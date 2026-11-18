@@ -451,8 +451,7 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(thinking) ||
             Boolean(opts.clearThinking) ||
             typeof opts.lightContext === "boolean" ||
-            typeof opts.skipIfScratchEmpty === "boolean" ||
-            typeof opts.includeReasoning === "boolean";
+            typeof opts.skipIfScratchEmpty === "boolean";
           const hasScriptSpecificPayloadField =
             Boolean(scriptPath) ||
             scriptTimeoutSeconds !== undefined ||
@@ -484,10 +483,7 @@ export function registerCronEditCommand(cron: Command) {
           } else if (requestedPayloadKinds.length > 1) {
             throw new CronCliError("Choose at most one payload change");
           }
-          for (const [key, flag] of [
-            ["skipIfScratchEmpty", "skip-if-scratch-empty"],
-            ["includeReasoning", "include-reasoning"],
-          ] as const) {
+          for (const [key, flag] of [["skipIfScratchEmpty", "skip-if-scratch-empty"]] as const) {
             if (
               typeof opts[key] === "boolean" &&
               typeof opts.message !== "string" &&
@@ -517,7 +513,6 @@ export function registerCronEditCommand(cron: Command) {
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(payload, "lightContext", opts.lightContext);
             assignIf(payload, "skipIfScratchEmpty", opts.skipIfScratchEmpty);
-            assignIf(payload, "includeReasoning", opts.includeReasoning);
           } else if (payloadKind === "command") {
             payload = {
               kind: "command",

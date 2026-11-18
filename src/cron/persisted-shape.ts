@@ -306,9 +306,8 @@ export function getInvalidPersistedCronJobReason(
   }
   if (
     payloadKind === "agentTurn" &&
-    ["skipIfScratchEmpty", "includeReasoning"].some(
-      (field) => payloadRecord[field] !== undefined && typeof payloadRecord[field] !== "boolean",
-    )
+    payloadRecord.skipIfScratchEmpty !== undefined &&
+    typeof payloadRecord.skipIfScratchEmpty !== "boolean"
   ) {
     return "invalid-payload";
   }

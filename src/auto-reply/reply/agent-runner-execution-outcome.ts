@@ -174,9 +174,6 @@ export async function runAgentTurnWithOutcome(
       if (result.outcome.kind === "settled") {
         result.outcome.automation = {
           result: invocation.result,
-          includeReasoning:
-            automation.job.payload.kind === "agentTurn" &&
-            automation.job.payload.includeReasoning === true,
         };
       }
     }

@@ -120,7 +120,6 @@ describe("cron store", () => {
       delivery: {
         mode: "announce",
         to: "telegram:chat",
-        completionDestination: { mode: "webhook", to: "https://example.invalid/complete" },
       },
       failureAlert: { accountId: "bot-1", mode: "webhook" },
     },
@@ -488,28 +487,6 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
 
     expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toEqual(expected);
-  });
-
-  it("round-trips completion destinations through canonical cron job JSON", async () => {
-    const { storePath } = await makeStorePath();
-    const job = makeStore("sqlite-webhook-delivery-job", true).jobs[0];
-    job.delivery = {
-      mode: "announce",
-      channel: "telegram",
-      to: "telegram:chat-1",
-      threadId: "topic-9",
-      accountId: "bot-1",
-      bestEffort: true,
-      completionDestination: {
-        mode: "webhook",
-        to: "https://example.invalid/legacy-completion",
-      },
-    };
-    const expected = structuredClone(job.delivery);
-
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-
-    expect((await loadCronStore(storePath)).jobs[0]?.delivery).toEqual(expected);
   });
 
   it.each(["1737500000.123456", "007"])(

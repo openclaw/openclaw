@@ -737,7 +737,7 @@ describe("maybeRepairLegacyCronStore", () => {
     ]);
   });
 
-  it("migrates notify fallback while preserving announce delivery", async () => {
+  it("migrates standalone notify fallback and pauses jobs that also need chat", async () => {
     await writeCronStore([
       createCurrentCronJob({
         id: "notify-and-announce",
@@ -763,11 +763,54 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(jobs[0]?.delivery).toEqual({
       mode: "announce",
       to: "telegram:123",
-      completionDestination: { mode: "webhook", to: WEBHOOK },
     });
+    expect(jobs[0]?.enabled).toBe(false);
+    expectNoteContaining(
+      "(notify-and-announce): removed the retired secondary webhook to example.invalid. Paused",
+      "Doctor changes",
+    );
     for (const job of jobs.slice(1)) {
       expect(job.delivery).toEqual({ mode: "webhook", to: WEBHOOK });
     }
+  });
+
+  it("backs up and pauses secondary webhook jobs without changing their primary routes", async () => {
+    const primary = { mode: "announce", channel: "telegram", to: "telegram:123" };
+    const webhook = { mode: "webhook", to: "https://reports.example.invalid/secret?token=private" };
+    const payload = { kind: "agentTurn", message: "Report stock changes" };
+    const reasoningOnly = createCurrentCronJob({
+      id: "reasoning-only",
+      payload: { ...payload, includeReasoning: false },
+      delivery: { mode: "webhook", to: "https://primary.example.invalid/status" },
+    });
+    await writeCronStore([
+      createCurrentCronJob({
+        id: "stock-digest",
+        name: "Stock digest",
+        payload: { ...payload, includeReasoning: true },
+        delivery: { ...primary, completionDestination: webhook },
+      }),
+      reasoningOnly,
+    ]);
+    await repairCronStore();
+    const jobs = await readPersistedJobs();
+    expect(
+      jobs.map(({ id, enabled, delivery, payload }) => ({ id, enabled, delivery, payload })),
+    ).toEqual([
+      { id: "stock-digest", enabled: false, delivery: primary, payload },
+      { id: "reasoning-only", enabled: true, delivery: reasoningOnly.delivery, payload },
+    ]);
+    expectNoteContaining("Saved pre-repair cron backup", "Doctor changes");
+    expectNoteContaining(
+      'Automation "Stock digest" (stock-digest): removed the retired secondary webhook to reports.example.invalid. Paused',
+      "Doctor changes",
+    );
+    expect(JSON.stringify(noteMock.mock.calls)).not.toContain("token=private");
+    expect(JSON.stringify(noteMock.mock.calls)).not.toContain("includeReasoning");
+    const secondRun = makePrompter();
+    await repairCronStore(secondRun);
+    expect(secondRun.confirm).not.toHaveBeenCalled();
+    expect(await readPersistedJobs()).toEqual(jobs);
   });
 
   it("does not migrate legacy notify fallback from a credential-bearing webhook URL", async () => {

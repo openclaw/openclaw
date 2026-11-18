@@ -779,7 +779,7 @@ describe("gateway server cron", () => {
     await finishedRun;
   });
 
-  test("posts authenticated primary and completion webhooks", async () => {
+  test("posts an authenticated primary webhook", async () => {
     await writeCronConfig({
       cron: { webhookToken: "cron-webhook-token", failureAlert: { after: 1 } },
     });
@@ -813,19 +813,6 @@ describe("gateway server cron", () => {
     });
 
     expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-
-    const completionJobId = await add("announce plus completion webhook", {
-      sessionTarget: "isolated",
-      delivery: {
-        mode: "announce",
-        completionDestination: {
-          mode: "webhook",
-          to: "https://example.invalid/completion-destination",
-        },
-      },
-    });
-    await run(completionJobId);
-    expectWebhook(1, "https://example.invalid/completion-destination", completionJobId, "ok");
   }, 60_000);
 
   test("omits raw summaries from failed cron webhook payloads", async () => {

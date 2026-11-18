@@ -14,7 +14,6 @@ export function mergeCronDelivery(
   patch: CronDeliveryPatch,
   implicitMode: CronDelivery["mode"],
 ): CronDelivery | undefined {
-  const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
     mode: existing ? existing.mode : implicitMode,
     target: existing?.target,
@@ -24,7 +23,6 @@ export function mergeCronDelivery(
     threadId: existing?.threadId,
     accountId: existing?.accountId,
     bestEffort: existing?.bestEffort,
-    completionDestination: existing?.completionDestination,
     failureDestination: existing?.failureDestination,
   };
 
@@ -42,9 +40,6 @@ export function mergeCronDelivery(
       next.channel = undefined;
       next.threadId = undefined;
       next.accountId = undefined;
-    }
-    if (!hasCompletionDestinationPatch && (next.mode === "none" || next.mode === "webhook")) {
-      next.completionDestination = undefined;
     }
   }
   if ("channel" in patch) {
@@ -67,17 +62,6 @@ export function mergeCronDelivery(
   }
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
-  }
-  if (hasCompletionDestinationPatch) {
-    if (patch.completionDestination == null) {
-      next.completionDestination = undefined;
-    } else {
-      const to = normalizeOptionalString(patch.completionDestination.to);
-      next.completionDestination = {
-        mode: "webhook",
-        ...(to ? { to } : {}),
-      };
-    }
   }
   if ("failureDestination" in patch) {
     if (patch.failureDestination == null) {
@@ -133,7 +117,6 @@ export function mergeCronDelivery(
     next.threadId === undefined &&
     next.accountId === undefined &&
     next.bestEffort === undefined &&
-    next.completionDestination === undefined &&
     next.failureDestination === undefined
   ) {
     // Clearing an absent override must preserve implicit detached-job delivery.

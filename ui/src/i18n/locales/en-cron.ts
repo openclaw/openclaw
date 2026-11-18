@@ -296,8 +296,6 @@ const enCron = {
       lightContext: "Lightweight start",
       lightContextHelp:
         "Starts without loading workspace files like AGENTS.md. Faster and cheaper, with less context.",
-      includeReasoning: "Include reasoning",
-      includeReasoningHelp: "Adds the model’s reasoning to the results when it’s available.",
       model: "Model",
       customModel: "Custom model…",
       modelPlaceholder: "openai/gpt-5.2",

@@ -41,10 +41,7 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import {
-  resolveAutomationReplyState,
-  retainAutomationReasoningWithFinal,
-} from "./automation-reply-payloads.js";
+import { resolveAutomationReplyState } from "./automation-reply-payloads.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
@@ -406,9 +403,6 @@ export async function resolveFollowupDeliveryDecision(params: {
     if (payloads.length === 0) {
       return { kind: "suppress" as const, reason: "message-tool-only" as const };
     }
-  }
-  if (execution.outcome.automation) {
-    payloads = retainAutomationReasoningWithFinal(payloads);
   }
   return payloads.length > 0
     ? { kind: "deliver" as const, payloads, resolved: runtimeResolved }

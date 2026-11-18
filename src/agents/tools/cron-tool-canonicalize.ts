@@ -17,7 +17,6 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "timeoutSeconds",
   "toolBudget",
   "lightContext",
-  "includeReasoning",
   "skipIfScratchEmpty",
   "allowUnsafeExternalContent",
 ] as const;
@@ -275,7 +274,6 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         isNonEmptyString(payload.thinking) ||
         (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
-        typeof payload.includeReasoning === "boolean" ||
         typeof payload.skipIfScratchEmpty === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));

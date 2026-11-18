@@ -72,12 +72,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const explicitSilence = state.replyOperationRunState.replyCompletion?.outcome === "silent";
   const finalReplies = Array.isArray(finalResult) ? finalResult : finalResult ? [finalResult] : [];
   const replies = explicitSilence ? retainSilentFinalPayloads(finalReplies) : finalReplies;
-  const scheduledPayload = state.params.replyOptions?.scheduledAutomation?.job.payload;
-  // Automation result assembly already requires a successful, meaningful final.
-  // This opt-in must not enable reasoning blocks before that outcome is known.
-  const finalReasoningEnabled = scheduledPayload
-    ? scheduledPayload.kind === "agentTurn" && scheduledPayload.includeReasoning === true
-    : state.reasoningPayloadsEnabled;
+  const finalReasoningEnabled =
+    !state.params.replyOptions?.scheduledAutomation && state.reasoningPayloadsEnabled;
   const queueAdmission = state.replyOperationRunState.admission;
   const collaborativeSteeringRefused =
     queueAdmission?.status === "skipped" &&

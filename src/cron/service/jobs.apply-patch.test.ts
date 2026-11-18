@@ -117,7 +117,6 @@ describe("applyJobPatch delivery merge", () => {
       to: null,
       threadId: null,
       accountId: null,
-      completionDestination: null,
       failureDestination: null,
     },
     { mode: "none", channel: "telegram", to: "123", threadId: 0, accountId: "bot-a" },
@@ -133,10 +132,7 @@ describe("applyJobPatch delivery merge", () => {
     },
   );
 
-  it.each([
-    { mode: "announce" },
-    { completionDestination: { mode: "webhook", to: "https://example.com/completed" } },
-  ] satisfies NonNullable<CronJobPatch["delivery"]>[])(
+  it.each([{ mode: "announce" }] satisfies NonNullable<CronJobPatch["delivery"]>[])(
     "rejects authored main delivery %j",
     (delivery) => {
       const job = makeMainJob();

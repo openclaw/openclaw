@@ -171,13 +171,7 @@ describe("cron protocol validators", () => {
     ],
     [{ payload: { ...agentPayload, model: null } }, false],
     [{ delivery: { mode: "announce", channel: "telegram", to: "-100123", threadId: 42 } }, true],
-    [{ delivery: { mode: "announce", completionDestination } }, true],
-    [{ delivery: { mode: "none", completionDestination } }, false],
-    [
-      { delivery: { mode: "webhook", to: "https://example.invalid", completionDestination } },
-      false,
-    ],
-    [{ delivery: { mode: "announce", completionDestination: null } }, false],
+    [{ delivery: { mode: "announce", completionDestination } }, false],
     [{ delivery: { mode: "announce", channel: "telegram", to: "   " } }, false],
   ] as const)("add %j accepted=%s", (fields, accepted) => {
     checkAdd(fields).toBe(accepted);
@@ -211,10 +205,7 @@ describe("cron protocol validators", () => {
     [{ delivery: { failureDestination: { threadId: "42" } } }, true],
     [{ delivery: { failureDestination: { threadId: null } } }, true],
     [{ failureAlert: { threadId: {} } }, false],
-    [{ delivery: { completionDestination } }, true],
-    [{ delivery: { completionDestination: null } }, true],
-    [{ delivery: { completionDestination: {} } }, false],
-    [{ delivery: { completionDestination: { mode: "announce", to: "https://x.test" } } }, false],
+    [{ delivery: { completionDestination } }, false],
     [{ delivery: cleared("channel", "to", "threadId", "accountId", "failureDestination") }, true],
     [{ delivery: { failureDestination: cleared("channel", "to", "accountId", "mode") } }, true],
     [{ delivery: { channel: "\t" } }, false],

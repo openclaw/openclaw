@@ -679,6 +679,13 @@ Gateway `cron.add` and `cron.update` requests still accept the deprecated
 `announce`. This request adapter does not repair stored `deliver` values; those
 still require Doctor.
 
+Doctor also removes the retired agent-turn reasoning flag and secondary webhook
+settings from stored automations after backing up cron state. It reports each
+removed secondary webhook by job and host, without revealing the URL path or
+query. Jobs that used both chat and a webhook are paused; their primary route
+stays configured. Review the route before re-enabling those jobs. Standalone
+webhooks and failure alerts remain supported.
+
 ## Exec approval policy
 
 Doctor normalizes legacy exec approval policy already stored in SQLite as well

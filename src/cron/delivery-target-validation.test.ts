@@ -9,23 +9,12 @@ describe("assertCronDeliveryInputNonBlankFields", () => {
     expect(() => assertCronDeliveryInputNonBlankFields("string")).not.toThrow();
   });
 
-  it("throws when completionDestination to is blank", () => {
-    expect(() =>
-      assertCronDeliveryInputNonBlankFields({
-        channel: "slack",
-        to: "#general",
-        completionDestination: { to: "   " },
-      }),
-    ).toThrow("delivery.completionDestination.to must be a non-empty string");
-  });
-
   it("does not throw when nested destinations have valid fields", () => {
     expect(() =>
       assertCronDeliveryInputNonBlankFields({
         channel: "slack",
         to: "#general",
         failureDestination: { channel: "email", to: "admin@example.com" },
-        completionDestination: { to: "done" },
       }),
     ).not.toThrow();
   });

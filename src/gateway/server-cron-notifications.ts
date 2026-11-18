@@ -1,8 +1,5 @@
 // Sends announce and webhook notifications for cron completion/failure events.
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
@@ -144,20 +141,6 @@ async function runGatewayCronFailureRepair(
   }, "cron:failure-repair");
 }
 
-function redactWebhookUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    return `${parsed.origin}${parsed.pathname}`;
-  } catch {
-    return "<invalid-webhook-url>";
-  }
-}
-
-function redactOptionalWebhookUrl(url: unknown): string | undefined {
-  const normalized = normalizeOptionalString(url);
-  return normalized ? redactWebhookUrl(normalized) : undefined;
-}
-
 function stripCronJobDiagnostics(job: NonNullable<CronEvent["job"]>) {
   const state = { ...job.state };
   delete state.lastDiagnostics;
@@ -212,16 +195,6 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
     redacted.job = stripCronJobDiagnostics(evt.job);
   }
   return redacted;
-}
-
-function resolveCronCompletionWebhook(delivery: CronJob["delivery"]): string | undefined {
-  if (
-    normalizeOptionalLowercaseString(delivery?.mode) !== "announce" ||
-    normalizeOptionalLowercaseString(delivery?.completionDestination?.mode) !== "webhook"
-  ) {
-    return undefined;
-  }
-  return normalizeHttpWebhookUrl(delivery?.completionDestination?.to) ?? undefined;
 }
 
 function appendCronFailureAlertDetails(
@@ -335,31 +308,6 @@ async function postCronWebhookStrict(params: {
     } else {
       await cleanup();
     }
-  }
-}
-
-/** Posts a detached cron webhook without throwing back into scheduler completion flow. */
-async function postCronWebhook(params: {
-  webhookUrl: string;
-  webhookToken?: string;
-  payload: unknown;
-  ssrfPolicy?: SsrFPolicy;
-  jobId: string;
-  logger: CronLogger;
-}): Promise<void> {
-  try {
-    await postCronWebhookStrict(params);
-  } catch (err) {
-    const blocked = err instanceof SsrFBlockedError;
-    params.logger.warn(
-      {
-        jobId: params.jobId,
-        source: "completionDestination",
-        [blocked ? "reason" : "err"]: formatErrorMessage(err),
-        webhookUrl: redactWebhookUrl(params.webhookUrl),
-      },
-      blocked ? "cron: webhook delivery blocked by SSRF guard" : "cron: webhook delivery failed",
-    );
   }
 }
 
@@ -563,7 +511,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   }
 }
 
-/** Records unstarted outcomes and fans out completion webhooks. */
+/** Records unstarted outcomes in the owner conversation. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
@@ -572,8 +520,6 @@ export function dispatchGatewayCronFinishedNotifications(params: {
   quietTrigger?: boolean;
   resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
-  webhookToken?: unknown;
-  ssrfPolicy?: SsrFPolicy;
 }): void {
   if (
     params.job &&
@@ -627,49 +573,6 @@ export function dispatchGatewayCronFinishedNotifications(params: {
       params.logger.warn(
         { jobId: job.id, err: formatErrorMessage(error) },
         "cron: run outcome notice failed",
-      );
-    });
-  }
-  const webhookToken = normalizeOptionalString(params.webhookToken);
-  const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
-  const completionSummary =
-    params.job?.payload.kind === "script"
-      ? normalizeOptionalString(redactedWebhookEvent.summary)
-      : params.evt.summary;
-  const completionWebhookUrl = resolveCronCompletionWebhook(params.job?.delivery);
-
-  if (
-    params.job?.delivery?.completionDestination?.mode === "webhook" &&
-    !normalizeHttpWebhookUrl(params.job.delivery.completionDestination.to)
-  ) {
-    params.logger.warn(
-      {
-        jobId: params.evt.jobId,
-        deliveryTo: redactOptionalWebhookUrl(params.job.delivery.completionDestination.to),
-      },
-      "cron: skipped completion webhook delivery, delivery.completionDestination.to must be a valid http(s) URL",
-    );
-  }
-
-  // Script notify is carried as the prepared completion summary.
-  if (completionWebhookUrl && (completionSummary || params.evt.completionStatus === "failed")) {
-    const payload = buildCronFinishedWebhookPayload(redactedWebhookEvent);
-    // Detached sends own roots so suspension cannot snapshot mid-delivery.
-    void runWithGatewayIndependentRootWorkContinuation(
-      () =>
-        postCronWebhook({
-          webhookUrl: completionWebhookUrl,
-          webhookToken,
-          ssrfPolicy: params.ssrfPolicy,
-          payload,
-          jobId: params.evt.jobId,
-          logger: params.logger,
-        }),
-      "cron:notification-delivery",
-    ).catch((err: unknown) => {
-      params.logger.warn(
-        { jobId: params.evt.jobId, err: formatErrorMessage(err) },
-        "cron: detached notification delivery failed",
       );
     });
   }

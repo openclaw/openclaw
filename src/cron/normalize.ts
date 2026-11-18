@@ -196,32 +196,7 @@ function coerceDelivery(delivery: UnknownRecord) {
       delete next.failureDestination;
     }
   }
-  if ("completionDestination" in next && next.completionDestination !== null) {
-    // Completion destinations are currently webhook-only, so other shapes are
-    // discarded before they can persist as ambiguous config.
-    const completionDestination = isRecord(next.completionDestination)
-      ? coerceCompletionDestination(next.completionDestination)
-      : null;
-    if (completionDestination) {
-      next.completionDestination = completionDestination;
-    } else {
-      delete next.completionDestination;
-    }
-  }
   return { ...next };
-}
-
-function coerceCompletionDestination(value: UnknownRecord) {
-  const input = snapshotOwnCronRecord(value);
-  const mode = normalizeOptionalLowercaseString(input.mode);
-  const to = normalizeOptionalString(input.to);
-  if (mode !== "webhook") {
-    return null;
-  }
-  return {
-    mode,
-    ...(to ? { to } : {}),
-  } satisfies UnknownRecord;
 }
 
 function coerceFailureDestination(value: UnknownRecord) {

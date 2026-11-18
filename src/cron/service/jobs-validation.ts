@@ -279,10 +279,6 @@ export function assertDeliverySupport(
   if (!job.delivery) {
     return;
   }
-  // No primary delivery and no completion webhook -- nothing to validate.
-  if (job.delivery.mode === "none" && !job.delivery.completionDestination) {
-    return;
-  }
   // Webhook delivery is allowed for any session target
   if (job.delivery.mode === "webhook") {
     const target = normalizeHttpWebhookUrl(job.delivery.to);
@@ -290,20 +286,6 @@ export function assertDeliverySupport(
       throw new Error("cron webhook delivery requires delivery.to to be a valid http(s) URL");
     }
     job.delivery.to = target;
-  }
-  if (job.delivery.completionDestination?.mode === "webhook") {
-    if (job.delivery.mode !== "announce") {
-      throw new Error(
-        'cron completion destination webhook is only supported with delivery.mode="announce"',
-      );
-    }
-    const target = normalizeHttpWebhookUrl(job.delivery.completionDestination.to);
-    if (!target) {
-      throw new Error(
-        "cron completion destination webhook requires delivery.completionDestination.to to be a valid http(s) URL",
-      );
-    }
-    job.delivery.completionDestination.to = target;
   }
   if (job.delivery.mode === "none") {
     return;

@@ -107,6 +107,7 @@ type NormalizeCronStoreJobsResult = {
   legacyGatewayExecJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
+  removedRetiredReasoning: boolean;
   removedJobs: Array<{ job: Record<string, unknown>; reason: string; sourceIndex: number }>;
 };
 
@@ -176,11 +177,17 @@ export function normalizeStoredCronJobs(
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
   };
   let mutated = false;
+  let removedRetiredReasoning = false;
   const keptJobs: Array<Record<string, unknown>> = [];
   const removedJobs: NormalizeCronStoreJobsResult["removedJobs"] = [];
   const codexRuntimePolicyTargets = new Map<string, CronCodexRuntimePolicyTarget>();
 
   for (const [sourceIndex, raw] of jobs.entries()) {
+    if (isRecord(raw.payload) && "includeReasoning" in raw.payload) {
+      delete raw.payload.includeReasoning;
+      mutated = true;
+      removedRetiredReasoning = true;
+    }
     if (!canRepairCronDeliveryForDoctor(raw.delivery)) {
       unsupportedDeliveryModeJobs.push(storedCronJobId(raw) ?? "<unnamed>");
       keptJobs.push(raw);
@@ -549,6 +556,7 @@ export function normalizeStoredCronJobs(
     legacyGatewayExecJobs,
     jobs,
     mutated,
+    removedRetiredReasoning,
     removedJobs,
   };
 }

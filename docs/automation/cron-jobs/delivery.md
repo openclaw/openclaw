@@ -177,11 +177,6 @@ job clears the previous explicit recipient and thread. Selecting a new explicit
 recipient replaces owner targeting. Use `--clear-delivery-target` or
 `--clear-direct-policy` to remove the stored policy.
 
-Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
-job only when reasoning returned by the agent should accompany a meaningful result.
-Reasoning alone does not create a notification; omitting this setting keeps ordinary
-final-output delivery.
-
 ### Failure notifications
 
 Failure-alert webhooks stay **Unknown** when the request may have reached the

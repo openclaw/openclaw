@@ -436,8 +436,7 @@ export function applyJobPatch(
         authoredDelivery.channel !== undefined ||
         authoredDelivery.to !== undefined ||
         authoredDelivery.threadId !== undefined ||
-        authoredDelivery.accountId !== undefined ||
-        authoredDelivery.completionDestination !== undefined)
+        authoredDelivery.accountId !== undefined)
     ) {
       assertDeliverySupport({
         sessionTarget: job.sessionTarget,

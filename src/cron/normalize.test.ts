@@ -281,23 +281,6 @@ it.each([
   expect(createAgent({ delivery }).delivery).toEqual(expected);
 });
 
-it("normalizes completion destinations without inventing an enclosing mode", () => {
-  const delivery = { completionDestination: { mode: " WeBhOoK ", to: " https://x.invalid/c " } };
-  const expected = {
-    completionDestination: { mode: "webhook", to: "https://x.invalid/c" },
-  };
-  const created = createMain({
-    schedule: EVERY_SCHEDULE,
-    wakeMode: "now",
-    delivery: { mode: "none", ...delivery },
-  });
-  const patch = normalizePatch({ delivery });
-  expect(created.delivery).toEqual({ mode: "none", ...expected });
-  expect(validateCronAddParams(created)).toBe(false);
-  expect(patch.delivery).toEqual(expected);
-  expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
-});
-
 it.each([
   { channel: null, to: null, threadId: null, accountId: null, failureDestination: null },
   { failureDestination: { channel: null, to: null, accountId: null, mode: null } },
@@ -354,7 +337,6 @@ it("promotes implicit text payloads with agentTurn hints to agentTurn create job
     timeoutSeconds: 45,
     lightContext: true,
     skipIfScratchEmpty: true,
-    includeReasoning: false,
     allowUnsafeExternalContent: true,
   };
   const normalized = createDefaulted({

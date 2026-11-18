@@ -1873,11 +1873,6 @@ describe("buildGatewayCronService", () => {
       code: "internal_error",
       error: rawError,
     });
-    mocks.fetch.mockResolvedValueOnce({
-      response: new Response(null, { status: 204 }),
-      finalUrl: "https://example.invalid/cron",
-      release: vi.fn(async () => {}),
-    });
     const broadcast = vi.fn();
     await withCronService(
       cfg,
@@ -1889,10 +1884,6 @@ describe("buildGatewayCronService", () => {
             mode: "announce",
             channel: "telegram",
             to: "123",
-            completionDestination: {
-              mode: "webhook",
-              to: "https://example.invalid/cron-finished",
-            },
             failureDestination: { mode: "announce", channel: "telegram", to: "456" },
           },
         });
@@ -1901,7 +1892,6 @@ describe("buildGatewayCronService", () => {
 
         await state.cron.run(job.id, "force");
         await vi.waitFor(() => expect(mocks.announce).toHaveBeenCalledOnce());
-        await vi.waitFor(() => expect(mocks.fetch).toHaveBeenCalledOnce());
 
         const announceRequest = callRecord(mocks.announce);
         const announce = requireRecord(announceRequest.payload, "script failure announce");
@@ -1920,13 +1910,6 @@ describe("buildGatewayCronService", () => {
         const hookEvent = finishedEvent(job.id);
         expect(hookEvent).not.toHaveProperty("failureNotificationDetail");
         expect(JSON.stringify(hookEvent)).not.toContain("failureNotificationDetail");
-
-        const webhookRequest = callRecord(mocks.fetch);
-        const webhookBody = JSON.parse(
-          String(requireRecord(webhookRequest.init, "script failure webhook init").body),
-        ) as Record<string, unknown>;
-        expect(webhookBody.error).toContain(rawError);
-        expect(webhookBody).not.toHaveProperty("failureNotificationDetail");
       },
       { broadcast },
     );
