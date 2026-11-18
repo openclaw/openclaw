@@ -31,10 +31,10 @@ function readProtectedFields(payload: unknown): string {
   const fields = [payload, nested].flatMap((owner) =>
     PROTECTED_FIELDS.map((field) => Reflect.get(owner, field)),
   );
-  const generation = Reflect.get(payload, "generation_config");
+  const generationConfig = Reflect.get(payload, "generation_config");
   fields.push(
-    generation && typeof generation === "object"
-      ? Reflect.get(generation, "tool_choice")
+    generationConfig && typeof generationConfig === "object"
+      ? Reflect.get(generationConfig, "tool_choice")
       : undefined,
   );
   return JSON.stringify(fields);

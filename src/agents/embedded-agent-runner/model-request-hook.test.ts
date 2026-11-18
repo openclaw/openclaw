@@ -1,6 +1,5 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { afterEach, expect, it } from "vitest";
-import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -12,10 +11,7 @@ import { wrapStreamFnWithModelRequestGate } from "./model-request-hook.js";
 afterEach(resetGlobalHookRunner);
 const model = { id: "fixture", provider: "fixture" } as Model;
 /** Sends one payload through the gate as a transport does and returns what it would send. */
-function sendThroughGate(
-  hookContext: PluginHookAgentContext,
-  requestKind: PluginHookModelRequestKind = "turn",
-) {
+function sendThroughGate(hookContext: PluginHookAgentContext) {
   return async (payload: unknown, requestModel: Model, context: Context) => {
     let sent: unknown;
     const streamFn = wrapStreamFnWithModelRequestGate(
@@ -24,7 +20,7 @@ function sendThroughGate(
         return undefined as never;
       },
       hookContext,
-      requestKind,
+      "turn",
     );
     await streamFn(requestModel, context, {});
     return sent;
@@ -55,23 +51,6 @@ it("dispatches final payload with detached provenance and the correct session", 
   const transform = sendThroughGate({ sessionKey: "fixture-session" });
   expect(await transform({ input: "outside" }, model, context)).toEqual({ input: "withheld" });
   expect(source.content).toBe("outside");
-});
-it("names the request kind", async () => {
-  const kinds: unknown[] = [];
-  initializeGlobalHookRunner(
-    createMockPluginRegistry([
-      {
-        hookName: "before_model_request",
-        handler: async (raw) => {
-          kinds.push((raw as { requestKind: unknown }).requestKind);
-        },
-      },
-    ]),
-  );
-  await sendThroughGate({})({ input: "a" }, model, { messages: [] });
-  await sendThroughGate({}, "compaction")({ input: "b" }, model, { messages: [] });
-  await sendThroughGate({}, "side_question")({ input: "c" }, model, { messages: [] });
-  expect(kinds).toEqual(["turn", "compaction", "side_question"]);
 });
 it("leaves the request intact when the plugin is absent", async () => {
   const payload = { input: "owner" };

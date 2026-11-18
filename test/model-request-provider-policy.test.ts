@@ -1,7 +1,7 @@
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { requestPreparedOpenAIResponsesCompaction } from "@openclaw/ai/transports";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createGoogleGenerativeAiTransportStreamFn } from "../extensions/google/transport-stream.js";
+import { createGoogleGenerativeAiTransportStreamFn } from "../extensions/google/api.js";
 import {
   PROVIDER_CONTEXT_HANDOFF,
   PROVIDER_MODEL_INPUT,
