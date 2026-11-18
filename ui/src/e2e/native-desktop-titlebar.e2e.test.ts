@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { rethrowWithControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
@@ -160,7 +161,45 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
       .toEqual([]);
     for (const control of await controls.all()) {
       if (await control.isEnabled()) {
-        await control.click({ trial: true });
+        try {
+          await control.click({ trial: true });
+        } catch (error) {
+          await rethrowWithControlUiE2eFailureFacts(page, error, "titlebarHitRead", () =>
+            control.evaluate((button) => {
+              const bounds = button.getBoundingClientRect();
+              const x = bounds.left + bounds.width / 2;
+              const y = bounds.top + bounds.height / 2;
+              const hit = document.elementFromPoint(x, y);
+              const sidebar = document.querySelector("openclaw-app-sidebar");
+              const hoveredRail = document.querySelector(".sidebar-rail button:hover");
+              const section = hoveredRail?.getAttribute("data-navigation-view");
+              const rect = (element: Element | null) => {
+                if (!element) {
+                  return null;
+                }
+                const box = element.getBoundingClientRect();
+                return { x: box.x, y: box.y, width: box.width, height: box.height };
+              };
+              return {
+                titlebarHit: {
+                  navigationCollapsed:
+                    document.querySelector(".shell")?.classList.contains("shell--nav-collapsed") ??
+                    false,
+                  peek: sidebar?.hasAttribute("data-peek") ?? false,
+                  hoveredRailSection:
+                    section && ["sessions", "online", "pages", "settings"].includes(section)
+                      ? section
+                      : null,
+                  targetBounds: rect(button),
+                  hitBounds: rect(hit),
+                  hitIsTarget: hit !== null && button.contains(hit),
+                  hitInSidebar: hit !== null && hit.closest(".shell-nav") !== null,
+                  hitInPanelHeader: hit !== null && hit.closest(".sidebar-panel-header") !== null,
+                },
+              };
+            }),
+          );
+        }
       }
     }
   };
