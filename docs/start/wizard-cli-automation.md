@@ -15,6 +15,12 @@ Each command can install a managed Gateway with `--install-daemon`, require an a
 `--json` does not imply non-interactive mode. Pass `--non-interactive --accept-risk` explicitly for scripts.
 </Note>
 
+For a composed non-secret configuration example, see
+[Repeatable setup](/start/repeatable-setup). For service readiness, resume steps,
+and an honest first-chat checklist, see [Small-host setup](/start/small-host-setup).
+These guides reuse the commands below; they do not add a profile format or
+automatic cross-phase receipt.
+
 ## Review required plugins
 
 Bundled plugins and verified plugins from OpenClaw's official catalog do not

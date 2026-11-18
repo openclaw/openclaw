@@ -9,6 +9,8 @@ title: "Setup"
 <Note>
 If you are setting up for the first time, start with [Getting Started](/start/getting-started).
 For onboarding details, see [Onboarding (CLI)](/start/wizard).
+For a single Linux host, including password-manager keys, existing Ollama, and
+resuming incomplete setup, use [Small-host setup](/start/small-host-setup).
 </Note>
 
 ## TL;DR
