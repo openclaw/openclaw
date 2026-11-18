@@ -1,0 +1,2 @@
+# Exact net regression-test lines for release integration repairs: attachment read-only access and awaited shared-auth diagnostics.
+28

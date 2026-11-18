@@ -9,6 +9,8 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { runAuthProfileDiagnostics } from "../flows/doctor-auth-health.js";
+import { createDoctorHealthFlowContext } from "../flows/doctor-health-context.test-support.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   withOpenClawTestState,
@@ -255,15 +257,23 @@ it("reports legacy shared auth until its owner is relocated", async () => {
       { "openai:default": { type: "api_key", provider: "openai", key: "test-key" } },
       resolveSharedMainAuthAgentDir(state.env),
     );
-    expect(collectSharedAuthStoreFindings(state.env)).toEqual([
+    expect(await collectSharedAuthStoreFindings(state.env)).toEqual([
       expect.objectContaining({
         category: "recommended",
         fixHint: expect.stringContaining("openclaw doctor --fix"),
       }),
     ]);
+    const ctx = createDoctorHealthFlowContext({
+      env: { ...state.env, GH_TOKEN: "", GITHUB_TOKEN: "" },
+      authProfileHealthReady: false,
+    });
+    await runAuthProfileDiagnostics(ctx);
+    expect(ctx.healthFindings).toEqual([
+      expect.objectContaining({ checkId: "core/doctor/shared-auth-store" }),
+    ]);
     const env = { ...state.env, OPENCLAW_STATE_DIR: state.statePath("relocated") };
     writeConfigMachineState("auth.sharedStore", { location: "state-db" }, { env });
-    expect(collectSharedAuthStoreFindings(env)).toEqual([]);
+    expect(await collectSharedAuthStoreFindings(env)).toEqual([]);
   }, false);
 });
 

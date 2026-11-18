@@ -13,10 +13,11 @@ afterEach(() => __setFsSafeTestHooksForTest());
 const repository = (parent: string, name: string) =>
   initializeGitFixture(parent, name, "seed.txt", "fixture\n");
 
-function fileTools(root: string) {
+function fileTools(root: string, attachmentReadRoot?: string) {
   const tools = createCoreCodingTools({
     codingRoot: root,
     containmentRoot: root,
+    attachmentReadRoot,
     includeBaseCodingTools: true,
     shellTools: "patch-only",
     readOnly: false,
@@ -29,6 +30,23 @@ function fileTools(root: string) {
   return async (name: string, args: Record<string, unknown>) =>
     tools.find((entry) => entry.name === name)!.execute(name, args);
 }
+
+it("reads attachments outside the workspace without granting writes", async () => {
+  const fixture = tempDirs.make("openclaw-attachment-root-");
+  const workspace = path.join(fixture, "workspace");
+  const attachments = path.join(fixture, "attachments");
+  await fs.mkdir(workspace);
+  await fs.mkdir(attachments);
+  const target = path.join(attachments, "note.txt");
+  await fs.writeFile(target, "attachment contents");
+  const execute = fileTools(workspace, attachments);
+  const result = await execute("read", { path: target });
+  expect(result.content).toContainEqual(
+    expect.objectContaining({ text: expect.stringContaining("attachment contents") }),
+  );
+  await expect(execute("write", { path: target, content: "denied" })).rejects.toThrow();
+  expect(await fs.readFile(target, "utf8")).toBe("attachment contents");
+});
 
 it("explains how to bind a worker before editing another repository's linked worktree", async () => {
   const fixture = await fs.realpath(tempDirs.make("openclaw-worker-worktree-"));

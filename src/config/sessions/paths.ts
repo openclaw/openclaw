@@ -125,7 +125,7 @@ type SessionPathFilesystem = {
 };
 
 const sessionPathFilesystem: SessionPathFilesystem = {
-  realpath: (file) => safeRealpathSync(file),
+  realpath: (file) => safeRealpathSync(file) ?? undefined,
   exists: (file) => fs.existsSync(file),
 };
 

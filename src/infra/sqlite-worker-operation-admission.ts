@@ -248,6 +248,7 @@ function createOperationAdmission(
         );
         return;
       }
+      const { location: requestedLocation, port } = message;
       const decision = new Int32Array(message.decision);
       decisions.add(decision);
       const deadlineAtMs = message.deadlineAtMs;
@@ -278,14 +279,14 @@ function createOperationAdmission(
           }
           // The paired registry owns these records; sharing them grants no database authority.
           installSqliteDatabaseAdmissions(admissions);
-          let location = message.location;
+          let location = requestedLocation;
           let create = false;
           if (
-            message.location &&
+            requestedLocation &&
             message.create &&
-            !prepareSqliteDatabaseAdmission(message.location)
+            !prepareSqliteDatabaseAdmission(requestedLocation)
           ) {
-            location = resolveIdentityPathViaExistingAncestorSync(message.location);
+            location = resolveIdentityPathViaExistingAncestorSync(requestedLocation);
             const creationLocation = location;
             const authority = databaseAuthority;
             const assertCreate = authority?.assertCreate?.bind(authority);
@@ -363,15 +364,15 @@ function createOperationAdmission(
             assertRelayCreation?.();
           }
           const scope =
-            message.location === undefined && admissions.length === 0
+            requestedLocation === undefined && admissions.length === 0
               ? undefined
-              : { location: message.location, admissions };
+              : { location: requestedLocation, admissions };
           const cursor = databaseAdmissionCursors.get(admission);
           const reply = captureSqliteDatabaseAdmissions(
             cursor?.cursor ?? databaseAdmissionCursor,
             scope,
           );
-          message.port.postMessage(reply, []);
+          port.postMessage(reply, []);
           recordWorkerMessage("admission", "to_worker");
           Atomics.compareExchange(decision, 0, REQUESTED, GRANTED);
         } catch (error) {
@@ -394,7 +395,7 @@ function createOperationAdmission(
           }
         } finally {
           decisions.delete(decision);
-          message.port.close();
+          port.close();
           Atomics.notify(decision, 0);
         }
       })();

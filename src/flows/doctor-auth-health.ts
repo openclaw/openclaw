@@ -128,6 +128,6 @@ export async function runAuthProfileDiagnostics(ctx: DoctorHealthFlowContext): P
     );
   }
   renderStructuredHealthFindings(ctx, collectLegacyCodexProviderOverrideFindings(ctx.cfg));
-  renderStructuredHealthFindings(ctx, collectSharedAuthStoreFindings(ctx.env));
+  renderStructuredHealthFindings(ctx, await collectSharedAuthStoreFindings(ctx.env));
   renderStructuredHealthFindings(ctx, collectCopilotAmbientTokenFindings(ctx.cfg, ctx.env));
 }

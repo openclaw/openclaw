@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { canAccess } from "../infra/path-existence.js";
