@@ -54,7 +54,6 @@ final class OnboardingAISetupModel {
     }
 
     private(set) var manualError: Failure?
-    var showManualEntry = false
 
     /// Called when a candidate connects so the page can advance.
     var onConnected: (() -> Void)?
@@ -553,7 +552,6 @@ final class OnboardingAISetupModel {
         self.manualKey = ""
         self.manualError = nil
         self.manualTesting = false
-        self.showManualEntry = false
         if let authSessionToCancel, let authServerLease {
             Task {
                 await self.gateway.cancelWizardSession(authSessionToCancel, on: authServerLease)
@@ -673,13 +671,11 @@ extension OnboardingAISetupModel {
                         label: label,
                         status: "unavailable",
                         error: "\(label) did not expose a usable local model. Review setup, then retry.")
-                    self.showManualEntry = !self.manualProviders.isEmpty
                 }
                 return
             }
             // Detection is presentation-only. Existing credentials and native
             // subscriptions are never tested or selected until the user clicks one.
-            self.showManualEntry = !self.manualProviders.isEmpty
         } catch {
             guard self.isCurrentAttempt(context) else { return }
             if self.connectionModeProvider() == .remote, let authIssue = RemoteGatewayAuthIssue(error: error) {
@@ -688,7 +684,6 @@ extension OnboardingAISetupModel {
             }
             self.phase = .ready
             self.detectError = Self.transportFailure(error.localizedDescription)
-            self.showManualEntry = self.candidates.isEmpty
         }
     }
 
@@ -959,7 +954,6 @@ extension OnboardingAISetupModel {
             return
         }
         self.phase = .ready
-        if !request.isManual { self.showManualEntry = !self.manualProviders.isEmpty }
     }
 
     private func requestActivation(

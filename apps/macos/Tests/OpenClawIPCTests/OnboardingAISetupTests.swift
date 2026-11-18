@@ -855,7 +855,7 @@ private func pressOnboardingEntryButton(_ title: String, in root: NSView) async 
             .compactMap(\.self)
         if element.accessibilityRole?() == .button,
            element.isAccessibilityEnabled?() == true,
-           text.contains(where: { $0 == title || (title == "API Keys" && $0.contains(title)) })
+           text.contains(where: { $0 == title || (title == "API key" && $0.hasPrefix(title)) })
         {
             matches.append(element)
         }
@@ -930,8 +930,8 @@ private func inspectAISetupAccessibility(_ root: NSView) async throws
 private func inspectAISetupSheet(
     _ model: OnboardingAISetupModel,
     colorScheme: ColorScheme = .light
-) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
-    let snapshot = await inspectAISetupSurface(OnboardingAISetupSheet(model: model), colorScheme: colorScheme)
+) async -> (labels: [String], actions: [String: Bool]) {
+    let snapshot = await inspectAISetupSurface(OnboardingProviderSetupSteps(model: model), colorScheme: colorScheme)
     #expect(snapshot.actions["Cancel"] != nil)
     return snapshot
 }
@@ -940,7 +940,7 @@ private func inspectAISetupSheet(
 private func inspectAISetupSurface(
     _ content: some View,
     colorScheme: ColorScheme = .light
-) async -> (labels: [String], actions: [String: Bool], size: NSSize) {
+) async -> (labels: [String], actions: [String: Bool]) {
     // Self-process AX enumerates all windows; keep this fixture isolated through teardown.
     await TestIsolation.withIsolatedState {
         _ = AppKitTestSupport.application
@@ -971,7 +971,7 @@ private func inspectAISetupSurface(
             Issue.record(error)
             snapshot = ([], [:])
         }
-        return (snapshot.labels, snapshot.actions, hosting.fittingSize)
+        return (snapshot.labels, snapshot.actions)
     }
 }
 
@@ -1398,10 +1398,6 @@ struct OnboardingAISetupTests {
         if inspectSheet {
             let reviewSheet = await inspectAISetupSheet(model)
             #expect(reviewSheet.labels.contains(reviewMessage))
-            #expect(reviewSheet.size.height <= 500)
-            if manual {
-                #expect(reviewSheet.size.height > 260)
-            }
             #expect(reviewSheet.actions["Continue"] == true)
         }
         #expect(!model.connected)
@@ -1421,7 +1417,7 @@ struct OnboardingAISetupTests {
         if inspectSheet {
             let consentSheet = await inspectAISetupSheet(model)
             #expect(consentSheet.labels.contains("Confirm"))
-            #expect(consentSheet.actions["Submit"] == true)
+            #expect(consentSheet.actions["Continue"] == true)
         }
         if decision == "retry-cancel" {
             model.cancelProviderAuth()
@@ -1430,7 +1426,7 @@ struct OnboardingAISetupTests {
             #expect(model.authBusy)
             let retrySheet = await inspectAISetupSheet(model)
             #expect(retrySheet.actions["Cancel"] == true)
-            #expect(!retrySheet.labels.contains("Requesting cancellation…"))
+            #expect(!retrySheet.labels.contains("Canceling…"))
             #expect(retrySheet.labels.contains("Cancellation not confirmed"))
             cancellationFails.setValue(false)
             model.cancelProviderAuth()
@@ -1635,9 +1631,9 @@ struct OnboardingAISetupTests {
         if !terminalReply, !confirmedCancellation {
             await cancellation.waitUntilStarted()
             let pendingSheet = await inspectAISetupSheet(model)
-            #expect(pendingSheet.labels.contains("Requesting cancellation…"))
+            #expect(pendingSheet.labels.contains("Canceling…"))
             #expect(pendingSheet.actions["Cancel"] == false)
-            #expect(pendingSheet.actions["Submit"] == nil)
+            #expect(pendingSheet.actions["Continue"] == nil)
             #expect(model.activeAuthOption != nil)
         }
         do {
@@ -1992,9 +1988,7 @@ struct OnboardingAISetupTests {
         #expect(model.activeAuthOption?.label == "Codex CLI")
         let startingSheet = await inspectAISetupSheet(model)
         #expect(startingSheet.labels.contains("Preparing your AI connection…"))
-        #expect(startingSheet.actions["Submit"] == nil)
-        #expect(startingSheet.size.width == 500)
-        #expect((220 ... 260).contains(startingSheet.size.height))
+        #expect(startingSheet.actions["Continue"] == nil)
         await startGate.release()
         await activation.value
         #expect(await harness.recorder.snapshot().methods.filter {
@@ -2098,8 +2092,6 @@ struct OnboardingAISetupTests {
             #expect(model.authStep?.message == "Downloading model: 80%")
             let progressSheet = await inspectAISetupSheet(model, colorScheme: colorScheme)
             #expect(progressSheet.labels.contains("Downloading model: 80%"))
-            #expect(progressSheet.labels.contains(option.label))
-            #expect(progressSheet.actions["Submit"] == nil)
             #expect(progressSheet.actions["Continue"] == nil)
             #expect(progressSheet.actions["Cancel"] == true)
             model.continueProviderAuth()
@@ -2416,7 +2408,7 @@ struct OnboardingAISetupTests {
         let sheet = await inspectAISetupSheet(model)
         #expect(sheet.labels.contains("Cancellation not confirmed"))
         #expect(sheet.actions["Cancel"] == true)
-        #expect(sheet.actions["Submit"] == nil)
+        #expect(sheet.actions["Continue"] == nil)
         cancellationFails.setValue(false)
         model.cancelProviderAuth()
         try await TestWait.observed("settled provider auth") { model.activeAuthOption == nil }
@@ -2589,7 +2581,7 @@ struct OnboardingAISetupTests {
                     "Named actions: \(sheet.actions)"
                 )
             }
-            #expect(sheet.actions["Submit"] == nil)
+            #expect(sheet.actions["Continue"] == nil)
             #expect(sheet.actions["Cancel"] == true)
             model.cancelProviderAuth()
             #expect(model.activeAuthOption == nil)
@@ -3214,7 +3206,6 @@ struct OnboardingAISetupTests {
         await configGate.waitUntilBlocked()
         model.resetForGatewayChange(clearPendingHandoff: false)
         model.manualKey = "replacement-input"
-        model.showManualEntry = true
         markPending(defaults, owner: replacementOwner)
         let replacementState = pendingState(defaults)
         if scenario.retireSocket {
@@ -3227,7 +3218,6 @@ struct OnboardingAISetupTests {
         #expect(model.phase == .idle)
         #expect(model.detectError == nil)
         #expect(model.manualKey == "replacement-input")
-        #expect(model.showManualEntry)
         #expect(handoffCount == 0)
         #expect(storedActivationOwner(defaults) == replacementOwner)
         #expect(pendingState(defaults) == replacementState)
@@ -3238,14 +3228,12 @@ struct OnboardingAISetupTests {
         let model = OnboardingAISetupModel()
         model.manualProviderID = "openai"
         model.manualKey = "temporary-key"
-        model.showManualEntry = true
 
         model.resetForGatewayChange()
 
         #expect(model.phase == .idle)
         #expect(model.manualProviderID.isEmpty)
         #expect(model.manualKey.isEmpty)
-        #expect(!model.showManualEntry)
     }
 
     @Test func `configured model label stays pending until live verification`() async throws {
@@ -3468,12 +3456,12 @@ struct OnboardingAISetupTests {
                     try await TestWait.state("manual AI setup controls") {
                         let ax = try await inspectAISetupAccessibility(hosting)
                         return ax.actions["Next"] == false &&
-                            ax.actions.contains { $0.key.contains("API Keys") && $0.value }
+                            ax.actions.contains { $0.key.hasPrefix("API key") && $0.value }
                     }
-                    try await pressOnboardingEntryButton("API Keys", in: hosting)
+                    try await pressOnboardingEntryButton("API key", in: hosting)
                     try await TestWait.state("API key provider form") {
                         let ax = try await inspectAISetupAccessibility(hosting)
-                        return model.showManualEntry && ax.labels.contains("OpenAI API key") &&
+                        return ax.labels.contains("OpenAI API key") &&
                             ax.actions["Next"] == false
                     }
                     #expect(events.persistenceCalls == 4)
@@ -4360,7 +4348,6 @@ struct OnboardingAISetupTests {
         #expect(!model.configuredGatewayProbeUnavailable)
         #expect(model.detectError == nil)
         #expect(model.candidates.isEmpty)
-        #expect(!model.showManualEntry)
         #expect(harness.session.latestTask()?.snapshotSendCount() == 1)
     }
 
@@ -6386,8 +6373,8 @@ struct OnboardingAISetupTests {
                 hosting.layoutSubtreeIfNeeded()
                 window.displayIfNeeded()
                 let surface = try await inspectAISetupAccessibility(hosting)
-                #expect(surface.actions.contains { $0.key.contains("Test AI") && $0.value })
-                #expect(surface.actions.contains { $0.key.contains("API Keys") && $0.value })
+                #expect(surface.actions.contains { $0.key.hasPrefix("Claude") && $0.value })
+                #expect(surface.actions.contains { $0.key.hasPrefix("API key") && $0.value })
                 #expect(surface.actions["Show details"] == true)
 
                 // Repairing credentials alone grants no retry; the operator selects the row.
@@ -6492,7 +6479,6 @@ struct OnboardingAISetupTests {
         let model = OnboardingAISetupModel()
         model.manualProviderID = "openai"
         model.manualKey = "temporary-key"
-        model.showManualEntry = true
         let failure = OnboardingAISetupModel.transportFailure("connection dropped")
 
         model.requireFreshDetection(after: failure)
@@ -6503,6 +6489,5 @@ struct OnboardingAISetupTests {
         #expect(model.manualProviders.isEmpty)
         #expect(model.manualProviderID.isEmpty)
         #expect(model.manualKey.isEmpty)
-        #expect(!model.showManualEntry)
     }
 }

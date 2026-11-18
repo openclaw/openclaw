@@ -2,53 +2,16 @@ import AppKit
 import OpenClawProtocol
 import SwiftUI
 
-struct OnboardingAISetupSheet: View {
+/// Provider sign-in, model preparation, and activation steps, shown inside the picker row that started them.
+struct OnboardingProviderSetupSteps: View {
     @Bindable var model: OnboardingAISetupModel
     @State private var openedProviderAuthURL: URL?
-    @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 12) {
-                OnboardingProviderArtwork(
-                    icon: self.model.activeAuthOption?.icon,
-                    brandCandidates: [self.model.activeAuthOption?.brandId, self.model.activeAuthOption?.id],
-                    fallbackSymbol: "key.fill")
-                    .accessibilityHidden(true)
-                Text(self.model.activeAuthOption?.label ?? String(localized: "Provider setup"))
-                    .font(.title3.weight(.semibold))
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-            }
-
-            ScrollView {
-                self.content
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
-                        self.contentHeight = $0
-                    }
-            }
-            .scrollBounceBehavior(.basedOnSize)
-            .frame(height: min(self.contentHeight, 300))
-
-            HStack {
-                Button("Cancel") { self.model.cancelProviderAuth() }
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(self.model.providerAuthCancellation == .requesting)
-                Spacer(minLength: 0)
-                if let title = self.continueTitle {
-                    Button(title) { self.model.continueProviderAuth() }
-                        .buttonStyle(.borderedProminent)
-                        .keyboardShortcut(.defaultAction)
-                        .disabled(self.model.authBusy)
-                }
-            }
+        VStack(alignment: .leading, spacing: 12) {
+            self.content
+            self.actions
         }
-        .padding(24)
-        .frame(width: 500)
-        .frame(minHeight: 220)
-        .interactiveDismissDisabled()
         .environment(\.openURL, AppActivation.shared.openURLAction)
         .onAppear {
             self.openProviderAuthURLIfNeeded(self.model.authStep?.externalurl)
@@ -58,10 +21,25 @@ struct OnboardingAISetupSheet: View {
         }
     }
 
+    private var actions: some View {
+        HStack {
+            Button("Cancel") { self.model.cancelProviderAuth() }
+                .keyboardShortcut(.cancelAction)
+                .disabled(self.model.providerAuthCancellation == .requesting)
+            Spacer(minLength: 0)
+            if let title = self.continueTitle {
+                Button(title) { self.model.continueProviderAuth() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(self.model.authBusy)
+            }
+        }
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: 16) {
             if self.model.providerAuthCancellation == .requesting {
-                self.activity(String(localized: "Requesting cancellation…"))
+                self.activity(String(localized: "Canceling…"))
             } else if let step = self.model.authStep {
                 let deviceCode = parseWizardDeviceCode(step.devicecode)
                 if deviceCode == nil,
@@ -133,8 +111,7 @@ struct OnboardingAISetupSheet: View {
         if parseWizardDeviceCode(step.devicecode) != nil {
             return String(localized: "I've signed in")
         }
-        return ["text", "select", "confirm"].contains(wizardStepType(step))
-            ? String(localized: "Submit") : String(localized: "Continue")
+        return String(localized: "Continue")
     }
 
     private func deviceCodeStep(_ deviceCode: WizardDeviceCodePresentation) -> some View {
@@ -194,18 +171,19 @@ struct OnboardingAISetupSheet: View {
         switch wizardStepType(step) {
         case "text":
             if step.sensitive == true {
-                SecureField(step.placeholder ?? String(localized: "Value"), text: self.$model.authText)
+                SecureField(step.placeholder ?? "", text: self.$model.authText)
                     .textFieldStyle(.roundedBorder)
             } else {
-                TextField(step.placeholder ?? String(localized: "Value"), text: self.$model.authText)
+                TextField(step.placeholder ?? "", text: self.$model.authText)
                     .textFieldStyle(.roundedBorder)
             }
         case "select":
-            Picker("Option", selection: self.$model.authSelection) {
+            Picker("", selection: self.$model.authSelection) {
                 ForEach(Array(self.model.authWizardOptions.enumerated()), id: \.offset) { index, option in
                     Text(option.label).tag(index)
                 }
             }
+            .labelsHidden()
         case "confirm":
             Toggle("Confirm", isOn: self.$model.authConfirmation)
         default:

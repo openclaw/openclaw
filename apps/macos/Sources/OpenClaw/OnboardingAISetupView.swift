@@ -98,7 +98,8 @@ struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: (OnboardingAISetupModel.SetupIntent) -> Void
-    @State private var manualEntryRequest = 0
+    @State private var expandedRow: OnboardingAIPicker.RowID?
+    @State private var showMoreProviders = false
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
         GatewayAuthCard(
@@ -110,14 +111,27 @@ struct OnboardingAISetupView: View {
 
     var body: some View {
         ScrollViewReader { scroll in
-            ScrollView {
-                self.content
-                    .padding(.vertical, 4)
+            VStack(spacing: 6) {
+                ScrollView {
+                    self.content
+                        .padding(.vertical, 4)
+                        .padding(.trailing, 12)
+                }
+                .scrollIndicators(.automatic)
+                // Pinned below the list so a tall expanded row never pushes it out of sight.
+                if self.showsMoreProvidersLink {
+                    HStack {
+                        Spacer(minLength: 0)
+                        Button("More providers") {
+                            withAnimation(.easeInOut(duration: 0.15)) { self.showMoreProviders.toggle() }
+                            if self.showMoreProviders {
+                                withAnimation { scroll.scrollTo("more-providers", anchor: .top) }
+                            }
+                        }
+                        .buttonStyle(.link)
+                    }
                     .padding(.trailing, 12)
-            }
-            .scrollIndicators(.automatic)
-            .onChange(of: self.manualEntryRequest) {
-                withAnimation { scroll.scrollTo("manual-entry", anchor: .top) }
+                }
             }
             .onChange(of: self.model.manualError) { _, error in
                 if error != nil {
@@ -127,11 +141,24 @@ struct OnboardingAISetupView: View {
         }
     }
 
+    private var showsMoreProvidersLink: Bool {
+        self.model.providerCatalogLoaded && self.model.configuredGatewayAuthIssue == nil &&
+            (self.model.phase == .ready || self.model.phase == .testing)
+    }
+
     private var content: some View {
         VStack(alignment: .leading, spacing: 12) {
             switch self.model.phase {
             case .idle, .detecting:
-                self.detectingView
+                if self.model.waitingForPendingActivationDeadline {
+                    self.pendingActivationView
+                } else {
+                    // The usual providers show while the Gateway answers; they turn on once it does.
+                    self.rowList(OnboardingAIPicker.placeholderRows.map {
+                        OnboardingAIPicker.Row(id: $0, action: .localModel, onThisMac: false)
+                    })
+                    .disabled(true)
+                }
             case .ready, .testing:
                 self.resultsView
             case .connected:
@@ -139,30 +166,17 @@ struct OnboardingAISetupView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: Binding(
-            get: { self.model.activeAuthOption != nil },
-            set: {
-                if !$0 {
-                    self.model.cancelProviderAuth()
-                }
-            })) {
-                OnboardingAISetupSheet(model: self.model)
-        }
     }
 
-    private var detectingView: some View {
+    private var pendingActivationView: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
                 ProgressView()
                     .controlSize(.small)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(self.model.waitingForPendingActivationDeadline
-                        ? "Waiting for the previous AI test to finish…"
-                        : "Looking for AI you already use…")
+                    Text("Waiting for the previous AI test to finish…")
                         .font(.callout.weight(.semibold))
-                    Text(self.model.waitingForPendingActivationDeadline
-                        ? "OpenClaw will check again before changing any inference settings."
-                        : "Checking CLI logins, saved API keys, and local model servers on the Gateway.")
+                    Text("OpenClaw checks again before it changes your AI setup.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -171,42 +185,45 @@ struct OnboardingAISetupView: View {
             .padding(.vertical, 18)
             .frame(maxWidth: .infinity)
 
-            if self.model.waitingForPendingActivationDeadline {
-                if let failure = self.model.detectError {
-                    OnboardingErrorCard(
-                        title: "AI setup needs verification",
-                        message: failure.summary,
-                        details: failure.detail,
-                        docsSlug: "start/onboarding",
-                        retryTitle: "Check again",
-                        retry: { self.retryConfiguredGatewayProbe(.inspectOnly) })
-                } else {
-                    Button("Check again") { self.retryConfiguredGatewayProbe(.inspectOnly) }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                }
+            if let failure = self.model.detectError {
+                OnboardingErrorCard(
+                    title: "AI setup needs verification",
+                    message: failure.summary,
+                    details: failure.detail,
+                    docsSlug: "start/onboarding",
+                    retryTitle: "Check again",
+                    retry: { self.retryConfiguredGatewayProbe(.inspectOnly) })
+            } else {
+                Button("Check again") { self.retryConfiguredGatewayProbe(.inspectOnly) }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
             }
         }
     }
 
+    private var picker: OnboardingAIPicker {
+        OnboardingAIPicker(
+            candidates: self.model.candidates,
+            authOptions: self.model.authOptions,
+            manualProviders: self.model.manualProviders,
+            prepareOptions: self.model.prepareOptions)
+    }
+
     @ViewBuilder
     private var resultsView: some View {
-        if !self.model.candidates.isEmpty {
-            VStack(spacing: 8) {
-                ForEach(self.model.candidates) { candidate in
-                    self.candidateRow(candidate)
-                }
+        let picker = self.picker
+        if self.model.configuredGatewayAuthIssue == nil {
+            if !picker.rows.isEmpty {
+                self.rowList(picker.rows)
             }
-        } else if self.model.detectError == nil,
-                  self.model.configuredGatewayAuthIssue == nil
-        {
-            // A failed detect must not claim "nothing found" — the error card
-            // below owns that state and the claim would be unproven.
-            self.noCandidatesIntro
-        }
-
-        if !self.model.unavailableCandidates.isEmpty {
-            self.unavailableCandidatesSection
+            // Steps started without a row (a resumed setup or More providers) show under the list.
+            if self.model.activeAuthOption != nil, self.expandedRow == nil {
+                self.unplacedSetupSteps
+            }
+            if self.model.providerCatalogLoaded, self.showMoreProviders {
+                self.moreProviders(picker)
+                    .id("more-providers")
+            }
         }
 
         if let authIssue = model.configuredGatewayAuthIssue {
@@ -221,9 +238,7 @@ struct OnboardingAISetupView: View {
                 retry: self.returnToGatewayAuthentication)
         } else if let detectError = model.detectError {
             OnboardingErrorCard(
-                title: self.model.configuredGatewayProbeUnavailable
-                    ? "Couldn’t check this Gateway for AI accounts"
-                    : "Couldn’t check this Gateway for AI access",
+                title: "Couldn’t check which AI you can use",
                 message: detectError.summary,
                 details: detectError.detail,
                 docsSlug: "start/onboarding",
@@ -247,49 +262,331 @@ struct OnboardingAISetupView: View {
                 self.model.retryFromScratch()
             }
         }
+    }
 
-        if self.model.providerCatalogLoaded {
-            self.providerPrepareSection
-            self.providerAuthSection
-            self.manualSection
+    private func rowList(_ rows: [OnboardingAIPicker.Row]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0 { Divider() }
+                self.pickerRow(row)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(OnboardingSurface(cornerRadius: 12))
+    }
+
+    private func pickerRow(_ row: OnboardingAIPicker.Row) -> some View {
+        let expanded = self.expandedRow == row.id
+        let failure = self.failure(for: row)
+        return VStack(alignment: .leading, spacing: 10) {
+            Button {
+                self.select(row)
+            } label: {
+                HStack(spacing: 12) {
+                    OnboardingProviderArtwork(
+                        icon: row.candidate?.icon,
+                        brandCandidates: Self.brands(for: row),
+                        fallbackSymbol: Self.symbol(for: row),
+                        wellSize: 36,
+                        iconSize: 20)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            self.title(for: row)
+                                .font(.callout.weight(.semibold))
+                            if row.onThisMac {
+                                Text("On this Mac")
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill(Color.green.opacity(0.16)))
+                                    .foregroundStyle(Color.green)
+                            }
+                        }
+                        Group {
+                            if let failure {
+                                Text(failure.summary)
+                            } else if expanded, self.isConnecting {
+                                Text("Connecting…")
+                            } else {
+                                self.subtitle(for: row, expanded: expanded)
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundStyle(failure == nil ? Color.secondary : Color.orange)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 0)
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!self.canSelect(row))
+            .accessibilityIdentifier("onboarding-ai-row-\(Self.accessibilityName(for: row.id))")
+
+            if expanded {
+                self.expandedContent(row, failure: failure)
+                    .padding(.leading, 48)
+                    .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(expanded ? Color.accentColor.opacity(0.06) : Color.clear)
+        .overlay(alignment: .leading) {
+            if expanded {
+                Rectangle().fill(Color.accentColor).frame(width: 3)
+            }
         }
     }
 
-    private var noCandidatesIntro: some View {
+    @ViewBuilder
+    private func expandedContent(_ row: OnboardingAIPicker.Row, failure: OnboardingAISetupModel.Failure?) -> some View {
+        if self.model.activeAuthOption != nil {
+            OnboardingProviderSetupSteps(model: self.model)
+        } else if self.model.phase == .testing {
+            self.activity(String(
+                format: String(localized: "Checking that %@ replies with one short message…"),
+                self.displayName(for: row)))
+        } else {
+            switch row.action {
+            case .apiKey:
+                self.keyForm(fixedProvider: row.id == .gemini)
+            case .localModel:
+                self.localModelChoices
+            case let .candidate(kind):
+                if let failure {
+                    OnboardingErrorDetails(text: failure.copyText)
+                    Button("Try again") { self.model.userSelect(kind: kind) }
+                        .controlSize(.small)
+                }
+            case .signIn:
+                EmptyView()
+            }
+        }
+    }
+
+    private var unplacedSetupSteps: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                OnboardingProviderArtwork(
+                    icon: self.model.activeAuthOption?.icon,
+                    brandCandidates: [self.model.activeAuthOption?.brandId, self.model.activeAuthOption?.id],
+                    fallbackSymbol: "key.fill")
+                Text(self.model.activeAuthOption?.label ?? "")
+                    .font(.callout.weight(.semibold))
+            }
+            OnboardingProviderSetupSteps(model: self.model)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(OnboardingSurface(cornerRadius: 12))
+    }
+
+    private func activity(_ message: String) -> some View {
+        HStack(spacing: 8) {
+            ProgressView().controlSize(.small)
+            Text(message).font(.callout)
+        }
+    }
+
+    private var isConnecting: Bool {
+        self.model.activeAuthOption != nil || self.model.phase == .testing || self.model.manualTesting
+    }
+
+    private func failure(for row: OnboardingAIPicker.Row) -> OnboardingAISetupModel.Failure? {
+        guard case let .candidate(kind) = row.action,
+              case let .failed(failure) = self.model.statuses[kind] ?? .untried
+        else { return nil }
+        return failure
+    }
+
+    private func canSelect(_ row: OnboardingAIPicker.Row) -> Bool {
+        if case let .candidate(kind) = row.action {
+            return self.model.canSelectCandidate(kind: kind)
+        }
+        return !self.model.isBusy && self.model.activeAuthOption == nil && !self.model.connected
+    }
+
+    private func select(_ row: OnboardingAIPicker.Row) {
+        withAnimation(.easeInOut(duration: 0.15)) {
+            switch row.action {
+            case let .candidate(kind):
+                self.expandedRow = row.id
+                self.model.userSelect(kind: kind)
+            case let .signIn(option):
+                self.expandedRow = row.id
+                self.model.startProviderWizard(option, kind: .auth)
+            case let .apiKey(providerID):
+                self.toggle(row.id)
+                if let providerID { self.model.manualProviderID = providerID }
+            case .localModel:
+                self.toggle(row.id)
+            }
+        }
+    }
+
+    private func toggle(_ id: OnboardingAIPicker.RowID) {
+        self.expandedRow = self.expandedRow == id ? nil : id
+    }
+
+    private func title(for row: OnboardingAIPicker.Row) -> Text {
+        switch row.id {
+        case .chatGPT: Text("ChatGPT")
+        case .claude: Text("Claude")
+        case .gemini: Text("Gemini")
+        case .apiKey: Text("API key")
+        case .localModel: Text("A model on your own computer")
+        case .found: Text(verbatim: row.candidate?.label ?? "")
+        }
+    }
+
+    private func displayName(for row: OnboardingAIPicker.Row) -> String {
+        switch row.id {
+        case .chatGPT: "ChatGPT"
+        case .claude: "Claude"
+        case .gemini: "Gemini"
+        case .apiKey: self.model.selectedManualProvider?.label ?? String(localized: "your AI")
+        case .localModel, .found: self.model.candidates.first { $0.kind == self.model.selectedKind }?.label
+            ?? String(localized: "your AI")
+        }
+    }
+
+    private func subtitle(for row: OnboardingAIPicker.Row, expanded: Bool) -> Text {
+        switch row.id {
+        case .chatGPT: Text("Use your ChatGPT plan")
+        case .claude: Text("Use your Claude plan")
+        case .gemini: if case .signIn = row.action {
+                Text("Use your Google account")
+            } else {
+                Text("Use a Gemini API key")
+            }
+        case .apiKey: if expanded {
+                Text("Paste a key from your provider’s website")
+            } else {
+                Text("OpenAI, Anthropic, OpenRouter and more")
+            }
+        case .localModel: Text("Ollama or LM Studio")
+        case .found: Text(verbatim: row.candidate?.detail ?? "")
+        }
+    }
+
+    private static func brands(for row: OnboardingAIPicker.Row) -> [String?] {
+        switch row.id {
+        case .chatGPT: ["openai"]
+        case .claude: ["anthropic"]
+        case .gemini: ["google"]
+        case .apiKey: []
+        case .localModel: ["ollama"]
+        case let .found(kind): [row.candidate?.brandId, kind]
+        }
+    }
+
+    private static func symbol(for row: OnboardingAIPicker.Row) -> String {
+        switch row.id {
+        case .apiKey: "key.fill"
+        case .localModel: "desktopcomputer"
+        case let .found(kind): self.symbol(for: kind)
+        default: "sparkles"
+        }
+    }
+
+    private static func accessibilityName(for id: OnboardingAIPicker.RowID) -> String {
+        switch id {
+        case .chatGPT: "chatgpt"
+        case .claude: "claude"
+        case .gemini: "gemini"
+        case .apiKey: "api-key"
+        case .localModel: "local-model"
+        case let .found(kind): kind
+        }
+    }
+
+    @ViewBuilder
+    private var localModelChoices: some View {
+        let picker = self.picker
         VStack(alignment: .leading, spacing: 8) {
-            Text("No usable AI access found on this Gateway")
-                .font(.headline)
-            Text(self.model.recommendedInstalls.isEmpty
-                ? "Connect a provider below with an API key or token, then check again."
-                : "Install one of these tools, then check again. You can also connect a provider below.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            if !self.model.recommendedInstalls.isEmpty {
-                Text("Recommended installs")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 230), spacing: 10)],
-                    spacing: 10)
+            ForEach(picker.localCandidates) { candidate in
+                self.candidateRow(candidate)
+            }
+            ForEach(self.model.prepareOptions) { option in
+                self.providerChoiceRow(
+                    icon: option.icon,
+                    brandCandidates: [option.brandId, option.id],
+                    label: Text(option.label),
+                    hint: self.providerHint(option.hint),
+                    fallbackSymbol: "arrow.down.circle",
+                    actionLabel: Text(option.actionLabel ?? String(localized: "Set up…")))
                 {
+                    self.model.startProviderPrepare(option)
+                }
+            }
+            ForEach(picker.localAuthOptions) { option in
+                self.providerAuthRow(option)
+            }
+        }
+    }
+
+    private func moreProviders(_ picker: OnboardingAIPicker) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if self.model.nativeSessionCatalogPreferenceRequired,
+               !self.model.nativeSessionCatalogs.isEmpty
+            {
+                Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Show your existing conversations")
+                            .font(.callout.weight(.semibold))
+                        Text(String(
+                            format: String(
+                                localized: "Lists your %@ conversations in the sidebar without copying them."),
+                            self.model.nativeSessionCatalogSummary))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.checkbox)
+                .padding(.bottom, 6)
+            }
+            ForEach(picker.moreAuthOptions) { option in
+                self.providerAuthRow(option)
+            }
+            if self.model.manualProviders.isEmpty, self.model.authOptions.isEmpty {
+                OnboardingErrorCard(
+                    title: "No AI providers are available",
+                    message: "Install an AI provider plugin, then check again.",
+                    docsSlug: "concepts/model-providers",
+                    retryTitle: "Check again")
+                {
+                    self.model.retryFromScratch()
+                }
+            }
+            if !self.model.unavailableCandidates.isEmpty {
+                self.unavailableCandidatesSection
+            }
+            if !self.model.recommendedInstalls.isEmpty {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 10)], spacing: 10) {
                     ForEach(self.model.recommendedInstalls) { install in
                         OnboardingRecommendedInstallCard(install: install)
                     }
                 }
             }
-            Button("Check again") {
-                self.model.retryFromScratch()
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
+            Button("Check again") { self.model.retryFromScratch() }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(self.model.isBusy)
         }
-        .padding(.vertical, 4)
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(OnboardingSurface(cornerRadius: 12))
     }
 
     private var unavailableCandidatesSection: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Detected, but not auto-tested")
+            Text("Found, but not ready to use")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             ForEach(self.model.unavailableCandidates) { candidate in
@@ -369,11 +666,13 @@ struct OnboardingAISetupView: View {
     {
         switch status {
         case .testing:
-            "Testing — asking \(candidate.modelRef) for a quick reply…"
+            String(
+                format: String(localized: "Checking that %@ replies with one short message…"),
+                candidate.label)
         case let .failed(failure):
             failure.summary
         case .untried:
-            "\(candidate.modelRef) · \(candidate.detail)"
+            candidate.detail
         }
     }
 
@@ -409,129 +708,6 @@ struct OnboardingAISetupView: View {
             return true
         }
         return false
-    }
-
-    @ViewBuilder
-    private var manualSection: some View {
-        if self.model.manualProviders.isEmpty {
-            if self.model.authOptions.isEmpty {
-                OnboardingErrorCard(
-                    title: "No key-based providers are available",
-                    message: "Enable or install a text-inference provider plugin on this Gateway, then check again.",
-                    docsSlug: "concepts/model-providers",
-                    retryTitle: "Check again")
-                {
-                    self.model.retryFromScratch()
-                }
-            }
-        } else if self.model.candidates.isEmpty || self.model.showManualEntry {
-            self.manualForm
-        }
-    }
-
-    @ViewBuilder
-    private var providerPrepareSection: some View {
-        if !self.model.prepareOptions.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Set up a local model")
-                    .font(.headline)
-                Text("Connect a local model service, or prepare a model on this Gateway.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                ForEach(self.model.prepareOptions) { option in
-                    self.providerChoiceRow(
-                        icon: option.icon,
-                        brandCandidates: [option.brandId, option.id],
-                        label: Text(option.label),
-                        hint: self.providerHint(option.hint),
-                        fallbackSymbol: "arrow.down.circle",
-                        actionLabel: Text(option.actionLabel ?? String(localized: "Connect / Set up")))
-                    {
-                        self.model.startProviderPrepare(option)
-                    }
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(OnboardingSurface(cornerRadius: 12))
-        }
-    }
-
-    @ViewBuilder
-    private var providerAuthSection: some View {
-        if !self.model.authOptions.isEmpty || !self.model.manualProviders.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                if self.model.nativeSessionCatalogPreferenceRequired,
-                   !self.model.nativeSessionCatalogs.isEmpty
-                {
-                    Toggle(isOn: self.$model.nativeSessionCatalogsEnabled) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Show existing native conversations")
-                                .font(.callout.weight(.semibold))
-                            Text(String(
-                                format: String(localized: """
-                                Include existing %@ conversations in the sidebar. \
-                                This discovers them in place; it does not copy transcripts.
-                                """),
-                                self.model.nativeSessionCatalogSummary))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.checkbox)
-                    .padding(.bottom, 6)
-                }
-                Text("Connect an AI provider")
-                    .font(.headline)
-                // Localization: the sign-in/API-key flow belongs to the selected provider, not OpenClaw.
-                Text(
-                    "Choose any supported provider. OpenClaw asks before installing a provider plugin, " +
-                        "then continues into its own sign-in or API-key flow and verifies a real reply.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                let featured = self.model.authOptions.filter(\.featured)
-                let more = self.model.authOptions.filter { !$0.featured }
-                ForEach(featured) { option in
-                    self.providerAuthRow(option)
-                }
-                if !self.model.manualProviders.isEmpty {
-                    self.apiKeysRow
-                }
-                if !more.isEmpty {
-                    DisclosureGroup("More sign-in options") {
-                        VStack(spacing: 8) {
-                            ForEach(more) { option in
-                                self.providerAuthRow(option)
-                            }
-                        }
-                        .padding(.top, 6)
-                    }
-                    .font(.callout)
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(OnboardingSurface(cornerRadius: 12))
-        }
-    }
-
-    private var apiKeysRow: some View {
-        self.providerChoiceRow(
-            icon: nil,
-            brandCandidates: [],
-            label: Text("API Keys"),
-            hint: Text("Connect with an API key or token"),
-            fallbackSymbol: "key.fill",
-            actionLabel: Text("Connect"),
-            selected: self.model.showManualEntry)
-        {
-            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
-                self.model.showManualEntry = true
-                // The form can already exist below the viewport; every tap must reveal it.
-                self.manualEntryRequest += 1
-            }
-        }
     }
 
     private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
@@ -591,26 +767,20 @@ struct OnboardingAISetupView: View {
         .disabled(self.model.isBusy)
     }
 
-    private var manualForm: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Connect with an API key or token")
-                .font(.headline)
+    private func keyForm(fixedProvider: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                if let provider = self.model.selectedManualProvider {
-                    OnboardingProviderArtwork(
-                        icon: provider.icon,
-                        brandCandidates: [provider.brandId, provider.id],
-                        fallbackSymbol: "key.fill")
-                }
-                Picker("Provider", selection: self.$model.manualProviderID) {
-                    ForEach(self.model.manualProviders) { provider in
-                        Text(provider.label).tag(provider.id)
+                if !fixedProvider {
+                    Picker("Provider", selection: self.$model.manualProviderID) {
+                        ForEach(self.model.manualProviders) { provider in
+                            Text(provider.label).tag(provider.id)
+                        }
                     }
+                    .labelsHidden()
+                    .frame(width: 170)
                 }
-                .labelsHidden()
-                .frame(width: 230)
 
-                SecureField("API key or token", text: self.$model.manualKey)
+                SecureField("API key", text: self.$model.manualKey)
                     .textFieldStyle(.roundedBorder)
                     .onSubmit { self.model.submitManualKey() }
 
@@ -620,10 +790,10 @@ struct OnboardingAISetupView: View {
                     if self.model.manualTesting {
                         ProgressView()
                             .controlSize(.small)
-                            .frame(minWidth: 74)
+                            .frame(minWidth: 64)
                     } else {
                         Text("Connect")
-                            .frame(minWidth: 74)
+                            .frame(minWidth: 64)
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -633,9 +803,11 @@ struct OnboardingAISetupView: View {
                 .disabled(self.model.isBusy ||
                     self.model.manualKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text(self.manualProviderHelp)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if let website = OnboardingProviderAuthLink.safeURL(self.model.selectedManualProvider?.website) {
+                Link("Where do I find my key?", destination: website)
+                    .font(.caption)
+                    .environment(\.openURL, AppActivation.shared.openURLAction)
+            }
             if let manualError = model.manualError {
                 OnboardingErrorCard(
                     title: "That key didn’t work",
@@ -646,18 +818,7 @@ struct OnboardingAISetupView: View {
                     retry: nil)
             }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(OnboardingSurface(cornerRadius: 12))
         .id("manual-entry")
-    }
-
-    private var manualProviderHelp: String {
-        let hint = self.model.selectedManualProvider?.hint?.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let hint, !hint.isEmpty else {
-            return "Paste the key or token here, and OpenClaw checks it with a real test question."
-        }
-        return "\(hint). Paste it here, and OpenClaw checks it with a real test question."
     }
 }
 
