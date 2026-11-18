@@ -86,15 +86,19 @@ BEGIN
     ALTER TABLE standing_intents ADD COLUMN IF NOT EXISTS location_trigger TEXT COLLATE "C";
     ALTER TABLE standing_intents ADD COLUMN IF NOT EXISTS delivery_target TEXT COLLATE "C";
     ALTER TABLE standing_intents ADD COLUMN IF NOT EXISTS last_inside BIGINT;
+    -- Checks are created validated (no NOT VALID): existing rows hold NULL
+    -- in the new columns, which satisfies each IS NULL guard trivially, and
+    -- verifyAndRecordPostgresSchema compares exact constraint definitions —
+    -- pg_get_constraintdef would record a NOT VALID suffix as drift.
     ALTER TABLE standing_intents
       ADD CONSTRAINT standing_intents_trigger_kind_check
-      CHECK (trigger_kind IS NULL OR (trigger_kind IN ('keywords', 'location'))) NOT VALID;
+      CHECK (trigger_kind IS NULL OR (trigger_kind IN ('keywords', 'location')));
     ALTER TABLE standing_intents
       ADD CONSTRAINT standing_intents_delivery_target_check
-      CHECK (delivery_target IS NULL OR (char_length(btrim(delivery_target)) > 0)) NOT VALID;
+      CHECK (delivery_target IS NULL OR (char_length(btrim(delivery_target)) > 0));
     ALTER TABLE standing_intents
       ADD CONSTRAINT standing_intents_last_inside_check
-      CHECK (last_inside IS NULL OR (last_inside IN (0, 1))) NOT VALID;
+      CHECK (last_inside IS NULL OR (last_inside IN (0, 1)));
     CREATE INDEX IF NOT EXISTS idx_standing_intents_location
       ON standing_intents (status, trigger_kind, location_trigger);
   END IF;
