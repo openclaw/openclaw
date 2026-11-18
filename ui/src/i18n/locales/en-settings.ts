@@ -1002,7 +1002,8 @@ const enSettings = {
       providerDefault: "Provider default",
       machineClass: "Device class",
       machineClassHelp:
-        "Enter a class accepted by the selected Crabbox backend and binary. The provider determines its effective sizing.",
+        "Choose an advertised class when available, or enter a custom class. The provider determines its effective sizing.",
+      customMachineClass: "Custom device class…",
       ttl: "Max lifetime",
       ttlHelp: "Use a positive Go duration such as 8h or 90m.",
       ttlPlaceholder: "8h",
