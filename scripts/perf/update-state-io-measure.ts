@@ -23,6 +23,10 @@ assert.ok(
   Number.isSafeInteger(samples) && samples >= 3 && samples % 2 === 1,
   "Use an odd sample count >=3",
 );
+if (values.phase === "discovery") {
+  await measureDiscovery();
+  process.exit(0);
+}
 const phases = values.phase ? [values.phase] : ["snapshot", "retention", "doctor"];
 assert.ok(phases.every((phase) => ["snapshot", "retention", "doctor"].includes(phase)));
 const repo = fileURLToPath(new URL("../../", import.meta.url));
@@ -293,5 +297,153 @@ async function measure() {
         }),
       );
     }
+  }
+}
+
+// Owner-only attribution, not total update time or Gateway downtime.
+async function measureDiscovery() {
+  assert.ok(samples >= 5, "Discovery timing requires at least five interleaved samples");
+  const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const scratch = path.join(sourceRoot, ".artifacts");
+  fs.mkdirSync(scratch, { recursive: true });
+  const fixtureRoot = fs.realpathSync(fs.mkdtempSync(path.join(scratch, "update-discovery-")));
+  const stateDir = path.join(fixtureRoot, "state");
+  const agentRoot = path.join(stateDir, "agents/main/agent");
+  const database = path.join(agentRoot, "openclaw-agent.sqlite");
+  Object.assign(process.env, {
+    HOME: path.join(fixtureRoot, "home"),
+    OPENCLAW_HOME: path.join(fixtureRoot, "home"),
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+    OPENCLAW_AGENT_DIR: agentRoot,
+  });
+  try {
+    fs.mkdirSync(agentRoot, { recursive: true });
+    fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH!, '{"plugins":{"enabled":false}}');
+    {
+      using db = new DatabaseSync(database);
+      db.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES ('synthetic')");
+    }
+    for (let directory = 0; directory < 200; directory++) {
+      const destination = path.join(agentRoot, `ordinary-${directory}`);
+      fs.mkdirSync(destination);
+      for (let file = 0; file < 10; file++) {
+        fs.writeFileSync(path.join(destination, `${file}.txt`), "ordinary synthetic payload");
+      }
+    }
+    const owners = [
+      "src/commands/backup-resource-inventory.ts",
+      "src/infra/backup-sqlite-snapshot.ts",
+    ];
+    const frozenOwners = new Map(
+      owners.map((owner) => [
+        path.resolve(sourceRoot, owner),
+        path.join(fixtureRoot, path.basename(owner)),
+      ]),
+    );
+    for (const relative of owners) {
+      const owner = path.resolve(sourceRoot, relative);
+      const baseline = execFileSync("git", ["show", `${values.baseline}:${relative}`], {
+        cwd: sourceRoot,
+        encoding: "utf8",
+      }).replace(
+        /(from\s+|import\(\s*)"([^"]+)"/gu,
+        (_match, prefix: string, specifier: string) => {
+          const source = path.resolve(path.dirname(owner), specifier);
+          const resolved = specifier.startsWith(".")
+            ? pathToFileURL(frozenOwners.get(source.replace(/\.js$/u, ".ts")) ?? source).href
+            : import.meta.resolve(specifier);
+          return `${prefix}${JSON.stringify(resolved)}`;
+        },
+      );
+      fs.writeFileSync(frozenOwners.get(owner)!, baseline);
+    }
+    const before: typeof import("../../src/infra/backup-sqlite-snapshot.js") = await import(
+      pathToFileURL(frozenOwners.get(path.resolve(sourceRoot, owners[1]!))!).href
+    );
+    const after = await import("../../src/infra/backup-sqlite-snapshot.js");
+    const promises = (await import("node:fs/promises")).default;
+    const original = promises.readdir;
+    const measurements: Array<{ label: string; seconds: number; unrelatedDirectoryReads: number }> =
+      [];
+    console.log(
+      JSON.stringify({
+        scope:
+          "Warm discovery owners only; both changed baseline modules frozen, other dependencies shared; not CLI update or downtime proof",
+        acceptance:
+          "Exact selected core database; zero agent-tree reads outside retained plugin resource roots; candidate median/p95 must not regress",
+        baseline: values.baseline,
+        samples,
+        ordinaryFiles: 2000,
+        unrelatedDirectories: 201,
+        candidateOwners: Object.fromEntries(
+          owners.map((owner) => [
+            owner,
+            createHash("sha256")
+              .update(fs.readFileSync(path.join(sourceRoot, owner)))
+              .digest("hex"),
+          ]),
+        ),
+        node: process.version,
+        loadavg: loadavg(),
+      }),
+    );
+    // Both owners warm metadata/module caches before the interleaved samples.
+    const input = {
+      stateDir,
+      config: { plugins: { enabled: false } },
+      env: process.env,
+      agentRegistry: [],
+    };
+    for (const module of [before, after]) {
+      assert.deepEqual(await module.discoverBackupDatabasePaths(input), [database]);
+    }
+    for (let sample = 0; sample < samples; sample++) {
+      for (const [label, module] of [
+        ["before", before],
+        ["after", after],
+      ] as const) {
+        let unrelatedDirectoryReads = 0;
+        promises.readdir = new Proxy(original, {
+          apply(target, thisArg, args) {
+            const directory = String(args[0]);
+            if (directory === agentRoot || directory.startsWith(`${agentRoot}${path.sep}`)) {
+              unrelatedDirectoryReads++;
+            }
+            return Reflect.apply(target, thisArg, args);
+          },
+        });
+        const started = performance.now();
+        try {
+          assert.deepEqual(await module.discoverBackupDatabasePaths(input), [database]);
+        } finally {
+          promises.readdir = original;
+        }
+        const seconds = (performance.now() - started) / 1000;
+        measurements.push({ label, seconds, unrelatedDirectoryReads });
+        console.log(JSON.stringify({ sample, label, seconds, unrelatedDirectoryReads }));
+      }
+    }
+    for (const label of ["before", "after"]) {
+      const rows = measurements.filter((row) => row.label === label);
+      assert.ok(rows.every((row) => row.unrelatedDirectoryReads === (label === "after" ? 0 : 201)));
+      const times = rows.map((row) => row.seconds).toSorted((a, b) => a - b);
+      console.log(
+        JSON.stringify({
+          label,
+          median: times[Math.floor(times.length / 2)],
+          p95: times[Math.ceil(times.length * 0.95) - 1],
+          min: times[0],
+          max: times.at(-1),
+          unrelatedDirectoryReads: rows.map((row) => row.unrelatedDirectoryReads),
+        }),
+      );
+    }
+  } finally {
+    const { closeCliResources, waitForPendingCliDisposers } =
+      await import("../../src/cli/runtime-cleanup.js");
+    await closeCliResources();
+    await waitForPendingCliDisposers();
+    fs.rmSync(fixtureRoot, { recursive: true, force: true });
   }
 }

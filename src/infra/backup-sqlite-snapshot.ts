@@ -279,6 +279,7 @@ export async function discoverBackupDatabasePaths(params: {
     agentRoots: [],
     pluginResources: retained,
     pluginRoots: plugins.plugins.map((plugin) => plugin.rootDir),
+    temporaryRootScope: "plugin-resources",
   });
   const inventory = sealBackupResourceInventory(resources, []);
   // Core paths are already known; unrelated state cannot contribute plugin stores.

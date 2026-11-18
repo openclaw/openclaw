@@ -92,7 +92,14 @@ const MANAGED_STATE_ROOTS = [
 async function listDefaultAgentTemporaryRoots(
   stateDir: string,
   agentRoots: readonly BackupAgentRoot[],
+  resourceRoots?: readonly string[],
 ): Promise<string[]> {
+  const isSelectedPath = (candidate: string) =>
+    !resourceRoots ||
+    resourceRoots.some((root) => isPathInside(root, candidate) || isPathInside(candidate, root));
+  if (!isSelectedPath(path.join(stateDir, "agents"))) {
+    return [];
+  }
   // Name-based scratch ownership belongs only to the shipped default layout;
   // a configured custom root keeps its durable tmp trees even when nested there.
   const customAgentRoots = agentRoots.filter(
@@ -112,7 +119,7 @@ async function listDefaultAgentTemporaryRoots(
   }
   for (const directory of agentDirectories) {
     const agentRoot = path.join(stateDir, "agents", directory.name, "agent");
-    if (!directory.isDirectory() || isCustomAgentPath(agentRoot)) {
+    if (!directory.isDirectory() || isCustomAgentPath(agentRoot) || !isSelectedPath(agentRoot)) {
       continue;
     }
     const scan = await walkDirectory(agentRoot, {
@@ -120,9 +127,13 @@ async function listDefaultAgentTemporaryRoots(
       include: (entry) =>
         entry.kind === "directory" &&
         (entry.name === "tmp" || entry.name === ".tmp") &&
+        isSelectedPath(entry.path) &&
         !isCustomAgentPath(entry.path),
       descend: (entry) =>
-        entry.name !== "tmp" && entry.name !== ".tmp" && !isCustomAgentPath(entry.path),
+        entry.name !== "tmp" &&
+        entry.name !== ".tmp" &&
+        isSelectedPath(entry.path) &&
+        !isCustomAgentPath(entry.path),
     });
     const failure = scan.failedDirs.find(({ error }) => !isNotFoundPathError(error));
     if (failure) {
@@ -147,6 +158,8 @@ export async function createBackupResourcePlan(params: {
   pluginRoots: readonly string[];
   onlyConfig?: boolean;
   localCompanion?: boolean;
+  /** A full archive must enumerate all default-agent temporary roots. */
+  temporaryRootScope?: "plugin-resources";
 }): Promise<BackupResourcePlan> {
   const stateDir = path.resolve(params.stateDir);
   const pluginResourceRoots: string[] = [];
@@ -179,9 +192,6 @@ export async function createBackupResourcePlan(params: {
     for (const templateDir of params.excludedWorktreeTemplateDirs ?? []) {
       exclude("worktree template", templateDir);
     }
-    for (const temporaryRoot of await listDefaultAgentTemporaryRoots(stateDir, agentRoots)) {
-      exclude("agent temporary files", temporaryRoot);
-    }
     exclude("plugin skills", path.join(stateDir, "plugin-skills"));
 
     for (const resource of params.pluginResources) {
@@ -206,6 +216,13 @@ export async function createBackupResourcePlan(params: {
     }
     for (const pluginRoot of params.pluginRoots) {
       exclude("plugin dependencies", path.join(pluginRoot, "node_modules"));
+    }
+    for (const temporaryRoot of await listDefaultAgentTemporaryRoots(
+      stateDir,
+      agentRoots,
+      params.temporaryRootScope === "plugin-resources" ? pluginResourceRoots : undefined,
+    )) {
+      exclude("agent temporary files", temporaryRoot);
     }
   }
 
