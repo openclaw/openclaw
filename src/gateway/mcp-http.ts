@@ -5,7 +5,9 @@ import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/int
 import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
+import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import { isAutomationsToolName } from "../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -316,6 +318,18 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               : undefined;
             if (callerIdentity && boundClientGrant?.personalToolParticipants) {
               callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+            }
+            // Loopback callers carry the same conversation tool policy that already
+            // filtered the served catalog; bind it so tools re-asserting caller policy
+            // (for example the GitHub reader) can verify the invocation's policy.
+            if (callerIdentity) {
+              const policy = pickSandboxToolPolicy(requestContext.conversationToolPolicy);
+              const isToolAllowed = createToolPolicyMatcher(policy);
+              callerIdentity.assertToolAllowed = (toolName: string) => {
+                if (!isToolAllowed(toolName)) {
+                  throw new Error(`${toolName} is not allowed by this conversation's tool policy`);
+                }
+              };
             }
             return callerIdentity;
           };
