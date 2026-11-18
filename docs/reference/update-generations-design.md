@@ -21,12 +21,12 @@ This is the fourth version. Source reviews at
 [Rejected approaches](#rejected-approaches). Counts under "Why change it" are
 from `6acf398088c430ba93944a5bc07eec1b2299ac00`.
 
-| Slice                                        | Status                                                                                                                                                                                   |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).                                                                                                                   |
-| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835).                                                                                                                   |
-| Owed steps after the commit point            | Two slices merged: [#200331](https://github.com/openclaw/openclaw/pull/200331) and [#200507](https://github.com/openclaw/openclaw/pull/200507). Backup retirement and collection remain. |
-| Stop, publish, and rollback in the candidate | Not designed.                                                                                                                                                                            |
+| Slice                                        | Status                                                                                                                                                                                                                                                   |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Candidate-owned rehearsal                    | Merged in [#197922](https://github.com/openclaw/openclaw/pull/197922).                                                                                                                                                                                   |
+| Release directories behind a linked root     | Merged in [#198835](https://github.com/openclaw/openclaw/pull/198835).                                                                                                                                                                                   |
+| Owed steps after the commit point            | Three slices merged: [#200331](https://github.com/openclaw/openclaw/pull/200331), [#200507](https://github.com/openclaw/openclaw/pull/200507), and [#201178](https://github.com/openclaw/openclaw/pull/201178). Backup retirement and collection remain. |
+| Stop, publish, and rollback in the candidate | Not designed.                                                                                                                                                                                                                                            |
 
 ## Why change it
 
@@ -775,9 +775,10 @@ definition refresh.
 - **Retry.** The next `openclaw update` retries, also when the core is already
   current, and `openclaw update repair` settles after its own finalization. A
   retry that fails keeps the step owed, warns, and never fails its command.
-  Gateway startup does not retry; this differs from the paragraph above
-  because startup runs no package manager and the two first steps need none
-  of its state.
+  Gateway startup itself retries nothing, because it runs no package manager.
+  With automatic updates on, the Gateway's update check now starts the retry
+  for owed plugin convergence; see [third slice as built](#third-slice-as-built).
+  Default installs still need a manual `openclaw update`.
 - **Reporting.** The update's report, `openclaw update status`, and the JSON
   field `owedSteps` name the step, its reason, and what settles it. The
   finalize child's `status` does not change for an owed step, because a
@@ -818,6 +819,48 @@ rolled a replaced core back.
 - **First hop.** Released updaters through 2026.11.5-beta.4 retain no plugin
   cohort, so the first update from them gains nothing: the new child still
   fails and the old parent rolls back. This is read from source, not run.
+
+#### Third slice as built
+
+[#201178](https://github.com/openclaw/openclaw/pull/201178), merged as
+`1dbe12a0ed6`, lets automatic updates retry owed plugin convergence.
+
+- **Trigger.** Automatic updates must be on (`update.auto.enabled`, default
+  off). The install must be a `stable` or `beta` package with a managed
+  Gateway service. When the registry's channel version equals the installed
+  version and history holds an owed `plugin-convergence` row for it, the
+  hourly check announces a campaign for that same version.
+- **The campaign.** It is the existing one: idle wait, countdown, hard
+  deadline, **Hold 1 h**, and the managed-service handoff. The handed-off
+  `openclaw update` finds the core current, converges plugins, and settles
+  the row. The core is not reinstalled.
+- **Rechecks.** The check reads history right before it announces, and again
+  right before it applies. Any running update run defers it. A row settled
+  during the countdown ends the campaign without an update run.
+- **Bound.** One campaign per owed row per version. A same-version campaign
+  run at or after the run that holds the row ends automatic retries, whether
+  it settled the step, owed it again, or failed. The next release,
+  `openclaw update`, or `openclaw update repair` can still settle it. It adds
+  no config key, stored field, or schema.
+- **Opt-outs.** Nothing new happens with automatic updates off,
+  `update.checkOnStart: false`, `OPENCLAW_NO_AUTO_UPDATE=1`, an external
+  supervisor, no service supervisor, `dev`, or `extended-stable`.
+- **Still by hand.** A default install, with automatic updates off, still
+  needs `openclaw update` or `openclaw update repair`. A Doctor-only owed row
+  starts no retry, because an update settles it only after plugins change. A
+  row whose one automatic retry is spent also waits for a person or the next
+  release. The first update from an older published version records no owed
+  rows, so this slice does not cover it.
+- **Measured.** The Docker cell `package-installed-recovery-owed-plugin-retry`
+  passed on the landed PR head `cdafad89393` on local OrbStack. With no command from a person,
+  the Gateway ran a `campaign` run with `before` and `target` both the
+  installed version. The row became `completed`, and the next check added no
+  run. Unit tests through the Gateway check cover the opt-outs and the bound.
+- **Limits.** The Control UI compact card still titles this campaign
+  **Update available**, with no version. The existing 15-minute forced
+  restart applies to this repair-only campaign. macOS launchd and Windows
+  Gateways were not exercised. The "owes again" and "fails" bounds are proven
+  only in unit tests.
 
 #### What else can still fail a kept update
 
