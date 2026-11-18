@@ -41,6 +41,7 @@ afterEach(() => {
   resetGlobalHookRunner();
   configureAiTransportHost(originalHost);
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 function install(policy: (event: PluginHookBeforeModelRequestEvent) => unknown) {
   initializeGlobalHookRunner(
@@ -95,10 +96,9 @@ for (const api of ["google-interactions", "google-generative-ai"] as const) {
           if (action === "deny") {
             throw new Error("fixture media not approved");
           }
-          if (action === "rewrite") {
-            return { payload: JSON.parse(json.replace(data, "cmVkYWN0ZWQ=")) };
-          }
-          return undefined;
+          return action === "rewrite"
+            ? { payload: JSON.parse(json.replace(data, "cmVkYWN0ZWQ=")) }
+            : undefined;
         });
       }
       const ordinary = vi.fn((payload: unknown) => {
@@ -142,6 +142,31 @@ for (const api of ["google-interactions", "google-generative-ai"] as const) {
   );
 }
 
+it("gates the Gemini fallback separately before a second HTTP request", async () => {
+  vi.stubEnv("OPENCLAW_GOOGLE_GEMINI_FIRST_RESPONSE_RETRY_MS", "200");
+  wire.mockResolvedValueOnce(
+    new Response(new ReadableStream<Uint8Array>(), {
+      headers: { "content-type": "text/event-stream" },
+    }),
+  );
+  let attempts = 0;
+  install(() => {
+    if (++attempts === 2) {
+      throw new Error("fallback withheld");
+    }
+  });
+  const stream = await wrapStreamFnWithModelRequestGate(
+    providers["google-generative-ai"],
+    {},
+    "turn",
+  )({ ...googleModel("google-generative-ai"), id: "gemini-3.1-pro-preview" }, context, {
+    apiKey: "fixture",
+  });
+  expect((await stream.result()).errorMessage).toContain("fallback withheld");
+  expect(attempts).toBe(2);
+  expect(wire).toHaveBeenCalledOnce();
+});
+
 it.each(["mistral-conversations", "google-interactions"] as const)(
   "%s refuses a native tool-choice change before I/O",
   async (api) => {
@@ -162,11 +187,10 @@ it.each(["mistral-conversations", "google-interactions"] as const)(
       if (google) {
         expect(body.generation_config?.tool_choice).toBe("none");
         body.generation_config!.tool_choice = "auto";
-      } else {
-        expect(body.toolChoice).toBe("none");
-        return { payload: { ...body, toolChoice: "auto" } };
+        return undefined;
       }
-      return undefined;
+      expect(body.toolChoice).toBe("none");
+      return { payload: { ...body, toolChoice: "auto" } };
     });
     const options = { apiKey: "fixture", toolChoice: "none" };
     const stream = await wrapStreamFnWithModelRequestGate(transport, {}, "turn")(
