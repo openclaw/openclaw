@@ -47,6 +47,10 @@ function restrictedHarness(threadId = "thread-1", previousThread?: string, cwd?:
   );
 }
 
+// Mirrors thread-lifecycle-adoption.ts: the previous owner's unload confirmation is
+// bounded at 10s before the replacement client resumes (#191830).
+const CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS = 10_000;
+
 setupRunAttemptTestHooks();
 
 it.each(["changed", "failed", "rejected"])(
@@ -178,7 +182,7 @@ it.each(["changed", "failed", "rejected"])(
     ]);
     const readIndex = first!.request.mock.calls.findIndex(([method]) => method === "thread/read");
     await first!.request.mock.results[readIndex]!.value;
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS);
     await run.waitForTurnAccepted();
     second!.notify({
       method: "turn/completed",
