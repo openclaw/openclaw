@@ -69,3 +69,33 @@ it.runIf(process.platform !== "win32")(
   },
   20_000,
 );
+
+it.runIf(process.platform !== "win32")(
+  "a group stop is uncertain when SIGKILL ends the survivor but not its group",
+  async () => {
+    // Both ignore SIGTERM; the forced kill reaches only the survivor, as with a child under
+    // another user.
+    const survivor = spawn("sh", ["-c", "trap '' TERM; sleep 60 & exec sleep 60"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const pid = survivor.pid!;
+    groups.push(pid);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const adopted = adoptReleasedProcess("group-kill-denied", { pid, pgid: pid }, () => {});
+    const realKill = process.kill.bind(process);
+    vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+      if (target === -pid && signal === "SIGKILL") {
+        try {
+          return realKill(pid, "SIGKILL");
+        } catch {
+          return true;
+        }
+      }
+      return realKill(target, signal);
+    });
+
+    expect(await adopted!.stop({ group: true })).toMatchObject({ status: "uncertain" });
+  },
+  30_000,
+);

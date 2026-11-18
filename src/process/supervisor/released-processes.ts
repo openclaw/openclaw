@@ -197,7 +197,7 @@ async function terminate(
     ("result" in kill && kill.result === "gone") ||
     (await waitForExit(entry, KILL_CONFIRM_TIMEOUT_MS))
   ) {
-    return { status: "stopped" };
+    return pgid ? await forceGroupAfterGrace(pgid, graceEnds) : { status: "stopped" };
   }
   const reason =
     "failed" in kill
