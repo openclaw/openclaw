@@ -141,6 +141,9 @@ export async function createCrabboxProjectNativeVerificationFixture(corrupt: boo
     if (!preparing) {
       verifications++;
       expect(call.argv).not.toContain("--allow-env");
+      expect(call.argv).toContain("--no-hydrate");
+    } else {
+      expect(call.argv).not.toContain("--no-hydrate");
     }
     // Scrubbing has separate proof; never run the guest's /tmp cleanup on this host.
     const script = String(call.options.input).replace(SCRUB_WORKER_STATE, "true");

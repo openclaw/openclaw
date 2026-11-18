@@ -172,6 +172,7 @@ describe("Crabbox project snapshot provisioning", () => {
         NonNullable<NonNullable<ProvisionOptions["project"]>["inspectPreparedWorkspace"]>
       >(async (transport) => {
         if (!transport.snapshot) {
+          await transport.runScript("verify-enrolled-workspace", f.options.project.signal);
           return;
         }
         expect(transport.baseCommit).toBe(BASE_COMMIT);
@@ -218,6 +219,15 @@ describe("Crabbox project snapshot provisioning", () => {
         expect(f.count("create")).toBe(1);
         await f.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
         expect(inspectPreparedWorkspace).toHaveBeenCalledTimes(2);
+      }
+      const inspections = f.calls.filter((call) =>
+        ["verify-snapshot-caches", "verify-enrolled-workspace"].includes(
+          String(call.options.input),
+        ),
+      );
+      expect(inspections).toHaveLength(invalid ? 1 : 2);
+      for (const call of inspections) {
+        expect(call.argv).toContain("--no-hydrate");
       }
     },
   );
