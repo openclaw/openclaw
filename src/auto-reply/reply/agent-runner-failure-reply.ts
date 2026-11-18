@@ -209,10 +209,15 @@ export function resolveNonOwnerProviderFailureText(params: {
   ) {
     return undefined;
   }
-  // A fallback summary carries the last attempt's reason; earlier attempts can still be billing.
+  // A fallback summary carries the last attempt's reason. An earlier billing or credential
+  // failure still produces operator copy; earlier transient failures do not.
   const isProviderFailure =
-    [facts.reason, ...readFallbackAttempts(error).map((attempt) => attempt.reason)].some(
-      (reason) => reason !== undefined && OPERATOR_PROVIDER_FAILURE_REASONS.has(reason),
+    (facts.reason !== undefined && OPERATOR_PROVIDER_FAILURE_REASONS.has(facts.reason)) ||
+    readFallbackAttempts(error).some(
+      (attempt) =>
+        attempt.reason === "billing" ||
+        attempt.reason === "auth" ||
+        attempt.reason === "auth_permanent",
     ) ||
     classifyOAuthRefreshFailureError(error) !== null ||
     collectErrorGraphCandidates(error, readErrorCauses).some(

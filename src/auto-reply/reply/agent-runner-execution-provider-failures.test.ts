@@ -629,6 +629,18 @@ describe("provider failures seen by non-owners in shared chats", () => {
     expect(payload.text).toContain("Check its results before trying again");
   });
 
+  it("keeps the final failure's copy after an earlier transient provider failure", async () => {
+    const chain = createTestFallbackSummaryError({
+      message: "All models failed (2)",
+      attempts: [
+        { provider: "anthropic", model: "claude", error: "529", reason: "overloaded", status: 529 },
+        { provider: "openai", model: "gpt-5.5", error: "too long", reason: "context_overflow" },
+      ],
+    });
+    const payload = await replyTo(chain, false);
+    expect(payload.text).not.toBe(UNAVAILABLE_TEXT);
+  });
+
   it("keeps failures that are not about the provider", async () => {
     const payload = await replyTo(
       new Error("Preflight compaction required but failed: summary too large"),
