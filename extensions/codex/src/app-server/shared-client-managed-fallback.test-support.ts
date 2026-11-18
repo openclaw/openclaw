@@ -166,6 +166,55 @@ export function registerSharedClientManagedFallbackTests(params: {
       await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
     });
 
+    it("keeps the installed binary selected when a caller cancels initialization", async () => {
+      const cancelled = createClientHarness();
+      const next = createClientHarness();
+      const cancellation = Object.assign(new Error("Request owner changed"), {
+        name: "AbortError",
+      });
+      vi.spyOn(cancelled.client, "initialize").mockRejectedValueOnce(cancellation);
+      const startSpy = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockResolvedValueOnce(cancelled.client)
+        .mockResolvedValueOnce(next.client);
+      const startOptions = selectInstalledCodex();
+
+      await expect(
+        createIsolatedCodexAppServerClient({ startOptions, timeoutMs: 1_000 }),
+      ).rejects.toBe(cancellation);
+      expect(cancelled.process.stdin.destroyed).toBe(true);
+      expect(startSpy).toHaveBeenCalledOnce();
+      await expect(installedState.selection).resolves.toMatchObject({ command: installedCommand });
+
+      const acquire = getSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
+      await params.sendInitializeResult(next, `codex-cli/${installedVersion}`);
+      await expect(acquire).resolves.toBe(next.client);
+      expect(startSpy.mock.calls[1]?.[0]?.command).toBe(installedCommand);
+      await clearSharedCodexAppServerClientAndWait({ exitTimeoutMs: 25, forceKillDelayMs: 5 });
+    });
+
+    it("keeps the installed binary selected when spawn wraps a cancellation with stderr", async () => {
+      const cancellation = Object.assign(new Error("Request owner changed"), {
+        name: "AbortError",
+      });
+      const spawnError = new Error('Request owner changed; stderr="startup diagnostic"', {
+        cause: cancellation,
+      });
+      const startSpy = vi
+        .spyOn(CodexAppServerClient, "start")
+        .mockRejectedValueOnce(spawnError)
+        .mockRejectedValue(new Error("unexpected fallback"));
+
+      await expect(
+        createIsolatedCodexAppServerClient({
+          startOptions: selectInstalledCodex(),
+          timeoutMs: 1_000,
+        }),
+      ).rejects.toBe(spawnError);
+      expect(startSpy).toHaveBeenCalledOnce();
+      await expect(installedState.selection).resolves.toMatchObject({ command: installedCommand });
+    });
+
     it("keeps the installed binary when its handshake matches the selection", async () => {
       const installed = createClientHarness();
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(installed.client);

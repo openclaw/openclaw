@@ -59,6 +59,7 @@ import {
   resolveManagedCodexNativeCommand,
 } from "./managed-binary.js";
 import {
+  canFallbackFromInstalledCodex,
   isCodexComputerUseCandidateArtifactsUnavailableError,
   resolveManagedFallbackStartOptions,
 } from "./managed-fallback.js";
@@ -693,20 +694,13 @@ async function startInitializedCodexAppServerClientOnce(
     );
   };
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
-  // A selected installed Codex that cannot start or reports another version
-  // yields to the bundled package here, before any thread or turn exists.
   const yieldInstalledCodex = (index: number, command: string, error: unknown) => {
     if (
       params.startOptions.commandSource !== "resolved-managed" ||
       index + 1 >= startOptionsCandidates.length ||
       readInstalledCodexAppServerStatus(command) === undefined ||
-      abandonSignal.aborted
+      !canFallbackFromInstalledCodex(error, abandonSignal, params.assertCurrent)
     ) {
-      return false;
-    }
-    try {
-      params.assertCurrent?.();
-    } catch {
       return false;
     }
     // Publish fallback ownership before rejection makes fresh callers resolve
