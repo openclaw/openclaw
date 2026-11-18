@@ -27,6 +27,8 @@
  * caller after patch preparation, then proves the next preparation writes no journal.
  * --reconcile-base-refresh applies one staged base refresh to both targets, then
  * measures the following preparation and all persisted rollback journals.
+ * --reconcile-pending-preparation measures preparation settling an interrupted
+ * projection receipt, including any redundant capture after application.
  * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
  * allocation mode reports main and matched worker allocation for each reconcile burst.
  * --reconcile-profile (Node 26+) adds all-worker allocation/CPU profiles and a
@@ -215,6 +217,7 @@ const { values } = parseArgs({
     "reconcile-traffic": { type: "boolean", default: false },
     "reconcile-caller-stop": { type: "boolean", default: false },
     "reconcile-base-refresh": { type: "boolean", default: false },
+    "reconcile-pending-preparation": { type: "boolean", default: false },
     "reconcile-profile": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
@@ -468,18 +471,22 @@ assert(
 assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
 const reconcile = values.mode === "reconcile";
-assert(
-  !values["reconcile-base-refresh"] ||
-    (reconcile && values["reconcile-traffic"] && !values["reconcile-caller-stop"]),
-);
+assert(!values["reconcile-base-refresh"] || (reconcile && values["reconcile-traffic"]));
 const turnLoop = values.mode === "turn-loop" || reconcile;
 const toolsPerTurn = Number(values["tools-per-turn"]);
 assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 10 === 0);
 const reconcileTarget = values["reconcile-target"];
 assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
 assert(
-  !values["reconcile-caller-stop"] ||
+  !(values["reconcile-caller-stop"] || values["reconcile-pending-preparation"]) ||
     (reconcile && reconcileTarget === "projection" && values["reconcile-traffic"]),
+);
+assert(
+  [
+    values["reconcile-caller-stop"],
+    values["reconcile-base-refresh"],
+    values["reconcile-pending-preparation"],
+  ].filter(Boolean).length <= 1,
 );
 let checkpointCaller = new AbortController();
 let checkpointInterruption: "stage" | "stop" | undefined;
@@ -1012,6 +1019,7 @@ Object.assign(globalThis, {
     operation: string,
     input: { action?: { kind?: string }; mutation?: unknown },
     bytes: number,
+    transferredPackBytes: number,
   ) => {
     if (operation.startsWith("localWorkspace.")) {
       const mutation: unknown =
@@ -1038,6 +1046,9 @@ Object.assign(globalThis, {
             ]),
           )
         : undefined;
+      if (fieldBytes && transferredPackBytes) {
+        fieldBytes.journal_pack = transferredPackBytes;
+      }
       const journal: unknown =
         isRecord(patch) && typeof patch.journal_json === "string"
           ? JSON.parse(patch.journal_json)
@@ -1063,7 +1074,7 @@ Object.assign(globalThis, {
       reconcileTraffic.push({
         phase: reconcilePhase,
         operation,
-        bytes,
+        bytes: bytes + transferredPackBytes,
         action: input.action?.kind,
         fieldBytes,
         journalCounts,
@@ -1198,7 +1209,8 @@ registerHooks({
       assert(code.includes(anchor));
       code = code.replace(
         anchor,
-        anchor + "\nglobalThis.__reconcileTraffic(commandType, command.input, payload.byteLength);",
+        anchor +
+          "\nglobalThis.__reconcileTraffic(commandType, command.input, payload.byteLength, options.transferredInput?.journalPack?.byteLength ?? 0);",
       );
     }
     if (
@@ -1872,7 +1884,7 @@ measurement: try {
             String(reconcileRandomBytes),
           ]);
         }
-        if (values["reconcile-caller-stop"]) {
+        if (values["reconcile-caller-stop"] || values["reconcile-pending-preparation"]) {
           checkpointInterruption = "stage";
           await assert.rejects(
             projection.withLocalWorkspaceProjection(owner, (operations) =>
@@ -1880,7 +1892,7 @@ measurement: try {
             ),
             /synthetic staged receipt interruption/,
           );
-          checkpointInterruption = "stop";
+          checkpointInterruption = values["reconcile-caller-stop"] ? "stop" : undefined;
           commandCpu = process.cpuUsage();
           commandAllocated = getHeapStatistics().total_allocated_bytes;
         }
@@ -1937,6 +1949,13 @@ measurement: try {
           } finally {
             fs.rmSync(temporaryRoot, { recursive: true, force: true });
           }
+        } else if (values["reconcile-pending-preparation"]) {
+          await prepareWorkspace();
+          assert.equal(
+            reconcileTraffic.slice(beforeTraffic).filter((request) => request.journalCounts).length,
+            1,
+            "Pending preparation must apply its journal once",
+          );
         } else if (values["reconcile-caller-stop"]) {
           await turnProjection!.checkpoint();
           assert(
