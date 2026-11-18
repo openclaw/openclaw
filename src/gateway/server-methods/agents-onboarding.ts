@@ -98,7 +98,6 @@ export async function prepareAgentOnboarding(
     agentId,
     modelTarget: "primary",
     requireExecutionOwner: false,
-    candidateSetup: true,
     runtime: createSystemAgentGatewayRuntime(),
     assertSourceCurrent: assertCurrent,
     signal: options.signal,

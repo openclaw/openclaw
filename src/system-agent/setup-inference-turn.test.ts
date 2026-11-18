@@ -29,7 +29,6 @@ import { captureAsyncWorkTracker } from "../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
-import { resolveSetupContextFloorError } from "./setup-inference-core.js";
 import {
   loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
@@ -132,12 +131,12 @@ describe("setup inference plugin ownership", () => {
   });
 
   it.each([
-    [8_192, true, false],
-    [16_384, true, true],
-    [8_192, undefined, true],
+    [8_192, true, true],
+    [16_384, true, false],
+    [8_192, undefined, false],
   ] as const)(
-    "checks a %i-token runtime context against the setup floor (candidate: %s)",
-    async (contextTokens, candidateSetup, ok) => {
+    "verifies a %i-token runtime context and warns only a chosen small model (candidate: %s)",
+    async (contextTokens, candidateSetup, warned) => {
       const config = embeddedRoute("openclaw", "fixture", "direct-model").runConfig;
       config.models = createFixtureProviderModels("http://127.0.0.1:18299/v1");
       vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async (params) => ({
@@ -163,24 +162,20 @@ describe("setup inference plugin ownership", () => {
         },
         ...(candidateSetup ? { candidateSetup } : {}),
       });
-      expect(result.ok, result.ok ? undefined : result.error).toBe(ok);
+      expect(result.ok, result.ok ? undefined : result.error).toBe(true);
       if (!result.ok) {
-        expect(result.status).toBe("unavailable");
-        expect(result.error).toContain(
+        return;
+      }
+      if (warned) {
+        expect(result.warning).toContain(
           "fixture/direct-model has an effective context window of 8192 tokens",
         );
-        expect(result.error).toContain("at least 16384");
+        expect(result.warning).toContain("at least 16384");
+      } else {
+        expect(result.warning).toBeUndefined();
       }
     },
   );
-
-  it("keeps utility models out of the primary context floor", () => {
-    const utility = { modelLabel: "apple/on-device", modelTarget: "utility" as const };
-    expect(resolveSetupContextFloorError(utility, 8_192)).toBeUndefined();
-    expect(resolveSetupContextFloorError({ modelLabel: "local/nemo" }, 8_192)).toContain(
-      "at least 16384",
-    );
-  });
 
   it("leaves the context floor to setup callers, not the shared probe", async () => {
     const route = embeddedRoute("openclaw");

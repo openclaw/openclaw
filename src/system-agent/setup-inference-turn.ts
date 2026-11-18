@@ -43,7 +43,7 @@ import {
   parseInferenceRef,
   redactSetupInferenceError,
   resolveSetupInferenceWinnerError,
-  resolveSetupContextFloorError,
+  resolveSetupContextShortfall,
   resolveToolFreeCliSetupError,
   SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS,
   SETUP_INFERENCE_TEST_TIMEOUT_MS,
@@ -566,7 +566,7 @@ export async function verifySetupInferenceConfig(
     requireExecutionOwner?: boolean;
     assertSourceCurrent?: () => void;
     signal?: AbortSignal;
-    /** A model being chosen in setup must fit a first turn; existing routes keep the runtime guard. */
+    /** A model being chosen in setup gets a context warning; existing routes keep the runtime guard. */
     candidateSetup?: true;
   },
 ): Promise<VerifySetupInferenceResult> {
@@ -622,12 +622,6 @@ export async function verifySetupInferenceConfig(
   if (!turn.ok) {
     return { ...turn, error: await redactSetupInferenceError(turn.error) };
   }
-  const contextFloorError = params.candidateSetup
-    ? resolveSetupContextFloorError(route, turn.contextTokens)
-    : undefined;
-  if (contextFloorError) {
-    return { ok: false, status: "unavailable", error: contextFloorError };
-  }
   if (requireExecutionOwner) {
     try {
       // Rebuild from the operation's authority, not its materialized probe route.
@@ -670,10 +664,14 @@ export async function verifySetupInferenceConfig(
       return { ok: false, status: "auth", error: await redactSetupInferenceError(error) };
     }
   }
+  const warning = params.candidateSetup
+    ? resolveSetupContextShortfall(route, turn.contextTokens)
+    : undefined;
   return {
     ok: true,
     modelRef: route.modelLabel,
     latencyMs: turn.latencyMs,
     ...(route.modelTarget ? { modelTarget: route.modelTarget } : {}),
+    ...(warning ? { warning } : {}),
   };
 }

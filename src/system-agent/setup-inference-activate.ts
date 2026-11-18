@@ -490,11 +490,10 @@ async function verifyAndActivateCandidate(
   if (!verification.ok) {
     return failure(verification);
   }
-  if ("auth" in verification) {
-    const evidenceFailure = validateSetupInferenceEvidence(route, verification);
-    if (evidenceFailure) {
-      return failure(evidenceFailure);
-    }
+  const evidence =
+    "auth" in verification ? validateSetupInferenceEvidence(route, verification, params) : {};
+  if (evidence.failure) {
+    return failure(evidence.failure);
   }
   const savedCredential = staged.authProfileId
     ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(ctx.agentDir)).profiles[
@@ -703,6 +702,6 @@ async function verifyAndActivateCandidate(
     ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
-    lines,
+    lines: evidence.warning ? [...lines, evidence.warning] : lines,
   };
 }

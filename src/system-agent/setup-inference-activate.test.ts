@@ -99,6 +99,38 @@ describe("setup activation credentials and configuration", () => {
     },
   );
 
+  it.each([
+    { contextTokens: 8_192, automatic: true, utility: false, ok: false, warned: false },
+    { contextTokens: 8_192, automatic: false, utility: false, ok: true, warned: true },
+    { contextTokens: 32_768, automatic: true, utility: false, ok: true, warned: false },
+    { contextTokens: 8_192, automatic: true, utility: true, ok: true, warned: false },
+  ])(
+    "checks a $contextTokens-token context (automatic: $automatic, utility: $utility)",
+    async ({ contextTokens, automatic, utility, ok, warned }) => {
+      const setup = await fixture({
+        authMethod: "api_key",
+        ...(utility ? { modelTarget: "utility" as const } : {}),
+      });
+      setup.run.mockImplementation(async (params) => {
+        const reply = await setup.reply(params);
+        const agentMeta = { sessionId: "probe", provider: "openai", model: modelRef, contextTokens };
+        return { ...reply, meta: { ...reply.meta, agentMeta } };
+      });
+      const result = await setup.activate("api-key", true, {
+        apiKey: "synthetic-context-key",
+        ...(automatic ? { automaticSetup: true } : {}),
+      });
+      const shortfall = `${modelRef} has an effective context window of 8192 tokens`;
+      expect(result.ok, result.ok ? undefined : result.error).toBe(ok);
+      if (!result.ok) {
+        expect(result).toMatchObject({ status: "unavailable" });
+        expect(result.error).toContain(shortfall);
+        return;
+      }
+      expect(result.lines.some((line) => line.includes(shortfall))).toBe(warned);
+    },
+  );
+
   it("isolates utility activation from the primary model", async () => {
     const setup = await fixture({ modelTarget: "utility", primaryModel: "stable/working-model" });
     const result = await setup.activate();

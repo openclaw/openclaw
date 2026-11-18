@@ -48,16 +48,17 @@ export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 export const SETUP_INFERENCE_REMOTE_TEST_TIMEOUT_MS = 30_000;
 /**
  * The tool-free check fits small windows, but a first real turn also sends the system prompt
- * and tool schemas (measured 11.8K to 18.5K tokens), so setup refuses windows below this.
- * Same floor guided Ollama and LM Studio setup use when picking a model.
+ * and tool schemas (measured 11.8K to 18.5K tokens). Same floor guided Ollama and LM Studio
+ * discovery apply (#112028).
  */
 const SETUP_INFERENCE_MIN_CONTEXT_TOKENS = 16_384;
 
 /**
- * Floor for a primary model being chosen in setup. Chat, existing routes and update repair keep the
- * runtime guard; utility models run a reduced prompt and keep their own minimums.
+ * Shortfall of a primary model chosen in setup. Automatic setup refuses it; a manual pick only
+ * warns, since #112028 keeps smaller models available through manual selection. Utility models
+ * run a reduced prompt and keep their own minimums.
  */
-export function resolveSetupContextFloorError(
+export function resolveSetupContextShortfall(
   route: { modelLabel: string; modelTarget?: "utility" },
   contextTokens: number | undefined,
 ): string | undefined {
@@ -68,7 +69,7 @@ export function resolveSetupContextFloorError(
   ) {
     return undefined;
   }
-  return `${route.modelLabel} has an effective context window of ${contextTokens} tokens; OpenClaw setup needs at least ${SETUP_INFERENCE_MIN_CONTEXT_TOKENS}. Raise the model's context limit (the server's context size, and contextWindow or contextTokens in its model settings), or choose a larger model.`;
+  return `${route.modelLabel} has an effective context window of ${contextTokens} tokens. A first OpenClaw turn usually needs at least ${SETUP_INFERENCE_MIN_CONTEXT_TOKENS} for the system prompt and tool definitions, so messages may fail with a context overflow. Raise the model's context limit (the server's context size, and contextWindow or contextTokens in its model settings), or choose a larger model.`;
 }
 
 const PROVIDER_AUTO_SETUP_KIND_PREFIX = "provider-auto:";
@@ -179,6 +180,8 @@ export type VerifySetupInferenceResult =
       modelTarget?: "utility";
       modelRef: string;
       latencyMs: number;
+      /** Verified, but the effective context window is likely too small for a first turn. */
+      warning?: string;
     }
   | {
       ok: false;
@@ -389,7 +392,10 @@ export function describeSetupInferenceError(
       };
 }
 
-/** Activation evidence: the setup context floor, then a runtime owner OpenClaw can reuse. */
+/**
+ * Activation evidence: the context shortfall (refused in automatic setup, a warning otherwise),
+ * then a runtime owner OpenClaw can reuse.
+ */
 export function validateSetupInferenceEvidence(
   route: {
     runner: "cli" | "embedded";
@@ -398,10 +404,11 @@ export function validateSetupInferenceEvidence(
     modelTarget?: "utility";
   },
   verification: { auth: AgentExecutionAuthBinding; contextTokens?: number },
-): Extract<ActivateSetupInferenceResult, { ok: false }> | undefined {
-  const contextFloorError = resolveSetupContextFloorError(route, verification.contextTokens);
-  if (contextFloorError) {
-    return { ok: false, status: "unavailable", error: contextFloorError };
+  options: { automaticSetup?: true } = {},
+): { failure?: Extract<ActivateSetupInferenceResult, { ok: false }>; warning?: string } {
+  const shortfall = resolveSetupContextShortfall(route, verification.contextTokens);
+  if (shortfall && options.automaticSetup) {
+    return { failure: { ok: false, status: "unavailable", error: shortfall } };
   }
   const params = {
     runner: route.runner,
@@ -442,13 +449,11 @@ export function validateSetupInferenceEvidence(
       reason = "its agent harness artifact could not be safely reused";
     }
   }
-  return reason
-    ? {
-        ok: false,
-        status: "unknown",
-        error: `Inference succeeded, but ${reason}. No default model was changed.`,
-      }
-    : undefined;
+  if (reason) {
+    const error = `Inference succeeded, but ${reason}. No default model was changed.`;
+    return { failure: { ok: false, status: "unknown", error } };
+  }
+  return shortfall ? { warning: shortfall } : {};
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */
