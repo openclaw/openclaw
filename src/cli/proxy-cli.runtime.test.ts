@@ -220,8 +220,8 @@ describe("proxy cli runtime", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
-  it("redacts proxy credentials in text output", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
+  it.each([false, true])("redacts proxy credentials (json: %s)", async (json) => {
+    const result = {
       ok: true,
       config: {
         enabled: true,
@@ -230,45 +230,24 @@ describe("proxy cli runtime", () => {
         errors: [],
       },
       checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({});
-
+    };
+    runProxyValidationMock.mockResolvedValueOnce(result);
+    await proxyCliRuntime.runProxyValidateCommand({ json });
     expect(process.stdout["write"]).toHaveBeenCalledWith(
-      "Proxy validation passed\n\n" +
-        "Proxy\n" +
-        "  Source: config\n" +
-        "  URL:    http://redacted:redacted@proxy.example:3128/\n",
-    );
-  });
-
-  it("redacts proxy credentials in JSON output", async () => {
-    runProxyValidationMock.mockResolvedValueOnce({
-      ok: true,
-      config: {
-        enabled: true,
-        proxyUrl: "http://user:secret@proxy.example:3128?token=secret#fragment",
-        source: "config",
-        errors: [],
-      },
-      checks: [],
-    });
-    await proxyCliRuntime.runProxyValidateCommand({ json: true });
-
-    expect(process.stdout["write"]).toHaveBeenCalledWith(
-      `${JSON.stringify(
-        {
-          ok: true,
-          config: {
-            enabled: true,
-            proxyUrl: "http://redacted:redacted@proxy.example:3128/",
-            source: "config",
-            errors: [],
-          },
-          checks: [],
-        },
-        null,
-        2,
-      )}\n`,
+      json
+        ? `${JSON.stringify(
+            {
+              ...result,
+              config: {
+                ...result.config,
+                proxyUrl: "http://redacted:redacted@proxy.example:3128/",
+              },
+            },
+            null,
+            2,
+          )}\n`
+        : "Proxy validation passed\n\nProxy\n  Source: config\n" +
+            "  URL:    http://redacted:redacted@proxy.example:3128/\n",
     );
   });
 
@@ -306,7 +285,7 @@ describe("proxy cli runtime", () => {
         enabled: true,
         proxyUrl: "https://proxy.example:8443",
         source: "config",
-        errors: ["proxy CA file could not be read (/missing/ca.pem): ENOENT"],
+        errors: ["proxy CA file could not be read (/missing/\u001b[2Jca\nfile.pem): ENOENT"],
       },
       checks: [],
     });
@@ -318,7 +297,7 @@ describe("proxy cli runtime", () => {
         "  Source: config\n" +
         "  URL:    https://proxy.example:8443/\n\n" +
         "Problems\n" +
-        "  - proxy CA file could not be read (/missing/ca.pem): ENOENT\n\n" +
+        "  - proxy CA file could not be read (/missing/ca\\nfile.pem): ENOENT\n\n" +
         "Next steps\n" +
         "  Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.\n",
     );
@@ -367,9 +346,9 @@ describe("proxy cli runtime", () => {
       checks: [
         {
           kind: "denied",
-          url: "http://127.0.0.1:12345/",
+          url: "http://127.0.0.1:12345/\u001b]2;title\u0007\nnext",
           ok: true,
-          error: "fetch failed",
+          error: "fetch\u001b[31m failed\rretry\tlater\u202e",
         },
       ],
     });
@@ -381,7 +360,7 @@ describe("proxy cli runtime", () => {
         "  Source: config\n" +
         "  URL:    http://proxy.example:3128/\n\n" +
         "Checks\n" +
-        "  ✓ denied  http://127.0.0.1:12345/ — fetch failed\n",
+        "  ✓ denied  http://127.0.0.1:12345/\\nnext — fetch failed\\rretry\\tlater\n",
     );
   });
 
@@ -406,7 +385,7 @@ describe("proxy cli runtime", () => {
           url: "http://target.example/allowed",
           ok: false,
           status: 200,
-          error: "Denied destination was reachable through the proxy",
+          error: "Denied destination\u001b[2J was reachable\nthrough the proxy",
         },
       ],
     });
@@ -419,7 +398,7 @@ describe("proxy cli runtime", () => {
         "  URL:    http://proxy.example:3128/\n\n" +
         "Checks\n" +
         "  ✓ allowed http://target.example/allowed HTTP 200\n" +
-        "  ✗ denied  http://target.example/allowed HTTP 200 — Denied destination was reachable through the proxy\n\n" +
+        "  ✗ denied  http://target.example/allowed HTTP 200 — Denied destination was reachable\\nthrough the proxy\n\n" +
         "Next steps\n" +
         "  Update the proxy ACL so denied destinations are blocked, or pass the expected --denied-url values.\n",
     );

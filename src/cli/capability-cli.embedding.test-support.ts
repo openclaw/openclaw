@@ -86,12 +86,12 @@ export function registerEmbeddingCapabilityCliTests({
       [],
     ]);
 
-    await create("--text", "world", "--text", "");
+    await create("--text", "wo\u001b[2Jrld\u001b]2;title\u0007\nnext\tcolumn", "--text", "");
 
     expect(log).toHaveBeenCalledWith(
       "embedding.create via local\nprovider: openai\nmodel: text-embedding-3-small\noutputs: 3\n" +
         "hello\ndimensions: 2\nembedding: [0.1, -0.2]\n" +
-        "world\ndimensions: 9\nembedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]\n" +
+        "world\nnext\\tcolumn\ndimensions: 9\nembedding: [1, 2, 3, 4, 5, 6, 7, 8, ...]\n" +
         "\ndimensions: 0\nembedding: []",
     );
   });
