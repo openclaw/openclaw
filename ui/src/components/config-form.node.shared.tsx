@@ -2,7 +2,11 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { ConfigUiHints } from "../api/types.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
-import { REDACTED_SENTINEL } from "../lib/config-form-utils.ts";
+import {
+  configSettingId,
+  configSettingTitleId,
+  REDACTED_SENTINEL,
+} from "../lib/config-form-utils.ts";
 import type { ConfigSecretFields } from "../lib/config/config-secret-fields.ts";
 import { getLocale, registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
@@ -198,8 +202,13 @@ export function FieldRow(props: {
   const hasText = createMemo(
     () => props.showLabel || Boolean(props.error) || Boolean(props.unsupported),
   );
+  // Only a labeled row is a setting a link can name.
+  const targetId = createMemo(() =>
+    props.showLabel && props.path ? configSettingId(props.path) : undefined,
+  );
   return (
     <div
+      id={targetId()}
       class={[
         "settings-row",
         {
@@ -211,7 +220,7 @@ export function FieldRow(props: {
       {hasText() && (
         <div class="settings-row__text">
           {props.showLabel && (
-            <span class="settings-row__title">
+            <span class="settings-row__title" id={targetId() && configSettingTitleId(props.path!)}>
               {props.title ?? props.label}
               {props.required && (
                 <span class="settings-row__desc" aria-hidden="true">

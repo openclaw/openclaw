@@ -5,6 +5,7 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { modelCatalogRef } from "./data.ts";
 import { buildLoginProviders } from "./login-providers.ts";
+import { createSettingsTargetArrival } from "../../lib/reactive/settings-target-arrival.ts";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -121,8 +122,10 @@ export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
 }
 
 export function ModelProvidersPage(props: ModelProvidersPageProps) {
+  let host!: HTMLElement;
+  createSettingsTargetArrival(() => host);
   return (
-    <openclaw-model-providers-page>
+    <openclaw-model-providers-page ref={(element) => (host = element)}>
       <ModelProvidersPageBody {...props} />
     </openclaw-model-providers-page>
   );

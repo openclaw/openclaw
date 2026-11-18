@@ -1,6 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { copyWithPathPatch } from "../lib/config-form-utils.ts";
+import {
+  configSettingId,
+  configSettingTitleId,
+  copyWithPathPatch,
+} from "../lib/config-form-utils.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import {
   ConfigCollectionDraft,
@@ -162,9 +166,12 @@ export function ConfigObject(props: CollectionProps): JSX.Element {
             }
           }}
         >
-          <summary class="settings-row settings-row--nav cfg-object__summary">
+          <summary
+            id={configSettingId(props.params.path)}
+            class="settings-row settings-row--nav cfg-object__summary"
+          >
             <div class="settings-row__text">
-              <span class="settings-row__title">
+              <span class="settings-row__title" id={configSettingTitleId(props.params.path)}>
                 {configLabelInContext(meta().label, props.params.contextLabel)}
                 <Show when={copy().hasHelp}>
                   <ConfigFieldHelp
@@ -473,6 +480,7 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
       fallback={
         <FieldRow
           label={resolveFieldMeta(props.params.path, props.params.schema, props.params.hints).label}
+          path={props.params.path}
           showLabel={true}
           control={undefined}
           unsupported={t("configForm.unsupportedArray")}
@@ -482,10 +490,13 @@ export function ConfigArray(props: CollectionProps): JSX.Element {
     >
       {(current) => (
         <div class="cfg-block cfg-array">
-          <div class="settings-row cfg-collection-row">
+          <div
+            id={current().showLabel ? configSettingId(props.params.path) : undefined}
+            class="settings-row cfg-collection-row"
+          >
             <div class="settings-row__text">
               <Show when={current().showLabel}>
-                <span class="settings-row__title">
+                <span class="settings-row__title" id={configSettingTitleId(props.params.path)}>
                   {configLabelInContext(current().label, props.params.contextLabel)}
                   <Show when={current().showHeaderMeta && current().copy.hasHelp}>
                     <ConfigFieldHelp

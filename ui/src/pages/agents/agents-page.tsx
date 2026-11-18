@@ -1,5 +1,6 @@
 import { createEffect, createMemo } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { createSettingsTargetArrival } from "../../lib/reactive/settings-target-arrival.ts";
 import { createAgentsPageState } from "./agents-page-state.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { Agents } from "./view.tsx";
@@ -15,8 +16,10 @@ export function AgentsPage(props: { routeData?: AgentsRouteData }) {
   const viewProps = createMemo(() => ({
     ...state.read(),
   }));
+  let host!: HTMLElement;
+  createSettingsTargetArrival(() => host);
   return (
-    <openclaw-agents-page>
+    <openclaw-agents-page ref={(element) => (host = element)}>
       <Agents {...viewProps()} />
     </openclaw-agents-page>
   );

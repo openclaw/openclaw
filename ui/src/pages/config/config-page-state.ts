@@ -36,7 +36,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { createPendingSettingsTarget } from "../../lib/settings-target-arrival.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import { createConfigPagePreferences } from "./config-page-preferences.ts";
@@ -170,8 +170,7 @@ export function createConfigPage(
   const countdown = useVisiblePoll(1_000, invalidate);
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
-  let targetBlockId: string | null = null;
-  let scrollFrame: number | null = null;
+  const pendingTarget = createPendingSettingsTarget(host);
 
   function nowMs() {
     revision();
@@ -251,12 +250,9 @@ export function createConfigPage(
     setPresentation((draft) => {
       draft.selections[pageId] = selection;
     });
-    if (scrollFrame !== null) {
-      cancelAnimationFrame(scrollFrame);
-      scrollFrame = null;
-    }
-    targetBlockId =
+    const targetBlockId =
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
+    pendingTarget.request(targetBlockId);
     appearanceDataRequested ||= pageId === "appearance" && isAppearanceDataTarget(targetBlockId);
     synchronize();
     invalidate();
@@ -344,19 +340,9 @@ export function createConfigPage(
   }
 
   function afterCommit() {
-    if (!connected || !targetBlockId || scrollFrame !== null) {
-      return;
+    if (connected) {
+      pendingTarget.commit();
     }
-    scrollFrame = requestAnimationFrame(() => {
-      scrollFrame = null;
-      // Settings routes share one live page; keep the document's ID lookup scoped to it.
-      const target = targetBlockId ? host().ownerDocument.getElementById(targetBlockId) : null;
-      if (!target || !host().contains(target)) {
-        return;
-      }
-      target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
-      targetBlockId = null;
-    });
   }
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
@@ -706,10 +692,7 @@ export function createConfigPage(
       mediaDeviceOwner.retire();
       countdown.stop();
       abortRequests();
-      if (scrollFrame !== null) {
-        cancelAnimationFrame(scrollFrame);
-        scrollFrame = null;
-      }
+      pendingTarget.dispose();
       runtimeConfigSource = null;
       resetConfigViewState();
     };

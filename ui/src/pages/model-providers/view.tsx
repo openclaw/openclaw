@@ -245,7 +245,9 @@ export function ModelProviders(props: ModelProvidersViewProps) {
                 props.providerUsageStalled)
             }
           >
-            <ProviderAccess {...props} />
+            <div id={MODEL_SETTINGS_TARGET_IDS.providers}>
+              <ProviderAccess {...props} />
+            </div>
           </Show>
           {props.installedAgents}
           <Show when={hasDefaults() && defaultsBelow()}>{defaults()}</Show>

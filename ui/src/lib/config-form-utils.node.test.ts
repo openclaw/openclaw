@@ -3,12 +3,28 @@ import { describe, expect, it } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import { configHintTranslationKey } from "../i18n/lib/config-hint-translation.ts";
 import {
+  configSettingId,
+  configSettingSection,
   hintForPath,
   localizedHintForPath,
   removePathValue,
   pruneEmptyConfigForm,
   setPathValue,
 } from "./config-form-utils.ts";
+
+describe("configSettingId", () => {
+  it("uses the config path, which is unique for every setting", () => {
+    expect(configSettingId(["gateway", "publicOrigin"])).toBe("gateway.publicOrigin");
+    expect(configSettingSection("gateway.publicOrigin")).toBe("gateway");
+  });
+
+  it("names no section root, list item or block anchor", () => {
+    expect(configSettingId(["gateway"])).toBeUndefined();
+    expect(configSettingId(["hooks", "mappings", 0, "match"])).toBeUndefined();
+    expect(configSettingSection("config-section-gateway")).toBeNull();
+    expect(configSettingSection(null)).toBeNull();
+  });
+});
 
 describe("hintForPath", () => {
   it("localizes the matched wildcard while preserving direct precedence and metadata", async () => {

@@ -43,6 +43,8 @@ export function RetryAction(props: {
 }
 
 type SettingsRowProps = {
+  /** Anchor a settings link can name; the row is marked when a link arrives at it. */
+  id?: string;
   title: JSX.Element;
   description?: JSX.Element;
   control?: JSX.Element;
@@ -250,9 +252,11 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
           "oc-settings-row-stacked": props.carapace && props.stacked,
         },
       ]}
+      id={props.id}
       role={props.role}
     >
       <SettingsRowText
+        id={props.id && `${props.id}-title`}
         title={props.title}
         description={props.description}
         carapace={props.carapace}
@@ -306,6 +310,8 @@ export function SettingsToggle(
 
 export function SettingsToggleRow(
   props: SettingsToggleControl & {
+    /** Anchor a settings link can name; the row is marked when a link arrives at it. */
+    id?: string;
     icon?: JSX.Element;
     title: JSX.Element;
     ariaLabel?: JSX.Element;
@@ -315,10 +321,12 @@ export function SettingsToggleRow(
     controlClass?: string;
   },
 ) {
-  const titleId = nextSettingsRadioName();
+  const generatedTitleId = nextSettingsRadioName();
+  const titleId = () => (props.id ? `${props.id}-title` : generatedTitleId);
   let input: HTMLInputElement | undefined;
   return (
     <div
+      id={props.id}
       class="settings-row settings-row--toggle"
       onClick={(event) => {
         // Links, buttons, and fields own their clicks; plain row areas toggle the input.
@@ -335,7 +343,7 @@ export function SettingsToggleRow(
       }}
     >
       {props.icon}
-      <SettingsRowText id={titleId} title={props.title} description={props.description} />
+      <SettingsRowText id={titleId()} title={props.title} description={props.description} />
       <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
@@ -343,7 +351,7 @@ export function SettingsToggleRow(
           ariaLabel={undefined}
           inputRef={(element) => (input = element)}
           label={props.ariaLabel}
-          ariaLabelledBy={props.ariaLabel == null ? titleId : undefined}
+          ariaLabelledBy={props.ariaLabel == null ? titleId() : undefined}
         />
       </div>
     </div>

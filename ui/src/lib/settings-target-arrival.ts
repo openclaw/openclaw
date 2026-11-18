@@ -1,0 +1,142 @@
+import { listen } from "./reactive/listener.ts";
+import { resolveScrollBehavior } from "./scroll-behavior.ts";
+
+/** Marks the setting a link brought the reader to; settings-controls.css draws the mark. */
+const SETTINGS_ARRIVAL_ATTRIBUTE = "data-settings-arrival";
+
+/** Frames a row holds its place before its scroll counts as finished. */
+const SETTLED_FRAMES = 4;
+/** A scroll that never settles still shows its mark. */
+const MAX_SCROLL_FRAMES = 120;
+
+/**
+ * The element a settings link names inside `root`. A setting that has no row yet, such as
+ * a field of an object the config does not define, resolves to the nearest enclosing
+ * setting that is rendered.
+ */
+function findSettingsTarget(root: HTMLElement, targetId: string): HTMLElement | null {
+  for (let id = targetId; id;) {
+    const target = root.ownerDocument.getElementById(id);
+    if (target && root.contains(target)) {
+      return target;
+    }
+    const parent = id.slice(0, Math.max(0, id.lastIndexOf(".")));
+    // A single segment is a section key, never a setting ID.
+    id = parent.includes(".") ? parent : "";
+  }
+  return null;
+}
+
+/**
+ * Holds the target a route named until its page has rendered it. `request` replaces the
+ * target, `commit` looks for it after a render, and `dispose` drops it with its mark.
+ */
+export function createPendingSettingsTarget(host: () => HTMLElement) {
+  let targetId: string | null = null;
+  let frame: number | null = null;
+  let leave: (() => void) | undefined;
+  const cancel = () => {
+    if (frame !== null) {
+      cancelAnimationFrame(frame);
+      frame = null;
+    }
+    leave?.();
+    leave = undefined;
+  };
+  return {
+    request(id: string | null) {
+      cancel();
+      targetId = id;
+    },
+    commit() {
+      if (!targetId || frame !== null) {
+        return;
+      }
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        // Settings routes share one live page; keep the document's ID lookup scoped to it.
+        const target = targetId ? findSettingsTarget(host(), targetId) : null;
+        if (!target) {
+          return;
+        }
+        leave = arriveAtSettingsTarget(target);
+        targetId = null;
+      });
+    },
+    dispose: cancel,
+  };
+}
+
+/**
+ * Brings the target of a settings link into view. One setting row is centered, marked
+ * after the scroll stops, and focused; a larger block keeps its top-aligned scroll.
+ * Nothing is edited. Returns the cleanup for a pending or visible mark.
+ */
+function arriveAtSettingsTarget(target: HTMLElement): () => void {
+  // A row inside a closed disclosure has no place on screen to scroll to.
+  for (let parent = target.parentElement; parent; parent = parent.parentElement) {
+    if (parent instanceof HTMLDetailsElement && !parent.open) {
+      parent.open = true;
+    }
+  }
+  const behavior = resolveScrollBehavior();
+  if (!target.classList.contains("settings-row")) {
+    target.scrollIntoView?.({ behavior, block: "start" });
+    return () => {};
+  }
+  // Centered, the row keeps its neighbors for context and clears any sticky header.
+  target.scrollIntoView?.({ behavior, block: "center" });
+  const view = target.ownerDocument.defaultView;
+  let frame: number | undefined;
+  let stopListening: Array<() => void> = [];
+  const clear = () => {
+    target.removeAttribute(SETTINGS_ARRIVAL_ATTRIBUTE);
+    for (const stop of stopListening) {
+      stop();
+    }
+    stopListening = [];
+  };
+  const mark = () => {
+    frame = undefined;
+    target.setAttribute(SETTINGS_ARRIVAL_ATTRIBUTE, "");
+    // Focus lands on the row, never inside its control: no key press can change the value.
+    // A row that is a control itself, such as a disclosure's summary, already takes focus
+    // and names itself.
+    if (target.tabIndex < 0) {
+      const title = target.ownerDocument.getElementById(`${target.id}-title`);
+      if (title && target.contains(title)) {
+        target.setAttribute("role", "group");
+        target.setAttribute("aria-labelledby", title.id);
+      }
+      target.tabIndex = -1;
+    }
+    target.focus({ preventScroll: true });
+    // The mark has done its job once the reader acts.
+    stopListening = (["pointerdown", "keydown"] as const).map((type) =>
+      listen(target.ownerDocument, type, clear, { capture: true, passive: true }),
+    );
+  };
+  // A fading mark is wasted while the row is still moving, so it waits for the scroll to end.
+  let settledFrames = 0;
+  let frames = 0;
+  let lastTop = Number.NaN;
+  const watch = () => {
+    const top = target.getBoundingClientRect().top;
+    settledFrames = top === lastTop ? settledFrames + 1 : 0;
+    lastTop = top;
+    frames += 1;
+    if (settledFrames >= SETTLED_FRAMES || frames >= MAX_SCROLL_FRAMES || !view) {
+      mark();
+      return;
+    }
+    frame = view.requestAnimationFrame(watch);
+  };
+  watch();
+  return () => {
+    if (frame !== undefined) {
+      view?.cancelAnimationFrame(frame);
+      frame = undefined;
+    }
+    clear();
+  };
+}

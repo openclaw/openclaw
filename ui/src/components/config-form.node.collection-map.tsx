@@ -1,6 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { containsRedactedSentinel, copyWithPathPatch } from "../lib/config-form-utils.ts";
+import {
+  configSettingId,
+  configSettingTitleId,
+  containsRedactedSentinel,
+  copyWithPathPatch,
+} from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { liveValue } from "../lib/reactive/live-value.ts";
 import { createProgressiveList } from "../lib/reactive/progressive-list.ts";
@@ -103,7 +108,7 @@ function ConfigMapRow(
   );
   return (
     <>
-      <div class="settings-row cfg-collection-row">
+      <div id={configSettingId(valuePath())} class="settings-row cfg-collection-row">
         <div class="settings-row__text">
           <input
             type="text"
@@ -223,7 +228,10 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
   return (
     <Show when={content().visible}>
       <div class="cfg-block cfg-map" aria-busy={visible.pending() ? "true" : undefined}>
-        <div class="settings-row cfg-collection-row">
+        <div
+          id={props.heading ? configSettingId(props.params.path) : undefined}
+          class="settings-row cfg-collection-row"
+        >
           <Show
             when={props.heading}
             fallback={
@@ -244,7 +252,7 @@ export function ConfigMapField(props: MapProps & { heading?: MapHeading }): JSX.
               );
               return (
                 <div class="settings-row__text">
-                  <span class="settings-row__title">
+                  <span class="settings-row__title" id={configSettingTitleId(props.params.path)}>
                     {configLabelInContext(heading().label, props.params.contextLabel)}
                     <Show when={copy().hasHelp}>
                       <ConfigFieldHelp

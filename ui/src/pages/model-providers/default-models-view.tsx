@@ -38,6 +38,7 @@ import type {
   ModelProviderRowMessage,
   ModelRuntimePick,
 } from "./config-mutation.ts";
+import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { ModelProviderCatalogReceipt } from "./core-load.ts";
 import {
   modelCatalogRef,
@@ -182,6 +183,7 @@ function BehaviorSetting<Value extends string>(props: {
   );
   return (
     <SettingsRow
+      id={props.field === "thinking" ? MODEL_SETTINGS_TARGET_IDS.thinking : undefined}
       title={
         <HelpTitle
           title={t(`quickSettings.model.${props.field}`)}
@@ -255,6 +257,7 @@ function CatalogProgress(props: DefaultModelsViewProps): JSX.Element {
 }
 
 function FallbackModel(props: {
+  id?: string;
   label: string;
   fallbacks: string[];
   primary: string | undefined;
@@ -281,6 +284,7 @@ function FallbackModel(props: {
   });
   return (
     <SettingsRow
+      id={props.id}
       title={props.label}
       description={
         props.fallbacks.length > 1
@@ -525,6 +529,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
     >
       <div class="model-providers__defaults">
         <SettingsRow
+          id={MODEL_SETTINGS_TARGET_IDS.primary}
           title={t("modelProviders.defaults.primary")}
           description={props.agentModel}
           control={
@@ -579,6 +584,7 @@ export function DefaultModels(props: DefaultModelsViewProps) {
         </button>
         <Show when={moreOpen()}>
           <FallbackModel
+            id={MODEL_SETTINGS_TARGET_IDS.fallback}
             label={t("modelProviders.defaults.fallback")}
             fallbacks={props.selection.fallbacks}
             primary={props.selection.primary}

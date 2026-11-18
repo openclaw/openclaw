@@ -82,6 +82,29 @@ export function pathKey(path: Array<string | number>): string {
   return path.filter((segment) => typeof segment === "string").join(".");
 }
 
+/**
+ * ID of one schema setting: its config path, such as `gateway.publicOrigin`. It is the row's
+ * element ID and the anchor a settings link names. A section root is addressed by its
+ * `config-section-*` ID, and list items share their list's path, so neither has one.
+ */
+export function configSettingId(path: Array<string | number>): string | undefined {
+  return path.length > 1 && path.every((segment) => typeof segment === "string")
+    ? path.join(".")
+    : undefined;
+}
+
+/** ID of the element that names a setting row; a marked row is labelled by it. */
+export function configSettingTitleId(path: Array<string | number>): string | undefined {
+  const id = configSettingId(path);
+  return id && `${id}-title`;
+}
+
+/** Config section a setting ID belongs to; null for anchors that are not setting IDs. */
+export function configSettingSection(settingId: string | null): string | null {
+  const separator = settingId?.indexOf(".") ?? -1;
+  return settingId && separator > 0 ? settingId.slice(0, separator) : null;
+}
+
 const wildcardHintCache = new WeakMap<
   ConfigUiHints,
   Map<number, Array<[string[], ConfigUiHint]>>

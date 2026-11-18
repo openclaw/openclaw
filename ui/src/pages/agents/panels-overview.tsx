@@ -51,6 +51,7 @@ import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { AGENT_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import type { AgentsPageView } from "./agents-page-state.ts";
 import { AvatarPicker } from "./avatar-picker.tsx";
 import type { AgentIdentityOutcome } from "./identity-actions.ts";
@@ -487,6 +488,7 @@ export function AgentOverview(
         }
       >
         <SettingsRow
+          id={AGENT_SETTINGS_TARGET_IDS.model}
           title={primaryModelLabel()}
           control={
             <ModelPicker
@@ -501,6 +503,7 @@ export function AgentOverview(
           }
         />
         <SettingsRow
+          id={AGENT_SETTINGS_TARGET_IDS.fallbacks}
           title={t("agents.overview.fallbacks")}
           control={
             <MultiSelect
@@ -520,6 +523,7 @@ export function AgentOverview(
         />
         <Show when={thinkingOptions().length > 0}>
           <SettingsRow
+            id={AGENT_SETTINGS_TARGET_IDS.thinking}
             title={t("agents.context.thinkingDefault")}
             control={
               <SettingsSelect

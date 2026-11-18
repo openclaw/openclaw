@@ -71,6 +71,29 @@
   min-height: var(--list-row-min-height);
 }
 
+/* A link to one setting marks its row on arrival. The mark is inset because the group
+   clips overflow; the edge bar stays until the reader clicks or types, the wash fades. */
+.settings-row[data-settings-arrival] {
+  outline: none;
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--accent) 75%, transparent);
+  animation: settings-arrival-wash 2.4s var(--ease-out);
+}
+
+@keyframes settings-arrival-wash {
+  12%,
+  45% {
+    background-color: color-mix(in srgb, var(--accent) 11%, transparent);
+  }
+}
+
+/* Without motion the wash cannot fade, so it stays with the bar. */
+@media (prefers-reduced-motion: reduce) {
+  .settings-row[data-settings-arrival] {
+    background-color: color-mix(in srgb, var(--accent) 11%, transparent);
+    animation: none;
+  }
+}
+
 .settings-row__text {
   display: flex;
   flex-direction: column;
