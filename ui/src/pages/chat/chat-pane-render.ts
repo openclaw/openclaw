@@ -51,6 +51,7 @@ import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { clearChatQueue, resumeChatQueue } from "./chat-send-actions.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
+import { readChatModelCatalogState } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import {
@@ -141,9 +142,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       agentsLoaded: this.context.agents.state.agentsList !== null,
       selectedAgentFound: selectedAgent !== undefined,
       agentModel: agentDefaultModel,
-      modelSelectionPolicy: state.chatModelSelectionPolicy,
-      catalogRetired: state.chatModelCatalogRetired,
-      catalogInitialized: state.chatModelCatalogInitialized,
+      modelCatalogState: readChatModelCatalogState(state),
+      modelAuthStatusResult: state.modelAuthStatusResult,
       catalogError: state.chatModelCatalogError,
       onSetup: () => this.context.navigate("model-setup"),
     });
