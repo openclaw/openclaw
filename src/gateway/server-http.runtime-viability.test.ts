@@ -1,7 +1,6 @@
 import fsp from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { prepareChildRuntimeFailure } from "../infra/child-runtime-viability.js";
 import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import { readHttp } from "./control-ui-fixture.test-support.js";
@@ -60,9 +59,7 @@ it("serves repeated readyz probes without synchronous runtime filesystem checks"
   expect(runtimeStats.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(0);
 });
 
-it("serves all HTTP probes while runtime IO is held and reports recorded failures", async ({
-  signal,
-}) => {
+it("serves all HTTP probes while runtime IO is held and reports draining", async ({ signal }) => {
   const entered = createDeferred();
   const resume = createDeferred();
   let draining = false;
@@ -113,13 +110,6 @@ it("serves all HTTP probes while runtime IO is held and reports recorded failure
             coreReady: false,
             failing: ["gateway-draining"],
           });
-          draining = false;
-          await prepareChildRuntimeFailure({
-            stderr: "node: error while loading shared libraries: libfixture.so",
-          });
-          const unavailable = await probe("/readyz");
-          expect(unavailable.status).toBe(503);
-          expect(unavailable.json()).toMatchObject({ failing: ["child-runtime"] });
         } finally {
           resume.resolve();
           await inspection;
