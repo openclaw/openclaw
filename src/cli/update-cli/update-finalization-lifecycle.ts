@@ -106,6 +106,8 @@ export class UpdateFinalizationLifecycle {
     private readonly json: boolean,
     private readonly timeoutMs: number | undefined,
     private readonly stopChildren: () => void,
+    /** False for a stage inside another command, which owns the only result document. */
+    private readonly reportsResult = true,
   ) {}
 
   get ownsUpdateRun(): boolean {
@@ -381,7 +383,7 @@ export class UpdateFinalizationLifecycle {
             `[update finalize] Stalled phase children: ${JSON.stringify(diagnostics)}\n`,
           );
           this.recordDiagnostic(JSON.stringify(diagnostics));
-          if (this.json) {
+          if (this.json && this.reportsResult) {
             defaultRuntime.writeJson({
               status: "failed",
               mode: "finalize",
