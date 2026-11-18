@@ -43,7 +43,7 @@ it.each(["observation", "restoration", "unsafe"] as const)(
       export async function waitForGatewayUpdateRecovery(version, buildId, timeoutMs) {
         withSqliteDatabaseAdmissionExchange((admissions) => admissions, () =>
           exchangeSqliteDatabaseAdmission(${JSON.stringify(path.join(root, "fixture.sqlite"))}));
-        if (version !== "2.0.0" || buildId !== "candidate-build" || timeoutMs !== 3000)
+        if (version !== "2.0.0" || buildId !== "candidate-build" || timeoutMs !== ${mode === "observation" ? 3_000 : 4_000})
           throw new Error("unexpected probe inputs");
         return { healthy: true, runtime: { status: "running", pid: process.pid },
           gatewayVersion: "2.0.0", gatewayBuildId: "candidate-build" };
@@ -60,7 +60,7 @@ it.each(["observation", "restoration", "unsafe"] as const)(
       const params = {
         action: "update", cwd: ${JSON.stringify(root)}, updateLeaseKey: ${JSON.stringify(root)},
         logPath: ${JSON.stringify(logPath)}, recoveryModulePath: ${JSON.stringify(candidate)},
-        recoveryTimeoutMs: 3000, runtimeArgs: [], nodeExecArgv: [], parentPid: 1,
+        recoveryTimeoutMs: 4000, runtimeArgs: [], nodeExecArgv: [], parentPid: 1,
         serviceRecovery: { kind: "systemd", unit: "fixture.service" },
         recovery: ${JSON.stringify(
           mode === "unsafe"
@@ -72,7 +72,7 @@ it.each(["observation", "restoration", "unsafe"] as const)(
             : { serviceRestartSafe: true, version: "2.0.0", buildId: "candidate-build" },
         )},
       };
-      const logs = [], starts = [], recorded = [];
+      const logs = [], starts = [], recorded = [], commandTimeouts = [];
       const appendLog = (line) => logs.push(line);
       const terminationRequested = false;
       const restorationArmed = ${mode !== "observation"};
@@ -84,6 +84,10 @@ it.each(["observation", "restoration", "unsafe"] as const)(
       };
       const assertTriageRequester = () => {};
       const killOwnedCommand = (child) => child.kill("SIGKILL");
+      const setTimeout = (callback, timeoutMs) => {
+        commandTimeouts.push(timeoutMs);
+        return globalThis.setTimeout(callback, timeoutMs);
+      };
 
       // Native service and ledger I/O are fixtures. The helper runs the shipped
       // lease gate, process runner and recovery decisions with real child imports.
@@ -113,7 +117,7 @@ it.each(["observation", "restoration", "unsafe"] as const)(
       } else {
         restored = await restoreGatewayService("activation-refused");
       }
-      process.stdout.write(JSON.stringify({ restored, verification, triageFailure, logs, starts, recorded,
+      process.stdout.write(JSON.stringify({ restored, verification, triageFailure, logs, starts, recorded, commandTimeouts,
         helperPid: process.pid, executorPid: managedUpdateLease.executor.pid }));`,
     );
 
@@ -122,10 +126,17 @@ it.each(["observation", "restoration", "unsafe"] as const)(
       timeout: 10_000,
     });
     const result = JSON.parse(stdout);
+    expect(fs.readdirSync(root)).not.toContain("recovery-probe.json");
     if (mode === "unsafe") {
-      expect(result).toMatchObject({ restored: false, starts: [], recorded: [false] });
+      expect(result).toMatchObject({
+        restored: false,
+        starts: [],
+        recorded: [false],
+        commandTimeouts: [],
+      });
       return;
     }
+    expect(result.commandTimeouts).toEqual(mode === "observation" ? [8_000] : [9_000]);
     const diagnostic = [
       ...result.logs,
       fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "",
@@ -140,7 +151,6 @@ it.each(["observation", "restoration", "unsafe"] as const)(
     expect(result.verification.pid).toEqual(expect.any(Number));
     expect(result.verification.pid).not.toBe(result.helperPid);
     expect(result.executorPid).toBe(result.helperPid);
-    expect(fs.readdirSync(root)).not.toContain("recovery-probe.json");
     if (mode === "observation") {
       expect(result).toMatchObject({ triageFailure: { restored: true }, starts: [] });
     } else {

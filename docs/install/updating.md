@@ -445,7 +445,9 @@ are reported by the scheduler without restarting the Gateway.
 
 Managed update recovery probes load the installed runtime in a separate process
 under the handoff lease. That lets the installed package initialize its own
-SQLite admission state. The updater driving the handoff must contain this fix.
+SQLite admission state. The child deadline adds five seconds to the health-poll
+budget for admission, startup, and result delivery. The updater driving the
+handoff must contain this fix.
 If migration leaves data at risk and rollback cannot be verified, the Gateway
 stays stopped for operator repair.
 

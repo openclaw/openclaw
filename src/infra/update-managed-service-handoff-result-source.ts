@@ -1,6 +1,9 @@
 import { MANAGED_HANDOFF_RUNTIME_ENTRY } from "./update-managed-service-handoff-runtime-assets.js";
 import { MANAGED_HANDOFF_SENTINEL_SOURCE } from "./update-managed-service-handoff-sentinel-source.js";
 
+// Admission, Node startup, the installed import, and result delivery surround health polling.
+const RECOVERY_PROBE_STARTUP_ALLOWANCE_MS = 5_000;
+
 const INSTALLED_GATEWAY_RECOVERY_PROBE = `
 import { writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
@@ -43,7 +46,8 @@ async function probeInstalledGatewayRecovery(version, buildId, timeoutMs) {
   try {
     const exit = await runOwnedUpdateCommand("recovery-probe", [process.execPath, ...params.runtimeArgs, "--input-type=module", "-e",
       ${JSON.stringify(INSTALLED_GATEWAY_RECOVERY_PROBE)},
-      JSON.stringify([params.recoveryModulePath, resultPath, version, buildId, timeoutMs])], timeoutMs);
+      JSON.stringify([params.recoveryModulePath, resultPath, version, buildId, timeoutMs])],
+      timeoutMs + ${RECOVERY_PROBE_STARTUP_ALLOWANCE_MS});
     if (exit.signal || exit.code !== 0) throw new Error("installed recovery probe exited with " + (exit.signal ?? exit.code));
     return JSON.parse(fs.readFileSync(resultPath, "utf8"));
   } finally {
