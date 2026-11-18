@@ -3,6 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
@@ -18,10 +24,13 @@ import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-me
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import { createRuntimeLlm } from "../plugins/runtime/runtime-llm.runtime.js";
+import type { LlmCompleteResult } from "../plugins/runtime/runtime-llm.types.js";
 import {
   createColdPluginFixture,
   isColdPluginRuntimeLoaded,
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveAgentDir } from "./agent-scope.js";
 import { resolveSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
@@ -33,7 +42,6 @@ import {
 } from "./auth-profiles/sqlite-read.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
-import { completeWithAuthProfileFailover } from "./simple-completion-profile-failover.js";
 import {
   acquireSimpleCompletionModelForAgent,
   completeWithPreparedSimpleCompletionModel,
@@ -80,7 +88,7 @@ async function readPersistedHealth(agentId: string, agentDir: string) {
   }
 }
 
-describe.skipIf(!mixedAgentConnection)("Gateway simple completion acquisition", () => {
+describe.skipIf(!mixedAgentConnection)("Gateway simple completion", () => {
   for (const { stateEngine, agentEngine } of mixedAgentPairs.filter(
     (pair) => pair.stateEngine === "postgres" || pair.agentEngine === "postgres",
   )) {
@@ -89,12 +97,26 @@ describe.skipIf(!mixedAgentConnection)("Gateway simple completion acquisition", 
 
       const scenarios = ["configured", "failover"];
       if (stateEngine === "postgres" && agentEngine === "postgres") {
-        scenarios.push("pinned");
+        scenarios.push("pinned", "cancel");
       }
-      it.each(scenarios)(
+      it.for(scenarios)(
         "%s: acquires, completes and releases without host PostgreSQL",
-        async (scenario) => {
+        async (scenario, { signal }) => {
+          const work = new AsyncWorkScope();
+          const abort = new AbortController();
+          const requestStarted = createDeferred();
+          const disposalStarted = createDeferred();
+          const releaseDisposal = createDeferred();
+          const lifecycleKey = "__openclawPostgresCompletionLifecycle";
+          let completion: Promise<LlmCompleteResult> | undefined;
+          let disposals = 0;
+          let disposalFinished = false;
           onTestFinished(async () => {
+            abort.abort();
+            releaseDisposal.resolve();
+            await Promise.allSettled(completion ? [completion] : []);
+            await work.drain();
+            Reflect.deleteProperty(globalThis, lifecycleKey);
             await resetPreparedModelRuntimeSnapshotsForTest();
             clearCurrentPluginMetadataSnapshot();
             clearPluginMetadataLifecycleCaches();
@@ -120,6 +142,17 @@ describe.skipIf(!mixedAgentConnection)("Gateway simple completion acquisition", 
             pluginId: "completion-unrelated",
             providerId: "unrelated-provider",
           });
+          if (scenario === "cancel") {
+            Object.defineProperty(globalThis, lifecycleKey, {
+              configurable: true,
+              value: async () => {
+                disposals += 1;
+                disposalStarted.resolve();
+                await releaseDisposal.promise;
+                disposalFinished = true;
+              },
+            });
+          }
           fs.writeFileSync(
             selected.runtimeSource,
             `require("node:fs").writeFileSync(${JSON.stringify(selected.runtimeMarker)}, "loaded");
@@ -127,18 +160,25 @@ module.exports = {
   id: ${JSON.stringify(selected.pluginId)},
   register(api) {
     api.registerProvider({ id: ${JSON.stringify(selected.providerId)}, label: "Completion", auth: [] });
+    ${scenario === "cancel" ? `api.registerRuntimeLifecycle({ id: "completion-resource", dispose: () => globalThis[${JSON.stringify(lifecycleKey)}]() });` : ""}
   },
 };
 `,
           );
-          const storedProfiles = scenario !== "configured";
+          const storedProfiles = scenario === "failover" || scenario === "pinned";
           const primaryId = `completion-provider:${scenario}:primary`;
           const backupId = `completion-provider:${scenario}:backup`;
-          const agentId = storedProfiles ? `completion-${scenario}` : "main";
+          const agentId = scenario === "configured" ? "main" : `completion-${scenario}`;
           const authorizations: Array<string | undefined> = [];
           await using server = await startCompletionServer((request, response) => {
             request.resume();
             authorizations.push(request.headers.authorization);
+            if (scenario === "cancel") {
+              response.writeHead(200, { "content-type": "text/event-stream" });
+              response.flushHeaders();
+              requestStarted.resolve();
+              return;
+            }
             if (request.headers.authorization === "Bearer fixture-primary-key") {
               response.writeHead(429, {
                 "content-type": "application/json",
@@ -233,52 +273,106 @@ module.exports = {
                 },
               });
             }
-            const acquired = await acquireSimpleCompletionModelForAgent({
-              cfg: config,
-              agentId,
-              ...(storedProfiles ? { profileFailover: true, preferredProfile: primaryId } : {}),
-              ...(scenario === "pinned"
-                ? {
-                    modelRef: `completion-provider/completion-model@${primaryId}`,
-                    bindAuthOwner: true,
-                  }
-                : {}),
-            });
-            assertPrepared(acquired);
-            try {
-              expect(acquired.selection).toMatchObject({
-                provider: selected.providerId,
-                modelId: "completion-model",
-              });
-              expect(isColdPluginRuntimeLoaded(selected)).toBe(true);
-              expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
-              const complete = (current: Pick<typeof acquired, "model" | "auth"> = acquired) =>
+            if (scenario === "configured") {
+              const acquired = await acquireSimpleCompletionModelForAgent({ cfg: config, agentId });
+              assertPrepared(acquired);
+              const complete = () =>
                 completeWithPreparedSimpleCompletionModel({
-                  model: current.model,
-                  auth: current.auth,
+                  model: acquired.model,
+                  auth: acquired.auth,
                   cfg: config,
                   context: completionContext(),
                 });
-              if (storedProfiles) {
-                expect(acquired.auth.profileId).toBe(primaryId);
-                expect(acquired.authProfiles?.profileIds).toEqual(
-                  scenario === "pinned" ? [primaryId] : [primaryId, backupId],
-                );
-                const warnings: string[] = [];
-                const started = Date.now();
-                const result = await completeWithAuthProfileFailover({
-                  prepared: acquired,
-                  cfg: config,
-                  agentDir,
-                  assertCurrent: () => {},
-                  complete,
-                  warn: (message) => warnings.push(message),
+              try {
+                expect(acquired.selection).toMatchObject({
+                  provider: selected.providerId,
+                  modelId: "completion-model",
                 });
-                expect(warnings).toEqual([]);
+                await expect(complete()).resolves.toMatchObject({
+                  stopReason: "stop",
+                  content: [{ type: "text", text: "completed" }],
+                });
+                expect(authorizations).toEqual(["Bearer fixture-completion-key"]);
+                await acquired[Symbol.asyncDispose]();
+                await expect(complete()).rejects.toThrow(
+                  "Prepared completion model has been released",
+                );
+              } finally {
+                await acquired[Symbol.asyncDispose]();
+              }
+            } else {
+              const llm = createRuntimeLlm({
+                getConfig: () => config,
+                authority: {
+                  caller: { kind: "plugin", id: selected.pluginId },
+                  agentId,
+                  requiresBoundAgent: true,
+                  ...(storedProfiles ? { preferredProfile: primaryId } : {}),
+                  ...(scenario === "pinned" ? { allowModelOverride: true } : {}),
+                },
+              });
+              const started = Date.now();
+              completion = work.track(() =>
+                llm.complete({
+                  messages: [{ role: "user", content: "Complete" }],
+                  signal: abort.signal,
+                  ...(scenario === "pinned"
+                    ? { model: `completion-provider/completion-model@${primaryId}` }
+                    : {}),
+                }),
+              );
+              if (scenario === "cancel") {
+                await withinTest(
+                  awaitGateBeforeSettlement(
+                    requestStarted.promise,
+                    completion,
+                    "Completion settled before its provider request",
+                  ),
+                  signal,
+                );
+                abort.abort();
+              }
+              const result = await withinTest(completion, signal);
+              expect(result).toMatchObject({
+                provider: selected.providerId,
+                model: "completion-model",
+                agentId,
+                execution: {
+                  mode: "direct-provider",
+                  owner: { kind: "provider", id: selected.providerId },
+                },
+                audit: { caller: { kind: "plugin", id: selected.pluginId } },
+              });
+              if (scenario === "cancel") {
+                expect(result).toMatchObject({ text: "", stopReason: "aborted" });
+                expect(authorizations).toEqual(["Bearer fixture-completion-key"]);
+                let drained = false;
+                const draining = work.drain().then(() => {
+                  drained = true;
+                });
+                // The caller may settle before plugin teardown; its parent still owns that resource.
+                await withinTest(
+                  awaitGateBeforeSettlement(
+                    disposalStarted.promise,
+                    draining,
+                    "Parent drained before plugin disposal started",
+                  ),
+                  signal,
+                );
+                await withinTest(nextEventLoopTurn(), signal);
+                expect(disposals).toBe(1);
+                expect(disposalFinished).toBe(false);
+                expect(drained).toBe(false);
+                releaseDisposal.resolve();
+                await withinTest(draining, signal);
+                expect(disposalFinished).toBe(true);
+                expect(disposals).toBe(1);
+              } else {
+                await withinTest(work.drain(), signal);
                 expect(result).toMatchObject(
                   scenario === "pinned"
-                    ? { stopReason: "error", content: [] }
-                    : { stopReason: "stop", content: [{ type: "text", text: "completed" }] },
+                    ? { stopReason: "error", text: "" }
+                    : { stopReason: "stop", text: "completed" },
                 );
                 expect(authorizations).toEqual(
                   scenario === "pinned"
@@ -309,23 +403,18 @@ module.exports = {
                   expect(success?.errorCount).toBe(0);
                   expect(local.lastGood?.[selected.providerId]).toBe(backupId);
                 }
-              } else {
-                await expect(complete()).resolves.toMatchObject({
-                  stopReason: "stop",
-                  content: [{ type: "text", text: "completed" }],
-                });
-                expect(authorizations).toEqual(["Bearer fixture-completion-key"]);
               }
-              await acquired[Symbol.asyncDispose]();
-              await expect(complete()).rejects.toThrow(
-                "Prepared completion model has been released",
-              );
-              expect(guard.mock.results.filter(({ type }) => type === "throw")).toEqual([]);
-              expect(hostStatements).toEqual([]);
-            } finally {
-              await acquired[Symbol.asyncDispose]();
             }
+            expect(isColdPluginRuntimeLoaded(selected)).toBe(true);
+            expect(isColdPluginRuntimeLoaded(unrelated)).toBe(false);
+            expect(guard.mock.results.filter(({ type }) => type === "throw")).toEqual([]);
+            expect(hostStatements).toEqual([]);
           } finally {
+            abort.abort();
+            releaseDisposal.resolve();
+            await Promise.allSettled(completion ? [completion] : []);
+            await work.drain();
+            Reflect.deleteProperty(globalThis, lifecycleKey);
             statements.unsubscribe(observe);
           }
         },
