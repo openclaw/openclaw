@@ -152,8 +152,11 @@ export function createProcessSupervisor(): ProcessSupervisor & {
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
     const external = input.cleanupOwnership === "external";
-    const hostExec =
-      process.platform === "linux" && input.executionIntent === "agent-tool" && !external;
+    // Agent exec always owns its tree, so a command's survivors are adopted by its chat;
+    // the shared memory budget is Linux-only.
+    const agentExec =
+      process.platform !== "win32" && input.executionIntent === "agent-tool" && !external;
+    const hostExec = agentExec && process.platform === "linux";
     const treeCleanupOwners = owner.cleanupOwners.filter((scope) =>
       requiresProcessTree(scope, external),
     );
@@ -383,7 +386,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
               })
             : createChildAdapter({
                 ...construction,
-                ...((requireProcessTree || hostExec) && !external
+                ...((requireProcessTree || agentExec) && !external
                   ? { ownProcessTree: true as const }
                   : {}),
                 ...(releaseOnRootExit ? { releaseOnRootExit: true as const } : {}),

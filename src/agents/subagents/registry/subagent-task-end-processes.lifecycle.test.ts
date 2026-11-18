@@ -73,11 +73,12 @@ function failure(data: Record<string, unknown>) {
 }
 
 /** The child's styles of leftover work: a hand-off, a service, a survivor and its later child. */
-async function startChildProcesses(childKey: string): Promise<number[]> {
+async function startChildProcesses(childKey: string, unmarked = false): Promise<number[]> {
   const pidOf = (text: string | undefined) => Number(/PID=(\d+)/.exec(text ?? "")?.[1]);
   return withEnvAsync(
     {
-      OPENCLAW_SERVICE_MARKER: "task-end-test",
+      // Unmarked: an unmanaged macOS Gateway, which has no service marker.
+      OPENCLAW_SERVICE_MARKER: unmarked ? undefined : "task-end-test",
       OPENCLAW_EXEC_SHELL_SNAPSHOT: "0",
       SHELL: "/bin/sh",
     },
@@ -124,6 +125,7 @@ const liveInScope = (childKey: string) =>
 
 type EndCause = {
   cause: string;
+  unmarked?: true;
   keeps?: boolean;
   spawnMode?: "session";
   end: (runId: string, childKey: string) => unknown;
@@ -133,6 +135,11 @@ type EndCause = {
 it.each<EndCause>([
   {
     cause: "complete",
+    end: (runId: string, key: string) => lifecycle(runId, key, { phase: "end" }),
+  },
+  {
+    cause: "complete without a service marker",
+    unmarked: true,
     end: (runId: string, key: string) => lifecycle(runId, key, { phase: "end" }),
   },
   { cause: "error", end: failure({ phase: "error", error: "400 scripted model failure" }) },
@@ -172,7 +179,7 @@ it.each<EndCause>([
   },
 ])(
   "subagent task end: $cause",
-  async ({ cause, end, keeps, spawnMode }) => {
+  async ({ cause, end, keeps, spawnMode, unmarked }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -193,7 +200,7 @@ it.each<EndCause>([
       expectsCompletionMessage: false,
       ...(spawnMode ? { spawnMode } : {}),
     });
-    const pids = await startChildProcesses(childKey);
+    const pids = await startChildProcesses(childKey, unmarked);
     try {
       expect(pids.every(isPidAlive)).toBe(true);
       await end(runId, childKey);
