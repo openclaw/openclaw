@@ -175,38 +175,34 @@ suite.define(() => {
             await toggle.click();
           }
           await sidebar.locator(`[data-session-key="${childKeys[0]}"]`).waitFor();
-          // data-snapshot-saved stays true from the earlier save until the
-          // debounced capture of the toggles above starts, so read the committed
-          // snapshot itself before reloading.
-          await expect
-            .poll(
-              () =>
-                page.evaluate(
-                  async ({ shown, hidden }) => {
-                    const result = <T>(request: IDBRequest<T>) =>
-                      new Promise<T>((resolve, reject) => {
-                        request.addEventListener("success", () => resolve(request.result));
-                        request.addEventListener("error", () =>
-                          reject(request.error ?? new Error("Snapshot request failed")),
-                        );
-                      });
-                    const database = await result(indexedDB.open("openclaw-chat-snapshots"));
-                    const rows = JSON.stringify(
-                      await result(
-                        database
-                          .transaction("sidebarSnapshots")
-                          .objectStore("sidebarSnapshots")
-                          .getAll(),
-                      ),
-                    );
-                    database.close();
-                    return rows.includes(`"key":"${shown}"`) && !rows.includes(`"key":"${hidden}"`);
-                  },
-                  { shown: childKeys[0]!, hidden: collapsedChildKey },
-                ),
-              { timeout: controlUiE2eWaitTimeoutMs },
-            )
-            .toBe(true);
+          const expansion = await page.evaluateHandle(() => {
+            // oxlint-disable-next-line typescript/unbound-method -- preserve the IDB store receiver below.
+            const put = IDBObjectStore.prototype.put;
+            return {
+              done: new Promise<void>((resolve) => {
+                IDBObjectStore.prototype.put = function (this: IDBObjectStore, value, key) {
+                  const request = put.call(this, value, key);
+                  if (
+                    this.name === "sidebarSnapshots" &&
+                    value.model?.sections?.some(
+                      (section: { visibleLimit: number }) => section.visibleLimit > 10,
+                    )
+                  ) {
+                    IDBObjectStore.prototype.put = put;
+                    this.transaction.addEventListener("complete", () => resolve(), { once: true });
+                  }
+                  return request;
+                };
+              }),
+            };
+          });
+          await sidebar
+            .locator(".sidebar-session-content .sidebar-session-pagination__button")
+            .filter({ hasText: "Show more" })
+            .first()
+            .click();
+          await expansion.evaluate((observation) => observation.done);
+          await expansion.dispose();
           await saved().waitFor();
           await viewport.evaluate((element) => {
             element.scrollTop = 0;

@@ -151,6 +151,24 @@ it("hides empty filtered native groups and preserves other section owners", () =
   expect(sectionIds(rows, { ...input, emptyGroupsMode: "never" })).toContain("category:Empty");
 });
 
+it("continues only a lone section on scroll, counting a shown empty Other heading", () => {
+  const rows = Array.from({ length: 20 }, (_, index) => sessionRow(`row-${index}`));
+  const alpha = rows.map((row) => ({ ...row, category: "Alpha" }));
+  const continues = (sessions: SidebarRecentSession[], overrides: Partial<ProjectionInput>) =>
+    project(sessions, overrides).sections.map(({ id, continuesOnScroll }) => [
+      id,
+      continuesOnScroll,
+    ]);
+  expect(continues(rows, { grouping: "none" })).toEqual([["ungrouped", true]]);
+  expect(continues(alpha, { knownGroups: ["Alpha"] })).toEqual([["category:Alpha", true]]);
+  expect(
+    continues(alpha, { knownGroups: ["Alpha"], showEmptyOther: true, statusFilter: "all" }),
+  ).toEqual([
+    ["category:Alpha", false],
+    ["ungrouped", false],
+  ]);
+});
+
 it("retains unloaded group destinations until the session list establishes their contents", () => {
   const input = { knownGroups: ["Awaiting sessions"], statusFilter: "active" as const };
   expect(sectionIds([], { ...input, listLoaded: false })).toContain("category:Awaiting sessions");

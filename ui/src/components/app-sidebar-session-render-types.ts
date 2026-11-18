@@ -54,7 +54,7 @@ export interface SessionListHost {
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
   readonly sessionProjection: Pick<
     SidebarSessionProjection,
-    "resolveSubtitle" | "heldSubtitle" | "mountCatalogRow" | "resetMembership"
+    "resolveSubtitle" | "heldSubtitle" | "mountCatalogRow"
   >;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
@@ -145,6 +145,7 @@ export interface SessionListHost {
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
   requestOpenNewSession(agentId: string, target?: NewSessionTarget): void;
   setVisibleSessionLimit(sectionId: string, limit: number): void;
+  resetVisibleSessionLimit(sectionId: string): void;
   clearSessionSelection(): void;
 }
 

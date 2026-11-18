@@ -383,6 +383,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     }
   }
 
+  resetVisibleSessionLimit(sectionId: string): void {
+    this.setVisibleSessionLimit(
+      sectionId,
+      sidebarSessionPagination(this.effectiveSessionsGrouping(), sectionId).initialLimit,
+    );
+  }
+
   async loadMoreSidebarSessions(): Promise<void> {
     if (this.sessionData.sessionsLoading) {
       return;

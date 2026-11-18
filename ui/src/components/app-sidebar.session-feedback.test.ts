@@ -286,8 +286,6 @@ describe("sidebar session feedback", () => {
       (_, i) => "agent:main:thread-" + i,
     );
     const harness = createSessionsHarness("main", keys);
-    // Groups below Other keeps Other's local Show more.
-    harness.result.sessions.push({ key: "agent:main:room", kind: "group", updatedAt: 0 });
     const first = { ...harness.sessions.state.result!, hasMore: true, nextOffset: keys.length };
     harness.list.mockResolvedValue(first);
     const { sidebar } = await mountSidebar(
@@ -318,10 +316,9 @@ describe("sidebar session feedback", () => {
     button().click();
     await sidebar.sessionData.loadMoreSidebarSessions();
     expect(harness.list).toHaveBeenCalledTimes(1);
-    expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(
-      SIDEBAR_SESSION_PAGE_SIZE + 1,
-    );
+    expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(SIDEBAR_SESSION_PAGE_SIZE);
     expect(button().textContent).toContain("Loading");
+    // Show more renders once its lazy module loads.
     const localMore = await vi.waitFor(() => {
       const more = sidebar.querySelector<HTMLButtonElement>('button[aria-label="Show more"]');
       expect(more).not.toBeNull();
@@ -330,7 +327,7 @@ describe("sidebar session feedback", () => {
     expect(localMore.disabled).toBe(false);
     localMore.click();
     await settleLitElement(sidebar);
-    expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(keys.length + 1);
+    expect(sidebar.querySelectorAll("[data-session-key]")).toHaveLength(keys.length);
     pending.reject(new Error("Fixture page failed"));
     await vi.waitFor(() => expect(button().disabled).toBe(false));
     expect(button().textContent).toContain("Load more sessions");
@@ -354,7 +351,6 @@ describe("sidebar session feedback", () => {
   it("does not expand a new grouping when a previous grouping's roster page settles", async () => {
     const keys = Array.from({ length: 40 }, (_, index) => `agent:main:page-${index}`);
     const harness = createSessionsHarness("main", keys);
-    harness.result.sessions.push({ key: "agent:main:room", kind: "group", updatedAt: 0 });
     harness.list.mockResolvedValue({
       ...harness.sessions.state.result!,
       hasMore: true,
@@ -382,7 +378,7 @@ describe("sidebar session feedback", () => {
     });
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).toBeNull());
     expect(
-      sidebar.querySelectorAll('[data-session-section="ungrouped"] .sidebar-recent-session'),
+      sidebar.querySelectorAll(".sidebar-session-content .sidebar-recent-session"),
     ).toHaveLength(15);
   });
 

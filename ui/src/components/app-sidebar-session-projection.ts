@@ -87,6 +87,9 @@ export type SidebarVisibleSections = {
     visibleLimit: number;
     collapsedVisibleRowCount: number;
     renderHeader: boolean;
+    /** The section is the whole list: reaching its end shows its next page.
+     *  Pinned and cached-snapshot sections leave it out and page by click. */
+    continuesOnScroll?: boolean;
   })[];
   visibleRows: SidebarRecentSession[];
 };
@@ -422,9 +425,6 @@ export class SidebarSessionProjection {
   readonly #observedOrder = new Map<string, number>();
   #nextCreatedOrder = 0;
   readonly #stickySections = new Map<string, Set<string>>();
-  // Rows a lone section showed, kept after a peer arrives until collapse or
-  // Show less (resetMembership) so the list does not shrink under the reader.
-  readonly #revealed = new Map<string, number>();
   readonly children = new SidebarChildExpansion(() => {
     this.revision += 1;
   });
@@ -611,11 +611,11 @@ export class SidebarSessionProjection {
         sections.some(
           (section) => section.id !== "ungrouped" && section.id !== soloOwnerSectionId,
         ));
-    // A lone section (flat list, or Other with no peers) shows every loaded
-    // row. With several, each pages so none buries the others (1700+ sessions
-    // on a team server) or changes paging on reorder. Roster cards
-    // (input.sections) keep their own paging.
-    const sole = !input.sections && sections.length === 1;
+    // A lone section (flat list, or Other with no peers) shows its next page when
+    // its end scrolls into view. With several, each waits for Show more so none
+    // buries the others (1700+ sessions on a team server) or changes paging on
+    // reorder. Roster cards (input.sections) keep their own paging.
+    const continuesOnScroll = !input.sections && sections.length === 1;
     const visibleRows: SidebarRecentSession[] = [];
     const limitedSections: SidebarVisibleSections["sections"] = [];
     for (const section of sections) {
@@ -629,13 +629,8 @@ export class SidebarSessionProjection {
       const collapsed =
         (renderHeader || section.id.startsWith("agent:")) &&
         input.collapsedSections.has(section.id);
-      const { initialLimit: pageLimit, key } = sidebarSessionPagination(grouping, section.id);
-      const visibleLimit = Math.max(
-        input.visibleSessionLimits.get(key) ?? pageLimit,
-        this.#revealed.get(section.id) ?? 0,
-      );
-      const initialLimit = sole ? totalRowCount : pageLimit;
-      const rowLimit = sole ? totalRowCount : visibleLimit;
+      const { initialLimit, key } = sidebarSessionPagination(grouping, section.id);
+      const visibleLimit = input.visibleSessionLimits.get(key) ?? initialLimit;
       const requiredRowCount = section.rows.reduce(
         (count, row) => count + Number(row.active || row.containsActiveDescendant || row.pinned),
         0,
@@ -646,8 +641,8 @@ export class SidebarSessionProjection {
       );
       let visibleRowCount = 0;
       if (!collapsed) {
-        let optionalSlots = Math.max(0, rowLimit - requiredRowCount);
-        let retainedSlots = rowLimit;
+        let optionalSlots = Math.max(0, visibleLimit - requiredRowCount);
+        let retainedSlots = visibleLimit;
         const sticky = this.#stickySections.get(section.id);
         // Keep one prior page through run-state and recency changes. An unbounded
         // union eventually renders the entire roster without a Show more action.
@@ -665,9 +660,6 @@ export class SidebarSessionProjection {
           retainedSlots -= 1;
           return true;
         });
-        if (sole) {
-          this.#revealed.set(section.id, section.rows.length);
-        }
         this.#stickySections.set(section.id, new Set(section.rows.map((row) => row.key)));
         visibleRows.push(...section.rows);
         visibleRowCount = section.rows.length;
@@ -679,6 +671,7 @@ export class SidebarSessionProjection {
           visibleLimit,
           collapsedVisibleRowCount,
           renderHeader,
+          continuesOnScroll,
         }),
       );
     }
@@ -689,10 +682,8 @@ export class SidebarSessionProjection {
     this.revision += 1;
     if (sectionId === undefined) {
       this.#stickySections.clear();
-      this.#revealed.clear();
     } else {
       this.#stickySections.delete(sectionId);
-      this.#revealed.delete(sectionId);
     }
   }
 

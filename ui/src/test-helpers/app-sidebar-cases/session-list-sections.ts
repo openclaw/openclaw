@@ -13,7 +13,7 @@ import { settleLitElement } from "../lit-settle.ts";
 import "../../components/app-sidebar.tsx";
 
 describe("AppSidebar session section visibility", () => {
-  it("pages every section, the last one included, when several render", async () => {
+  it("paginates each expanded section independently", async () => {
     const threadKeys = Array.from({ length: 17 }, (_, index) => `agent:main:thread-${index}`);
     const categoryKeys = Array.from({ length: 17 }, (_, index) => `agent:main:alpha-${index}`);
     const sessions = createSessionsHarness("main", [...threadKeys, ...categoryKeys]);
@@ -46,60 +46,6 @@ describe("AppSidebar session section visibility", () => {
 
     await expectSection(category, 15, true);
     await expectSection(threads, 17, false);
-  });
-
-  it("keeps the rows a lone Other showed when a group arrives below it", async () => {
-    const keys = Array.from({ length: 40 }, (_, index) => `agent:main:thread-${index}`);
-    const harness = createSessionsHarness("main", keys);
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      harness.sessions,
-    );
-    const rows = () =>
-      sidebar.querySelectorAll('[data-session-section="ungrouped"] .sidebar-recent-session');
-    expect(rows()).toHaveLength(40);
-
-    const result = harness.sessions.state.result!;
-    harness.publishList({
-      result: {
-        ...result,
-        sessions: [...result.sessions, { key: "agent:main:room", kind: "group", updatedAt: 0 }],
-      },
-    });
-    await settleLitElement(sidebar);
-
-    expect(sidebar.querySelector('[data-session-section="groups"]')).not.toBeNull();
-    expect(rows()).toHaveLength(40);
-    const collapse = () =>
-      sidebar.querySelector<HTMLButtonElement>('button[aria-label="Collapse"]');
-    await vi.waitFor(() => expect(collapse()).not.toBeNull());
-    collapse()!.click();
-    await settleLitElement(sidebar);
-    expect(rows()).toHaveLength(15);
-    await vi.waitFor(() =>
-      expect(sidebar.querySelector('button[aria-label="Show more"]')).not.toBeNull(),
-    );
-  });
-
-  it("counts a rendered empty Other heading as a second section", async () => {
-    const keys = Array.from({ length: 20 }, (_, index) => `agent:main:alpha-${index}`);
-    const sessions = createSessionsHarness("main", keys);
-    for (const row of sessions.result.sessions) {
-      row.category = "Alpha";
-    }
-    sessions.publish({ groups: ["Alpha"] });
-    const { sidebar } = await mountSidebar(
-      createGateway({} as GatewayBrowserClient),
-      sessions.sessions,
-    );
-    await activateSessionMenuValue(sidebar, "empty-groups:never");
-    await activateSessionMenuValue(sidebar, "status:all");
-    await settleLitElement(sidebar);
-    const alpha = sidebar.querySelector('[data-session-section="category:Alpha"]');
-
-    expect(sidebar.querySelector('[data-session-section="ungrouped"]')).not.toBeNull();
-    expect(alpha?.querySelectorAll(".sidebar-recent-session")).toHaveLength(15);
-    await vi.waitFor(() => expect(alpha?.querySelector('[aria-label="Show more"]')).not.toBeNull());
   });
 
   it("keeps global session actions when every unpinned thread has a custom group", async () => {

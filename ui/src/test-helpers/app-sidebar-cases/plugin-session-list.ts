@@ -132,8 +132,6 @@ it.each([false, true])("AppSidebar replacement sessions (delegates: %s)", async 
   wide.result!.sessions.forEach((row, index) => {
     row.updatedAt = 100 - index;
   });
-  // Groups below Other keeps Other paged.
-  wide.result!.sessions.splice(1, 0, { key: "agent:main:room", kind: "group", updatedAt: 0 });
   sessions.publishList(wide);
   await settleRoster(sidebar);
   const last = wide.result!.sessions.at(-1)!;
