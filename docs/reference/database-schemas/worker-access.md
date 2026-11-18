@@ -13,6 +13,11 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Subagent registry writes obtain their initial host grant before opening the native
+write transaction. The FIFO row owner and write-ID sequence remain authoritative;
+terminal-event admission and the final commit grant stay inside the transaction.
+The initial host admission wait therefore does not hold the native writer.
+
 Plugin model catalog publication uses the agent database writer queue. Credential
 cleanup joins those same queues before inspecting candidate catalogs, so an earlier
 publication settles before a clean-catalog decision. Later publications revalidate
