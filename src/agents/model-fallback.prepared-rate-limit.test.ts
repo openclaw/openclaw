@@ -3,7 +3,6 @@ import { expect, it, vi } from "vitest";
 import * as autoEnable from "../config/plugin-auto-enable.js";
 import { createProviderRateLimitRequest } from "../llm/provider-rate-limit.js";
 import * as pluginConfig from "../plugins/config-state.js";
-import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import * as modelResolution from "./embedded-agent-runner/model.registry-resolution.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
@@ -24,11 +23,11 @@ it("reads prepared fallback routes without plugin work and keeps reload generati
     snapshot = fixture === first ? firstSnapshot : nextSnapshot,
   ) => {
     await setImmediate();
-    return withPluginMetadataSnapshotScope(
-      fixture.metadata,
+    return withPreparedModelRuntimePluginGenerationScope(
+      fixture.generation,
       () =>
-        withPreparedModelRuntimePluginGenerationScope(
-          fixture.generation,
+        withPluginRuntimeGenerationScope(
+          { metadataSnapshot: fixture.metadata, pluginRegistry: fixture.generation.pluginRegistry },
           () =>
             runWithModelFallback({
               cfg: fixture.config,
@@ -38,9 +37,8 @@ it("reads prepared fallback routes without plugin work and keeps reload generati
               skipAuthProfileRuntime: true,
               run: async (provider, model) => `${provider}/${model}`,
             }),
-          () => snapshot,
         ),
-      { config: fixture.config, trustConfigIdentity: true },
+      () => snapshot,
     );
   };
   try {

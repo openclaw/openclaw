@@ -28,6 +28,7 @@ import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { resolveFallbackRateLimitModel } from "./model-fallback-rate-limit-model.js";
 import { modelKey } from "./model-ref-shared.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
+import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { applyModelServingContextLimit } from "./model-serving-context.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
@@ -367,9 +368,12 @@ export function createPreparedModelRuntimeSnapshot(
         agentId: input.agentId,
         manifestPlugins: pluginMetadataSnapshot,
       };
+      if (resolveConfiguredModelFallbacks(selection).length === 0) {
+        return models;
+      }
       const candidates = resolveModelCandidateChain({
         ...selection,
-        ...resolveDefaultModelForAgent(selection),
+        ...resolveDefaultModelForAgent({ ...selection, allowPluginNormalization: false }),
       });
       for (const { provider, model: modelId } of candidates.length > 1 ? candidates : []) {
         const key = modelKey(provider, modelId);

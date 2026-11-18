@@ -34,6 +34,7 @@ import { resolveBundledCompatActivationInputs } from "../../src/plugins/activati
 import { prepareRuntimePluginsConfig } from "../../src/plugins/config-state.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { withPluginRuntimeGenerationScope } from "../../src/plugins/runtime/generation-scope.js";
 import { freezeJsonSnapshot } from "../../src/shared/immutable-data.js";
 
 const { values } = parseArgs({
@@ -165,7 +166,8 @@ async function run(count: number) {
     if (preparedFixture && preparedSnapshot) {
       result = await withPreparedModelRuntimePluginGenerationScope(
         preparedFixture.generation,
-        () => runWithModelFallback(params),
+        () =>
+          withPluginRuntimeGenerationScope(preparedSnapshot, () => runWithModelFallback(params)),
         () => preparedSnapshot,
       );
     } else if (values.flow === "runner") {
