@@ -72,6 +72,17 @@ export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   );
 }
 
+/** An ended message wait owns a continuation, not a finished result. */
+export function isEndedSubagentMessageWait(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.status === "terminal" &&
+    isYieldedSubagentRun(entry) &&
+    (entry.waitingForRequesterMessage === true ||
+      Boolean(entry.requesterSettleWake?.pauseNotice)) &&
+    hasSubagentRunEnded(entry)
+  );
+}
+
 export function isStaleUnendedSubagentRun(
   entry: SubagentRunLivenessRecord,
   now = Date.now(),

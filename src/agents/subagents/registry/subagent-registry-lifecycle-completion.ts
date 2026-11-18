@@ -411,6 +411,7 @@ function planTerminalCompletion(
     );
     entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
     entry.pauseReason = undefined;
+    entry.waitingForRequesterMessage = undefined;
     entry.execution = {
       ...entry.execution,
       status: "terminal",
@@ -632,6 +633,7 @@ function planTerminalCompletion(
   if (entry.pauseReason !== undefined) {
     entry.pauseReason = undefined;
   }
+  entry.waitingForRequesterMessage = undefined;
 
   const completion = ensureCompletionState(entry);
   if (completeParams.completionSnapshot) {

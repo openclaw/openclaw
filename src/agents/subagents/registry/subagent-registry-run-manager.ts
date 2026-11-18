@@ -363,6 +363,7 @@ class SubagentRunManager extends SubagentLaunchManager {
                 : now;
               entry.suppressAnnounceReason = "killed";
               entry.pauseReason = undefined;
+              entry.waitingForRequesterMessage = undefined;
               entry.killIntent = undefined;
               const taskEndedAt = existingKillIntent
                 ? existingKillIntent.requestedAt

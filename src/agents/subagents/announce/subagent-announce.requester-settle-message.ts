@@ -21,6 +21,7 @@ export function buildRequesterSettleWakeMessage(params: {
   yieldedFinalDeliverable?: boolean;
   /** The descendant wait was spent while a descendant result was still undelivered. */
   descendantsUnsettled?: boolean;
+  hasMessageWait?: boolean;
   children: readonly SubagentRunRecord[];
   recoveryChildren: readonly SubagentRunRecord[];
   preserveModelRouteNotice: boolean;
@@ -61,10 +62,16 @@ export function buildRequesterSettleWakeMessage(params: {
       : routeNotices;
   const recoveryRoster = buildSubagentRestartRecoveryRoster(params.recoveryChildren);
   return [
-    params.descendantsUnsettled
-      ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
-      : "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
-    "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+    ...(params.hasMessageWait
+      ? [
+          "[Subagent Context] These results are ready. Other children are paused awaiting a message and may report later. If their results are needed, send them the continuation they are waiting for before yielding again.",
+        ]
+      : [
+          params.descendantsUnsettled
+            ? "[Subagent Context] Every subagent in this batch has ended, but a descendant result below it was still undelivered when waiting stopped; a child that later receives it may report again in a separate completion."
+            : "[Subagent Context] Every subagent in this batch has now settled, including its descendants.",
+          "[Subagent Context] Do not keep waiting or call sessions_yield again for this batch; no further completion events will arrive for it. Other batches may still be running.",
+        ]),
     // Private completion guidance already includes the shared outcome policy.
     ...(params.parentOnly ? [] : [`[Subagent Context] ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}`]),
     ...(recoveryRoster

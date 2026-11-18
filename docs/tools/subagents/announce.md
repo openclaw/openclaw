@@ -61,8 +61,10 @@ outputs from leaking into the current announce. Announce replies preserve
 thread/topic routing when available on channel adapters.
 
 After `sessions_yield`, the frozen batch waits for its own children and their
-descendants to settle. A still-running child from an earlier requester turn does
-not delay that batch's result; the earlier batch retains its own completion wake.
+descendants to settle. A child paused to wait for a message stays resumable and
+retains its completion wake while ready results can be delivered separately.
+An already admitted continuation keeps its original batch. A still-running
+child from an earlier requester turn does not delay this batch's result.
 
 Completion inputs retain their own turn identity across compaction and runtime
 context messages. If transcript persistence rejects a completion because its

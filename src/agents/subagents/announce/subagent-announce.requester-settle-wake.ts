@@ -483,6 +483,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       parentOnly,
       yieldedFinalDeliverable: admissionMarker.yieldedFinalDeliverable,
       descendantsUnsettled,
+      hasMessageWait: selectedWave.hasMessageWait,
       children: completionRows,
       recoveryChildren: recoveryRows,
       preserveModelRouteNotice:

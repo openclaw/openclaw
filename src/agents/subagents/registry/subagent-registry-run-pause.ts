@@ -156,20 +156,23 @@ export async function claimSubagentYieldInRuns(params: {
       if (entry.expectsCompletionMessage !== true) {
         return { value: { messageWaitRegistered: false } };
       }
-      if (entry.requesterSettleWake?.pauseNotice) {
+      if (entry.waitingForRequesterMessage && entry.requesterSettleWake?.pauseNotice) {
         return { value: { messageWaitRegistered: true } };
       }
       const next = structuredClone(entry);
-      next.requesterSettleWake = {
-        ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
-        batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
-        pauseNotice: {
-          acknowledgment: truncateUtf16Safe(
-            params.acknowledgment?.trim() || "Paused awaiting continuation.",
-            12_000,
-          ),
-        },
-      };
+      next.waitingForRequesterMessage = true;
+      if (!next.requesterSettleWake?.pauseNotice) {
+        next.requesterSettleWake = {
+          ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
+          batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
+          pauseNotice: {
+            acknowledgment: truncateUtf16Safe(
+              params.acknowledgment?.trim() || "Paused awaiting continuation.",
+              12_000,
+            ),
+          },
+        };
+      }
       return { value: { messageWaitRegistered: true }, postimages: new Map([[entry.runId, next]]) };
     },
     {

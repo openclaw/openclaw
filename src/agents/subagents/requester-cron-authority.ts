@@ -424,6 +424,14 @@ type RequesterCronAuthorityDispatch = {
 };
 const activeDispatch = new AsyncLocalStorage<RequesterCronAuthorityDispatch>();
 
+/** Earlier partial wakes cannot take a continuation's exact-batch management custody. */
+export function hasRetainedRequesterCronCohort(batch: readonly SubagentRunRecord[]): boolean {
+  return batch.some((entry) => {
+    const authority = state.byEntry.get(getSubagentRunRuntimeKey(entry));
+    return authority?.kind === "yield" && isCurrent(authority);
+  });
+}
+
 export async function withRequesterCronAuthority<T>(
   params: {
     requesterSessionKey: string;

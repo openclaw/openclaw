@@ -179,6 +179,8 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   childSessionIdentity?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
   /** Exact requester attempt for cancellation, independent of completion messaging. */
   requesterTurnRunId?: string;
+  /** Message-only yield remains distinguishable after its requester notice is consumed. */
+  waitingForRequesterMessage?: true;
   /** Durable proof that this requester attempt invoked sessions_yield. */
   requesterTurnYielded?: true;
   /** Completion-producing row retirement deferred until requesterTurnRunId settles. */

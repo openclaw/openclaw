@@ -59,7 +59,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isEndedSubagentMessageWait } from "./subagent-run-liveness.js";
 
 async function prepareParentDeliveryFailureReport(
   context: SubagentLifecycleWakeContext,
@@ -434,9 +434,11 @@ export function scheduleRequesterSettleWake(
   }
   const pendingAtAdmission = getPendingWakeCommit(context, entry);
   const admittedWake = entry.requesterSettleWake;
+  const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
     (!admittedWake && !pendingAtAdmission) ||
+    (!pendingAtAdmission && !pauseNotice && isEndedSubagentMessageWait(entry)) ||
     entry.collect ||
     (!pendingAtAdmission &&
       isCompletedRequesterDeliveryBlocked(entry) &&
@@ -484,17 +486,21 @@ export function scheduleRequesterSettleWake(
     return;
   }
   let admittedBatch = (
-    entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
-      ? [runId]
-      : (admittedWake?.partitionRunIds ?? admittedWake?.batchRunIds ?? [runId])
+    pauseNotice ? [runId] : (admittedWake?.partitionRunIds ?? admittedWake?.batchRunIds ?? [runId])
   ).flatMap((id) => {
     const member = params.runs.get(id);
-    return member && (!admittedWake || hasSameRequesterWakePartition(member, admittedWake))
+    return member &&
+      (pauseNotice ||
+        (admittedWake?.attemptCount ?? 0) > 0 ||
+        !isEndedSubagentMessageWait(member)) &&
+      (!admittedWake || hasSameRequesterWakePartition(member, admittedWake))
       ? [member]
       : [];
   });
   if (!admittedWake?.partitionRunIds && (admittedWake?.attemptCount ?? 0) === 0) {
-    admittedBatch = subagentRuns.selectCompletionAuthorityBatch(admittedBatch, entry);
+    admittedBatch = subagentRuns
+      .selectCompletionAuthorityBatch(admittedBatch, entry)
+      .filter((member) => (member.requesterSettleWake?.attemptCount ?? 0) === 0);
   }
   context.scheduledRequesterSettleWakeRuns.add(runtimeKey);
   runWithoutOwnedSessionTranscriptWrites(() => {

@@ -381,6 +381,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             accumulatedRuntimeMs,
             endedReason: undefined,
             pauseReason: undefined,
+            waitingForRequesterMessage: undefined,
             endedHookEmittedAt: undefined,
             browserCleanupDispatchedAt: undefined,
             deleteCleanupDispatchedAt: undefined,

@@ -1,3 +1,4 @@
+import { getFollowupCohortOwner } from "../completion/session-followup-cohort.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { selectConnectedSettledSubagentWave } from "../registry/subagent-registry-queries.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
@@ -5,7 +6,11 @@ import {
   hasSameRequesterWakeCohort,
   hasSameRequesterWakePartition,
 } from "../registry/subagent-requester-settle-identity.js";
-import { hasSubagentRunEnded } from "../registry/subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isEndedSubagentMessageWait,
+} from "../registry/subagent-run-liveness.js";
+import { hasRetainedRequesterCronCohort } from "../requester-cron-authority.js";
 import type { RequesterSettleWakeBatchState } from "./subagent-announce.requester-settle-state.js";
 
 /** Select one invocation wave before dispatch can spend it. */
@@ -14,7 +19,7 @@ export function selectRequesterSettleWave(params: {
   currentSettledEntry: SubagentRunRecord;
   currentState: RequesterSettleWakeBatchState;
   pause: boolean;
-}): { batch: SubagentRunRecord[]; partial: boolean } | undefined {
+}): { batch: SubagentRunRecord[]; partial: boolean; hasMessageWait: boolean } | undefined {
   const { requesterRuns, currentSettledEntry, currentState, pause } = params;
   const frozenBatchRunIds = currentState.batchRunIds;
   const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
@@ -25,6 +30,7 @@ export function selectRequesterSettleWave(params: {
     hasSubagentRunEnded(entry);
   let settledBatch: SubagentRunRecord[];
   let partial = false;
+  let hasMessageWait = false;
   if (pause) {
     settledBatch = [currentSettledEntry];
   } else if (frozenBatchRunIds?.length) {
@@ -39,6 +45,7 @@ export function selectRequesterSettleWave(params: {
         hasSameRequesterWakePartition(entry, currentState),
       );
       partial = true;
+      hasMessageWait = frozenMembers.some(isEndedSubagentMessageWait);
     } else {
       if (frozenMembers.some((entry) => entry.requesterSettleWake?.partitionRunIds)) {
         return undefined;
@@ -48,7 +55,19 @@ export function selectRequesterSettleWave(params: {
       settledBatch =
         currentState.attemptCount > 0
           ? frozenMembers
-          : subagentRuns.selectCompletionAuthorityBatch(frozenMembers, currentSettledEntry);
+          : subagentRuns
+              .selectCompletionAuthorityBatch(frozenMembers, currentSettledEntry)
+              .filter((entry) => (entry.requesterSettleWake?.attemptCount ?? 0) === 0);
+      const ready = settledBatch.filter(hasSettled);
+      hasMessageWait =
+        ready.length < settledBatch.length &&
+        currentState.attemptCount === 0 &&
+        settledBatch.every((entry) => hasSettled(entry) || isEndedSubagentMessageWait(entry)) &&
+        !settledBatch.some(getFollowupCohortOwner) &&
+        !hasRetainedRequesterCronCohort(settledBatch);
+      if (hasMessageWait) {
+        settledBatch = ready;
+      }
       partial = settledBatch.length < frozenMembers.length;
     }
     if (!settledBatch.every(hasSettled)) {
@@ -73,5 +92,5 @@ export function selectRequesterSettleWave(params: {
     return undefined;
   }
 
-  return { batch: settledBatch, partial };
+  return { batch: settledBatch, partial, hasMessageWait };
 }

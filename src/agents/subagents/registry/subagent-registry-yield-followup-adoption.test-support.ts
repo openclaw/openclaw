@@ -113,6 +113,7 @@ export function registerYieldFollowupAdoptionTests({
     const run = findRequesterRun(runId);
     if (paused) {
       expect(run?.pauseReason).toBe("sessions_yield");
+      expect(run?.waitingForRequesterMessage).toBe(true);
       expect(run?.execution.outcome).toBeUndefined();
       expect(run?.endedReason).toBeUndefined();
       expect(wakeRequester).toHaveBeenCalledOnce();
