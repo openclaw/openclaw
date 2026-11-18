@@ -128,7 +128,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
         queuedFinal = result.ok;
         if (state.isRoutedReplyDelivered(result)) {
           routedFinalCount += 1;
-          await mirrorDeliveredReplyToTranscript({ metadata, cfg });
+          await mirrorDeliveredReplyToTranscript({
+            metadata,
+            cfg,
+            waitForStopExchange: fast.reason === "fast_abort",
+          });
         }
         if (!result.ok) {
           logVerbose(
@@ -165,7 +169,11 @@ export async function prepareDispatchOperation(state: PrepareDispatchOperationCo
           registerReplyDispatcherSettledTask(dispatcher, async () => {
             try {
               if ((await sent.outcome) === "delivered") {
-                await mirrorDeliveredReplyToTranscript({ metadata: delivered(), cfg });
+                await mirrorDeliveredReplyToTranscript({
+                  metadata: delivered(),
+                  cfg,
+                  waitForStopExchange: fast.reason === "fast_abort",
+                });
               }
             } finally {
               stopSettlement?.resolve();

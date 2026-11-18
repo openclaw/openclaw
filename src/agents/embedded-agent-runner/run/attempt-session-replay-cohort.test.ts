@@ -1,5 +1,13 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import {
+  createReplyOperation,
+  markReplyOperationExecutionStarted,
+} from "../../../auto-reply/reply/reply-run-registry.js";
+import { admitReplyTurn } from "../../../auto-reply/reply/reply-turn-admission.js";
+import { recordDeliveredCommandExchange } from "../../../config/sessions/command-transcript.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-read.js";
 import { SessionEntryChangedDuringReadError } from "../../../config/sessions/session-entry-read-errors.js";
 import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
@@ -20,6 +28,82 @@ import { cleanupEmbeddedAttemptResources } from "./attempt-subscription-cleanup.
 registerAgentSessionLoopTestLifecycle();
 
 describe("transcript replay cohorts", () => {
+  it.each([false, true])(
+    "keeps a prepared user turn replayable when a command reply is delivered mid-turn (physical reply owner: %s)",
+    async (physical) => {
+      await withInterruptedTurn(
+        false,
+        async (fixture) => {
+          const prepared = await fixture.prepare();
+          const consume = await prepared.prepareInitialUserTurnReplay?.();
+          expect(consume).toBeTypeOf("function");
+          const { target } = fixture;
+          const operation = await (async () => {
+            if (physical) {
+              const admission = await admitReplyTurn({
+                ...target,
+                kind: "visible",
+                resetTriggered: false,
+              });
+              if (admission.status !== "owned") {
+                throw new Error("Expected the physical reply owner");
+              }
+              admission.operation.setPhase("running");
+              return admission.operation;
+            }
+            const unscoped = createReplyOperation({ ...target, resetTriggered: false });
+            markReplyOperationExecutionStarted(unscoped);
+            return unscoped;
+          })();
+          const before = loadTranscriptEventsSync(target);
+          try {
+            const exchange = {
+              ...target,
+              expectedSessionId: target.sessionId,
+              commandText: "/think",
+              commandId: "mid-turn",
+              replyId: "menu",
+              replyText: "Choose a thinking level.",
+            };
+            if (physical) {
+              // The same key and session id in another store do not share a context fence.
+              const other = {
+                ...target,
+                storePath: path.join(path.dirname(target.storePath), "other.sqlite"),
+              };
+              await upsertSessionEntryCore(other, { sessionId: target.sessionId, updatedAt: 1 });
+              await expect(
+                recordDeliveredCommandExchange({ ...exchange, ...other }),
+              ).resolves.toMatchObject({ ok: true });
+            }
+            await recordDeliveredCommandExchange(exchange);
+            const admitted = vi.fn();
+            await consume!(admitted);
+            expect(admitted).toHaveBeenCalledOnce();
+            expect(loadTranscriptEventsSync(target)).toEqual(before);
+            await SessionManager.open(target).appendMessageAsync(
+              createAssistant(testModel, [{ type: "text", text: "The running turn's answer" }]),
+            );
+          } finally {
+            operation.complete();
+          }
+          // The detached write crosses the SQLite writer and projection workers.
+          await vi.waitFor(
+            () => {
+              const entries = loadTranscriptEventsSync(target);
+              expect(entries).toHaveLength(before.length + 3);
+              expect(JSON.stringify(entries.slice(-3))).toMatch(
+                /The running turn's answer.*\/think.*Choose a thinking level\./s,
+              );
+            },
+            { timeout: 10_000, interval: 100 },
+          );
+        },
+        { selectedOwner: true, admittedReceipt: true, interruptedTurn: false },
+      );
+    },
+  );
+
   it("retains bootstrap presence when the bounded active path has no messages", async () => {
     await withInterruptedTurn(
       false,

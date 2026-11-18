@@ -1,6 +1,9 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { recordDeliveredCommandExchange } from "../../config/sessions/command-transcript.js";
+import {
+  recordDeliveredCommandExchange,
+  recordDeliveredStopExchange,
+} from "../../config/sessions/command-transcript.js";
 import type { SessionTranscriptDeliveryMirror } from "../../config/sessions/transcript-mirror.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -38,6 +41,7 @@ function transcriptMirrorExpectations(mirror: TranscriptMirror) {
 export async function mirrorDeliveredReplyToTranscript(params: {
   metadata?: TranscriptMirror;
   cfg: OpenClawConfig;
+  waitForStopExchange?: boolean;
 }): Promise<void> {
   const mirror = params.metadata;
   if (!mirror || mirror.transcriptOwner) {
@@ -45,7 +49,10 @@ export async function mirrorDeliveredReplyToTranscript(params: {
   }
   try {
     if (mirror.commandText && mirror.commandId && mirror.text) {
-      await recordDeliveredCommandExchange({
+      const record = params.waitForStopExchange
+        ? recordDeliveredStopExchange
+        : recordDeliveredCommandExchange;
+      await record({
         sessionKey: mirror.sessionKey,
         agentId: mirror.agentId,
         ...transcriptMirrorExpectations(mirror),

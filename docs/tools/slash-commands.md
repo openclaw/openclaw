@@ -67,7 +67,9 @@ command handling is enabled for the surface.
 Command replies delivered through the shared dispatcher are part of the conversation
 on every channel. Native command menus and button selections on Discord and
 Telegram, Slack argument menus, and Mattermost model pickers are also retained after delivery.
-These exchanges appear in session history and later model context.
+These exchanges appear in session history and later model context. If a command
+reply is delivered while a turn is running, its exchange is recorded after that
+turn settles so the running answer is not interrupted.
 Login codes, pairing codes,
 login URLs, and sensitive `/config set` or `/debug set` values are redacted in the
 recorded copy; delivered instructions and command execution are unchanged.
