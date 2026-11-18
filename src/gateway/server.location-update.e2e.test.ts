@@ -1,19 +1,18 @@
 // Production-path e2e: a paired node client sends `node.event location.update`
-// over a real gateway WebSocket, memory-core's registered consumer evaluates
-// the fix against an armed one-shot intent, and exactly one routed system
-// event lands on the intent's delivery session. Unmatched fixes produce no
-// wake.
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
-import {
-  registerLocationIntentConsumer,
-  settleLocationIntentFiresForTest,
-} from "../../extensions/memory-core/src/location-intent-consumer.js";
-import {
-  createLocationStandingIntent,
-  listStandingIntents,
-} from "../../extensions/memory-core/src/standing-intents.js";
+// over a real gateway WebSocket and the gateway's dispatch contract holds:
+// a valid fix reaches the registered consumer exactly once with the typed
+// payload, a malformed fix is rejected before any consumer runs, and a
+// retired registry stops dispatch with `no_consumer`.
+//
+// The consumer here is a test stub registered through core plugin-registry
+// surfaces only: core tests may not deep-import bundled extensions
+// (src/plugins/contracts/boundary-invariants.test.ts). The full chain from
+// this event to a fired intent and its routed wake — with the real
+// memory-core consumer — is covered by the extension's own integration
+// suites (extensions/memory-core/src/location-intent-consumer.test.ts and
+// location-intents.test.ts), which own those internals.
+import { afterAll, beforeAll, expect, test } from "vitest";
 import { requestNodePairing, approveNodePairing } from "../infra/device-pairing-node.js";
-import { drainSystemEvents } from "../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -35,54 +34,34 @@ installGatewayTestHooks({ scope: "suite" });
 const { cleanup: cleanupNodePairingTestState, setup: setupNodePairingTestState } =
   createNodePairingTestState("openclaw-location-update-e2e-");
 
-const DELIVERY_SESSION = "agent:main:main";
 const inside = { lat: 57.69747, lon: 11.95073, accuracyMeters: 10, source: "e2e" };
 const outside = { lat: 57.6991, lon: 11.9505, accuracyMeters: 10, source: "e2e" };
 
-async function pairNode(name: string) {
-  const paired = await pairDeviceIdentity({
-    name,
-    role: "node",
-    scopes: [],
-    clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
-    clientMode: GATEWAY_CLIENT_MODES.NODE,
-  });
-  const pairing = await requestNodePairing({
-    nodeId: paired.identity.deviceId,
-    platform: "macos",
-    deviceFamily: "Mac",
-    commands: [],
-  });
-  const approved = await approveNodePairing(pairing.request.requestId, {
-    callerScopes: ["operator.pairing", "operator.write", "operator.admin"],
-  });
-  expect(approved).toMatchObject({ node: { nodeId: paired.identity.deviceId } });
-  return paired.identity;
-}
+/** A gateway-validated fix exactly as the consumer contract receives it. */
+type LocationFix = { lat: number; lon: number; accuracyMeters: number; source: string };
 
-function expectRegistryWithConsumer(): { registry: PluginRegistry; warnings: string[] } {
+/** Registers a recording consumer through the same registry the gateway reads at dispatch time. */
+function activateRecordingConsumer(): {
+  registry: PluginRegistry;
+  received: Array<{ nodeId: string; payload: LocationFix }>;
+} {
   const registry = createEmptyPluginRegistry();
-  const warnings: string[] = [];
-  const api = {
-    registerNodeEventConsumer: (subscription: unknown) => {
-      registry.nodeEventConsumers.push({
-        pluginId: "memory-core",
-        source: "bundled",
-        subscription: subscription as PluginRegistry["nodeEventConsumers"][number]["subscription"],
-      });
+  const received: Array<{ nodeId: string; payload: LocationFix }> = [];
+  registry.nodeEventConsumers.push({
+    pluginId: "location-e2e-test",
+    source: "test",
+    subscription: {
+      events: ["location.update"],
+      handle: (delivery: { nodeId: string; payload: unknown }) => {
+        received.push({
+          nodeId: delivery.nodeId,
+          payload: delivery.payload as LocationFix,
+        });
+      },
     },
-    logger: {
-      warn: (message: string) => warnings.push(message),
-      info() {},
-      error() {},
-      debug() {},
-    },
-    runtime: {
-      config: { current: () => ({ agents: { list: [{ id: "main" }] } }) },
-    },
-  };
-  registerLocationIntentConsumer(api as never);
-  return { registry, warnings };
+  });
+  setActivePluginRegistry(registry);
+  return { registry, received };
 }
 
 describeWithGatewayServer("gateway location.update e2e (paired node WebSocket)", (getStarted) => {
@@ -101,17 +80,28 @@ describeWithGatewayServer("gateway location.update e2e (paired node WebSocket)",
     await cleanupNodePairingTestState();
   });
 
-  test("fires an armed one-shot intent to the routed session and stays silent on replay", async () => {
+  test("delivers validated fixes to the registered consumer over the node WebSocket", async () => {
     const started = getStarted();
-    // Publish the real memory-core consumer now — after the gateway booted
-    // and installed its own registry — because dispatch reads the active
-    // registry at event time.
     registrySnapshot = captureActivePluginRegistrySnapshot();
-    // The consumer logs failures via its api logger and fire passes are
-    // awaited below, so the returned diagnostics collector stays unused here.
-    const { registry } = expectRegistryWithConsumer();
-    setActivePluginRegistry(registry);
-    const identity = await pairNode("location-update-e2e-node");
+    const { received } = activateRecordingConsumer();
+    const identity = await pairDeviceIdentity({
+      name: "location-update-e2e-node",
+      role: "node",
+      scopes: [],
+      clientId: GATEWAY_CLIENT_NAMES.NODE_HOST,
+      clientMode: GATEWAY_CLIENT_MODES.NODE,
+    });
+    const pairing = await requestNodePairing({
+      nodeId: identity.deviceId,
+      platform: "macos",
+      deviceFamily: "Mac",
+      commands: [],
+    });
+    const approved = await approveNodePairing(pairing.request.requestId, {
+      callerScopes: ["operator.pairing", "operator.write", "operator.admin"],
+    });
+    expect(approved).toMatchObject({ node: { nodeId: identity.deviceId } });
+
     await using cleanup = new AsyncDisposableStack();
     const node = await connectGatewayClient({
       url: `ws://127.0.0.1:${started.port}`,
@@ -130,51 +120,46 @@ describeWithGatewayServer("gateway location.update e2e (paired node WebSocket)",
     cleanup.defer(() => node.stopAndWait());
 
     const nodeId = identity.deviceId;
-    expect(await listStandingIntents({ agentId: "main" })).toHaveLength(0);
-    await createLocationStandingIntent({
-      agentId: "main",
-      description: "E2E: buy groceries when leaving lunch.",
-      nodeId,
-      direction: "exit",
-      centerLat: inside.lat,
-      centerLon: inside.lon,
-      radiusMeters: 55,
-      deliveryTarget: DELIVERY_SESSION,
-      creatorSender: "owner-sender",
-    });
 
-    // Baseline through the real WebSocket: validated, dispatched to the
-    // consumer, but no fire on arm and no wake.
+    // Valid baseline fix through the real WebSocket: validated, dispatched,
+    // and handed to the consumer with the typed payload and sender node id.
     const baseline = await node.request("node.event", {
       event: "location.update",
       payload: inside,
     });
     expect(baseline).toMatchObject({ ok: true, handled: true, reason: "dispatched" });
-    // Serialize the fire passes: the consumer dedupes fixes per node while a
-    // pass is in flight, so the baseline pass must settle before the
-    // crossing fix is sent.
-    await settleLocationIntentFiresForTest();
+    expect(received).toEqual([{ nodeId, payload: inside }]);
 
-    // Real crossing through the real WebSocket: one routed wake.
+    // A second distinct fix is also delivered; dispatch does not dedupe or
+    // transform coordinates on the gateway side.
     const crossing = await node.request("node.event", {
       event: "location.update",
       payload: outside,
     });
-    expect(crossing).toMatchObject({ ok: true, handled: true });
-    // The consumer pass is fire-and-forget; settle it before reading the queue.
-    await settleLocationIntentFiresForTest();
-    // Single drain: the routed wake lands on the recorded session exactly once.
-    const wakeTexts = drainSystemEvents(DELIVERY_SESSION);
-    expect(wakeTexts).toHaveLength(1);
-    expect(wakeTexts[0]).toContain("E2E: buy groceries when leaving lunch.");
+    expect(crossing).toMatchObject({ ok: true, handled: true, reason: "dispatched" });
+    expect(received).toEqual([
+      { nodeId, payload: inside },
+      { nodeId, payload: outside },
+    ]);
 
-    const rows = await listStandingIntents({ agentId: "main" });
-    expect(rows.find((row) => row.description.startsWith("E2E:"))?.status).toBe("done");
-    const replay = await node.request("node.event", {
+    // Malformed payload: rejected before any consumer runs.
+    const beforeMalformed = received.length;
+    const malformed = await node.request("node.event", {
       event: "location.update",
-      payload: outside,
+      payload: { lat: 91, lon: 11.95073, accuracyMeters: 10, source: "e2e" },
     });
-    expect(replay).toMatchObject({ ok: true, handled: true });
-    expect(drainSystemEvents(DELIVERY_SESSION)).toEqual([]);
+    expect(malformed).toMatchObject({ ok: true, handled: false, reason: "invalid_payload" });
+    expect(received).toHaveLength(beforeMalformed);
+
+    // Retired registry generation: the subscription goes with the registry,
+    // so the same valid fix is now a validated drop.
+    const retired = createEmptyPluginRegistry();
+    setActivePluginRegistry(retired);
+    const afterRetire = await node.request("node.event", {
+      event: "location.update",
+      payload: inside,
+    });
+    expect(afterRetire).toMatchObject({ ok: true, handled: false, reason: "no_consumer" });
+    expect(received).toHaveLength(beforeMalformed);
   });
 });
