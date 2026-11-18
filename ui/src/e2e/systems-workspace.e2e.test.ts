@@ -219,7 +219,7 @@ suite.define(() => {
             .locator("main.content")
             .evaluate((element) => getComputedStyle(element).paddingInline);
         expect(await inset()).toBe("0px");
-        // New session shows the Sessions drawer; tapping its avatar there would open the agent menu.
+        // New session shows the Sessions drawer, collapsed; Expand sidebar reopens it.
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
         await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
         await page.locator(".chat-thread").waitFor();

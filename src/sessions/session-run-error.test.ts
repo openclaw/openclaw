@@ -69,6 +69,36 @@ it.each([
   },
 );
 
+it("keeps the update-required code and its instructions in the failure notice", async () => {
+  expect.hasAssertions();
+  const message =
+    'gpt-6.2-sol needs a newer Codex than 0.164.0. Update your global Codex with "npm i -g @openai/codex", then restart the Gateway. Or choose another model.';
+  vi.mocked(appendSessionTranscriptReport).mockImplementation(async (_target, report) => {
+    if (report.kind !== "custom") {
+      throw new Error("Expected a custom run-failure notice");
+    }
+    const appended = report.selectReport(undefined);
+    expect(appended?.content).toContain("npm i -g @openai/codex");
+    // Control UI offers "Start a new session" only for this recorded code.
+    expect(appended?.details).toMatchObject({
+      cause: { provider: "openai", code: "harness_update_required" },
+    });
+    return { ok: true, value: undefined };
+  });
+
+  await recordGatewaySessionRunFailure({
+    target: {
+      agentId: "cx",
+      storePath: "/synthetic/sessions.json",
+      sessionKey: "agent:cx:update-required",
+      sessionId: "update-required",
+    },
+    runId: "failed-run",
+    error: message,
+    errorObservation: { provider: "openai", providerErrorCode: "harness_update_required" },
+  });
+});
+
 it.each([
   ...storageFailures.map(([, legacyError, summary]) => [legacyError, summary] as const),
   ...[

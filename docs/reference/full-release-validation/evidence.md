@@ -101,6 +101,15 @@ and short reason; optional `targetSha` and `evidence: { runId, runAttempt }` res
 candidate/execution. Checked-in list is authoritative; retain release-specific
 authorization/diagnostics in PR or handoff.
 
+A `testFailures` entry additionally requires the sole failed step and the complete
+ordered set of exact test/error signatures from the native test-evidence parser.
+The verifier reads the original leaf log and requires completed invocation
+evidence before accepting it. Changed or additional errors, incomplete logs, and
+setup failures remain blocking; aggregate causes are also checked exactly. The
+2026.11.10-beta.1 entries cover only the observed MCP listener collision and cron
+pre-output assertion. UI, QA, and mixed firstbirth/attachment failures are not
+granted by those entries.
+
 Changing P alone does not invalidate retained evidence for unchanged C/Q, coverage,
 inputs, and source digests. With reuse enabled, admitted P reevaluates sealed child
 receipts, including failures covered by current exact waivers. Accepted receipts

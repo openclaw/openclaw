@@ -417,7 +417,7 @@ describe("operator role policy", () => {
       }),
   );
 
-  it("retires the original source on a profile merge while preserving unrelated sources", () =>
+  it("keeps admitted sources on a profile merge while new captures use the surviving profile", () =>
     inState(async () => {
       const source = ensureProfileForEmail("source-role@example.test");
       const target = ensureProfileForEmail("target-role@example.test");
@@ -429,16 +429,15 @@ describe("operator role policy", () => {
       using unaffected = await capture(unrelated.id);
       original.authority.assertCurrent();
       linkEmail("source-role@example.test", target.id);
-      const error = "operator source identity changed; start a new request";
-      expectCurrent(original.authority, error);
-      expect(original.authority.signal?.reason).toEqual(new Error(error));
+      expectCurrent(original.authority);
+      await expect(capture(source.id)).rejects.toThrow();
       expectCurrent(unaffected.authority);
       using fresh = await capture(target.id);
 
       expect(() => fresh.authority.assertCurrent()).not.toThrow();
-      expectCurrent(original.authority, error);
+      expectCurrent(original.authority);
     }));
-  it("rejects retained admin authority after a role downgrade even when ordinary session work remains allowed", () =>
+  it("keeps admitted authority after a role downgrade while new admin requests are refused", () =>
     inState(async () => {
       const { profile, cfg, client: reader, capture } = roleFixture();
       setUserProfileRole(profile.id, "maintainer");
@@ -451,13 +450,14 @@ describe("operator role policy", () => {
       invalidateOperatorRolePolicy(profile.id);
       expect(authorizeCurrentOperatorRoleScopes(admin, cfg)).toMatchObject({ code: "FORBIDDEN" });
       expect(authorizeCurrentOperatorRoleScopes(reader, cfg)).toBeUndefined();
-      expectCurrent(source.authority, "Your operator role changed; reconnect before continuing.");
+      expectCurrent(source.authority);
+      expect(source.authority.readCurrentRoleFacts?.().assignedRole).toBe("maintainer");
       const reconnected = identifiedClient(profile.id);
       reconnected.connect.scopes = ["operator.write"];
       expect(authorizeCurrentOperatorRoleScopes(reconnected, cfg)).toBeUndefined();
     }));
   it.each(["agents", "sessions", "sandbox"] as const)(
-    "retires only affected sources after a committed %s policy change with unchanged scopes",
+    "keeps admitted role policy after a committed %s change",
     (restriction) =>
       inState(async () => {
         const profile = ensureProfileForEmail("committed-role-source@example.test");
@@ -501,12 +501,17 @@ describe("operator role policy", () => {
         publishOperatorRoleConfigChange({});
         expect(original.authority.signal?.aborted).toBe(false);
         publishOperatorRoleConfigChange(context);
-        expectCurrent(original.authority, "Your operator role changed");
+        expectCurrent(original.authority);
+        expect(original.authority.readCurrentRoleFacts?.().policy).toEqual(
+          guestDefinition(initial),
+        );
+        using fresh = await capture(profile.id);
+        expect(fresh.authority.readCurrentRoleFacts?.().policy).toEqual(changedRole);
         expectCurrent(unaffected.authority);
       }),
   );
 
-  it("updates bounded and unbounded model choices without revoking allowed sibling or unrelated work", () =>
+  it("keeps captured model choices and applies changed choices to fresh requests", () =>
     inState(async () => {
       const guest = ensureProfileForEmail("model-guest@example.test");
       const staff = ensureProfileForEmail("model-staff@example.test");
@@ -546,11 +551,11 @@ describe("operator role policy", () => {
         },
         run: async (_provider, model) => model,
       });
-      expect(result.result).toBe("fallback");
-      expectCurrent(primaryExecution, "operator role cannot use this model");
+      expect(result.result).toBe("primary");
+      expectCurrent(primaryExecution);
       expectCurrent(fallbackExecution);
       expectCurrent(original.authority);
-      expectModel(original.authority, "primary", false);
+      expectModel(original.authority, "primary", true);
       expectModel(original.authority, "fallback", true);
       expectModel(original.authority, "next", false);
       expectModel(unaffected.authority, "restricted-new", true);
@@ -569,7 +574,7 @@ describe("operator role policy", () => {
       publishOperatorRoleConfigChange(context);
       expectCurrent(unaffected.authority);
       expect(narrowed.authority.scopes).toEqual([]);
-      expectModel(narrowed.authority, "primary", false);
+      expectModel(narrowed.authority, "primary", true);
       expectModel(narrowed.authority, "b", true);
       expectModel(narrowed.authority, "c", true);
       fallbackExecution.release();

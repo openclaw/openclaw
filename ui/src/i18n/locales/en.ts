@@ -947,6 +947,7 @@ const startupEnglish = {
     pin: "Pin",
     unpin: "Unpin",
     customize: "Edit pinned items",
+    installedPlugins: "Installed",
   },
   terminal: {
     title: "Terminal",
@@ -1551,6 +1552,9 @@ const startupEnglish = {
       openModels: "Open Models",
       failedRepeatCount: "{count} times",
       tryAgain: "Try again",
+      startNewSession: "Start a new session",
+      harnessUpdatePrompt:
+        "My last message in another session failed with this error:\n\n{summary}\n\nDo the update it asks for on this machine, confirm the installed version, and tell me if I still need to restart the OpenClaw Gateway.",
       continuePrompt:
         "Continue from where you stopped. Check which actions already completed before retrying anything.",
     },

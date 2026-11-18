@@ -17,6 +17,7 @@ import {
 import { prepareSessionPlacementSandbox } from "./session-placement-admission.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 import { readRegistryWorktree } from "./worktrees/registry-read.js";
+import { recordRegistryWorktreeActivity } from "./worktrees/registry.js";
 import { captureWorktreeRunEndContext } from "./worktrees/run-end-lifecycle.js";
 
 export type WorkspaceSandboxParams = Pick<
@@ -152,8 +153,11 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
       if (worktree?.removedAt !== undefined) {
         // Removal does not record intent; only the explicit restore action may undo deletion.
         throw new SessionWorkStartInvalidatedError(
-          "This session's worktree was removed by cleanup or deletion. Use Restore in Settings > Worktrees (worktrees.restore), or start a new session.",
+          `This session's worktree was removed by cleanup or deletion. Use Restore in Settings > Worktrees (worktrees.restore), or start a new session. Worktree: ${entry.worktree.id}.`,
         );
+      }
+      if (worktree) {
+        await recordRegistryWorktreeActivity(context.environment, worktree, assertCurrent);
       }
     }
   }

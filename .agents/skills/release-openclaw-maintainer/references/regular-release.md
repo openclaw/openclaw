@@ -102,7 +102,8 @@ that can feed validation, run the integrated exact-HEAD gate:
 pnpm release:push
 ```
 
-This wrapper refreshes and pins `origin/main` and release tags, requires a clean canonical
+This wrapper refreshes and pins `origin/main` and release tags, fetching complete
+history first when the checkout is shallow so the audit can resolve its merge base. It requires a clean canonical
 `release/YYYY.M.PATCH` worktree, captures `HEAD`, verifies that it fast-forwards
 the remote release branch, and runs only a short `git diff --check` plus the
 dependency-free release-changelog layout check. It pushes that captured SHA

@@ -189,3 +189,30 @@ it.each(["project", "legacy"] as const)("preserves %s keep-files installs", asyn
   expect(fs.existsSync(packageDir)).toBe(true);
   expect(hasMarker(packageDir)).toBe(true);
 });
+
+it.each(["project", "legacy"] as const)(
+  "preserves unreadable %s retention markers without blocking other cleanup",
+  async (layout) => {
+    const npmDir = makeNpmDir();
+    const packageFor = (name: string) =>
+      makePackage(
+        layout === "legacy" ? npmDir : resolvePluginNpmProjectDir({ npmDir, packageName: name }),
+        name,
+      );
+    const broken = packageFor("aaa-retained-plugin");
+    const retired = packageFor("zzz-retired-plugin");
+    await mark(broken);
+    await mark(retired);
+    fs.writeFileSync(markerPathFor(broken), "{incomplete");
+    const onError = vi.fn();
+
+    await expect(cleanupGenerations({ npmDir, onError })).resolves.toBe(1);
+    expect(fs.existsSync(broken)).toBe(true);
+    expect(fs.readFileSync(markerPathFor(broken), "utf8")).toBe("{incomplete");
+    expect(fs.existsSync(retired)).toBe(false);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(
+      expect.any(SyntaxError),
+      layout === "legacy" ? broken : path.dirname(path.dirname(broken)),
+    );
+  },
+);

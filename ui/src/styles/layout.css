@@ -2374,15 +2374,43 @@ div.shell.shell--onboarding {
   background: var(--danger);
 }
 
-/* Customize section: the hub's pages. */
+/* Customize section: the hub's pages, then shortcuts to installed plugins. */
 .sidebar-customize {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-/* The people list's heading matches the Sessions group headings, without a toggle. */
-.sidebar-online__heading {
+/* Plugin artwork keeps its own color; the line icons above dim instead. */
+.sidebar-customize__plugins .nav-item__icon {
+  opacity: 1;
+}
+
+.sidebar-customize__plugin-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--muted-strong);
+}
+
+.sidebar-customize__plugin-icon--fallback {
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+
+.sidebar-customize__plugin-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Noninteractive headings use the same inset and height as Sessions group controls. */
+.sidebar-section-heading {
   display: flex;
   align-items: center;
   min-height: 30px;
@@ -2747,7 +2775,7 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-recent-sessions__group--dragging,
-.sidebar-recent-session--dragging,
+.reorder-dragging,
 .sidebar-zone-entry--dragging {
   opacity: 0.45;
 }
@@ -2762,15 +2790,9 @@ div.shell.shell--onboarding {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-/* A row's rounded fill would bend an inset edge; draw the drop line straight in the row gap. */
-.sidebar-recent-session:is(.sidebar-zone-entry--drop-before, .sidebar-zone-entry--drop-after) {
-  box-shadow: none;
-}
-
-.sidebar-recent-session:is(
-    .sidebar-zone-entry--drop-before,
-    .sidebar-zone-entry--drop-after
-  )::before {
+/* Draw a straight insertion line in the gap between rounded rows. */
+.reorder-drop-before::before,
+.reorder-drop-after::before {
   content: "";
   position: absolute;
   inset-inline: 6px;
@@ -2780,12 +2802,12 @@ div.shell.shell--onboarding {
   pointer-events: none;
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-before::before {
-  top: -2px;
+.reorder-drop-before::before {
+  top: var(--reorder-edge, -2px);
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-after::before {
-  bottom: -2px;
+.reorder-drop-after::before {
+  bottom: var(--reorder-edge, -2px);
 }
 
 /* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */

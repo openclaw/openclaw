@@ -1,15 +1,11 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createMemo, For, Show } from "solid-js";
 import type { AgentSelectOption } from "../../components/agent-select-types.ts";
 import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
 import { EnabledSwitch } from "./view-controls.tsx";
@@ -21,8 +17,8 @@ import {
   inputIdForField,
   CronSelect,
   FieldRow,
-  TrayInput,
 } from "./view-fields.tsx";
+import { CronModelControls } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
@@ -31,8 +27,6 @@ import {
   TrayErrors,
 } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
-
-registerEnglishCatalog(registerPreferencesEnglish);
 
 type EditorProps = CronProps & {
   mode: CronPanelMode;
@@ -293,13 +287,6 @@ function PromptBlock(
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.systemEventHelp")
         : t("cron.form.agentTurnHelp");
-  const modelError = () => props.fieldErrors.payloadModel;
-  const modelOptions = createMemo(() =>
-    uniqueStrings(props.modelSuggestions).map((value) => {
-      const provider = providerIdFromModelRef(value);
-      return { value, label: value, provider: provider ?? undefined };
-    }),
-  );
   const nameError = () => props.fieldErrors.name;
   const payloadError = () => props.fieldErrors.payloadText;
   return (
@@ -395,36 +382,8 @@ function PromptBlock(
             <ScheduleNote {...props} />
           </div>
           {props.isAgentTurn ? (
-            <span class="cron-prompt__run-controls">
-              <span class="cron-tray-picker" title={t("cron.form.modelHelp")}>
-                <ModelPicker
-                  id="cron-payload-model-picker"
-                  label={t("cron.form.model")}
-                  value={props.form.payloadModel}
-                  options={[
-                    { value: "", label: t("quickSettings.model.default") },
-                    ...modelOptions(),
-                  ]}
-                  custom={{
-                    id: inputIdForField("payloadModel"),
-                    label: t("cron.form.customModel"),
-                    placeholder: t("cron.form.modelPlaceholder"),
-                    invalid: Boolean(modelError()),
-                    describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
-                  }}
-                  onChange={(payloadModel) => props.onFormChange({ payloadModel })}
-                />
-              </span>
-              <TrayInput
-                {...props}
-                field="payloadThinking"
-                label={t("cron.form.thinking")}
-                help={t("cron.form.thinkingHelp")}
-                errorKey="payloadThinking"
-                size="narrow"
-                list="cron-thinking-suggestions"
-                placeholder={t("cron.form.thinkingPlaceholder")}
-              />
+            <span class="cron-prompt__run-controls" data-picker-below>
+              <CronModelControls {...props} />
             </span>
           ) : undefined}
         </div>

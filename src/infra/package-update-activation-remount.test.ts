@@ -230,6 +230,27 @@ test.each([
   expect(fs.readFileSync(f.launcher)).toEqual(launcher);
 });
 
+test.each([
+  ["previous", "publication-not-started"],
+  ["candidate", "publication-settled-external-change"],
+] as const)(
+  "the next update settles a remounted publication with the %s installed",
+  async (installed, reason) => {
+    const f = await remounted(
+      installed === "previous" ? "different-files" : "equal-symlinks",
+      installed,
+    );
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).toThrow(
+      "device number changed only",
+    );
+    await expect(
+      settlePendingPackageActivation(f.packageRoot, undefined, undefined, { automatic: true }),
+    ).resolves.toMatchObject({ operationId: f.operationId, reason });
+    expect(fs.existsSync(f.journalPath)).toBe(false);
+    expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+  },
+);
+
 test("refuses separate-helper settlement without a remount", async () => {
   const f = await fixture.prepare();
   const journalPath = resolvePackageActivationJournalPath(f.anchor);
