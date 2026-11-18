@@ -764,7 +764,8 @@ describe("Scheduled Task settlement", () => {
       expect(error).toMatchObject(noRun ? { cause: fact } : { taskSettlement: fact });
       expect(String(error)).toContain(noRun ? "stop unverified" : "restart unverified");
       expect(failedProbes).toBeGreaterThan(1);
-      expect(timeState.now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+      // Restart then spends the 15s post-/Run activation window before refusing.
+      expect(timeState.now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS + (noRun ? 0 : 15_000));
       expect(stdout.read()?.toString() ?? "").not.toContain("Restarted Scheduled Task");
       expect(taskAction("/Run")).toBe(!noRun);
       if (!noRun) {
