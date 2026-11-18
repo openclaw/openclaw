@@ -8,12 +8,15 @@ let logging: typeof import("../logging.js");
 let loggingConfig: typeof import("./config.js");
 let applyLoggingConfig: typeof import("./logger.js").applyLoggingConfig;
 let getLogger: typeof import("./logger.js").getLogger;
+let flushLogger: typeof import("./logger.js").flushLogger;
+let getResolvedLoggerFileTarget: typeof import("./logger.js").getResolvedLoggerFileTarget;
 
 beforeAll(async () => {
   // Bind the observer and both settings consumers to the same module generation.
   vi.resetModules();
   loggingConfig = await import("./config.js");
-  ({ applyLoggingConfig, getLogger } = await import("./logger.js"));
+  ({ applyLoggingConfig, getLogger, flushLogger, getResolvedLoggerFileTarget } =
+    await import("./logger.js"));
   logging = await import("../logging.js");
 });
 
@@ -53,6 +56,38 @@ describe("getResolvedLoggerSettings", () => {
         expect(logging.getResolvedLoggerSettings().level).toBe("silent");
         getLogger().warn("disabled file record");
         expect(fs.existsSync(stateDir)).toBe(false);
+      });
+    },
+  );
+
+  it.each([false, true])(
+    "admits the default file only on emission (unsafe: %s)",
+    async (unsafe) => {
+      await withTempDir("openclaw-active-logs-", async (root) => {
+        const stateDir = path.join(root, "state");
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        vi.stubEnv("VITEST", undefined);
+        logging.setLoggerOverride({ level: "info" });
+        expect(logging.getResolvedLoggerSettings().level).toBe("info");
+        const logger = getLogger();
+        logger.debug("filtered record");
+        expect(fs.existsSync(stateDir)).toBe(false);
+        const outside = path.join(root, "outside");
+        if (unsafe) {
+          fs.mkdirSync(stateDir, { mode: 0o700 });
+          fs.mkdirSync(outside);
+          fs.symlinkSync(outside, path.join(stateDir, "logs"), "junction");
+        }
+        logger.info("admitted record");
+        await flushLogger();
+        const { file } = getResolvedLoggerFileTarget();
+        const content = fs.readFileSync(file, "utf8");
+        expect(content).toContain("admitted record");
+        expect(content).not.toContain("filtered record");
+        if (unsafe) {
+          expect(fs.readdirSync(outside)).toEqual([]);
+          expect(file.startsWith(path.join(stateDir, "tmp") + path.sep)).toBe(true);
+        }
       });
     },
   );

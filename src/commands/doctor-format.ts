@@ -17,7 +17,7 @@ import {
 } from "../daemon/systemd-hints.js";
 import { classifySystemdUnavailableDetail } from "../daemon/systemd-unavailable.js";
 import { isWSLEnv } from "../infra/wsl.js";
-import { getResolvedLoggerSettings } from "../logging.js";
+import { getResolvedLoggerFileTarget } from "../logging/logger.js";
 
 export function buildGatewayRuntimeHints(
   runtime: GatewayServiceRuntime | undefined,
@@ -31,7 +31,7 @@ export function buildGatewayRuntimeHints(
   const env = options.env ?? process.env;
   const fileLog = (() => {
     try {
-      return getResolvedLoggerSettings().file;
+      return getResolvedLoggerFileTarget().file;
     } catch {
       return null;
     }

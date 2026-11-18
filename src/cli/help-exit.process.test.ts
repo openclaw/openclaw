@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Command, CommanderError } from "commander";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -10,12 +11,46 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { createCliProcessFixture } from "./isolated-process-fixture.test-support.js";
 import { registerCoreCliByName } from "./program/command-registry-core.js";
 import { createProgramContext } from "./program/context.js";
 import { registerSubCliByName } from "./program/register.subclis.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const preparedCliEntry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
+
+it.each([
+  { args: ["update", "--help"], code: 0, output: "Usage:" },
+  {
+    args: ["update", "--dry-run", "--no-restart", "--timeout", "1", "--json"],
+    code: 0,
+    output: "dryRun",
+  },
+  {
+    args: ["gateway", "call", "system-presence", "--params", "not-json", "--json"],
+    code: 1,
+    output: "--params must be valid JSON",
+  },
+])("keeps nonlogging CLI invocation artifact-free: $args", async ({ args, code, output }) => {
+  const root = tempDirs.make("openclaw-no-log-state-");
+  const fixture = createCliProcessFixture(root, {
+    OPENCLAW_HOME: root,
+    TMPDIR: path.join(root, "tmp"),
+    XDG_CACHE_HOME: path.join(root, "cache"),
+    NODE_DISABLE_COMPILE_CACHE: "1",
+    BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+    NO_COLOR: "1",
+    OPENCLAW_HIDE_BANNER: "1",
+  });
+  await fixture.writeConfig({});
+  const result = await fixture.run(args);
+  expect(result.code, result.stderr).toBe(code);
+  expect(result.stdout + result.stderr).toContain(output);
+  if (args.includes("--json")) {
+    expect(JSON.parse(result.stdout)).toBeTypeOf("object");
+  }
+  await expect(fs.access(fixture.env.OPENCLAW_STATE_DIR)).rejects.toMatchObject({ code: "ENOENT" });
+});
 const SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS = 240_000;
 const SLOW_DOTENV_TEST_TIMEOUT_MS = SLOW_DOTENV_CHILD_PROCESS_TIMEOUT_MS + 10_000;
 const dotenvLoggingConfig = {
@@ -274,7 +309,7 @@ describe("CLI help process exit", () => {
   });
 });
 
-it("does not scaffold a selected profile before option validation", async () => {
+it("only writes the validation error log before scaffolding a selected profile", async () => {
   const profile = "rejected-profile";
   const result = await runCliProcess({
     args: [
@@ -292,9 +327,16 @@ it("does not scaffold a selected profile before option validation", async () => 
   });
 
   expect(result.stderr).toContain("--gateway-port must be an integer between 1 and 65535.");
-  await expect(fs.access(path.join(result.root, `.openclaw-${profile}`))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  const stateDir = path.join(result.root, `.openclaw-${profile}`);
+  // Console error capture is real logging, not profile scaffolding.
+  expect(await fs.readdir(stateDir)).toEqual(["logs"]);
+  const logFile = expectDefined(
+    (await fs.readdir(path.join(stateDir, "logs")))[0],
+    "validation error log",
+  );
+  expect(await fs.readFile(path.join(stateDir, "logs", logFile), "utf8")).toContain(
+    "--gateway-port must be an integer between 1 and 65535.",
+  );
 });
 
 it.each(

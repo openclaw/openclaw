@@ -28,7 +28,10 @@ Named profiles use their own state directory and a profile-qualified filename:
 
 `OPENCLAW_STATE_DIR` relocates both state and default logs. Test harnesses that
 allocate temporary state therefore keep their logs in that same temporary tree;
-separate Gateways no longer append to a host-wide daily file.
+separate Gateways no longer append to a host-wide daily file. Resolving logger
+settings or checking a log level does not create these directories. File logging
+prepares them only when a record is emitted; explicit log-path discovery also
+prepares the selected safe directory.
 
 The filename profile segment is lowercase and limited to letters, numbers, and
 dashes. Simple lowercase names stay readable, so the `--dev` shorthand writes

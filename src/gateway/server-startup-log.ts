@@ -25,7 +25,7 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { resolveEnvironmentValue } from "../infra/process-env.js";
 import { getTrackedWorkerLifecycleSnapshot } from "../infra/worker-cpu.js";
 import { getWorkerComputeCapacity } from "../infra/worker-task-capacity.js";
-import { getResolvedLoggerSettings } from "../logging.js";
+import { getResolvedLoggerFileTarget } from "../logging/logger.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "../security/dangerous-config-flags-current.js";
 import { VERSION } from "../version.js";
@@ -63,7 +63,7 @@ export async function logGatewayStartup(params: {
   params.log.info(
     `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
   );
-  params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
+  params.log.info(`log file: ${getResolvedLoggerFileTarget().file}`);
   params.log.info(
     "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
   );

@@ -18,9 +18,14 @@ import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function attemptGatewayLockInChild(env: NodeJS.ProcessEnv): Promise<string> {
+async function attemptGatewayLockInChild(env: NodeJS.ProcessEnv, logFile: string): Promise<string> {
   const lockModuleUrl = pathToFileURL(path.resolve("src/infra/gateway-lock.ts")).href;
+  const loggerModuleUrl = pathToFileURL(path.resolve("src/logging/logger.ts")).href;
   const script = `
+    const { setLoggerOverride } = await import(${JSON.stringify(loggerModuleUrl)});
+    // The contender emits a real wait warning. Keep it outside the directory
+    // being removed so this probe exercises exclusion, not new-state refusal.
+    setLoggerOverride({ file: ${JSON.stringify(logFile)} });
     const { acquireGatewayLock } = await import(${JSON.stringify(lockModuleUrl)});
     const report = (message) => process.send?.(message, () => process.exit(0));
     try {
@@ -278,7 +283,7 @@ describe("cleanup path removals", () => {
   it.each(["shared", "separate"] as const)(
     "retains current and published Gateway exclusion through linked-path cleanup (%s lock directory)",
     async (layout) => {
-      const { stateDir, configPath, env, remove } = await cleanupFixture(true, "{}\n");
+      const { tmpRoot, stateDir, configPath, env, remove } = await cleanupFixture(true, "{}\n");
       const markerPath = path.join(stateDir, "marker.txt");
       const lockDir =
         layout === "shared" ? resolveGatewayLockDir(stateDir) : path.join(stateDir, "custom-locks");
@@ -319,7 +324,10 @@ describe("cleanup path removals", () => {
             fsSync.unlinkSync(stateLockPath);
           }
         }
-        const lockAttempt = await attemptGatewayLockInChild(env);
+        const lockAttempt = await attemptGatewayLockInChild(
+          env,
+          path.join(tmpRoot, "contender.log"),
+        );
         pause.resume();
         const [cleanupResult] = await Promise.allSettled([cleanup]);
 
