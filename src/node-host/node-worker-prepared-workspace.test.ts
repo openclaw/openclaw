@@ -197,6 +197,34 @@ function manifestPath(homeDir: string, manifestRef: string) {
 }
 
 describe("prepared node workspace ownership", () => {
+  it.each([false, true])(
+    "consumes exact initial snapshot content facts without an inventory (mismatch: %s)",
+    async (mismatch) => {
+      const f = await fixture(true);
+      await f.runtime.prepare(f.registration);
+      const capture = vi.spyOn(workspaceCommands, "captureManifest");
+      const claim = {
+        ...binding,
+        initialSnapshot: {
+          checkpointId: "checkpoint-fresh",
+          baseCommit: f.baseCommit,
+          sourceManifestRef: f.registration.sourceManifestRef,
+          preparedManifestRef: mismatch
+            ? `sha256:${"f".repeat(64)}`
+            : f.registration.preparedManifestRef,
+        },
+      };
+      if (mismatch) {
+        await expect(f.runtime.prepare(claim)).rejects.toThrow("does not match its manifest");
+      } else {
+        await expect(f.runtime.prepare(claim)).resolves.toMatchObject({
+          workspaceDir: f.workspaceDir,
+        });
+      }
+      expect(capture).not.toHaveBeenCalled();
+    },
+  );
+
   it("reuses checkpoint hashes across registration and bind processes, falling back for missing or corrupt memos", async () => {
     const workspaceUrl = resolveRuntimeWorkerUrl(workspaceProcessTestEntrypoints.nodeWorkspace);
     const stateUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);

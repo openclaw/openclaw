@@ -280,6 +280,7 @@ export function createWorkerPlacementDispatchStartup(options: {
     authorize?: WorkerPlacementAuthorization;
     signal?: AbortSignal;
     admittedNode?: WorkerNodePlacementAdmission;
+    admittedIntent?: WorkerProviderPreparedIntent;
     markPhase?: (phase: string) => void;
     retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
   }): Promise<WorkerActiveDispatchPlacement> => {
@@ -430,6 +431,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           sessionKey: request.sessionKey,
           preparationKey: preparation.key,
           cacheKey: preparation.cacheKey,
+          admittedIntent: params.admittedIntent,
           readNativeCredential: request.readNativeCredential,
           retainCredentialCleanup: params.retainCredentialCleanup,
           signal: params.signal,

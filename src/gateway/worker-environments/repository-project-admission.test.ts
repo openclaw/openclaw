@@ -90,6 +90,8 @@ describe("repository project admission", () => {
     mocks.matchesAgentLifecycleBindingAsync.mockReset().mockResolvedValue(true);
     mocks.prepareGitHubReadIdentity.mockReset().mockImplementation(async ({ assertActive }) => {
       assertActive();
+      mocks.prepareGitHubReadIdentity.mockClear();
+      fetchImpl.mockClear();
       const admittedToken = token;
       const assertSelected = () => {
         assertActive();
@@ -359,11 +361,17 @@ describe("repository project admission", () => {
     },
   );
 
+  it("revalidates the pinned repository and commit in one atomic remote observation", async () => {
+    const admitted = await prepareRepositoryWorkerProjectSource(initial);
+    fetchImpl.mockClear();
+    await admitted.revalidate();
+    expect(requestPaths()).toEqual(["/graphql"]);
+  });
+
   it.each(["repository", "visibility", "access"] as const)(
-    "rejects %s changes after the immutable-node read",
+    "rejects %s changes in the current immutable-node observation",
     async (change) => {
       const admitted = await prepareRepositoryWorkerProjectSource(initial);
-      const response = { data: { node: repositoryNode() } };
       fetchImpl.mockClear().mockImplementationOnce(async () => {
         if (change === "repository") {
           repositoryId = "R_recreated_project";
@@ -374,10 +382,12 @@ describe("repository project admission", () => {
         if (change === "access") {
           unavailable = true;
         }
-        return new Response(JSON.stringify(response));
+        return change === "access"
+          ? new Response("{}", { status: 404 })
+          : Response.json({ data: { node: repositoryNode() } });
       });
       await expect(admitted.revalidate()).rejects.toThrow();
-      expect(requestPaths()).toEqual(["/graphql", "/repos/acme/project"]);
+      expect(requestPaths()).toEqual(["/graphql"]);
     },
   );
 
@@ -551,22 +561,27 @@ describe("repository project admission", () => {
       expected: JSON.parse(storedProject),
     });
     expect(reopened.project).toEqual(admitted.project);
+    mocks.prepareGitHubReadIdentity.mockClear();
+    fetchImpl.mockClear();
+    const admittedToken = token;
     token = "rotated-synthetic-token";
     const signal = new AbortController().signal;
     await expect(reopened.prepareGitPack!({ temporaryRoot: "/synthetic", signal })).resolves.toBe(
       "/synthetic/source.pack",
     );
+    expect(mocks.prepareGitHubReadIdentity).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
     expect(mocks.prepareGitPack).toHaveBeenCalledExactlyOnceWith({
       url: repositoryUrl,
       baseCommit: commit,
-      token,
+      token: admittedToken,
       temporaryRoot: "/synthetic",
       signal,
       assertCurrent: expect.any(Function),
     });
   });
 
-  it.each(["caller", "account", "visibility", "during fetch"] as const)(
+  it.each(["caller", "account", "during fetch"] as const)(
     "rejects private pack preparation after %s authority changes",
     async (change) => {
       privateRepository = true;
@@ -580,9 +595,6 @@ describe("repository project admission", () => {
       }
       if (change === "account") {
         selected = false;
-      }
-      if (change === "visibility") {
-        privateRepository = false;
       }
       if (change === "during fetch") {
         mocks.prepareGitPack.mockImplementationOnce(async () => {

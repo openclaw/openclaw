@@ -15,9 +15,11 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
+import type { WorkerProviderRepositorySource } from "./provider-project-preparation.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
 import { prepareRepositoryWorkerProjectSource } from "./repository-project-admission.js";
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
@@ -106,6 +108,16 @@ type WorkerEnvironmentAccessOptions = {
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   bindPreparedWorkspace?: WorkerProviderLifecycleInputOptions["bindPreparedWorkspace"];
+  preparedRepositorySource?: (
+    profileId: string,
+    intent: WorkerProviderPreparedIntent,
+  ) => WorkerProviderRepositorySource | undefined;
+  takeInitialSnapshot?: (
+    intent: WorkerProviderPreparedIntent,
+    record: WorkerEnvironmentRecord,
+  ) =>
+    | import("../../worker/node-workspace-prepared-protocol.js").NodeWorkerInitialSnapshot
+    | undefined;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: WorkerEnvironmentNodeTunnel;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
@@ -268,12 +280,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
 
   const bindPreparedWorkspace = async (
     request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0] & {
+      admittedIntent?: WorkerProviderPreparedIntent;
       readNativeCredential?: GitHubCredentialReader;
       retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
     },
   ) => {
     // Repository admission belongs to this host owner, not the node transport payload.
-    const { readNativeCredential, retainCredentialCleanup, ...binding } = request;
+    const { admittedIntent, readNativeCredential, retainCredentialCleanup, ...binding } = request;
     const bind = options.bindPreparedWorkspace;
     const assertCurrent = () => {
       request.signal?.throwIfAborted();
@@ -304,30 +317,35 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       if (!options.projectNamespace) {
         throw new Error("Prepared repository namespace is unavailable");
       }
-      // A ready hit and resumed initial binding must prove current source access too;
-      // a snapshot is reusable content, never a substitute for repository authority.
-      repository = await prepareRepositoryWorkerProjectSource({
-        expected: projectSnapshot,
-        readNativeCredential,
-        retainCredentialCleanup,
-        namespace: options.projectNamespace,
-        getConfig: options.getConfig,
-        assertCurrent,
-        signal: request.signal,
-        knownRecipe: () => ({
-          setupRecipe: preparation.setupRecipe,
-          recipe: preparation.recipe,
-        }),
-      });
+      // A fresh dispatch already admitted this source. Ready capacity and replay
+      // have no such handle and admit their current repository access here.
+      repository =
+        (admittedIntent && options.preparedRepositorySource?.(record.profileId, admittedIntent)) ??
+        (await prepareRepositoryWorkerProjectSource({
+          expected: projectSnapshot,
+          readNativeCredential,
+          retainCredentialCleanup,
+          namespace: options.projectNamespace,
+          getConfig: options.getConfig,
+          assertCurrent,
+          signal: request.signal,
+          knownRecipe: () => ({
+            setupRecipe: preparation.setupRecipe,
+            recipe: preparation.recipe,
+          }),
+        }));
     }
     const assertBindingCurrent = () => {
       assertCurrent();
       repository?.assertCurrent();
     };
     assertBindingCurrent();
-    const prepared = await bind({ ...binding, assertCurrent: assertBindingCurrent });
-    assertBindingCurrent();
-    await repository?.revalidate(request.signal);
+    const initialSnapshot = admittedIntent && options.takeInitialSnapshot?.(admittedIntent, record);
+    const prepared = await bind({
+      ...binding,
+      ...(initialSnapshot ? { initialSnapshot } : {}),
+      assertCurrent: assertBindingCurrent,
+    });
     assertBindingCurrent();
     return { ...prepared, assertCurrent: assertBindingCurrent };
   };

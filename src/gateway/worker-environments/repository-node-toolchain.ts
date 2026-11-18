@@ -1,8 +1,9 @@
+import { INSPECT_NODE_TOOLCHAIN_JS } from "./node-toolchain-inspection.js";
 import { NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
 import { REPOSITORY_NODE_REQUIREMENT_SOURCE } from "./repository-node-requirement.generated.js";
 
 /** Runs inside the supported bootstrap Node, before any repository setup command. */
-export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machineHome, reusePrepared = false) => {
+export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machineHome, reusePrepared = false, onVerifiedToolchain) => {
   if (process.platform !== "linux" || !["x64", "arm64"].includes(process.arch)) return;
   const fs = require("node:fs");
   const path = require("node:path");
@@ -28,11 +29,14 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
         const link = path.join(bin, name);
         fs.accessSync(link, fs.constants.X_OK);
         return fs.readlinkSync(link) === target;
-      })) return previous.setupPath;
+      })) {
+        if (previous.nodeToolchain) onVerifiedToolchain?.(previous.nodeToolchain);
+        return previous.setupPath;
+      }
     } catch { /* Old images and incomplete toolchains take the full preparation path. */ }
   }
   let nodeBin = path.dirname(process.execPath);
-  let semver, version;
+  let semver, version, selectedToolchain;
   const fetchText = async (url) => {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(120000), redirect: "error" });
@@ -68,6 +72,10 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
     });
     if (installed.status !== 0) throw new Error("Repository Node installation failed; check nodejs.org access, disk space and image prerequisites, then retry: " + (installed.stderr || installed.error?.message || installed.status));
     nodeBin = installed.stdout.trim();
+    if (fs.existsSync(path.join(nodeBin, "..", ".archive.tgz"))) {
+      selectedToolchain = await (${INSPECT_NODE_TOOLCHAIN_JS})(machineHome, { version, platform: "linux", arch: process.arch, archiveSha256: digest });
+      onVerifiedToolchain?.(selectedToolchain);
+    }
   }
   fs.mkdirSync(bin, { recursive: true, mode: 0o700 });
   // A repository release without Corepack uses the worker's. When its engines reject the repository
@@ -128,6 +136,6 @@ export const PREPARE_REPOSITORY_NODE_JS = `async (workspaceDir, homeDir, machine
     if (enabled.status !== 0) throw new Error("Corepack enable failed; supply Corepack in the image or profile setup and retry preparation: " + (enabled.stderr || enabled.error?.message || enabled.status));
   }
   const links = Object.fromEntries(fs.readdirSync(bin).filter((name) => fs.lstatSync(path.join(bin, name)).isSymbolicLink()).map((name) => [name, fs.readlinkSync(path.join(bin, name))]));
-  fs.writeFileSync(recordFile, JSON.stringify({ identity, setupPath, links }), { mode: 0o600 });
+  fs.writeFileSync(recordFile, JSON.stringify({ identity, setupPath, links, ...(selectedToolchain ? { nodeToolchain: selectedToolchain } : {}) }), { mode: 0o600 });
   return setupPath;
 }`;

@@ -105,6 +105,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           preparedManifestRef: string;
         },
         hashMemo: WorkspaceHashMemo,
+        snapshot?: Extract<NodeWorkerPreparedWorkspaceInput, { action: "bind" }>["initialSnapshot"],
       ) => {
         const { manifest: source } = await readWorkspaceManifest(
           workspace.homeDir,
@@ -119,16 +120,21 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         if (
           !source.baseCommit ||
           source.baseCommit !== prepared.baseCommit ||
-          (await captureManifest({
-            mode: "eligible",
-            workspaceDir: workspace.workspaceDir,
-            manifestHome: workspace.homeDir,
-            baseCommit: source.baseCommit,
-            referenceManifestRef: workspace.preparedManifestRef,
-            baseManifestRef: workspace.sourceManifestRef,
-            hashMemo,
-            signal,
-          })) !== workspace.preparedManifestRef
+          (snapshot &&
+            (snapshot.baseCommit !== source.baseCommit ||
+              snapshot.sourceManifestRef !== workspace.sourceManifestRef ||
+              snapshot.preparedManifestRef !== workspace.preparedManifestRef)) ||
+          (!snapshot &&
+            (await captureManifest({
+              mode: "eligible",
+              workspaceDir: workspace.workspaceDir,
+              manifestHome: workspace.homeDir,
+              baseCommit: source.baseCommit,
+              referenceManifestRef: workspace.preparedManifestRef,
+              baseManifestRef: workspace.sourceManifestRef,
+              hashMemo,
+              signal,
+            })) !== workspace.preparedManifestRef)
         ) {
           throw new Error("INVALID_REQUEST: prepared workspace source does not match its manifest");
         }
@@ -160,7 +166,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           // Ready capacity must still match completed setup at its first claim.
           // Exact bind replay belongs to the session and must preserve its later edits.
           const hashMemo = hashMemos.get(ownerRoot) ?? new Map();
-          await verifyPrepared(registeredWorkspace, hashMemo);
+          await verifyPrepared(registeredWorkspace, hashMemo, input.initialSnapshot);
           signal?.throwIfAborted();
           hashMemos.set(ownerRoot, hashMemo);
         }

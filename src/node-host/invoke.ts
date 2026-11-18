@@ -44,6 +44,11 @@ import {
   NODE_MCP_TOOLS_CALL_COMMAND,
   NODE_TERMINAL_UPLOAD_COMMAND,
   NODE_WORKER_DESKTOP_COMPUTER_COMMAND,
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+  NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_PROCESSES_COMMAND,
 } from "../infra/node-commands.js";
 import { stageTerminalUpload } from "../infra/terminal-file-upload.js";
 import { logWarn } from "../logger.js";
@@ -78,6 +83,14 @@ import { invokeRegisteredNodeHostCommand as invokePlugin } from "./plugin-node-h
 import { preferMacAppExecHost } from "./runtime-manifest.js";
 import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import { resolveNodeHostedSkillDirectory } from "./skills.js";
+
+const SNAPSHOT_STARTUP_COMMANDS = new Set([
+  NODE_WORKER_BUNDLE_INSTALL_COMMAND,
+  NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+  NODE_WORKER_WORKSPACE_RETAIN_COMMAND,
+  NODE_WORKER_SUPERVISOR_STATUS_COMMAND,
+  NODE_WORKER_PROCESSES_COMMAND,
+]);
 
 const MCP_ERROR_MESSAGE_MAX_CHARS = 1_024;
 
@@ -280,6 +293,9 @@ export async function handleInvoke(
   const invocationClient = createNodeHostInvocationClient(client, runtime.signal);
   try {
     const command = frame.command ?? "";
+    if (!SNAPSHOT_STARTUP_COMMANDS.has(command)) {
+      runtime.workerBundleInstaller?.invalidateSnapshotPreparation?.();
+    }
     const response = createNodeInvokeResponder(invocationClient, frame);
     if (
       (command === NODE_WORKER_DESKTOP_COMPUTER_COMMAND && !runtime.workerComputer) ||

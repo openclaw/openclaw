@@ -29,11 +29,14 @@ export async function runProjectScriptWithGitProbe(
     options: cp.SpawnSyncOptionsWithStringEncoding,
   ) => cp.SpawnSyncReturns<string> | undefined,
   manifestProbe?: typeof probe,
+  guest?: { platform: string; arch: string; env: NodeJS.ProcessEnv; fetch: typeof fetch },
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
   const guestProcess = {
-    env: { PATH: process.env.PATH, HOME: home },
+    env: guest?.env ?? { PATH: process.env.PATH, HOME: home },
+    platform: guest?.platform ?? process.platform,
+    arch: guest?.arch ?? process.arch,
     execPath: process.execPath,
     umask: () => {},
     exitCode: 0,
@@ -63,11 +66,16 @@ export async function runProjectScriptWithGitProbe(
     Buffer,
     URL,
     performance,
+    fetch: guest?.fetch ?? globalThis.fetch,
+    AbortSignal,
+    AbortController,
     setTimeout,
     clearTimeout,
     process: guestProcess,
     console: { error: (text: string) => (stderr += text) },
-    require: (id: string) => modules.get(id) ?? requireModule(id),
+    require: Object.assign((id: string) => modules.get(id) ?? requireModule(id), {
+      resolve: requireModule.resolve,
+    }),
   });
   if (guestProcess.exitCode !== 0) {
     throw new Error(stderr);

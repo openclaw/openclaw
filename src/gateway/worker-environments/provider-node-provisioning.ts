@@ -284,6 +284,7 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
       ReturnType<typeof createWorkerProjectPreparation>["getPreparedWorkspace"]
     >,
     beforeProvision?: () => void,
+    initialSnapshot?: import("../../worker/node-workspace-prepared-protocol.js").NodeWorkerInitialSnapshot,
   ): Promise<WorkerEnvironmentRecord> => {
     const nodePatch = {
       ...patch,
@@ -334,6 +335,20 @@ export function createWorkerNodeProvisioning(options: WorkerNodeProvisioningOpti
         deviceId: lease.node.deviceId,
         artifact,
         prewarm,
+        ...(initialSnapshot &&
+        preparation &&
+        lease.sharedHost === false &&
+        (record.profileSnapshot.runSetupScript === false ||
+          projectPreparation?.runSetupScript === false ||
+          (projectPreparation?.recipe?.postCreate === undefined &&
+            projectPreparation?.recipe?.postStart === undefined)) &&
+        lease.node.preparedRuntime?.nodeBootstrapSha256 ===
+          preparation.artifacts.nodeBootstrapSha256 &&
+        lease.node.preparedRuntime.workerBundleSha256 === artifact.tarballSha256 &&
+        lease.node.preparedRuntime.executionMode ===
+          (record.profileSnapshot.executionMode ?? "worker-turn")
+          ? { initialSnapshot: initialSnapshot.checkpointId }
+          : {}),
         signal: workSignal,
         assertCurrent,
       });

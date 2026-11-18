@@ -1,4 +1,4 @@
-import type { Dirent } from "node:fs";
+import fs, { type Dirent } from "node:fs";
 import fsp from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
@@ -28,7 +28,10 @@ import {
   verifyBundleArchive,
   publishExpandedBundle,
 } from "./node-worker-bundle-cache.js";
-import { packagedNodeWorkerBundleDirectory } from "./node-worker-bundle-paths.js";
+import {
+  packagedNodeWorkerBundleDirectory,
+  resolveNodeWorkerBundleDirectory,
+} from "./node-worker-bundle-paths.js";
 import { prewarmNodeWorkerBundle } from "./node-worker-bundle-prewarm.js";
 import { snapshotNodeWorkerEnv } from "./node-worker-environment.js";
 import {
@@ -262,7 +265,10 @@ export class NodeWorkerBundleInstaller {
   readonly #packageRoot: string | null;
   readonly #operations = new KeyedAsyncQueue();
   readonly #currentGenerationByNamespace = new Map<string, number>();
-  readonly #prewarmedBundles = new Set<string>();
+  readonly #prewarmedBundles = new Map<
+    string,
+    { build: WorkerAdmissionHandshake; initialSnapshot?: string }
+  >();
   readonly #pendingValidations = new Map<
     string,
     { build: WorkerAdmissionHandshake; result: Promise<boolean> }
@@ -270,6 +276,7 @@ export class NodeWorkerBundleInstaller {
   readonly #workerEnv: NodeJS.ProcessEnv;
   #prefetch: AbortController | undefined;
   #foreground = 0;
+  #snapshotStartupOpen = true;
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
@@ -281,6 +288,69 @@ export class NodeWorkerBundleInstaller {
   #recordInstall(gatewayNamespace: string): void {
     const generation = (this.#currentGenerationByNamespace.get(gatewayNamespace) ?? 0) + 1;
     this.#currentGenerationByNamespace.set(gatewayNamespace, generation);
+  }
+
+  /** Startup content provenance ends before any admitted code-capable command. */
+  invalidateSnapshotPreparation(): void {
+    this.#snapshotStartupOpen = false;
+    for (const [directory, fact] of this.#prewarmedBundles) {
+      if (fact.initialSnapshot) {
+        this.#prewarmedBundles.set(directory, { build: fact.build });
+      }
+    }
+  }
+
+  async #reuseSnapshot(
+    destination: string,
+    input: NodeWorkerBundleInstallInput,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    if (!this.#snapshotStartupOpen) {
+      return false;
+    }
+    const prepared = packagedNodeWorkerBundleDirectory(input.build.bundleHash);
+    if (!prepared) {
+      return false;
+    }
+    try {
+      if (!fs.lstatSync(prepared).isDirectory() || fs.realpathSync.native(prepared) !== prepared) {
+        return false;
+      }
+      const receipt = await readReceipt(prepared);
+      if (!receipt || !sameWorkerBuild(receipt, input.build) || !this.#snapshotStartupOpen) {
+        return false;
+      }
+      try {
+        if (
+          !fs.lstatSync(destination).isSymbolicLink() ||
+          resolveNodeWorkerBundleDirectory(destination, input.build.bundleHash) !== prepared
+        ) {
+          return false;
+        }
+      } catch (error) {
+        if (!isMissingPathError(error)) {
+          return false;
+        }
+        await fsp.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+        signal?.throwIfAborted();
+        if (!this.#snapshotStartupOpen) {
+          return false;
+        }
+        await fsp.symlink(prepared, destination, process.platform === "win32" ? "junction" : "dir");
+      }
+      signal?.throwIfAborted();
+      if (!this.#snapshotStartupOpen) {
+        return false;
+      }
+      this.#prewarmedBundles.set(destination, {
+        build: input.build,
+        initialSnapshot: input.initialSnapshot,
+      });
+      return true;
+    } catch {
+      signal?.throwIfAborted();
+      return false;
+    }
   }
 
   async ensure(request: {
@@ -314,16 +384,18 @@ export class NodeWorkerBundleInstaller {
     try {
       params.signal?.throwIfAborted();
       // Share read-only checks after prewarm; downloads and child execution keep caller custody.
-      if (!input.prefetch && this.#prewarmedBundles.has(destination)) {
+      if (!input.prefetch && !input.initialSnapshot && this.#prewarmedBundles.has(destination)) {
+        this.invalidateSnapshotPreparation();
         const validationBuild = input.build;
         const validationDestination = destination;
         let pending = this.#pendingValidations.get(key);
         if (!pending || !sameWorkerBuild(pending.build, validationBuild)) {
           pending = {
             build: validationBuild,
-            result: this.#operations.enqueue(key, () =>
-              validateInstalledBundle(validationDestination, validationBuild),
-            ),
+            result: this.#operations.enqueue(key, () => {
+              this.invalidateSnapshotPreparation();
+              return validateInstalledBundle(validationDestination, validationBuild);
+            }),
           };
           this.#pendingValidations.set(key, pending);
         }
@@ -347,6 +419,17 @@ export class NodeWorkerBundleInstaller {
       this.#pendingValidations.delete(key);
       return await this.#operations.enqueue(key, async () => {
         params.signal?.throwIfAborted();
+        if (
+          !input.prefetch &&
+          input.initialSnapshot &&
+          (await this.#reuseSnapshot(destination, input, params.signal))
+        ) {
+          this.#recordInstall(key);
+          return input.build;
+        }
+        if (!input.prefetch) {
+          this.invalidateSnapshotPreparation();
+        }
         // Prefetch never repairs or activates an existing bundle; the session owns that work.
         if (input.prefetch) {
           try {
@@ -449,7 +532,7 @@ export class NodeWorkerBundleInstaller {
               env: this.#workerEnv,
               signal: prewarmSignal,
             });
-            this.#prewarmedBundles.add(destination);
+            this.#prewarmedBundles.set(destination, { build: input.build });
           }
         }
         params.signal?.throwIfAborted();
@@ -500,6 +583,24 @@ export class NodeWorkerBundleInstaller {
         "bundles",
         params.bundleHash,
       );
+      const fact = this.#prewarmedBundles.get(bundleDir);
+      if (this.#snapshotStartupOpen && fact?.initialSnapshot) {
+        try {
+          const prepared = packagedNodeWorkerBundleDirectory(params.bundleHash);
+          if (
+            prepared &&
+            resolveNodeWorkerBundleDirectory(bundleDir, params.bundleHash) === prepared
+          ) {
+            const receipt = await readReceipt(prepared);
+            if (this.#snapshotStartupOpen && receipt && sameWorkerBuild(receipt, fact.build)) {
+              return { bundleHash: params.bundleHash, status: "installed" };
+            }
+          }
+        } catch {
+          /* Changed paths return to the canonical full validator below. */
+        }
+        this.invalidateSnapshotPreparation();
+      }
       const receipt = await readReceipt(bundleDir);
       const installed =
         receipt?.bundleHash === params.bundleHash &&
@@ -540,6 +641,9 @@ export class NodeWorkerBundleInstaller {
         .map((entry) => entry.name)
         .toSorted();
       const selected = candidates.slice(0, BUNDLE_DELETE_BATCH);
+      if (selected.length > 0) {
+        this.invalidateSnapshotPreparation();
+      }
       for (const name of selected) {
         const target = path.join(bundlesRoot, name);
         await fsp.rm(target, { recursive: true, force: true });
@@ -555,4 +659,4 @@ export class NodeWorkerBundleInstaller {
 }
 
 export type NodeWorkerBundleInstallerControl = Pick<NodeWorkerBundleInstaller, "ensure"> &
-  Partial<Pick<NodeWorkerBundleInstaller, "inspect" | "retain">>;
+  Partial<Pick<NodeWorkerBundleInstaller, "inspect" | "retain" | "invalidateSnapshotPreparation">>;
