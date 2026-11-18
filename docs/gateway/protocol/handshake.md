@@ -320,6 +320,12 @@ presence. The Control UI advertises `hello-health-on-demand` and
 `hello-presence-self`; the presence stream avoids caching a roster across
 connections. Keep the `ultrafast` legacy projection while released decoders need it.
 
+Clients that negotiate `model-catalog-snapshot` and send `modelCatalog` receive an
+initial `models.snapshot` event after hello. This works for native apps and other
+operator clients as well as the browser Control UI; the Gateway uses the same
+`models.list` scope and session-access checks for each client. Clients that do not
+request a snapshot continue to load the catalog through `models.list`.
+
 Capabilities do not grant authorization. For tools that require client capabilities:
 
 - The session records the operator declaration on each operator turn. Empty

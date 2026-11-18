@@ -1,6 +1,5 @@
 import {
   GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
   hasGatewayClientCap,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type {
@@ -24,7 +23,7 @@ export async function publishConnectModelCatalog(
   const client = handler.getClient();
   const requestedScope = client?.connect.modelCatalog;
   if (
-    client?.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI ||
+    !client ||
     !hasGatewayClientCap(client.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT) ||
     !requestedScope
   ) {

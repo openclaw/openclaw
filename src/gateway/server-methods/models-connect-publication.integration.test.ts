@@ -14,6 +14,12 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+} from "../../infra/device-identity.js";
+import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
+import { requestDevicePairing } from "../../infra/device-pairing.js";
 import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import * as startupModels from "../server-startup-model-runtime.js";
@@ -88,7 +94,7 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
   const connect = async (
     options: Pick<
       Parameters<typeof connectGatewayClient>[0],
-      "clientName" | "modelCatalog" | "caps" | "onEvent"
+      "clientName" | "mode" | "deviceIdentity" | "modelCatalog" | "caps" | "onEvent"
     >,
   ) => {
     const snapshots: ModelsSnapshotEvent[] = [];
@@ -189,6 +195,45 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       await expect
         .poll(() => other.snapshots)
         .toMatchObject(snapshot({ agentId: selection.agentId }, [model(selection.modelId)]));
+      expect(publications).toHaveLength(1);
+    }
+    for (const clientName of [
+      GATEWAY_CLIENT_IDS.MACOS_APP,
+      GATEWAY_CLIENT_IDS.LINUX_APP,
+      GATEWAY_CLIENT_IDS.IOS_APP,
+      GATEWAY_CLIENT_IDS.ANDROID_APP,
+    ]) {
+      const deviceIdentity = loadOrCreateDeviceIdentity({
+        path: state.path(clientName, "client", "credentials.sqlite"),
+      });
+      const pairing = await requestDevicePairing({
+        deviceId: deviceIdentity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(deviceIdentity.publicKeyPem),
+        clientId: clientName,
+        clientMode: GATEWAY_CLIENT_MODES.UI,
+        platform: process.platform,
+        role: "operator",
+        scopes: clientOptions.scopes,
+      });
+      expect(
+        (
+          await approveDevicePairing(pairing.request.requestId, {
+            callerScopes: clientOptions.scopes,
+          })
+        )?.status,
+      ).toBe("approved");
+      await using native = await connect({
+        clientName,
+        deviceIdentity,
+        mode: GATEWAY_CLIENT_MODES.UI,
+        modelCatalog: { agentId: "bravo" },
+      });
+      await withTestTimeout(
+        native.published,
+        10_000,
+        `${clientName} did not receive its negotiated model catalog`,
+      );
+      expect(native.snapshots).toMatchObject(snapshot({ agentId: "bravo" }, [model("second")]));
       expect(publications).toHaveLength(1);
     }
     const sessionKey = "agent:alpha:dashboard:12345678-1234-4123-8123-123456789abc";
