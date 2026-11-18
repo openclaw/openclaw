@@ -468,7 +468,6 @@ const enSettings = {
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
     sectionHelp: "Help for {section}",
-    advancedDivider: "Advanced",
     advancedSettings: "Advanced settings",
     hideValue: en.configForm.hideValue,
     revealValue: en.configForm.revealValue,
@@ -491,15 +490,11 @@ const enSettings = {
     invalidNumber: "Enter a value within the allowed range and step.",
     draftRejected: "This setting could not be saved. Your draft is still here.",
     unsupportedArray: "Unsupported array schema. Use Raw mode.",
-    itemCountOne: "{count} item",
-    itemCount: "{count} items",
     add: "Add",
-    noItems: "No items yet.",
     removeItem: "Remove item",
     customEntries: "Custom entries",
     addEntry: "Add entry",
     key: "Key",
-    removeEntry: "Remove entry",
     removeEntryKey: "Remove entry: {key}",
     renameRejected: "Rename not applied. The original key was kept. {reason}",
     secretSaved: "Saved",
@@ -1681,7 +1676,6 @@ const enSettings = {
         "OpenClaw activity identifies this Mac without extra permissions. Enable this to also detect activity in other apps. Shares only idle duration, never keys, pointer positions, app names, or window titles. Requires Accessibility.",
     },
     deviceTalk: {
-      title: "This Mac",
       wakeEnabled: "Voice wake",
       unsupported:
         "Voice wake is unavailable on this Mac. It requires macOS 26 or newer and on-device recognition for the selected language.",
@@ -1919,7 +1913,6 @@ const enSettings = {
       themeUnavailable: "{id} is unavailable. Using Claw for now.",
       background: {
         title: "Background",
-        hint: "Choose your background. Only your view changes.",
         source: "Artwork",
         presentation: "Style",
         faded: "Faded",
@@ -1937,7 +1930,6 @@ const enSettings = {
         choose: "Choose image…",
         replace: "Replace…",
         remove: "Remove",
-        imageAlt: "Your background image",
         formats: "JPEG, PNG, WebP · up to 8 MiB",
         newSession: "New session page",
         sessions: "Sessions",
@@ -2249,12 +2241,10 @@ const enSettings = {
       frequency: {
         label: "Schedule (cron)",
         help: "Schedule for the full dreaming sweep (light, REM, then deep). Leave empty for the plugin default.",
-        placeholder: "0 3 * * *",
       },
       timezone: {
         label: "Timezone",
         help: "IANA timezone used to interpret the cron cadence.",
-        placeholder: "Europe/Vienna",
         default: "Gateway local timezone",
       },
       model: {
@@ -2319,9 +2309,6 @@ const enSettings = {
           "Token budget for each promoted snippet. Provenance stays attached.",
         minPatternStrength: "Minimum pattern strength",
         minPatternStrengthHelp: "Strength a recurring pattern must reach to be reported.",
-      },
-      agentScope: {
-        rowTitle: "Agent",
       },
       unsupported: {
         title: "Dreaming settings",
