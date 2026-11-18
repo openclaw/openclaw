@@ -22,7 +22,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
-  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+  loadInstalledPluginIndexInstallRecords: () => ({}),
 }));
 
 export function asConfig(value: unknown): OpenClawConfig {

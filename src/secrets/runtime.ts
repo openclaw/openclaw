@@ -38,6 +38,7 @@ import {
   canUseSecretsRuntimeFastPath,
   collectCandidateAgentDirs,
   createEmptyRuntimeWebToolsMetadata,
+  hasRuntimeWebToolConfigSurface,
   mergeSecretsRuntimeEnv,
   resolveRefreshAgentDirs,
 } from "./runtime-fast-path.js";
@@ -96,6 +97,9 @@ function shouldLoadPluginMetadataForSecrets(config: OpenClawConfig): boolean {
   }
   const channels = config.channels;
   if (isRecord(channels) && Object.keys(channels).some((channelId) => channelId !== "defaults")) {
+    return true;
+  }
+  if (hasRuntimeWebToolConfigSurface(config)) {
     return true;
   }
   const providers = config.secrets?.providers;
@@ -227,20 +231,15 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   const { listSecretAssignmentOwners, resolveAndApplySecretAssignments } =
     await loadRuntimeOwnerAssignmentHelpers();
   let manifestRegistry = params.manifestRegistry ?? params.pluginMetadataSnapshot?.manifestRegistry;
-  if (!manifestRegistry && shouldLoadPluginMetadataForSecrets(sourceConfig)) {
+  if (
+    !manifestRegistry &&
+    (shouldLoadPluginMetadataForSecrets(sourceConfig) ||
+      (params.assignmentConfig && shouldLoadPluginMetadataForSecrets(assignmentSourceConfig)))
+  ) {
     const { resolveConfigWidePluginMetadataSnapshotAsync } = await loadRuntimeManifestHelpers();
     manifestRegistry = (
-      await resolveConfigWidePluginMetadataSnapshotAsync({
-        config: sourceConfig,
-        env: runtimeEnv,
-      })
+      await resolveConfigWidePluginMetadataSnapshotAsync({ config: sourceConfig, env: runtimeEnv })
     ).manifestRegistry;
-  }
-  if (manifestRegistry) {
-    // Web-provider discovery can enter the synchronous plugin loader. Prepare
-    // its migration facts through the worker before that loader consumes them.
-    const { readPluginStateMigrationReadinessAsync } = await loadRuntimeManifestHelpers();
-    await readPluginStateMigrationReadinessAsync({ env: runtimeEnv });
   }
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??

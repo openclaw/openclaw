@@ -7,7 +7,7 @@ import { resolveSecretRefValues } from "./resolve.js";
 
 const contracts = vi.hoisted(() => new Map<string, object>());
 vi.mock("../plugins/installed-plugin-index-records.js", () => ({
-  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+  loadInstalledPluginIndexInstallRecords: () => ({}),
 }));
 // mock-isolation: collector fixtures use explicit channel contracts without loading plugin runtimes.
 vi.mock("./channel-contract-api.js", () => ({
