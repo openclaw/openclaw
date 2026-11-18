@@ -708,13 +708,19 @@ Windows host-wide legacy capture cleanup remains report-only.
   an undeclared optional package was found only above the rehearsal directory.
   Update inspection ignores that ancestor package and continues with a warning;
   declared dependencies and links escaping the copy still fail containment.
-  After two identical candidate Doctor failures for the same version, automatic
-  updates pause before starting another rehearsal. Inspect the recorded failure
-  with `openclaw update status --json`, fix its cause, and run `openclaw update`
-  to retry. A new candidate version also clears the pause.
+  On current builds, automatic updates pause after two identical activation
+  failures of the same candidate at `openclaw doctor`, `post-update
+  verification`, or `activated-gateway-startup`; both `failed` and
+  `rolled-back` runs count. The Gateway logs `Warning: Automatic updates paused
+  after repeated activation failure.` Inspect the recorded failure with
+  `openclaw update status --json`, fix its cause, and run `openclaw update` to
+  retry; a new candidate version also clears the pause. Installed updaters
+  through `v2026.11.5` pause after two identical candidate Doctor failures
+  instead.
 - `doctor-failed`: run `openclaw doctor` on the Gateway host, resolve its
-  findings, then retry. See [Doctor](/cli/doctor) for the check list and
-  `--fix` behavior.
+  findings, then retry. Two identical activation failures of the same candidate
+  pause automatic updates until a manual `openclaw update` or a new candidate
+  version. See [Doctor](/cli/doctor) for the check list and `--fix` behavior.
 - `restart-disabled`, `restart-unavailable`: restore a supported supervisor or
   enable Gateway restarts before retrying.
 - `restart-unhealthy`, `restart-revision-mismatch`,
