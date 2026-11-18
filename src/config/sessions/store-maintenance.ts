@@ -129,6 +129,13 @@ function resolveHighWaterBytes(
   }
 }
 
+export function resolveSessionColdStorageConfig(maintenance?: SessionMaintenanceConfig) {
+  return {
+    enabled: maintenance?.coldStorage?.enabled ?? true,
+    afterDays: maintenance?.coldStorage?.afterDays ?? 30,
+  };
+}
+
 export function resolveMaintenanceConfigFromInput(
   maintenance?: SessionMaintenanceConfig,
 ): ResolvedSessionMaintenanceConfig {

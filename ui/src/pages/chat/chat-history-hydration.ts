@@ -20,7 +20,6 @@ import {
   isHistoryCursor,
   resolveChatHistoryPagination,
   historySessionId,
-  reconcileHistoryTail,
   commitCurrentChatHistorySnapshot,
 } from "./chat-history-snapshot.ts";
 import {
@@ -186,10 +185,29 @@ export async function hydrateChatHistory(
         return undefined;
       }
     }
-    // Only a Stop-style cursor reset can cut a transcript this pane shows from
-    // its start; a window reset asks for a fresh window instead.
-    if (cursorReset && !isHistoryCursor(response) && !requests.windowReset?.isCurrent()) {
-      const { fillHeldHistoryGap } = await import("./chat-history-held-gap.ts");
+    const inFlightEvents =
+      isHistoryCursor(response) && response.kind === "reset"
+        ? undefined
+        : response.inFlightRun?.events;
+    const replayAgentEvent = inFlightEvents?.length
+      ? (await loadChatLiveTools()).handleAgentEvent
+      : undefined;
+    // First history has no held transcript to reconcile. Load recovery only
+    // after other async prerequisites, before capturing the state it may retain.
+    const { fillHeldHistoryGap, reconcileHistoryTail } =
+      !isHistoryCursor(response) && state.currentSessionId
+        ? await import("./chat-history-held-gap.ts")
+        : { fillHeldHistoryGap: undefined, reconcileHistoryTail: undefined };
+    if (!isCurrent()) {
+      return undefined;
+    }
+    // Cursor resets may return a bounded tail, not a replacement display window.
+    if (
+      cursorReset &&
+      !isHistoryCursor(response) &&
+      !requests.windowReset?.isCurrent() &&
+      fillHeldHistoryGap
+    ) {
       response = await fillHeldHistoryGap(
         state,
         client,
@@ -202,16 +220,6 @@ export async function hydrateChatHistory(
       if (!isCurrent()) {
         return undefined;
       }
-    }
-    const inFlightEvents =
-      isHistoryCursor(response) && response.kind === "reset"
-        ? undefined
-        : response.inFlightRun?.events;
-    const replayAgentEvent = inFlightEvents?.length
-      ? (await loadChatLiveTools()).handleAgentEvent
-      : undefined;
-    if (!isCurrent()) {
-      return undefined;
     }
     // Live history wins even if a pending IndexedDB read settles in the next microtask.
     retireInitialChatSnapshot(state);
@@ -318,19 +326,21 @@ export async function hydrateChatHistory(
     const retainsTranscriptIdentity =
       !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
-      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
-      (previousDisplayedLeafEntryId === undefined ||
-        previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
-    const reconciledHistory = retainsTranscriptIdentity
-      ? reconcileHistoryTail({
-          nextMessages: visibleMessages,
-          nextPagination,
-          nextSessionId,
-          previousMessages: previousTerminalMessages,
-          previousPagination,
-          previousSessionId,
-        })
-      : null;
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId);
+    const reconciledHistory =
+      retainsTranscriptIdentity && reconcileHistoryTail
+        ? reconcileHistoryTail({
+            sameLeaf:
+              previousDisplayedLeafEntryId === undefined ||
+              previousDisplayedLeafEntryId === nextDisplayedLeafEntryId,
+            nextMessages: visibleMessages,
+            nextPagination,
+            nextSessionId,
+            previousMessages: previousTerminalMessages,
+            previousPagination,
+            previousSessionId,
+          })
+        : null;
     const authoritativeMessages = reconciledHistory?.messages ?? visibleMessages;
     const scope = readChatSessionProjectionScope(state, {
       sessionKey,

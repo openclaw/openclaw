@@ -46,10 +46,16 @@ export function createRequesterYieldCallback(params: {
   // The scheduler owns child output and delivery for every automation placement.
   // End the model turn without arming an interactive requester continuation.
   if (isSchedulerOwnedRequesterYield(params)) {
-    // The cron run executor resumes a yield on this run's wake-armed commands in place.
+    // The cron run executor resumes a yield on this run chat's wake-armed commands in place.
     const resumesInPlace = isCronRunSessionKey(params.requesterSessionKey);
     return () => {
-      const execs = resumesInPlace ? listYieldAwaitableExecs(params.requesterTurnRunId) : [];
+      const execs =
+        resumesInPlace && params.requesterSessionKey
+          ? listYieldAwaitableExecs({
+              agentId: params.requesterAgentId,
+              sessionKey: params.requesterSessionKey,
+            })
+          : [];
       if (execs.length === 0) {
         return { schedulerOwned: true };
       }
@@ -58,6 +64,9 @@ export function createRequesterYieldCallback(params: {
     };
   }
   const requesterSessionKey = params.requesterSessionKey?.trim() || undefined;
+  const requesterChat = requesterSessionKey
+    ? { agentId: params.requesterAgentId, sessionKey: requesterSessionKey }
+    : undefined;
   const hasRegistryClaim = Boolean(requesterSessionKey && params.requesterTurnRunId);
   if (!params.claimYieldCompletion && !requesterSessionKey) {
     return undefined;
@@ -72,9 +81,9 @@ export function createRequesterYieldCallback(params: {
     // Runtime claims are observational. Check them before durable registry state
     // so a runtime failure cannot record a yield that never reaches onYield.
     const runtimeClaim = (await params.claimYieldCompletion?.()) ?? false;
-    // Wake-armed commands this run started resume it on exit, bounded by their deadlines.
+    // The chat's wake-armed commands resume it on exit, bounded by their deadlines.
     const runtimeClaimed =
-      runtimeClaim === true || listYieldAwaitableExecs(params.requesterTurnRunId).length > 0;
+      runtimeClaim === true || listYieldAwaitableExecs(requesterChat).length > 0;
     let registryClaimed = false;
     if (hasRegistryClaim) {
       const { markRequesterTurnYielded } =
@@ -121,7 +130,7 @@ export function createRequesterYieldCallback(params: {
     }
     if (completionClaimed) {
       // Recheck at commit: a command that exited meanwhile already reported its exit.
-      const execs = listYieldAwaitableExecs(params.requesterTurnRunId);
+      const execs = listYieldAwaitableExecs(requesterChat);
       if (runtimeClaim === true || registryClaimed || execs.length > 0) {
         awaitExecsForYield(execs);
         return true;

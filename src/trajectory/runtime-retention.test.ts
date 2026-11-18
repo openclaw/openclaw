@@ -82,27 +82,28 @@ vi.mock("../state/openclaw-agent-write-admission.js", () => ({
 }));
 // mock-isolation: Native execution is never admitted; only its cleanup result is injected.
 vi.mock("../state/openclaw-agent-execution.js", () => ({
-  captureOpenClawAgentDatabaseExecution: (): OpenClawAgentDatabaseExecution => ({
-    agentId: "main",
-    path: "unused-retention-execution",
-    fileIdentity: undefined,
-    onTerminal: () => () => {},
-    assertCurrent() {},
-    captureGenerationClaim() {
-      throw new Error("Unexpected generation capture");
-    },
-    capturePreparedGenerationClaim: () => undefined,
-    async prepare() {
-      throw new Error("Unexpected database preparation");
-    },
-    async adoptNativeDatabase() {
-      throw new Error("Unexpected native database adoption");
-    },
-    async runExisting() {
-      throw new Error("Revoked retention must not write");
-    },
-    release: fixture.releaseExecution,
-  }),
+  captureOpenClawAgentDatabaseExecutionAsync:
+    async (): Promise<OpenClawAgentDatabaseExecution> => ({
+      agentId: "main",
+      path: "unused-retention-execution",
+      fileIdentity: undefined,
+      onTerminal: () => () => {},
+      assertCurrent() {},
+      captureGenerationClaim() {
+        throw new Error("Unexpected generation capture");
+      },
+      capturePreparedGenerationClaim: () => undefined,
+      async prepare() {
+        throw new Error("Unexpected database preparation");
+      },
+      async adoptNativeDatabase() {
+        throw new Error("Unexpected native database adoption");
+      },
+      async runExisting() {
+        throw new Error("Revoked retention must not write");
+      },
+      release: fixture.releaseExecution,
+    }),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

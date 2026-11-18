@@ -111,6 +111,7 @@ let requestExecution: Awaited<ReturnType<typeof observeGatewayRunExecution>>;
 let lifecycleWrites: ReturnType<typeof createPreparedLifecycleWriteTracker>;
 let lifecyclePersistence: MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>;
 let expectedRevokedWriters: Map<string, () => boolean>;
+let reportParityFailure: (() => void) | undefined;
 
 beforeAll(async () => {
   harness = await createGatewaySuiteHarness();
@@ -119,6 +120,7 @@ afterAll(async () => {
   await harness.close();
 });
 beforeEach(async () => {
+  reportParityFailure = undefined;
   requestExecution = await observeGatewayRunExecution();
   lifecycleWrites = createPreparedLifecycleWriteTracker();
   expectedRevokedWriters = new Map();
@@ -221,7 +223,10 @@ beforeEach(async () => {
     transcriptCapable: true,
   });
 });
-afterEach(async () => {
+afterEach(async ({ task }) => {
+  if (task.result?.state === "fail") {
+    reportParityFailure?.();
+  }
   releaseModel.resolve();
   try {
     try {
@@ -790,6 +795,9 @@ it.runIf(process.platform === "linux").each([false, true])(
     await runTalkNodePermissionParity({
       ...parityFixture(),
       publicOnly,
+      setFailureReporter: (report) => {
+        reportParityFailure = report;
+      },
       expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
     });
   },

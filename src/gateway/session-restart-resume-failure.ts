@@ -52,6 +52,9 @@ export async function recordRestartResumeFailure(params: {
   log: { warn: (message: string) => void };
 }): Promise<void> {
   const { target, entry, runId, admissionStage, error, signal, log } = params;
+  const operatorSource = entry.resumeAfterRestart?.operatorSource;
+  const operatorRecoveryUnavailableReason =
+    operatorSource?.kind === "unavailable" ? operatorSource.reason : undefined;
   const diagnostic = truncateSessionRunError(
     sanitizeSessionRunError(
       `${readErrorName(error) ?? "Error"}: ${formatErrorMessageWithCode(error)}`,
@@ -61,7 +64,7 @@ export async function recordRestartResumeFailure(params: {
   log.warn(
     truncateSessionRunError(
       sanitizeSessionRunError(
-        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage })}`,
+        `Skipped restart resume for ${target.sessionKey}: ${diagnostic} ${JSON.stringify({ sessionId: entry.sessionId, runId, admissionStage, operatorRecoveryUnavailableReason })}`,
       ),
       2048,
     ),

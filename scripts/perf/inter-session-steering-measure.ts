@@ -11,6 +11,9 @@
  * and candidate processes; unchanged baseline processes provide A/A controls.
  * --state-dir accepts only a generated team-shape fixture; --workspace selects
  * its populated worktree. Each process creates a fresh session in that database.
+ * --scenario tool-boundary measures the embedded delivery owner during a held tool.
+ * Use --hold-ms 120100 --warmup 0 to cross the historical implicit deadline.
+ * --baseline-dir loads a sparse owner overlay before importing runtime modules.
  */
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
@@ -21,6 +24,7 @@ import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { Type } from "typebox";
 import {
   config,
   user,
@@ -48,12 +52,20 @@ const { values } = parseArgs({
     "hold-ms": { type: "string", default: "100" },
     "state-dir": { type: "string" },
     workspace: { type: "string" },
+    warmup: { type: "string" },
+    "baseline-dir": { type: "string" },
   },
 });
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(values.mode === "timing" || values.mode === "allocation");
-assert(values.scenario === "admission" || values.scenario === "checkpoint");
+assert(["admission", "checkpoint", "tool-boundary"].includes(values.scenario));
+if (values["baseline-dir"]) {
+  process.env.OPENCLAW_BENCH_BASELINE_DIR = path.resolve(values["baseline-dir"]);
+  await import("./worker-retained-heap-preload.ts");
+}
+const { steerActiveSessionWithOptionalDeliveryWait } =
+  await import("../../src/agents/embedded-agent-runner/run/attempt-queue-message.js");
 const holdMs = Number(values["hold-ms"]);
 assert(Number.isFinite(holdMs) && holdMs >= 0);
 const stateDir = values["state-dir"] && path.resolve(values["state-dir"]);
@@ -86,12 +98,30 @@ const resources = new DefaultResourceLoader({
   agentDir: manager.getCwd(),
 });
 await resources.reload();
+let toolStarted = Promise.withResolvers<void>();
+let turnRequests = 0;
 const agent = new Agent({
   streamFn: () => {
     throw new Error("Withdrawn steering must not start inference");
   },
   initialState: {
     model: config.model,
+    tools:
+      values.scenario === "tool-boundary"
+        ? [
+            {
+              name: "hold",
+              label: "hold",
+              description: "Synthetic held tool",
+              parameters: Type.Object({}),
+              execute: async () => {
+                toolStarted.resolve();
+                await delay(holdMs);
+                return { content: [{ type: "text" as const, text: "Tool complete" }], details: {} };
+              },
+            },
+          ]
+        : [],
     messages: Array.from({ length: 1000 }, (_, index) => user(`Synthetic history ${index}`, index)),
   },
 });
@@ -105,7 +135,8 @@ const session = new AgentSession({
   cwd: manager.getCwd(),
   resourceLoader: resources,
   modelRegistry: ModelRegistry.inMemory(auth),
-  allowedToolNames: [],
+  customTools: agent.state.tools,
+  allowedToolNames: values.scenario === "tool-boundary" ? ["hold"] : [],
   cleanupProviderSessionResourcesOnDispose: false,
 });
 const text = "Synthetic delegated task completed. ".repeat(64);
@@ -119,6 +150,8 @@ const recorder = createUserTurnTranscriptRecorder({
   target: () => undefined,
 });
 const injectionMs: number[] = [];
+const acceptanceMs: number[] = [];
+const outcomes: string[] = [];
 let requestCount = 0;
 let sentAt = 0;
 let checkpointArrival = false;
@@ -148,9 +181,52 @@ if (values.scenario === "checkpoint") {
     return reply(makeAssistantMessage([{ type: "text", text: "Synthetic response" }]));
   };
 }
+if (values.scenario === "tool-boundary") {
+  agent.streamFn = () => {
+    requestCount++;
+    const first = ++turnRequests === 1;
+    return reply(
+      makeAssistantMessage(
+        first
+          ? [{ type: "toolCall", id: randomUUID(), name: "hold", arguments: {} }]
+          : [{ type: "text", text: "Synthetic response" }],
+      ),
+    );
+  };
+}
 async function run(count: number) {
   for (let index = 0; index < count; index++) {
-    if (values.scenario === "checkpoint") {
+    if (values.scenario === "tool-boundary") {
+      toolStarted = Promise.withResolvers<void>();
+      turnRequests = 0;
+      const active = session.prompt("Run the held tool");
+      await Promise.race([
+        toolStarted.promise,
+        active.then(() => {
+          throw new Error("Synthetic turn ended before starting its held tool");
+        }),
+      ]);
+      const started = performance.now();
+      const result = await steerActiveSessionWithOptionalDeliveryWait(session, text, {
+        waitForTranscriptCommit: true,
+        onQueueAccepted: (accepted) => {
+          assert(accepted);
+          acceptanceMs.push(performance.now() - started);
+        },
+      }).then(
+        () => "committed",
+        (error: unknown) => {
+          if (error instanceof Error && error.name === "MessageInjectionWithdrawnError") {
+            return "withdrawn";
+          }
+          throw error;
+        },
+      );
+      injectionMs.push(performance.now() - started);
+      outcomes.push(result);
+      await active;
+      assert.equal(session.getSteeringMessages().length, 0);
+    } else if (values.scenario === "checkpoint") {
       checkpointArrival = true;
       const delivered = injectionMs.length;
       await session.prompt("Synthetic current request");
@@ -162,8 +238,12 @@ async function run(count: number) {
     }
   }
 }
-await run(values.scenario === "checkpoint" ? 5 : 500);
+const warmup = Number(values.warmup ?? (values.scenario === "admission" ? 500 : 5));
+assert(Number.isSafeInteger(warmup) && warmup >= 0);
+await run(warmup);
 injectionMs.length = 0;
+acceptanceMs.length = 0;
+outcomes.length = 0;
 requestCount = 0;
 globalThis.gc?.();
 const inspector = new Session();
@@ -207,6 +287,8 @@ console.log(
     mainThreadCpuNsPerSteer: ((used.user + used.system) * 1000) / iterations,
     processCpuNsPerSteer: ((processUsed.user + processUsed.system) * 1000) / iterations,
     allocatedBytesPerSteer: allocatedBytes === undefined ? undefined : allocatedBytes / iterations,
-    ...(values.scenario === "checkpoint" ? { holdMs, injectionMs, requestCount } : {}),
+    ...(values.scenario !== "admission"
+      ? { holdMs, injectionMs, requestCount, acceptanceMs, outcomes }
+      : {}),
   }),
 );

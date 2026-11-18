@@ -1,34 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveOpenAICodexClientVersion } from "./codex-client-version.js";
 
 export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/codex";
-// Bundled @openai/codex pin, reported when the Codex plugin cannot name the
-// binary its turns run; the client-version contract test keeps it equal to
-// extensions/codex's exact dependency.
-const OPENAI_CODEX_CLIENT_VERSION = "0.164.0";
 
-export type OpenAICodexModelsEndpointContext = {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  agentDir?: string;
-};
-
-/**
- * ChatGPT model-list URL. The backend gates models on the client version, so
- * discovery reports the Codex binary this process's turns run.
- */
-export async function resolveOpenAICodexModelsEndpoint(
-  context: OpenAICodexModelsEndpointContext = {},
-): Promise<string> {
-  // Lazy runtime facade: keeps the Codex plugin surface off provider registration.
-  const { resolveCodexClientVersion } =
-    await import("openclaw/plugin-sdk/codex-client-version-runtime");
-  const clientVersion =
-    (await resolveCodexClientVersion({
-      config: context.config,
-      env: context.env,
-      agentDir: context.agentDir,
-    })) ?? OPENAI_CODEX_CLIENT_VERSION;
+/** ChatGPT model-list URL. The backend gates models on the reported Codex client version. */
+export async function resolveOpenAICodexModelsEndpoint(): Promise<string> {
+  const clientVersion = await resolveOpenAICodexClientVersion();
   return `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${encodeURIComponent(clientVersion)}`;
 }
 

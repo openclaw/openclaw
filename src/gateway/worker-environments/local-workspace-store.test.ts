@@ -12,6 +12,8 @@ import {
   trackSqliteStatementExecutions,
 } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { acquireSandboxGatewayOwner } from "../../agents/sandbox/registry.test-support.js";
+import { captureSandboxStateOwner } from "../../agents/sandbox/state-owner.js";
 import {
   WORKTREE_CREATE_LEASE_SCOPE,
   WORKTREE_MUTATION_LEASE_SCOPE,
@@ -33,13 +35,13 @@ import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-leas
 import * as stateRead from "../../state/openclaw-state-read-operation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import { decodeLocalWorkspaceTree, localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import {
   readLocalWorkspaceSweepCandidates,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
 import { sweepLocalWorkspaceManifests } from "./local-workspace-gc.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
 import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
@@ -54,6 +56,7 @@ import {
   localWorkspaceProjectionFixture,
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
+import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-store.types.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -181,16 +184,80 @@ it("keeps admitted paths and checkpoint documents out of root-publication reques
       currentManifestRaw: rawManifest,
       currentManifestRef: manifestRef,
       buildCacheInputs,
+      fingerprints: {
+        target: "projection",
+        blob: Buffer.alloc(8192, 7).toString("base64"),
+        oppositeBlob: Buffer.alloc(8192, 9).toString("base64"),
+      },
     };
     const reserved = await store.update(baseline, { checkpoint_json: JSON.stringify(checkpoint) });
-    return store.update(reserved, { pending_target: null }, undefined, checkpoint);
+    return store.update(reserved, { pending_target: null }, undefined, {
+      ...checkpoint,
+      fingerprintsFromCheckpoint: true,
+    });
   });
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
   expect(accepted.source_paths_json).toBe(sourcePaths);
   expect(JSON.parse(accepted.checkpoint_json!)).toMatchObject({ buildCacheInputs });
+  expect(Buffer.from(accepted.projection_fingerprints!)).toEqual(Buffer.alloc(8192, 7));
+  expect(Buffer.from(accepted.canonical_fingerprints!)).toEqual(Buffer.alloc(8192, 9));
   expect(bytes).toHaveLength(4);
   expect.soft(bytes[0], "create request bytes").toBeLessThan(2048);
   expect.soft(bytes[3], "settlement request bytes").toBeLessThan(2048);
+  // SAFETY: The store just persisted this owner-written checkpoint.
+  const checkpoint = JSON.parse(accepted.checkpoint_json!) as LocalWorkspaceManifestCheckpoint;
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+      store.update(store.get()!, {}, undefined, {
+        ...checkpoint,
+        resultingRoot: `sha256:${"f".repeat(64)}`,
+        fingerprintsFromCheckpoint: true,
+      }),
+    ),
+  ).rejects.toThrow("checkpoint changed before acceptance");
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
+});
+
+it("bounds reconcile checkpoint requests while preserving the durable recovery document", async () => {
+  const worktreeId = randomUUID();
+  const entries = Array.from({ length: 25000 }, (_, index) => ({
+    path: `file-${index}.txt`,
+    type: "file",
+    mode: 0o644,
+    size: 32,
+    sha256: "b".repeat(64),
+  }));
+  const raw = JSON.stringify({
+    version: 1,
+    baseCommit: "a".repeat(40),
+    entries: entries.slice(0, 2),
+  });
+  const checkpoint = JSON.stringify({
+    baseManifestRaw: raw,
+    currentManifestRaw: raw,
+    records: [],
+    removed: [],
+    buildCacheInputs: entries.map((entry) => `.artifacts/build-cache-inputs/${entry.path}`),
+  });
+  const bytes: number[] = [];
+  probe.command(stateWorker, (command, options, scope) => {
+    if (command.type === "localWorkspace.mutate") {
+      bytes.push(serialize(command).byteLength);
+    }
+    return scope.execute(command, options);
+  });
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const created = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
+    await store.update(created, {
+      checkpoint_json: checkpoint,
+      pending_target: "canonical",
+    });
+  });
+  await closeOpenClawStateDatabaseAsync();
+  const recovered = await readLocalWorkspaceProjection(worktreeId, env);
+  expect(recovered?.checkpoint_json).toBe(checkpoint);
+  expect(bytes).toHaveLength(2);
+  expect(Math.max(...bytes)).toBeLessThan(1024 * 1024);
 });
 
 it("looks up workspace identity without returning pending recovery payloads", async () => {
@@ -824,6 +891,7 @@ it("recovers an oversized committed row after reply loss without replaying or tr
   );
   const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
   const journalPack = Buffer.alloc(1024, 7);
+  const publicationPack = new Uint8Array(journalPack);
   let writes = 0;
   let retainedGuard: (() => void) | undefined;
   const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -845,12 +913,16 @@ it("recovers an oversized committed row after reply loss without replaying or tr
         journal_pack: journalPack,
         paused_runtimes_json: undefined,
       },
+      undefined,
+      undefined,
+      publicationPack,
     );
     expect(store.get()).toEqual(row);
     return row;
   });
   lostReply.mockRestore();
   expect(writes).toBe(1);
+  expect(publicationPack.byteLength).toBe(0);
   assert(retainedGuard);
   expect(retainedGuard).toThrow();
   const committed = await readLocalWorkspaceProjection(worktreeId, env);
@@ -926,95 +998,32 @@ it("queues an expanded checkpoint receipt behind another workspace write", async
   expect((await readLocalWorkspaceProjection(checkpointId, env))?.checkpoint_json).toBe(checkpoint);
 });
 
-it("converts a v31 projection online without changing its root and recovers its saved checkpoint after restart", async () => {
-  const worktreeId = randomUUID();
-  const baseCommit = "a".repeat(40);
-  const records = createLocalWorkspaceManifestTree([
-    { path: "entry.txt", type: "file", mode: 0o644, size: 4, sha256: "a".repeat(64) },
-  ]);
-  const previousRoot = localWorkspaceManifestRootReference(records, baseCommit);
-  const previousTreeRoot = records.get("")!.treeRef;
-  const legacyRows = [...records.values()].map((record) =>
-    Object.assign({}, record, {
-      canonicalIdentity: "gateway:1:2:4:5:6",
-      projectionIdentity: "gateway:1:3:4:5:6",
-    }),
-  );
-  const changed = updateLocalWorkspaceManifestTree(records, [
-    {
-      path: "entry.txt",
-      node: { path: "entry.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) },
-    },
-  ]);
-  const resultingRoot = localWorkspaceManifestRootReference(records, baseCommit);
-  const checkpoint = {
-    version: 1 as const,
-    kind: "scan" as const,
-    previousRoot,
-    resultingRoot,
-    ...changed,
-    baseManifestRaw: serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit,
-      entries: [legacyRows.find((record) => record.node.path === "entry.txt")!.node].filter(
-        (node) => node.type !== "directory",
-      ),
-    }),
-    baseManifestRef: "sha256:legacy-base",
-    currentManifestRaw: serializeWorkerWorkspaceManifest({
-      version: 1,
-      baseCommit,
-      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) }],
-    }),
-    currentManifestRef: "sha256:legacy-result",
-    buildCacheInputs: [],
-  };
-  const savedCheckpoint = JSON.stringify(checkpoint);
-  await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
-    store.create({
-      ...localWorkspaceProjectionFixture(worktreeId, root),
-      source_paths_json: '["entry.txt"]',
-      baseline_ref: previousRoot,
-      pending_ref: "refs/openclaw/results/legacy-checkpoint",
-      pending_target: "canonical",
-      checkpoint_json: savedCheckpoint,
-    }),
-  );
-  const database = openOpenClawStateDatabase({ env });
-  for (const record of legacyRows) {
-    database.db
-      .prepare(
-        "INSERT INTO local_workspace_manifest_nodes (worktree_id, path, node_json) VALUES (?, ?, ?)",
-      )
-      .run(worktreeId, record.node.path, JSON.stringify(record));
-  }
-  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    const prepared = await store.manifest(store.get()!, { kind: "convert" });
-    assert(prepared.kind === "replace");
-    const converted = await store.accept(prepared.update);
-    expect(converted.baseline_ref).toBe(previousRoot);
-    expect(
-      Buffer.from(converted.tree_root_digest!).equals(localWorkspaceDigestBytes(previousTreeRoot)),
-    ).toBe(true);
-    expect(converted.checkpoint_json).toBe(savedCheckpoint);
-    expect(converted.pending_target).toBe("canonical");
-  });
-  expect(
-    database.db
-      .prepare("SELECT count(*) AS count FROM local_workspace_manifest_nodes WHERE worktree_id = ?")
-      .get(worktreeId)!.count,
-  ).toBe(0);
-  await closeOpenClawStateDatabaseAsync();
-  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
-    const selected = store.get()!;
-    const restored = JSON.parse(selected.checkpoint_json!) as typeof checkpoint;
-    expect(restored.previousRoot).toBe(selected.baseline_ref);
-    const accepted = await store.update(selected, { pending_target: null }, undefined, restored);
-    expect(accepted.baseline_ref).toBe(resultingRoot);
-    const materialized = await store.manifest(accepted, { kind: "materialize" });
-    expect(materialized).toMatchObject({
-      kind: "materialize",
-      rawManifest: checkpoint.currentManifestRaw,
+it.skipIf(process.platform === "win32")(
+  "rolls back local workspace publication after its captured state alias retargets",
+  async () => {
+    const first = dirs.make("local-workspace-state-first-");
+    const second = dirs.make("local-workspace-state-second-");
+    const alias = path.join(dirs.make("local-workspace-state-alias-"), "selected");
+    await fs.symlink(first, alias, "dir");
+    const worktreeId = randomUUID();
+    const selectedEnv = { ...env, OPENCLAW_STATE_DIR: first };
+    await withEnvAsync({ OPENCLAW_STATE_DIR: alias }, async () => {
+      using _ = acquireSandboxGatewayOwner(first);
+      const captured = await captureSandboxStateOwner();
+      await withLocalWorkspaceStore(
+        { worktreeId, env: selectedEnv, workerAuthority: captured },
+        async (store) => {
+          const initial = await store.create(localWorkspaceProjectionFixture(worktreeId, first));
+          await fs.unlink(alias);
+          await fs.symlink(second, alias, "dir");
+          await expect(
+            store.update(initial, { pending_ref: "refs/openclaw/results/refused" }),
+          ).rejects.toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+          expect(() => store.get()).toThrow("Local workspace custody has ended");
+        },
+      );
     });
-  });
-});
+    expect((await readLocalWorkspaceProjection(worktreeId, selectedEnv))?.pending_ref).toBeNull();
+    expect(await fs.readdir(second)).toEqual([]);
+  },
+);

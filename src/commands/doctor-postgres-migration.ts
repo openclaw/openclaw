@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseEngineInput } from "../infra/database-engine/types.js";
-import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-attribution.js";
+import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import {
   capturePostgresBackup,
   fingerprintPostgresBackup,

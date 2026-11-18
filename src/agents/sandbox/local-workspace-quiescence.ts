@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import {
@@ -22,6 +24,7 @@ import {
   assertSandboxRegistryEntryCurrent,
   assertSandboxBrowserRegistryEntryCurrent,
 } from "./registry.js";
+import type { LocalWorkspacePausePhase } from "./types.js";
 
 const log = createSubsystemLogger("sandbox/quiescence");
 const pauseCounts = {
@@ -33,24 +36,6 @@ const pauseCounts = {
   restore: 0,
 };
 export type LocalWorkspacePauseReason = keyof typeof pauseCounts;
-export type LocalWorkspacePausePhase =
-  | "pause"
-  | "operation"
-  | "recovery"
-  | "capture"
-  | "scan"
-  | "staging"
-  | "materialization"
-  | "preflight"
-  | "patch"
-  | "apply"
-  | "acceptance"
-  | "verification"
-  | "cleanup"
-  | "resume"
-  | "resumeInspect"
-  | "resumeAuthority"
-  | "unpause";
 
 /** Registered runtimes and retained stream children can write the exact private mount. */
 export async function readLocalWorkspaceRuntimes(
@@ -225,6 +210,7 @@ export async function quiesceLocalWorkspace(params: {
   using phases = observeDiagnosticsTimelinePhases(
     "attempt.setup.sandbox.workspace_selection.quiesce.registry",
   );
+  const scope = createHash("sha256").update(params.workspaceDir).digest("hex").slice(0, 16);
   const selected = (await readLocalWorkspaceRuntimes(params.workspaceDir, { env: params.env })).map(
     (runtime) => ({
       runtime,
@@ -367,10 +353,13 @@ export async function quiesceLocalWorkspace(params: {
       phases.mark("attempt.setup.sandbox.workspace_selection.quiesce.pause");
       phaseStartedAt = startedAt = performance.now();
       await execContainer(engine, ["pause", id], { signal: AbortSignal.timeout(30_000) });
-      log.info(`Local workspace pause: reason=${reason} count=${++pauseCounts[reason]}`, {
-        engine: engine.id,
-        runtime: runtime.kind,
-      });
+      log.info(
+        `Local workspace pause: reason=${reason} scope=${scope} count=${++pauseCounts[reason]}`,
+        {
+          engine: engine.id,
+          runtime: runtime.kind,
+        },
+      );
     }
     phaseObservers.add(observePhase);
     releases.push(async () => {
@@ -381,42 +370,48 @@ export async function quiesceLocalWorkspace(params: {
         await validateSandboxContainerEngineTarget(engine, backendTarget);
       }
       params.assertCurrent();
-      // Archive may have removed this exact generation while settlement held it.
-      // A missing or already-running runtime needs receipt cleanup, not unpause.
-      resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.inspect");
-      observePhase("resumeInspect");
-      const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
-        allowFailure: true,
-        signal: AbortSignal.timeout(30_000),
-      });
-      params.assertCurrent();
-      let outcome = "already-running";
-      if (observed.code !== 0) {
-        if (!/no such (?:container|object)|does not exist/iu.test(observed.stderr)) {
-          throw new Error(
-            "Local workspace runtime resume inspection failed; exact paused owner retained",
-          );
-        }
-        outcome = "removed";
-      } else if (observed.stdout.trim() === "true") {
-        resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.authority");
-        observePhase("resumeAuthority");
+      resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.authority");
+      observePhase("resumeAuthority");
+      let resumeError: Error | undefined;
+      try {
         await runtime.assertCurrent();
+      } catch (error) {
+        resumeError = toErrorObject(error, "Local workspace runtime authority unavailable");
+      }
+      let outcome = "resumed";
+      if (!resumeError) {
         resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.unpause");
         observePhase("unpause");
         const result = await execContainer(engine, ["unpause", id], {
           allowFailure: true,
           signal: AbortSignal.timeout(30_000),
         });
-        if (
-          result.code !== 0 &&
-          !/no such (?:container|object)|does not exist/iu.test(result.stderr)
-        ) {
-          throw new Error("Local workspace runtime resume failed; exact paused owner retained");
+        if (result.code !== 0) {
+          resumeError = new Error(
+            "Local workspace runtime resume failed; exact paused owner retained",
+          );
         }
-        outcome = result.code === 0 ? "resumed" : "removed";
-      } else if (observed.stdout.trim() !== "false") {
-        throw new Error("Invalid local workspace runtime resume inspection");
+      }
+      // Successful unpause is authoritative for this exact ID. Inspect only on failure:
+      // archive may have removed it, or a recovered receipt may already be running.
+      if (resumeError) {
+        resumePhases.mark("attempt.setup.sandbox.workspace_selection.resume.inspect");
+        observePhase("resumeInspect");
+        const observed = await execContainer(engine, ["inspect", "-f", "{{.State.Paused}}", id], {
+          allowFailure: true,
+          signal: AbortSignal.timeout(30_000),
+        });
+        params.assertCurrent();
+        if (observed.code !== 0) {
+          if (!/no such (?:container|object)|does not exist/iu.test(observed.stderr)) {
+            throw resumeError;
+          }
+          outcome = "removed";
+        } else if (observed.stdout.trim() === "false") {
+          outcome = "already-running";
+        } else {
+          throw resumeError;
+        }
       }
       if (phaseObservers.delete(observePhase)) {
         observePhase("resume");
@@ -434,7 +429,7 @@ export async function quiesceLocalWorkspace(params: {
         }
         // Recovered receipts have no timestamp; never present this owner's observation as the full pause.
         log.info(
-          `Local workspace unpause: reason=${reason} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
+          `Local workspace unpause: reason=${reason} scope=${scope} durationMs=${Math.round(performance.now() - startedAt)} dominantPhase=${dominantPhase} dominantPhaseMs=${Math.round(dominantPhaseMs)} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)} durationScope=${isPaused ? "observed" : "owner"} outcome=${outcome}`,
           { engine: engine.id, runtime: runtime.kind },
         );
       }

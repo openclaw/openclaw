@@ -8,6 +8,7 @@ import {
 import type { StoreSchema } from "./contract.js";
 import type { PostgresCapabilities } from "./physical-facts-contract.js";
 import {
+  hasPostgresCatalogColumn,
   postgresCatalogQuery,
   readPostgresCatalog,
   type PostgresCatalogFact,
@@ -171,7 +172,12 @@ export function postgresSchemaSql(
       definition.mode !== "keyword-only" && Object.keys(definition.vector ?? {}).length > 0;
     return `;\n${ddl}`;
   });
-  return [schema.postgres ?? "", ...ordered.values(), ...searchSql].join("\n");
+  const optional = schema.postgresWithoutOptionalColumn;
+  const eager =
+    optional && catalog && !hasPostgresCatalogColumn(catalog, optional.table, optional.column)
+      ? optional.sql
+      : schema.postgres;
+  return [eager ?? "", ...ordered.values(), ...searchSql].join("\n");
 }
 
 export function postgresSchemaHash(

@@ -30,7 +30,7 @@ suite.define(() => {
       maxHeight: 140,
     },
   ])(
-    "explains the failed run on arrival and while editing on $name",
+    "explains the failed run on arrival on $name",
     async ({ name, viewport, colorScheme, maxHeight }) => {
       await suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport, colorScheme },
@@ -86,45 +86,35 @@ suite.define(() => {
           });
           // Same job-only deep link used by the session Details attention row.
           await page.goto(suite.server.baseUrl + "cron?job=" + job.id);
-          const history = page.locator("[data-test-id=cron-detail-tab-history]");
-          await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+          // A failed automation opens on its prompt; the notice sits under it, above the history.
           const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
+          expect(await page.locator("[data-test-id=cron-edit]").count()).toBe(1);
           const review = attention.locator("[data-test-id=cron-review-failed-run]");
+          const toggle = attention.locator("[data-test-id=cron-failure-details-toggle]");
           const cause = attention.locator(".cron-error-details__text");
-          // Outside history the raw cause stays collapsed behind "Error details".
-          const clipped = () =>
-            attention
-              .locator("details.cron-error-details")
-              .evaluate((element) => !(element as HTMLDetailsElement).open);
           const fitsViewport = () =>
             page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+          // The raw cause stays collapsed until the reader asks for it.
+          expect(await toggle.getAttribute("aria-expanded")).toBe("false");
+          expect(await cause.count()).toBe(0);
+          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
+          expect(await fitsViewport()).toBe(true);
+          await toggle.click();
           expect(await cause.textContent()).toContain(failure);
           expect(await cause.textContent()).toContain(diagnostic);
-          expect(await clipped()).toBe(false);
           expect(
             await cause.evaluate((element) => element.scrollWidth <= element.clientWidth),
           ).toBe(true);
           expect(await fitsViewport()).toBe(true);
-          // History already exposes the saved job's full cause, even without a retained run.
-          expect(await review.count()).toBe(0);
           expect(await page.locator(".cron-detail-header").textContent()).not.toContain("Paused");
+          await review.click();
           if (name === "phone") {
+            // The run is no longer retained; the notice still carries the saved cause.
             expect(await page.locator(".cron-run-entry").count()).toBe(0);
           } else {
-            expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
+            expect(await page.locator(".cron-run-entry").first().textContent()).toContain(failure);
           }
-          await page.locator("[data-test-id=cron-detail-tab-settings]").click();
-          const prompt = page.locator(".cron-tab-panel textarea").first();
-          const draft = "Keep this unsaved release instruction while reviewing the failure.";
-          await prompt.fill(draft);
-          expect(await clipped()).toBe(true);
-          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
-          await review.click();
-          await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
-          expect(await clipped()).toBe(false);
-          await page.locator("[data-test-id=cron-detail-tab-settings]").click();
-          expect(await prompt.inputValue()).toBe(draft);
           expect(await fitsViewport()).toBe(true);
           expect(await gateway.getRequests("cron.run")).toHaveLength(0);
           expect(await gateway.getRequests("cron.update")).toHaveLength(0);

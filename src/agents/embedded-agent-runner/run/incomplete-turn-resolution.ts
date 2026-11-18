@@ -281,6 +281,7 @@ interface YieldContinuationAttempt {
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
   toolMetas?: readonly { asyncStarted?: boolean }[];
+  yieldAcknowledgment?: string;
 }
 
 /** Same-attempt work that can resume execution or deliver its completion. */
@@ -297,9 +298,13 @@ export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): b
   );
 }
 
-/** A deliberate yield can also leave accepted work or already-sent output. */
+/**
+ * A deliberate yield can also leave accepted work or already-sent output. A waiting
+ * acknowledgment is kept only for an armed completion, so that wake is its continuation.
+ */
 export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
   return (
+    Boolean(attempt.yieldAcknowledgment?.trim()) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     hasCommittedMessagingToolDeliveryEvidence(attempt) ||
     (attempt.successfulCronAdds ?? 0) > 0 ||

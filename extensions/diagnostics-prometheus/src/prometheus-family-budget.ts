@@ -138,6 +138,8 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_worker_heap_used_bytes: 128,
   openclaw_worker_heap_used_high_water_bytes: 128,
   openclaw_worker_message_payload_bytes_total: 512,
+  openclaw_worker_authority_component_sampled_bytes_total: 64,
+  openclaw_worker_authority_component_samples_total: 128,
   openclaw_worker_message_unmeasured_total: 64,
   openclaw_worker_messages_total: 64,
   openclaw_worker_queue_depth: 512,
@@ -151,7 +153,7 @@ export const PROMETHEUS_FAMILY_RESERVES = {
 } as const;
 
 export type PrometheusMetricName = keyof typeof PROMETHEUS_FAMILY_RESERVES;
-const MAX_PROMETHEUS_SERIES = 16384;
+const MAX_PROMETHEUS_SERIES = 16576;
 // Larger explicit reserves also raise the ceiling, without borrowing shared entries.
 export const MAX_PROMETHEUS_FAMILY_SERIES = 128;
 export const SHARED_PROMETHEUS_SERIES =

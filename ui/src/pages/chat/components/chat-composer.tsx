@@ -191,6 +191,15 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   onSettled(() =>
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
+  onSettled(() => {
+    const stop = () => context().stopRunFromEscape();
+    state.stopRunFromEscape = stop;
+    return () => {
+      if (state.stopRunFromEscape === stop) {
+        state.stopRunFromEscape = null;
+      }
+    };
+  });
 
   // Owners and handlers retain live reads; only scalar presentation values filter updates.
   const scalarContext = createProjection(() => {

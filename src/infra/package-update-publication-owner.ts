@@ -43,6 +43,7 @@ import {
   packageIntegrityMatches,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
+import { publicationExchange } from "./package-update-publication-exchange.js";
 import {
   copyPackagePublicationTree,
   createPackagePublicationTreeMatcher,
@@ -238,6 +239,7 @@ export function createPublicationOwner(
     }
     return { selected, previous, candidate, launcherStates };
   };
+  const exchange = publicationExchange(anchor, () => record, assertCurrent, transition, inspect);
   const verifyClosure = async () => {
     assertion();
     assertInventory();
@@ -377,6 +379,7 @@ export function createPublicationOwner(
       }
       await discardIncompleteCopy();
       await finishCopiedDisplacement();
+      await exchange.restore();
       let observed = await inspect();
       assertCurrent();
       if (resume && observed.selected === "previous" && !observed.previous) {
@@ -386,6 +389,7 @@ export function createPublicationOwner(
         transition("aborted");
         return packageActivationStatus(record);
       }
+      observed = (await exchange.publish(resume, observed, onDisplaced)) ?? observed;
       if (observed.selected === "previous") {
         transition("publishing", { kind: "displace" });
         assertCurrent();
@@ -663,6 +667,7 @@ export function createPublicationOwner(
       privateCandidate = false;
       assertCurrent();
       await discardIncompleteCopy();
+      await exchange.restore();
       const observed = await inspect();
       assertCurrent();
       if (
@@ -712,6 +717,7 @@ export function createPublicationOwner(
       transition("rolled-back", null, publications);
     },
     status: () => packageActivationStatus(record),
+    exchangeOutcome: exchange.outcome,
     assertCurrent,
   };
 }

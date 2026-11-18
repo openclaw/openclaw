@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as config from "../config/runtime-snapshot.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
@@ -23,8 +23,9 @@ afterEach(async () => {
   config.clearRuntimeConfigSnapshot();
   resetPluginRuntimeStateForTest();
   vi.unstubAllEnvs();
+  tempDirs.cleanup();
 });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
 
 async function checkLaunch(
   source: "session-full" | "human-approved",

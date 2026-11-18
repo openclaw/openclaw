@@ -82,7 +82,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           : "";
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
+        `${inspectionDetail}Runtime artifacts must be republished (this update changed them or they were already stale), but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
         { cause },
       );
     };

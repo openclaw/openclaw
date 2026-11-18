@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -701,9 +702,10 @@ it.each([
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     expect(message).not.toMatch(loneSurrogate);
     expect(message).not.toContain("�");
-    // The 1,000-char retention cap already dropped the start, so the wake says so.
-    expect(message).toContain("; earlier output was discarded):\n");
+    // The 1,000-char retention cap dropped the start; the output file still has it.
     expect(message).toContain(head);
+    const [, file] = /\nFull output: (\S+) \(1104 bytes\)\n/.exec(message) ?? [];
+    expect(await fs.readFile(file!, "utf8")).toBe(stdout);
   }
 });
 

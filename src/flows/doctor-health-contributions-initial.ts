@@ -32,6 +32,7 @@ import {
   legacyOwnedRepair,
   recordDoctorHealthWarnings,
 } from "./doctor-health-contribution.js";
+import { memberRolesCheck, runMemberRolesHealth } from "./doctor-member-roles.js";
 import { appContainerSpawnCheck, nativeStatusCheck } from "./doctor-native-status-check.js";
 
 function coreHealthRunner(checkId: string): DoctorHealthContribution["run"] {
@@ -187,9 +188,9 @@ export function resolveInitialDoctorHealthContributions(params: {
       ],
       run: params.runLegacyStateHealth,
     }),
-    createDoctorHealthContribution("doctor:session-transcripts", "Session transcripts", {
+    createDoctorHealthContribution("doctor:session-transcripts", "Chat history", {
       healthChecks: {
-        description: "Legacy or branchy session transcript files are represented as findings.",
+        description: "Legacy or branched chat history files are represented as findings.",
         defaultEnabled: false,
         async detect() {
           const { detectSessionTranscriptHealthIssues, sessionTranscriptIssueToHealthFinding } =
@@ -529,7 +530,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution(
       "doctor:session-transcript-headers",
-      "Session transcript headers",
+      "Chat history headers",
       async (ctx) => {
         const { noteSessionTranscriptHeaderHealth } =
           await import("../commands/doctor-session-transcript-headers.js");
@@ -543,7 +544,7 @@ export function resolveInitialDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution(
       "doctor:session-transcript-labels",
-      "Session transcript labels",
+      "Chat history labels",
       async (ctx) => {
         const { noteSessionTranscriptLabelHealth } =
           await import("../commands/doctor-session-transcript-labels.js");
@@ -612,29 +613,33 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runLegacyCronHealth,
     }),
     createDoctorHealthContribution("doctor:sandbox", "Sandbox", {
-      healthChecks: {
-        id: "core/doctor/sandbox/registry-files",
-        description: "Legacy sandbox registry files are represented in SQLite registry storage.",
-        async detect() {
-          const {
-            detectLegacySandboxRegistryFileIssues,
-            legacySandboxRegistryInspectionToHealthFinding,
-          } = await import("../commands/doctor-sandbox.js");
-          return (await detectLegacySandboxRegistryFileIssues()).map(
-            legacySandboxRegistryInspectionToHealthFinding,
-          );
+      healthChecks: [
+        {
+          id: "core/doctor/sandbox/registry-files",
+          description: "Legacy sandbox registry files are represented in SQLite registry storage.",
+          async detect() {
+            const {
+              detectLegacySandboxRegistryFileIssues,
+              legacySandboxRegistryInspectionToHealthFinding,
+            } = await import("../commands/doctor-sandbox.js");
+            return (await detectLegacySandboxRegistryFileIssues()).map(
+              legacySandboxRegistryInspectionToHealthFinding,
+            );
+          },
+          repair: legacyOwnedRepair(async () => {
+            const {
+              detectLegacySandboxRegistryFileIssues,
+              legacySandboxRegistryInspectionToRepairEffect,
+            } = await import("../commands/doctor-sandbox.js");
+            return (await detectLegacySandboxRegistryFileIssues()).map(
+              legacySandboxRegistryInspectionToRepairEffect,
+            );
+          }, "legacy doctor sandbox contribution owns registry migration"),
         },
-        repair: legacyOwnedRepair(async () => {
-          const {
-            detectLegacySandboxRegistryFileIssues,
-            legacySandboxRegistryInspectionToRepairEffect,
-          } = await import("../commands/doctor-sandbox.js");
-          return (await detectLegacySandboxRegistryFileIssues()).map(
-            legacySandboxRegistryInspectionToRepairEffect,
-          );
-        }, "legacy doctor sandbox contribution owns registry migration"),
-      },
+        memberRolesCheck,
+      ],
       async run(ctx) {
+        await runMemberRolesHealth(ctx);
         const {
           maybeRepairSandboxImages,
           maybeRepairSandboxRegistryFiles,

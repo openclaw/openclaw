@@ -508,7 +508,7 @@ describe("personal publisher credential custody", () => {
   });
   it.each([
     "allowed",
-    "requester-revoked",
+    "requester-disconnected",
     "execution-reselected",
     "cancelled-before",
     "cancelled-after",
@@ -617,11 +617,11 @@ describe("personal publisher credential custody", () => {
     mocks.prepareRepositoryIntegration.mockImplementation(async (identity, input) => {
       integrationSignal = input.signal;
       negativeExercised ||= [
-        "requester-revoked",
+        "requester-disconnected",
         "execution-reselected",
         "cancelled-before",
       ].includes(scenario);
-      if (scenario === "requester-revoked") {
+      if (scenario === "requester-disconnected") {
         person.runtime.live = false;
       }
       if (scenario === "execution-reselected") {
@@ -684,6 +684,8 @@ describe("personal publisher credential custody", () => {
       .catch(() => ({ status: "rejected" as const }));
     if (scenario !== "allowed") {
       expect(negativeExercised).toBe(true);
+    }
+    if (scenario !== "allowed" && scenario !== "requester-disconnected") {
       if (scenario === "execution-unavailable") {
         expect(result).toMatchObject({
           status: "failed",
@@ -742,6 +744,11 @@ describe("personal publisher credential custody", () => {
     expect(personalApiCalls).toBeGreaterThan(0);
     expect(personalAtWorker).toBe(false);
     expect(sharedAtWorker).toBe(true);
+    if (scenario === "requester-disconnected") {
+      await expect(preparePersonalPublicationFixtureAction(person)).rejects.toThrow(
+        "current authenticated human Gateway connection",
+      );
+    }
   });
 });
 

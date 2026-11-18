@@ -82,13 +82,10 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(
   }
 }
 
-/** Gateway consults read lock state through the worker-backed session reader. */
-async function assertConsultModelSelectionUnlocked(
-  params: RealtimeVoiceAgentConsultModelLockParams & { skip?: boolean },
+/** Read current model locks through the existing session worker. */
+export async function assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(
+  params: RealtimeVoiceAgentConsultModelLockParams,
 ): Promise<void> {
-  if (params.skip) {
-    return;
-  }
   for (const candidate of collectModelSelectionLockCandidates(params)) {
     assertModelSelectionUnlocked(
       await params.agentRuntime.session.getSessionEntryAsync({
@@ -96,6 +93,15 @@ async function assertConsultModelSelectionUnlocked(
         readConsistency: "latest",
       }),
     );
+  }
+}
+
+// Session-runtime consults retain their locks in the typed-turn command owner.
+async function assertConsultModelSelectionUnlocked(
+  params: RealtimeVoiceAgentConsultModelLockParams & { skip?: boolean },
+): Promise<void> {
+  if (!params.skip) {
+    await assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync(params);
   }
 }
 

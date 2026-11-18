@@ -122,21 +122,6 @@ export const createAutoCompactionSettings = (
     retry: { enabled: false },
   });
 
-export function mockInvalidThenTextSummary(recoveredText: string) {
-  let requests = 0;
-  streamMocks.streamSimple.mockImplementation((activeModel: Model) =>
-    createAssistantResultStream(
-      createAssistant(
-        activeModel,
-        ++requests === 1
-          ? [{ type: "thinking", thinking: "internal summary reasoning" }]
-          : [{ type: "text", text: recoveredText }],
-      ),
-    ),
-  );
-  return () => requests;
-}
-
 type TestSessionOptions = Partial<
   Pick<
     CreateAgentSessionOptions,

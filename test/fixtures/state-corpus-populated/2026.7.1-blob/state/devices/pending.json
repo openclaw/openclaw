@@ -1,0 +1,19 @@
+{
+  "c590b54b-97d9-4869-aef1-d6d0f10888da": {
+    "requestId": "c590b54b-97d9-4869-aef1-d6d0f10888da",
+    "deviceId": "corpus-device-1",
+    "publicKey": "corpus-device-public-key",
+    "displayName": "Fixture iPhone 📱",
+    "platform": "ios",
+    "role": "operator",
+    "roles": [
+      "operator"
+    ],
+    "scopes": [
+      "operator.read"
+    ],
+    "silent": false,
+    "isRepair": false,
+    "ts": 1794580628306
+  }
+}

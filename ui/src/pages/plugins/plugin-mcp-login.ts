@@ -12,9 +12,9 @@ import type { PluginsPageDetail } from "./plugins-page-model.ts";
 
 /** Binds operator sign-in and sign-out to the selected plugin and live Gateway. */
 export function createPluginMcpLogin(
-  gateway: GatewayPageBinding,
+  gateway: Pick<GatewayPageBinding, "client" | "snapshot" | "capture" | "isCurrent">,
   options: {
-    getDetail: () => PluginsPageDetail | null;
+    getDetail: () => Pick<PluginsPageDetail, "pluginId" | "inspection"> | null;
     getName: (pluginId: string) => string | undefined;
     refresh: (pluginId: string) => Promise<void>;
     setMessage: (rowKey: string, message: PluginRowMessage | null) => void;
@@ -24,14 +24,20 @@ export function createPluginMcpLogin(
     canCallGatewayMethod(gateway.snapshot, method, "operator.admin");
   let currentSelection: { pluginId: string; scope: GatewayConnectionScope } | null = null;
   const [signingOut, setSigningOut] = createSignal(false, { ownedWrite: true });
+  const [outcome, setOutcome] = createSignal<"cancelled" | "expired" | "failed">();
   const dialog = createWizardLogin({
     getClient: () => gateway.client,
     getAgentId: () => null,
     requestFailedMessage: () => t("pluginsPage.auth.requestFailed"),
     sessionExpiredMessage: () => t("pluginsPage.auth.sessionExpired"),
+    onCancelled: () => setOutcome("cancelled"),
+    onSessionMissing: () => setOutcome("expired"),
     onClose: () => {
+      if (dialog.runner.state.phase === "error" && outcome() !== "expired") {
+        setOutcome("failed");
+      }
       const pluginId = currentSelection?.pluginId;
-      reset();
+      reset(true);
       if (pluginId && options.getDetail()?.pluginId === pluginId) {
         void options.refresh(pluginId);
       }
@@ -51,7 +57,11 @@ export function createPluginMcpLogin(
     return signingOut() || dialog.state().phase !== "idle";
   }
 
-  function hasAccount(detail: PluginsPageDetail, serverName: string, authorized: boolean) {
+  function hasAccount(
+    detail: Pick<PluginsPageDetail, "pluginId" | "inspection">,
+    serverName: string,
+    authorized: boolean,
+  ) {
     return Boolean(
       detail.inspection?.mcpAuth?.some(
         (entry) => entry.serverName === serverName && (entry.state === "authorized") === authorized,
@@ -59,7 +69,10 @@ export function createPluginMcpLogin(
     );
   }
 
-  function reset() {
+  function reset(preserveOutcome = false) {
+    if (!preserveOutcome) {
+      setOutcome(undefined);
+    }
     currentSelection = null;
     dialog.reset();
   }
@@ -83,8 +96,37 @@ export function createPluginMcpLogin(
   onCleanup(() => {
     currentSelection = null;
   });
+  async function start(serverName: string): Promise<void> {
+    const scope = gateway.capture();
+    const detail = options.getDetail();
+    if (
+      !scope ||
+      !detail ||
+      !canCall("mcp.authLogin") ||
+      busy() ||
+      !hasAccount(detail, serverName, false)
+    ) {
+      return;
+    }
+    setOutcome(undefined);
+    const selection = { pluginId: detail.pluginId, scope };
+    currentSelection = selection;
+    dialog.runner.prepareSignIn("oauth", options.getName(detail.pluginId) ?? serverName);
+    const completion = await dialog.runner.startMcpLogin(serverName);
+    if (selection === currentSelection) {
+      await complete(completion);
+    }
+  }
   return {
     dialog,
+    outcome,
+    async retry(serverName: string): Promise<void> {
+      if (dialog.runner.state.phase === "starting" || dialog.runner.state.phase === "step") {
+        return;
+      }
+      reset();
+      await start(serverName);
+    },
     get busy() {
       return busy();
     },
@@ -94,26 +136,7 @@ export function createPluginMcpLogin(
       }
     },
     reset,
-    async start(serverName: string): Promise<void> {
-      const scope = gateway.capture();
-      const detail = options.getDetail();
-      if (
-        !scope ||
-        !detail ||
-        !canCall("mcp.authLogin") ||
-        busy() ||
-        !hasAccount(detail, serverName, false)
-      ) {
-        return;
-      }
-      const selection = { pluginId: detail.pluginId, scope };
-      currentSelection = selection;
-      dialog.runner.prepareSignIn("oauth", options.getName(detail.pluginId) ?? serverName);
-      const completion = await dialog.runner.startMcpLogin(serverName);
-      if (selection === currentSelection) {
-        await complete(completion);
-      }
-    },
+    start,
     async signOut(serverName: string): Promise<void> {
       const scope = gateway.capture();
       const detail = options.getDetail();

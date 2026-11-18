@@ -9,7 +9,7 @@ import { isMainThread } from "node:worker_threads";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readExecRequestOwners } from "../infra/exec-request-context.js";
-import { peekSystemEventEntries } from "../infra/system-events.js";
+import { enqueueSystemEvent, peekSystemEventEntries } from "../infra/system-events.js";
 import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -388,7 +388,7 @@ void it("recovers a memory-limit completion before its notification settles", as
       cursorKeyMode: "normal",
       notifyOnExit: true,
     });
-    const run = await startDurableExecProcess(session, sessionId, {
+    const run = await startDurableExecProcess(session, {
       mode: "child",
       argv: ["/bin/sh", "-c", session.command],
       cwd: state.workspaceDir,
@@ -487,9 +487,9 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
       assert.partialDeepStrictEqual(
         (await store.list()).toSorted((a, b) => a.startedAt - b.startedAt),
         [
-          { id: crashed.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
-          { id: stopped.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
-          { id: sandboxed.id, kind: "ordinary", sandboxed: true, sessionKey, sessionId },
+          { id: crashed.id, kind: "ordinary", sessionKey, command: "Background exec" },
+          { id: stopped.id, kind: "ordinary", sessionKey, command: "Background exec" },
+          { id: sandboxed.id, kind: "ordinary", sandboxed: true, sessionKey },
         ],
       );
       assert.equal((await store.list()).length, 3);
@@ -501,10 +501,17 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
         await initializeDurableProcesses({
           crashWindows: { main: [{ startedAt: crashed.startedAt, endedAt: stopped.startedAt }] },
         });
+        // Display prefixes can collide; unrelated notices must not identify this process.
+        assert.ok(
+          enqueueSystemEvent(`Unrelated completion (${crashed.id.slice(0, 8)})`, {
+            sessionKey,
+            contextKey: "exec:unrelated-process",
+          }),
+        );
         const notice = async (session: ProcessSession) => {
           const matching = () =>
-            peekSystemEventEntries(sessionKey).filter((event) =>
-              event.text.includes(session.id.slice(0, 8)),
+            peekSystemEventEntries(sessionKey).filter(
+              (event) => event.contextKey === `exec:${session.id}`,
             );
           // Reporting runs after startup without holding durable adoption.
           for (let turn = 0; turn < 500 && matching().length === 0; turn++) {

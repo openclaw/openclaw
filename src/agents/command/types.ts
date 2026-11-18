@@ -8,6 +8,7 @@ import type {
 } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { CronCreatorAuthorityCapability } from "../../gateway/cron-creator-authority-grant.types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -24,7 +25,6 @@ import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-app
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { BootstrapContextRunKind } from "../bootstrap-mode.js";
 import type { CliSessionBindingFacts } from "../cli-runner/session-binding.types.js";
-import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-context.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
 import type { RequesterOrigin } from "../requester-origin.js";

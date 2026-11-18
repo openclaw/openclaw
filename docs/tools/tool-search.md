@@ -107,6 +107,15 @@ run:
 At execution time every real tool call returns to OpenClaw, where the normal
 policy, approval, hook, logging, and result handling still apply.
 
+Network-backed results use the active model's normal tool-result budget, including
+the external-content wrapper and sanitization overhead. Tool Search does not
+apply a separate 20,000-character ceiling.
+
+If a complete network result cannot fit, Tool Search omits the payload rather than
+showing a partial page with a misleading continuation cursor. For a read-only
+operation, request a smaller page from the same starting position. The original
+operation has already run; do not repeat a mutation just to recover its output.
+
 ## Modes
 
 `tools.toolSearch` has two model-facing modes:

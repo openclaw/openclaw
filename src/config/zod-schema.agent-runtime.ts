@@ -366,7 +366,7 @@ const ToolFsSchema = z
 
 const ToolLoopDetectionSchema = z
   .strictObject({
-    /** Enable tool-loop protection (default: false). */
+    /** Enable the tool repeat guard (default: true). */
     enabled: z.boolean().optional(),
   })
   .optional();

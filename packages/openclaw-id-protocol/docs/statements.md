@@ -105,15 +105,16 @@ even if a Gateway considers it less privileged.
 
 MembershipChange targets:
 
-| op                  | target fields                                                                     |
-| ------------------- | --------------------------------------------------------------------------------- |
-| `add`               | account_id, role, peer_keys (>= 1), invite_id (null, or the invite this approves) |
-| `add_member_device` | account_id, peer_key, device_pub, label (inherits role)                           |
-| `remove`            | account_id                                                                        |
-| `set_role`          | account_id, role                                                                  |
-| `revoke_device`     | peer_key (one member browser)                                                     |
-| `add_owner_device`  | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
-| `deny_invite`       | invite_id (declines a pending redemption; the invite is consumed)                 |
+| op                        | target fields                                                                     |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| `add`                     | account_id, role, peer_keys (>= 1), invite_id (null, or the invite this approves) |
+| `add_member_device`       | account_id, peer_key, device_pub, label (inherits role)                           |
+| `set_member_recovery_kit` | account_id, device_pub (null removes the kit)                                     |
+| `remove`                  | account_id                                                                        |
+| `set_role`                | account_id, role                                                                  |
+| `revoke_device`           | peer_key (one member browser)                                                     |
+| `add_owner_device`        | cert: the new device's OwnerDeviceCert (signed by the change's own signer)        |
+| `deny_invite`             | invite_id (declines a pending redemption; the invite is consumed)                 |
 
 `seq` must equal the Gateway's current membership seq + 1 (compare-and-set). This stops a
 captured change from being replayed later; a concurrent writer gets a conflict and retries.
@@ -133,10 +134,14 @@ active owner device (undefined otherwise):
 
 When the signer is not an owner, `members(devicePub)` may resolve a currently listed member
 peer to `{ account_id, peer_key }`. Only `MembershipChange` operations `add_member_device`
-and `revoke_device` then verify, producing authority
+`set_member_recovery_kit` and `revoke_device` then verify, producing authority
 `member_device { account_id, device_pub, peer_key }`. The authority checks the target belongs
 to that same account and refuses self-revocation. Every other statement and operation is
 still owner/R-only; member changes never pass the mailbox gate. See enrollment.md, Member devices.
+
+A listed recovery-only member device resolves separately as `member_recovery_kit`; only
+`add_member_device` verifies and the authority requires the same current account. It is the
+only non-root MembershipChange signer permitted over the mailbox. See enrollment.md.
 
 Only the Gateway can run steps 4 and 5. Clients and Discovery verify R's signatures only.
 

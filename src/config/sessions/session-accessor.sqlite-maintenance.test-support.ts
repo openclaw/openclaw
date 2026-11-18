@@ -11,6 +11,7 @@ import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-work
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -265,6 +266,7 @@ export function createSessionMaintenanceKickStore(fixture: {
   runOpenClawAgentWriteTransaction((owner) => {
     writeSessionEntry(owner, key, { sessionId: "age-kick", updatedAt });
   }, scope);
+  const identity = readOpenClawAgentDatabaseIdentity(database);
   vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(updatedAt);
   const maintenanceConfig: ResolvedSessionMaintenanceConfig = {
@@ -276,6 +278,12 @@ export function createSessionMaintenanceKickStore(fixture: {
   return {
     database,
     request: {
+      source: {
+        kind: "file" as const,
+        physicalIdentity: identity.identity,
+        birthtime: identity.birthtime,
+        nativeLocation: identity.canonicalPath,
+      },
       activeSessionKey: key,
       archiveDirectory: path.join(path.dirname(storePath), "archives"),
       maintenanceConfig,

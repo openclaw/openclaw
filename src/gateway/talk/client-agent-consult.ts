@@ -35,7 +35,7 @@ import {
   consultRealtimeVoiceAgentInSessionRuntime,
 } from "../../talk/agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
-import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
+import { controlTalkAgentRun } from "../../talk/agent-run-control.js";
 import { assertClientVoiceSessionOpen } from "../../talk/client-voice-session-read.js";
 import type { ClientVoiceSessionSource } from "../../talk/client-voice-session-source.js";
 import { registerClientVoiceConsultRun } from "../../talk/client-voice-session.js";
@@ -59,7 +59,7 @@ import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 type TalkRequesterFinalRegistration = ReturnType<typeof registerRequesterFinalAttachment>;
 
-export function prepareTalkClientControlAuthority(params: {
+export async function prepareTalkClientControlAuthority(params: {
   config: OpenClawConfig;
   sessionTarget: PreparedTalkSessionTarget;
   authority: TalkAgentConsultAuthority;
@@ -70,7 +70,7 @@ export function prepareTalkClientControlAuthority(params: {
     throw new Error("Talk chat caller authority is unavailable");
   }
   // The control callback reads current policy immediately before the execution effect.
-  const sessionEntry = params.agentRuntime.session.getSessionEntry({
+  const sessionEntry = await params.agentRuntime.session.getSessionEntryAsync({
     agentId: params.sessionTarget.agentId,
     sessionKey: params.sessionTarget.canonicalKey,
     storePath: params.sessionTarget.storePath,
@@ -555,7 +555,7 @@ export function createTalkClientAgentConsultRunner(params: {
     ) {
       throw new Error("The active Talk consult backend is no longer current");
     }
-    const result = await controlRealtimeVoiceAgentRun({
+    const result = await controlTalkAgentRun({
       sessionKey: canonicalKey,
       runTarget: {
         runId: identity.runId,
@@ -566,11 +566,11 @@ export function createTalkClientAgentConsultRunner(params: {
           isCurrentSessionControllerOperation(operation) &&
           !operation.result,
       },
-      getToolAuthorityOverlay: () => {
+      getToolAuthorityOverlayAsync: async () => {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
           throw new Error("The active Talk consult is no longer current");
         }
-        return prepareTalkClientControlAuthority({
+        return await prepareTalkClientControlAuthority({
           config: getConfig(),
           sessionTarget: params.sessionTarget,
           authority,

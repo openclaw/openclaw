@@ -9,7 +9,6 @@ import {
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -358,6 +357,15 @@ export async function preflightOpenClawDatabaseSchemas(
         Object.assign(result, inspection.schemas);
         Object.assign(stateMetrics, inspection.startupMetrics);
         stateInspectionErrors.push(...inspection.inspectionErrors);
+        inspection.schemas.indeterminate.forEach((row, index) => {
+          const error = inspection.inspectionErrors[index];
+          indeterminateCauses.set(
+            row,
+            options.requireStartupMigrationReadiness
+              ? schemaRead.annotateStartupStateInspectionFailure(error, statePath, options.signal)
+              : error,
+          );
+        });
         if (
           startup &&
           inspection.inspectionErrors.length === 0 &&
@@ -520,9 +528,7 @@ export async function preflightOpenClawDatabaseSchemas(
         // artifact preservation must use the WAL-aware private snapshot below.
         if (
           !schemaInspection &&
-          (getDatabaseEngineInput("agent") ||
-            options.preserveSourceArtifacts !== true ||
-            (purpose === "runtime" && readSqliteDatabaseCleanClose(realAgentPath)))
+          (getDatabaseEngineInput("agent") || options.preserveSourceArtifacts !== true)
         ) {
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }

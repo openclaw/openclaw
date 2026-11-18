@@ -21,6 +21,13 @@ import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limit
 import { sha256, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 
+// These fault injections exercise asynchronous Gateway I/O. Real worker metadata
+// batching and cancellation are covered by workspace-manifest-worker.test.ts.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();

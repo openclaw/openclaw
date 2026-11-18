@@ -515,6 +515,9 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
       ? authorizedTargets[0]
       : undefined;
+  if (chatTarget) {
+    params.preparedProfiles?.admit();
+  }
   const admittedInput = createAdmittedSessionSharingAuthority({
     target: chatTarget,
     request: params,

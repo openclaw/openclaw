@@ -23,6 +23,7 @@ import { buildOutboundMediaLoadOptions } from "../../media/load-options.js";
 import { loadWebMediaRaw } from "../../media/web-media.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../../sessions/agent-harness-session-key.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
@@ -875,13 +876,11 @@ describe("gateway send conversation ownership", () => {
 
   it("hands each internally bound session result to the durable queue with its original generation", async () => {
     mockDeliverySuccess("m-session-result");
-    const generation = {
+    const generation = chatRef({
       agentId: "main",
       storePath: "/test/agents/main/sessions/sessions.json",
       sessionKey: "agent:main:main",
-      sessionId: "original-session",
-      lifecycleRevision: "original-revision",
-    };
+    });
     const { respond } = await sendWithClient(
       bindInProcessSessionDeliveryGeneration(
         {

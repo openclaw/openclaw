@@ -20,6 +20,7 @@ import { createChatSendLateFollowupDisposition } from "../../gateway/server-meth
 import { createChatSendLateReplyFinalizer } from "../../gateway/server-methods/chat-send-source-finalization.js";
 import { createGatewayRequestContext } from "../../gateway/server-request-context.js";
 import { makeContextParams } from "../../gateway/server-request-context.test-support.js";
+import { GatewayOperatorAccessUnavailableError } from "../../infra/operator-authority-error.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../../sessions/session-controller.watchdog-state.js";
 import { resetSessionControllerStateForTest } from "../../sessions/session-lifecycle-admission.test-support.js";
@@ -557,27 +558,36 @@ describe("runReplyAgent stalled turn continuation", () => {
     expect(await readTranscriptMessages(stalled.transcriptTarget)).toEqual([]);
   });
 
-  it("falls back to the notice once the stalled turn's authority is revoked", async () => {
-    let revoked = false;
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "operator",
-      scopes: ["operator.write"],
-      assertCurrent: () => {
-        if (revoked) {
-          throw new Error("operator authority revoked");
-        }
-      },
-    });
-    const stalled = await createStalledRun({ operatorAuthority });
-    await stallBeforeOutput(stalled);
-    revoked = true;
+  it.each(["recorded revocation", "unrecorded refusal"] as const)(
+    "leaves the notice with dispatch after an authority %s",
+    async (cause) => {
+      const revocation = new AbortController();
+      let refused = false;
+      const operatorAuthority = createAdmittedRunOperatorAuthority({
+        profileId: "operator",
+        scopes: ["operator.write"],
+        signal: revocation.signal,
+        assertCurrent: () => {
+          if (refused) {
+            throw new GatewayOperatorAccessUnavailableError();
+          }
+        },
+      });
+      const stalled = await createStalledRun({ operatorAuthority });
+      await stallBeforeOutput(stalled);
+      refused = true;
+      if (cause === "recorded revocation") {
+        revocation.abort(new Error("operator authority revoked"));
+      }
 
-    expect(stalled.runState.continueStalledTurn?.()).toBe(false);
-    expect(getFollowupQueueDepth(queueKey)).toBe(0);
+      expect(stalled.runState.continueStalledTurn?.()).toBe(false);
+      expect(operatorAuthority.signal?.aborted).toBe(cause === "recorded revocation");
+      expect(getFollowupQueueDepth(queueKey)).toBe(0);
 
-    await settleStalledOwner(stalled);
-    expect(drainedRuns).not.toHaveBeenCalled();
-  });
+      await settleStalledOwner(stalled);
+      expect(drainedRuns).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends the Web UI notice, not a second recovery, when the recovery also stalls", async () => {
     mocks.executeFollowups = true;

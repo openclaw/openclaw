@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
@@ -595,11 +594,8 @@ function resolveAggregateElisionMarkers(
   ) {
     return undefined;
   }
-  // Avoid pointing recovery at already-deleted spill files.
-  if (!existsSync(spill.path)) {
-    return undefined;
-  }
-  // The original footer already disclosed this path, so preserving it adds no disclosure.
+  // Publication owns this path. Preserve the disclosed pointer without probing the
+  // filesystem during prompt projection; a later read can report an expired artifact.
   const kind = spill.truncated ? "partial" : "full";
   const count = spill.truncated
     ? ` (${spill.chars === undefined ? "capped content" : `first ${spill.chars} chars`})`
