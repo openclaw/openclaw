@@ -195,6 +195,39 @@ async function proveLocalWorkspaceCaptures(
   });
   const takesSnapshot = atomicCapture === true || atomicCapture === "nested";
   const reconcile = atomicCapture && atomicCapture !== "direct";
+  let beforePauseEdit: (() => Promise<void>) | undefined;
+  if (atomicCapture === "direct") {
+    const worker = await import("./workspace-manifest-worker.js");
+    const prepare = worker.prepareWorkspaceStageInput;
+    const { parseWorkerWorkspaceManifest } = await import("./workspace-manifest.js");
+    const { parseChangedWorkspaceResult } = await import("./workspace-manifest-comparison.js");
+    vi.spyOn(worker, "prepareWorkspaceStageInput").mockImplementation(async (input, authority) => {
+      if (
+        !("publication" in input) &&
+        !input.existingObjects?.length &&
+        parseChangedWorkspaceResult(
+          parseWorkerWorkspaceManifest(
+            input.baseManifestRaw,
+            input.baseManifestRef,
+            input.buildCacheInputs,
+          ),
+          parseWorkerWorkspaceManifest(
+            input.currentManifestRaw,
+            input.currentManifestRef,
+            input.buildCacheInputs,
+          ),
+        ).entries.length
+      ) {
+        expect(paused, "Changed payload preparation must run before the guest pause").toBe(false);
+      }
+      const result = await prepare(input, authority);
+      if (input.blobsOnly && beforePauseEdit) {
+        await beforePauseEdit();
+        beforePauseEdit = undefined;
+      }
+      return result;
+    });
+  }
   if (atomicCapture) {
     const { nativeWorktreeFilesystem } =
       await import("../../agents/worktrees/filesystem-native.js");
@@ -308,7 +341,7 @@ async function proveLocalWorkspaceCaptures(
         ...store,
         manifest: async (row, action) => {
           if (action.kind === "scan") {
-            expect(paused).toBe(!action.capture);
+            expect(paused).toBe(!action.capture && !action.prehash);
             if (atomicCapture === "nested" && action.capture) {
               // The manifest worker reports omitted nested subvolumes before preparing CAS writes.
               throw Object.assign(new Error("Btrfs snapshot omitted a nested subvolume"), {
@@ -474,6 +507,28 @@ async function proveLocalWorkspaceCaptures(
     }
     if (atomicCapture) {
       await expectMissing(path.dirname(projection.workspaceDir), "checkpoint-capture");
+    }
+    if (atomicCapture === "direct") {
+      for (const name of ["keep.txt", "rewrite.txt", "remove.txt"]) {
+        await writeText(projection.workspaceDir, name, "before\n");
+      }
+      beforePauseEdit = async () => {
+        const source = path.join(projection.workspaceDir, "rewrite.txt");
+        const before = await fs.stat(source);
+        await fs.writeFile(source, "after!\n");
+        await fs.utimes(source, before.atime, before.mtime);
+        await fs.unlink(path.join(projection.workspaceDir, "remove.txt"));
+        await writeText(projection.workspaceDir, "added.txt", "during prehash\n");
+      };
+      await projection.checkpoint();
+      expect(beforePauseEdit).toBeUndefined();
+      await expectText(owner.worktree.path, "keep.txt", "before\n");
+      await expectText(owner.worktree.path, "rewrite.txt", "after!\n");
+      await expectText(owner.worktree.path, "added.txt", "during prehash\n");
+      await expectMissing(owner.worktree.path, "remove.txt");
+      const before = pauses;
+      await projection.checkpoint();
+      expect(pauses).toBe(before);
     }
   } finally {
     accept.resolve();
