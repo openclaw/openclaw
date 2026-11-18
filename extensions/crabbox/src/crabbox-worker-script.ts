@@ -38,7 +38,7 @@ export function wrapCrabboxNodeScript(
   script: string,
   target: CrabboxOperatingSystem = "linux",
   delimiter = "CRABBOX_NODE_SCRIPT",
-  purpose: "runtime" | "bootstrap" = "runtime",
+  purpose: "runtime" | "bootstrap" | "inspect" = "runtime",
 ): string {
   if (target !== "windows/normal") {
     // Bind the bootstrap-selected executable before an older snapshot's link can shadow it.
@@ -46,10 +46,11 @@ export function wrapCrabboxNodeScript(
       target === "linux"
         ? `${purpose === "bootstrap" ? `${BIND_RUNTIME_NODE}\n` : ""}${CRABBOX_RUNTIME_NODE_PATH}\n`
         : "";
-    return `set -eu\n${nodePath}node <<'${delimiter}'\n${script}\n${delimiter}`;
+    // Inspectors must not publish automatic bytecode caches on either success or failure.
+    return `set -eu\n${purpose === "inspect" ? "export NODE_DISABLE_COMPILE_CACHE=1\n" : ""}${nodePath}node <<'${delimiter}'\n${script}\n${delimiter}`;
   }
   return `$ErrorActionPreference = 'Stop'
-$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
+${purpose === "inspect" ? "$env:NODE_DISABLE_COMPILE_CACHE = '1'\n" : ""}$node = Get-Command node -CommandType Application -ErrorAction SilentlyContinue
 if (-not $node) { throw 'Cloud worker requires Node.js on PATH; update the Crabbox Windows bootstrap image and reprovision the worker' }
 $scriptPath = Join-Path $env:TEMP ('openclaw-' + [Guid]::NewGuid().ToString('N') + '.cjs')
 try {

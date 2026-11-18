@@ -9,6 +9,7 @@ import {
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import {
   CRABBOX_RUNTIME_VERIFICATION_SOURCE,
+  createCrabboxWorkerBundlePreparation,
   type CrabboxRuntimeInstallationIdentity,
 } from "./crabbox-worker-runtime-verification.js";
 import {
@@ -67,6 +68,8 @@ export function createCrabboxNodeRuntimeSetup(params: {
   workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
   leaseId: string;
   target?: CrabboxOperatingSystem;
+  /** Inspect the exact retained package without repair, download or prewarming. */
+  verifyOnly?: true;
 }): { command: string; forwardedEnv: Record<string, string> } {
   return createCrabboxNodeSetup(params);
 }
@@ -113,7 +116,7 @@ function createCrabboxNodeSetup(
     | ({ offline: true; leaseId?: never; verifyOnly: true } & CrabboxRuntimeInstallationIdentity)
     | {
         offline?: false;
-        verifyOnly?: false;
+        verifyOnly?: true;
         nodeBootstrap: CrabboxWorkerNodeEnrollment["nodeBootstrap"];
         leaseId: string;
         workerBundle?: CrabboxWorkerNodeRuntimePreparation["workerBundle"];
@@ -121,7 +124,8 @@ function createCrabboxNodeSetup(
   ),
 ): { command: string; forwardedEnv: Record<string, string> } {
   const { enrollment, leaseId } = params;
-  const { token, linuxToolchainSetup, installLock } = params.offline ? {} : params.nodeBootstrap;
+  const { token, linuxToolchainSetup, installLock } =
+    params.offline || params.verifyOnly ? {} : params.nodeBootstrap;
   const nodeBootstrap = params.offline
     ? params.nodeBootstrap
     : (({ token: _token, linuxToolchainSetup: _setup, installLock: _lock, ...artifact }) =>
@@ -133,6 +137,9 @@ function createCrabboxNodeSetup(
     !params.offline && params.workerBundle
       ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
       : params.workerBundle;
+  const workerPreparation = params.offline
+    ? undefined
+    : createCrabboxWorkerBundlePreparation(params.workerBundle, nodeBootstrap.openclawVersion);
   const desktopTarget = params.desktop ? (params.target ?? "linux") : undefined;
   const desktopEnvironment =
     desktopTarget === "linux"
@@ -157,15 +164,16 @@ const { performance } = require("node:perf_hooks");
 const { setTimeout: delay } = require("node:timers/promises");
 const bootstrap = ${JSON.stringify(nodeBootstrap)};
 const workerBundle = ${JSON.stringify(workerBundle)};
+const workerPreparation = ${JSON.stringify(workerPreparation)};
 const installLock = ${JSON.stringify(lockArtifact)};
 const leaseId = ${JSON.stringify(leaseId)};
 const displayName = ${JSON.stringify(enrollment?.displayName)};
 const mode = ${JSON.stringify(enrollment?.mode)};
 const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
 const desktopSetup = ${JSON.stringify(params.desktopSetup)};
-const credentials = ${params.offline ? "undefined" : `process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV}`};
-const setupCode = ${params.offline ? "undefined" : `process.env.${CLOUD_SETUP_CODE_ENV}`};
-const workerCodexBase64 = ${params.offline ? "undefined" : `process.env.${CLOUD_WORKER_CODEX_ENV}`};
+const credentials = ${params.offline || params.verifyOnly ? "undefined" : `process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV}`};
+const setupCode = ${params.offline || params.verifyOnly ? "undefined" : `process.env.${CLOUD_SETUP_CODE_ENV}`};
+const workerCodexBase64 = ${params.offline || params.verifyOnly ? "undefined" : `process.env.${CLOUD_WORKER_CODEX_ENV}`};
 delete process.env.${CLOUD_BOOTSTRAP_TOKEN_ENV};
 delete process.env.${CLOUD_SETUP_CODE_ENV};
 delete process.env.${CLOUD_WORKER_CODEX_ENV};
@@ -451,6 +459,7 @@ setPhase("preparation");
   if (${Boolean(params.verifyOnly)}) {
     await verifyRuntime(runtimeDir);
     if (!await verifyWorkerArchive(runtimeDir)) throw new Error("Cloud worker prepared archive is missing");
+    prepareWorkerBundle(true);
     reportRuntimeInstallation("existing-verified");
     setPhase("complete");
     return;
@@ -641,6 +650,8 @@ setPhase("preparation");
   installRuntimePrefetch();
   // A project snapshot contains only verified runtime bytes, never enrollment state.
   if (!mode) {
+    // Use the final package path so prewarming survives staging publication.
+    prepareWorkerBundle(false);
     // npm installations do not carry the manifest/build identity this receipt certifies.
     if (workerBundle && bootstrap.install !== "npm") reportRuntimeInstallation(reusedRuntime ? "existing-verified" : "installed");
     setPhase("complete");
@@ -671,33 +682,34 @@ setPhase("preparation");
 `;
   return {
     command:
-      ((params.target ?? "linux") === "linux"
+      ((params.target ?? "linux") === "linux" && !params.verifyOnly
         ? (enrollment ? LINUX_PLATFORM_TRUST_SETUP : "") + (linuxToolchainSetup ?? "")
         : "") +
       wrapCrabboxNodeScript(
         script.trimEnd(),
         params.target,
         "CRABBOX_NODE_ENROLLMENT_SCRIPT",
-        params.verifyOnly ? "runtime" : "bootstrap",
+        params.verifyOnly ? "inspect" : "bootstrap",
       ),
-    forwardedEnv: params.offline
-      ? {}
-      : {
-          ...(enrollment?.workerCodex
-            ? {
-                [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
-                  JSON.stringify(enrollment.workerCodex),
-                ).toString("base64"),
-              }
-            : {}),
-          [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
-            nodeBootstrap: token,
-            workerBundle: params.workerBundle?.token,
-            installLock: installLock?.token,
-          }),
-          ...(enrollment?.mode === "connect"
-            ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode }
-            : {}),
-        },
+    forwardedEnv:
+      params.offline || params.verifyOnly
+        ? {}
+        : {
+            ...(enrollment?.workerCodex
+              ? {
+                  [CLOUD_WORKER_CODEX_ENV]: Buffer.from(
+                    JSON.stringify(enrollment.workerCodex),
+                  ).toString("base64"),
+                }
+              : {}),
+            [CLOUD_BOOTSTRAP_TOKEN_ENV]: JSON.stringify({
+              nodeBootstrap: token,
+              workerBundle: params.workerBundle?.token,
+              installLock: installLock?.token,
+            }),
+            ...(enrollment?.mode === "connect"
+              ? { [CLOUD_SETUP_CODE_ENV]: enrollment.setupCode }
+              : {}),
+          },
   };
 }
