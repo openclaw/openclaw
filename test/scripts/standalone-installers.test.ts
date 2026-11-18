@@ -113,4 +113,42 @@ describe("standalone shell installers", () => {
       expect(policy.stdout).toBe("--no-frozen-lockfile\n");
     },
   );
+
+  it.each([
+    {
+      name: "--beta selects the beta tag",
+      env: { OPENCLAW_VERSION: "latest" },
+      useBeta: 1,
+      want: "v2026.11.6-beta.2",
+    },
+    { name: "--beta without a requested version", env: {}, useBeta: 1, want: "v2026.11.6-beta.2" },
+    {
+      name: "no --beta keeps the latest tag",
+      env: { OPENCLAW_VERSION: "latest" },
+      useBeta: 0,
+      want: "v2026.11.5",
+    },
+    {
+      name: "--beta does not override a pinned version",
+      env: { OPENCLAW_VERSION: "2026.11.5" },
+      useBeta: 1,
+      want: "v2026.11.5",
+    },
+    {
+      name: "branch requests pass through",
+      env: { OPENCLAW_VERSION: "somebranch" },
+      useBeta: 0,
+      want: "somebranch",
+    },
+  ])("resolves the git install ref: $name", ({ env, useBeta, want }) => {
+    const root = tempDirs.make("installer-git-ref-");
+    const probe = [
+      'installer_npm() { case "${3:-}" in dist-tags.beta) echo 2026.11.6-beta.2 ;; dist-tags.latest) echo 2026.11.5 ;; esac; }',
+      `source ${JSON.stringify(path.resolve("scripts/install-policy.sh"))}`,
+      "resolve_git_openclaw_ref",
+    ].join("\n");
+    const result = bash(root, ["-c", probe], { ...env, USE_BETA: String(useBeta) });
+    expect(result.stderr).toBe("");
+    expect(result.stdout.trim()).toBe(want);
+  });
 });

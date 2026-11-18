@@ -312,6 +312,12 @@ should_prefer_offline_pnpm_install() {
 resolve_git_openclaw_ref() {
     local requested="${OPENCLAW_VERSION:-latest}"
     local resolved_version=""
+    # --beta selects the beta channel for git installs too; the npm and Bun
+    # engines read it the same way before their dist-tag lookup. An explicit
+    # version or branch still wins, as it does for those engines.
+    if [[ "${USE_BETA:-0}" == "1" && ( -z "${OPENCLAW_VERSION:-}" || "${OPENCLAW_VERSION}" == "latest" || "${OPENCLAW_VERSION}" == "next" ) ]]; then
+        requested=beta
+    fi
 
     case "$requested" in
         ""|latest|next|beta)
