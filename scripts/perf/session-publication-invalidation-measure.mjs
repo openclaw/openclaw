@@ -6,6 +6,9 @@
  * allocation, preserving current rows and comparison witnesses. Report cold admission
  * and total replay separately so index maintenance is not hidden in invalidation wins.
  * Synthetic in-memory owner only: no SQLite, workspaces, model, or transport claims.
+ * --sharing --sessions 10000 --lists 50 --iterations 40000 adds sidebar packing
+ * to 10,000 list reads. Half the pages stay cold while overlapping hot pages refresh.
+ * Sharing acceptance: lower allocation, unchanged bytes, no controlled CPU regression.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -22,11 +25,15 @@ const { values } = parseArgs({
     "baseline-dir": { type: "string" },
     lists: { type: "string", default: "200" },
     iterations: { type: "string", default: "10000" },
+    sessions: { type: "string", default: "5000" },
+    sharing: { type: "boolean", default: false },
     "cpu-profile": { type: "string" },
   },
 });
 const count = Number(values.lists),
   iterations = Number(values.iterations);
+const sessionCount = Number(values.sessions);
+assert(Number.isSafeInteger(sessionCount) && sessionCount >= 5000);
 assert([50, 200].includes(count));
 assert(Number.isSafeInteger(iterations) && iterations > 0 && iterations % 200 === 0);
 assert(globalThis.gc && Number.isFinite(getHeapStatistics().total_allocated_bytes));
@@ -54,8 +61,14 @@ const hook = registerHooks({
 });
 const { prepareSessionRowPublicationView } =
   await import("../../src/gateway/session-row-publication.js");
-const { registerSerializedSessionRowArray } =
+const { registerSerializedSessionRowArray, sessionRowEncodingBytes } =
   await import("../../src/gateway/session-row-serialization.js");
+const shareSidebarSessionRows = values.sharing
+  ? (await import("../../src/gateway/session-row-presentation.js")).shareSidebarSessionRows
+  : undefined;
+const { sessionRowFactEncodingBytes } =
+  await import("../../src/gateway/session-list-view-cache.js");
+const { serializedJsonArrayBytes } = await import("../../src/gateway/serialized-json.js");
 hook.deregister();
 const factsListeners = [],
   selectionListeners = [];
@@ -65,7 +78,7 @@ const projection = {
   onFactsChange: (listener) => factsListeners.push(listener),
 };
 const { lists } = prepareSessionRowPublicationView(projection)();
-const rows = Array.from({ length: 5000 }, (_, i) =>
+const rows = Array.from({ length: sessionCount }, (_, i) =>
   Object.freeze({
     key: `agent:main:synthetic-${i}`,
     kind: "direct",
@@ -84,12 +97,12 @@ const pages = Array.from({ length: count }, (_, page) =>
   Array.from({ length: 200 }, (_row, offset) =>
     page % 2 === 0 && offset < 10
       ? rows[(page % 8) * 5 + offset]
-      : rows[40 + ((page * 137 + offset) % 4960)],
+      : rows[40 + ((page * 137 + offset) % (sessionCount - 40))],
   ),
 );
 const selection = {
   entries: [],
-  totalCount: 5000,
+  totalCount: sessionCount,
   ownerFacet: [],
   ownerCount: 0,
   offset: 0,
@@ -113,12 +126,23 @@ function publish() {
     // A client reads the current page between surges, reusing unchanged row objects.
     if (!view.rows) {
       pages[i] = Object.freeze(pages[i].map((row) => currentHot.get(row.key) ?? row));
-      registerSerializedSessionRowArray(pages[i]);
-      lists.setRows(view, pages[i], true);
+      if (shareSidebarSessionRows) {
+        const shared = shareSidebarSessionRows(pages[i]);
+        const bytes =
+          shared.sessions.reduce((sum, row) => sum + sessionRowEncodingBytes(row), 0) +
+          serializedJsonArrayBytes(shared.sessions);
+        lists.setRows(view, pages[i], true, bytes, sessionRowFactEncodingBytes);
+      } else {
+        registerSerializedSessionRowArray(pages[i]);
+        lists.setRows(view, pages[i], true);
+      }
     }
     if (!view.selection) {
       view.selection = selections[i];
       lists.update(view);
+    }
+    if (shareSidebarSessionRows) {
+      shareSidebarSessionRows(view.rows);
     }
   }
 }
@@ -189,6 +213,9 @@ console.log(
     node: process.version,
     count,
     iterations,
+    sessionCount,
+    sharing: values.sharing,
+    listReads: (iterations / 200) * count,
     hostLoad,
     sourceHashes: Object.fromEntries(
       [...sources].map(([url, source]) => [
