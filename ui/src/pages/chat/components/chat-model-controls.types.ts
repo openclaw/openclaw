@@ -72,4 +72,8 @@ export type ChatModelControlsProps = {
   onModelPickerTargetRetry?: (groupId: string) => unknown;
   onModelPickerTargetSelect?: (groupId: string, value: string) => unknown;
   onThinkingSelect?: (value: string, sessionKey: string) => unknown;
+  /** Element ids for the two triggers, so a host form can focus them. */
+  triggerIds?: { model: string; effort: string };
+  /** Hosts near the top of a page open the menus below; the composer opens them above. */
+  menuPlacement?: "top" | "bottom";
 };

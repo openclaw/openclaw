@@ -703,7 +703,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     canManageCron,
     canManageJob,
     canCreateCron,
-    cronModelSuggestions: presentation.modelSuggestions,
+    cronModelCatalog: presentation.modelCatalog,
     activityOpen,
     detailTab,
     actions,

@@ -30,7 +30,7 @@ import {
   operatorHello,
   waitForCronPage,
 } from "./cron-page.test-support.tsx";
-import { cronRpc, mountCronPage, emitEvent } from "./cron-rpc.test-support.ts";
+import { catalogModel, cronRpc, mountCronPage, emitEvent } from "./cron-rpc.test-support.ts";
 import { createCronViewJob, createCronViewRun, cronRunsResponse } from "./view.test-support.ts";
 import "./cron-page.tsx";
 
@@ -82,7 +82,7 @@ function modelClient(read: (params?: unknown) => unknown) {
 }
 
 function expectModels(page: CronTestPage, models: string[]) {
-  return waitForCronPage(() => expect(page.cronModelSuggestions).toEqual(models));
+  return waitForCronPage(() => expect(page.cronCatalogModels).toEqual(models));
 }
 
 afterEach(async () => {
@@ -100,7 +100,7 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
   async (unavailable) => {
     vi.useFakeTimers();
     const request = cronRpc({
-      "models.list": () => ({ models: [{ id: "retained-model" }] }),
+      "models.list": () => ({ models: [catalogModel("retained-model")] }),
     });
     const gateway = createGateway(createTestGatewayClient(request), true);
     gateway.emitSnapshot(unavailable);
@@ -120,7 +120,7 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
     await vi.advanceTimersByTimeAsync(0);
     await page.settle();
     expect(callsFor(request, "models.list")).toHaveLength(1);
-    expect(page.cronModelSuggestions).toEqual(["retained-model"]);
+    expect(page.cronCatalogModels).toEqual(["fixture/retained-model"]);
     expect(page.cron).toBe(current);
     expect(current.cronForm.name).toBe("Unsaved automation");
     request.mockClear();
@@ -133,7 +133,7 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
     await vi.advanceTimersByTimeAsync(0);
     // The paused config event invalidates the catalog; recovery refreshes it once.
     expectCalls(request, [...refreshMethods, "models.list"], 1);
-    expect(page.cronModelSuggestions).toEqual(["retained-model"]);
+    expect(page.cronCatalogModels).toEqual(["fixture/retained-model"]);
     expect(page.cron).toBe(current);
     expect(current).toMatchObject({
       cronCreateOpen: true,
@@ -142,92 +142,62 @@ it.each([{ restartPending: true }, { suspensionPhase: "draining" as const }])(
   },
 );
 
-it.each(["catalog-needed", "configured-alternative"])(
-  "preserves catalog provider identity through model selection and save (%s)",
-  async (source) => {
-    const configuredAlternatives = source === "configured-alternative";
-    const models = [
-      { provider: "alpha", id: "shared-model", name: "Alpha shared" },
-      { provider: "beta", id: "shared-model", name: "Beta shared" },
-      ...(configuredAlternatives
-        ? [{ provider: "beta", id: "beta/shared-model", name: "Qualified beta shared" }]
-        : []),
-      {
-        provider: "beta",
-        id: "hidden-model",
-        name: "Hidden model",
-        manualSelectionAllowed: false,
-      },
-    ];
-    const request = cronRpc({
-      "models.list": () => ({ models }),
-      "cron.add": () => ({ id: "identity-job" }),
-      "cron.list": () => cronListResponse([]),
+it("keeps a saved model and reasoning level the catalog does not list", async () => {
+  const job = createCronViewJob("legacy-model", {
+    name: "Legacy model",
+    configRevision: "legacy-definition",
+    sessionTarget: "isolated",
+    payload: {
+      kind: "agentTurn",
+      message: "Keep it",
+      model: "legacy/old-model",
+      thinking: "turbo",
+    },
+  });
+  const request = cronRpc({
+    "models.list": () => ({ models: [{ provider: "alpha", id: "current", name: "Current" }] }),
+    "cron.get": () => job,
+    "cron.update": () => job,
+  });
+  const { page } = mountCronPage(request);
+  page.routeSearch = "?job=" + job.id;
+  (await waitForElement(page, testId("cron-edit"))).click();
+  await expectModels(page, ["alpha/current"]);
+  // The catalog cannot say which levels an unlisted model takes, so only the model shows.
+  await waitForCronPage(() => expect(text(page, "#cron-payload-model")).toBe("legacy/old-model"));
+  fillInput(page, "#cron-name", "Legacy model, renamed");
+  await page.settle();
+  page.querySelector<HTMLButtonElement>(testId("cron-submit"))!.click();
+  await waitForCronPage(() => {
+    expect(callsFor(request, "cron.update")[0]?.[1]).toMatchObject({
+      patch: { payload: { model: "legacy/old-model", thinking: "turbo" } },
     });
-    const gateway = createGateway(createTestGatewayClient(request), true);
-    gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
-    const context = createContext(gateway);
-    Object.assign(context.runtimeConfig.state, {
-      configForm: {
-        agents: {
-          defaults: {
-            model: { primary: "alpha/shared-model" },
-            modelPolicy: { allow: ["alpha/shared-model", "beta/shared-model"] },
-            ...(configuredAlternatives
-              ? { models: { "alpha/shared-model": {}, "beta/shared-model": {} } }
-              : {}),
-          },
-        },
-        models: {
-          providers: Object.fromEntries(
-            ["alpha", "beta"].map((provider) => [
-              provider,
-              {
-                baseUrl: `https://${provider}.invalid`,
-                models: [{ id: "shared-model", name: `${provider} shared` }],
-              },
-            ]),
-          ),
-        },
-      },
-    });
-    const page = createPage(context, { render: true });
-    await waitForCronPage(() => expect(page.cron.cronLoading).toBe(false));
-    await page.settle();
-    await openDraft(page, "Provider identity", "Use the selected model");
-    await waitForCronPage(() => expect(page.cronModelSuggestions.length).toBeGreaterThan(0));
-    await page.settle();
-    const trigger = page.querySelector<HTMLButtonElement>("#cron-payload-model-picker")!;
-    const picker = trigger.closest("openclaw-select-picker")!;
-    trigger.click();
-    await waitForCronPage(() => {
-      expect(trigger.getAttribute("aria-expanded")).toBe("true");
-      expect(
-        Array.from(picker.querySelectorAll<HTMLElement>('[role="option"]')).map(
-          (option) => option.dataset.value,
-        ),
-      ).toEqual(["", "alpha/shared-model", "beta/shared-model", "__openclaw_custom_model__"]);
-      const inheritText = text(picker, '[role="option"][data-value=""]') ?? "";
-      expect(inheritText).toContain("Default");
-      expect(inheritText).not.toContain("common.default");
-    });
-    picker.querySelector<HTMLElement>('[role="option"][data-value="beta/shared-model"]')!.click();
-    await page.settle();
-    const save = page.querySelector<HTMLButtonElement>(testId("cron-submit"))!;
-    expect(save.disabled).toBe(false);
-    save.click();
-    await waitForCronPage(() => {
-      const adds = callsFor(request, "cron.add");
-      expect(adds).toHaveLength(1);
-      expect(adds[0]?.[1]).toHaveProperty("payload", {
-        kind: "agentTurn",
-        message: "Use the selected model",
-        model: "beta/shared-model",
-      });
-    });
-    await waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
-  },
-);
+  });
+});
+
+it("shows an unusual reasoning level beside the levels its model offers", async () => {
+  const models = [
+    {
+      provider: "alpha",
+      id: "deep",
+      name: "Deep",
+      thinkingLevels: [
+        { id: "low", label: "low" },
+        { id: "high", label: "high" },
+      ],
+    },
+  ];
+  const { page } = mountCronPage(cronRpc({ "models.list": () => ({ models }) }));
+  await openDraft(page, "Unusual reasoning", "Think in turbo");
+  await expectModels(page, ["alpha/deep"]);
+  page.patchForm({ payloadModel: "alpha/deep", payloadThinking: "turbo" });
+  await page.settle();
+  await waitForCronPage(() => {
+    expect(text(page, "#cron-payload-model")).toBe("Deep");
+    expect(text(page, "#cron-payload-thinking")).toBe("Turbo");
+  });
+  expect(page.cron.cronForm.payloadThinking).toBe("turbo");
+});
 
 it.each([false, true])(
   "shows an internal catalog failure and empty recovery (retained rows: %s)",
@@ -265,16 +235,16 @@ it.each(["agent", "connection", "detach", "panel close"])(
     const oldError = gate();
     const read = vi
       .fn()
-      .mockReturnValueOnce({ models: [{ id: "initial-model" }] })
+      .mockReturnValueOnce({ models: [catalogModel("initial-model")] })
       .mockReturnValueOnce(oldError.promise)
-      .mockReturnValue({ models: [{ id: "current-model" }] });
+      .mockReturnValue({ models: [catalogModel("current-model")] });
     const client = modelClient(read);
     const { page, gateway, context } = mountCronPage(client);
     await openDraft(page, "Catalogue retirement", "Keep current owner");
-    await expectModels(page, ["initial-model"]);
+    await expectModels(page, ["fixture/initial-model"]);
     emitEvent(gateway, "config.changed");
     await waitForCronPage(() => expect(read).toHaveBeenCalledTimes(2));
-    expect(page.cronModelSuggestions).toEqual(["initial-model"]);
+    expect(page.cronCatalogModels).toEqual(["fixture/initial-model"]);
     if (change === "agent") {
       context.agentSelection.set("writer");
     } else if (change === "connection") {
@@ -300,17 +270,17 @@ it.each(["agent", "connection", "detach", "panel close"])(
         expect(page.textContent).not.toContain("Retired catalog error");
         await openDraft(page, "Current catalogue", "Use the current owner");
       }
-      await expectModels(page, ["current-model"]);
+      await expectModels(page, ["fixture/current-model"]);
       await page.settle();
-      expect(page.cronModelSuggestions).toEqual(["current-model"]);
+      expect(page.cronCatalogModels).toEqual(["fixture/current-model"]);
     }
     expect(page.textContent).not.toContain("Retired catalog error");
   },
 );
 
 it("refreshes model suggestions when team selection changes without changing scope", async () => {
-  const lateMain = deferred<{ models: { id: string }[] }>({ models: [] });
-  const writer = deferred<{ models: { id: string }[] }>({ models: [] });
+  const lateMain = deferred<{ models: ReturnType<typeof catalogModel>[] }>({ models: [] });
+  const writer = deferred<{ models: ReturnType<typeof catalogModel>[] }>({ models: [] });
   const modelRequests: unknown[] = [];
   let mainReads = 0;
   const client = modelClient((params) => {
@@ -320,7 +290,7 @@ it("refreshes model suggestions when team selection changes without changing sco
       return writer.promise;
     }
     mainReads += 1;
-    return mainReads === 1 ? { models: [{ id: "main-model" }] } : lateMain.promise;
+    return mainReads === 1 ? { models: [catalogModel("main-model")] } : lateMain.promise;
   });
   const gateway = createGateway(client, true);
   gateway.emitSnapshot({ assistantAgentId: "main" });
@@ -345,7 +315,7 @@ it("refreshes model suggestions when team selection changes without changing sco
   );
   cleanups.push(() => agentSelection.dispose());
   await openDraft(page, "Same-scope selection", "Retain this draft");
-  await expectModels(page, ["main-model"]);
+  await expectModels(page, ["fixture/main-model"]);
   const cron = page.cron;
   emitEvent(gateway, "chat.metadata.changed");
   await waitForCronPage(() => expect(modelRequests).toHaveLength(2));
@@ -353,18 +323,18 @@ it("refreshes model suggestions when team selection changes without changing sco
   expect(agentSelection.state).toEqual({ selectedId: "writer", scopeId: null });
   await waitForCronPage(() => expect(modelRequests).toHaveLength(3));
   expect(page.cron).toBe(cron);
-  expect(page.cronModelSuggestions).toEqual([]);
+  expect(page.cronCatalogModels).toEqual([]);
   expect(modelRequests).toEqual([
     { agentId: "main", view: "configured" },
     { agentId: "main", view: "configured" },
     { agentId: "writer", view: "configured" },
   ]);
-  writer.resolve({ models: [{ id: "writer-model" }] });
-  await expectModels(page, ["writer-model"]);
-  lateMain.resolve({ models: [{ id: "late-main-model" }] });
+  writer.resolve({ models: [catalogModel("writer-model")] });
+  await expectModels(page, ["fixture/writer-model"]);
+  lateMain.resolve({ models: [catalogModel("late-main-model")] });
   await lateMain.promise;
   await page.settle();
-  expect(page.cronModelSuggestions).toEqual(["writer-model"]);
+  expect(page.cronCatalogModels).toEqual(["fixture/writer-model"]);
 });
 
 it("applies run events to the complete job table without fetching the inventory again", async () => {
@@ -649,7 +619,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         modelReads += 1;
         if (changingCatalog) {
           if (asOptionalRecord(params)?.agentId === "previous") {
-            return { models: [{ id: "previous-model" }] };
+            return { models: [catalogModel("previous-model")] };
           }
           throw new Error("Current agent catalog unavailable");
         }
@@ -689,7 +659,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         await openSettings();
         await waitForElement(page, "#cron-name");
         if (changingCatalog) {
-          await expectModels(page, ["previous-model"]);
+          await expectModels(page, ["fixture/previous-model"]);
         } else {
           await page.settle();
           expect(agentSelection.state.selectedId).toBeNull();
@@ -712,7 +682,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         await waitForCronPage(() =>
           expect(page.textContent).toContain("Current agent catalog unavailable"),
         );
-        expect(page.cronModelSuggestions).toEqual([]);
+        expect(page.cronCatalogModels).toEqual([]);
       }
       await waitForCronPage(() => {
         expect(text(page, ".cron-detail-title") ?? "").toContain(job.name);

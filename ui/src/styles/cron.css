@@ -374,6 +374,8 @@
 }
 
 .cron-prompt__run-controls {
+  /* The session composer's pickers sit on the tray's 28px control row. */
+  --chat-composer-chip-height: 28px;
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
@@ -516,11 +518,6 @@
 
 .cron-tray-picker > openclaw-select-picker {
   min-width: 0;
-}
-
-.cron-tray-picker .model-picker__custom {
-  height: 28px;
-  margin-top: 2px;
 }
 
 .cron-prompt__edit {
@@ -1496,13 +1493,6 @@
     padding: calc(var(--cron-prompt-radius) + 7px) 10px 8px;
     border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
     background: var(--cron-phone-control);
-  }
-
-  .cron-prompt--editing .cron-prompt__run-controls .cron-tray-input,
-  .cron-prompt--editing .cron-prompt__run-controls .picker-select__trigger {
-    background: var(--cron-phone-card);
-    border-radius: var(--radius-md);
-    min-block-size: 34px;
   }
 
   .cron-editor-schedule,

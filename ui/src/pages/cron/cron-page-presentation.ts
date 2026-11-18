@@ -1,7 +1,6 @@
 import { action, createMemo, createOptimistic, createSignal } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -27,17 +26,15 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   type ModelReceipt = { state: CronState; agentId: string; result: Promise<void> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
-  const cronModelSuggestions = createMemo(
+  const cronModelCatalog = createMemo(
     () => {
       const state = deps.readState();
       const agentId = deps.context().agentSelection.state.selectedId;
       const receipt = modelReceipt();
       if (receipt?.state !== state || receipt.agentId !== agentId) {
-        return [];
+        return undefined;
       }
-      return readAgentModelCatalog(state.client, agentId)
-        .models.filter((entry) => entry.manualSelectionAllowed !== false)
-        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+      return readAgentModelCatalog(state.client, agentId);
     },
     { lazy: true },
   );
@@ -183,7 +180,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       stopModelSuggestions?.();
       modelSuggestionsRequest = null;
     },
-    modelSuggestions: cronModelSuggestions,
+    modelCatalog: cronModelCatalog,
     get modelRequest() {
       return modelSuggestionsRequest;
     },

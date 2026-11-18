@@ -35,7 +35,8 @@ function bindChatPickerOverlay(
     acquireOcclusion: acquireNativeOverlaySurface,
     onEscape: clearChatModelSearchOnEscape,
   });
-  trigger.id = `${overlay.id}-trigger`;
+  // A host form may name the trigger so its validation summary can focus it.
+  trigger.id ||= `${overlay.id}-trigger`;
   trigger.setAttribute("aria-haspopup", "dialog");
   trigger.setAttribute("aria-controls", overlay.id);
   surface.id = overlay.id;
