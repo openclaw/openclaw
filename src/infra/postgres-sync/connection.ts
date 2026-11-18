@@ -39,6 +39,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
   readonly advisoryLockKey: bigint;
   private bridge?: PostgresBridge;
   private idleCheckout = false;
+  private lastResponseAt = Date.now();
   private readonly bridgeParameters: Parameters<typeof createPostgresBridge>[0];
   private failure: Error | undefined;
   private outcomeUnknown = true;
@@ -170,14 +171,24 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       throw this.loseConnection();
     }
     const deadline = performance.now() + 120_000;
-    // A failed or unsettled request cannot reuse an earlier idle observation.
-    bridge.inTransaction = undefined;
+    const retainedIdle = bridge.inTransaction === false;
     const reconnectIfIdle =
-      this.idleCheckout &&
+      (this.idleCheckout || retainedIdle) &&
       (request.operation === "query" || request.operation === "recovery-generation");
+    // Wall time includes host suspension; the request deadline remains monotonic.
+    const validateIfIdle =
+      reconnectIfIdle &&
+      (this.idleCheckout || (retainedIdle && Date.now() - this.lastResponseAt >= 1000));
+    // Failed or unsettled work cannot reuse an earlier idle observation.
+    bridge.inTransaction = undefined;
     this.idleCheckout = false;
     bridge.port.postMessage(
-      { ...request, ...(reconnectIfIdle ? { reconnectIfIdle } : {}), id },
+      {
+        ...request,
+        ...(reconnectIfIdle ? { reconnectIfIdle } : {}),
+        ...(validateIfIdle ? { validateIfIdle } : {}),
+        id,
+      },
       [],
     );
     recordWorkerMessage("sqlite_request", "to_worker");
@@ -218,6 +229,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       throw decodePostgresError(reply.error);
     }
+    this.lastResponseAt = Date.now();
     if ("reusable" in reply) {
       bridge.inTransaction = !reply.reusable;
       return reply.reusable;

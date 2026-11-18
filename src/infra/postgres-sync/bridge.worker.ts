@@ -93,16 +93,16 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     schema = namespace;
   }
 
-  async function useSchema(namespace: string, reconnectIfIdle: boolean) {
+  async function useSchema(namespace: string, reconnectIfIdle: boolean, validateIfIdle: boolean) {
     if (connectionError) {
-      // Only a returned transport can reconnect before its new borrower starts work.
+      // Reconnect only before caller SQL, using the last completed idle status.
       if (!reconnectIfIdle || client.getTransactionStatus() !== "I") {
         throw connectionError;
       }
       await connect(namespace);
       return;
     }
-    if (schema === namespace && !reconnectIfIdle) {
+    if (schema === namespace && !validateIfIdle) {
       return;
     }
     if (client.getTransactionStatus() !== "I") {
@@ -110,7 +110,7 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     }
     try {
       if (schema === namespace) {
-        // Validate only idle checkout; user statements are never replayed.
+        // Validate idle transports before caller SQL; user statements are never replayed.
         await client.query("SELECT 1");
       } else {
         await client.query("SELECT set_config('search_path', $1, false)", [
@@ -151,7 +151,11 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
           }
           reply = { id: request.id, reusable };
         } else if (request.operation === "recovery-generation") {
-          await useSchema(request.schema, request.reconnectIfIdle === true);
+          await useSchema(
+            request.schema,
+            request.reconnectIfIdle === true,
+            request.validateIfIdle === true,
+          );
           if (request.lock) {
             await lockPostgresGeneration(client, schema);
           }
@@ -166,7 +170,11 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
             inTransaction: client.getTransactionStatus() !== "I",
           };
         } else {
-          await useSchema(request.schema, request.reconnectIfIdle === true);
+          await useSchema(
+            request.schema,
+            request.reconnectIfIdle === true,
+            request.validateIfIdle === true,
+          );
           const results = await client.query(request.sql, [...request.parameters]);
           const result: QueryResult = Array.isArray(results) ? results.at(-1)! : results;
           // A trailing SELECT must not hide an earlier write in the same SQL batch.
