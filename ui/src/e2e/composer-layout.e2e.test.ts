@@ -335,6 +335,8 @@ suite.define(() => {
         await installMockGateway(page, {
           sessionKey,
           historyMessages: [{ role: "assistant", content: "Reload keeps the composer still." }],
+          authMethod: route === "chat" ? "trusted-proxy" : undefined,
+          authMode: route === "chat" ? "trusted-proxy" : undefined,
           methodResponses: route === "chat" ? { "cron.list": cronJobsListResponse() } : undefined,
         });
         await page.goto(
@@ -356,6 +358,17 @@ suite.define(() => {
               snapshot.details.automations
             );
           }, sessionKey);
+          await page.locator(".chat-main__conversation-frame").evaluate(async (frame) => {
+            await Promise.all(
+              frame
+                .getAnimations({ subtree: true })
+                .filter((animation) =>
+                  Number.isFinite(animation.effect?.getComputedTiming().endTime),
+                )
+                .map((animation) => animation.finished.catch(() => undefined)),
+            );
+            await new Promise(requestAnimationFrame);
+          });
           await page.evaluate(async () => {
             await Reflect.get(
               document.querySelector(".chat-pane-cache__pane--active")!,
