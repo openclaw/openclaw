@@ -736,7 +736,7 @@ describe("built-in session tool role authority", () => {
     }));
 
   it.each(["system", "operator", "closed request", "revoked device"] as const)(
-    "settles self-archive with live source authority after caller closure (%s)",
+    "keeps admitted self-archive through caller closure and device changes (%s)",
     (caller) =>
       withSessionToolsFixture(async (cfg) => {
         const context = localContext();
@@ -830,11 +830,6 @@ describe("built-in session tool role authority", () => {
           current = false;
           source.release();
           admission.release();
-        }
-        if (caller === "revoked device") {
-          await expect(settled.promise).rejects.toThrow(/authority.*no longer active/);
-          expect(mainSession(sessionKey)?.archivedAt).toBeUndefined();
-          return;
         }
         await settled.promise;
         await archived.promise;

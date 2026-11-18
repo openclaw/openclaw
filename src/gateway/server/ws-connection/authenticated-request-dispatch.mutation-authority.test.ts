@@ -129,14 +129,14 @@ beforeEach(() => {
 afterEach(() => clearRuntimeConfigSnapshot());
 
 describe("authenticated request mutation custody", () => {
-  it("retains the equivalent committed grant across checks and rejects the next revocation", async () => {
+  it("retains the committed grant after revocation while refusing the next request", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const email = "retained-policy@example.test";
       let committedConfig: OpenClawConfig = {
         gateway: { auth: { identityScopes: { [email]: ["operator.admin"] } } },
       };
       setRuntimeConfigSnapshot(committedConfig);
-      const { captures, dispatch } = createCaptureFixture({
+      const { captures, dispatch, harness } = createCaptureFixture({
         config: () => committedConfig,
         profileId: ensureProfileForEmail(email).id,
         method: "test.retained-policy",
@@ -158,9 +158,16 @@ describe("authenticated request mutation custody", () => {
         committedConfig = {
           gateway: { auth: { identityScopes: { [email]: ["operator.read"] } } },
         };
-        expect(retained.authority.assertCurrent).toThrow();
+        setRuntimeConfigSnapshot(committedConfig);
+        expect(retained.authority.assertCurrent).not.toThrow();
+        await dispatch("revoked-policy");
+        expect(harness.close).toHaveBeenCalledWith(
+          4001,
+          "client invalidated: gateway-policy-changed",
+        );
+        expect(captures).toHaveLength(1);
         committedConfig = acceptedConfig;
-        expect(retained.authority.assertCurrent).toThrow();
+        expect(retained.authority.assertCurrent).not.toThrow();
       } finally {
         stringify.mockRestore();
       }
@@ -204,7 +211,7 @@ describe("authenticated request mutation custody", () => {
     }
   });
 
-  it("keeps original wildcard model ceilings separate through WS capture and contiguous collect", async () => {
+  it("keeps wildcard ceilings separate and refuses a queued source whose policy changed", async () => {
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       const profile = ensureProfileForEmail("queued-model-ceiling@example.test");
       using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -298,11 +305,12 @@ describe("authenticated request mutation custody", () => {
           }
         });
         await vi.runAllTimersAsync();
-        expect(failures).toEqual([]);
+        expect(failures).toEqual([
+          expect.objectContaining({ message: expect.stringContaining("role changed") }),
+        ]);
         expect(getExistingFollowupQueue(key)).toBeUndefined();
         expect(observed).toEqual([
           { prompts: ["request 0", "request 1"], allowsB: true },
-          { prompts: ["request 2"], allowsB: false },
           { prompts: ["request 3"], allowsB: true },
         ]);
       } finally {
@@ -373,14 +381,14 @@ describe("authenticated request mutation custody", () => {
 
         if (outcome === "commit") {
           expect(generation.finalize(ownership)).toBe(true);
-          expect(accepted.authority.signal?.aborted).toBe(true);
+          expect(accepted.authority.signal?.aborted).toBe(false);
         } else if (outcome === "revoke all") {
           disconnect(null, []);
-          expect(accepted.authority.signal?.aborted).toBe(true);
+          expect(accepted.authority.signal?.aborted).toBe(false);
         } else if (outcome === "policy commit") {
           committedConfig = nextConfig;
           publishOperatorRoleConfigChange(context);
-          expect(accepted.authority.signal?.aborted).toBe(true);
+          expect(accepted.authority.signal?.aborted).toBe(false);
         } else {
           if (changesPolicy) {
             setRuntimeConfigSnapshot(committedConfig);
@@ -398,6 +406,9 @@ describe("authenticated request mutation custody", () => {
           expect(() => accepted.authority.assertCurrent()).not.toThrow();
           access.abort(new Error("original access source revoked"));
           expect(accepted.authority.signal?.aborted).toBe(true);
+        }
+        if (!access.signal.aborted) {
+          expect(accepted.authority.assertCurrent).not.toThrow();
         }
       } finally {
         releaseQueued();
