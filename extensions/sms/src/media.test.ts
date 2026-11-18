@@ -1019,7 +1019,7 @@ describe("SMS inbound MMS materialization", () => {
                 lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
                 fetchImpl: async (input: RequestInfo | URL, init?: RequestInit) => {
                   hops.push({
-                    host: new URL(String(input)).hostname,
+                    host: new URL(input instanceof Request ? input.url : input).hostname,
                     authorization: new Headers(init?.headers).get("authorization"),
                   });
                   const location = `https://mms.twiliocdn.com/${ACCOUNT_SID}/${"1".repeat(32)}`;
