@@ -3324,7 +3324,6 @@
 ["src/commands/cleanup-command.test-support.ts","../daemon/service.js","d7141001d776e28f5a19524750beaa0341eff67390d952dac8069b9bc5af192a",1]
 ["src/commands/cleanup-command.test-support.ts","./cleanup-plan.js","37d41fa3d822f74c4742937290fb9c0c32fe55f22c5cacb5b760cdab8af5d30a",1]
 ["src/commands/cleanup-command.test-support.ts","./cleanup-utils.js","9464700991d0ed89b442c2a7c7d9d6ade9a545b333f21cb0bc0f9136688b54ea",1]
-["src/commands/cleanup-live-state.test.ts","../daemon/service.js","d7141001d776e28f5a19524750beaa0341eff67390d952dac8069b9bc5af192a",1]
 ["src/commands/codex-runtime-plugin-install.test.ts","../plugins/plugin-metadata-snapshot.js","6a3a53b273f85dbf65c0a62952605f032d2ab61c5ba88769ac18b9bf8b319415",1]
 ["src/commands/codex-runtime-plugin-install.test.ts","./doctor/shared/missing-configured-plugin-install.js","d6cc3737214b82f7f83ba589f2e2cd4c1ee3239ce9e6ca93c485caf27380d3c9",1]
 ["src/commands/codex-runtime-plugin-install.test.ts","./onboarding-plugin-install.js","3c41ed7b078efc4b412740f76647aba5e3f0853beb00d9a27bab94139da3605e",1]

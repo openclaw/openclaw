@@ -32,7 +32,7 @@ export async function stopGatewayForCleanup(
     // Unloaded is not absent: installed definitions still need teardown.
     // Data cleanup independently checks for a live, unmanaged state owner.
     if (uninstall && (await service.isAbsent?.({ env: process.env }))) {
-      runtime.log("Gateway service is not installed; skipping service removal.");
+      runtime.error("No Gateway service to remove. Continuing uninstall.");
       return true;
     }
     loaded = await service.isLoaded({ env: process.env });

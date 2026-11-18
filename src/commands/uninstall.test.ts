@@ -102,6 +102,7 @@ describe("uninstallCommand", () => {
     expect(removeWorkspaceDirs).toHaveBeenCalledWith(["/tmp/.openclaw/workspace"], runtime, {
       dryRun: true,
       preserveWorkspace: true,
+      retainedState: expect.any(Object),
     });
   });
 

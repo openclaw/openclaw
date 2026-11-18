@@ -9,6 +9,7 @@ import { registerMaintenanceCommands } from "../cli/program/register.maintenance
 import { resolveGatewayService } from "../daemon/service.js";
 import { mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { createNonExitingRuntime, defaultRuntime } from "../runtime.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -31,7 +32,8 @@ vi.mock("../config/config.js", async () => ({
     return configState.isNixMode;
   },
 }));
-vi.mock("../daemon/service.js", () => ({
+vi.mock("../daemon/service.js", async () => ({
+  ...(await vi.importActual<typeof import("../daemon/service.js")>("../daemon/service.js")),
   resolveGatewayService: vi.fn(() => gatewayService),
 }));
 const { resetCommand } = await import("./reset.js");
@@ -279,6 +281,33 @@ it.each([
   },
 );
 
+it("preserves a live unmanaged Gateway workspace when uninstall selects service and workspace only", async () => {
+  const state = await makeState();
+  await state.writeConfig({ agents: { defaults: { workspace: state.workspaceDir } } });
+  await fs.mkdir(state.workspaceDir, { recursive: true });
+  const marker = path.join(state.workspaceDir, "project.txt");
+  await fs.writeFile(marker, "user data");
+  openOpenClawStateDatabase({ env: state.env });
+  const owner = await startLiveStateOwner(state);
+  const runtime = quietRuntime();
+  const uninstall = () =>
+    uninstallCommand(runtime, {
+      service: true,
+      workspace: true,
+      yes: true,
+      nonInteractive: true,
+    });
+
+  await expect(uninstall()).rejects.toMatchObject({ name: "ExitError", code: 1 });
+  await expect(fs.readFile(marker, "utf8")).resolves.toBe("user data");
+  expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("owns this state directory"));
+  await stopLiveStateOwner(owner);
+
+  await expect(uninstall()).resolves.toBeUndefined();
+  await expect(fs.access(state.workspaceDir)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.access(state.configPath)).resolves.toBeUndefined();
+});
+
 it.skipIf(process.platform !== "linux")(
   "uninstalls state and workspace with no manager or installed service",
   async () => {
@@ -340,7 +369,7 @@ it.skipIf(process.platform !== "linux")(
     );
     expect({ error, messages: vi.mocked(runtime.error).mock.calls }).toEqual({
       error: null,
-      messages: [],
+      messages: [["No Gateway service to remove. Continuing uninstall."]],
     });
 
     expect(native).not.toHaveBeenCalled();
