@@ -130,6 +130,13 @@ the page topbar while the drawer is closed. Opening the drawer moves that action
 back to the rail, without a second header button. In team mode, creation opens the
 same agent picker as the rail. Native apps keep their native creation controls.
 
+The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
+**Involving me**, and **All owners** stay within the selected agent; changing the
+owner never expands the list to other agents. Sidebar pins and personal sections
+also follow that agent scope without removing their saved references. Choose
+**Show all** in the agent picker to browse across agents. Explicit rail shortcuts
+remain available across agent selections.
+
 Session activity and unread indicators stay in the leading column across owner
 filters, grouping modes, pinned sessions, and child rows. Idle rows reserve the
 same column so titles stay aligned when status changes or hover and keyboard
