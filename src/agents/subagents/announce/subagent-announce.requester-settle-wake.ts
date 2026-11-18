@@ -308,6 +308,12 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     await completeBatch(settledBatch, selectedState);
     return false;
   }
+  if (!pauseNotice && settledBatch.every(hasConsumedRequesterInput)) {
+    // The input is already in the requester transcript. Restart continuation belongs
+    // to the Gateway; resubmitting it can conflict with the committed payload.
+    await completeBatch(settledBatch, selectedState, { delivered: true, path: "direct" });
+    return true;
+  }
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
   // A yielded batch owns a rearm generation even when its child settles later.
   const requesterYieldedAfterDelivery =

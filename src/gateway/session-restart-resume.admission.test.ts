@@ -92,9 +92,7 @@ it.for(["aborted", "draining"] as const)(
       void recovery.catch(() => {});
       try {
         await withinTest(entered.promise, test.signal);
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-          queuedInputIds: [],
-        });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
         if (mode === "aborted") {
           const error = new Error("Another restart interrupted admission");
           controller.abort(error);
@@ -104,14 +102,12 @@ it.for(["aborted", "draining"] as const)(
           markGatewayRestartDraining();
           replaceSessionEntrySync(target, {
             ...loadExactSessionEntry(target)!.entry,
-            resumeAfterRestart: { queuedInputIds: ["next-shutdown-input"] },
+            resumeAfterRestart: {},
           });
           accepted.resolve({ ok: true });
           await recovery;
         }
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-          queuedInputIds: mode === "draining" ? ["next-shutdown-input"] : [],
-        });
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
         expect(enqueue).toHaveBeenCalledOnce();
       } finally {
         accepted.resolve({ ok: true });

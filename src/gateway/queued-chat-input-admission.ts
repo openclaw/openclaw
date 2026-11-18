@@ -8,6 +8,7 @@ type QueuedChatInputTarget = {
   storePath: string;
   sessionKey: string;
   sessionId: string;
+  inputId: string;
   runId: string;
   message: PersistedUserTurnMessage;
   requestHash: string;

@@ -860,3 +860,12 @@ it does not automatically scan or import existing transcripts.
 
 See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 for authenticated inspection, explicit transcript import, reset, and privacy.
+
+### Pending-input endings
+
+Agent schema 43 adds nullable `end_cause` and `origin_source_json` columns to
+`session_pending_inputs` on SQLite and PostgreSQL. The forward migration marks
+legacy cancelled inputs carrying a user Stop or dismissal marker as `user-stop`,
+without changing their message bytes. Stores without the optional pending-input
+table keep it absent until first use. `origin_source_json` reserves storage for
+the original input source; this migration does not populate it.

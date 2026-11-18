@@ -70,7 +70,7 @@ it("selects live, marked, and recent windows without preserving idle history", (
   addWindow(idle.key, "recent-transcript", cutoff - 1, cutoff);
   const live = addNode("live-history");
   addWindow(live.key, "running-history", cutoff - 1, null);
-  const protectedNode = addNode("busy", { resumeAfterRestart: { queuedInputIds: [] } });
+  const protectedNode = addNode("busy", { resumeAfterRestart: {} });
   addWindow(protectedNode.key, "old-busy-history", cutoff - 1, null);
   for (const column of ["updated_at", "last_activity_at", "last_interaction_at"]) {
     addNode(column, { updatedAt: column === "updated_at" ? cutoff : 1 });
@@ -177,7 +177,7 @@ it.each([false, true])(
 );
 
 it("checks selected windows against their owners and all cross-generation references", () => {
-  const busy = addNode("marked", { resumeAfterRestart: { queuedInputIds: [] } });
+  const busy = addNode("marked", { resumeAfterRestart: {} });
   addWindow(busy.key, "busy-history");
   const invalid = addNode("invalid", {}, "not-json");
   addWindow(invalid.key, "invalid-history");
