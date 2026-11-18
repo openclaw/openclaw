@@ -160,7 +160,7 @@ it("reserves cold admission synchronously before a later database turn", async (
 });
 
 it.for(["ELOOP", "EACCES"])(
-  "releases cold open custody after synchronous %s",
+  "releases cold open custody after discovery fails with %s",
   async (code, { signal, skip }) => {
     if (code === "ELOOP" && process.platform === "win32") {
       skip(); // File symlinks require privileges on Windows.
@@ -171,9 +171,9 @@ it.for(["ELOOP", "EACCES"])(
       symlinkSync(file, file);
     } else {
       // A permission error must be deterministic even when tests run as root.
-      vi.spyOn(workerIdentity, "inspectDatabasePathIdentitySync").mockImplementationOnce(() => {
-        throw Object.assign(new Error("permission denied"), { code });
-      });
+      vi.spyOn(workerIdentity, "inspectDatabasePathIdentity").mockRejectedValueOnce(
+        Object.assign(new Error("permission denied"), { code }),
+      );
     }
     const dispatch = vi.fn(async () => "unreachable");
     await expect(admission.open(1024, file, dispatch)).rejects.toMatchObject({ code });

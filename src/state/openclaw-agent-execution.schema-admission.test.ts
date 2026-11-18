@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
@@ -34,7 +35,7 @@ function fixture() {
       "main",
       path,
       context,
-      undefined,
+      captureGatewayStateOwner(context.admission.databasePath),
       lifetime,
       noop,
       noop,

@@ -5,6 +5,7 @@ import { afterEach, assert, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
+import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
@@ -146,7 +147,7 @@ it.each(["before handoff", "after handoff"] as const)(
       peer.agentId,
       peer.path,
       context,
-      undefined,
+      captureGatewayStateOwner(context.admission.databasePath),
       new AgentDatabaseExecutionLifetime().state,
       () => context.admission.assertCurrent(),
       () => context.admission.assertCurrent(),

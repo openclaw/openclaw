@@ -4,6 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { registerSandboxBackend } from "./backend.js";
 import * as custody from "./context-custody.test-support.js";
@@ -58,7 +59,7 @@ it.each(["docker", "podman"] as const)(
   },
 );
 
-it("checks physical custody once per runtime assertion and refuses a successor owner", async () => {
+it("uses worker-observed custody without lock polling and refuses a successor owner", async () => {
   const root = roots.make("sandbox-owner-assertion-");
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
     const owner = custody.acquireOwner(root);
@@ -86,12 +87,13 @@ it("checks physical custody once per runtime assertion and refuses a successor o
       const stat = vi.spyOn(fs, "lstatSync");
       try {
         assertCurrent!();
-        // fs-safe brackets one physical custody verification with two leaf observations.
-        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(2);
+        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(0);
       } finally {
         stat.mockRestore();
       }
+      const captured = captureGatewayStateOwner(path.join(root, "state", "openclaw.sqlite"))!;
       fs.unlinkSync(owner.path);
+      await expect(captured.prepareAccess()).rejects.toThrow();
       expect(assertCurrent).toThrow();
       owner.release();
       successor = custody.acquireOwner(root);

@@ -7,6 +7,7 @@ import {
   getDatabaseEngineSelection,
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
+import { withStateDatabaseColdAdmission } from "../infra/gateway-state-owner.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
@@ -15,6 +16,7 @@ import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { ownedWorkerBytes } from "../infra/worker-transfer-bytes.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
   closeRetainedOpenClawStateReadConnections,
   openOpenClawStateReadConnection,
@@ -92,14 +94,20 @@ const read: WorkerTaskHandler<OpenClawStateReadReply> = async function read(
       : undefined;
     const executeRead = async (): Promise<OpenClawStateReadReply> => {
       if (input.checkFreshAdmission) {
-        openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
-          input.databasePath,
-          input.context.environment,
-          (error) => {
-            nativeCleanupFailure = {
-              error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
-            };
-          },
+        // A schema owner can arrive after host dispatch. Wait before entering the read,
+        // never replay a domain operation or borrow an offline maintenance owner.
+        withStateDatabaseColdAdmission(
+          { databasePath: input.databasePath, busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+          () =>
+            openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
+              input.databasePath,
+              input.context.environment,
+              (error) => {
+                nativeCleanupFailure = {
+                  error: encodeOpenClawStateWorkerError(error, { includeOrdinary: true }),
+                };
+              },
+            ),
         );
       }
       const { command } = input;

@@ -1049,6 +1049,7 @@ src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
 src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
+src/infra/gateway-state-owner-lifecycle.ts
 src/infra/gateway-state-owner-record.ts
 src/infra/gateway-state-owner.ts
 src/infra/gateway-process-argv.ts
@@ -1184,6 +1185,8 @@ src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
 src/infra/sqlite-database-admission-context.ts
+src/infra/sqlite-database-admission-delta.ts
+src/infra/sqlite-database-admission-descriptor.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-record.ts
@@ -2120,6 +2123,7 @@ src/state/postgres-schema.generated/sqlite-memory-catalogs.ts
 src/state/postgres-schema.generated/sqlite-state-catalogs.json
 src/state/postgres-schema.generated/sqlite-state-catalogs.ts
 src/state/openclaw-state-db.paths.ts
+src/state/openclaw-state-db-removal-exclusion.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema-ensure.ts
 src/state/openclaw-state-feature-schema.ts

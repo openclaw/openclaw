@@ -355,6 +355,15 @@ export async function preflightOpenClawDatabaseSchemas(
         }
         Object.assign(result, inspection.schemas);
         stateInspectionErrors.push(...inspection.inspectionErrors);
+        inspection.schemas.indeterminate.forEach((row, index) => {
+          const error = inspection.inspectionErrors[index];
+          indeterminateCauses.set(
+            row,
+            options.requireStartupMigrationReadiness
+              ? schemaRead.annotateStartupStateInspectionFailure(error, statePath, options.signal)
+              : error,
+          );
+        });
         if (
           startup &&
           inspection.inspectionErrors.length === 0 &&
@@ -515,9 +524,7 @@ export async function preflightOpenClawDatabaseSchemas(
         // artifact preservation must use the WAL-aware private snapshot below.
         if (
           !schemaInspection &&
-          (getDatabaseEngineInput("agent") ||
-            options.preserveSourceArtifacts !== true ||
-            (purpose === "runtime" && readSqliteDatabaseCleanClose(realAgentPath)))
+          (getDatabaseEngineInput("agent") || options.preserveSourceArtifacts !== true)
         ) {
           schemaInspection = await inspectSchema(schemaInput, options.signal);
         }

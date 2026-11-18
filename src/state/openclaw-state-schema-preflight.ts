@@ -43,6 +43,7 @@ export type StateSchemaInspection = {
   schemas: OpenClawDatabaseSchemaPreflight;
   registeredDatabases?: { agentId: string; path: string }[];
   deletionJournal?: AgentDeletionJournalDisposition;
+  /** One original cause per schemas.indeterminate row, in the same order. */
   inspectionErrors: unknown[];
 };
 

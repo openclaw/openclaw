@@ -562,8 +562,26 @@ suite.define(() => {
       const groupedToolBubble = page.locator('.chat-bubble[data-entry-id="oversized-tool-1"]');
       await groupedToolBubble.waitFor({ state: "visible" });
       expect(await groupedToolBubble.getAttribute("data-message-text")).toBe(oversizedNotice);
+      // A late scroll-to-latest affordance can cover the press before contextmenu fires.
+      await groupedToolBubble.evaluate((element) => {
+        element.addEventListener(
+          "mousedown",
+          (event) => {
+            if (!(event instanceof MouseEvent)) {
+              throw new Error("Expected mouse input for the context-menu collision");
+            }
+            const obstacle = document.createElement("button");
+            obstacle.id = "context-pointer-obstacle";
+            obstacle.textContent = "Scroll to latest";
+            obstacle.style.cssText = `position:fixed;left:${event.clientX - 18}px;top:${event.clientY - 18}px;width:36px;height:36px;z-index:10`;
+            document.body.append(obstacle);
+          },
+          { once: true },
+        );
+      });
       await groupedToolBubble.click({ button: "right" });
       await menu.getByRole("menuitem", { name: "Copy as markdown" }).click();
+      await page.locator("#context-pointer-obstacle").evaluate((element) => element.remove());
       await expectClipboard(page, oversizedNotice);
       await contextAction(groupedToolBubble, "Reply to message");
       await replyText(fullTextReplyPreview).toBe(oversizedNotice);
