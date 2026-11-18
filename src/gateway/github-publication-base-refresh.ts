@@ -204,9 +204,11 @@ export async function integrateManagedWorkspaceSource(
           );
           const { baseCommit, initialHead, continuingIntegration, recoveredImport } = prepared!;
           const pending = await probe(["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
+          // A checkpoint can replace canonical bytes without changing Git HEAD or the base commit.
           if (
             (await git(["rev-parse", "HEAD"])) !== initialHead ||
             state.current().base_commit !== prepared!.previousBase ||
+            (prepared!.canonical && state.current().baseline_ref !== prepared!.previousBaseline) ||
             (continuingIntegration
               ? pending.code !== 0 || pending.stdout.trim() !== baseCommit
               : pending.code !== 1)
@@ -253,38 +255,10 @@ export async function integrateManagedWorkspaceSource(
           }
           if (initialImport && !recoveredImport) {
             quiescence?.markPhase("operation.pristine");
-            const source = params.source!;
-            const admittedPaths = await state.canonicalPaths();
-            const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
-              { cwd, assertCurrent: check },
-              policy,
-              admittedPaths,
-            );
-            const headTree = await git(["rev-parse", "HEAD^{tree}"]);
-            if (
-              initialHead !== state.current().base_commit ||
-              guestHead !== initialHead ||
-              guestDirty ||
-              snapshot.sourceIndexTree !== headTree ||
-              snapshot.workspaceTree !== headTree
-            ) {
+            if (guestHead !== initialHead || guestDirty) {
               throw new Error(pristineError);
             }
-            // A projection may first be captured after unrelated commits already exist.
-            // Only verified published history or the immutable empty source is disposable.
-            if (source.emptySource) {
-              if (initialHead !== (await git(["rev-parse", "refs/heads/main"]))) {
-                throw new Error(pristineError);
-              }
-            }
             const buildCacheInputs = new Set(await state.buildCacheInputs());
-            const canonical = await captureWorkspaceManifestDocument({
-              root: cwd,
-              baseCommit: state.current().base_commit,
-              includePaths: admittedPaths,
-              buildCacheInputs,
-              signal: params.signal,
-            });
             const projection = await captureWorkspaceManifestDocument({
               root: state.current().projection_path,
               baseCommit: state.current().base_commit,
@@ -293,7 +267,7 @@ export async function integrateManagedWorkspaceSource(
             });
             check();
             const equal = await workspaceSnapshotsEqual(
-              canonical,
+              prepared!.canonical!,
               projection,
               [...buildCacheInputs],
               params.signal,
