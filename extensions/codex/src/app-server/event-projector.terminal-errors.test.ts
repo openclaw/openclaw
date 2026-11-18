@@ -177,6 +177,70 @@ describe("CodexAppServerEventProjector terminal errors", () => {
     },
   );
 
+  it("explains outdated Codex only for ChatGPT model-not-found failures", async () => {
+    const nativeMessage =
+      "The 'gpt-6.2-sol' model is not supported when using Codex with a ChatGPT account.";
+    const body = {
+      detail: nativeMessage,
+      error: { type: "invalid_request_error", code: "model_not_found", message: nativeMessage },
+    };
+    const update =
+      'Update your global Codex with "npm i -g @openai/codex", then restart the Gateway. Or choose another model.';
+    const httpMessage = `unexpected status 400 Bad Request: ${JSON.stringify(body)}`;
+    for (const testCase of [
+      {
+        message: nativeMessage,
+        codexErrorInfo: "modelNotFound",
+        version: "0.164.0",
+        expected: `gpt-6.2-sol needs a newer Codex than 0.164.0. ${update}`,
+      },
+      {
+        message: httpMessage,
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 400 } },
+        version: "0.164.0",
+        expected: `gpt-6.2-sol needs a newer Codex than 0.164.0. ${update}`,
+      },
+      {
+        message: nativeMessage,
+        codexErrorInfo: "modelNotFound",
+        version: undefined,
+        expected: `gpt-6.2-sol needs a newer Codex. ${update}`,
+      },
+      {
+        message: "The requested model does not exist.",
+        codexErrorInfo: "modelNotFound",
+        version: "0.164.0",
+        expected: "The requested model does not exist.",
+      },
+      {
+        message: nativeMessage,
+        codexErrorInfo: "badRequest",
+        version: "0.164.0",
+        expected: nativeMessage,
+      },
+    ]) {
+      for (const completed of [false, true]) {
+        const params = { ...(await createParams()), modelId: "gpt-6.2-sol" };
+        const projector = await createProjector(params, { serverVersion: testCase.version });
+        await fail(
+          projector,
+          { message: testCase.message, codexErrorInfo: testCase.codexErrorInfo },
+          completed,
+        );
+        const terminal = readAttemptTerminal(fixture.result(projector));
+        if (testCase.expected !== testCase.message) {
+          expect(terminal.promptError).toMatchObject({
+            message: testCase.expected,
+            nativeMessage: testCase.message,
+          });
+        } else {
+          expect(terminal.promptError).toBe(testCase.message);
+        }
+        expect(projector.settledTurnFailureFinalizationAllowed).toBe(false);
+      }
+    }
+  });
+
   const denialBody = {
     error: "middleware_denied",
     reason_code: "request_credential_denied",

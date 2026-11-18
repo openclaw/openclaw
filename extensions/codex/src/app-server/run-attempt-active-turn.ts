@@ -170,6 +170,7 @@ export function activateCodexAttemptTurn(
     activeTurnId,
     {
       agentHookContext: hookContext,
+      serverVersion: resourceState.client.getServerVersion(),
       onResponseObserved,
       hasDeliveredFinalSourceReply: () => toolBridge.telemetry.finalSourceReplyDelivered === true,
       initialContextTokens: connection.mutable.startupContextTokens,

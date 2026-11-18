@@ -10,6 +10,7 @@ export type CodexAsyncDeliverySettlement = "settled" | "retry";
 
 export type CodexAppServerEventProjectorOptions = {
   agentHookContext?: Parameters<typeof runAgentHarnessBeforeCompactionHook>[0]["ctx"];
+  serverVersion?: string;
   initialContextTokens?: number;
   nativePostToolUseRelayEnabled?: boolean;
   asyncUserMessageAllowed?: boolean;

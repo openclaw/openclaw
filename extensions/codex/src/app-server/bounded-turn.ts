@@ -419,7 +419,10 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         const notification = result.error
           ? readCodexErrorNotification(result.error)?.error
           : undefined;
-        const priorFailure = notification ? resolveCodexPromptError(notification) : undefined;
+        const runtime = { model: thread.model, serverVersion: client.getServerVersion() };
+        const priorFailure = notification
+          ? resolveCodexPromptError(notification, runtime)
+          : undefined;
         const completed = result.turn?.error;
         // Preserve recorded failure details when the completion adds none.
         const retainPrior =
@@ -427,7 +430,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
           completed?.codexErrorInfo == null &&
           (!completed?.message || completed.message === notification?.message);
         const failure =
-          completed && !retainPrior ? resolveCodexPromptError(completed) : priorFailure;
+          completed && !retainPrior ? resolveCodexPromptError(completed, runtime) : priorFailure;
         throw failure instanceof Error
           ? failure
           : new Error(failure ?? `codex app-server ${params.taskLabel} turn failed`);

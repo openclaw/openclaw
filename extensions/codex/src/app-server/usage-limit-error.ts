@@ -50,6 +50,7 @@ export class CodexUsageLimitPromptError extends Error {
 
 export function resolveCodexPromptError(
   source: Pick<CodexUsageLimitErrorSource, "message" | "codexErrorInfo" | "rateLimits">,
+  runtime: { model: string; serverVersion?: string },
 ): string | Error | undefined {
   const usageLimitMessage = formatCodexUsageLimitErrorMessage(source);
   if (usageLimitMessage) {
@@ -89,12 +90,57 @@ export function resolveCodexPromptError(
   ) {
     return new AgentHarnessModelRequestPolicyError();
   }
+  if (isChatGptModelVersionError(source.message, info)) {
+    const version = runtime.serverVersion ? ` than ${runtime.serverVersion}` : "";
+    embeddedAgentLog.warn("codex app-server model requires a newer Codex", {
+      ...runtime,
+      nativeMessage: source.message,
+    });
+    return Object.assign(
+      new Error(
+        `${runtime.model} needs a newer Codex${version}. Update your global Codex with "npm i -g @openai/codex", then restart the Gateway. Or choose another model.`,
+      ),
+      { nativeMessage: source.message, ...(status === undefined ? {} : { status }) },
+    );
+  }
   return status === undefined
     ? (source.message ?? undefined)
     : Object.assign(new Error(source.message ?? "codex app-server error"), {
         status,
         ...(info === "serverOverloaded" ? { code: "OVERLOADED" } : {}),
       });
+}
+
+function isChatGptModelVersionError(
+  message: string | null | undefined,
+  codexErrorInfo: JsonValue | null | undefined,
+): boolean {
+  const phrase = "not supported when using Codex with a ChatGPT account";
+  if (!message?.includes(phrase)) {
+    return false;
+  }
+  // Newer Codex versions preserve the provider code as this protocol variant.
+  if (codexErrorInfo === "modelNotFound") {
+    return true;
+  }
+  // Older binaries retain the HTTP response body in their native error text.
+  const start = message.indexOf("{");
+  const end = message.lastIndexOf("}");
+  if (start === -1 || end < start) {
+    return false;
+  }
+  try {
+    const body: unknown = JSON.parse(message.slice(start, end + 1));
+    return (
+      isJsonObject(body) &&
+      isJsonObject(body.error) &&
+      body.error.code === "model_not_found" &&
+      typeof body.error.message === "string" &&
+      body.error.message.includes(phrase)
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isRequestPolicyDenial(message: string | null | undefined): boolean {
@@ -160,6 +206,7 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
 
 export async function resolveCodexTurnStartError(params: {
   client: CodexAppServerClient;
+  model: string;
   error: unknown;
   errorNotification?: CodexServerNotification;
   rateLimitsRevisionBeforeTurnStart?: number;
@@ -178,7 +225,10 @@ export async function resolveCodexTurnStartError(params: {
   }
   // Startup RPC errors carry the same provider facts as terminal notifications.
   // Normalize them before the generic runner loses the native error envelope.
-  const promptError = resolveCodexPromptError(source);
+  const promptError = resolveCodexPromptError(source, {
+    model: params.model,
+    serverVersion: params.client.getServerVersion(),
+  });
   return promptError instanceof Error ? { message: promptError.message, promptError } : undefined;
 }
 

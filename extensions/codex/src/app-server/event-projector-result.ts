@@ -509,11 +509,14 @@ export abstract class CodexTurnProjection {
       return;
     }
     this.promptError =
-      resolveCodexPromptError({
-        message: params.message,
-        codexErrorInfo: params.codexErrorInfo,
-        rateLimits: params.rateLimits,
-      }) ?? params.fallbackMessage;
+      resolveCodexPromptError(
+        {
+          message: params.message,
+          codexErrorInfo: params.codexErrorInfo,
+          rateLimits: params.rateLimits,
+        },
+        { model: this.params.modelId, serverVersion: this.options.serverVersion },
+      ) ?? params.fallbackMessage;
     this.requestPolicyDenialMessage =
       this.promptError instanceof AgentHarnessModelRequestPolicyError ? params.message : undefined;
     this.promptErrorSource = params.promptErrorSource;
