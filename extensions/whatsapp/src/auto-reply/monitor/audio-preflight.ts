@@ -1,6 +1,18 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatAudioTranscriptForAgent } from "openclaw/plugin-sdk/media-understanding-runtime";
-import type { AdmittedWebInboundMessage, WhatsAppInboundMedia } from "../../inbound/types.js";
+import type {
+  AdmittedWebInboundMessage,
+  WhatsAppInboundBatchedPart,
+  WhatsAppInboundMedia,
+} from "../../inbound/types.js";
+
+export type WhatsAppBatchedAudioTranscript = {
+  /** Agent body rebuilt in arrival order, with each voice note replaced by its framed transcript. */
+  body: string;
+  transcript: string;
+  /** Indexes into {@link listWhatsAppInboundMedia} that core STT must skip. */
+  transcribedIndexes: number[];
+};
 
 function isWhatsAppAudioMedia(media: WhatsAppInboundMedia | undefined): boolean {
   return media?.kind === "audio" || media?.type?.startsWith("audio/") === true;
@@ -8,6 +20,19 @@ function isWhatsAppAudioMedia(media: WhatsAppInboundMedia | undefined): boolean 
 
 export function hasWhatsAppAudioBody(msg: AdmittedWebInboundMessage): boolean {
   return isWhatsAppAudioMedia(msg.payload.media) && !msg.payload.body.trim();
+}
+
+function isUncaptionedVoiceNote(part: WhatsAppInboundBatchedPart): boolean {
+  return Boolean(part.media?.path) && !part.body.trim() && isWhatsAppAudioMedia(part.media);
+}
+
+/** True when the turn holds a readable uncaptioned voice note, alone or inside a batch. */
+export function hasWhatsAppAudioToTranscribe(msg: AdmittedWebInboundMessage): boolean {
+  const parts = msg.payload.batchedParts;
+  if (parts) {
+    return parts.some(isUncaptionedVoiceNote);
+  }
+  return hasWhatsAppAudioBody(msg) && Boolean(msg.payload.media?.path);
 }
 
 export async function transcribeWhatsAppAudioMessage(
@@ -60,15 +85,9 @@ export async function transcribeWhatsAppBatchedAudio(
   cfg: OpenClawConfig,
   msg: AdmittedWebInboundMessage,
   accountId: string | undefined,
-): Promise<{ body: string; transcript: string; transcribedIndexes: number[] } | undefined> {
+): Promise<WhatsAppBatchedAudioTranscript | undefined> {
   const parts = msg.payload.batchedParts;
-  if (!parts) {
-    return undefined;
-  }
-  const hasVoiceNote = parts.some(
-    (part) => part.media?.path && !part.body.trim() && isWhatsAppAudioMedia(part.media),
-  );
-  if (!hasVoiceNote) {
+  if (!parts?.some(isUncaptionedVoiceNote)) {
     return undefined;
   }
   // Load the STT runtime once; the voice notes then transcribe concurrently.
@@ -78,7 +97,7 @@ export async function transcribeWhatsAppBatchedAudio(
     parts.map(async (part) => {
       // Count every attachment, including unreadable ones, so indexes match the media list.
       const mediaIndex = part.media ? mediaCount++ : -1;
-      if (!part.media?.path || part.body.trim() || !isWhatsAppAudioMedia(part.media)) {
+      if (!isUncaptionedVoiceNote(part)) {
         return { body: part.body };
       }
       // Failures keep the structured audio fact, matching single-message preflight.

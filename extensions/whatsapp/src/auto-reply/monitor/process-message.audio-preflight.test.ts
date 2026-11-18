@@ -259,4 +259,32 @@ describe("processMessage audio preflight transcription", () => {
       ],
     });
   });
+
+  it("reuses a caller-level batch preflight instead of transcribing again", async () => {
+    const voice = { path: "/tmp/one.ogg", type: "audio/ogg; codecs=opus", kind: "audio" as const };
+
+    await processMessage({
+      ...makeParams({
+        event: { timestamp: 1735689600000, isBatched: true },
+        payload: {
+          body: "listen",
+          media: undefined,
+          batchedParts: [{ body: "listen" }, { body: "", media: voice }],
+        },
+      }),
+      preflightAudioTranscript: "shared note",
+      preflightBatchedAudio: {
+        body: "listen\nshared framed note",
+        transcript: "shared note",
+        transcribedIndexes: [0],
+      },
+    });
+
+    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
+    expectContextFields(firstDispatchContext(), {
+      BodyForAgent: "listen\nshared framed note",
+      Transcript: "shared note",
+      media: [expect.objectContaining({ path: voice.path, transcribed: true })],
+    });
+  });
 });

@@ -84,12 +84,33 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
   }),
 }));
 
-import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
+import {
+  createTestWebAudioInboundMessage,
+  createTestWebInboundMessage,
+} from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { createWebOnMessageHandler } from "./on-message.js";
 
 function makeAudioMsg(): AdmittedWebInboundMessage {
   return createTestWebAudioInboundMessage();
+}
+
+function makeBatchedVoiceNotesMsg(): AdmittedWebInboundMessage {
+  const voiceNote = (path: string) => ({
+    path,
+    type: "audio/ogg; codecs=opus",
+    kind: "audio" as const,
+  });
+  return createTestWebInboundMessage({
+    payload: {
+      body: "listen to these",
+      batchedParts: [
+        { body: "listen to these" },
+        { body: "", media: voiceNote("/tmp/first.ogg") },
+        { body: "", media: voiceNote("/tmp/second.ogg") },
+      ],
+    },
+  });
 }
 
 function makeGroupAudioMsg(): AdmittedWebInboundMessage {
@@ -228,6 +249,52 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
     expect(processParams.statusReactionController).toBe(statusReactionController);
     expect(processParams.ackAlreadySent).toBeUndefined();
+  });
+
+  it("sends ack reaction before transcribing a debounced batch once", async () => {
+    transcribeFirstAudioMock.mockImplementation(
+      async ({ ctx }: { ctx: { media: [{ path: string }] } }) => {
+        events.push(`stt:${ctx.media[0].path}`);
+        return `heard ${ctx.media[0].path}`;
+      },
+    );
+    const handler = makeHandler();
+
+    await handler(makeBatchedVoiceNotesMsg());
+
+    expect(events).toEqual(["ack", "stt:/tmp/first.ogg", "stt:/tmp/second.ogg"]);
+    const processParams = mockObjectArg(processMessageMock, "processMessage");
+    expect(processParams.ackAlreadySent).toBe(true);
+    expect(processParams.ackReaction).toBe(ackReactionHandle);
+    expect(processParams.preflightAudioTranscript).toBe(
+      "heard /tmp/first.ogg\nheard /tmp/second.ogg",
+    );
+    expect(processParams.preflightBatchedAudio).toEqual({
+      body: expect.stringMatching(
+        /^listen to these\n.*heard \/tmp\/first\.ogg.*\n.*heard \/tmp\/second\.ogg/s,
+      ),
+      transcript: "heard /tmp/first.ogg\nheard /tmp/second.ogg",
+      transcribedIndexes: [0, 1],
+    });
+  });
+
+  it("shares one batched transcription across direct-chat broadcast agents", async () => {
+    const handler = makeHandler({
+      cfg: {
+        broadcast: { "+15550000002": ["main", "backup"] },
+        agents: { entries: { main: {}, backup: {} } },
+        channels: { whatsapp: { ackReaction: { enabled: true } } },
+      } as never,
+    });
+
+    await handler(makeBatchedVoiceNotesMsg());
+
+    expect(transcribeFirstAudioMock).toHaveBeenCalledTimes(2);
+    expect(processMessageMock).toHaveBeenCalledTimes(2);
+    const [first, second] = processMessageMock.mock.calls.map(([params]) => params);
+    expect(first.preflightBatchedAudio?.transcribedIndexes).toEqual([0, 1]);
+    expect(second.preflightBatchedAudio).toBe(first.preflightBatchedAudio);
+    expect(second.preflightAudioTranscript).toBe(first.preflightAudioTranscript);
   });
 
   it("drops blocked DM admission before ack, preflight, or dispatch", async () => {
