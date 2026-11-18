@@ -491,6 +491,7 @@ export async function prepareConfigRecoveryFromContext(
       raw: current.raw,
       parsed: current.parsed,
       prepareBackup: previewContext.prepareRecoveryBackupCandidate,
+      prepareBackupAsync: previewContext.prepareRecoveryBackupCandidateAsync,
     });
     if (!plan) {
       return null;
