@@ -28,6 +28,7 @@ export function NewSessionModelControlView(props: {
   control: NewSessionModelControl;
   options: NewSessionModelRenderOptions;
   showEffort?: boolean;
+  previewInitialDefaults?: boolean;
 }) {
   // Draft revisions replace options, but text is not an input to model controls.
   const control = createMemo(() => props.control);
@@ -76,6 +77,11 @@ export function NewSessionModelControlView(props: {
     },
   );
   const metadata = createMemo(() => read().promise);
+  const initialDefaultsPending = createMemo(() => {
+    updates().revision();
+    const roster = context()?.agents.state;
+    return props.previewInitialDefaults === true && roster?.agentsLoading && !roster.agentsList;
+  });
   const controls = createMemo(() => {
     updates().revision();
     defaults().revision();
@@ -90,6 +96,7 @@ export function NewSessionModelControlView(props: {
     <ChatModelControls
       {...controls()}
       showEffort={props.showEffort}
+      initialDefaultsPending={initialDefaultsPending()}
       renderModelCatalogStatus={(render) => (
         <ModelCatalogStatus read={metadata} identity={read()}>
           {render}

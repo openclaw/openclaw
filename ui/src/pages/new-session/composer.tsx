@@ -655,6 +655,7 @@ export function NewSessionComposer(props: {
                 >
                   <NewSessionModelControlView
                     control={options().modelControl}
+                    previewInitialDefaults
                     options={{
                       agent: options().agent,
                       agentId: options().agentId,

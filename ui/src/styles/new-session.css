@@ -142,6 +142,13 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
   max-width: 100%;
 }
 
+.new-session-page .agent-chat__welcome-identity-copy > h2:not(.sr-only) {
+  /* Match the interactive name slot before the agent roster arrives. */
+  display: grid;
+  align-items: center;
+  min-height: 44px;
+}
+
 /* Reuse the existing agent menu at the identity, without a second small avatar. */
 .new-session-page .agent-chat__welcome-name {
   max-width: 100%;
@@ -1555,6 +1562,55 @@ span.new-session-page__select {
   }
 }
 
+/* Reserve a short label instead of flashing generic copy on cold start. */
+.new-session-page
+  [data-model-defaults-pending]
+  .chat-controls__model-trigger
+  .chat-controls__inline-select-label {
+  flex: 0 1 6ch;
+  width: 6ch;
+}
+
+.new-session-page
+  [data-model-defaults-pending]
+  .chat-controls__model-trigger
+  .chat-controls__inline-select-chevron {
+  visibility: hidden;
+}
+
+/* Reuse the inert effort slot for first paint, not for background catalog reads. */
+.new-session-page [data-model-defaults-pending] .chat-controls__effort-picker--reserved {
+  position: relative;
+  display: block;
+  visibility: visible;
+}
+
+.new-session-page [data-model-defaults-pending] .chat-controls__effort-picker--reserved > summary {
+  visibility: hidden;
+}
+
+.new-session-page [data-model-defaults-pending] .chat-controls__effort-picker--reserved::after {
+  position: absolute;
+  inset-block-start: calc(50% - 4px);
+  inset-inline-start: 25%;
+  width: 50%;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  content: "";
+}
+
+.new-session-page
+  [data-model-defaults-pending]
+  .chat-controls__model-trigger
+  .chat-controls__inline-select-label::before {
+  display: block;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  content: "";
+}
+
 /* The context tray tucks behind the composer; each picker anchors its own menu. */
 .new-session-page__context-tray {
   --new-session-tray-radius: var(--composer-radius);
@@ -1657,6 +1713,22 @@ span.new-session-page__select {
 .new-session-page__context-tray .new-session-page__trigger-label {
   min-width: 0;
   max-width: 300px;
+}
+
+.new-session-page__select--where > .new-session-page__trigger > .new-session-page__trigger-label,
+.new-session-page__select--project > .new-session-page__trigger > .new-session-page__trigger-label {
+  /* Short resolved names and their placeholders occupy the same track. */
+  min-inline-size: 8ch;
+  text-align: start;
+}
+
+.new-session-page__trigger[aria-busy="true"] > .new-session-page__trigger-label::before {
+  display: block;
+  width: 6ch;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  content: "";
 }
 
 .new-session-page__picker-chevron {

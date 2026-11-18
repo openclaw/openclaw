@@ -57,6 +57,7 @@ export type ChatModelPickerParams = {
   triggerModelLabel: string;
   triggerModelValue?: string;
   triggerStatusLabel?: string;
+  triggerLabelPending?: boolean;
   onModelSetup?: () => void;
   onProviderSettings?: (provider: string) => void;
   onOpen?: () => unknown;
@@ -177,7 +178,11 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
               ? "true"
               : "false"
           }
-          aria-label={`${t("chat.selectors.model")}: ${triggerTitle()}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
+          aria-label={
+            params.triggerLabelPending
+              ? t("chat.selectors.model")
+              : `${t("chat.selectors.model")}: ${triggerTitle()}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`
+          }
           aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
@@ -190,7 +195,9 @@ function ModelPickerPopover(params: ChatModelPickerParams) {
             />
           </Show>
           <span class="chat-controls__inline-select-label">
-            {params.triggerStatusLabel ?? params.triggerModelLabel}
+            {params.triggerLabelPending
+              ? null
+              : (params.triggerStatusLabel ?? params.triggerModelLabel)}
           </span>
           {contextWindowBadge() ? (
             <span

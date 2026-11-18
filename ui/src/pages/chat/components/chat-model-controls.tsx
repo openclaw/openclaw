@@ -71,7 +71,12 @@ function resolveCatalogTriggerStatus(
   return undefined;
 }
 
-function createChatModelControls(props: ChatModelControlsProps): Accessor<{
+type ModelControlsViewProps = ChatModelControlsProps & {
+  showEffort?: boolean;
+  initialDefaultsPending?: boolean;
+};
+
+function createChatModelControls(props: ModelControlsViewProps): Accessor<{
   model: ChatModelPickerParams;
   effort: ChatEffortPickerParams;
   showEffort: boolean;
@@ -648,6 +653,12 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
         triggerModelValue: triggerModelValue || undefined,
         triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
+        triggerLabelPending:
+          props.initialDefaultsPending &&
+          !triggerModelValue &&
+          !defaultModel &&
+          !catalogTriggerStatus &&
+          !props.modelSelectionLocked,
         onModelSetup:
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
@@ -691,10 +702,13 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   });
 }
 
-export function ChatModelControls(props: ChatModelControlsProps & { showEffort?: boolean }) {
+export function ChatModelControls(props: ModelControlsViewProps) {
   const controls = createChatModelControls(props);
   return (
-    <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
+    <div
+      class="chat-controls__session chat-controls__model chat-controls__model-settings"
+      data-model-defaults-pending={controls().model.triggerLabelPending ? "true" : undefined}
+    >
       <ChatModelPicker {...controls().model} />
       {props.showEffort !== false && controls().showEffort ? (
         <ChatEffortPicker {...controls().effort} />

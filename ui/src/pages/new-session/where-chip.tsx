@@ -62,17 +62,24 @@ export function WhereChip(props: WhereChipProps) {
         : "";
     return { cloudSelection, cloudPresentation, label, configurationSummary };
   });
+  const labelPending = () =>
+    props.state.kind === "local" && props.params.gateway.gatewayNamePending;
+  const label = () =>
+    labelPending() ? t("newSession.where") : `${t("newSession.where")}: ${view().label}`;
   return (
     <SessionPicker
       lazy
       ref={props.ref}
       kind="where"
-      label={`${t("newSession.where")}: ${view().label}`}
+      label={label()}
+      labelPending={labelPending()}
       value={view().label}
       icon={triggerIcon()}
       summary={view().configurationSummary}
       triggerAttributes={{
-        "aria-label": `${t("newSession.where")}: ${view().label}${view().configurationSummary ? `, ${view().configurationSummary}` : ""}`,
+        "aria-label": view().configurationSummary
+          ? `${label()}, ${view().configurationSummary}`
+          : label(),
         "aria-description":
           props.state.kind === "cloud" && view().cloudPresentation.label
             ? t("newSession.cloudWorkerProvider", { provider: view().cloudPresentation.label })

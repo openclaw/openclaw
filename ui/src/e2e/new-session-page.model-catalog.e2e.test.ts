@@ -20,6 +20,44 @@ const suite = createNewSessionPageE2eSuite();
 const luna: ModelCatalogEntry = catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna");
 
 suite.define(() => {
+  it.each([400, 820, 1280])(
+    "does not flash a default model while the first agent loads at %s px",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width, height: 900 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const gateway = await installMockGateway(page, { heldMethods: ["agents.list"] });
+          await page.goto(suite.server.baseUrl + "new");
+          await gateway.waitForRequest("agents.list");
+          const composer = page.locator(".new-session-page__composer");
+          const trigger = composer.locator("[data-chat-model-select]");
+          const label = trigger.locator(".chat-controls__inline-select-label");
+          const effort = composer.locator(".chat-controls__effort-trigger");
+          const chevrons = composer.locator(
+            ".chat-controls__model-settings .chat-controls__inline-select-chevron:visible",
+          );
+          const actions = composer.locator(".agent-chat__composer-actions");
+          await trigger.waitFor();
+          await page.evaluate(() => document.fonts.ready);
+          await captureUiProof(suite, page, `model-defaults-${width}-pending.png`);
+          const pendingLabel = await label.textContent();
+          const pendingEffort = await effort.boundingBox();
+          const pendingChevrons = await chevrons.count();
+          const actionsBefore = await actions.boundingBox();
+          await gateway.resolveDeferred("agents.list");
+          await pollText(trigger).toContain("gpt-5.5");
+          await effort.waitFor();
+          await captureUiProof(suite, page, `model-defaults-${width}-ready.png`);
+          expect(await actions.boundingBox()).toEqual(actionsBefore);
+          expect(pendingLabel).not.toContain("Default model");
+          expect(pendingEffort).not.toBeNull();
+          expect(pendingChevrons).toBe(0);
+          await pollCount(chevrons).toBe(2);
+        },
+      );
+    },
+  );
+
   it.each([320, 400, 560])(
     "keeps background model reads steady at %s px under CPU throttling",
     async (width) => {

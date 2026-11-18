@@ -127,18 +127,30 @@ export function NewSessionPlaceControls(props: {
     const nativeTerminal = catalog.isTarget(data);
     const cloudProfiles = nativeTerminal ? [] : gateway.cloudProfiles;
     const projects = nativeTerminal ? [] : browser.projects;
+    const workspacePath = place.workspacePath();
     const recents = nativeTerminal
       ? []
       : browser.resolveProjectRecents({
           sessions: context?.sessions.state.result?.sessions ?? [],
-          workspace: place.workspacePath(),
+          workspace: workspacePath,
           workspaceRoots: place.knownWorkspaceRoots(),
           isAdmin: place.isAdmin(),
         });
     const whereState = resolveWhereChip(draftWhereChipParams(place, gateway, cloudProfiles));
+    const agentRoster = context?.agents.state;
+    const projectLabelPending = Boolean(
+      agentRoster?.agentsLoading &&
+      !agentRoster.agentsList &&
+      !workspacePath &&
+      !place.folder &&
+      !place.deviceFolder &&
+      !place.freshWorkspace &&
+      !browser.remoteProject &&
+      !browser.projectId,
+    );
     const projectState = resolveProjectChip({
       folder: place.deviceFolder?.path ?? place.folder,
-      workspace: place.workspacePath(),
+      workspace: workspacePath,
       projectId: browser.projectId,
       selectedRemoteProject: browser.remoteProject,
       projects,
@@ -151,6 +163,7 @@ export function NewSessionPlaceControls(props: {
       browser,
       whereState,
       projectState,
+      projectLabelPending,
     };
   });
   return (
@@ -212,6 +225,7 @@ export function NewSessionPlaceControls(props: {
               <ProjectChip
                 params={props.params}
                 state={view().projectState}
+                labelPending={view().projectLabelPending}
                 nativeTerminal={view().nativeTerminal}
                 focus={view().browser.projectFocus}
               />

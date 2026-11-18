@@ -17,6 +17,7 @@ export function SessionPicker(props: {
   kind: "where" | "project" | "checkout";
   label: string;
   value: string;
+  labelPending?: boolean;
   icon: JSX.Element;
   summary?: string;
   triggerAttributes?: Pick<
@@ -59,6 +60,7 @@ export function SessionPicker(props: {
           aria-haspopup="dialog"
           aria-controls={`new-session-${props.kind}-popover`}
           aria-expanded={props.params.place.browser.popoverOpen(props.kind) ? "true" : "false"}
+          aria-busy={props.labelPending ? "true" : undefined}
           disabled={
             props.params.submitting ||
             props.params.pendingPlacement ||
@@ -69,7 +71,9 @@ export function SessionPicker(props: {
           <span class="new-session-page__target-icon" aria-hidden="true">
             {props.icon}
           </span>
-          <span class="new-session-page__trigger-label">{props.value}</span>
+          <span class="new-session-page__trigger-label">
+            {props.labelPending ? null : props.value}
+          </span>
           {props.summary ? (
             <>
               {" "}
