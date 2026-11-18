@@ -152,7 +152,7 @@ function eventEnvelope(value: unknown): XPostEnvelope | undefined {
 }
 
 async function receiveStream(
-  options: XReceiveOptions & { onBudgetPause: (until: number) => void },
+  options: XReceiveOptions & { onBudgetPause: (until: number) => void; onConnected: () => void },
   backfillMs: number,
 ): Promise<void> {
   const controller = new AbortController();
@@ -200,12 +200,21 @@ async function receiveStream(
   const unsubscribe = options.api.spend.subscribe(() => {
     void checkBudget().catch((error: unknown) => controller.abort(error));
   });
-  const armIdleTimer = () => {
+  const disarmIdleTimer = () => {
     clearTimeout(idleTimer);
-    idleTimer = setTimeout(
-      () => controller.abort(new Error("X activity stream idle timeout")),
-      25_000,
-    );
+    idleTimer = undefined;
+  };
+  const armIdleTimer = () => {
+    disarmIdleTimer();
+    const timer = setTimeout(() => {
+      // After a local stall, let buffered socket reads run before declaring X idle.
+      setImmediate(() => {
+        if (idleTimer === timer) {
+          controller.abort(new Error("X activity stream idle timeout"));
+        }
+      });
+    }, 25_000);
+    idleTimer = timer;
   };
   const receiveBatches = async (source: ReadableStreamDefaultReader<Uint8Array>) => {
     const decoder = new TextDecoder();
@@ -235,7 +244,7 @@ async function receiveStream(
             });
           } finally {
             wakeReader = undefined;
-            clearTimeout(idleTimer);
+            disarmIdleTimer();
           }
         }
         if (drainRequested && !ready) {
@@ -295,7 +304,7 @@ async function receiveStream(
     } finally {
       receiveDone = true;
       wakeConsumer?.();
-      clearTimeout(idleTimer);
+      disarmIdleTimer();
     }
   };
   try {
@@ -313,7 +322,8 @@ async function receiveStream(
     if (signal.aborted) {
       cancelOnAbort();
     }
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
+    options.onConnected();
     options.onStatus?.({
       eventMode: "stream",
       streamConnected: true,
@@ -440,7 +450,7 @@ async function receiveStream(
   } finally {
     closed = true;
     unsubscribe();
-    clearTimeout(idleTimer);
+    disarmIdleTimer();
     controller.abort();
     await backfill;
     signal.removeEventListener("abort", cancelOnAbort);
@@ -528,7 +538,13 @@ export async function runXEvents(
       }
       try {
         await receiveStream(
-          { ...options, onBudgetPause: pauseStream },
+          {
+            ...options,
+            onBudgetPause: pauseStream,
+            onConnected: () => {
+              backoffMs = 1_000;
+            },
+          },
           Math.max(60, (options.pollSeconds ?? 60) * 4) * 1000,
         );
       } catch (error) {
