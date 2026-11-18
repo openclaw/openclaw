@@ -15,6 +15,7 @@ import {
   WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS,
 } from "./crabbox-worker-timeouts.js";
 import type { RecipePreparation } from "./crabbox-worker-warm-image-recipe.js";
+import { listCrabboxWarmImages, type CrabboxState } from "./crabbox-worker-warm-image-store.js";
 
 type ProjectPreparation = NonNullable<
   NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]
@@ -50,8 +51,10 @@ export async function prepareCrabboxWorkerRuntime(params: {
   context: Omit<Parameters<typeof runProvisionSetup>[0], "phase" | "setup">;
   prepareNodeRuntime: NonNullable<Parameters<WorkerProvider["provision"]>[2]>["prepareNodeRuntime"];
   leaseId: string;
+  project?: ProjectPreparation;
   preparationSignal?: AbortSignal;
   assertCurrent: () => void;
+  onPrepared: () => void;
   onSetupFailure: () => void;
 }) {
   if (!params.prepareNodeRuntime) {
@@ -69,6 +72,31 @@ export async function prepareCrabboxWorkerRuntime(params: {
   const timeoutMs = resolveCrabboxNodeEnrollmentTimeoutMs(runtime.bootstrapTimeoutMs);
   return {
     timeoutMs,
+    async inspectPreparedWorkspace() {
+      if (params.project?.preparation) {
+        await prepareCrabboxProjectFiles({
+          ...params.context,
+          id: params.leaseId,
+          project: params.project,
+          inspectPrepared: true,
+          snapshot: {
+            baseCommit: params.project.baseCommit,
+            workerBundle:
+              runtime.workerBundle.bundleHash && runtime.workerBundle.protocolFeatures
+                ? {
+                    bundleHash: runtime.workerBundle.bundleHash,
+                    openclawVersion: runtime.nodeBootstrap.openclawVersion,
+                    protocolFeatures: runtime.workerBundle.protocolFeatures,
+                  }
+                : undefined,
+          },
+          signal: params.preparationSignal,
+          assertCurrent: params.assertCurrent,
+          timeoutMs: () =>
+            remainingProvisionTimeout(params.context.deadline, CRABBOX_SETUP_TIMEOUT_MS),
+        });
+      }
+    },
     async run(scrubScript?: string) {
       params.context.signal?.throwIfAborted();
       runtime.signal?.throwIfAborted();
@@ -93,6 +121,8 @@ export async function prepareCrabboxWorkerRuntime(params: {
         params.onSetupFailure();
         throw error;
       }
+      params.onPrepared();
+      params.assertCurrent();
     },
   };
 }
@@ -106,6 +136,13 @@ export async function prepareCrabboxProjectFiles(params: {
   timeoutMs: () => number;
   signal?: AbortSignal;
   inspectPrepared?: true;
+  snapshot?: {
+    baseCommit: string;
+    workerBundle?: Parameters<
+      NonNullable<ProjectPreparation["inspectPreparedWorkspace"]>
+    >[0]["snapshotWorkerBundle"];
+  };
+  initialSnapshot?: { checkpointId: string; state: CrabboxState };
   recordRecipePreparation?: (metadata: RecipePreparation) => Promise<void>;
   setupSecrets?: Readonly<Record<string, SecretRef>>;
   assertCurrent?: () => void;
@@ -151,11 +188,31 @@ export async function prepareCrabboxProjectFiles(params: {
     }
     await params.project.inspectPreparedWorkspace({
       recordRecipePreparation: params.recordRecipePreparation,
+      ...(params.snapshot
+        ? {
+            snapshot: true,
+            baseCommit: params.snapshot.baseCommit,
+            snapshotWorkerBundle: params.snapshot.workerBundle,
+          }
+        : {}),
       runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
     });
     return undefined;
   }
+  // The fresh fork receipt selects the exact generation, never the requested
+  // checkout's commit or a later current image. Replays supply no initial snapshot.
+  const initialCheckpoint = params.initialSnapshot
+    ? (await listCrabboxWarmImages(params.initialSnapshot.state))
+        .flatMap((image) => [image, image.previous])
+        .find((image) => image?.checkpointId === params.initialSnapshot?.checkpointId)
+    : undefined;
   return await params.project.prepare({
+    ...(initialCheckpoint?.baseCommit
+      ? {
+          snapshotBaseCommit: initialCheckpoint.baseCommit,
+          initialSnapshotCheckpointId: initialCheckpoint.checkpointId,
+        }
+      : {}),
     ...(params.recordRecipePreparation
       ? { recordRecipePreparation: params.recordRecipePreparation }
       : {}),

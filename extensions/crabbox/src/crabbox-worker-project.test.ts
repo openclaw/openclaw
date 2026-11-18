@@ -107,6 +107,120 @@ function captureFailure(receipt: unknown, result: Partial<SpawnResult> = {}) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it.each([BASE_COMMIT, "e".repeat(40)])(
+    "attests only a fresh checkpoint fork, not replay (requested base=%s)",
+    async (baseCommit) => {
+      const f = projectFixture();
+      const preparation = { ...reservePreparation(), purpose: "session" as const };
+      const inspectPreparedWorkspace = vi.fn(async () => {});
+      const first = await f.provision({
+        project: { ...f.options.project, preparation, inspectPreparedWorkspace },
+      });
+      expect(first.node).toEqual({
+        deviceId: "project-node",
+        preparedRuntime: f.options.nodeRuntimeIdentity,
+      });
+      await f.provider.notePreparedDemand?.(
+        { leaseId: first.leaseId, profile: PROFILE },
+        { preparationKey: preparation.key, demandAtMs: preparation.demandAtMs },
+      );
+      inspectPreparedWorkspace.mockClear();
+      const fork = projectOptions([]).options;
+      const forked = await f.provider.provision(PROFILE, "fresh-fork", {
+        ...fork,
+        project: { ...fork.project, baseCommit, preparation, inspectPreparedWorkspace },
+      });
+      const transport = fork.project.prepare.mock.calls[0]![0];
+      expect(transport.snapshotBaseCommit).toBe(BASE_COMMIT);
+      expect(transport.initialSnapshotCheckpointId).toBe(CHECKPOINT_ID);
+      expect(forked.node).toEqual({
+        deviceId: "project-node",
+        preparedRuntime: fork.nodeRuntimeIdentity,
+      });
+      expect(inspectPreparedWorkspace).not.toHaveBeenCalled();
+      const replay = projectOptions([]).options;
+      const replayed = await f.provider.provision(PROFILE, "fresh-fork", {
+        ...replay,
+        project: { ...replay.project, baseCommit, preparation, inspectPreparedWorkspace },
+      });
+      expect(replayed.node).toEqual({ deviceId: "project-node" });
+      expect(replay.project.prepare).not.toHaveBeenCalled();
+      expect(inspectPreparedWorkspace).toHaveBeenCalledOnce();
+      expect(
+        await f.provider.inspect({ leaseId: forked.leaseId, profile: PROFILE }),
+      ).not.toHaveProperty("node.preparedRuntime");
+    },
+  );
+
+  it.each([false, true])(
+    "inspects prepared caches inside the capture claim before checkpoint creation (invalid=%s)",
+    async (invalid) => {
+      const f = projectFixture();
+      const preparation = reservePreparation();
+      const workerBundle = {
+        ...createWorkerArchiveFixture(),
+        bundleHash: "f".repeat(64),
+        protocolFeatures: ["synthetic-feature"],
+      };
+      f.options.prepareNodeRuntime.mockResolvedValue({
+        nodeBootstrap: createNodeBootstrapFixture(),
+        workerBundle,
+        signal: f.options.project.signal,
+      });
+      const inspectPreparedWorkspace = vi.fn<
+        NonNullable<NonNullable<ProvisionOptions["project"]>["inspectPreparedWorkspace"]>
+      >(async (transport) => {
+        if (!transport.snapshot) {
+          return;
+        }
+        expect(transport.baseCommit).toBe(BASE_COMMIT);
+        expect(transport.snapshotWorkerBundle).toEqual({
+          bundleHash: "f".repeat(64),
+          openclawVersion: "2026.8.1",
+          protocolFeatures: ["synthetic-feature"],
+        });
+        expect((await warmImage())?.capture?.phase).toBe("scrubbing");
+        await transport.runScript("verify-snapshot-caches", f.options.project.signal);
+        if (invalid) {
+          throw new Error("Snapshot cache inventory changed");
+        }
+      });
+      const provision = f.provision({
+        project: { ...f.options.project, preparation, inspectPreparedWorkspace },
+      });
+      if (invalid) {
+        await expect(provision).rejects.toThrow("Snapshot cache inventory changed");
+        expect(f.count("create")).toBe(0);
+        expect(f.options.beginNodeEnrollment).not.toHaveBeenCalled();
+      } else {
+        const lease = await provision;
+        const inspection = f.calls.findIndex(
+          (call) => call.options.input === "verify-snapshot-caches",
+        );
+        const checkpoint = f.calls.findIndex((call) => call.argv[2] === "create");
+        expect(inspection).toBeGreaterThan(-1);
+        expect(checkpoint).toBeGreaterThan(inspection);
+        await f.provider.provision(PROFILE, "project", {
+          ...f.options,
+          project: { ...f.options.project, preparation, inspectPreparedWorkspace },
+        });
+        expect(
+          inspectPreparedWorkspace.mock.calls.map(([transport]) => transport.snapshot),
+        ).toEqual([true, undefined]);
+        expect(f.count("create")).toBe(1);
+        expect(lease.node?.deviceId).toBe("project-node");
+        await f.provider.provision(PROFILE, "unclaimed-fork", {
+          ...f.options,
+          project: { ...f.options.project, preparation, inspectPreparedWorkspace },
+        });
+        expect(inspectPreparedWorkspace).toHaveBeenCalledTimes(2);
+        expect(f.count("create")).toBe(1);
+        await f.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
+        expect(inspectPreparedWorkspace).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
   it("skips refused native captures across restart until the refresh interval expires", async () => {
     const now = 1_800_000_000_000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -418,11 +532,11 @@ exec "$CRABBOX_TEST_NODE" "$@"
             )
           : undefined;
       const initial = createWarmProvider(command);
-      const baseline = await initial.provider.provision(
-        PROFILE,
-        "replay-baseline",
-        projectOptions([], undefined, preparation).options,
-      );
+      const baselineOptions = projectOptions([], undefined, preparation).options;
+      const baseline = await initial.provider.provision(PROFILE, "replay-baseline", {
+        ...baselineOptions,
+        project: { ...baselineOptions.project, inspectPreparedWorkspace: async () => {} },
+      });
       await destroyAndWait(initial.provider, { ...baseline, profile: PROFILE });
       await initial.provider.dispose();
       const operation = "prepared-capture-replay";
@@ -485,7 +599,12 @@ exec "$CRABBOX_TEST_NODE" "$@"
       await first.provider.dispose();
       const before = captures;
       const resumed = createWarmProvider(command, initial.stateDir);
-      await resumed.provider.provision(PROFILE, operation, optionsFor(false));
+      const resumedOptions = optionsFor(false);
+      await resumed.provider.provision(PROFILE, operation, resumedOptions);
+      for (const [transport] of vi.mocked(resumedOptions.project.prepare).mock.calls) {
+        expect(transport.initialSnapshotCheckpointId).toBeUndefined();
+        expect(transport.snapshotBaseCommit).toBeUndefined();
+      }
       expect(captures - before).toBe(replayCaptures);
       const enrolled = optionsFor(false);
       await resumed.provider.provision(PROFILE, operation, enrolled);
@@ -531,6 +650,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
           ...options.project,
           // Reserves still wait for upload; first session captures can use --wait=false.
           preparation: reservePreparation(),
+          inspectPreparedWorkspace: async () => {},
         },
       })
       .then(
