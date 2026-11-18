@@ -96,11 +96,16 @@ it.each([{ flags: [] }, { flags: ["--include-test-types", "--include-architectur
     };
     try {
       const full = await trace();
-      const nonlint = await trace("policy", "preflight", "typecheck", "preflight");
+      const guards = await trace("policy", "preflight", "preflight");
+      const types = await trace("typecheck");
+      const nonlint = [...guards, ...types];
       const lint = await trace("lint");
       expect(lint).toEqual([["lint", "--base", "fixture-base"], ["format:check"]]);
-      expect(nonlint).toEqual(
-        full.filter(([command]) => command !== "lint" && command !== "format:check"),
+      expect(guards).toEqual(
+        full.filter(
+          ([command]) =>
+            !command?.startsWith("tsgo:") && command !== "lint" && command !== "format:check",
+        ),
       );
       expect([...nonlint, ...lint].map((args) => JSON.stringify(args)).toSorted()).toEqual(
         full.map((args) => JSON.stringify(args)).toSorted(),
@@ -135,7 +140,7 @@ it("runs the legacy-store guard once while preserving standalone and fail-fast c
   const exitCode = process.exitCode;
   try {
     expect(expand("check:architecture").filter((name) => name === guard)).toHaveLength(1);
-    for (const stages of [[], ["preflight"], ["policy"], ["preflight", "typecheck", "policy"]]) {
+    for (const stages of [[], ["preflight"], ["policy"], ["preflight", "policy"]]) {
       run.mockClear();
       await main(["--include-architecture", ...stages.flatMap((stage) => ["--stage", stage])]);
       const commands = run.mock.calls.flatMap(([command]) => expand(command.args![0]!));
@@ -146,9 +151,13 @@ it("runs the legacy-store guard once while preserving standalone and fail-fast c
     }
     run.mockClear();
     run.mockImplementation(async ({ args }) => (args?.[0] === guard ? 7 : 0));
-    await main(["--include-architecture"]);
+    await main(["--include-architecture", "--stage", "preflight", "--stage", "policy"]);
     expect(process.exitCode).toBe(7);
-    expect(run.mock.calls.some(([command]) => command.args?.[0] === "tsgo:prod")).toBe(false);
+    expect(
+      run.mock.calls.some(
+        ([command]) => command.args?.[0] === "check:architecture:after-preflight",
+      ),
+    ).toBe(false);
   } finally {
     run.mockRestore();
     stderr.mockRestore();
