@@ -481,7 +481,7 @@ describe.skipIf(process.platform === "win32")(
       );
       // The selected release's own verdict replaces the shipped data-at-risk stamp.
       expect(recovered.result.recovery).not.toMatchObject({ reason: "state-migration-started" });
-      expect(recovered.result.recovery?.dataAtRisk).toBeUndefined();
+      expect(recovered.result.recovery).not.toHaveProperty("dataAtRisk");
     });
 
     it.each([
