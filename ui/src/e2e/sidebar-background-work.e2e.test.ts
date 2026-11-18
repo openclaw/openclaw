@@ -84,6 +84,7 @@ suite.define(() => {
       );
       const hiddenRun = sessionRow("agent:main:subagent:build-worker", "Build worker", now - 7, {
         spawnedBy: parentKey,
+        subagentRunState: "paused",
         backgroundProcessCount: 1,
       });
       const descendants = [...children, hiddenRun];
@@ -117,8 +118,8 @@ suite.define(() => {
       const toggle = parentRow.locator("[data-child-session-toggle]");
       await ui.visible(toggle);
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      // The parent renders before the child roster. Its own background ring stays
-      // valid until the loaded hidden run supplies the subagent summary.
+      // Only a paused worker with pending commands contributes this parent summary;
+      // an ended worker's leftover processes belong on its own row.
       await ui.visible(
         parentRow.locator(".sidebar-session-indicator").getByRole("img", {
           name: "Subagents working",
