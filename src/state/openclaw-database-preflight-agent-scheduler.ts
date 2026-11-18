@@ -37,11 +37,6 @@ const FAST_INSPECTION_TURNS = 8;
 let agentDatabaseSnapshotSlotsInUse = 0;
 const agentDatabaseSnapshotSlotWaiters: Array<() => void> = [];
 
-/** Inspections waiting to copy a fallback snapshot while two copies are already open. */
-export function pendingAgentDatabaseSnapshotSlots(): number {
-  return agentDatabaseSnapshotSlotWaiters.length;
-}
-
 /** Holds one of the two fallback-snapshot slots until the caller finishes cleanup. */
 export async function acquireAgentDatabaseSnapshotSlot(signal?: AbortSignal): Promise<() => void> {
   signal?.throwIfAborted();

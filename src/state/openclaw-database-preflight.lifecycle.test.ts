@@ -4,7 +4,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { observeSettlement as trackSettlement } from "../agents/promise-settlement.test-support.js";
 import * as sqliteInspection from "../infra/sqlite-readonly-worker.js";
@@ -20,7 +25,6 @@ import {
   closeDatabases,
   execSql,
 } from "./database-preflight-fixtures.test-support.js";
-import { pendingAgentDatabaseSnapshotSlots } from "./openclaw-database-preflight-agent-scheduler.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -460,7 +464,9 @@ it.each(["cancel", "failure"] as const)(
   },
 );
 
-it("keeps fallback snapshot preparation and cleanup within two slots after startup release", async () => {
+it("keeps fallback snapshot preparation and cleanup within two slots after startup release", async ({
+  signal,
+}) => {
   const root = tempDirs.make("openclaw-preflight-snapshot-cap-");
   const initialized = databaseFixture(path.join(root, "initialized"));
   const ids = ["slot-a", "slot-b", "slot-c", "slot-d"];
@@ -473,24 +479,32 @@ it("keeps fallback snapshot preparation and cleanup within two slots after start
   }
   const sourcePaths = new Set(paths.map((pathname) => fs.realpathSync.native(pathname)));
   const prepare = snapshots.prepareSqliteReadOnlyLocation;
-  const hold = createDeferred();
+  const releaseFirst = createDeferred();
+  const releaseRest = createDeferred();
+  const thirdPrepared = createDeferred();
+  const snapshotsCleaned = createDeferred();
   let inFlight = 0;
   let peak = 0;
   let cleanupActive = 0;
   let cleanupPeak = 0;
   let preparedCount = 0;
+  let cleanedCount = 0;
   vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation(
     async (pathname, options) => {
       const preparedLocation = await prepare(pathname, options);
       if (pathname === statePath || !sourcePaths.has(pathname)) {
         return preparedLocation;
       }
+      const ordinal = preparedCount;
       preparedCount += 1;
       inFlight += 1;
       peak = Math.max(peak, inFlight);
-      // Stay here, before the snapshot reader starts, so the startup timer can
-      // release the inspection slots while these two copies are still open.
-      await hold.promise;
+      if (ordinal === 2) {
+        thirdPrepared.resolve();
+      }
+      // Hold the copy open so startup can release its inspection slots while
+      // these snapshots still occupy the two fallback slots.
+      await (ordinal === 0 ? releaseFirst.promise : releaseRest.promise);
       return {
         ...preparedLocation,
         cleanupAsync: async () => {
@@ -501,56 +515,69 @@ it("keeps fallback snapshot preparation and cleanup within two slots after start
           } finally {
             cleanupActive -= 1;
             inFlight -= 1;
+            cleanedCount += 1;
+            if (cleanedCount === ids.length) {
+              snapshotsCleaned.resolve();
+            }
           }
         },
       };
     },
   );
-  const waitUntil = async (ready: () => boolean, label: string) => {
-    const deadline = Date.now() + 20_000;
-    while (!ready()) {
-      if (Date.now() > deadline) {
-        throw new Error(
-          `${label} (prepared=${preparedCount}, inFlight=${inFlight}, cleanup=${cleanupActive}, waiting=${pendingAgentDatabaseSnapshotSlots()})`,
-        );
-      }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 50);
-      });
-    }
-  };
   try {
-    await withAgentDatabaseStartupAdmission(
-      async () => {
-        const controller = new AbortController();
-        const run = inspectDatabases({
-          supportedVersions,
-          agentAdmissionConfig: agentConfig(ids, "slot-a"),
-          configuredAgentDatabaseCandidatePaths: paths,
-          verifyCurrentSchemaShape: true,
-          requireStartupMigrationReadiness: true,
-          signal: controller.signal,
-        });
-        void run.catch(() => undefined);
-        await waitUntil(() => inFlight === 2, "startup did not open two fallback snapshots");
-        await waitUntil(
-          () => pendingAgentDatabaseSnapshotSlots() >= 1,
-          "a later snapshot did not wait after the startup slots were released",
-        );
-        expect({ inFlight, preparedCount, peak }).toEqual({
-          inFlight: 2,
-          preparedCount: 2,
-          peak: 2,
-        });
-        controller.abort(new Error("snapshot cap observed"));
-        hold.resolve();
-        await expect(run).resolves.toMatchObject({ incompatible: [], indeterminate: [] });
-        expect(peak).toBeLessThanOrEqual(2);
-        expect(cleanupPeak).toBeLessThanOrEqual(2);
-      },
-      { deferInspections: true },
+    await withinTest(
+      withAgentDatabaseStartupAdmission(
+        async () => {
+          const run = inspectDatabases({
+            supportedVersions,
+            agentAdmissionConfig: agentConfig(ids, "slot-a"),
+            configuredAgentDatabaseCandidatePaths: paths,
+            verifyCurrentSchemaShape: true,
+            requireStartupMigrationReadiness: true,
+          });
+          // Startup returns while the first two copies are still open. A third
+          // copy entering here would mean the fallback cap was not held.
+          const foreground = await awaitGateBeforeSettlement(
+            run,
+            thirdPrepared.promise,
+            "a third fallback snapshot started before startup foreground settlement",
+          );
+          expect({ inFlight, preparedCount, peak, cleanedCount }).toEqual({
+            inFlight: 2,
+            preparedCount: 2,
+            peak: 2,
+            cleanedCount: 0,
+          });
+          expect(foreground).toMatchObject({ incompatible: [], indeterminate: [] });
+          releaseFirst.resolve();
+          await withinTest(thirdPrepared.promise, signal);
+          expect({ inFlight, preparedCount, peak }).toEqual({
+            inFlight: 2,
+            preparedCount: 3,
+            peak: 2,
+          });
+          releaseRest.resolve();
+          await withinTest(snapshotsCleaned.promise, signal);
+          expect({
+            preparedCount,
+            cleanedCount,
+            inFlight,
+            peak,
+          }).toEqual({
+            preparedCount: ids.length,
+            cleanedCount: ids.length,
+            inFlight: 0,
+            peak: 2,
+          });
+          expect(cleanupPeak).toBeGreaterThan(0);
+          expect(cleanupPeak).toBeLessThanOrEqual(2);
+        },
+        { deferInspections: true },
+      ),
+      signal,
     );
   } finally {
-    hold.resolve();
+    releaseFirst.resolve();
+    releaseRest.resolve();
   }
 });
