@@ -191,7 +191,8 @@ If a channel plugin needs to be installed during a flag-driven add command, Open
 
 Both guided setup and flag-driven setup pass through the selected channel's parser, validation, account resolution, config writer, and post-write hooks. Unsupported flags fail with the owning channel's setup error instead of being accepted through a global input bag.
 
-New or changed SecretRef-supported channel credentials are saved as protected
+New or changed SecretRef-supported channel credentials entered in `channels add`,
+`configure`, onboarding, `agents add` or chat channel setup are saved as protected
 entries in the [shared secret store](/gateway/secrets/secret-store-and-egress).
 `openclaw.json` keeps a `store` SecretRef instead of the credential. Existing
 references, environment-backed setup, and token-file choices are preserved.

@@ -11,6 +11,61 @@ import { getPath, setPathExistingStrict } from "../../secrets/path-utils.js";
 import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
 import { discoverConfigSecretTargets } from "../../secrets/target-registry.js";
 
+/** Moves new or changed plaintext channel credentials into the protected secret store. */
+export async function storeChannelSetupCredentials(params: {
+  cfg: OpenClawConfig;
+  previousConfig: OpenClawConfig;
+  storedNames?: string[];
+  beforePersistentEffect?: () => Promise<void>;
+  assertCurrent?: () => void;
+}): Promise<OpenClawConfig> {
+  let sourceConfig = params.cfg;
+  for (const target of discoverConfigSecretTargets(sourceConfig)) {
+    if (
+      target.pathSegments[0] !== "channels" ||
+      target.entry.secretShape !== "secret_input" ||
+      isDeepStrictEqual(target.value, getPath(params.previousConfig, target.pathSegments)) ||
+      !classifyConfigSecretTarget(sourceConfig, target).plaintext
+    ) {
+      continue;
+    }
+    // A fresh 128-bit name avoids changing a credential another config key uses.
+    const name = `CHANNEL_SETUP_${randomBytes(16).toString("hex").toUpperCase()}`;
+    const value = typeof target.value === "string" ? target.value : JSON.stringify(target.value);
+    await params.beforePersistentEffect?.();
+    await runWithLocalStateOwner({
+      method: "secrets.store.set",
+      params: { name, value, kind: "secret" },
+      target: target.path,
+      assertTargetCurrent: params.assertCurrent,
+      runLocal: async ({ env, assertCurrent }) => {
+        const { writeSecretStoreEntry } = await import("../../secrets/store/secret-store.js");
+        await writeSecretStoreEntry({
+          scope: { kind: "team" },
+          name,
+          value,
+          kind: "secret",
+          updatedBy: "channel-setup",
+          database: { env },
+          assertCurrent,
+        });
+      },
+    });
+    params.storedNames?.push(name);
+    if (sourceConfig === params.cfg) {
+      sourceConfig = structuredClone(sourceConfig);
+    }
+    setPathExistingStrict(sourceConfig, target.pathSegments, {
+      source: "store",
+      provider: resolveDefaultSecretProviderAlias(sourceConfig, "store", {
+        preferFirstProviderForSource: true,
+      }),
+      id: name,
+    });
+  }
+  return sourceConfig;
+}
+
 export async function persistChannelPluginConfig(params: {
   cfg: OpenClawConfig;
   pluginInstalled: boolean;
@@ -28,50 +83,11 @@ export async function persistChannelPluginConfig(params: {
   const storedNames: string[] = [];
   try {
     if (setup) {
-      for (const target of discoverConfigSecretTargets(sourceConfig)) {
-        if (
-          target.pathSegments[0] !== "channels" ||
-          target.entry.secretShape !== "secret_input" ||
-          isDeepStrictEqual(target.value, getPath(setup.previousConfig, target.pathSegments)) ||
-          !classifyConfigSecretTarget(sourceConfig, target).plaintext
-        ) {
-          continue;
-        }
-        // A fresh 128-bit name avoids changing a credential another config key uses.
-        const name = `CHANNEL_SETUP_${randomBytes(16).toString("hex").toUpperCase()}`;
-        const value =
-          typeof target.value === "string" ? target.value : JSON.stringify(target.value);
-        await setup.beforePersistentEffect?.();
-        await runWithLocalStateOwner({
-          method: "secrets.store.set",
-          params: { name, value, kind: "secret" },
-          target: target.path,
-          assertTargetCurrent: setup.assertCurrent,
-          runLocal: async ({ env, assertCurrent }) => {
-            const { writeSecretStoreEntry } = await import("../../secrets/store/secret-store.js");
-            await writeSecretStoreEntry({
-              scope: { kind: "team" },
-              name,
-              value,
-              kind: "secret",
-              updatedBy: "channel-setup",
-              database: { env },
-              assertCurrent,
-            });
-          },
-        });
-        storedNames.push(name);
-        if (sourceConfig === params.cfg) {
-          sourceConfig = structuredClone(sourceConfig);
-        }
-        setPathExistingStrict(sourceConfig, target.pathSegments, {
-          source: "store",
-          provider: resolveDefaultSecretProviderAlias(sourceConfig, "store", {
-            preferFirstProviderForSource: true,
-          }),
-          id: name,
-        });
-      }
+      sourceConfig = await storeChannelSetupCredentials({
+        cfg: sourceConfig,
+        ...setup,
+        storedNames,
+      });
       await setup.beforePersistentEffect?.();
       setup.assertCurrent?.();
     }
