@@ -34,6 +34,7 @@ import { discardPackageUpdateStage } from "./package-update-stage-cleanup.js";
 import {
   PackageUpdateActivationError,
   type PackageActivationOptions,
+  type PackagePostInstallVerifier,
   type PackageUpdateTransaction,
   type StagedPackageInstall,
   type StagedPackageSwapParams,
@@ -42,7 +43,6 @@ import { removePackageUpdatePath, swapStagedPackageInstall } from "./package-upd
 import {
   createPackageVerificationFailureStep,
   validateStagedPackage,
-  type PackagePostInstallVerifier,
 } from "./package-update-verification-step.js";
 import { realpathOrResolve } from "./path-existence.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";

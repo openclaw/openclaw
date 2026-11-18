@@ -1,7 +1,6 @@
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
 import type { PackageReleaseRecord, PackageReleaseTarget } from "./package-release-slot.js";
 import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
-import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
 import type { NpmGlobalPrefixLayout } from "./update-npm-prefix.js";
@@ -58,6 +57,11 @@ export type StagedPackageInstall = {
   /** Why this update could not use the release layout; reported by the swap that replaces it. */
   releaseUnavailable?: string;
 };
+
+export type PackagePostInstallVerifier = (
+  root: string,
+  results: UpdateStepResult[],
+) => Promise<UpdateStepResult | null>;
 
 export type StagedPackageSwapParams = {
   stage: StagedPackageInstall;
