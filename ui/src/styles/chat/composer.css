@@ -522,8 +522,7 @@
 }
 .chat-browser-annotation-card__meta > span,
 .chat-controls__model-option-title,
-.chat-controls__model-option-meta,
-.chat-controls__model-option-auth-warning > span {
+.chat-controls__model-option-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -871,8 +870,7 @@
 }
 
 .chat-talk-input-picker__trigger:focus-visible,
-.chat-controls__inline-select-trigger:focus-visible,
-.chat-controls__provider-toggle:focus-visible {
+.chat-controls__inline-select-trigger:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -2124,7 +2122,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   color: var(--text-strong);
 }
 
-.chat-controls__speed-toggle:disabled,
 .chat-controls__reasoning-option:disabled {
   cursor: not-allowed;
   opacity: 0.55;
@@ -2494,34 +2491,8 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding-block: 0;
 }
 
-.chat-controls__provider-toggle {
-  display: flex;
-  align-items: center;
-  gap: inherit;
-  min-width: 0;
-  min-height: 32px;
-  /* Long account metadata shrinks before the provider toggle's contents. */
-  flex: 1 0 auto;
-  padding: 6px 0;
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: start;
-  cursor: var(--cursor-action);
-}
-
-.chat-controls__provider-toggle:focus-visible {
-  border-radius: var(--radius-sm);
-}
-
-.chat-controls__provider-toggle .chat-controls__inline-select-chevron,
 .chat-controls__model-more-toggle .chat-controls__inline-select-chevron {
   transform: rotate(0deg);
-}
-
-.chat-controls__provider-toggle[aria-expanded="true"] .chat-controls__inline-select-chevron {
-  transform: rotate(180deg);
 }
 
 .chat-controls__auth-meta {
@@ -2828,29 +2799,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   padding-inline-start: 6px;
 }
 
-.chat-controls__model-option-auth-warning {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  min-width: 0;
-  flex: 0 1 auto;
-  color: var(--warn);
-  font-size: 10px;
-  font-weight: 550;
-}
-
-.chat-controls__model-option-auth-warning::before {
-  content: "\00b7";
-  margin-inline: 6px 3px;
-  color: var(--muted);
-}
-
-.chat-controls__model-option-auth-warning svg {
-  width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-}
-
 .chat-controls__model-chat-only-info {
   display: inline-flex;
   align-items: center;
@@ -2950,12 +2898,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 .chat-controls__model-catalog-action:hover,
 .chat-controls__model-catalog-action:focus-visible {
   background: var(--accent);
-}
-
-.chat-controls__fast-mode-title {
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 500;
 }
 
 .chat-controls__effort-value {
@@ -3130,20 +3072,15 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 }
 
-.chat-controls__speed-panel,
-.chat-controls__fast-mode-row {
+.chat-controls__speed-panel {
+  display: grid;
   gap: 8px;
   padding: 11px 12px;
 }
 
 /* Access keeps its existing section boundary; Effort and Speed form one group. */
-.chat-controls__effort-menu > .chat-controls__reasoning-panel:not(:first-child),
-.chat-controls__fast-mode-row {
+.chat-controls__effort-menu > .chat-controls__reasoning-panel:not(:first-child) {
   border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-}
-
-.chat-controls__speed-panel {
-  display: grid;
 }
 
 .chat-controls__speed-options {
@@ -3186,24 +3123,10 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   opacity: 0.55;
 }
 
-.chat-controls__fast-mode-row {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.chat-controls__fast-mode-icon {
-  display: inline-flex;
-  width: var(--chat-composer-chip-icon, 14px);
-  height: var(--chat-composer-chip-icon, 14px);
-  color: var(--accent);
-  flex: 0 0 var(--chat-composer-chip-icon, 14px);
-}
-
 /* The filled lightning carries more visual mass than the provider mark, so a
    14px box keeps it one step above that mark without outweighing the chip.
    The footer svg rule below makes the glyph follow this box rather than the
-   footer icon token; the fast-mode row keeps the full chip icon token. */
+   footer icon token. */
 .chat-controls__effort-zap {
   display: inline-flex;
   width: 14px;
@@ -3256,50 +3179,12 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 }
 
-.chat-controls__fast-mode-icon svg,
 .chat-controls__effort-zap svg,
 .agent-chat__composer-footer .chat-controls__effort-zap svg {
   width: 100%;
   height: 100%;
   fill: currentColor;
   stroke: currentColor;
-}
-
-.chat-controls__fast-mode-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.chat-controls__fast-mode-description {
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 10px;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* The button owns switch semantics; the shared track inside draws it. Without
-   the flex lock the row's 1fr copy column squeezes the track down to the knob. */
-.chat-controls__speed-toggle {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-}
-
-.chat-controls__speed-toggle:focus-visible {
-  outline: none;
-}
-
-.chat-controls__speed-toggle:focus-visible .settings-toggle__control {
-  outline: 3px solid var(--ring);
-  outline-offset: 1px;
 }
 
 .chat-controls__reasoning-option {
@@ -3509,10 +3394,6 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 @media (max-width: 640px) {
-  .chat-controls__provider-toggle {
-    min-height: 44px;
-  }
-
   /* A floor, not a fixed width: a composer wider than 560px still shows the label. */
   .agent-chat__composer-meta .chat-controls__permission-trigger {
     min-width: 44px;
