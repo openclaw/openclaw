@@ -20,4 +20,11 @@
 # latest-stable upgrade proof requested by review — additive columns and
 # index arrive, existing intent rows preserved, stored location format
 # accepted on the migrated table.
-609
+# standing-intents.postgres.test.ts: location-intent creation must be
+# rejected on PostgreSQL agents with an actionable error (keyword intents
+# stay engine-neutral) — regression for the review's silent no-op finding.
+# location-intent-consumer.test.ts: a crossing fix arriving while the
+# baseline pass is still evaluating must be preserved and fired, not
+# dropped — regression for the review's fix-loss finding; back-to-back
+# synchronous handle() calls make the mid-evaluation arrival deterministic.
+686

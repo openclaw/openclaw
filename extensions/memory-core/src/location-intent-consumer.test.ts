@@ -20,7 +20,7 @@ import {
   registerLocationIntentConsumer,
   settleLocationIntentFiresForTest,
 } from "./location-intent-consumer.js";
-import { createLocationStandingIntent } from "./standing-intents.js";
+import { createLocationStandingIntent, listStandingIntents } from "./standing-intents.js";
 
 const { sendNodeIntentAlertMock } = vi.hoisted(() => ({
   sendNodeIntentAlertMock: vi.fn(async () => ({
@@ -157,5 +157,47 @@ describe("memory-core location.update consumer integration", () => {
     await settleLocationIntentFiresForTest();
     expect(queuedTexts()).toEqual([]);
     await settleLocationIntentFiresForTest();
+  });
+
+  it("preserves a crossing fix that arrives while the baseline pass is still evaluating", async () => {
+    // Regression for the review finding: the in-flight set was keyed only
+    // by nodeId, so a fix arriving mid-evaluation was discarded. If the
+    // inside baseline is still being processed when the outside crossing
+    // arrives, the crossing must be evaluated next, not dropped — otherwise
+    // the exit reminder is lost and a later return inside masks it.
+    await createLocationStandingIntent({
+      agentId: "main",
+      description: "Crossing during evaluation must still fire.",
+      nodeId: "iphone",
+      direction: "exit",
+      centerLat: 57.697_47,
+      centerLon: 11.950_73,
+      radiusMeters: 55,
+      deliveryTarget: DELIVERY_SESSION,
+      creatorSender: "owner-sender",
+    });
+
+    const api = makeApi() as never as Parameters<typeof registerLocationIntentConsumer>[0];
+    registerLocationIntentConsumer(api);
+    const handle = (api.registerNodeEventConsumer.mock.calls[0]?.[0] as { handle: ConsumerHandle })
+      .handle;
+
+    // Back-to-back synchronous handle() calls: the second fix is guaranteed
+    // to arrive while the first pass is still evaluating. The old code
+    // dropped it; the queue must preserve and evaluate it.
+    handle({ nodeId: "iphone", payload: inside });
+    handle({ nodeId: "iphone", payload: outside });
+    await settleLocationIntentFiresForTest();
+
+    // The exit fence fired from the preserved crossing: exactly one wake.
+    const texts = queuedTexts();
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain("Crossing during evaluation must still fire.");
+    expect(sendNodeIntentAlertMock).toHaveBeenCalledTimes(1);
+
+    const rows = await listStandingIntents({ agentId: "main" });
+    expect(
+      rows.find((row) => row.description === "Crossing during evaluation must still fire.")?.status,
+    ).toBe("done");
   });
 });

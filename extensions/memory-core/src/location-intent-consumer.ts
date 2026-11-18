@@ -20,18 +20,25 @@ type LocationUpdatePayload = {
   source: string;
 };
 
-/** Fixes currently being evaluated; a duplicate is dropped, not queued. */
-type InFlightState = { active: Set<string> };
+type PendingFix = { lat: number; lon: number; accuracyMeters: number; source: string };
+
+/** Per-node evaluation state: draining node ids and their ordered fix queues. */
+type InFlightState = { active: Set<string>; pending: Map<string, PendingFix[]> };
 
 const inFlight = resolveGlobalSingleton<InFlightState>(
   Symbol.for("openclaw.memoryCore.locationIntentFires"),
-  () => ({ active: new Set<string>() }),
+  () => ({ active: new Set<string>(), pending: new Map<string, PendingFix[]>() }),
 );
 
-/** Resolves once every in-flight consumer fire pass has settled (tests use this). */
+/** Resolves once every in-flight and queued consumer fire pass has settled (tests use this). */
 export async function settleLocationIntentFiresForTest(): Promise<void> {
   const deadline = Date.now() + 15_000;
-  while (inFlight.active.size > 0) {
+  for (;;) {
+    const draining = inFlight.active.size > 0;
+    const queued = [...inFlight.pending.values()].some((queue) => queue.length > 0);
+    if (!draining && !queued) {
+      return;
+    }
     if (Date.now() > deadline) {
       throw new Error(
         `location intent fires still in flight for: ${[...inFlight.active].join(", ")}`,
@@ -43,8 +50,12 @@ export async function settleLocationIntentFiresForTest(): Promise<void> {
 
 /**
  * Registers the plugin-owned `location.update` consumer. Fire passes are
- * sequential per fix and idempotent: duplicate coordinates in flight are
- * dropped, and each armed row is atomically transitioned at most once.
+ * sequential per node: while one fix is being evaluated, later fixes for that
+ * node are coalesced into an ordered per-node queue (identical consecutive
+ * fixes collapse to one entry) and drained in order when the in-flight pass
+ * completes. A distinct fix is never discarded — an exit crossing that
+ * arrives while the inside baseline is still evaluating is evaluated next,
+ * not lost. Each armed row still transitions atomically at most once.
  */
 export function registerLocationIntentConsumer(api: OpenClawPluginApi): void {
   api.registerNodeEventConsumer({
@@ -53,15 +64,61 @@ export function registerLocationIntentConsumer(api: OpenClawPluginApi): void {
       // The gateway router already validated this payload against
       // NodeLocationUpdatePayloadSchema; narrow locally for typing only.
       const fix = payload as LocationUpdatePayload;
-      if (inFlight.active.has(nodeId)) {
-        return;
+      const queue = inFlight.pending.get(nodeId) ?? [];
+      const last = queue.at(-1);
+      if (
+        last &&
+        last.lat === fix.lat &&
+        last.lon === fix.lon &&
+        last.accuracyMeters === fix.accuracyMeters &&
+        last.source === fix.source
+      ) {
+        // Identical consecutive fix: already queued, nothing to add.
+        if (inFlight.active.has(nodeId)) {
+          return;
+        }
+      } else {
+        queue.push({
+          lat: fix.lat,
+          lon: fix.lon,
+          accuracyMeters: fix.accuracyMeters,
+          source: fix.source,
+        });
       }
-      inFlight.active.add(nodeId);
-      void evaluateFix(api, nodeId, fix).finally(() => {
-        inFlight.active.delete(nodeId);
-      });
+      inFlight.pending.set(nodeId, queue);
+      if (inFlight.active.has(nodeId)) {
+        return; // The draining pass picks the queue up on completion.
+      }
+      void drainNode(api, nodeId);
     },
   });
+}
+
+/** Drains a node's queued fixes one at a time; each fix is fully evaluated before the next. */
+async function drainNode(api: OpenClawPluginApi, nodeId: string): Promise<void> {
+  inFlight.active.add(nodeId);
+  try {
+    for (;;) {
+      const queue = inFlight.pending.get(nodeId);
+      const next = queue?.shift();
+      if (!next) {
+        if (queue) {
+          inFlight.pending.delete(nodeId);
+        }
+        return;
+      }
+      if (queue.length === 0) {
+        inFlight.pending.delete(nodeId);
+      }
+      await evaluateFix(api, nodeId, next);
+    }
+  } finally {
+    inFlight.active.delete(nodeId);
+    // A fix may have arrived between the last shift and this finally; restart.
+    if ((inFlight.pending.get(nodeId)?.length ?? 0) > 0 && !inFlight.active.has(nodeId)) {
+      void drainNode(api, nodeId);
+    }
+  }
 }
 
 async function evaluateFix(

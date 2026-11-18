@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { postgresProductScope } from "./postgres-product.test-support.js";
 import {
   cancelStandingIntent as cancel,
+  createLocationStandingIntent,
   createStandingIntent,
   encodeStandingIntentChannelScope as channelScope,
   encodeStandingIntentSenderScope as senderScope,
@@ -98,5 +99,39 @@ describe.skipIf(!database.connection)("PostgreSQL standing intent product flow",
     const late = await create("late prompt trigger", { triggerKeywords: ["amethyst orbit"] });
     const prompt = `${Array.from({ length: 1000 }, (_, index) => `unrelated${index}`).join(" ")} amethyst orbit`;
     expect((await match({ prompt })).map((intent) => intent.id)).toEqual([late.id]);
+  });
+
+  it("rejects location-intent creation with an actionable error while keyword intents keep working", async () => {
+    // Location evaluation is v1 SQLite-agent storage; the fire path
+    // discards every fix on PostgreSQL. Accepting the create would report
+    // a fence as armed that can never fire, so creation must refuse with
+    // guidance instead (regression for the silent no-op gap).
+    await expect(
+      selected(() =>
+        createLocationStandingIntent({
+          agentId: "main",
+          description: "Postgres fence that must not arm",
+          nodeId: "iphone",
+          direction: "enter",
+          centerLat: 57.697_47,
+          centerLon: 11.950_73,
+          radiusMeters: 55,
+          deliveryTarget: "agent:main:main",
+          creatorSender: "owner-sender",
+        }),
+      ),
+    ).rejects.toThrow(/not supported on PostgreSQL agents.*SQLite storage/u);
+    // Keyword intents remain engine-neutral and fully functional.
+    const keyword = await create("keyword intent still works", {
+      triggerKeywords: ["copper lantern"],
+    });
+    expect(keyword.status).toBe("armed");
+    expect((await match({ prompt: "the copper lantern is lit" })).map((i) => i.id)).toEqual([
+      keyword.id,
+    ]);
+    const listed = await selected(() => list({ agentId: "main" }));
+    expect(listed.some((intent) => intent.description === "Postgres fence that must not arm")).toBe(
+      false,
+    );
   });
 });

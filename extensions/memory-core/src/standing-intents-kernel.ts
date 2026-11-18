@@ -140,6 +140,17 @@ export function createStandingIntentInDatabase(
   db: EngineConnection,
   row: StandingIntentRow,
 ): StandingIntent {
+  if (isPostgresSqlConnection(db) && row.trigger_kind === "location") {
+    // Location intents are v1 SQLite-agent storage; Postgres agents match on
+    // turns instead. Rejecting at create is the honest contract: accepting a
+    // location row on a PostgreSQL agent would report it armed while the
+    // fire path silently discards every fix, so the reminder could never
+    // fire. Keyword intents keep working: their turn matching is
+    // engine-neutral.
+    throw new Error(
+      "location-triggered standing intents are not supported on PostgreSQL agents; this agent needs SQLite storage before fences can be armed",
+    );
+  }
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
   invalidateStandingIntentLifecycle(db);
   executeSqliteQuerySync(db, kysely.insertInto("standing_intents").values(row));
@@ -342,7 +353,10 @@ export function fireLocationStandingIntentsInDatabase(
   const nowMs = params.nowMs ?? Date.now();
   invalidateStandingIntentLifecycle(db);
   if (isPostgresSqlConnection(db)) {
-    // Location intents are v1 SQLite-agent storage; Postgres agents match on turns instead.
+    // Location intents are v1 SQLite-agent storage; Postgres agents match on
+    // turns instead. Creates are rejected (createStandingIntentInDatabase),
+    // so reaching here with an armed location row means storage moved to
+    // PostgreSQL after arming; discarding is the documented v1 behavior.
     return { fired: [], evaluated: 0 };
   }
   const kysely = getNodeSqliteKysely<StandingIntentDatabase>(db);
