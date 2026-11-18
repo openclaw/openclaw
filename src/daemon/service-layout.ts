@@ -5,7 +5,10 @@ import { isStandaloneRuntimeExecutable } from "../../cli-invocation.mjs";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { consumeRootCommandOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 import { pathExists } from "../infra/fs-safe.js";
-import { resolveGitReleaseEntrypointForLauncher } from "../infra/git-release-paths.js";
+import {
+  GIT_RELEASE_LAUNCHER,
+  resolveGitReleaseEntrypointForLauncher,
+} from "../infra/git-release-paths.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -185,6 +188,38 @@ export function resolveServiceEntrypoint(
   return undefined;
 }
 
+/** The repository's common Git directory, read from `.git` without running Git. */
+async function readGitCommonDir(worktree: string): Promise<string | undefined> {
+  const dotGit = path.join(worktree, ".git");
+  const stat = await fs.lstat(dotGit).catch(() => null);
+  if (stat?.isDirectory()) {
+    return await realpathOrResolve(dotGit);
+  }
+  if (!stat?.isFile()) {
+    return undefined;
+  }
+  const pointer = /^gitdir:\s*(.+)$/mu.exec(await fs.readFile(dotGit, "utf8"))?.[1]?.trim();
+  if (!pointer) {
+    return undefined;
+  }
+  const gitDir = path.resolve(worktree, pointer);
+  const common = (await fs.readFile(path.join(gitDir, "commondir"), "utf8").catch(() => "")).trim();
+  return await realpathOrResolve(common ? path.resolve(gitDir, common) : gitDir);
+}
+
+/** Whether `release` is a linked worktree of the repository that `checkout` belongs to. */
+async function isLinkedWorktreeOf(release: string, checkout: string): Promise<boolean> {
+  const releaseGit = await fs.lstat(path.join(release, ".git")).catch(() => null);
+  if (!releaseGit?.isFile()) {
+    return false;
+  }
+  const [releaseCommon, checkoutCommon] = await Promise.all([
+    readGitCommonDir(release),
+    readGitCommonDir(checkout),
+  ]);
+  return releaseCommon !== undefined && releaseCommon === checkoutCommon;
+}
+
 function tryRealpath(value: string): Promise<string>;
 function tryRealpath(value: string | undefined): Promise<string | undefined>;
 async function tryRealpath(value: string | undefined): Promise<string | undefined> {
@@ -312,6 +347,14 @@ export async function gatewayServiceCommandMatchesRoot(
     [expectedRootReal, serviceRootReal].map((directory) => fs.stat(directory).catch(() => null)),
   );
   if (expected && actual && expected.dev === actual.dev && expected.ino === actual.ino) {
+    return true;
+  }
+  // A Git release-mode service starts the release launcher; each release is a
+  // linked worktree of the checkout, which stays the installation's own root.
+  if (
+    command?.programArguments.some((arg) => path.basename(arg) === GIT_RELEASE_LAUNCHER) &&
+    (await isLinkedWorktreeOf(serviceRootReal, expectedRootReal))
+  ) {
     return true;
   }
   const managed = command?.managedDefinition;

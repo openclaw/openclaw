@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -120,5 +121,57 @@ it.each(["stable", "foreign", "pinned", "paired", "different-mount"] as const)(
     await expect(
       gatewayServiceCommandUsesRoot({ root: managedRoot, command: command.managedDefinition }),
     ).resolves.toBe(true);
+  },
+);
+
+it.each(["own checkout", "other checkout", "copied release"] as const)(
+  "owns a Git release-mode service only for a release worktree of its checkout (%s)",
+  async (release) => {
+    const root = await fs.realpath(dirs.make("openclaw-git-release-owner-"));
+    const git = (cwd: string, ...args: string[]) =>
+      execFileSync(
+        "git",
+        ["-c", "user.name=fixture", "-c", "user.email=fixture@invalid", ...args],
+        { cwd, stdio: "ignore" },
+      );
+    const createCheckout = async (dir: string) => {
+      await fs.mkdir(path.join(dir, "dist"), { recursive: true });
+      await fs.writeFile(path.join(dir, "package.json"), '{"name":"openclaw"}');
+      await fs.writeFile(path.join(dir, "dist", "index.js"), "gateway");
+      git(dir, "init", "-q");
+      git(dir, "add", ".");
+      git(dir, "commit", "-q", "-m", "fixture");
+    };
+    const checkout = path.join(root, "checkout");
+    const other = path.join(root, "other");
+    await createCheckout(checkout);
+    await createCheckout(other);
+    const prefix = path.join(root, "state", "git-install");
+    const releaseRoot = path.join(prefix, "releases", "r1", "lib", "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(releaseRoot), { recursive: true });
+    if (release === "copied release") {
+      await fs.cp(checkout, releaseRoot, {
+        recursive: true,
+        filter: (source) => path.basename(source) !== ".git",
+      });
+    } else {
+      const owner = release === "own checkout" ? checkout : other;
+      git(owner, "worktree", "add", "-q", "--detach", releaseRoot);
+    }
+    const slot = path.join(prefix, "lib", "node_modules", "openclaw");
+    await fs.mkdir(path.dirname(slot), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(slot), releaseRoot), slot);
+    // The installed unit starts the launcher written beside the release link.
+    const launcher = path.join(prefix, "openclaw-launcher.mjs");
+    const command = { programArguments: [process.execPath, launcher, "gateway"] };
+
+    await expect(gatewayServiceCommandUsesRoot({ root: checkout, command })).resolves.toBe(
+      release === "own checkout",
+    );
+    // Without the launcher, a service of the release files is not this checkout's.
+    const direct = [process.execPath, path.join(slot, "dist", "index.js"), "gateway"];
+    await expect(
+      gatewayServiceCommandUsesRoot({ root: checkout, command: { programArguments: direct } }),
+    ).resolves.toBe(false);
   },
 );
