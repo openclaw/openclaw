@@ -15,10 +15,10 @@ import {
 // mock-isolation: these tests spy on global fetch for the model list; the npm Codex
 // version read is covered by openai-codex-discovery.test.ts.
 vi.mock("./codex-client-version.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./codex-client-version.js")>();
+  const { BUNDLED_CODEX_VERSION } = await import("./test-support/codex-version.test-support.js");
   return {
-    ...actual,
-    resolveOpenAICodexClientVersion: async () => actual.OPENAI_CODEX_CLIENT_VERSION_FLOOR,
+    ...(await importOriginal<typeof import("./codex-client-version.js")>()),
+    resolveOpenAICodexClientVersion: async () => BUNDLED_CODEX_VERSION,
   };
 });
 

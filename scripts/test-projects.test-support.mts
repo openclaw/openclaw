@@ -4412,9 +4412,10 @@ function resolveToolingTestTargets(
     semanticTargets.length ||
     conventionalTargets?.length,
   );
+  // A conventional filename is an owner hint, not an exhaustive consumer list.
   const importGraphResult =
     !options.boundedOwners &&
-    !hasDirectOwner &&
+    (!hasDirectOwner || conventionalTargets?.length) &&
     (options.forceFullImportGraph ||
       TOOLING_IMPORTABLE_FILE_EXTENSIONS.some((ext) => implementationPath.endsWith(ext)))
       ? options.forceFullImportGraph

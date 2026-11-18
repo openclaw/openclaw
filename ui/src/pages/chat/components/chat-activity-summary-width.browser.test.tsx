@@ -66,7 +66,7 @@ it.each(
   async ({ thread, presentation }) => {
     const container = document.body.appendChild(document.createElement("div"));
     container.className = "chat";
-    container.style.width = "768px";
+    container.style.width = "640px";
     const root = mountSolid(
       () => (
         <div class={["chat-thread", { "chat-thread--direct": thread === "direct" }]}>

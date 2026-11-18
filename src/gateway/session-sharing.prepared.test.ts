@@ -26,6 +26,7 @@ it("keeps retained policies isolated across memberships and current across autho
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const cfg = rolePolicyConfig();
     const client = roleClient("view") as GatewayWsClient;
+    delete client.preparedSessionProfile;
     const identityId = client.authenticatedUserProfile!.profileId;
     const profiles = await prepareSessionSharingProfiles(client);
     const target = sharingPolicyTarget({ type: "human", id: "another-person" });
@@ -56,6 +57,14 @@ it("keeps retained policies isolated across memberships and current across autho
     const restricted = member!.policy(cfg, [identityId])!;
     expect(restricted.roleForTarget(target)).toBe("viewer");
     expect(restricted.canReadTarget(target)).toBe(false);
+    const unadmitted = await prepareSessionSharingProfiles(client);
+    profiles.admit();
+    setUserProfileRole(identityId, "none");
+    expect(profiles.readCurrent().roleProfile?.role).toBe("view");
+    expect(unadmitted.readCurrent).toThrow();
+    expect((await prepareSessionSharingProfiles(client)).readCurrent().roleProfile?.role).toBe(
+      "none",
+    );
 
     client.authenticatedUserProfile = undefined;
     prepareGatewayRecipientProfile(client);
