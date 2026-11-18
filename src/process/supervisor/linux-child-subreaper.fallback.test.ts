@@ -134,3 +134,45 @@ it("fails loudly when neither enumeration method observes any process stat", () 
   fs.readFile.mockImplementation(() => enoent());
   expect(() => acquireLinuxChildSubreaper()).toThrow(/could not enumerate its children/u);
 });
+
+it("tolerates an ESRCH stat read for a retiring foreign process before an adopted child", () => {
+  const rows = installProcWithoutChildrenFiles();
+  const retiring = 9999;
+  fs.readdir.mockImplementation((path) =>
+    path === "/proc/self/task"
+      ? ["1"]
+      : ["1", "self", "cpuinfo", String(retiring), SELF, ...rows.keys()].map(String),
+  );
+  const census = fs.readFile.getMockImplementation()!;
+  fs.readFile.mockImplementation((path) => {
+    if (path === `/proc/${retiring}/stat`) {
+      // The kernel opened the stat file, but the task was gone by the read.
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    }
+    return census(path);
+  });
+  const owner = acquireLinuxChildSubreaper();
+  rows.set(1234, `1234 (esbuild --servi) Z ${SELF} 1234 1234 0 -1 0 0 0 0 0`);
+  native.world.zombies.add(1234);
+  expect(owner.drain()).toBe(true);
+  expect(native.reapChild).toHaveBeenCalledWith(1234);
+});
+
+it("still fails when the owner's own stat read reports ESRCH", () => {
+  fs.readdir.mockImplementation((path) =>
+    path === "/proc/self/task" ? ["1"] : ["1", "cpuinfo", SELF].map(String),
+  );
+  fs.readFile.mockImplementation((path) => {
+    if (path === "/proc/self/task/1/children") {
+      enoent();
+    }
+    if (path === `/proc/${SELF}/stat`) {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    }
+    if (path === "/proc/1/stat") {
+      return "1 (systemd) S 0 1 1 0 -1 0 0 0 0 0";
+    }
+    enoent();
+  });
+  expect(() => acquireLinuxChildSubreaper()).toThrow("no such process");
+});

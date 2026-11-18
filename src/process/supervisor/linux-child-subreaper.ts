@@ -51,10 +51,17 @@ function childPidsFromProcStat(): number[] {
     try {
       stat = readFileSync("/proc/" + entry + "/stat", "utf8");
     } catch (error) {
-      // A process can retire between the listing and its stat read. This is not
-      // extinction evidence.
-      ignoreMissingPath(error);
-      continue;
+      // A foreign process can retire between the listing and its stat read; the
+      // kernel reports ESRCH when the task is gone by the read despite the open
+      // having succeeded. This is not extinction evidence. The owner's own
+      // entry must stay readable, so its failures are never dismissed here.
+      if (
+        Number(entry) !== process.pid &&
+        (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ESRCH"))
+      ) {
+        continue;
+      }
+      throw error;
     }
     sawStatFile = true;
     // A comm value may contain spaces or parentheses; fields follow its last ')'.
