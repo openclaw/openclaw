@@ -203,6 +203,7 @@ it("requires live shard report evidence for each selected file", () => {
 
 it.each([
   ["test/e2e/crabbox-sandbox.live.test.ts", "OPENCLAW_E2E_CRABBOX"],
+  ["test/gateway-local-codex-goal-resume.live.test.ts", "OPENCLAW_LIVE_CODEX_GOAL_RESUME"],
   [
     "src/gateway/gateway-personal-native-child-abort.live.test.ts",
     "OPENCLAW_LIVE_CODEX_HARNESS_PERSONAL_STOP",

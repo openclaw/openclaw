@@ -104,6 +104,7 @@ const OPTIONAL_LIVE_SHARD_FILE_ENVS = new Map([
   ["src/gateway/gateway-trajectory-export.live.test.ts", ["OPENCLAW_LIVE_CODEX_HARNESS"]],
   ["src/infra/push-apns-http2.live.test.ts", ["OPENCLAW_LIVE_APNS_REACHABILITY"]],
   ["test/e2e/crabbox-sandbox.live.test.ts", ["OPENCLAW_E2E_CRABBOX"]],
+  ["test/gateway-local-codex-goal-resume.live.test.ts", ["OPENCLAW_LIVE_CODEX_GOAL_RESUME"]],
   ["test/image-generation.infer-cli.live.test.ts", ["OPENCLAW_LIVE_INFER_CLI_TEST"]],
 ]);
 const SKIPPED_ASSERTION_STATUSES = new Set(["disabled", "pending", "skipped", "todo"]);
