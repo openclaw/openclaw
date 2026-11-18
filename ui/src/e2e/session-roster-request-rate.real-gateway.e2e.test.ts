@@ -337,7 +337,11 @@ suite.define(() => {
               },
             });
           } catch {
-            recordControlUiE2eFailureFacts(page, { rosterBackCaptureUnavailable: true });
+            try {
+              recordControlUiE2eFailureFacts(page, { rosterBackCaptureUnavailable: true });
+            } catch {
+              // Diagnostic recording must not replace the original wait failure.
+            }
           }
           throw error;
         }
