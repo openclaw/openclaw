@@ -418,7 +418,8 @@ export function createUserTurnTranscriptRecorder(
             ...resolvedTarget,
             logicalTurnId,
             message: projectUserTurnRequesterOrigin(candidate, requesterOrigin),
-            sessionTurnMutation: params.sessionTurnMutation,
+            // Rejection records an audit message, not an admitted Goal.
+            sessionTurnMutation: blocked ? undefined : params.sessionTurnMutation,
             expectedSessionId: options.expectedSessionId || resolvedTarget.expectedSessionId,
             sessionLifecyclePatch: options.sessionLifecyclePatch ?? params.sessionLifecyclePatch,
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,

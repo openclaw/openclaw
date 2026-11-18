@@ -72,6 +72,8 @@ export function resolveRuntimeGoalAdmission(
     sessionEntry: current.entry,
     provider: session.resolvedSessionModel.provider,
     modelId: session.resolvedSessionModel.model,
+    placementRuntime:
+      !local && placement.executionMode === "worker-turn" ? OPENCLAW_AGENT_RUNTIME_ID : undefined,
   });
   if (runtime === OPENCLAW_AGENT_RUNTIME_ID) {
     return !local && placement.executionMode === "worker-turn" ? "worker" : undefined;
