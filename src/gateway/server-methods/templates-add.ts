@@ -44,6 +44,7 @@ import {
 import type { TemplateAddPlan } from "../../templates/types.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { deleteAgentConfigEntry } from "./agents-config-mutations.js";
+import { captureCronCreatorSession } from "./cron-input-validation.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -194,26 +195,45 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
         },
         cronGateway: {
           add: async (input, options) => {
+            let creator: Awaited<ReturnType<typeof captureCronCreatorSession>> | undefined;
             const assertForwardCurrent = () => {
               assertCurrent();
               options?.commitGuard?.();
+              creator?.assertInferenceSelectionCurrent?.();
+              creator?.assertOperatorSourceCurrent?.();
             };
-            assertCurrent();
+            assertForwardCurrent();
             const normalized = normalizeCronJobCreate(input);
             if (!normalized || !validateCronAddParams(normalized)) {
               throw new Error("Template schedule declaration is invalid.");
             }
-            await assertValidCronCreateDelivery(context.getRuntimeConfig(), normalized);
-            assertForwardCurrent();
-            return await context.cron.add(normalized, {
-              commitGuard: assertForwardCurrent,
-              matchesExisting: (job) => {
-                if (job.declarationKey === normalized.declarationKey) {
-                  throw new Error("Template schedule declaration appeared after the list check.");
-                }
-                return false;
-              },
-            });
+            const config = context.getRuntimeConfig();
+            try {
+              creator = await captureCronCreatorSession(
+                normalized,
+                undefined,
+                { client, context, signal },
+                config,
+              );
+              await assertValidCronCreateDelivery(config, normalized);
+              assertForwardCurrent();
+              const actor = creator.createdActor;
+              options?.captureOwnerProfileId?.(
+                actor?.type === "human" && actor.source === "profile" ? actor.id : undefined,
+              );
+              return await context.cron.add(normalized, {
+                ...creator,
+                commitGuard: assertForwardCurrent,
+                matchesExisting: (job) => {
+                  if (job.declarationKey === normalized.declarationKey) {
+                    throw new Error("Template schedule declaration appeared after the list check.");
+                  }
+                  return false;
+                },
+              });
+            } finally {
+              creator?.disposeInferenceAuthorization?.();
+            }
           },
           list: async (agentId) => ({
             jobs: (await context.cron.list({ includeDisabled: true })).filter(
