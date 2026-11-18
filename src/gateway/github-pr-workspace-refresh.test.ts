@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import * as gitCommands from "../infra/git-exec.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
@@ -692,10 +693,23 @@ describe("imported PR source refresh", () => {
     expect(f.writes).toEqual([]);
   });
 
-  it("finishes a merged refresh after its review base failed to prepare", async () => {
+  it("verifies staged recovery entries with the guest running after review preparation fails", async () => {
     const f = await fixture();
+    const paths = [
+      "pr.txt",
+      "literal[1].txt",
+      "space file.txt",
+      ...(process.platform === "win32"
+        ? []
+        : ["tab\tfile.txt", "line\nfile.txt", "colon:file.txt"]),
+    ];
+    await f.advanceHead(Object.fromEntries(paths.map((name) => [name, "original PR contents\n"])));
     await f.invoke();
-    const acceptedHead = await f.advanceHead({ "pr.txt": "advanced PR\n" });
+    const runtime = await bindFixtureRuntime(f);
+    using _ = runtime.projection;
+    const acceptedHead = await f.advanceHead(
+      Object.fromEntries(paths.map((name) => [name, "advanced PR\n"])),
+    );
     const backend = f.sandbox.backend!;
     const run = backend.runShellCommand.bind(backend);
     let failed = false;
@@ -710,8 +724,25 @@ describe("imported PR source refresh", () => {
     expect(failed).toBe(true);
     // The host merge completed, so the imported file stays staged at its pre-refresh entry.
     expect(await f.guestGit("status", "--porcelain", "pr.txt")).toBe("AM pr.txt");
+    const execute = gitCommands.executeGitCommand;
+    let verifiedWhileRunning = false;
+    using verification = vi.spyOn(gitCommands, "executeGitCommand");
+    verification.mockImplementation(async (cwd, argv, options) => {
+      if (argv.includes("ORIG_HEAD")) {
+        expect(runtime.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "during-verification.txt"), "guest work\n");
+        verifiedWhileRunning = true;
+      }
+      return await execute(cwd, argv, options);
+    });
     expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: acceptedHead });
-    expect(await f.guestGit("show", ":pr.txt")).toBe("advanced PR");
+    expect(verifiedWhileRunning).toBe(true);
+    for (const name of paths) {
+      expect(await f.guestGit("show", `:${name}`)).toBe("advanced PR");
+    }
+    expect(await fs.readFile(path.join(f.projection, "during-verification.txt"), "utf8")).toBe(
+      "guest work\n",
+    );
   });
 
   it("refuses unrelated remote history without pinning it as a pending refresh", async () => {
