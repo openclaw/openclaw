@@ -92,7 +92,7 @@ it.each(["saved", "failed"])("waits for the file writer before reporting %s", as
   }
   await vi.waitFor(() => expect(download.disabled).toBe(false));
   expect(status.textContent).toBe(
-    outcome === "saved" ? "Original file downloaded." : "Error: Disk full",
+    outcome === "saved" ? "Original file saved." : "Error: Disk full",
   );
   expect(writer.abort).toHaveBeenCalledTimes(outcome === "saved" ? 0 : 1);
 });

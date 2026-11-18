@@ -36,7 +36,6 @@ import { buildHarnessHostRequester } from "../harness/host-requester.js";
 import { runStructuredInput } from "../harness/structured-input-execution.js";
 import { compileStructuredInputQuestions } from "../harness/structured-input.js";
 import { resolveExecToolConfig } from "../lazy-exec-tool.js";
-import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import {
   restartCliLiveSession,
   createCliLiveSessionCapability,
@@ -159,10 +158,6 @@ async function createPluginToolPermissionHandler(params: {
         turnSourceTo: run.chatId ?? run.currentChannelId,
         turnSourceAccountId: run.agentAccountId,
         turnSourceThreadId: run.currentThreadTs,
-        loopDetection: resolveToolLoopDetectionConfig({
-          cfg: run.config,
-          agentId: run.agentId,
-        }),
       },
     });
     try {
@@ -398,6 +393,7 @@ export async function executePluginOwnedProcess(params: {
     beginCapture: (captureKey: string | undefined, assertCurrent: () => void) => void;
     registerTurnInterrupt?: (interrupt: CliBackendTurnInterrupt | undefined) => void;
     waitForTurnInterrupt?: () => Promise<void>;
+    onInputSubmitted?: () => void;
   };
   liveSession?: {
     requiredGeneration?: string;
@@ -477,7 +473,8 @@ export async function executePluginOwnedProcess(params: {
         getInjection: () => messageInjection,
         signal,
         assertCurrent,
-        cwd: run.cwd ?? run.workspaceDir,
+        context: params.context,
+        onInputSubmitted: params.mcpCapture?.onInputSubmitted,
       }),
     },
   );

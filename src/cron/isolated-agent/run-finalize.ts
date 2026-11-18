@@ -2,6 +2,7 @@
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOwedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { listChatRunningSessions } from "../../agents/bash-tools.exec-notify.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -15,6 +16,7 @@ import {
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import { readSessionWatchdogFailure } from "../../sessions/session-controller.watchdog-error.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { hasPendingAutomationContinuation } from "../automation-result.js";
 import {
@@ -54,14 +56,23 @@ const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-cont
  * `describeStop()` produced, so the mechanical watchdog reason must not replace it.
  */
 export function resolveCronRecoveryClassification(
-  operation?: Pick<ReplyOperation, "staleExpiryReason" | "recoveryClassification">,
+  operation?: Pick<ReplyOperation, "staleExpiryReason" | "recoveryClassification" | "abortSignal">,
+  options?: { includePendingTools: boolean },
 ): string | undefined {
-  return operation?.staleExpiryReason === "rate_limited"
-    ? undefined
-    : operation?.recoveryClassification;
+  if (operation?.staleExpiryReason === "rate_limited") {
+    return undefined;
+  }
+  const classification = operation?.recoveryClassification;
+  const failure = options?.includePendingTools
+    ? readSessionWatchdogFailure(operation?.abortSignal.reason)
+    : undefined;
+  return classification && failure?.pendingTools.length
+    ? `${classification} staleReason=${failure.staleReason} pendingTools=${JSON.stringify(failure.pendingTools)}`
+    : classification;
 }
 
 export async function finalizeCronRun(params: {
+  runId: string;
   prepared: PreparedCronRunContext;
   automationResult?: AutomationResult;
   execution: CronExecutionResult;
@@ -76,8 +87,9 @@ export async function finalizeCronRun(params: {
    * was aborted without a descriptive error message. Optional.
    */
   recoveryClassification?: string;
+  recoveryError?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const { prepared, execution, recoveryClassification } = params;
+  const { prepared, execution, recoveryClassification, recoveryError } = params;
   const finalRunResult = execution.runResult;
   const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
   const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
@@ -233,7 +245,7 @@ export async function finalizeCronRun(params: {
     const error =
       metaErrorMessage ||
       (recoveryClassification && recoveryClassification.trim().length > 0
-        ? recoveryClassification
+        ? (recoveryError ?? recoveryClassification)
         : "cron isolated agent run aborted");
     await cleanupRunSession("cron-delete-after-run-aborted");
     return prepared.withRunSession({
@@ -282,7 +294,25 @@ export async function finalizeCronRun(params: {
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
-  const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
+  // Subagents are awaited: their output is this run's output. Background commands are neither
+  // awaited nor stopped, since they may be services; name the ones still running.
+  const runningCommandIds = listChatRunningSessions({
+    agentId: prepared.agentId,
+    sessionKey: prepared.runSessionKey,
+  })
+    .filter((session) => session.backgrounded)
+    .map((session) => session.id);
+  const runDiagnostics = mergeCronRunDiagnostics(
+    prepared.preflightDiagnostics,
+    agentDiagnostics,
+    runningCommandIds.length > 0
+      ? createCronRunDiagnosticsFromError(
+          "exec",
+          `Background commands still running after the run ended: ${runningCommandIds.join(", ")}. Inspect them with process log.`,
+          { severity: "info" },
+        )
+      : undefined,
+  );
   const resolveRunOutcome = (
     result?: Partial<DispatchCronDeliveryState> & { delivery?: CronDeliveryTrace },
   ) => {

@@ -9,6 +9,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { FsSafeError } from "../infra/fs-safe.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 
 const binaryMime = "application/octet-stream";
@@ -358,7 +359,18 @@ describe("media store", () => {
         expiredAge,
       );
 
-      await store.prunePlaybackTranscodeCache();
+      const quotaPath = await fileFixture(
+        path.join(cacheDir, "v2-quota.m4a"),
+        "",
+        24 * 60 * 60_000,
+        512 * 1024 * 1024,
+      );
+      {
+        using observer = observeMainThreadFs();
+        await store.prunePlaybackTranscodeCache();
+        expect(observer.calls()).toEqual({});
+      }
+      await expect(fs.stat(quotaPath)).rejects.toMatchObject({ code: "ENOENT" });
 
       await expect(fs.stat(freshPath)).resolves.toMatchObject({ size: 5 });
       await expect(fs.stat(oldPath)).rejects.toMatchObject({ code: "ENOENT" });
@@ -380,6 +392,7 @@ describe("media store filesystem faults", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("@openclaw/fs-safe/store");
+    vi.doUnmock("../infra/fs-safe-filesystem-worker.js");
     vi.unstubAllEnvs();
     vi.resetModules();
   });
@@ -454,18 +467,28 @@ describe("media store filesystem faults", () => {
     const insertedName = "v2-quota-inserted.mp4";
     let injected = false;
     if (operation === "remove") {
-      mockFileStore((actualStore) => ({
-        remove: async (...args) => {
-          if (args[0] === `playback-transcode/${oldName}`) {
-            injected = true;
-            if (code !== "ENOENT") {
-              throw injectedError;
+      vi.doMock("../infra/fs-safe-filesystem-worker.js", async (importOriginal) => {
+        const actual =
+          await importOriginal<typeof import("../infra/fs-safe-filesystem-worker.js")>();
+        return {
+          ...actual,
+          runFsSafeStoreOperation: async (
+            command: Parameters<typeof actual.runFsSafeStoreOperation>[0],
+          ) => {
+            if (
+              command.type === "remove-store-file" &&
+              command.relativePath === `playback-transcode/${oldName}`
+            ) {
+              injected = true;
+              if (code !== "ENOENT") {
+                throw injectedError;
+              }
+              await fs.unlink(path.join(command.rootDir, command.relativePath));
             }
-            await fs.unlink(actualStore.path(args[0]));
-          }
-          return await actualStore.remove(...args);
-        },
-      }));
+            return await actual.runFsSafeStoreOperation(command);
+          },
+        };
+      });
     }
     const store = await freshStore(`playback-quota-${operation}-${code}`);
     const cacheDir = path.join(await store.ensureMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR);

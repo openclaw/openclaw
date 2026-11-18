@@ -467,7 +467,8 @@
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
       "dependencyStatusNotLoaded": "未加载",
-      "automationDisabled": "已禁用"
+      "automationDisabled": "已禁用",
+      "dispatchFirstFailure": "首次启动失败：{message}"
     }
   },
   "zh-TW": {
@@ -938,7 +939,8 @@
       "automationEvent": "事件：{source}",
       "automationWaitingForEvent": "等待事件",
       "dependencyStatusNotLoaded": "未載入",
-      "automationDisabled": "已停用"
+      "automationDisabled": "已停用",
+      "dispatchFirstFailure": "首次啟動失敗：{message}"
     }
   },
   "pt-BR": {
@@ -1409,7 +1411,8 @@
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Aguardando evento",
       "dependencyStatusNotLoaded": "Não carregado",
-      "automationDisabled": "Desativado"
+      "automationDisabled": "Desativado",
+      "dispatchFirstFailure": "Primeira falha na inicialização: {message}"
     }
   },
   "de": {
@@ -1880,7 +1883,8 @@
       "automationEvent": "Ereignis: {source}",
       "automationWaitingForEvent": "Warten auf Ereignis",
       "dependencyStatusNotLoaded": "Nicht geladen",
-      "automationDisabled": "Deaktiviert"
+      "automationDisabled": "Deaktiviert",
+      "dispatchFirstFailure": "Erster Startfehler: {message}"
     }
   },
   "es": {
@@ -2351,7 +2355,8 @@
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "Esperando un evento",
       "dependencyStatusNotLoaded": "Sin cargar",
-      "automationDisabled": "Desactivado"
+      "automationDisabled": "Desactivado",
+      "dispatchFirstFailure": "Primer fallo de inicio: {message}"
     }
   },
   "ja-JP": {
@@ -2822,7 +2827,8 @@
       "automationEvent": "イベント：{source}",
       "automationWaitingForEvent": "イベント待機中",
       "dependencyStatusNotLoaded": "未読み込み",
-      "automationDisabled": "無効"
+      "automationDisabled": "無効",
+      "dispatchFirstFailure": "初回起動の失敗: {message}"
     }
   },
   "ko": {
@@ -3293,7 +3299,8 @@
       "automationEvent": "이벤트: {source}",
       "automationWaitingForEvent": "이벤트 대기 중",
       "dependencyStatusNotLoaded": "불러오지 않음",
-      "automationDisabled": "비활성화됨"
+      "automationDisabled": "비활성화됨",
+      "dispatchFirstFailure": "첫 시작 실패: {message}"
     }
   },
   "fr": {
@@ -3764,7 +3771,8 @@
       "automationEvent": "Événement : {source}",
       "automationWaitingForEvent": "En attente d’un événement",
       "dependencyStatusNotLoaded": "Non chargé",
-      "automationDisabled": "Désactivé"
+      "automationDisabled": "Désactivé",
+      "dispatchFirstFailure": "Premier échec de démarrage : {message}"
     }
   },
   "hi": {
@@ -4235,7 +4243,8 @@
       "automationEvent": "घटना: {source}",
       "automationWaitingForEvent": "घटना की प्रतीक्षा है",
       "dependencyStatusNotLoaded": "लोड नहीं हुआ",
-      "automationDisabled": "अक्षम"
+      "automationDisabled": "अक्षम",
+      "dispatchFirstFailure": "शुरू करने का पहला प्रयास विफल: {message}"
     }
   },
   "ar": {
@@ -4706,7 +4715,8 @@
       "automationEvent": "الحدث: {source}",
       "automationWaitingForEvent": "في انتظار حدث",
       "dependencyStatusNotLoaded": "غير محمّل",
-      "automationDisabled": "معطّل"
+      "automationDisabled": "معطّل",
+      "dispatchFirstFailure": "أول فشل في بدء التشغيل: {message}"
     }
   },
   "it": {
@@ -5177,7 +5187,8 @@
       "automationEvent": "Evento: {source}",
       "automationWaitingForEvent": "In attesa di un evento",
       "dependencyStatusNotLoaded": "Non caricato",
-      "automationDisabled": "Disabilitata"
+      "automationDisabled": "Disabilitata",
+      "dispatchFirstFailure": "Primo errore di avvio: {message}"
     }
   },
   "tr": {
@@ -5648,7 +5659,8 @@
       "automationEvent": "Olay: {source}",
       "automationWaitingForEvent": "Olay bekleniyor",
       "dependencyStatusNotLoaded": "Yüklenmedi",
-      "automationDisabled": "Devre dışı"
+      "automationDisabled": "Devre dışı",
+      "dispatchFirstFailure": "İlk başlatma hatası: {message}"
     }
   },
   "uk": {
@@ -6119,7 +6131,8 @@
       "automationEvent": "Подія: {source}",
       "automationWaitingForEvent": "Очікування події",
       "dependencyStatusNotLoaded": "Не завантажено",
-      "automationDisabled": "Вимкнено"
+      "automationDisabled": "Вимкнено",
+      "dispatchFirstFailure": "Перша помилка запуску: {message}"
     }
   },
   "id": {
@@ -6590,7 +6603,8 @@
       "automationEvent": "Peristiwa: {source}",
       "automationWaitingForEvent": "Menunggu peristiwa",
       "dependencyStatusNotLoaded": "Belum dimuat",
-      "automationDisabled": "Dinonaktifkan"
+      "automationDisabled": "Dinonaktifkan",
+      "dispatchFirstFailure": "Kegagalan awal saat memulai: {message}"
     }
   },
   "pl": {
@@ -7061,7 +7075,8 @@
       "automationEvent": "Zdarzenie: {source}",
       "automationWaitingForEvent": "Oczekiwanie na zdarzenie",
       "dependencyStatusNotLoaded": "Nie wczytano",
-      "automationDisabled": "Wyłączona"
+      "automationDisabled": "Wyłączona",
+      "dispatchFirstFailure": "Pierwszy błąd uruchomienia: {message}"
     }
   },
   "th": {
@@ -7532,7 +7547,8 @@
       "automationEvent": "เหตุการณ์: {source}",
       "automationWaitingForEvent": "กำลังรอเหตุการณ์",
       "dependencyStatusNotLoaded": "ยังไม่ได้โหลด",
-      "automationDisabled": "ปิดใช้งาน"
+      "automationDisabled": "ปิดใช้งาน",
+      "dispatchFirstFailure": "การเริ่มทำงานล้มเหลวครั้งแรก: {message}"
     }
   },
   "vi": {
@@ -8003,7 +8019,8 @@
       "automationEvent": "Sự kiện: {source}",
       "automationWaitingForEvent": "Đang chờ sự kiện",
       "dependencyStatusNotLoaded": "Chưa tải",
-      "automationDisabled": "Đã tắt"
+      "automationDisabled": "Đã tắt",
+      "dispatchFirstFailure": "Lỗi khởi động đầu tiên: {message}"
     }
   },
   "nl": {
@@ -8474,7 +8491,8 @@
       "automationEvent": "Gebeurtenis: {source}",
       "automationWaitingForEvent": "Wachten op gebeurtenis",
       "dependencyStatusNotLoaded": "Niet geladen",
-      "automationDisabled": "Uitgeschakeld"
+      "automationDisabled": "Uitgeschakeld",
+      "dispatchFirstFailure": "Eerste opstartfout: {message}"
     }
   },
   "fa": {
@@ -8945,7 +8963,8 @@
       "automationEvent": "رویداد: {source}",
       "automationWaitingForEvent": "در انتظار رویداد",
       "dependencyStatusNotLoaded": "بارگذاری نشده",
-      "automationDisabled": "غیرفعال"
+      "automationDisabled": "غیرفعال",
+      "dispatchFirstFailure": "اولین خطا در شروع: {message}"
     }
   },
   "ru": {
@@ -9416,7 +9435,8 @@
       "automationEvent": "Событие: {source}",
       "automationWaitingForEvent": "Ожидание события",
       "dependencyStatusNotLoaded": "Не загружено",
-      "automationDisabled": "Отключено"
+      "automationDisabled": "Отключено",
+      "dispatchFirstFailure": "Первая ошибка запуска: {message}"
     }
   },
   "sv": {
@@ -9826,7 +9846,8 @@
       "eventArchived": "Arkiverad",
       "eventUnarchived": "Återställd från arkivet",
       "eventStale": "Inaktuell session",
-      "automationDisabled": "Inaktiverad"
+      "automationDisabled": "Inaktiverad",
+      "dispatchFirstFailure": "Första startfelet: {message}"
     }
   },
   "ca": {
@@ -10236,7 +10257,8 @@
       "eventArchived": "Arxivat",
       "eventUnarchived": "Desarxivat",
       "eventStale": "Sessió obsoleta",
-      "automationDisabled": "Desactivada"
+      "automationDisabled": "Desactivada",
+      "dispatchFirstFailure": "Primer error d'inici: {message}"
     }
   }
 }

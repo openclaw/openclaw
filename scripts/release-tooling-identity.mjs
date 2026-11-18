@@ -125,12 +125,12 @@ export function resolveReleaseToolingIdentity({
   if (qualificationAdmission !== undefined) {
     if (
       !isRecord(qualificationAdmission) ||
-      candidateSha !== sha ||
+      !SHA_PATTERN.test(candidateSha) ||
       requested.ref !== ref ||
       requested.fullRef !== fullRef ||
       requested.sha !== sha
     ) {
-      fail("candidate qualification must bind the exact executing C=Q identity");
+      fail("candidate qualification must bind valid C and the exact executing Q identity");
     }
     return requested;
   }
@@ -730,6 +730,10 @@ async function main(argv = process.argv.slice(2)) {
 
 function handleMainError(error) {
   console.error(error instanceof Error ? error.message : String(error));
+  // Identity lookups wrap the gh failure; retain its diagnostic without dumping captured stdout.
+  if (error instanceof Error && error.cause instanceof Error) {
+    console.error(`Caused by: ${error.cause.message}`);
+  }
   process.exitCode = 1;
 }
 

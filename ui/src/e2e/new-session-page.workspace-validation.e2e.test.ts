@@ -159,7 +159,7 @@ async function expectPendingNewSession(page: Page, message: string) {
   await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
   await pollLocatorText(submittedPrompt).toContain(message);
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
   expect(await messageInput(page).isVisible()).toBe(false);
 }
@@ -180,19 +180,19 @@ suite.define(() => {
           { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
         );
         await gateway.waitForRequest("worktrees.branches");
-        await page.locator("#new-session-checkout-trigger").click();
-        const picker = checkoutPopover(page);
-        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+        const trigger = page.locator("#new-session-checkout-trigger");
         if (cold) {
-          expect(await worktreeOption(page).isDisabled()).toBe(true);
+          expect(await trigger.count()).toBe(0);
           await captureUiProof(suite, page, "checkout-cold-refreshing.png");
           await gateway.setMethodResponse("worktrees.branches", {
             ...branchList(),
             refreshing: true,
           });
           await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
-          await expect.poll(() => worktreeOption(page).isDisabled()).toBe(false);
         }
+        await trigger.click();
+        const picker = checkoutPopover(page);
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
         await worktreeOption(page).click();
         const base = checkoutBaseRefInput(picker);
         await base.fill("release/custom");
@@ -233,14 +233,14 @@ suite.define(() => {
       );
       await gateway.waitForRequest("worktrees.branches");
       const trigger = page.locator("#new-session-checkout-trigger");
-      await trigger.click();
-      const picker = checkoutPopover(page);
-      await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+      expect(await trigger.count()).toBe(0);
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
         branchesUnavailable: true,
       });
       await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+      await trigger.click();
+      const picker = checkoutPopover(page);
       await picker
         .getByText("Couldn’t verify Git for this folder. Try again.", {
           exact: true,
@@ -433,19 +433,21 @@ suite.define(() => {
         }
         if (repositoryStatus === "not_git") {
           await expect.poll(() => trigger.count()).toBe(0);
-          expect(
-            await page.evaluate(() => {
-              const storageKey = Object.keys(localStorage).find((candidate) =>
-                candidate.startsWith("openclaw.new-session.preferences.v1:"),
-              );
-              const value = storageKey
-                ? (JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
-                    agents?: Record<string, { worktree?: boolean }>;
-                  } | null)
-                : null;
-              return value?.agents?.main?.worktree;
-            }),
-          ).toBe(false);
+          await expect
+            .poll(() =>
+              page.evaluate(() => {
+                const storageKey = Object.keys(localStorage).find((candidate) =>
+                  candidate.startsWith("openclaw.new-session.preferences.v1:"),
+                );
+                const value = storageKey
+                  ? (JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+                      agents?: Record<string, { worktree?: boolean }>;
+                    } | null)
+                  : null;
+                return value?.agents?.main?.worktree;
+              }),
+            )
+            .toBe(false);
         } else {
           await expectAttribute(trigger, "data-worktree", "true");
           await messageInput(page).fill(message);
@@ -868,7 +870,11 @@ suite.define(() => {
           "agents.list": {
             agents: [
               agent("main", "Main", WORKSPACE),
-              agent("research", "Research", "/home/peter/research"),
+              {
+                ...agent("research", "Research", "/home/peter/research"),
+                description: "Researches project decisions.",
+                recommendedPrompts: ["Research a decision"],
+              },
             ],
             defaultId: "main",
             mainKey: "main",
@@ -901,6 +907,10 @@ suite.define(() => {
         "#new-session-project-trigger .new-session-page__trigger-label",
       );
       await pollLocatorText(folderLabel).toBe("research");
+      await pollLocatorText(page.locator(".agent-chat__description")).toBe(
+        "Researches project decisions.",
+      );
+      await pollLocatorText(page.locator(".agent-chat__suggestion")).toBe("Research a decision");
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=main&catalog=claude");
@@ -908,6 +918,10 @@ suite.define(() => {
       });
 
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await expect.poll(() => page.locator(".agent-chat__description").count()).toBe(0);
+      expect(await page.locator(".agent-chat__welcome").textContent()).not.toContain(
+        "Research a decision",
+      );
       await pollLocatorText(folderLabel).toBe("openclaw");
       await messageInput(page).fill("retarget this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();

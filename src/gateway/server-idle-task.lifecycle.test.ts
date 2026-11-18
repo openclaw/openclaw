@@ -104,7 +104,13 @@ it.each(["complete", "shutdown"] as const)(
       signal: scheduler.signal,
       waitForReady: () => recoveryReady.promise,
       log,
-    })([{ database: { agentId: "main", path: "/synthetic/agent.sqlite" }, assertCurrent() {} }]);
+    })([
+      {
+        database: { agentId: "main", path: "/synthetic/agent.sqlite" },
+        assertCurrent() {},
+        backfillSource: { assertCurrent() {}, readCustody: [] },
+      },
+    ]);
     const initialTick = clock.advanceBy(250);
     await nextTurn();
     expect(runBatch).not.toHaveBeenCalled();

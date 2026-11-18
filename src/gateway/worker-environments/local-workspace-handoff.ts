@@ -13,6 +13,8 @@ export async function finishLocalWorkspaceHandoff(
   if (handoff.worktreeId !== owner.worktree.id || handoff.toSessionId !== owner.sessionId) {
     throw new Error("Local workspace handoff belongs to a different session incarnation");
   }
+  const projectionPath = await localWorkspaceProjectionPath(owner);
+  owner.assertCurrent();
   await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async (store) => {
     const row = store.get();
     if (!row) {
@@ -23,7 +25,7 @@ export async function finishLocalWorkspaceHandoff(
     // An in-place history cut keeps the session id and rotates only the lifecycle
     // revision, so custody transfers on the incarnation pair, not the id alone.
     if (row.session_id === owner.sessionId && row.lifecycle_revision === owner.lifecycleRevision) {
-      assertLocalWorkspaceProjectionOwner(row, owner, localWorkspaceProjectionPath(owner));
+      assertLocalWorkspaceProjectionOwner(row, owner, projectionPath);
       return;
     }
     assertLocalWorkspaceProjectionOwner(
@@ -33,7 +35,7 @@ export async function finishLocalWorkspaceHandoff(
         sessionId: handoff.fromSessionId,
         lifecycleRevision: handoff.lifecycleRevision,
       },
-      localWorkspaceProjectionPath(owner),
+      projectionPath,
     );
     if (
       row.revision !== handoff.projectionRevision ||

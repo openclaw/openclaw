@@ -31,6 +31,7 @@ export {
   createGoogleVideoPlaceholder,
   GOOGLE_VIDEO_SLOT_OMISSION,
   materializeGoogleVideoSlots,
+  prepareFinalModelRequestJson,
   type GoogleVideoSlots,
   projectGoogleMessages,
   requiresGoogleToolCallId,

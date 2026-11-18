@@ -192,7 +192,12 @@ preserve the recorded source. Changes to model-facing names, prompts, tools, sch
 or other executable behavior need fresh source authorization and clear the old source
 when none is present. Remote management alone cannot supply local-source authorization,
 and older jobs without a provable origin remain blocked until reauthorized or recreated
-from a fresh authorized source.
+from a fresh authorized source. Blocked jobs are discoverable: `openclaw automations status`
+reports a `reauthorizationRequired` count, and each affected job's details and list entries
+carry a `reauthorizationRequired` flag. Re-saving the job's tool cap from the creator's
+authenticated turn records a fresh origin and unblocks the job without changing its
+account-scoped authority; recreating it from the intended account is the fallback when the
+creator turn is unavailable.
 
 Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
 Agent-created jobs use their recorded creator account and Discord's delegated
@@ -544,7 +549,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
 
   </Accordion>
   <Accordion title="Unattended run contract">
-    Scheduled turns on the OpenClaw runtime continue through unrelated MCP server configuration edits. The MCP owner still retires changed server connections; retained calls cannot use a retired connection. Other native runtimes that receive their own MCP configuration retain their configuration checks. Unstarted work can re-admit automatically after a relevant policy change; work that may already have produced effects fails visibly instead of replaying those effects.
+    A started scheduled turn finishes under the configuration it started with; configuration edits apply to the next run. The MCP owner still retires changed server connections; retained calls cannot use a retired connection. Unstarted work can re-admit automatically after a relevant policy change.
 
     Isolated automation and hook agent turns are explicitly unattended: no one is present to clarify or approve. The final reply must be the deliverable rather than a plan, acknowledgement, or request for input. The agent records `no_change` without a summary and returns `NO_REPLY` when nothing needs doing. Unchanged state and repeated known blockers stay quiet; new blockers and changes that need action get a concise result. Explicitly requested recurring reports and digests still run and deliver at their requested cadence. Execution failures remain visible rather than being treated as no change. For machine-checkable conditions, use an existing deterministic condition trigger or script to skip inference when nothing changed, instead of paying for a model turn to rediscover that fact.
 

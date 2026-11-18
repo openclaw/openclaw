@@ -23,6 +23,7 @@ import {
 import { createGatewayNarrationDelivery } from "./server-broadcast-narration.js";
 import {
   hasEventScope,
+  isPublicationReaderEventAllowed,
   isPlainEventPayload,
   isSessionReadInvalidation,
   isTargetedTranscriptionEvent,
@@ -333,6 +334,9 @@ export function createGatewayBroadcaster(params: {
         (opts?.excludeClientCapability &&
           hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
+        continue;
+      }
+      if (!isPublicationReaderEventAllowed(c, event, payload, opts?.stateVersion)) {
         continue;
       }
       const questionRecipient =

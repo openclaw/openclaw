@@ -86,6 +86,8 @@
     "PACKER_PLUGIN_PATH",
     "PERL5LIB",
     "PERL5OPT",
+    "PERL5SHELL",
+    "PERLLIB",
     "PS4",
     "PYTHONBREAKPOINT",
     "PYTHONHOME",
@@ -271,5 +273,5 @@
     "YARN_RC_FILENAME",
     "ZDOTDIR"
   ],
-  "expectedTotalReportedEntries": 266
+  "expectedTotalReportedEntries": 268
 }

@@ -342,17 +342,31 @@ async function scenario(
     await moving;
   };
   if (beforeStop) {
-    // A preceding lifecycle owner holds ingress pending while Stop joins that
-    // same owner. This fixes ordering without timer delays or editing ingress.
-    await runSessionMutation({
+    const mutationEntered = createDeferred();
+    const reservationReady = createDeferred();
+    // Only Stop borrows this mutation. Ingress starts outside its async context
+    // so it cannot borrow the owner that is meant to hold it pending.
+    const mutation = runSessionMutation({
       scope: storePath,
       identities: [REQUEST.sessionKey, REQUEST.sessionId],
       agentId: REQUEST.agentId,
       run: async () => {
-        await reserveOld();
+        mutationEntered.resolve();
+        await reservationReady.promise;
         await stop();
       },
     });
+    await awaitGateBeforeSettlement(
+      mutationEntered.promise,
+      mutation,
+      "Lifecycle mutation settled before holding pre-Stop ingress",
+    );
+    try {
+      await reserveOld();
+    } finally {
+      reservationReady.resolve();
+      await mutation;
+    }
   } else {
     await stop();
   }

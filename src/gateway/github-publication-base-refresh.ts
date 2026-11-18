@@ -8,7 +8,9 @@ import { prepareGitCoauthorAttribution } from "../agents/git-coauthor-attributio
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
+import { gitPathspecBatches } from "../agents/worktrees/git-path-inventory.js";
 import { resolveGitMetadataPath } from "../agents/worktrees/git.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
@@ -27,7 +29,6 @@ import {
   prepareManagedWorkspaceReviewBase,
   readManagedSandboxGitState,
 } from "./github-publication-workspace-review.js";
-import { prepareLocalWorkspaceCheckout } from "./worker-environments/local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
 import {
@@ -76,14 +77,16 @@ export async function integrateManagedWorkspaceSource(
     config: currentGitHubPublicationConfig(),
     excludeAccountId: identity.account.accountId,
   });
-  const assertCurrent = () => {
-    params.signal?.throwIfAborted();
-    owner.assertCurrent();
-    params.assertCurrent();
-    if (!attribution.isCurrent()) {
-      throw new Error(`Contributor credit changed; retry ${action}.`);
-    }
-  };
+  const assertCurrent = composeSessionSourceAssertion(
+    [owner.assertCurrent, params.assertCurrent],
+    (assertSources) => {
+      params.signal?.throwIfAborted();
+      assertSources();
+      if (!attribution.isCurrent()) {
+        throw new Error(`Contributor credit changed; retry ${action}.`);
+      }
+    },
+  );
   const message = (subject: string) =>
     [
       subject,
@@ -142,7 +145,7 @@ export async function integrateManagedWorkspaceSource(
   let previousBase: string | undefined;
   const result = await withLocalWorkspaceProjection<SessionGitHubBaseRefreshResult>(
     { ...owner, assertCurrent },
-    async (state) => {
+    async (state, quiescence) => {
       if (
         sandbox.sessionKey !== owner.sessionKey ||
         sandbox.workspaceDir !== state.current().projection_path ||
@@ -163,16 +166,22 @@ export async function integrateManagedWorkspaceSource(
         };
       }
       // This operation prepares an existing private checkout; it never creates a new binding.
-      state.current();
       await state.settle();
+      // Only a first import needs the guest frozen for its pristine comparison.
+      // Later synchronization owns capture and re-fences any projection writes.
+      if (!initialImport || prepared!.recoveredImport) {
+        await quiescence?.resume();
+      }
+      quiescence?.markPhase("operation.gitState");
       previousBase = state.current().base_commit ?? undefined;
-      const check = () => {
+      const check = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+        assertSource();
         state.current();
-      };
+      });
       return await withWorktreeGitConfig<SessionGitHubBaseRefreshResult>(
         owner.worktree.path,
         true,
-        { beforeRun: check },
+        { beforeRun: check, stateOwnerPath: state.workerAuthority.stateOwnerPath },
         async (policy) => {
           const cwd = owner.worktree.path;
           const env = {
@@ -212,6 +221,7 @@ export async function integrateManagedWorkspaceSource(
             root: cwd,
             stagedResultRef: stagedRef,
             assertCurrent: check,
+            workerAuthority: state.workerAuthority,
           });
           // A refresh rewrites working files before the guest index is restaged, so a refreshed file
           // stays staged at its pre-refresh entry, which ORIG_HEAD records until the next source is
@@ -219,18 +229,30 @@ export async function integrateManagedWorkspaceSource(
           const stagedSnapshot = pendingStaged.length
             ? (await probe(["rev-parse", "--verify", "--quiet", "ORIG_HEAD"])).stdout.trim()
             : "";
+          const recorded = new Set<string>();
+          if (stagedSnapshot) {
+            for (const paths of gitPathspecBatches(pendingStaged.map((entry) => entry.path))) {
+              const listed = await git([
+                "--literal-pathspecs",
+                "ls-tree",
+                "-z",
+                "--full-tree",
+                stagedSnapshot,
+                "--",
+                ...paths,
+              ]);
+              for (const line of listed.split("\0")) {
+                recorded.add(line);
+              }
+            }
+          }
           for (const entry of pendingStaged) {
-            const listed = stagedSnapshot
-              ? await probe(["ls-tree", "-z", "--full-tree", stagedSnapshot, "--", entry.path])
-              : undefined;
-            const recorded = listed?.stdout
-              .split("\0")
-              .find((line) => line.slice(line.indexOf("\t") + 1) === entry.path);
-            if (!entry.indexEntry || recorded?.split("\t")[0] !== entry.indexEntry) {
+            if (!entry.indexEntry || !recorded.has(`${entry.indexEntry}\t${entry.path}`)) {
               throw new Error(stagedError);
             }
           }
           if (initialImport && !recoveredImport) {
+            quiescence?.markPhase("operation.pristine");
             const source = params.source!;
             const admittedPaths = await state.canonicalPaths();
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
@@ -284,6 +306,7 @@ export async function integrateManagedWorkspaceSource(
           if (!continuingIntegration) {
             await state.synchronize("canonical");
             await state.synchronize("projection");
+            quiescence?.markPhase("operation.gitState");
             const ancestor = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
             if (ancestor.code === 0 && (!initialImport || initialHead === baseCommit)) {
               await integrationSource?.accept();
@@ -300,6 +323,7 @@ export async function integrateManagedWorkspaceSource(
             if (ancestor.code !== 0 && ancestor.code !== 1) {
               throw new Error("The selected base ancestry could not be verified.");
             }
+            quiescence?.markPhase("operation.snapshot");
             const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
               { cwd, assertCurrent: check },
               policy,
@@ -310,6 +334,7 @@ export async function integrateManagedWorkspaceSource(
               snapshot.workspaceTree !== (await git(["rev-parse", "HEAD^{tree}"]))
             ) {
               // Index-only installation preserves every working byte, including accepted ignored data.
+              quiescence?.markPhase("operation.commit");
               await git(["read-tree", snapshot.workspaceTree]);
               await git([
                 "-c",
@@ -321,6 +346,7 @@ export async function integrateManagedWorkspaceSource(
               ]);
             }
           }
+          quiescence?.markPhase("operation.gitState");
           const integrated = await probe(["merge-base", "--is-ancestor", baseCommit, "HEAD"]);
           if (integrated.code === 0 && (!initialImport || initialHead === baseCommit)) {
             await integrationSource?.accept();
@@ -339,6 +365,10 @@ export async function integrateManagedWorkspaceSource(
           if (integrated.code !== 0 && integrated.code !== 1) {
             throw new Error("The pending base ancestry could not be verified.");
           }
+          // Canonical custody and the captured baseline own preparation. Guest
+          // writes are checked by the target preflight before applying the result.
+          await quiescence?.resume();
+          quiescence?.markPhase("operation");
           const sourceHead = await git(["rev-parse", "HEAD"]);
           const merge = initialImport
             ? { code: 0, stdout: await git(["rev-parse", `${baseCommit}^{tree}`]) }
@@ -375,31 +405,14 @@ export async function integrateManagedWorkspaceSource(
           if (state.current().base_commit !== baseCommit) {
             const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-base-refresh-"));
             try {
-              const mergedCommit = await git(
-                ["commit-tree", "--no-gpg-sign", tree, "-p", sourceHead],
-                "Prepare selected base integration\n",
-              );
-              for (const [name, commit] of [
-                ["before", sourceHead],
-                ["after", mergedCommit],
-              ]) {
-                const destination = path.join(temporary, name!);
-                await prepareLocalWorkspaceCheckout({
-                  source: cwd,
-                  destination,
-                  temporaryRoot: temporary,
-                  baseCommit: commit!,
-                  branch: "refresh",
-                  signal: new AbortController().signal,
-                  assertCurrent: check,
-                });
-              }
               const buildCacheInputs = await state.buildCacheInputs();
               const baseline = await state.baselineDocument();
               const current = await prepareWorkspaceBaseRefresh(
                 {
-                  beforeRoot: path.join(temporary, "before"),
-                  afterRoot: path.join(temporary, "after"),
+                  root: cwd,
+                  beforeTree: sourceHead,
+                  afterTree: tree,
+                  temporaryRoot: temporary,
                   baseCommit,
                   baseRaw: baseline.rawManifest,
                   baseRef: baseline.manifestRef,
@@ -418,6 +431,7 @@ export async function integrateManagedWorkspaceSource(
                 currentManifestRaw: current.rawManifest,
                 buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
+                workerAuthority: state.workerAuthority,
               });
             } finally {
               await fs.rm(temporary, { recursive: true, force: true });
@@ -459,11 +473,13 @@ export async function integrateManagedWorkspaceSource(
               conflictPaths,
             };
           }
+          quiescence?.markPhase("operation.snapshot");
           const snapshot = await captureSettledGitHubPublicationWorkspaceSnapshot(
             { cwd, assertCurrent: check },
             policy,
             await state.canonicalPaths(),
           );
+          quiescence?.markPhase("operation.commit");
           const markers = await probe(["diff", "--check", sourceHead, "--", ...conflictPaths]);
           if (conflictPaths.length && markers.stdout.includes("conflict marker")) {
             throw new Error(

@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { ToolInterruptedByUser } from "../../packages/agent-core/src/tool-interruption.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
+import { captureDiagnosticToolExecutionAwaiting } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   loadExecApprovalsReadOnlyAsync,
   maxAsk,
@@ -56,10 +57,6 @@ import {
   resolveApprovalRunningNoticeMs,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
-import {
-  shouldSkipExecScriptPreflight,
-  validateScriptFileForShellBleed,
-} from "./bash-tools.exec-script-preflight.js";
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
@@ -352,7 +349,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       await rejectUnsafeExecControlShellCommand(params.command);
       let workdir: string | undefined;
-      let scriptPreflightCwd: string | null = null;
       let containerWorkdir = sandbox?.containerWorkdir;
       let discardPreparedSandboxWorkdir: (() => void) | null = null;
       const workdirResolution =
@@ -379,7 +375,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       if (workdirResolution.kind === "sandbox") {
         workdir = workdirResolution.hostCwd;
         containerWorkdir = workdirResolution.containerCwd;
-        scriptPreflightCwd = workdirResolution.scriptPreflightCwd;
         if (sandbox?.discardPreparedWorkdir && sandbox.workdirValidation === "backend") {
           const preparedContainerWorkdir = containerWorkdir;
           discardPreparedSandboxWorkdir = () => {
@@ -388,7 +383,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
       } else if (workdirResolution.kind === "local") {
         workdir = workdirResolution.hostCwd;
-        scriptPreflightCwd = workdirResolution.hostCwd;
       } else {
         workdir = workdirResolution.remoteCwd;
       }
@@ -497,6 +491,20 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
             : undefined;
 
+        const subagentSession =
+          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
+        const timeoutSec =
+          params.timeoutSeconds ??
+          (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec);
+        const deadlineSource = params.timeoutSeconds === undefined ? "default" : "explicit";
+        captureDiagnosticToolExecutionAwaiting()(() => [
+          {
+            kind: "exec",
+            phase: "preparing",
+            deadlineSource: timeoutSec === null || timeoutSec <= 0 ? "none" : deadlineSource,
+          },
+        ]);
+
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
             ...hostApprovalParams(),
@@ -541,17 +549,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           );
         }
 
-        // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
-        // before execution. JavaScript source diagnostics belong to Node.
-        if (scriptPreflightCwd && !shouldSkipExecScriptPreflight({ host, security, ask })) {
-          await validateScriptFileForShellBleed({
-            command: params.command,
-            workdir: scriptPreflightCwd,
-          });
-        }
-
-        const subagentSession =
-          notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
         assertSourceActive();
         run = await runExecProcess({
           command: params.command,
@@ -581,9 +578,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          timeoutSec:
-            params.timeoutSeconds ??
-            (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec),
+          timeoutSec,
+          deadlineSource,
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,
@@ -596,8 +592,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             settled = true;
           },
         });
-        // Completion wakes need the backgrounding below, so this precedes any wake.
-        run.session.originRunId = defaults?.runId;
+        run.session.startedByRunId = defaults?.runId;
         discardPreparedSandboxWorkdir = null;
       } catch (error) {
         gatewayApproval?.releaseSpawn?.();
@@ -706,8 +701,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
                 outcome: completed.outcome,
                 cwd: run.session.cwd,
                 warningText: getWarningText(),
-                aggregateOutputDropped:
-                  run.session.totalOutputChars > run.session.aggregated.length,
+                session: run.session,
               })
             : {
                 content: [

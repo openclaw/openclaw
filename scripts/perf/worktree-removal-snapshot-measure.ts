@@ -11,7 +11,8 @@
  * chunk writes and one .env chunk; preserve tracked edits/nonignored user files,
  * improve CPU/allocation without a >20% removal regression. Filesystem caches are
  * warm after creation; every run has fresh process/database state, with workers
- * warmed by creation. This does not claim a cold-storage latency bound.
+ * warmed by creation and one tiny removal. This excludes first-use TypeScript
+ * compilation in the source harness and does not claim a cold-storage latency bound.
  * Each Git subprocess and registry mutation gets an inclusive host-boundary timing; these
  * include IPC/admission and are not native SQL-only times. Main allocation is exact V8;
  * process CPU includes workers but excludes Git children. Use --cpu-prof for CPU profiles.
@@ -44,6 +45,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -68,6 +70,9 @@ const { values } = parseArgs({
     report: { type: "string", default: "report.json" },
     passes: { type: "string", default: "5" },
     clean: { type: "boolean", default: false },
+    packed: { type: "boolean", default: false },
+    "warm-index": { type: "boolean", default: false },
+    "retained-refs": { type: "string", default: "0" },
   },
 });
 assert(values.output, "--output must name a new task-owned directory");
@@ -137,6 +142,7 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
     GIT_CONFIG_SYSTEM: os.devNull,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_ATTR_NOSYSTEM: "1",
+    GIT_TRACE2_PERF: path.join(output, "git.trace"),
     ...(values.clean
       ? { GIT_AUTHOR_DATE: "2026-01-01T00:00:00Z", GIT_COMMITTER_DATE: "2026-01-01T00:00:00Z" }
       : {}),
@@ -305,6 +311,20 @@ if (!values["reuse-fixture"]) {
   }
   git(["add", "."]);
   git(["commit", "-m", "synthetic source"]);
+  if (values.packed) {
+    git(["repack", "-ad"]);
+  }
+  const retainedRefs = Number(values["retained-refs"]);
+  assert(Number.isSafeInteger(retainedRefs) && retainedRefs >= 0);
+  if (retainedRefs) {
+    execFileSync("git", ["-C", repo, "update-ref", "--stdin"], {
+      input: Array.from(
+        { length: retainedRefs },
+        (_, index) => `update refs/openclaw/snapshots/synthetic-${index} HEAD\n`,
+      ).join(""),
+      env: process.env,
+    });
+  }
   const dependency = Buffer.alloc(fileBytes, 97);
 
   for (let index = 0; index < files; index++) {
@@ -604,7 +624,7 @@ if (gcMode) {
 }
 
 try {
-  const created = values["reuse-fixture"]
+  let created = values["reuse-fixture"]
     ? (await service.listRegistryRecords()).find((record) => record.name === "synthetic-removal")
     : await service.create({
         repoRoot: repo,
@@ -612,7 +632,16 @@ try {
         baseRef: "HEAD",
         runSetupScript: false,
       });
-  assert(created && !created.removedAt, "Fixture must have a live synthetic-removal checkout");
+  assert(created, "Fixture must have a synthetic-removal record");
+  if (created.removedAt !== undefined) {
+    created = await service.restore({ id: created.id });
+  }
+  if (values["reuse-fixture"]) {
+    fs.cpSync(path.join(repo, "node_modules"), path.join(created.path, "node_modules"), {
+      recursive: true,
+      mode: fs.constants.COPYFILE_FICLONE,
+    });
+  }
   assert.equal(
     fs.statSync(path.join(created.path, dependencyDirectory(files - 1), `${files - 1}.js`)).size,
     fileBytes,
@@ -622,13 +651,49 @@ try {
     fs.writeFileSync(path.join(created.path, "user-notes.txt"), "synthetic unsaved user work\n");
   }
   fs.writeFileSync(path.join(created.path, ".env.local"), "SYNTHETIC_SETTING=edited\n");
-  if (values.profile) {
+  const warmupRepo = path.join(output, "warmup-repo");
+  if (!fs.existsSync(warmupRepo)) {
+    fs.mkdirSync(warmupRepo);
+    git(["init", "-b", "main", "--template="], warmupRepo);
+    fs.writeFileSync(path.join(warmupRepo, "source.txt"), "synthetic warmup\n");
+    git(["add", "source.txt"], warmupRepo);
+    git(
+      [
+        "-c",
+        "user.name=Synthetic Benchmark",
+        "-c",
+        "user.email=benchmark@example.invalid",
+        "commit",
+        "-m",
+        "synthetic warmup",
+      ],
+      warmupRepo,
+    );
+  }
+  const warmup = await service.create({
+    repoRoot: warmupRepo,
+    name: "synthetic-warmup",
+    baseRef: "HEAD",
+    runSetupScript: false,
+  });
+  await service.remove({ id: warmup.id, reason: "synthetic warmup" });
+  {
     const { runGitWorkerOperation } = await import("../../src/infra/git-worker.js");
     // Creation and maintenance have separate workers; admit the measured owner first.
     await runGitWorkerOperation({
       type: "worktree.cleanup-inspection",
       input: { kind: "provisioned", checkoutPath: created.path, provisionedPaths: [] },
     });
+  }
+  if (values["warm-index"]) {
+    git(["update-index", "--refresh"], created.path);
+  }
+  fs.writeFileSync(path.join(output, "git.trace"), "");
+  const profiler = values.profile ? new Session() : undefined;
+  if (profiler) {
+    profiler.connect();
+    await profiler.post("Profiler.enable");
+    await profiler.post("Profiler.start");
   }
   await profileWorkers("start");
   const loadBefore = os.loadavg();
@@ -655,6 +720,11 @@ try {
   const gcStats = gc.stop()?.statistics ?? [];
   loop.disable();
   await profileWorkers("stop");
+  if (profiler) {
+    const { profile } = await profiler.post("Profiler.stop");
+    profiler.disconnect();
+    fs.writeFileSync(path.join(output, "removal.cpuprofile"), JSON.stringify(profile));
+  }
   assert(removed.removed && removed.snapshotRef);
   assert.equal(
     git(["show", `${removed.snapshotRef}:src/0.ts`]),
@@ -693,6 +763,7 @@ try {
     sourceDigest,
     baseline: baseline ?? null,
     diagnosticProfile: values.profile,
+    warmIndex: values["warm-index"],
     node: process.version,
     platform: process.platform,
     tracked,
@@ -745,7 +816,10 @@ try {
     );
   }
   if (values.clean) {
-    const originalHead = git(["rev-parse", `${removed.snapshotRef}^`]);
+    const originalHead = git([
+      "rev-parse",
+      removed.snapshotRef.includes("/clean-v1/") ? removed.snapshotRef : `${removed.snapshotRef}^`,
+    ]);
     assert.equal(
       git(["rev-parse", `${removed.snapshotRef}^{tree}`]),
       git(["rev-parse", `${originalHead}^{tree}`]),

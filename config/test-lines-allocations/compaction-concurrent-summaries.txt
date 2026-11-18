@@ -1,3 +1,0 @@
-# Compaction summaries no longer hold the singleton worker: cross-session regression,
-# exact-selection equivalence, cancellation, and stale-history coverage.
-93

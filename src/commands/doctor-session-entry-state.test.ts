@@ -22,6 +22,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { ensureSessionPendingInputsSchema } from "../state/openclaw-agent-pending-inputs-schema.js";
 import * as quarantine from "../state/openclaw-quarantine-store.js";
 import {
   createOpenClawTestState,
@@ -174,7 +175,7 @@ it("backs up and retires terminal unmatched restart custody only in Doctor", asy
   }
   expect(matched.read()).toMatchObject({
     status: "interrupted",
-    resumeAfterRestart: { queuedInputIds: [] },
+    resumeAfterRestart: {},
   });
   expect(archived.read()).toEqual({
     sessionId: "session-terminal-unmatched",
@@ -229,6 +230,98 @@ it("aggregates startup guidance for terminal unmatched custody without retiring 
     pendingFinalDelivery: { kind: "replayable", text: "Unsent final", createdAt: 42 },
   });
   expect(second.readRaw()).toBe(second.raw);
+});
+
+it("moves only matching legacy queued sources into their durable rows before startup reads", async () => {
+  const source = {
+    kind: "gateway",
+    snapshot: {
+      profileId: "operator",
+      scopes: ["operator.admin"],
+      assignedRole: null,
+      githubLogin: null,
+      grant: null,
+      aliasBindingIds: [],
+      authPolicy: {
+        generation: "",
+        grantGeneration: "grant-generation",
+        role: "operator",
+        authMethod: "token",
+      },
+      controlUiAdmin: false,
+      localOperator: true,
+      sourceIngress: "internal",
+    },
+  };
+  const inputs = [
+    { id: "valid", source },
+    { id: "malformed", source: { kind: "gateway", snapshot: {} } },
+    { id: "unavailable", source: { kind: "unavailable" } },
+    { id: "wrong-run", source },
+    { id: "wrong-session", source },
+    { id: "terminal", source },
+    { id: "consumed", source },
+    { id: "already-recorded", source },
+  ];
+  const legacy = seedEntry("legacy-queued-sources", {
+    resumeAfterRestart: {
+      operatorSource: { kind: "unavailable" },
+      queuedInputIds: inputs.map(({ id }) => id),
+      queuedInputSources: Object.fromEntries(
+        inputs.map(({ id, source: inputSource }) => [
+          id,
+          { runId: `run-${id}`, source: inputSource },
+        ]),
+      ),
+    },
+  });
+  const database = agentDatabase();
+  seedEntry("other-queued-session", {});
+  ensureSessionPendingInputsSchema(database.db);
+  const existingSourceJson = JSON.stringify({ kind: "unavailable" });
+  for (const { id } of inputs) {
+    database.db
+      .prepare(
+        `INSERT INTO session_pending_inputs
+       (input_id, session_key, session_id, idempotency_key, run_id, request_hash,
+        message_json, lifecycle_generation, state, accepted_at, consumed_event_id, origin_source_json)
+       VALUES (?, ?, ?, ?, ?, 'request-hash', ?, 'previous-process', ?, 42, ?, ?)`,
+      )
+      .run(
+        id,
+        legacy.sessionKey,
+        id === "wrong-session" ? "session-other-queued-session" : "session-legacy-queued-sources",
+        `key-${id}`,
+        id === "wrong-run" ? "different-run" : `run-${id}`,
+        JSON.stringify({ role: "user", content: id, timestamp: 42 }),
+        id === "terminal" ? "cancelled" : "queued",
+        id === "consumed" ? "committed-event" : null,
+        id === "already-recorded" ? existingSourceJson : null,
+      );
+  }
+  await runSessionStartupMigration({
+    cfg: {},
+    env: state.env,
+    log: { info() {}, warn() {} },
+  });
+  expect(legacy.read().resumeAfterRestart).toEqual({ operatorSource: { kind: "unavailable" } });
+  expect(
+    database.db
+      .prepare("SELECT input_id, origin_source_json FROM session_pending_inputs ORDER BY input_id")
+      .all(),
+  ).toEqual(
+    inputs
+      .map(({ id }) => ({
+        input_id: id,
+        origin_source_json:
+          id === "valid"
+            ? JSON.stringify(source)
+            : id === "already-recorded"
+              ? existingSourceJson
+              : null,
+      }))
+      .toSorted((left, right) => left.input_id.localeCompare(right.input_id)),
+  );
 });
 
 it("backs up and repairs retained ISO endedAt without losing session data or repeating repair", async () => {

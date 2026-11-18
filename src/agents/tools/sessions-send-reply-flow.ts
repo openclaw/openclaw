@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -260,13 +261,11 @@ export function prepareSessionsSendReplyContext(params: {
     : undefined;
   const requesterDeliveryGeneration =
     requesterSessionEntry && requesterSession
-      ? {
+      ? chatRef({
           agentId: params.requesterTarget.agentId,
           storePath: params.requesterTarget.storePath,
           sessionKey: params.requesterTarget.canonicalKey,
-          ...requesterSession,
-          lifecycleRevision: requesterSession.lifecycleRevision ?? null,
-        }
+        })
       : undefined;
   const persistentParent =
     params.targetAcpMode === "persistent" &&

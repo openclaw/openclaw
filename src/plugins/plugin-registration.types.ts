@@ -442,6 +442,8 @@ export type OpenClawPluginServiceContext = {
     onWorkerRequestMetrics?: (
       listener: import("../infra/worker-request-diagnostics.js").WorkerRequestMetricsListener,
     ) => () => void;
+    /** Synchronous samples recorded through `api.metrics`; labels are borrowed until return. */
+    onPluginMetrics?: (listener: import("./plugin-metrics.js").PluginMetricsListener) => () => void;
     /** Identity of the hosting process, available only while this service is active. */
     getRuntimeIdentity?: () => { processInstanceId: string; buildId?: string };
     /** Current owner-projected work; undefined while the Gateway projection is unavailable. */

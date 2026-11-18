@@ -4,6 +4,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
   SessionLifecycleArchivedTranscript,
@@ -167,8 +168,8 @@ export type SessionEntryLifecycleMutationParams = {
   beforeCommitInTransaction?: () => void;
   /** Retain source authority around the final writer, after projection and native preparation. */
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
-  /** Non-throwing notification after outer COMMIT, before lifecycle publication and owner cleanup. */
-  onLifecycleCommitted?: () => void;
+  /** Non-throwing after outer COMMIT, before publication/cleanup; only memory omits its file source. */
+  onLifecycleCommitted?: (source?: AgentDatabaseExecutionFileIdentity) => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 };
 

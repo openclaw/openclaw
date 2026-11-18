@@ -132,7 +132,7 @@ it.each(["true", "false"])("recovers only owned pauses (Running=%s)", async (run
   expect(commands("pause")).toHaveLength(0);
   expect(mocks.pauseLog).toHaveBeenCalledExactlyOnceWith(
     expect.stringMatching(
-      /^Local workspace unpause: reason=reconcile durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ phaseDurationsMs=\{.*\} durationScope=observed outcome=resumed$/u,
+      /^Local workspace unpause: reason=reconcile scope=240baed8f6807bd3 durationMs=\d+ dominantPhase=\w+ dominantPhaseMs=\d+ phaseDurationsMs=\{.*\} durationScope=observed outcome=resumed$/u,
     ),
     { engine: "docker", runtime: "container" },
   );
@@ -151,9 +151,6 @@ it("reports cumulative frozen phases including engine resume, before receipt cle
   mockEngine({ owned: id }, ({ action }) => {
     if (action === "pause") {
       elapsed = 29_000;
-    } else if (action === "resume-inspect") {
-      resuming = true;
-      elapsed += 29_900;
     } else if (action === "unpause") {
       elapsed += 29_900;
     }
@@ -175,10 +172,11 @@ it("reports cumulative frozen phases including engine resume, before receipt cle
       elapsed += 60_000;
       retained = [];
     });
+    resuming = true;
     await control.resume();
     await control.resume();
     expect(mocks.pauseLog).toHaveBeenLastCalledWith(
-      'Local workspace unpause: reason=reconcile durationMs=194399 dominantPhase=operation dominantPhaseMs=53600 phaseDurationsMs={"pause":29000,"operation":53600,"scan":20000,"staging":30000,"resumeInspect":29900,"resumeAuthority":1000,"unpause":29900} durationScope=owner outcome=resumed',
+      'Local workspace unpause: reason=reconcile scope=240baed8f6807bd3 durationMs=164499 dominantPhase=operation dominantPhaseMs=53600 phaseDurationsMs={"pause":29000,"operation":53600,"scan":20000,"staging":30000,"resumeAuthority":1000,"unpause":29900} durationScope=owner outcome=resumed',
       { engine: "docker", runtime: "container" },
     );
     expect(mocks.pauseLog).toHaveBeenCalledTimes(2);
@@ -205,14 +203,18 @@ it("persists exact container and browser custody before pausing and resumes only
   const { resume } = await quiesce({ reason: "checkpoint" });
   expect(mocks.pauseLog.mock.calls).toEqual([
     [
-      "Local workspace pause: reason=checkpoint count=1",
+      "Local workspace pause: reason=checkpoint scope=240baed8f6807bd3 count=1",
       { engine: "docker", runtime: "container" },
     ],
-    ["Local workspace pause: reason=checkpoint count=2", { engine: "docker", runtime: "browser" }],
+    [
+      "Local workspace pause: reason=checkpoint scope=240baed8f6807bd3 count=2",
+      { engine: "docker", runtime: "browser" },
+    ],
   ]);
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));
+  expect(commands("inspect")).toHaveLength(2);
   expect(persist).toHaveBeenCalledTimes(4);
   expect(retained).toEqual([]);
 });
@@ -281,6 +283,28 @@ it("records each released generation before a later resume failure and re-fences
   expect({ retained, paused: [...pausedIds] }).toEqual({ retained: [], paused: [] });
 });
 
+it.each(["removed", "already-running"])(
+  "settles an %s exact generation after unpause fails",
+  async (outcome) => {
+    const paused = mockEngine({ owned: id }, ({ action, target }) => {
+      if (action === "unpause") {
+        expect(target).toBe(id);
+        return { code: 1, stdout: "", stderr: "runtime changed during settlement" };
+      }
+      if (action === "resume-inspect" && outcome === "removed") {
+        return { code: 1, stdout: "", stderr: `no such container: ${id}` };
+      }
+      return undefined;
+    });
+    const control = await quiesce();
+    paused.clear();
+    await control.resume();
+    expect(retained).toEqual([]);
+    expect(commands("inspect").at(-1)?.at(-1)).toBe(id);
+    expect(mocks.pauseLog.mock.lastCall?.[0]).toContain(`outcome=${outcome}`);
+  },
+);
+
 it.each(["inspect", "pause", "resume-inspect", "unpause"])(
   "bounds a hung %s, joins command cleanup, and preserves uncertain custody for recovery",
   async (phase) => {
@@ -299,6 +323,9 @@ it.each(["inspect", "pause", "resume-inspect", "unpause"])(
     const paused = mockEngine({ owned: id }, async ({ action, apply, signal: commandSignal }) => {
       const signal = expectDefined(commandSignal, "bounded engine command signal");
       signal.throwIfAborted();
+      if (phase === "resume-inspect" && action === "unpause" && fail) {
+        return { code: 1, stdout: "", stderr: "temporary engine fault" };
+      }
       // The engine may accept a mutation before its client stops responding.
       const result = apply();
       if (fail && action === phase) {

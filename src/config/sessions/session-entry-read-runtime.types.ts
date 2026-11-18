@@ -10,12 +10,14 @@ import type {
   SessionEntryListWorkerInput,
 } from "./session-entry-read.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export type SessionStoreWorkerReadScope = {
   agentId: string;
   storePath: string;
   env?: NodeJS.ProcessEnv;
+  readCustody?: readonly SessionStoreReadCustody[];
   /** Access checks use the worker pool's reserved class-0 lane. */
   pointRead?: true;
   /** Borrow physical selection from its live owner; rows still come from a fresh read. */
@@ -76,6 +78,7 @@ export type SessionEntryCohortReadOptions = {
 /** One admitted physical owner; each call prepares a fresh synchronous consumption phase. */
 export type SessionEntryCohortReader = {
   readonly database: PreparedSessionEntryWorkerRead["database"];
+  readonly identity: DatabasePathIdentity;
   readonly sessionKey: string;
   readonly logicalAgentId: string;
   readonly storePaths: readonly string[];
