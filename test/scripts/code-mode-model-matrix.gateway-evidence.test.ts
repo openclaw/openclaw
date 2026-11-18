@@ -409,6 +409,37 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
   }
 });
 
+it("counts one underlying shell outcome through direct exec with error=true", () => {
+  const input = { command: "node ./process-probe.mjs" };
+  const result = { status: "failed", exitCode: 1, aggregated: "synthetic process failure" };
+  const trace = collectGatewayMatrixTrace([
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "invoke", name: "exec", arguments: input }],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "invoke",
+        toolName: "exec",
+        isError: true,
+        details: result,
+        content: [{ type: "text", text: JSON.stringify(result) }],
+      },
+    },
+  ]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "exec", input, result, isError: true, eventIndex: 1 }),
+  ]);
+  expect(trace.activities[0]?.parentId).toBeUndefined();
+  expect(trace.calls.map((call) => call.name)).toEqual(["exec"]);
+  expect(trace.outcomes.map((outcome) => outcome.name)).toEqual(["exec"]);
+});
+
 const TASK_DELTAS = {
   taskElapsedMs: -2000,
   assistantTurns: null,
