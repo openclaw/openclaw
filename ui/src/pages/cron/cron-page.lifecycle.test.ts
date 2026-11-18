@@ -544,10 +544,10 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   click(page, testId("cron-new-task"));
   await waitForElement(page, "fieldset.cron-editor");
   const triggerToggle = Array.from(page.querySelectorAll(".settings-toggle")).find((toggle) =>
-    toggle.textContent?.includes("Condition trigger"),
+    toggle.textContent?.includes("Check a condition first"),
   );
   expect(triggerToggle).toBeUndefined();
-  expect(page.textContent).toContain("disabled by cron.triggers.enabled");
+  expect(page.textContent).toContain("turned off for this Gateway (cron.triggers.enabled)");
 });
 
 it("replaces an in-flight inventory read when the connected profile hydrates", async () => {
