@@ -4003,6 +4003,16 @@ async function main() {
     const evidence = await client.verify(options.runId, plan, createOperationDeadline());
     console.log(evidence);
     await releaseSealedPriority(client, options.runId);
+    if (!options.json) {
+      console.log(`VERIFIED: Full Release Validation run ${options.runId}`);
+      console.log(`Qualification tooling (Q): ${plan.trustedWorkflow.sha}`);
+      console.log(
+        `Candidate inputs: --target-sha ${plan.targetSha} --full-release-validation-run-id ${options.runId} --release-profile ${String(plan.releaseProfile)} --skip-dispatch`,
+      );
+      console.log(
+        "Supply independently pinned publication tooling (P) via --workflow-sha <P> or --publish-workflow-ref <tag>, plus the release tag, channel, route, and any required SDK acknowledgement; these are not inferred from verification.",
+      );
+    }
     return;
   }
   const loaded = await loadPlanForCommand(options, client);

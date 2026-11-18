@@ -34,6 +34,13 @@ pnpm frv prioritize --restore <record> [--dry-run]
 | `continue --failed`    | Retries each child once as it becomes terminal, while siblings/parent may run; adopts active attempts and leaves green children untouched. A repeated failure exits immediately with attempt/budget. Ghost duplicate attempts require fresh all-group FRV. After green child evidence and original parent completion, reruns parent once to restore the same plan and reseal; early Decision/Drain disagreement does not waive plan/attempt checks. |
 | `prioritize --restore` | Recovers former priority-gate deferrals; see [Release priority](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery). Active validation no longer pauses CI/supporting workflows.                                                                                                                                                                                                       |
 
+Successful `verify` output ends with a verdict, the qualification tooling SHA (Q)
+as informational identity, and reusable candidate inputs (target SHA, validation
+run, and release profile). With `release:candidate`, independently pin publication
+tooling (P) using `--workflow-sha <P>` or `--publish-workflow-ref <tag>`; Q is not a
+publication-tooling selection. Supply the intended tag, channel, route, and any
+required SDK acknowledgement separately. `--json` retains the verifier evidence alone.
+
 Retry selection for `rerun --child` and continuation:
 
 | Condition                                                                                                                                  | Mode / action                                                                                                                                                                                                            |
@@ -108,7 +115,8 @@ Follow [dispatch identity/admission/ref rules](/reference/full-release-validatio
 Validation SHA = Code SHA (possibly Release SHA) or changelog-only Release SHA,
 not a third identity. Reject malformed/mismatched expected SHAs before children;
 all report Q. `-f reuse_evidence=false` forces fresh work. New publish defaults
-Q=C; admission-workflow arguments select P; candidate `--workflow-sha <Q>` selects
+Q=C; admission-workflow arguments select P;
+`ci:full-release --trusted-workflow-ref candidate --workflow-sha <Q>` selects
 reviewed main-ancestor Q. Missing contracts need Q repair/candidate backport;
 new Q requires new request/admission, never continuation/plan edits/substitution.
 Historical identities stay frozen; workflows never create/update refs.
