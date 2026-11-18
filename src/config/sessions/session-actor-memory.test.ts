@@ -4,6 +4,7 @@ import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-aut
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import { createCompletionGrantLineageAdmission } from "../../gateway/tool-resolution-completion.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
@@ -15,10 +16,7 @@ import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { memoryStorage } from "./session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import { runWithSessionActorStorage } from "./session-actor-storage-binding.js";
-import {
-  prepareSessionDeliveryGeneration,
-  prepareSessionGenerationFacts,
-} from "./session-delivery-generation.js";
+import { prepareChatDeliveryLease, prepareLeaseFacts } from "./session-delivery-generation.js";
 import { acquireSessionInputActor } from "./session-input-actor.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
@@ -357,11 +355,11 @@ describe("memory actor effect adapters", () => {
   it("reads unbound delivery settings and refuses a closed actor after same-key recreation", async () => {
     const { source, target, upsert } = unboundFixture("delivery");
     const facts = { ...source, lifecycleRevision: null };
-    await expect(prepareSessionGenerationFacts(facts)).rejects.toThrow("no longer accepts");
+    await expect(prepareLeaseFacts(facts)).rejects.toThrow("no longer accepts");
     expect(memorySessionActorOwners.read(target)).toBeUndefined();
     await upsert();
-    const delivery = await prepareSessionGenerationFacts(facts);
-    const effect = await prepareSessionDeliveryGeneration(facts);
+    const delivery = await prepareLeaseFacts(facts);
+    const effect = await prepareChatDeliveryLease(chatRef(facts));
     try {
       await upsert({
         permissionMode: "guarded",
@@ -372,7 +370,7 @@ describe("memory actor effect adapters", () => {
         toolOverrides: { webSearch: false },
       });
       delivery.assertNativeTransactionCurrent();
-      const released = await prepareSessionGenerationFacts(facts);
+      const released = await prepareLeaseFacts(facts);
       released.release();
       expect(released.assertNativeTransactionCurrent).toThrow("unavailable");
       delivery.assertNativeTransactionCurrent();

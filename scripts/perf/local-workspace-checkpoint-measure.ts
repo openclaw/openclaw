@@ -170,6 +170,7 @@ import {
   createGatewayBenchEnv,
   writePluginFixtures,
 } from "../lib/gateway-bench-runtime.ts";
+import { observeLocalWorkspaceMutations } from "./local-workspace-mutation-measure.ts";
 
 const { values } = parseArgs({
   options: {
@@ -203,7 +204,10 @@ const { values } = parseArgs({
     "native-turns": { type: "boolean", default: false },
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
+    "checkpoint-changed-files": { type: "string", default: "1" },
+    "checkpoint-seed": { type: "string" },
     "tools-per-turn": { type: "string", default: "10" },
+    "mutation-segments": { type: "boolean", default: false },
     "reconcile-traffic": { type: "boolean", default: false },
     "reconcile-profile": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
@@ -227,7 +231,7 @@ const { values } = parseArgs({
     "retention-ms": { type: "string", default: "0" },
   },
 });
-const processInstance = randomUUID();
+const processInstance = values["checkpoint-seed"] ?? randomUUID();
 const harnessSha256 = createHash("sha256")
   .update(fs.readFileSync(fileURLToPath(import.meta.url)))
   .digest("hex");
@@ -338,6 +342,10 @@ if (values["freeze-source"]) {
       }
     }
   }
+  fs.copyFileSync(
+    new URL("./local-workspace-mutation-measure.ts", import.meta.url),
+    path.join(destination, "scripts/perf/local-workspace-mutation-measure.ts"),
+  );
   // Both arms execute this same measurement program, including its worker instrumentation.
   fs.copyFileSync(fileURLToPath(import.meta.url), path.join(destination, scriptRelative));
   fs.copyFileSync(
@@ -465,6 +473,15 @@ assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
 assert(!reconcileRandomBytes || reconcile);
 assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
 assert(!reconcile || reconcileChangedFiles < Number(values.files));
+const checkpointChangedFiles = values["checkpoint-changed-files"].split(",").map(Number);
+if (turnLoop) {
+  console.log(JSON.stringify({ checkpointSeed: processInstance, hostLoad: loadavg() }));
+}
+assert(
+  checkpointChangedFiles.every(
+    (count) => Number.isSafeInteger(count) && count > 0 && count < Number(values.files),
+  ),
+);
 const nativeTurns = values["native-turns"];
 assert(!nativeTurns || (turnLoop && values["sandbox-backend"] === "podman"));
 assert(!values["settlement-socket"] || nativeTurns);
@@ -572,7 +589,7 @@ const buildInputFiles = Number(values["build-input-files"]);
 assert(Number.isSafeInteger(buildInputFiles) && buildInputFiles >= 0);
 const transcriptMiB = Number(values["transcript-mib"]);
 assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
-assert(!values["agent-db-fixture"] || (serialTurns && !transcriptMiB));
+assert(!values["agent-db-fixture"] || ((serialTurns || reconcile) && !transcriptMiB));
 assert(!transcriptMiB || values.mode === "preparation" || fileReads || turnLoop);
 for (const value of [requests, burst, files, port, worktrees]) {
   assert(Number.isSafeInteger(value) && value > 0);
@@ -828,7 +845,7 @@ if (values["agent-storage-dir"] && !reuseFixture) {
   fs.mkdirSync(path.join(output, "state"), { recursive: true });
   fs.symlinkSync(agentStorage, path.join(output, "state", "agents"), "dir");
 }
-if (values["agent-db-fixture"] && !resumeOwnerSwitch) {
+if (values["agent-db-fixture"] && !resumeOwnerSwitch && !reuseFixture) {
   const destination = path.join(
     output,
     "state",
@@ -902,6 +919,7 @@ const custodyDurationsMs: number[] = [];
 const containerCommands: string[] = [];
 const finalizations: Array<{
   changed: boolean;
+  changedFiles?: number;
   durationMs: number;
   commandDurationMs: number;
   processCpuMs: number;
@@ -951,6 +969,7 @@ type FingerprintMetrics = {
   packedRecords: number;
 };
 const fingerprintMetrics: FingerprintMetrics[] = [];
+const mutationObserver = values["mutation-segments"] ? observeLocalWorkspaceMutations() : undefined;
 const reconcileTraffic: Array<{
   phase: string;
   operation: string;
@@ -970,6 +989,7 @@ const markReconcilePhase = (phase: string) => {
 };
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __mutationObserver: mutationObserver,
   __reconcilePhase: markReconcilePhase,
   __reconcileTraffic: (
     operation: string,
@@ -1112,8 +1132,42 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
-    if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
+    if (
+      values["mutation-segments"] &&
+      relative === "src/gateway/worker-environments/local-workspace-store.ts"
+    ) {
       code = fs.readFileSync(path.join(root, relative), "utf8");
+      code = code.replace("const mutate = async (", "const mutateImpl = async (");
+      const anchor = 'const readManifest: LocalWorkspaceStore["manifest"]';
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        `const mutate = (...args) => globalThis.__mutationObserver.run(args[0].patch?.journal_pack?.byteLength ?? 0, () => mutateImpl(...args)); ${anchor}`,
+      );
+      code = code.replace(
+        "serializedBytes = serialized.byteLength;",
+        "serializedBytes = serialized.byteLength; globalThis.__mutationObserver.serialized(serialized.byteLength);",
+      );
+    }
+    if (values["mutation-segments"] && relative === "src/infra/sqlite-worker-broker-reply.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      assert(code.includes("slot.worker.postMessage("));
+      code = code.replaceAll(
+        "slot.worker.postMessage(",
+        "globalThis.__mutationObserver.postMessage(slot.worker, ",
+      );
+    }
+    if (values["mutation-segments"] && relative === "src/infra/sqlite-worker-client.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        anchor + " globalThis.__mutationObserver.serialized(payload.byteLength);",
+      );
+    }
+    if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
+      code ??= fs.readFileSync(path.join(root, relative), "utf8");
       const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
       assert(code.includes(anchor));
       code = code.replace(
@@ -1198,7 +1252,7 @@ ${anchor}
       );
     }
     if (relative === "src/gateway/worker-environments/local-workspace-store.ts") {
-      code = fs.readFileSync(path.join(root, relative), "utf8");
+      code ??= fs.readFileSync(path.join(root, relative), "utf8");
       const anchor =
         'const readManifest: LocalWorkspaceStore["manifest"] = async (previous, action) => {';
       assert(code.includes(anchor));
@@ -1524,7 +1578,6 @@ const checkpoint = () =>
 const { collectRetiredWorktreeArtifacts } =
   await import("../../src/agents/worktrees/gc-artifacts.js");
 const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
-const { withWorktreeAllocationLease } = await import("../../src/agents/worktrees/allocation.js");
 // A populated default root with only registered checkouts is the recurring idle case.
 const maintained: LocalWorkspaceOwner["worktree"][] = [];
 if (values.mode === "maintenance") {
@@ -1812,30 +1865,40 @@ measurement: try {
         const commandAllocated = getHeapStatistics().total_allocated_bytes;
         const beforePauses = containerCommands.filter((command) => command === "pause").length;
         const spec = await backend.buildExecSpec({ command: "synthetic", env: {}, usePty: false });
-        const editedFile = Math.floor((files * (tool % 10 === 4 ? 1 : 2)) / 3);
-        const relative = `file-${editedFile}.txt`;
-        const content =
-          values["all-mutating"] || tool % 10 === 4 || tool % 10 === 9
-            ? `synthetic edit ${++edit}\n`
-            : undefined;
-        if (content) {
+        const changed = values["all-mutating"] || tool % 10 === 4 || tool % 10 === 9;
+        const changedFiles = changed
+          ? checkpointChangedFiles[edit % checkpointChangedFiles.length]!
+          : 0;
+        const seed = `${processInstance} synthetic edit ${++edit}`;
+        const content = (index: number) =>
+          createHash("shake256", { outputLength: Math.max(64, fileBytes) })
+            .update(`${seed} file-${index}`)
+            .digest();
+        if (changed) {
           assert(!fakePaused, "Guest command cannot write while frozen");
           if (nativeTurns) {
             execFileSync("podman", [
               "exec",
               turnRuntime,
-              "sh",
-              "-c",
-              'printf "%s" "$1" > "$2"',
-              "sh",
-              content,
-              `/workspace/${relative}`,
+              "node",
+              "-e",
+              `
+              const fs = require("node:fs"), crypto = require("node:crypto");
+              const [seed, count, bytes] = process.argv.slice(1);
+              for (let i = 1; i <= Number(count); i++) fs.writeFileSync("/workspace/file-" + i + ".txt",
+                crypto.createHash("shake256", { outputLength: Number(bytes) }).update(seed + " file-" + i).digest());
+            `,
+              seed,
+              String(changedFiles),
+              String(Math.max(64, fileBytes)),
             ]);
           } else {
-            fs.writeFileSync(path.join(workspace!, relative), content);
+            for (let i = 1; i <= changedFiles; i++) {
+              fs.writeFileSync(path.join(workspace!, `file-${i}.txt`), content(i));
+            }
           }
         } else if (nativeTurns) {
-          execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/${relative}`]);
+          execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"]);
         }
         const began = performance.now();
         const beforePauseSamples = pauseDurationsMs.length;
@@ -1849,7 +1912,8 @@ measurement: try {
         const usedCpu = process.cpuUsage(commandCpu);
         const paused = pauseDurationsMs.slice(beforePauseSamples);
         finalizations.push({
-          changed: Boolean(content),
+          changed,
+          changedFiles,
           durationMs: finalizationEnded - began,
           commandDurationMs: finalizationEnded - commandBegan,
           processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
@@ -1859,14 +1923,13 @@ measurement: try {
           maxPauseDurationMs: Math.max(0, ...paused),
         });
         assert(!fakePaused, "Finalization must resume the guest");
-        if (content) {
-          assert.equal(fs.readFileSync(path.join(canonical, relative), "utf8"), content);
+        for (let i = 1; i <= changedFiles; i++) {
+          const expected = content(i);
+          assert.deepEqual(fs.readFileSync(path.join(canonical, `file-${i}.txt`)), expected);
           if (nativeTurns) {
-            assert.equal(
-              execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/${relative}`], {
-                encoding: "utf8",
-              }),
-              content,
+            assert.deepEqual(
+              execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/file-${i}.txt`]),
+              expected,
               "The next guest read must see the completed command's saved bytes",
             );
           }
@@ -1987,7 +2050,7 @@ measurement: try {
       expiresBefore: 0,
       progress,
       orphanFailures: new Map(),
-      withAllocationLease: (run) => withWorktreeAllocationLease({ env: process.env }, run),
+      guard: {},
     });
     assert.equal(
       progress.result.outcome,
@@ -2851,6 +2914,9 @@ measurement: try {
   checkpointPhases.length = 0;
   fingerprintMetrics.length = 0;
   reconcileTraffic.length = 0;
+  if (mutationObserver) {
+    mutationObserver.samples.length = 0;
+  }
   reconcilePhases.length = 0;
   reconcilePhase = "idle";
   reconcilePhaseStarted = performance.now();
@@ -3113,11 +3179,19 @@ measurement: try {
       max: ordered.at(-1) ?? null,
     };
   };
+  if (mutationObserver && reconcileRandomBytes * reconcileChangedFiles >= 1024 * 1024) {
+    assert(mutationObserver.samples.length > 0, "Expected a measured oversized journal mutation");
+    assert(
+      mutationObserver.samples.every((sample) => sample.transferredBytes + sample.clonedBytes > 0),
+      "Expected worker transport byte accounting",
+    );
+  }
   const report = {
     mode: values.mode,
     workspaceRequests: values["reconcile-traffic"] ? [...workspaceRequests] : undefined,
     fingerprintMetrics: fingerprintImport ? [...fingerprintMetrics] : undefined,
     reconcileTraffic: values["reconcile-traffic"] ? [...reconcileTraffic] : undefined,
+    mutationSamples: mutationObserver ? [...mutationObserver.samples] : undefined,
     reconcilePhases: values["reconcile-traffic"] ? [...reconcilePhases] : undefined,
     sourceAuthorityProof,
     operatorAdmissions: values["source-authority"] ? admissions : undefined,
@@ -3130,6 +3204,8 @@ measurement: try {
           ...(reconcile ? { reconcileTarget, reconcileChangedFiles, reconcileRandomBytes } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
+          checkpointChangedFiles,
+          checkpointSeed: processInstance,
           snapshotCaptures: checkpointPhases.filter(
             (phase) => phase.name === "nativeWorktreeFilesystem:copy",
           ).length,
@@ -3258,6 +3334,7 @@ measurement: try {
     sampledBytesPerRequest: sampledBytes === undefined ? null : sampledBytes / requests,
     sampledBytesPerSecond: sampledBytes === undefined ? null : (sampledBytes * 1000) / elapsedMs,
     eventLoopP99Ms: loop.percentile(99) / 1e6,
+    eventLoopMaxMs: loop.max / 1e6,
     eventLoopSamples: loop.count,
     requestLatenciesMs: latencies,
     requestP50Ms: latencies[Math.floor((latencies.length - 1) * 0.5)],

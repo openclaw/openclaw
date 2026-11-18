@@ -24,6 +24,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   blockSubagentCompletionDelivery,
@@ -319,6 +320,31 @@ it.each([false, true])(
     }
   },
 );
+
+it("retains a restored running child until fresh requester admission can deliver its notice", async () => {
+  using warning = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
+  const startedBeforeThisProcess = Math.floor(performance.timeOrigin) - 60_000;
+  const subagent = createSubagentRunRecord({
+    runId: "restored-running-child",
+    requesterAgentId: "main",
+    createdAt: startedBeforeThisProcess,
+    startedAt: startedBeforeThisProcess,
+    expectsCompletionMessage: true,
+  });
+  publishCommittedRecords(subagent);
+  await resetSubagentRegistryForTests({ persist: false });
+  await closeOpenClawStateDatabaseAsync();
+  await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+  const restored = expectDefined(subagentRuns.get(subagent.runId), "restored running child");
+  expect(subagentRuns.isCompletionAuthorityRetired(restored)).toBe(true);
+
+  await testing.sweepOnceForTests();
+
+  const pending = loadSubagentRegistryFromSqlite().get(subagent.runId);
+  expect(warning).not.toHaveBeenCalled();
+  expect(pending?.execution.status).toBe("running");
+  expect(pending?.delivery?.status).toBe("pending");
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;

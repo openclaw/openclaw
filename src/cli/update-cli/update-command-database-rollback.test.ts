@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import { fork, type ChildProcess } from "node:child_process";
 // Keep network/package-manager admission outside this database recovery regression.
 import "./update-command-execution.test-support.js";
-import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -13,6 +13,7 @@ import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import { buildBackupArchivePath } from "../../infra/backup-archive-path-policy.js";
+import * as gitReleasePaths from "../../infra/git-release-paths.js";
 import { capturePackageActivationRuntime } from "../../infra/package-update-activation-paths.js";
 import { swapStagedPackageInstall } from "../../infra/package-update-swap.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
@@ -135,6 +136,8 @@ const { runUpdateFinalizationDoctorInFreshProcess } =
 const { withOwnedManagedUpdateEnv } = await import("./update-command-service-env.js");
 
 beforeEach(() => {
+  // These cases cover the in-place Git runner Windows checkouts and package-to-Git switches use.
+  vi.spyOn(gitReleasePaths, "usesGitReleases").mockReturnValue(false);
   vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
     stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
   );

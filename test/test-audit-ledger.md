@@ -1054,6 +1054,48 @@ formatting, line-cap/max-lines ratchets, and `git diff --check` pass. Independen
 preservation and local ClawSweeper review found no actionable issue. The shared
 cleanup helper is unchanged; its prior 11-pass / one-Windows-skip proof is reused.
 
+### Source scan fixture cleanup custody
+
+At `10f6b53ce51827256689604e821c34a7f5e84323`, the source-file scan fixture empties
+its directory tracker before removal succeeds. Reuse the shared cleanup owner
+after the existing pending-scan settlement and reset. All five declarations /
+eight expanded cases remain, including refill concurrency, source ordering,
+pre/post-read limits, decoding, mapper error behavior and live file mutations
+through both collect and map. Keep the asynchronous hook and the `rm` import
+used by the deletion mutation. Production and shared-helper code are unchanged.
+
+Actual Vitest-hook fault injection preserves the original removal error on both
+heads. With a real held scan, every root remains intact until settlement and the
+pending scan is reset before removal. The original hook loses the failed root
+and makes no retry; the candidate retains it, removes a healthy sibling and
+succeeds on the next attempt. Each fault run has one intentional hook failure
+and seven passing cases. Temporary instrumentation was removed and the exact
+candidate bytes restored. All eight clean cases pass on both heads (1.71 s
+baseline; 1.88 s candidate command time); these are correctness runs, not a
+performance comparison. Scoped scripts-test typecheck, lint, formatting and
+both line-cap ratchets pass. Production and shared-helper code are unchanged.
+
+### Built status runtime fixture cleanup
+
+At `a58770f3a50053e89236c787a331c1cb48d4b388`, the built-status runtime test
+clears its directory tracker before removal and stops on the first failure.
+Reuse the shared cleanup owner while preserving the synchronous hook, fixture
+factory and both declarations / four expanded cases. Retain the empty-PATH
+fallback with scoped environment restoration, hashed `.mjs` preference and
+three external-find rows with the no-readdir assertion. Production and shared
+helpers are unchanged.
+
+Actual Vitest-hook fault injection preserves the original error on both
+versions. The baseline loses both roots and performs no retry; the candidate
+removes the healthy root, retains the failed root and removes it on retry.
+Both injected runs intentionally report one hook failure and three passing
+cases. Both clean runs pass all four cases (6.99 s baseline command time;
+1.90 s candidate); these correctness runs are not a performance comparison.
+The temporary instrumentation was restored byte for byte, and scoped PATH
+restoration passed. Scoped scripts-test typecheck, lint, formatting and both
+line-cap ratchets pass. Independent preservation and local ClawSweeper reviews
+found no actionable defects.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

@@ -135,6 +135,9 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "test/scripts/eager-import-closure.test.ts",
     "test/scripts/type-suppression-inventory.test.ts",
     "test/scripts/plugin-sdk-surface-report.test.ts",
+    // Bundles each standalone worker at test time: one new edge can pull the Gateway graph
+    // into a private worker build, which only release packaging measures otherwise.
+    "test/scripts/runtime-process-build-graph.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     sourceOnly: true,
@@ -437,10 +440,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
-  })),
   {
     testFile: "packages/memory-host-sdk/src/host/session-memory-sync.test.ts",
     watchGlobs: [
@@ -472,7 +471,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-prompt-submit.runtime-replay.test.ts",
     "src/agents/embedded-agent-runner/run/attempt-stream-custody.test.ts",
-    "src/agents/embedded-agent-runner/run/attempt-transcript-lifecycle-prepare.test.ts",
     "src/agents/embedded-agent-runner/run/attempt.spawn-workspace.orphan.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
     "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",

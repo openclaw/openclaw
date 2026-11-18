@@ -60,7 +60,7 @@ export async function runCronSessionTurn(
     (await prepareAutomationSystemEvents(queueKey, job.id, job.state.runningAtMs));
   let noticesStarted = false;
   let operatorAuthority: AdmittedRunOperatorAuthority | undefined;
-  let controlUiAdmin: true | undefined;
+  let automationAdmin: true | undefined;
   using operatorLease = new DisposableStack();
   const assertCurrent = () => {
     params.assertCurrent();
@@ -83,11 +83,7 @@ export async function runCronSessionTurn(
       try {
         operator = await restoreCronOperatorSource({
           job,
-          target: {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: expectedTarget.sessionId,
-          },
+          target: { agentId: params.agentId, sessionKey: params.sessionKey },
           signal: params.abortSignal,
           deliveryAttemptFence: params.deliveryAttemptFence,
         });
@@ -107,7 +103,7 @@ export async function runCronSessionTurn(
       if (operator) {
         operatorLease.defer(operator.release);
         operatorAuthority = operator.authority;
-        controlUiAdmin = operator.controlUiAdmin ? true : undefined;
+        automationAdmin = operator.automationAdmin ? true : undefined;
       }
       assertCurrent();
     }
@@ -228,7 +224,7 @@ export async function runCronSessionTurn(
         job,
         occurrence: params.occurrence,
         operatorAuthority,
-        controlUiAdmin,
+        automationAdmin,
         admissionSource: params.admissionSource,
         prepare: params.prepare,
         preparePrompt: async (cfg) => {

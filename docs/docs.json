@@ -1851,6 +1851,7 @@
                     "group": "Models and memory",
                     "pages": [
                       "plugins/apple-fm",
+                      "plugins/gbrain",
                       "plugins/knowledge",
                       {
                         "group": "Knowledge",
@@ -3270,6 +3271,8 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.11.5",
+                  "releases/2026.11.4",
                   "releases/2026.11.3",
                   "releases/2026.11.2",
                   "releases/2026.11.1",

@@ -26,6 +26,11 @@ fact directly.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.
+Public settle turns also preserve the accepted input's sender attribution across
+restart. A matching restart-interrupted processing receipt resumes that same input
+and run, using its committed bytes without repeating transcript hooks or appending
+the child result again. Completed and intentionally stopped processing receipts
+remain final.
 
 A requester completion turn may finish with `NO_REPLY` or no visible text. That
 settles the child's completion without a retry, an extra model turn, or a blocked
@@ -33,6 +38,23 @@ delivery notice. The child result remains available in its session and the
 **Subagents** panel. This also applies when the completion guidance asks the parent
 to answer the user: later parent turns own any outstanding answer. A child task
 itself still owes its result; this quiet settlement applies to the parent reviewing it.
+
+A requester completion turn commits the child results to the requester transcript
+before it calls the model. A committed result is never dispatched again. If the turn
+then fails before it answers (for example the provider is unavailable), the result
+is delivered: the turn shows its own error in the chat, and the next turn reads the
+results from the transcript. If the turn answered but the answer did not reach the
+channel, or the turn ended for a recorded reason, that outcome is kept.
+
+Results that no turn committed stay owed. Cancellation before dispatch, worker
+timeout, preparation invalidation and other retryable refusals keep the wake pending
+with its last error, and the sweeper wakes it again. There is no attempt limit,
+retry ladder or expiry. A permanent refusal withholds the result with that error;
+it stays readable in the child session and is not dispatched again.
+Ordinary completion delivery retains its existing frozen-result retry policy and
+delivery identity; it does not start a new requester-settle attempt.
+Explicit Stop, retired work, and intentional delivery suppression still take
+precedence; cancellation does not revive work those owners have closed.
 
 By default, delivery depends on requester depth:
 
@@ -113,8 +135,12 @@ A required parent completion that permanently fails also records a visible failu
 notice in the original requester conversation, without starting another agent turn.
 The notice goes to the requester chat as it is now, also after a reset; a deleted requester gets none.
 A confirmed handoff remains delivered even if its receipt
-callback fails; cleanup must not replay an already consumed result. Failures before
+callback fails; cleanup must not replay an already consumed result. A completion
+steered into the requester's active run counts as delivered once the steer commits,
+even if its delivery owner changes afterward. Failures before
 a delivery result is reported follow the same retryability policy as direct sends.
+A temporary Gateway access-policy outage refuses only the current delivery attempt:
+the result stays owed and the next lifecycle event retries it.
 
 Restart checkpoint reconciliation retains the confirmed delivery evidence before
 clearing the active recovery claim. Delivered replies, intentionally suppressed
@@ -212,7 +238,12 @@ yielded work keep their payloads until those obligations settle.
 Restart recovery includes finished results whose requester has already settled,
 even when that requester has no interrupted-run marker. Retired process authority
 alone does not mean the requester or its store was replaced. Retryable delivery
-is not eligible for completed-run retention cleanup.
+is not eligible for completed-run retention cleanup. Existing wakes resume through
+startup recovery under fresh requester authority. An older build may already have
+removed a wake and suppressed completion delivery while leaving a retryable label.
+Upgrading does not recreate that retired wake or replay its possibly consumed input;
+those results require explicit recovery. Permanently suspended deliveries also stay
+suspended.
 
 Registry removal records a `child_delivery_removed` session-state event in the
 same transaction. It identifies the run, its delivered, suspended, or discarded

@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -17,10 +18,7 @@ import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-w
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
-import {
-  SubagentCompletionSourceChangedError,
-  SubagentRequesterWakeProgressChangedError,
-} from "../completion/subagent-completion-admission.store.js";
+import { SubagentCompletionSourceChangedError } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
@@ -528,8 +526,8 @@ export function scheduleRequesterSettleWake(
             if (isGatewayRestartDrainError(error)) {
               return;
             }
-            if (error instanceof SubagentRequesterWakeProgressChangedError) {
-              // Another attempt already owns this wake's newer progress.
+            if (error instanceof SubagentCompletionSourceChangedError) {
+              // A rejected owner must yield, not settle the current owner's owed results.
               for (const member of admittedBatch) {
                 const key = getSubagentRunRuntimeKey(member);
                 if (pendingRequesterSettlements.get(key)?.settle === settleObserved) {
@@ -546,12 +544,15 @@ export function scheduleRequesterSettleWake(
               });
               return;
             }
+            // A policy outage refuses this attempt without revoking its source: the finished
+            // result stays owed and the next lifecycle event retries it.
             const retryPreparation =
               !settleObserved &&
               ((error instanceof AgentDatabaseAdmissionError &&
                 error.refusal.code === "agent-database-inspection-pending") ||
                 error instanceof SubagentAnnouncePreparationConflictError ||
-                (error instanceof WorkerTaskError && error.code === "overloaded"));
+                (error instanceof WorkerTaskError && error.code === "overloaded") ||
+                isOperatorAuthorityUnavailable(error));
             const safeError = buildSafeLifecycleErrorMeta(error);
             if (retryPreparation) {
               // No delivery was admitted. Retain the exact cohort and its counters;
@@ -597,35 +598,6 @@ export function scheduleRequesterSettleWake(
             });
             if (!isSourceCurrent()) {
               return;
-            }
-            if (error instanceof SubagentCompletionSourceChangedError && !settleObserved) {
-              const noticeScope = admittedWake?.batchRunIds ? scope : `${scope}\0${runId}`;
-              try {
-                const { appendAssistantMessageToSessionTranscript } =
-                  await import("../../../config/sessions/transcript.js");
-                const notice = await appendAssistantMessageToSessionTranscript({
-                  agentId: entry.requesterAgentId,
-                  sessionKey: requesterSessionKey,
-                  storePath: entry.requesterStorePath,
-                  idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
-                  text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
-                  assertCurrent: () => {
-                    if (!isSourceCurrent() || requesterSettleWakeScope(entry) !== scope) {
-                      throw new Error("Requester wake changed before rejection notice", {
-                        cause: error,
-                      });
-                    }
-                  },
-                });
-                if (!notice.ok) {
-                  throw new Error(notice.reason, { cause: error });
-                }
-              } catch (noticeError) {
-                params.warn("failed to record requester settle wake rejection notice", {
-                  error: buildSafeLifecycleErrorMeta(noticeError),
-                  runId,
-                });
-              }
             }
             // Delivery may have succeeded before its bookkeeping failed. Preserve that result.
             await (

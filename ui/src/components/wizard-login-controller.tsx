@@ -28,6 +28,8 @@ export function createWizardLogin(options: {
   getClient: () => GatewayBrowserClient | null;
   getAgentId: () => string | null;
   onClose: () => void;
+  onCancelled?: () => void;
+  onSessionMissing?: () => void;
   requestFailedMessage: () => string;
   sessionExpiredMessage: () => string;
   finishingMessage?: () => string;
@@ -144,6 +146,7 @@ export function createWizardLogin(options: {
       .requestCancellation()
       .then((outcome) => {
         if (currentGeneration === generation && outcome === "cancelled") {
+          options.onCancelled?.();
           options.onClose();
         }
         return outcome;

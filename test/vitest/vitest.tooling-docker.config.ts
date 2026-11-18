@@ -1,10 +1,8 @@
 // Vitest tooling Docker config isolates the slow Docker helper contract tests.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
+import { toolingDockerTestFiles } from "./vitest.tooling-paths.mjs";
 
-export const toolingDockerTestFiles = [
-  "test/scripts/docker-build-helper.test.ts",
-  "test/scripts/docker-e2e-update-suppression.test.ts",
-];
+export { toolingDockerTestFiles } from "./vitest.tooling-paths.mjs";
 
 export function createToolingDockerVitestConfig(env?: Record<string, string | undefined>) {
   return createScopedVitestConfig(toolingDockerTestFiles, {
