@@ -255,6 +255,9 @@ export const sendHandlers: GatewayRequestHandlers = {
                 ...(resolvedMediaAccess.workspaceDir
                   ? { workspaceDir: resolvedMediaAccess.workspaceDir }
                   : {}),
+                ...(resolvedMediaAccess.blockedHostnames
+                  ? { blockedHostnames: resolvedMediaAccess.blockedHostnames }
+                  : {}),
               };
               if (request.action === "send") {
                 await hydrateAttachmentParamsForAction({

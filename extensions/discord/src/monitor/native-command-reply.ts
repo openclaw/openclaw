@@ -2,6 +2,11 @@ import type { APIEmbed, APIMessageTopLevelComponent } from "discord-api-types/v1
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  buildOutboundMediaLoadOptions,
+  type OutboundMediaAccess,
+} from "openclaw/plugin-sdk/media-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
@@ -68,6 +73,7 @@ export function resolveDiscordInteractionReplyOptions(
     }),
     maxLinesPerMessage: resolveDiscordMaxLinesPerMessage(params),
     chunkMode: resolveChunkMode(params.cfg, "discord", params.accountId),
+    mediaAccess: resolveOutboundMediaAccessForConfig(params.cfg),
   };
 }
 
@@ -138,6 +144,7 @@ export async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction | BaseComponentInteraction;
   payload: ReplyPayload;
   mediaLocalRoots?: readonly string[];
+  mediaAccess?: OutboundMediaAccess;
   componentRoute?: { accountId: string; agentId: string; sessionKey: string };
   textLimit: number;
   maxLinesPerMessage?: number;
@@ -250,6 +257,8 @@ export async function deliverDiscordInteractionReply(params: {
         reply.mediaUrls.map(async (url) => {
           const loaded = await loadWebMedia(url, {
             localRoots: params.mediaLocalRoots,
+            ssrfPolicy: buildOutboundMediaLoadOptions({ mediaAccess: params.mediaAccess })
+              .ssrfPolicy,
           });
           return {
             name: loaded.fileName ?? "upload",

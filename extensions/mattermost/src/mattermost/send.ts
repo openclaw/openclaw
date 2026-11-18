@@ -38,7 +38,7 @@ import { parseMattermostTarget, resolveMattermostOpaqueTarget } from "./target-r
 
 type MattermostSendOpts = Pick<
   ChannelOutboundContext,
-  "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+  "assertDirectAdapterHandoff" | "onPlatformSendDispatch" | "mediaAccess"
 > & {
   cfg: OpenClawConfig;
   botToken?: string;
@@ -215,6 +215,7 @@ export async function sendMessageMattermost(
     try {
       const media = await loadOutboundMediaFromUrl(mediaUrl, {
         maxBytes: mediaMaxBytes,
+        mediaAccess: opts.mediaAccess,
         mediaLocalRoots: opts.mediaLocalRoots,
         mediaReadFile: opts.mediaReadFile,
         workspaceDir: opts.workspaceDir,
