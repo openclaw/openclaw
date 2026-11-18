@@ -62,6 +62,7 @@ type Evidence = {
   schema: number;
   status: "failed" | "passed";
   targetSha: string;
+  harnessSha: string;
   client?: {
     kind: "stable-release-source-rebuild";
     clientSha: string;
@@ -106,6 +107,8 @@ export async function main(argv = process.argv.slice(2)) {
     args: argv.filter((arg) => arg !== "--"),
     options: {
       "target-sha": { type: "string" },
+      "candidate-root": { type: "string" },
+      "harness-sha": { type: "string" },
       "client-root": { type: "string" },
       "client-sha": { type: "string" },
       "client-release-tag": { type: "string" },
@@ -117,13 +120,25 @@ export async function main(argv = process.argv.slice(2)) {
   });
   if (!values.output || !/^[a-f0-9]{40}$/u.test(values["target-sha"] ?? "")) {
     throw new Error(
-      "usage: --target-sha <full-sha> --output <proof.json> [--artifacts-dir <directory>] [--selection-dir <directory>] [--client-root <stable-checkout> --client-sha <full-sha> --client-release-tag <tag>]",
+      "usage: --target-sha <full-sha> --output <proof.json> [--artifacts-dir <directory>] [--selection-dir <directory>] [--candidate-root <checkout> --harness-sha <full-sha>] [--client-root <stable-checkout> --client-sha <full-sha> --client-release-tag <tag>]",
     );
   }
   const compatibility =
     values["client-root"] !== undefined ||
     values["client-sha"] !== undefined ||
     values["client-release-tag"] !== undefined;
+  if (
+    (values["candidate-root"] !== undefined || values["harness-sha"] !== undefined) &&
+    (!compatibility ||
+      (values["candidate-root"] !== undefined && !values["candidate-root"].trim()) ||
+      (values["harness-sha"] !== undefined && !/^[a-f0-9]{40}$/u.test(values["harness-sha"])))
+  ) {
+    throw new Error(
+      "--candidate-root and --harness-sha require stable-client compatibility and valid identities.",
+    );
+  }
+  const candidateRoot = path.resolve(values["candidate-root"] ?? repo);
+  const harnessSha = values["harness-sha"] ?? values["target-sha"]!;
   const releaseTag = values["client-release-tag"];
   const release = releaseTag?.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
   if (
@@ -171,6 +186,7 @@ export async function main(argv = process.argv.slice(2)) {
     schema: 1,
     status: "failed",
     targetSha: values["target-sha"]!,
+    harnessSha,
     ...(compatibility
       ? {
           client: {
@@ -364,13 +380,13 @@ export async function main(argv = process.argv.slice(2)) {
   const transports: AndroidReleaseTransportSnapshot[] = [];
   evidence.transport = transports;
   try {
-    if ((await command("git", ["rev-parse", "HEAD"])) !== evidence.targetSha) {
+    if ((await command("git", ["rev-parse", "HEAD"])) !== evidence.harnessSha) {
       throw new Error("source-head-mismatch");
     }
     evidence.source = await androidReleaseSourceEvidence(command, repo);
     if (
       !evidence.source.clean &&
-      (!values["allow-dirty"] || process.env.GITHUB_ACTIONS === "true")
+      (compatibility || !values["allow-dirty"] || process.env.GITHUB_ACTIONS === "true")
     ) {
       throw new Error("dirty-source");
     }
@@ -437,7 +453,7 @@ export async function main(argv = process.argv.slice(2)) {
       selectionDir: path.resolve(values["selection-dir"] ?? `${output}.gateway-selection`),
       installDir: path.join(root, "gateway-install"),
       targetSha: evidence.targetSha,
-      ...(compatibility ? { candidateDir: repo } : {}),
+      ...(compatibility ? { candidateDir: candidateRoot } : {}),
       signal: abort.signal,
     });
     evidence.gateway = gateway.identity;
@@ -920,7 +936,7 @@ export async function main(argv = process.argv.slice(2)) {
       throw new Error("fixture-exited");
     }
     if (
-      (await command("git", ["rev-parse", "HEAD"])) !== evidence.targetSha ||
+      (await command("git", ["rev-parse", "HEAD"])) !== evidence.harnessSha ||
       JSON.stringify(await androidReleaseSourceEvidence(command, repo)) !==
         JSON.stringify(evidence.source)
     ) {

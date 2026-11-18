@@ -75,6 +75,12 @@ function requestValue(request) {
     "request identity or current parent workflow SHA is invalid",
   );
   const spec = releaseChildSpec(request.role);
+  if (request.role === "stableClientCompatibility") {
+    requireEvidence(
+      request.inputs?.target_sha === request.targetSha,
+      "stable client target_sha differs from the exact product source",
+    );
+  }
   return { ...request, inputs: normalizedInputs(request.inputs), spec };
 }
 
@@ -593,7 +599,7 @@ async function validateEvidence(selection, request, deps) {
     "receipt does not match the complete live composite workload",
   );
   // Callers supply the current admitted candidate version to apply trusted P policy.
-  if (request.policyTargetVersion) {
+  if (request.policyTargetVersion || request.role === "stableClientCompatibility") {
     const child = {
       key: request.role,
       runId: String(run.id),

@@ -44,6 +44,8 @@ const CHAT_MARKERS = [
 export async function createNativeDependencies(options: {
   mode: Mode;
   targetSha: string;
+  candidateRoot?: string;
+  harnessSha?: string;
   clientRoot?: string;
   clientSha?: string;
   clientReleaseTag?: string;
@@ -60,6 +62,8 @@ export async function createNativeDependencies(options: {
   cleanup: () => Promise<void>;
 }> {
   const cwd = process.cwd();
+  const candidateRoot = path.resolve(options.candidateRoot ?? cwd);
+  const harnessSha = options.harnessSha ?? options.targetSha;
   const clientRoot = options.clientRoot ? path.resolve(options.clientRoot) : cwd;
   const clientSha = options.clientSha ?? options.targetSha;
   if (options.clientRoot) {
@@ -223,8 +227,8 @@ export async function createNativeDependencies(options: {
         throw new OperationError("source-head", "identity-mismatch");
       }
     }
-    // The candidate owns the harness and fixtures; the optional release checkout owns native code.
-    const sources = [{ root: cwd, sha: options.targetSha }];
+    // The harness owns fixtures; the candidate owns the Gateway and the release owns native code.
+    const sources = [{ root: cwd, sha: harnessSha }];
     if (options.clientRoot) {
       sources.push({ root: clientRoot, sha: clientSha });
     }
@@ -246,7 +250,7 @@ export async function createNativeDependencies(options: {
     }
   };
   await assertCurrentSource();
-  options.proof.harnessSha = options.targetSha;
+  options.proof.harnessSha = harnessSha;
   const xcodeVersion = await command("xcode-version", "xcodebuild", ["-version"]);
   const xcode = /^Xcode ([0-9.]+)\r?\nBuild version ([A-Za-z0-9]+)$/u.exec(xcodeVersion);
   if (!xcode) {
@@ -316,7 +320,7 @@ export async function createNativeDependencies(options: {
         try {
           return await prepareIOSReleaseGateway({
             ...(options.clientRoot
-              ? { candidateDir: cwd }
+              ? { candidateDir: candidateRoot }
               : { selectionDir: options.gatewaySelectionDir! }),
             installDir: path.join(root, "gateway"),
             targetSha: options.targetSha,

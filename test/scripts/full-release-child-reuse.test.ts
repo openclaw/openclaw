@@ -328,6 +328,28 @@ function crossQualificationTrees(data: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("independent release child reuse", () => {
+  it("does not reuse a successful stable client workflow without its required gate", async () => {
+    const data = await fixture("stableClientCompatibility", { target_sha: TARGET });
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toBeNull();
+    data.jobs[1]!.name = "Verify stable client compatibility";
+    data.receipt.jobs.find((job) => job.name === "resolve target")!.name =
+      "Verify stable client compatibility";
+    data.receipt.jobs.sort(compareReleaseJobsByName);
+    data.receipt.compositeJobsSha256 = jsonDigest({
+      effectiveRunAttempt: data.receipt.effectiveRunAttempt,
+      plannedRunAttempt: data.receipt.plannedRunAttempt,
+      jobs: data.receipt.jobs,
+    });
+    await data.seal();
+    expect(await discoverReusableReleaseChild(data.request, data.deps)).toMatchObject({
+      role: "stableClientCompatibility",
+      inputs: { target_sha: TARGET },
+    });
+    await expect(
+      discoverReusableReleaseChild({ ...data.request, inputs: { target_ref: TARGET } }, data.deps),
+    ).rejects.toThrow(/target_sha/);
+  });
+
   it("retains original C-owned child identity across a parent-only Q repair", async () => {
     const data = await fixture("normalCi", undefined, TARGET);
     crossQualificationTrees(data);

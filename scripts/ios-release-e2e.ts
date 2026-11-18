@@ -404,6 +404,8 @@ async function main() {
     options: {
       mode: { type: "string", default: "stock" },
       "target-sha": { type: "string" },
+      "candidate-root": { type: "string" },
+      "harness-sha": { type: "string" },
       "client-root": { type: "string" },
       "client-sha": { type: "string" },
       "client-release-tag": { type: "string" },
@@ -419,6 +421,10 @@ async function main() {
   const releaseTag = values["client-release-tag"];
   const release = releaseTag?.startsWith("v") ? parseReleaseVersion(releaseTag.slice(1)) : null;
   if (
+    ((values["candidate-root"] !== undefined || values["harness-sha"] !== undefined) &&
+      (!compatibility ||
+        (values["candidate-root"] !== undefined && !values["candidate-root"].trim()) ||
+        (values["harness-sha"] !== undefined && !/^[a-f0-9]{40}$/u.test(values["harness-sha"])))) ||
     (compatibility &&
       (!values["client-root"]?.trim() ||
         !/^[a-f0-9]{40}$/u.test(values["client-sha"] ?? "") ||
@@ -433,7 +439,7 @@ async function main() {
     (values["gateway-only"] && (values["build-only"] || values.mode !== "stock"))
   ) {
     throw new Error(
-      "usage: --mode stock|compare --target-sha <full-sha> --output <proof.json> [--client-root <checkout> --client-sha <full-sha> --client-release-tag <stable-tag>]",
+      "usage: --mode stock|compare --target-sha <full-sha> --output <proof.json> [--candidate-root <checkout> --harness-sha <full-sha>] [--client-root <checkout> --client-sha <full-sha> --client-release-tag <stable-tag>]",
     );
   }
   const started = performance.now();
@@ -481,6 +487,8 @@ async function main() {
       buildOnly: values["build-only"],
       ...(compatibility
         ? {
+            candidateRoot: path.resolve(values["candidate-root"] ?? process.cwd()),
+            harnessSha: values["harness-sha"] ?? values["target-sha"]!,
             clientRoot: path.resolve(values["client-root"]!),
             clientSha: values["client-sha"]!,
             clientReleaseTag: values["client-release-tag"]!,

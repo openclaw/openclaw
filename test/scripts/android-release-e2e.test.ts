@@ -99,15 +99,48 @@ it.each([
   await expect(main([...argv("unused.json"), ...args])).rejects.toThrow("required together");
   expect(mocks.command).not.toHaveBeenCalled();
 });
+it.each([
+  ["--candidate-root", "."],
+  ["--harness-sha", "a".repeat(40)],
+])("rejects independent roots outside stable-client compatibility %j", async (...args) => {
+  await expect(main([...argv("unused.json"), ...args])).rejects.toThrow(
+    "require stable-client compatibility",
+  );
+  expect(mocks.command).not.toHaveBeenCalled();
+});
 it("rejects the candidate checkout as the stable client", async () => {
   await expect(main(argv("unused.json", mocks.repo, candidateSha))).rejects.toThrow(
     "separate stable-release checkout",
   );
 });
-it.each(["compatibility", "default", "dirty-client", "wrong-client-head", "changed-client"])(
-  "keeps build/source/Gateway identities separate for %s",
+it.each([
+  "compatibility",
+  "default",
+  "dirty-client",
+  "wrong-client-head",
+  "changed-client",
+  "separate-candidate",
+  "candidate-mismatch",
+  "candidate-missing",
+])(
+  "keeps native build/source/Gateway identities separate and fixture lifecycle rooted in the harness for %s",
   async (scenario) => {
     const root = tempDirs.make("android-release-client-");
+    const separateCandidate = scenario.includes("candidate");
+    const candidateRoot = separateCandidate ? path.join(root, "gateway-candidate") : mocks.repo;
+    const targetSha =
+      separateCandidate && scenario !== "candidate-missing"
+        ? checkout(candidateRoot)
+        : candidateSha;
+    if (separateCandidate && scenario !== "candidate-missing") {
+      mkdirSync(path.join(candidateRoot, "dist"));
+      writeFileSync(
+        path.join(candidateRoot, "dist/build-info.json"),
+        JSON.stringify({ commit: targetSha }),
+      );
+      // Build output is ignored just as it is in a prepared candidate checkout.
+      writeFileSync(path.join(candidateRoot, ".git/info/exclude"), "dist/\n");
+    }
     const client = path.join(root, "stable");
     const clientSha = checkout(client);
     git(client, "tag", tag);
@@ -132,11 +165,19 @@ it.each(["compatibility", "default", "dirty-client", "wrong-client-head", "chang
     const counters = new Map<string, number>();
     const launchedFrom: string[] = [];
     const apkPaths: string[] = [];
-    mocks.gateway.mockImplementation(async (options) => ({
-      cwd: options.candidateDir ?? "/synthetic/published-gateway",
-      entrypoint: ["openclaw.mjs"],
-      identity: { targetSha: options.targetSha },
-    }));
+    mocks.gateway.mockImplementation(async (options) => {
+      if (separateCandidate) {
+        const actual = await vi.importActual<
+          typeof import("../../scripts/lib/ios-release-gateway.js")
+        >("../../scripts/lib/ios-release-gateway.js");
+        return actual.prepareIOSReleaseGateway(options);
+      }
+      return {
+        cwd: options.candidateDir ?? "/synthetic/published-gateway",
+        entrypoint: ["openclaw.mjs"],
+        identity: { targetSha: options.targetSha },
+      };
+    });
     mocks.rpc.mockImplementation(async () => {
       if (scenario === "changed-client") {
         writeFileSync(path.join(client, "changed.txt"), "changed after build");
@@ -300,8 +341,22 @@ it.each(["compatibility", "default", "dirty-client", "wrong-client-head", "chang
         scenario === "wrong-client-head" ? "0".repeat(40) : clientSha,
       ),
       ...(scenario === "dirty-client" ? ["--allow-dirty"] : []),
+      ...(separateCandidate
+        ? [
+            "--candidate-root",
+            candidateRoot,
+            "--harness-sha",
+            candidateSha,
+            "--target-sha",
+            scenario === "candidate-mismatch" ? "0".repeat(40) : targetSha,
+          ]
+        : []),
     ]);
-    if (["dirty-client", "wrong-client-head"].includes(scenario)) {
+    if (["candidate-mismatch", "candidate-missing"].includes(scenario)) {
+      expect(proof.status).toBe("failed");
+      expect(proof.failure).toBe("gateway-install");
+      expect(counters.size).toBe(0);
+    } else if (["dirty-client", "wrong-client-head"].includes(scenario)) {
       expect(proof.status).toBe("failed");
       expect(proof.failure).toBe("source");
       expect(launchedFrom).toEqual([]);
@@ -321,10 +376,19 @@ it.each(["compatibility", "default", "dirty-client", "wrong-client-head", "chang
       }
       expect(proof.cleanupConfirmed).toBe(true);
       const options = mocks.gateway.mock.calls[0]![0];
-      expect(options.targetSha).toBe(candidateSha);
-      expect(options.candidateDir).toBe(scenario === "default" ? undefined : mocks.repo);
+      expect(options.targetSha).toBe(targetSha);
+      expect(options.candidateDir).toBe(scenario === "default" ? undefined : candidateRoot);
     }
-    expect(proof.targetSha).toBe(candidateSha);
+    expect(proof.targetSha).toBe(scenario === "candidate-mismatch" ? "0".repeat(40) : targetSha);
+    expect(proof.harnessSha).toBe(candidateSha);
+    if (scenario === "separate-candidate") {
+      expect(targetSha).not.toBe(candidateSha);
+      expect(proof.gateway).toEqual({ kind: "candidate-source", targetSha, sourceSha: targetSha });
+      const provider = mocks.command.mock.calls
+        .map(([options]) => options)
+        .find((options) => options.env?.MOCK_REQUEST_LOG);
+      expect(provider.cwd).toBe(mocks.repo);
+    }
     expect(proof.client).toEqual(
       scenario === "default"
         ? undefined

@@ -252,6 +252,15 @@ const CHILD_SPECS = Object.freeze([
     workflow: "ci.yml",
   },
   {
+    dispatchName: "Dispatch stable client compatibility",
+    displayName: "Stable Release Source Compatibility",
+    key: "stableClientCompatibility",
+    parentJobName: "Run stable client compatibility",
+    rerunGroups: ["all", "ci"],
+    suffix: "-stable-client",
+    workflow: "stable-release-source-compatibility.yml",
+  },
+  {
     dispatchName: "Dispatch plugin prerelease independent phase",
     displayName: "Plugin Prerelease",
     key: "pluginPrereleaseIndependent",
@@ -1312,7 +1321,11 @@ export function buildReleaseExecutionPlanArtifact({
   const artifactSpecs = frozenCoverage
     ? []
     : normalizedAttemptEvidenceVersion === 3
-      ? CHILD_SPECS
+      ? CHILD_SPECS.filter(
+          (spec) =>
+            spec.key !== "stableClientCompatibility" ||
+            normalizedChildren.some((child) => child.key === spec.key),
+        )
       : UNPHASED_CHILD_SPECS;
   for (const spec of artifactSpecs) {
     if (
@@ -1613,6 +1626,14 @@ export function terminalPolicyPass(child, targetVersion, targetSha) {
   const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha });
   return (
     child.status === "completed" &&
+    (child.key !== "stableClientCompatibility" ||
+      (child.jobs.filter((job) => job.name === "Verify stable client compatibility").length === 1 &&
+        child.jobs.some(
+          (job) =>
+            job.name === "Verify stable client compatibility" &&
+            job.status === "completed" &&
+            job.conclusion === "success",
+        ))) &&
     child.jobs.every((job) => job.status === "completed") &&
     (child.conclusion === "success" ||
       (child.conclusion === "failure" &&
@@ -2027,6 +2048,12 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     throw new Error("Execution plan omitted admitted frozen qualification coverage");
   }
   const expectedKeys = (payload.attemptEvidenceVersion === 3 ? CHILD_SPECS : UNPHASED_CHILD_SPECS)
+    // Older phase-three receipts predate this additive child inventory.
+    .filter(
+      (spec) =>
+        spec.key !== "stableClientCompatibility" ||
+        children.some((child) => child.key === spec.key),
+    )
     .map((spec) => spec.key)
     .toSorted();
   if (
@@ -2111,11 +2138,13 @@ function validateChildReuseBindings(plan) {
       throw new Error(`release child reuse differs from its immutable plan: ${role}`);
     }
     const targetKey =
-      role === "npmTelegram"
-        ? "harness_ref"
-        : role.startsWith("releaseChecks")
-          ? "ref"
-          : "target_ref";
+      role === "stableClientCompatibility"
+        ? "target_sha"
+        : role === "npmTelegram"
+          ? "harness_ref"
+          : role.startsWith("releaseChecks")
+            ? "ref"
+            : "target_ref";
     if (
       selection.inputs[targetKey] !== plan.targetSha ||
       (role.endsWith("Candidate") && selection.inputs.phase !== "candidate") ||

@@ -1,11 +1,11 @@
 name: Stable Release Source Compatibility
-run-name: Stable source compatibility ${{ inputs.target_sha }} (${{ inputs.dispatch_id }})
+run-name: Stable Release Source Compatibility ${{ inputs.dispatch_id }}
 
 on:
   workflow_dispatch:
     inputs:
       target_sha:
-        description: Exact candidate Gateway and harness commit (must match dispatch ref)
+        description: Exact candidate Gateway commit (dispatch ref pins qualification tooling)
         type: string
         required: true
       dispatch_id:
@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   select:
+    name: Select stable client source
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
@@ -41,7 +42,6 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
         with:
           script: |
-            if (process.env.TARGET_SHA !== context.sha) throw new Error('Candidate must match dispatch ref');
             const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
               ...context.repo, run_id: context.runId, per_page: 100,
               name: 'stable-client-source-' + context.runId,
@@ -94,3 +94,28 @@ jobs:
       target_sha: ${{ inputs.target_sha }}
       client_sha: ${{ needs.select.outputs.sha }}
       client_release_tag: ${{ needs.select.outputs.tag }}
+
+  verify:
+    name: Verify stable client compatibility
+    needs: [select, ios, android]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      RESULTS: ${{ join(needs.*.result, ',') }}
+    steps:
+      - name: Require both native runtime proofs
+        run: |
+          if [[ "$RESULTS" != "success,success,success" ]]; then
+            echo "::error::Stable client selection and both native platforms must pass; got $RESULTS"
+            exit 1
+          fi
+
+  seal_release_child_evidence:
+    name: Seal full release child evidence
+    needs: [select, ios, android, verify]
+    if: ${{ always() && !cancelled() && startsWith(inputs.dispatch_id, 'full-release-validation-') }}
+    uses: ./.github/workflows/full-release-child-evidence.yml
+    with:
+      role: stableClientCompatibility
+      target_sha: ${{ inputs.target_sha }}

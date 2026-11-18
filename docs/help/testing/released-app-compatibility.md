@@ -19,10 +19,11 @@ relationship without building apps from candidate source.
 
 ## Frozen inputs and execution
 
-Dispatch `stable-release-source-compatibility.yml` at the candidate commit with:
+Dispatch `stable-release-source-compatibility.yml` at the reviewed qualification
+commit with:
 
-- `target_sha`: the full candidate Gateway and harness commit; it must match the
-  workflow dispatch ref.
+- `target_sha`: the full candidate Gateway commit. The dispatch ref pins the
+  qualification harness and may differ from the candidate.
 - `dispatch_id`: the caller's correlation ID.
 
 The selector resolves GitHub's latest published stable repository release once,
@@ -31,11 +32,13 @@ same tag and SHA. A retained selection binds the client source to the candidate
 and dispatch ID; reruns restore it rather than selecting a newer release.
 Missing or expired rerun input fails and requires a new workflow run.
 
-Each job keeps two separate checkouts:
+Each job separates these source identities:
 
-- Candidate checkout: E2E harness, synthetic inference fixtures, isolated Gateway
-  lifecycle, and built candidate Gateway. Its checkout and build identity must
-  match `target_sha`.
+- Qualification checkout: reviewed E2E harness, synthetic inference fixtures, and
+  isolated Gateway lifecycle, pinned to the workflow commit.
+- Candidate checkout: built Gateway whose checkout and build identity match
+  `target_sha`. When candidate and qualification commits match, they share the
+  same checkout; otherwise the candidate is checked out and built separately.
 - Stable checkout: native app and test sources, native generation, dependencies,
   and build products. Its clean source identity must match the selected release
   SHA. The harness does not copy candidate native sources into this checkout.
@@ -45,10 +48,13 @@ exercise pairing, chat, and relaunch persistence. They retain sanitized per-plat
 proof, source identities, and failure status. Android Wear remains the existing
 controlled test-transport boundary, not real phone-to-watch delivery proof.
 
-The independent workflow is not yet an automatically dispatched or required
-Full Release Validation child. Its selection artifact and platform proofs are
-available for inspection; wiring release admission is separate from claiming a
-successful native runtime run.
+Full Release Validation dispatches this independent child for `all` and `ci`
+groups, including the beta profile. It is separate from candidate app build
+qualification: both stable-source native jobs must pass the compatibility gate.
+The existing child receipt, execution plan, decision, and diagnostic drain retain
+its exact run and terminal result. The selection artifact and per-platform proofs
+retain the client tag/SHA and candidate identity. Missing, skipped, or failed
+platforms do not qualify compatibility.
 
 ## What this does not prove
 

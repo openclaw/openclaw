@@ -22,6 +22,10 @@ on:
         default: true
   workflow_dispatch:
     inputs:
+      target_sha:
+        description: Optional exact candidate Gateway SHA (defaults to dispatch ref)
+        type: string
+        default: ""
       client_sha:
         description: Optional frozen stable-release client source SHA (paired with client_release_tag)
         type: string
@@ -76,9 +80,11 @@ jobs:
           PY
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
           [[ "$E2E_MODE" == stock || "$E2E_MODE" == compare ]] || exit 1
-          [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
           if [[ -n "$CLIENT_SHA" || -n "$CLIENT_RELEASE_TAG" ]]; then
             [[ -n "$CLIENT_SHA" && -n "$CLIENT_RELEASE_TAG" ]] || exit 1
+          fi
+          if [[ -z "$CLIENT_SHA" ]]; then
+            [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
           fi
 
       - name: Reserve host CPU for release qualification
@@ -95,10 +101,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]] || exit 1
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]] || exit 1
           test -f scripts/ios-release-e2e.ts
           test -f scripts/lib/ios-release-e2e-native.ts
           test -f test/helpers/openclaw-test-instance.ts
+
+      - name: Checkout independent candidate Gateway
+        if: inputs.client_sha != '' && inputs.target_sha != '' && inputs.target_sha != github.sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha }}
+          path: .openclaw/tmp/candidate-gateway
+          persist-credentials: false
 
       - name: Checkout frozen stable client source
         if: inputs.client_sha != ''
@@ -121,6 +135,10 @@ jobs:
         if: inputs.client_sha != ''
         run: |
           pnpm build:runtime
+          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+            pnpm --dir .openclaw/tmp/candidate-gateway install --frozen-lockfile
+            pnpm --dir .openclaw/tmp/candidate-gateway build:runtime
+          fi
           pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
 
       - name: Prepare stable Gateway selection
@@ -171,6 +189,10 @@ jobs:
           client_args=()
           if [[ -n "$CLIENT_SHA" ]]; then
             client_args=(--client-root "$GITHUB_WORKSPACE/.openclaw/tmp/stable-client" --client-sha "$CLIENT_SHA" --client-release-tag "$CLIENT_RELEASE_TAG")
+            client_args+=(--harness-sha "$GITHUB_SHA")
+            if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+              client_args+=(--candidate-root "$GITHUB_WORKSPACE/.openclaw/tmp/candidate-gateway")
+            fi
           fi
           node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
             node --import ./scripts/tsx.mjs scripts/ios-release-e2e.ts \

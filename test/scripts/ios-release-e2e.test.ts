@@ -239,6 +239,10 @@ it.each([false, true])(
         output,
         ...(compatibility
           ? [
+              "--candidate-root",
+              ".openclaw/tmp/missing-candidate",
+              "--harness-sha",
+              "1".repeat(40),
               "--client-root",
               ".",
               "--client-sha",
@@ -273,6 +277,8 @@ it.each([false, true])(
 );
 
 it.each([
+  ["candidate root without compatibility", ["--candidate-root", "."]],
+  ["harness SHA without compatibility", ["--harness-sha", "1".repeat(40)]],
   ["root only", ["--client-root", "."]],
   ["SHA only", ["--client-sha", "2".repeat(40)]],
   ["tag only", ["--client-release-tag", "v2026.11.1"]],
@@ -763,7 +769,10 @@ describe("release qualification workflow authority", () => {
     expect(ci.jobs["ios-release-e2e"].permissions).toEqual({ actions: "read", contents: "read" });
     expect(workflow.jobs.qualify["runs-on"]).toBe("xcode-27-xlarge");
     expect(workflow.jobs.qualify.environment).toBeUndefined();
-    expect(workflow.on.workflow_dispatch.inputs.target_sha).toBeUndefined();
+    expect(workflow.on.workflow_dispatch.inputs.target_sha).toMatchObject({
+      type: "string",
+      default: "",
+    });
     expect(workflow.jobs.qualify.env.TARGET_SHA).toBe("${{ inputs.target_sha || github.sha }}");
   });
   it("fails missing target harnesses and uses a step-scoped compare binary", () => {
@@ -774,7 +783,7 @@ describe("release qualification workflow authority", () => {
     expect(checkout.with.ref).toBe("${{ github.sha }}");
     expect(checkout.with["persist-credentials"]).toBe(false);
     const verify = steps.find((step: { name: string }) => step.name.startsWith("Verify target"));
-    expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]');
+    expect(verify.run).toContain('[[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]');
     expect(verify.run).toContain("test -f scripts/ios-release-e2e.ts");
     expect(verify.if).toBeUndefined();
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
@@ -947,6 +956,9 @@ process.exitCode = 23;
 
 it.each([
   "client-source",
+  "client-source-separate-candidate",
+  "client-source-candidate-mismatch",
+  "client-source-candidate-missing",
   "client-source-wrong-head",
   "client-source-dirty",
   "client-source-late-head",
@@ -1014,6 +1026,16 @@ it.each([
   const temp = tempDirs.make("ios-release-e2e-adapter-");
   const developerDir = tempDirs.make("ios-release-e2e-developer-");
   const compatibility = scenario.startsWith("client-source");
+  const separateCandidate =
+    scenario.includes("candidate-") || scenario.endsWith("separate-candidate");
+  const candidateRoot = separateCandidate ? path.join(temp, "candidate") : process.cwd();
+  if (separateCandidate && !scenario.endsWith("candidate-missing")) {
+    mkdirSync(path.join(candidateRoot, "dist"), { recursive: true });
+    writeFileSync(
+      path.join(candidateRoot, "dist/build-info.json"),
+      JSON.stringify({ commit: "3".repeat(40) }),
+    );
+  }
   const clientRoot = compatibility ? tempDirs.make("ios-release-e2e-client-") : "";
   vi.spyOn(os, "tmpdir").mockReturnValue(temp);
   vi.stubGlobal(
@@ -1051,6 +1073,14 @@ it.each([
           ? { code: "ETIMEDOUT", processTreeState: "live" }
           : {},
       );
+    }
+    if (separateCandidate) {
+      const actual = await vi.importActual<
+        typeof import("../../scripts/lib/ios-release-gateway.js")
+      >("../../scripts/lib/ios-release-gateway.js");
+      const prepared = await actual.prepareIOSReleaseGateway(options);
+      installedGatewayPath = prepared.cwd;
+      return prepared;
     }
     installedGatewayPath = path.join(options.installDir, "node_modules/openclaw");
     return { cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"], identity: gatewayIdentity };
@@ -1231,7 +1261,10 @@ it.each([
     return { setupCode: `synthetic-code-${instances.length}` };
   });
   nativeMocks.gateway.mockImplementation(async (options) => {
-    expect(options).toMatchObject({ cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"] });
+    expect(options).toMatchObject({
+      cwd: installedGatewayPath,
+      entrypoint: [separateCandidate ? path.join(candidateRoot, "openclaw.mjs") : "openclaw.mjs"],
+    });
     if (options.name === "ios-release-e2e-preflight") {
       lifecycle.push("gateway-preflight-create");
       return {
@@ -1303,6 +1336,8 @@ it.each([
         };
         options.signal.addEventListener("abort", onAbort, { once: true });
       });
+    } else if (options.bin === "git" && separateCandidate && options.cwd === candidateRoot) {
+      stdout.write((scenario.endsWith("candidate-mismatch") ? "4" : "3").repeat(40));
     } else if (options.bin === "git" && options.cwd === clientRoot) {
       if (args[1] === "--show-toplevel") {
         stdout.write(clientRoot);
@@ -1610,7 +1645,8 @@ it.each([
   });
   const admission = createNativeDependencies({
     mode: "stock",
-    targetSha: "1".repeat(40),
+    targetSha: (separateCandidate ? "3" : "1").repeat(40),
+    ...(separateCandidate ? { candidateRoot, harnessSha: "1".repeat(40) } : {}),
     signal: abort.signal,
     gatewayOnly: scenario === "gateway-only",
     buildOnly: scenario === "native-build-only",
@@ -1632,6 +1668,12 @@ it.each([
       }
     },
   });
+  if (scenario.endsWith("candidate-mismatch") || scenario.endsWith("candidate-missing")) {
+    await expect(admission).rejects.toMatchObject({ diagnostic: { operation: "gateway-install" } });
+    expect(nativeMocks.build).not.toHaveBeenCalled();
+    expect(nativeMocks.gateway).not.toHaveBeenCalled();
+    return;
+  }
   if (scenario === "client-source-wrong-head" || scenario === "client-source-dirty") {
     await expect(admission).rejects.toMatchObject({
       diagnostic:
@@ -1728,13 +1770,17 @@ it.each([
     }
     expect(nativeMocks.install).toHaveBeenCalledExactlyOnceWith({
       ...(compatibility
-        ? { candidateDir: process.cwd() }
+        ? { candidateDir: candidateRoot }
         : { selectionDir: path.join(temp, "selection") }),
       installDir: expect.stringMatching(/\/openclaw-ios-release-e2e-[^/]+\/gateway$/u),
-      targetSha: "1".repeat(40),
+      targetSha: (separateCandidate ? "3" : "1").repeat(40),
       signal: abort.signal,
     });
-    expect(proof.gateway).toEqual(gatewayIdentity);
+    expect(proof.gateway).toEqual(
+      separateCandidate
+        ? { kind: "candidate-source", targetSha: "3".repeat(40), sourceSha: "3".repeat(40) }
+        : gatewayIdentity,
+    );
     expect(proof.gatewayInstallMs).toEqual(expect.any(Number));
     if (scenario === "gateway-only") {
       const gatewayProbe = await native.dependencies.create("stock", 1);
@@ -2287,6 +2333,7 @@ it.each([
         process.cwd(),
         clientRoot,
         clientRoot,
+        ...(separateCandidate ? [candidateRoot] : []),
       ]);
     }
     const tests = commandsWith("test-without-building");
@@ -2342,7 +2389,7 @@ it.each([
       expect(readdirSync(temp)).toHaveLength(1);
     } else {
       await native.cleanup();
-      expect(readdirSync(temp)).toEqual([]);
+      expect(readdirSync(temp)).toEqual(separateCandidate ? ["candidate"] : []);
     }
   }
 });

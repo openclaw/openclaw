@@ -16,6 +16,10 @@ on:
         default: ""
   workflow_dispatch:
     inputs:
+      target_sha:
+        description: Optional exact candidate Gateway SHA (defaults to dispatch ref)
+        type: string
+        default: ""
       client_sha:
         description: Optional frozen stable-release client source SHA (paired with client_release_tag)
         type: string
@@ -57,9 +61,11 @@ jobs:
                          "errors": ["workflow-setup-incomplete"]}, out)
           PY
           [[ "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ]]
-          [[ "$TARGET_SHA" == "$GITHUB_SHA" ]]
           if [[ -n "$CLIENT_SHA" || -n "$CLIENT_RELEASE_TAG" ]]; then
             [[ -n "$CLIENT_SHA" && -n "$CLIENT_RELEASE_TAG" ]] || exit 1
+          fi
+          if [[ -z "$CLIENT_SHA" ]]; then
+            [[ "$TARGET_SHA" == "$GITHUB_SHA" ]] || exit 1
           fi
 
       - name: Checkout exact qualification target
@@ -72,9 +78,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          [[ "$(git rev-parse HEAD)" == "$TARGET_SHA" ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
           test -f scripts/android-release-e2e.ts
           test -f scripts/ios-release-gateway.ts
+
+      - name: Checkout independent candidate Gateway
+        if: inputs.client_sha != '' && inputs.target_sha != '' && inputs.target_sha != github.sha
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_sha }}
+          path: .openclaw/tmp/candidate-gateway
+          persist-credentials: false
 
       - name: Checkout frozen stable client source
         if: inputs.client_sha != ''
@@ -97,6 +111,10 @@ jobs:
         if: inputs.client_sha != ''
         run: |
           pnpm build:runtime
+          if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+            pnpm --dir .openclaw/tmp/candidate-gateway install --frozen-lockfile
+            pnpm --dir .openclaw/tmp/candidate-gateway build:runtime
+          fi
           pnpm --dir .openclaw/tmp/stable-client install --frozen-lockfile
 
       - name: Prepare stable Gateway selection
@@ -120,6 +138,10 @@ jobs:
           client_args=()
           if [[ -n "$CLIENT_SHA" ]]; then
             client_args=(--client-root "$GITHUB_WORKSPACE/.openclaw/tmp/stable-client" --client-sha "$CLIENT_SHA" --client-release-tag "$CLIENT_RELEASE_TAG")
+            client_args+=(--harness-sha "$GITHUB_SHA")
+            if [[ "$TARGET_SHA" != "$GITHUB_SHA" ]]; then
+              client_args+=(--candidate-root "$GITHUB_WORKSPACE/.openclaw/tmp/candidate-gateway")
+            fi
           fi
           pnpm android:release:validate -- \
             --target-sha "$TARGET_SHA" --output "$PROOF_PATH" \

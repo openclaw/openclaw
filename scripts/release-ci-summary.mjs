@@ -131,6 +131,7 @@ const LEGACY_CHILD_DISPATCHES = [
 ].map(childDispatch);
 const PHASED_CHILD_DISPATCHES = [
   "normalCi",
+  "stableClientCompatibility",
   "pluginPrereleaseIndependent",
   "pluginPrereleaseCandidate",
   "releaseChecksIndependent",
@@ -775,6 +776,10 @@ function requiredChildKeysForManifest(manifest) {
     manifest.validationInputs,
     manifest.version === 4 ? 3 : 2,
   );
+  // Receipts written before stable-client coverage keep their original inventory.
+  if (!Object.hasOwn(manifest.childRuns ?? {}, "stableClientCompatibility")) {
+    selectedKeys.delete("stableClientCompatibility");
+  }
   // validateParentManifest authenticates the explicit policy before selection;
   // an older beta receipt without this marker still requires its full child set.
   if (manifest.validationInputs?.coveragePolicy === "npm-beta-v1") {
@@ -1342,6 +1347,9 @@ export function validateParentManifest(value, expected) {
     : Object.fromEntries(
         [
           ["normalCi", "normal CI"],
+          ...(Object.hasOwn(childRuns, "stableClientCompatibility")
+            ? [["stableClientCompatibility", "stable client compatibility"]]
+            : []),
           ["npmTelegram", "npm Telegram"],
           ...(value.version === 4
             ? [
@@ -2484,7 +2492,8 @@ async function validateStrictChildRun({
     jobs = evidence.jobs;
   } else {
     jobs =
-      run.conclusion === "success" && child.manifestKey !== "productPerformance"
+      run.conclusion === "success" &&
+      !["productPerformance", "stableClientCompatibility"].includes(child.manifestKey)
         ? []
         : await client.getParentJobs(runId);
   }
