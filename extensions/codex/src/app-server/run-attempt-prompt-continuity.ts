@@ -55,3 +55,20 @@ export function selectCodexStaleBindingDelta(
     );
   });
 }
+
+/** A fresh native thread needs retained answers/summaries; tool-only suffixes are not continuity. */
+export function hasCodexHistoryContinuity(
+  messages: readonly AgentMessage[],
+  action: "started" | "resumed" | "forked",
+): boolean {
+  return messages.some(
+    (message) =>
+      message.role === "user" ||
+      isCodexDurableCustomMessage(message) ||
+      (action === "started" &&
+        (message.role === "compactionSummary" ||
+          message.role === "branchSummary" ||
+          (message.role === "assistant" &&
+            message.content.some((part) => part.type === "text" && part.text.trim())))),
+  );
+}

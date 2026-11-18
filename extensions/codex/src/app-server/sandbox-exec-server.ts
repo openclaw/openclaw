@@ -378,6 +378,8 @@ function readCodexPlacementNodeId(sandbox: SandboxContext): string | undefined {
 }
 
 export function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
+  retainedSession?: true;
+  requireExistingNativeState?: true;
   environmentId: string;
   sessionId: string;
   ownerEpoch: number;
@@ -398,6 +400,10 @@ export function readCodexPlacementWorkspaceIdentity(sandbox: SandboxContext): {
     throw new Error("Codex node execution requires its exact placement workspace identity.");
   }
   return {
+    ...(sandbox.placementRetainedSession === true ? { retainedSession: true as const } : {}),
+    ...(sandbox.placementRequireExistingNativeState === true
+      ? { requireExistingNativeState: true as const }
+      : {}),
     environmentId: sandbox.placementEnvironmentId,
     sessionId: sandbox.placementSessionId,
     ownerEpoch: sandbox.placementOwnerEpoch,

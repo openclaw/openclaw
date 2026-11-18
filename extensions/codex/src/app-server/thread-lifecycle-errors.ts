@@ -33,3 +33,43 @@ export class CodexAdoptedThreadActiveError extends AgentHarnessPreflightError {
     this.name = "CodexAdoptedThreadActiveError";
   }
 }
+
+/** Closed branch labels only; never persist fingerprints, native error data or config. */
+export type CodexRetainedThreadRefusalReason =
+  | "missing binding"
+  | "binding replacement"
+  | "native skill isolation"
+  | "ring-zero policy"
+  | "runtime identity"
+  | "model collaboration policy"
+  | "host tool policy"
+  | "transient tool policy"
+  | "configured MCP ownership"
+  | "native tool mode"
+  | "unattested restricted binding"
+  | "MCP config"
+  | "web search config"
+  | "delegation policy"
+  | "context-engine binding"
+  | "user MCP config"
+  | "network proxy config"
+  | "plugin app config"
+  | "dynamic tool loading"
+  | "dynamic tool catalog"
+  | "transient dynamic tools"
+  | "ephemeral binding unavailable"
+  | "restricted resume configuration"
+  | "native resume failed";
+
+export class CodexRetainedThreadResumeRefusedError extends Error {
+  readonly code = "CODEX_RETAINED_THREAD_RESUME_REFUSED";
+
+  constructor(readonly reason: CodexRetainedThreadRefusalReason) {
+    // Existing worker error projection preserves messages, not custom Error fields.
+    super(
+      "Retained Codex thread cannot be resumed under its current policy or native state; " +
+        `no input was submitted and a fresh thread is refused (reason=${reason})`,
+    );
+    this.name = "CodexRetainedThreadResumeRefusedError";
+  }
+}

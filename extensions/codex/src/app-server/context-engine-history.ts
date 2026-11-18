@@ -84,6 +84,8 @@ export async function prepareCodexContextEngineHistory(params: {
     "assembledMessages" | "systemPromptAddition" | "toolPayloadMode"
   >;
   historyTokenBudget?: number;
+  /** One-time recovery seeding retains the engine policy used by subsequent ordinary turns. */
+  bootstrapHistoryOnly?: boolean;
   baseDeveloperInstructions: string;
   assertCurrent: () => void;
 }) {
@@ -110,10 +112,14 @@ export async function prepareCodexContextEngineHistory(params: {
           startupBinding?.contextEngine?.projection?.fingerprint,
         )
       : undefined;
+  const nativeEngineProjection = readContextEngineThreadBootstrapProjection(
+    assembled.contextProjection,
+  );
   const contextEngineProjection = prepareSeed
     ? undefined
-    : (selection?.projection ??
-      readContextEngineThreadBootstrapProjection(assembled.contextProjection));
+    : params.bootstrapHistoryOnly
+      ? nativeEngineProjection
+      : (selection?.projection ?? nativeEngineProjection);
   let projectionDecision;
   if (contextEngineProjection && !params.hasContinuation) {
     const legacyDynamicToolsFingerprint = codexLegacyDynamicToolsFingerprint(params.toolSpecs);

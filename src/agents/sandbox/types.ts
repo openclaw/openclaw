@@ -2,6 +2,7 @@ import type { SchemaContract } from "../../../packages/gateway-protocol/src/sche
 import type { AgentSandboxConfig } from "../../config/types.agents-shared.js";
 import type { SandboxDockerSettings } from "../../config/types.sandbox.js";
 import type { SkillEligibilityContext, SkillUsagePath } from "../../skills/types.js";
+import type { NativeWorkerPlacement } from "../harness/native-session/worker-placement.js";
 import type { SandboxBackendHandle, SandboxBackendId } from "./backend-handle.types.js";
 import type { SandboxFsBridge, SandboxFsPreparation } from "./fs-bridge.types.js";
 
@@ -116,6 +117,12 @@ export type SandboxBrowserContext = {
 };
 
 export type SandboxContext = {
+  /** Prepared native ownership; current attempt authority still gates effects. */
+  nativeWorkerPlacement?: NativeWorkerPlacement;
+  /** Retained node sessions keep one native conversation across compute windows. */
+  placementRetainedSession?: true;
+  /** A provider-observed resume requires the native state from the original disk. */
+  placementRequireExistingNativeState?: true;
   /** Run-owned filesystem projection prepared before synchronous tool assembly. */
   fsPreparation?: SandboxFsPreparation;
   /** Creators release retained authority after last use; supplied contexts remain caller-owned. */

@@ -67,6 +67,9 @@ export type CodexStartOrResumeThreadParams = Omit<
   CodexThreadConfigurationOptions,
   "model" | "modelProvider" | "restrictedToolSurfaceInheritedMcpServerNames"
 > & {
+  nativeWorkerPlacement?: import("openclaw/plugin-sdk/agent-harness-session-runtime").NativeWorkerPlacement;
+  retainedSession?: true;
+  requireExistingThread?: true;
   inferenceRoute?: CodexInferenceProxy;
   inferenceProviderRoutes?: CodexInferenceProviderRoutes;
   client: CodexAppServerClient;

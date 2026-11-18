@@ -83,6 +83,8 @@ export function createCodexNodeAppServerCommand(): OpenClawPluginNodeHostCommand
         assertExecAuthorized,
         sessionId: request.workspace.sessionId,
         github: request.github,
+        retainedSession: request.workspace.retainedSession,
+        requireExistingNativeState: request.workspace.requireExistingNativeState,
         resourcePreparationRequired: request.resourcePreparationRequired,
       });
     },
@@ -122,6 +124,8 @@ export function createCodexNodeAppServerInvokePolicy(): OpenClawPluginNodeInvoke
               sessionId: workspace.sessionId,
               sessionKey: workspace.sessionKey,
               ownerEpoch: workspace.ownerEpoch,
+              ...(workspace.retainedSession ? { retainedSession: true } : {}),
+              ...(workspace.requireExistingNativeState ? { requireExistingNativeState: true } : {}),
             },
             ...(github ? { github } : {}),
             ...(resourcePreparationRequired ? { resourcePreparationRequired: true } : {}),

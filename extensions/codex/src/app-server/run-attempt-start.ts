@@ -146,6 +146,9 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
       sandbox,
+      nativeWorkerPlacement: connection.workerHostedCloud
+        ? sandbox?.nativeWorkerPlacement
+        : undefined,
       contextEngineProjection: promptState.contextEngineProjection,
       historyBootstrapItems: promptState.historyBootstrapItems,
       historyDeltaItems: promptState.historyDeltaItems,
@@ -224,7 +227,36 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
         phase: "thread_ready",
         threadId: state.thread.threadId,
         action: state.thread.lifecycle.action,
+        ...(state.thread.recoveredFrom
+          ? {
+              recovery: {
+                reason: "confirmed-worker-loss",
+                predecessorThreadId: state.thread.recoveredFrom.threadId,
+              },
+            }
+          : {}),
         clientId: state.client.getInstanceId(),
+        // Loader provenance identifies the plugin; runtime identity belongs to this connection.
+        plugin: connection.options.pluginProvenance,
+        runtime: {
+          serverVersion: state.client.getRuntimeIdentity()?.serverVersion,
+          configuredTransport: appServer.start.transport,
+          connectionClass: appServer.connectionClass,
+          workerHostedCloud: connection.workerHostedCloud,
+          usesSupervisionConnection,
+          nativeToolSurfaceEnabled,
+        },
+        goalControls: toolBridge.specs.flatMap((spec) => {
+          const namespace = spec.type === "namespace" ? spec.name : null;
+          const functions = spec.type === "namespace" ? spec.tools : [spec];
+          return functions
+            .filter((tool) => ["get_goal", "create_goal", "update_goal"].includes(tool.name))
+            .map((tool) => ({
+              name: tool.name,
+              namespace,
+              deferLoading: tool.deferLoading === true,
+            }));
+        }),
       },
     });
     if (

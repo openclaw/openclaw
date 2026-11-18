@@ -65,9 +65,10 @@ import {
 } from "./shared-client.js";
 import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
+  prepareCodexAppServerProcessEnvironment,
   projectCodexAppServerShellEnvironment,
-  withCodexAppServerGitConfig,
 } from "./transport-stdio.js";
+import { isCodexWorkerLossPredecessor } from "./worker-loss-recovery.js";
 
 export async function prepareCodexAttemptConnection({ params, options }: CodexRunAttemptInput) {
   const attemptStartedAt = Date.now();
@@ -144,6 +145,9 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
           githubApp: workerAppProfileId
             ? { agentId: sessionAgentId, profileId: workerAppProfileId, runId: params.runId }
             : undefined,
+          confirmedLossPredecessor: () => lostWorkerBinding,
+          requiresExistingNativeState: () =>
+            Boolean(admittedBinding?.workerPlacementOwner && !lostWorkerBinding),
           permissionMode: params.permissionMode,
           sandbox,
           signal: params.abortSignal ?? new AbortController().signal,
@@ -186,37 +190,13 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     assertLocalTargetSupported(
       appServer.start.transport !== "stdio" || Boolean(appServer.remoteWorkspaceRoot),
     );
-    // Resolve placement before projecting host PATH; socket peers and remote workspaces
-    // own their tool lookup even when their control connection runs on this machine.
-    const ownedLocalProcess =
-      !sandbox?.enabled &&
-      !remoteExec &&
-      appServer.start.transport === "stdio" &&
-      !isCodexAppServerProxyLaunch(appServer.start.args) &&
-      !appServer.remoteWorkspaceRoot;
-    const localToolEnv = ownedLocalProcess ? preparedEnvironment?.localToolEnv : undefined;
-    shellGitConfigParameters = ownedLocalProcess
-      ? preparedEnvironment?.localGitConfigParameters
-      : undefined;
-    const hasLocalToolEnv = localToolEnv && Object.keys(localToolEnv).length > 0;
-    shellPathPrepend = hasLocalToolEnv ? preparedEnvironment?.localToolPathPrepend : undefined;
-    shellEnvironment = hasLocalToolEnv
-      ? { ...baseShellEnvironment, ...localToolEnv }
-      : baseShellEnvironment;
-    // Tool lookup must not reject native login requests. Codex owns profile and
-    // snapshot startup; only the identity restrictions above disable login.
-    const prepared = shellEnvironment
-      ? {
-          ...appServer,
-          start: { ...appServer.start, env: { ...appServer.start.env, ...shellEnvironment } },
-        }
-      : appServer;
-    return shellGitConfigParameters
-      ? {
-          ...prepared,
-          start: withCodexAppServerGitConfig(prepared.start, shellGitConfigParameters),
-        }
-      : prepared;
+    const prepared = prepareCodexAppServerProcessEnvironment(appServer, {
+      remote: sandbox?.enabled === true || remoteExec,
+      preparedEnvironment,
+      baseShellEnvironment,
+    });
+    ({ shellEnvironment, shellPathPrepend, shellGitConfigParameters } = prepared);
+    return prepared.appServer;
   };
   let bindingIdentity: CodexAppServerBindingIdentity = sessionBindingIdentity({
     sessionId: params.sessionId,
@@ -302,7 +282,11 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     assertModelExecutionCurrent();
   };
   const authority = bindingAuthority.withLiveness(assertCurrent);
-  let startupBinding = admittedBinding;
+  // History must be assembled as a full bootstrap, never a delta to the lost thread.
+  const lostWorkerBinding =
+    workerHostedCloud &&
+    isCodexWorkerLossPredecessor(sandbox?.nativeWorkerPlacement, admittedBinding);
+  let startupBinding = lostWorkerBinding ? undefined : admittedBinding;
   preDynamicStartupStages.mark("read-binding");
   const usesSupervisionConnection = startupBinding?.connectionScope === "supervision";
   const selectedAuthProfileId =
@@ -673,6 +657,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       attemptClientFactory,
       workerHostedCloud,
       workerAppProfileId,
+      recoveringWorkerHistory: lostWorkerBinding,
       callerOwnedAttemptClient:
         workerHostedCloud || attemptClientFactory === createIsolatedCodexAppServerClient,
       runtimeArtifactRequest,

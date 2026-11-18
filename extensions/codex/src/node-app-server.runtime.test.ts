@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -86,8 +87,10 @@ describe("Codex worker model process", () => {
         vi.stubEnv("OPENCLAW_STATE_DIR", state);
         setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
         const runExecServer = nodeExecRuntime.runCodexNodeExecServer;
+        let cleanupFailureInjected = false;
         vi.spyOn(nodeExecRuntime, "runCodexNodeExecServer").mockImplementationOnce(
           async (params) => {
+            cleanupFailureInjected = true;
             let failCleanup = true;
             const stop = async () => {
               if (failCleanup) {
@@ -122,8 +125,19 @@ describe("Codex worker model process", () => {
         await fs.writeFile(helperPath, originalHelper);
         await fs.writeFile(path.join(configDir, "version"), version);
         await command.prepare?.({ config: {}, env: process.env });
+        // An interrupted preflight can create this home before any native thread exists.
+        await fs.mkdir(
+          path.join(
+            root,
+            ".openclaw-worker",
+            "codex",
+            createHash("sha256").update("worker-session").digest("hex"),
+          ),
+          { recursive: true, mode: 0o700 },
+        );
         const placement = {
           cwd: workspaceDir,
+          retainedSession: true,
           environmentId: "worker-environment",
           sessionId: "worker-session",
           ownerEpoch: 1,
@@ -136,7 +150,8 @@ describe("Codex worker model process", () => {
             waitNotification: (method: string) => Promise<unknown>,
           ) => Promise<T>,
         ): Promise<T> => {
-          const exerciseCleanupFailure = connections++ === 0;
+          const retainedReconnect = connections++ > 0;
+          const exerciseCleanupFailure = !retainedReconnect;
           const controller = new AbortController();
           const replies = new EventEmitter();
           let receiver: ((message: Uint8Array) => void | Promise<void>) | undefined;
@@ -147,7 +162,10 @@ describe("Codex worker model process", () => {
           const release = vi.fn();
           const running = command.handle(
             JSON.stringify({
-              placement,
+              placement: {
+                ...placement,
+                ...(retainedReconnect ? { requireExistingNativeState: true } : {}),
+              },
               authorization: "session-full",
               resourcePreparationRequired: true,
             }),
@@ -201,7 +219,7 @@ describe("Codex worker model process", () => {
           } finally {
             controller.abort(new Error("test complete"));
             await expect(running).rejects.toThrow();
-            if (exerciseCleanupFailure) {
+            if (exerciseCleanupFailure && cleanupFailureInjected) {
               try {
                 expect(release).not.toHaveBeenCalled();
                 expect(command.hasActiveWork?.()).toBe(true);
@@ -229,6 +247,7 @@ describe("Codex worker model process", () => {
             model: "codex-test-model",
             config: buildCodexRuntimeThreadConfig(undefined),
           })) as { result: { thread: { id: string } } };
+          expect(started).toMatchObject({ result: { thread: { id: expect.any(String) } } });
           expect(initialized).toMatchObject({
             result: {
               codexHome: expect.stringContaining(path.join(root, ".openclaw-worker", "codex")),
@@ -281,6 +300,9 @@ describe("Codex worker model process", () => {
         await runConnection(async (request, notify, waitNotification) => {
           await request(1, "initialize", buildCodexAppServerInitializeParams());
           await notify("initialized");
+          await expect(request(99, "thread/start", {})).resolves.toMatchObject({
+            error: { code: -32001 },
+          });
           await expect(request(2, "thread/resume", { threadId })).resolves.toMatchObject({
             result: { thread: { id: threadId } },
           });

@@ -1,4 +1,5 @@
 /** Canonical persisted binding codec; safe to load before worker transaction admission. */
+import { NativeWorkerPlacementOwnerSchema } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { z } from "zod";
 import { CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN } from "./config-contracts.shared.js";
 import type { CodexServiceTier } from "./protocol.js";
@@ -116,6 +117,13 @@ const threadBindingSchema = z
   .object({
     threadId: z.string().refine((value) => Boolean(value.trim())),
     clientId: optionalStringSchema,
+    workerPlacementOwner: NativeWorkerPlacementOwnerSchema.optional(),
+    recoveredFrom: z
+      .strictObject({
+        owner: NativeWorkerPlacementOwnerSchema,
+        threadId: z.string().min(1),
+      })
+      .optional(),
     cwd: z.string(),
     rolloutPath: optionalNonBlankStringSchema,
     // Private runtime ownership. Only the supervision catalog creates this

@@ -20,7 +20,6 @@ import {
   CODEX_TURN_START_TEXT_INPUT_MAX_CHARS,
   fitCodexProjectedContextForTurnStart,
   CodexContextAttachmentError,
-  isCodexDurableCustomMessage,
   projectContextEngineAssemblyForCodex,
   resolveProjectionPromptBudgetTokens,
   type CodexProjectedImageGroup,
@@ -30,6 +29,7 @@ import { flattenCodexDynamicToolFunctions } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import { estimateCodexAppServerProjectedTurnTokens } from "./run-attempt-lifecycle.js";
 import {
+  hasCodexHistoryContinuity,
   resolveCodexPromptContinuity,
   selectCodexStaleBindingDelta,
 } from "./run-attempt-prompt-continuity.js";
@@ -236,6 +236,11 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       : undefined;
     const historyBudget = reserveCodexHistoryBudget(promptBudget);
     try {
+      if (connection.recoveringWorkerHistory && !historyBudget) {
+        throw new CodexContextAttachmentError(
+          "Confirmed worker-loss recovery requires a finite model history budget",
+        );
+      }
       const assembled: Awaited<ReturnType<typeof assembleHarnessContextEngine>> =
         activeContextEngine
           ? await assembleHarnessContextEngine({
@@ -283,6 +288,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           imageHistory,
         },
         historyTokenBudget: historyBudget?.tokenBudget,
+        bootstrapHistoryOnly: connection.recoveringWorkerHistory && !params.authoredContextTokenCap,
         baseDeveloperInstructions,
         assertCurrent: assertProjectionCurrent,
       });
@@ -314,6 +320,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       }
     } catch (assembleErr) {
       if (
+        connection.recoveringWorkerHistory ||
         assembleErr instanceof CodexContextAttachmentError ||
         params.continuation ||
         params.pluginRuntimeRefreshMessages
@@ -348,11 +355,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   }
   // The binding owner decides native continuity. The connection may already have rotated
   // the admitted binding away, and thread startup may later replace it.
-  const { initialNativeThreadId } = connection;
   let nativeThreadAction: "started" | "resumed" | "forked" | undefined;
   const resolveContinuity = () =>
     resolveCodexPromptContinuity({
-      initialNativeThreadId,
+      initialNativeThreadId: connection.initialNativeThreadId,
       nativeThreadAction,
       currentNativeThreadId: mutable.startupBinding?.threadId,
       historyIncluded:
@@ -546,19 +552,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    // A bounded history can retain an answer after its user turn falls outside the window.
-    // Fresh threads need that text (or summaries), but tool-only suffixes are not continuity.
-    // Resumed bindings hand off only newer local conversation and durable notes.
-    const hasContinuity = historyState.messages.some(
-      (message) =>
-        message.role === "user" ||
-        isCodexDurableCustomMessage(message) ||
-        (action === "started" &&
-          (message.role === "compactionSummary" ||
-            message.role === "branchSummary" ||
-            (message.role === "assistant" &&
-              message.content.some((part) => part.type === "text" && part.text.trim())))),
-    );
+    const hasContinuity = hasCodexHistoryContinuity(historyState.messages, action);
+    if (connection.recoveringWorkerHistory) {
+      return false;
+    }
     if (usesSelectedHistory) {
       if (configuredContextBudget !== undefined) {
         return false;

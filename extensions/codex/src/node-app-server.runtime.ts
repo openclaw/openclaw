@@ -20,6 +20,7 @@ import {
 } from "./app-server/managed-binary.js";
 import type { CodexStdioChild } from "./app-server/stdio-worker.js";
 import { createStdioTransport } from "./app-server/transport-stdio.js";
+import { createWorkerDiagnosticForwarder } from "./app-server/worker-diagnostics.js";
 import {
   deriveCodexWorkerConfigurationVersion,
   resolveCodexWorkerAuthHelper,
@@ -103,6 +104,8 @@ export async function runCodexNodeAppServer(params: {
   activeProcesses: Set<() => Promise<void>>;
   assertExecAuthorized: () => void;
   github?: WorkerGitHubLaunchBinding;
+  retainedSession?: true;
+  requireExistingNativeState?: true;
   sessionId: string;
   resourcePreparationRequired?: boolean;
 }): Promise<string> {
@@ -125,6 +128,7 @@ export async function runCodexNodeAppServer(params: {
   let environment: Awaited<ReturnType<typeof createCodexNodeWorkspaceEnvironment>> | undefined;
   let github: CodexNodeGitHubCredential | undefined;
   let tempGitHub: string | undefined;
+  let diagnostics: ReturnType<typeof createWorkerDiagnosticForwarder> | undefined;
   let writes = Promise.resolve();
   const effects = new Set<Promise<void>>();
   const internal = new Map<string, ReturnType<typeof createDeferred<unknown>>>();
@@ -142,6 +146,7 @@ export async function runCodexNodeAppServer(params: {
       await writes.catch(() => {});
       await Promise.allSettled(effects);
       await environment?.close();
+      await diagnostics?.finish();
       if (tempGitHub) {
         await fs.rm(tempGitHub, { recursive: true, force: true });
       }
@@ -166,6 +171,24 @@ export async function runCodexNodeAppServer(params: {
       "codex",
       createHash("sha256").update(params.sessionId).digest("hex"),
     );
+    const priorHome = params.requireExistingNativeState
+      ? await fs.lstat(home).catch((error: unknown) => {
+          if (isRecord(error) && error.code === "ENOENT") {
+            return undefined;
+          }
+          throw error;
+        })
+      : undefined;
+    // The binding owner decides whether a thread exists; a home can precede thread/start.
+    let retainedThreadStarted = params.requireExistingNativeState === true;
+    if (
+      params.requireExistingNativeState &&
+      (!priorHome?.isDirectory() || priorHome.isSymbolicLink())
+    ) {
+      throw new Error(
+        "Retained Codex session home is missing; no input was submitted and replacement is refused",
+      );
+    }
     await fs.mkdir(home, { recursive: true, mode: 0o700 });
     await fs.writeFile(path.join(home, "config.toml"), runtime.config, { mode: 0o600 });
     if (params.github) {
@@ -215,6 +238,7 @@ export async function runCodexNodeAppServer(params: {
           env: {
             HOME: workspace.homeDir,
             CODEX_HOME: home,
+            LOG_FORMAT: "json",
             ...github?.environment,
             ...(process.platform === "win32" ? { USERPROFILE: workspace.homeDir } : {}),
           },
@@ -228,8 +252,9 @@ export async function runCodexNodeAppServer(params: {
           spawned.once("close", (code, exitSignal) => closed.resolve({ code, signal: exitSignal }));
           spawned.once("error", failed.reject);
           spawned.stdin.on("error", failed.reject);
-          // Native stderr may include prompts or credentials. Drain it, never export raw content.
-          spawned.stderr.resume();
+          diagnostics = createWorkerDiagnosticForwarder((frame) => frames.send(frame));
+          spawned.stderr.on("data", (chunk: Buffer) => diagnostics?.append(chunk));
+          spawned.once("exit", (code, exitSignal) => diagnostics?.nativeExit(code, exitSignal));
           outgoing = (async () => {
             const framer = createBoundedLineFramer(
               MAX_FRAME_BYTES,
@@ -354,6 +379,28 @@ export async function runCodexNodeAppServer(params: {
           return undefined;
         }
         const operation = writes.then(async () => {
+          if (
+            (params.retainedSession || params.requireExistingNativeState) &&
+            request.method === "thread/start"
+          ) {
+            if (retainedThreadStarted) {
+              await frames.send(
+                Buffer.from(
+                  JSON.stringify({
+                    id: request.id,
+                    error: {
+                      code: -32001,
+                      message:
+                        "Retained Codex session requires its existing thread; a fresh thread was refused before input submission.",
+                    },
+                  }),
+                ),
+              );
+              return;
+            }
+            // An uncertain start cannot create another native conversation on this duplex.
+            retainedThreadStarted = true;
+          }
           // Resume has no environment field in the pinned protocol; turn/start selects the fresh carrier.
           if (["thread/start", "turn/start"].includes(String(request.method))) {
             await ensureEnvironment();
