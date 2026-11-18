@@ -384,6 +384,28 @@
   min-width: 0;
 }
 
+/* The composer's pickers take the tray's ink, as Chat's take the composer's.
+   Chat neutralizes its provider mark only inside its own composer (New Session
+   keeps brand color), so the tray follows its label here; chevrons match the
+   schedule selects beside them. */
+.cron-prompt__run-controls .chat-controls__inline-select-trigger {
+  --icon-interactive: var(--muted);
+}
+
+.cron-prompt__run-controls .chat-controls__trigger-provider-icon {
+  color: inherit;
+}
+
+.cron-prompt__run-controls .chat-controls__inline-select-chevron,
+.cron-prompt__run-controls .chat-controls__inline-select-chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+}
+
+.cron-prompt__run-controls .chat-controls__inline-select-chevron svg {
+  stroke-width: var(--chrome-icon-stroke);
+}
+
 .cron-prompt__saved-text {
   max-height: 8lh;
   overflow: auto;
