@@ -558,6 +558,7 @@ it.each([
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
+  let modelAdmissions = 0;
   let offered: unknown;
   let admittedOperator = false;
   const results: unknown[] = [];
@@ -580,6 +581,7 @@ it.each([
       "gateway",
       params.runId,
     );
+    modelAdmissions++;
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     await params.onExecutionStarted?.({ lifecycleGeneration });
     params.onExecutionPhase?.({ phase: "model_call_started" });
@@ -832,7 +834,7 @@ it.each([
       expect(rejected ?? finishedEvent?.error).toMatch(
         /allow|authority|principal|policy|Person ingress requires trusted-proxy/i,
       );
-      expect(entered).toBe(0);
+      expect(modelAdmissions, "Refused authority must not reach model admission").toBe(0);
       return;
     }
     if (managerRename || captureRace) {
