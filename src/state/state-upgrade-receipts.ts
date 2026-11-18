@@ -17,10 +17,11 @@ export function readAppliedUpgradeShadowRoots(stateDir: string): string[] {
     ) {
       continue;
     }
-    const generation = entry.name.slice(APPLIED_UPGRADE_PREFIX.length, -5);
+    // This is the application build/version stamp written by retainAppliedPlan, not a session ID.
+    const appVersion = entry.name.slice(APPLIED_UPGRADE_PREFIX.length, -5);
     try {
       const plan: unknown = JSON.parse(fs.readFileSync(path.join(stateDir, entry.name), "utf8"));
-      if (!isRecord(plan) || plan.appVersion !== generation || !Array.isArray(plan.ops)) {
+      if (!isRecord(plan) || plan.appVersion !== appVersion || !Array.isArray(plan.ops)) {
         continue;
       }
       for (const op of plan.ops) {
@@ -33,7 +34,7 @@ export function readAppliedUpgradeShadowRoots(stateDir: string): string[] {
           continue;
         }
         const [work] = path.relative(stateDir, op.next).split(path.sep);
-        const prefix = `${UPGRADE_WORK_PREFIX}${generation}-`;
+        const prefix = `${UPGRADE_WORK_PREFIX}${appVersion}-`;
         if (!work?.startsWith(prefix) || !/^\d+-\d+$/.test(work.slice(prefix.length))) {
           continue;
         }
