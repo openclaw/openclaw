@@ -34,6 +34,11 @@ import { agentHandlers } from "../server-methods/agent.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import {
+  seedProjectionRow,
+  withSessionRowProjectionState,
+} from "../session-row-projection.test-support.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
@@ -822,3 +827,34 @@ it.each(["lifecycle-first", "dedupe-first"] as const)(
     expect(JSON.stringify(waiter.respond.mock.calls[0]?.[1])).not.toContain("private-target");
   },
 );
+
+it("waits by the original run ID after reopening a completed session", async () => {
+  await withSessionRowProjectionState(async (create) => {
+    const runId = "completed-before-restart";
+    const completed = { status: "done" as const, startedAt: 100, endedAt: 200 };
+    seedProjectionRow("finished", { ...completed, lastRunId: runId });
+    seedProjectionRow("first-collision", { ...completed, lastRunId: "shared-run" });
+    seedProjectionRow("second-collision", { ...completed, lastRunId: "shared-run" });
+    const context = createGatewayRequestContext(makeContextParams());
+    setRuntimeConfigSnapshot({});
+    const projection = await create({ cfg: {}, modelCatalog: [] });
+    bindSessionRowProjection(context, () => projection);
+    await expectReply(
+      invokeWait(context, runId, 0),
+      expect.objectContaining({
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+      }),
+    );
+    await expectReply(invokeWait(context, "shared-run", 0), {
+      runId: "shared-run",
+      status: "timeout",
+    });
+    await expectReply(invokeWait(context, "missing-run", 0), {
+      runId: "missing-run",
+      status: "timeout",
+    });
+  });
+});

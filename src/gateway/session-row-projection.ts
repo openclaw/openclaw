@@ -23,10 +23,7 @@ import { createSessionRowProjectionBackfill } from "./session-row-projection-bac
 import { createSessionRowProjectionCatalog } from "./session-row-projection-catalog.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
 import { createSessionRowGenerationMutations } from "./session-row-projection-generation.js";
-import {
-  createSessionRowCreatorIndex,
-  indexSessionRow,
-} from "./session-row-projection-identities.js";
+import * as rowIdentities from "./session-row-projection-identities.js";
 import * as rowReads from "./session-row-projection-materialize.js";
 import {
   createSessionRowPublication,
@@ -58,7 +55,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     referenced: (ref) => referenced(ref),
     readChildLinks: (row) => readChildLinks(row, true),
   });
-  const creators = createSessionRowCreatorIndex();
+  const creators = rowIdentities.createSessionRowCreatorIndex();
   const membership = createSessionMembershipProjection();
   const { invalidateRowMembership, readSessionRowEntry, createStoreRead } =
     rowMembership.createSessionRowEntryReadAccess(membership);
@@ -172,7 +169,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       invalidateRowMembership(row);
       markRelated(row);
       creators.update(row);
-      indexSessionRow(row, indexes, true);
+      rowIdentities.indexSessionRow(row, indexes, true);
       rows.delete(id);
       revisions.publishFacts(row);
       revisions.publishSelection(row, true);
@@ -197,7 +194,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     rows.set(records.identity(row), row);
     recents.update(row);
     rowFacts.track(row, row.unresolvedDatabaseFacts);
-    indexSessionRow(row, indexes, false, previous);
+    rowIdentities.indexSessionRow(row, indexes, false, previous);
     placementFacts.update(row, previous, (sessionId) =>
       [...(byKey.get(`id:${sessionId}`) ?? [])].flatMap((id) => rows.get(id) ?? []),
     );
@@ -610,6 +607,10 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       prepareRowFacts: rowFacts.prepare,
     });
   const projection = {
+    readRestoredCompletion: rowIdentities.createRestoredCompletionReader(
+      rows,
+      () => !disposed && !topologyDirty,
+    ),
     ...childRows.readers,
     ...rowReads.createSessionRowLookup({
       assertCurrent: assertActive,

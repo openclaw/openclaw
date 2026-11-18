@@ -7,6 +7,8 @@ import {
   isRpcSourceQueued,
 } from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
+import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentWaitSource } from "./agent-dedupe.js";
 import {
   captureAgentJobSession,
@@ -18,7 +20,7 @@ import {
 /** Capture an agent wait's initial session and defer its terminal or queued result. */
 export function prepareAgentWaitForTurn(
   context: Pick<GatewayRequestContext, "dedupe"> &
-    Partial<Pick<GatewayRequestContext, "resolveGatewayContext">>,
+    Partial<Pick<GatewayRequestContext, "resolveGatewayContext" | "sessionRowProjectionOwner">>,
   params: AgentWaitParams,
   // Turn waits preserve byte-exact protocol run IDs.
   options: { exactTurnSource?: boolean } = {},
@@ -60,6 +62,26 @@ export function prepareAgentWaitForTurn(
       runId,
       timeoutMs,
       source,
+      readRestoredCompletion: () => {
+        if (
+          source ||
+          runContext ||
+          context.dedupe.has(pendingChatSendDedupeKey(runId)) ||
+          context.dedupe.has(`chat:${runId}`) ||
+          context.dedupe.has(`agent:${runId}`)
+        ) {
+          return undefined;
+        }
+        const completed = getSessionRowProjection(context)?.readRestoredCompletion(runId);
+        return (
+          completed && {
+            status: "ok",
+            startedAt: completed.startedAt,
+            endedAt: completed.endedAt,
+            session: captureAgentJobSession({ ...completed, lifecycleGeneration }),
+          }
+        );
+      },
       stopWaiting: () => {
         queuedDuringWait = queuedResult();
         return queuedDuringWait !== undefined;

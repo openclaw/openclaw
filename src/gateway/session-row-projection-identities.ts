@@ -299,3 +299,40 @@ export function indexSessionRow(
     }
   }
 }
+
+export function createRestoredCompletionReader(
+  rows: ReadonlyMap<string, Row>,
+  isCurrent: () => boolean,
+) {
+  // Only rows loaded at startup can stand in for a previous Gateway's lost job cache.
+  // Run IDs are caller supplied. A collision across sessions has no unique owner.
+  const restoredRuns = new Map<string, string | null>();
+  for (const [id, row] of rows) {
+    const runId = row.storedEntry?.lastRunId;
+    if (runId) {
+      restoredRuns.set(runId, restoredRuns.has(runId) ? null : id);
+    }
+  }
+  return (runId: string) => {
+    const id = restoredRuns.get(runId);
+    const row = id && isCurrent() ? rows.get(id) : undefined;
+    const entry = row?.storedEntry;
+    if (
+      !row ||
+      !entry ||
+      entry.lastRunId !== runId ||
+      entry.status !== "done" ||
+      entry.endedAt === undefined ||
+      entry.endedAt >= performance.timeOrigin
+    ) {
+      return undefined;
+    }
+    return {
+      sessionKey: row.key,
+      agentId: row.agentId,
+      sessionId: entry.sessionId,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+    };
+  };
+}
