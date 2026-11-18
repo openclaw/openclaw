@@ -182,6 +182,7 @@ describe("Doctor maintenance with shared-state workers", () => {
                     committed: generations,
                     physical: generations,
                     emptyReaderAlternates: {},
+                    rebuiltIndexAlternates: {},
                   };
                 });
               }
