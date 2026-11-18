@@ -204,3 +204,8 @@ The built-in queue debounce applies to queued `followup` and `collect` delivery.
 - [Messages](/concepts/messages)
 - [Agent loop](/concepts/agent-loop)
 - [Codex harness runtime](/plugins/codex-harness-runtime) - `turn/steer` behavior on the native Codex harness
+
+Required Code Mode cells waiting only for shell commands can yield their observer
+to a pending steer without stopping those commands. The correction reaches the next
+model decision; use `wait` with the returned run ID to collect the original result.
+Other required calls remain inline, and lack of continuation capacity keeps the cell waiting.

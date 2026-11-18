@@ -354,6 +354,67 @@ describe("Code Mode agent-loop error recovery", () => {
     expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
   });
 
+  it("delivers a steer before a required nested shell finishes and resumes its exact result", async ({
+    onTestFinished,
+  }) => {
+    const { state, shell } = await nativeExecFixture("steer-held-shell", onTestFinished);
+    const started = join(state.workspaceDir, "started");
+    const release = join(state.workspaceDir, "release");
+    const command = nodeCommand(`const fs = require("node:fs");
+      const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => {
+        if (fs.existsSync(${JSON.stringify(release)})) { watcher.close(); clearTimeout(timer); console.log("original result"); }
+      });
+      const timer = setTimeout(() => watcher.close(), 10000);
+      fs.appendFileSync(${JSON.stringify(started)}, "started");`);
+    const correction = "Check this before the command finishes.";
+    let activeAgent!: Agent;
+    const observed: Context[] = [];
+    const run = runCodeModeAgent({
+      hiddenTools: [shell],
+      execInput: {
+        code: `return (await exec({command:${JSON.stringify(command)}})).aggregated;`,
+        awaitResults: true,
+      },
+      programs: [
+        "exec",
+        async (context) => {
+          observed.push(context);
+          await writeFile(release, "finish");
+          const result = readToolResultDetails(
+            context.messages.findLast((m) => m.role === "toolResult"),
+          );
+          expect(result).toMatchObject({
+            status: "waiting",
+            reason: "steering",
+            runId: expect.any(String),
+          });
+          return { wait: true, runId: String(result?.runId) };
+        },
+      ],
+      configureAgent(agent) {
+        activeAgent = agent;
+      },
+    });
+    await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
+      timeout: 15000,
+    });
+    activeAgent.steer({
+      role: "user",
+      content: [{ type: "text", text: correction }],
+      timestamp: Date.now(),
+    });
+    const { agent } = await run;
+    expect(observed[0]?.messages.slice(-2)).toMatchObject([
+      { role: "toolResult", details: { status: "waiting" } },
+      { role: "user", content: [{ type: "text", text: correction }] },
+    ]);
+    expect(
+      readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
+    ).toMatchObject({ status: "completed", value: "original result" });
+    expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+    expect(await readFile(started, "utf8")).toBe("started");
+  });
+
   it("keeps native failure output within its budget", async ({ onTestFinished }) => {
     const { shell } = await nativeExecFixture("exec-failure-budget", onTestFinished);
     const bounded = createCatalogCodeModeHarness([shell], {
