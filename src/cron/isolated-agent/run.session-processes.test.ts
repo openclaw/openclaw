@@ -28,10 +28,7 @@ describe("isolated cron run session processes", () => {
     resetProcessRegistryForTests();
   });
 
-  it.runIf(process.platform !== "win32").each([
-    { run: "ends", yielded: false },
-    { run: "yields on its command", yielded: true },
-  ])("when the run $run, its service keeps running: $yielded", async ({ yielded }) => {
+  it.runIf(process.platform !== "win32")("an ended run session's service stops", async () => {
     mockRunCronFallbackPassthrough();
     let runSessionKey = "";
     runEmbeddedAgentMock.mockImplementationOnce(async (params: { sessionKey: string }) => {
@@ -53,19 +50,14 @@ describe("isolated cron run session processes", () => {
         independentService: true,
         pid: run.pid,
         processActivity: run.activity,
-        ...(yielded ? { resumesYieldedRun: true as const } : {}),
       });
       void run.wait().then((exit) => markExited(session, exit.exitCode, exit.exitSignal, "killed"));
-      return { payloads: [{ text: "done" }], meta: { agentMeta: {}, yielded } };
+      return { payloads: [{ text: "done" }], meta: { agentMeta: {} } };
     });
 
     await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
     expect(runSessionKey).toMatch(/:cron:.+:run:/u);
-    if (yielded) {
-      expect(isPidAlive(pids[0]!)).toBe(true);
-    } else {
-      await vi.waitFor(() => expect(isPidAlive(pids[0]!)).toBe(false), { timeout: 10_000 });
-    }
+    await vi.waitFor(() => expect(isPidAlive(pids[0]!)).toBe(false), { timeout: 10_000 });
   });
 });

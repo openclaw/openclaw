@@ -1,6 +1,5 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
-import { listExecSessionsForCancellation } from "../../agents/bash-process-registry.js";
 import { isSessionLifecycleChangedGatewayError } from "../../config/sessions/lifecycle.js";
 import { releaseAgentRunContext } from "../../infra/agent-run-registry.js";
 import { logWarn } from "../../logger.js";
@@ -87,18 +86,14 @@ function shouldDeleteCronRunSessionAfterRun(params: {
 
 /**
  * An isolated run session (`:run:`) takes no turn after its run ends, so nothing would manage
- * its services or leftover processes: stop them, as a hidden subagent's task end does. A run
- * that yielded on a command keeps its processes; that command's exit continues it.
+ * its services or leftover processes: stop them, as a hidden subagent's task end does. A yield
+ * on this run's commands resumes inside the run (`executeCronRun`), so it has settled by now.
  */
 async function stopEndedCronRunProcesses(runSessionKey: string, sessionId: string) {
-  const scopes = new Set([runSessionKey, sessionId]);
-  const inScope = listExecSessionsForCancellation().filter(
-    (session) => scopes.has(session.scopeKey) && !session.exited,
-  );
-  if (!isCronRunSessionKey(runSessionKey) || inScope.some((s) => s.resumesYieldedRun)) {
+  if (!isCronRunSessionKey(runSessionKey)) {
     return;
   }
-  await stopSessionExecProcesses(scopes, () => {}).catch((error: unknown) =>
+  await stopSessionExecProcesses([runSessionKey, sessionId], () => {}).catch((error: unknown) =>
     logWarn(`[cron] Run session processes did not stop: ${String(error)}`),
   );
 }
