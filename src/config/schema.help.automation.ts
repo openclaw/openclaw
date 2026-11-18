@@ -21,6 +21,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
     "Sets local-hour boundary (0-23) for daily reset mode so sessions roll over at predictable times. Use with mode=daily and align to operator timezone expectations for human-readable behavior.",
   "session.reset.idleMinutes":
     "Sets inactivity window before reset for idle mode and can also act as secondary guard with daily mode. Use larger values to preserve continuity or smaller values for fresher short-lived threads.",
+  "session.reset.tailMessages":
+    "Sets how many recent user/assistant messages an automatic idle or daily reset carries into the new session (default: 6). Use 0 to start empty; /new and /reset always start empty.",
   "session.resetByType":
     "Overrides reset behavior by chat type (direct, group, thread) when defaults are not sufficient. Use this when group/thread traffic needs different reset cadence than direct messages.",
   "session.resetByType.direct":

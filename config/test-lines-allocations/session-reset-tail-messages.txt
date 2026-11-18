@@ -1,0 +1,4 @@
+# session.reset.tailMessages: boundary tail sizes (default, 2, 10, 0) and policy
+# resolution (default, base, chat type, channel, negative rejected), plus the
+# released SDK freshness call shape without tailMessages.
+38

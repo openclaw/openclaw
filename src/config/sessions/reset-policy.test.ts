@@ -13,6 +13,11 @@ it("honors a pending legacy reset tombstone under the default policy", () => {
   expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy })).toEqual({
     fresh: false,
   });
+  // Released plugin SDK call shape: freshness never takes the reset tail.
+  const sdkPolicy = { mode: "none", atHour: 4 } as const;
+  expect(evaluateSessionFreshness({ updatedAt: 0, now: DAY_MS, policy: sdkPolicy })).toEqual({
+    fresh: false,
+  });
 });
 
 it.each`
@@ -87,4 +92,16 @@ it("accepts none in the session schema and ignores reset deadlines", () => {
   expect(evaluateSessionFreshness({ updatedAt: 1, now: DAY_MS, policy })).toEqual({
     fresh: true,
   });
+});
+
+it.each([
+  [undefined, undefined, 6],
+  [{ reset: { tailMessages: 20 } }, undefined, 20],
+  [{ reset: { tailMessages: 20 }, resetByType: { direct: { tailMessages: 0 } } }, undefined, 0],
+  [{ reset: { tailMessages: 20 } }, { tailMessages: 3 }, 3],
+] as const)("resolves the reset tail %#", (sessionCfg, resetOverride, tailMessages) => {
+  expect(
+    resolveSessionResetPolicy({ sessionCfg, resetType: "direct", resetOverride }),
+  ).toMatchObject({ tailMessages });
+  expect(() => SessionSchema.parse({ reset: { tailMessages: -1 } })).toThrow();
 });

@@ -262,6 +262,7 @@ export function createPersistCronSessionEntry(params: {
               resetBoundary: {
                 context: "preserve-tail",
                 reason: "cron-stale",
+                tailMessages: params.cronSession.resetBoundaryPending?.tailMessages,
                 cwd: params.workspaceDir,
               } satisfies SessionResetBoundaryWrite,
             }

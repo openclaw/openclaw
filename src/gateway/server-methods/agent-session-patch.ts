@@ -293,7 +293,9 @@ export async function buildAgentSessionPatch(params: {
   }
   return {
     patch,
-    ...(automaticResetReason ? { automaticResetReason } : {}),
+    ...(automaticResetReason
+      ? { automaticResetReason, resetTailMessages: params.resetPolicy.tailMessages }
+      : {}),
     spawnedBy: freshSpawnedBy,
     ...nextGroup,
     freshSessionRotatedSinceLoad,

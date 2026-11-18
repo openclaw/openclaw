@@ -10,6 +10,7 @@ const SessionResetConfigSchema = z.strictObject({
   mode: z.union([z.literal("none"), z.literal("daily"), z.literal("idle")]).optional(),
   atHour: z.number().int().min(0).max(23).optional(),
   idleMinutes: z.number().int().positive().optional(),
+  tailMessages: z.number().int().min(0).optional(),
 });
 
 const PositiveDurationSchema = z.union([z.string(), z.number()]).superRefine((value, ctx) => {

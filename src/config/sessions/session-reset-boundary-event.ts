@@ -18,6 +18,8 @@ export type SessionResetBoundaryRequest =
   | {
       context: "preserve-tail";
       reason: Extract<SessionResetBoundaryReason, "reset" | "idle" | "daily" | "cron-stale">;
+      /** Defaults to the reset policy default when omitted. */
+      tailMessages?: number;
     };
 
 type SessionResetBoundaryEvent = {
@@ -104,7 +106,10 @@ export function buildSessionResetBoundaryEvent(
   const activeEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
   const keptEntries =
     params.context === "preserve-tail"
-      ? selectRecentUserAssistantReplayRecords(projectLatestBoundaryWindow(activeEntries))
+      ? selectRecentUserAssistantReplayRecords(
+          projectLatestBoundaryWindow(activeEntries),
+          params.tailMessages,
+        )
       : [];
   const firstKeptEntryId = recordId(keptEntries[0]);
   const boundaryId = params.boundaryId?.trim() || uniqueBoundaryId(params.events);
