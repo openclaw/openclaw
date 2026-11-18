@@ -75,7 +75,11 @@ this documentation enables the behavior:
 
 ## Install once, then choose your AI connection
 
-Follow [Install](/install), then run:
+Follow [Install](/install). Terminal onboarding waits for a connection choice
+before its live test; native macOS automatic first run can try detected access
+without the same picker. If the user limits which account may be used, choose
+the supported explicit-connection path rather than launching automatic trials.
+See [native onboarding](/start/onboarding#automatic-first-run). Then run:
 
 ```bash
 openclaw --version
@@ -86,7 +90,10 @@ Choose **Quick start**, or **Custom setup** to review the agent name, access
 mode, and optional settings. Quick start uses full access by default; read the
 [security guide](/gateway/security) before granting an agent access to this host.
 Choose the connection you want before its real verification request. Hosted
-providers may charge for that request. You can skip optional setup.
+providers may charge for that request. You can skip optional setup. Retain the
+selected agent ID: replace `<agent-id>` below with that ID and open chat with
+the same agent. On an existing install, inspect `openclaw agents list` rather
+than assuming it is `main`.
 
 ### An API key saved in a password manager
 
@@ -94,25 +101,35 @@ Choose your provider and its **API key** sign-in method. Enter the saved key
 only into the masked credential prompt, never into chat. An OpenAI API key and
 a ChatGPT subscription are different connections; choose the one you have.
 
-If you already use the 1Password CLI and want to avoid clipboard handling,
+For an **OpenAI API key only**, if you already use the 1Password CLI and want
+to avoid clipboard handling,
 run the following **in a terminal on the Gateway host**, not in agent chat.
-The example assumes the default agent is named `main`; use
-`openclaw agents list` to check an existing installation. Replace the
-`op://` reference with the one selected field you have permission to read.
-Baseline setup writes local setup state and can create the default proactive
-automation; it is not a read-only credential check.
+On a fresh state directory only, first complete `openclaw setup --baseline`
+successfully; stop at its error if it fails. Existing installs skip that step.
+Baseline writes setup state and can create the default proactive automation;
+it is not a read-only credential check. Inspect `openclaw agents list` for the
+actual agent ID, and replace the `op://` reference with one field you may read.
+In Bash:
 
 ```bash
-openclaw setup --baseline
-op read 'op://Private/OpenAI/credential' | \
-  openclaw models auth paste-api-key --provider openai \
-    --profile-id openai:setup --agent main
-openclaw onboard
+(
+  set +x
+  set -o pipefail
+  key=$(op read 'op://Private/OpenAI/credential') || exit
+  export -n key
+  builtin printf '%s\n' "$key" | \
+    openclaw models auth paste-api-key --provider openai \
+      --profile-id openai:setup --agent "<agent-id>"
+) && openclaw onboard
 ```
 
-The pipeline sends the key directly to OpenClaw
-without placing its value in command arguments or a temporary plaintext file.
-Keep shell tracing and command-output recording off. The import copies the key
+If reading or importing fails, inspect the non-secret error before continuing.
+Do not work around it by putting the key in command arguments or chat.
+
+The subshell imports only after the secret read succeeds. It keeps the key in
+a non-exported variable and uses Bash's built-in `printf`, without putting the
+value in process arguments or a temporary plaintext file. Bash tracing is
+disabled inside the subshell; keep command-output recording off. The import copies the key
 into OpenClaw credential storage under a named profile; it does not leave the
 key only in 1Password. Saving it does not prove usable inference: select the
 saved connection in onboarding and let verification finish. Repeating the import replaces
@@ -147,12 +164,12 @@ you chose foreground operation, **Ctrl+C** stops the Gateway but keeps config.
 To switch to a service later:
 
 ```bash
-openclaw gateway install
-openclaw gateway start
+openclaw gateway install && openclaw gateway start
 ```
 
 Installation installs and starts the service but returns before readiness;
-`gateway start` waits for health and readiness.
+`gateway start` waits for health and readiness. If either command fails, inspect
+the reported error before continuing.
 If start reports `still-starting` (exit code `2`), the service remains running.
 Check `openclaw gateway status --deep` before restarting or reinstalling.
 
@@ -176,14 +193,15 @@ reviewed: paths, account names, and service diagnostics can identify your host.
 | Valid configuration            | `openclaw config validate`                                                                        | Working credentials or inference                         |
 | Gateway and service            | `openclaw gateway status --deep --require-rpc`                                                    | A model reply, a tool call, or survival after reboot     |
 | Loopback listener              | On Linux, `ss -ltnp`; match the Gateway port/process reported by status                           | Config alone does not prove the actual listening address |
-| Configured model/auth          | `openclaw models status --agent main`                                                             | Status without a live check does not prove a reply       |
-| Inference                      | The selected connection passes onboarding verification, or a fresh chat receives a real reply     | Tools, every fallback, or every plugin                   |
+| Configured model/auth          | `openclaw models status --agent <agent-id>`                                                       | Status without a live check does not prove a reply       |
+| Connection inference           | The selected connection passes onboarding verification                                            | The running Gateway's agent chat or tools                |
+| Gateway chat                   | A fresh message to the intended agent through the running Gateway receives a real reply           | Tools, every fallback, or every plugin                   |
 | Linux persistence prerequisite | `loginctl show-user "$USER" -p Linger` and `systemctl --user is-enabled openclaw-gateway.service` | An actual logout or reboot test                          |
 
 Read the reported readiness and warnings, not just the status command's exit
 code. `--require-rpc` makes a failed RPC check nonzero; it is not a model test.
-Onboarding verification is tool-free; also send a real message through the
-running Gateway to exercise its chat path. To claim the primary model passed,
+Onboarding verification is tool-free. First-chat setup is complete only after
+the intended agent replies through the running Gateway. To claim the primary model passed,
 inspect the reply's actual provider/model: an agent turn may use a fallback.
 
 For this loopback-only baseline, investigate any non-loopback Gateway listener,
@@ -195,12 +213,12 @@ If lingering is off and you want the user service to run without a login,
 follow [Linux service setup](/start/setup#linux-systemd-user-service); enabling
 it may need administrator permission.
 
-**Optional tool check:** only on a test agent, ask it to call `session_status`
-with no arguments exactly once and summarize the result. Prohibit model or
-settings changes, file changes, shell commands, and external messages. Inspect the actual tool result in the transcript, not just the model's
-claim. A missing or denied tool is an incomplete check, not a reason to broaden
-permissions. A timeout or failed turn is not a pass. This uses model requests;
-it is not a strict token/spend cap or a guarantee of exactly one tool call.
+**Optional tool check:** if the intended agent exposes `session_status`, request
+one call with no arguments and inspect the actual result. Prohibit model/settings
+changes, file changes, shell commands, and external messages. If unavailable or
+denied, mark it not tested; do not create another agent or broaden permissions.
+This uses model requests, not a hard token/spend or tool-call cap. A failed or
+timed-out turn is not a pass.
 
 Do not use broad credential probes as a substitute for this first chat.
 [`models status --probe`](/cli/models#status) sends real provider requests and
@@ -211,14 +229,14 @@ requires the Gateway to be stopped.
 Do not use reset, delete state, or import credentials again to retry a later
 phase. Keep the same host user, state directory, and agent.
 
-| Where setup stopped                   | Next action                                                                                               |
-| ------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| CLI not found                         | Finish the installer's PATH instructions; reopen the terminal                                             |
-| Baseline only / **Skip for now**      | Run `openclaw onboard` and choose a connection                                                            |
-| Saved sign-in, verification failed    | Choose the saved connection and retry after fixing the reported cause; do not sign in again unnecessarily |
-| Service registered but still starting | Read `openclaw gateway status --deep`; preserve the running service while it warms up                     |
-| Service running, no model reply       | Inspect `openclaw models status --agent main`, then the provider error in chat                            |
-| Invalid config or an unclear failure  | Run `openclaw doctor --lint` for read-only findings; review repairs before authorizing `--fix`            |
+| Where setup stopped                     | Next action                                                                                               |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| CLI not found on this Linux CLI install | Finish the installer's PATH instructions; reopen the terminal                                             |
+| Baseline only / **Skip for now**        | Run `openclaw onboard` and choose a connection                                                            |
+| Saved sign-in, verification failed      | Choose the saved connection and retry after fixing the reported cause; do not sign in again unnecessarily |
+| Service registered but still starting   | Read `openclaw gateway status --deep`; preserve the running service while it warms up                     |
+| Service running, no model reply         | Inspect `openclaw models status --agent <agent-id>`, then the provider error in chat                      |
+| Invalid config or an unclear failure    | Run `openclaw doctor --lint` for read-only findings; review repairs before authorizing `--fix`            |
 
 If a credential or config write has an unknown outcome, inspect the Models page
 or the specific non-secret setting before retrying. A restart may require

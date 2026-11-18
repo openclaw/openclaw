@@ -98,8 +98,7 @@ To reuse selected non-secret settings, see [Repeatable setup](/start/repeatable-
     for it to be ready:
 
     ```bash
-    openclaw gateway install
-    openclaw gateway start
+    openclaw gateway install && openclaw gateway start
     ```
 
     This installs a LaunchAgent on macOS, a systemd user unit on Linux and
