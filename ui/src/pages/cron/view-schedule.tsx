@@ -229,32 +229,32 @@ export function ScheduleControls(props: CronProps) {
         </span>
       ) : undefined}
       {form().scheduleKind === "cron" && frequency() === "custom" ? (
-        <>
-          <TrayInput
-            {...props}
-            field="cronExpr"
-            onFormChange={(patch) => {
-              // An inferred Custom mode becomes explicit as soon as the expression is edited.
-              preferFrequency("custom");
-              props.onFormChange(patch);
-            }}
-            label={t("cron.form.expression")}
-            required
-            errorKey="cronExpr"
-            mono
-            placeholder={t("cron.form.expressionPlaceholder")}
-          />
-          <TrayInput
-            {...props}
-            field="cronTz"
-            errorKey="cronTz"
-            label={t("cron.form.timezoneOptional")}
-            help={t("cron.form.timezoneHelp")}
-            size="wide"
-            list="cron-tz-suggestions"
-            placeholder={t("cron.form.timezonePlaceholder")}
-          />
-        </>
+        <TrayInput
+          {...props}
+          field="cronExpr"
+          onFormChange={(patch) => {
+            // An inferred Custom mode becomes explicit as soon as the expression is edited.
+            preferFrequency("custom");
+            props.onFormChange(patch);
+          }}
+          label={t("cron.form.expression")}
+          required
+          errorKey="cronExpr"
+          mono
+          placeholder={t("cron.form.expressionPlaceholder")}
+        />
+      ) : undefined}
+      {form().scheduleKind === "cron" ? (
+        <TrayInput
+          {...props}
+          field="cronTz"
+          errorKey="cronTz"
+          label={t("cron.form.timezoneOptional")}
+          help={t("cron.form.timezoneHelp")}
+          size="wide"
+          list="cron-tz-suggestions"
+          placeholder={t("cron.form.timezonePlaceholder")}
+        />
       ) : undefined}
     </>
   );

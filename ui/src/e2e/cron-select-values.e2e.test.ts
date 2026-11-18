@@ -57,9 +57,20 @@ suite.define(() => {
       await editAutomation(page, job.id);
 
       const part = (name: string) => page.locator(`[data-test-id="cron-schedule-${name}"]`);
+      const submit = page.locator('[data-test-id="cron-submit"]');
+      const timeZone = page.locator("#cron-cron-tz");
+      await part("frequency").click();
+      await part("frequency-custom").click();
+      await timeZone.fill("Mars/Phobos");
+      await expect.poll(() => submit.isDisabled()).toBe(true);
       await part("frequency").click();
       await part("frequency-daily").click();
       await expect.poll(() => part("frequency").textContent()).toContain("Daily");
+      await page.locator(".cron-form-status__link").filter({ hasText: "Time zone:" }).click();
+      expect(await timeZone.evaluate((element) => document.activeElement === element)).toBe(true);
+      await timeZone.fill("America/Toronto");
+      await expect.poll(() => submit.isDisabled()).toBe(false);
+
       await part("days").click();
       await part("day-5").click();
       await part("day-1").click();
@@ -81,7 +92,7 @@ suite.define(() => {
       expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
         id: job.id,
         patch: {
-          schedule: { kind: "cron", expr: "0 10-18 * * 5", tz: "America/New_York", staggerMs: 0 },
+          schedule: { kind: "cron", expr: "0 10-18 * * 5", tz: "America/Toronto", staggerMs: 0 },
         },
       });
     });
