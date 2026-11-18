@@ -7,7 +7,7 @@ import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-fixtures.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
-import { attachHistoryActivity } from "../chat-history-request.ts";
+import { attachHistoryActivity } from "../chat-history-snapshot.ts";
 import { groupsOf } from "../chat-thread-fixtures.test-support.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
@@ -203,7 +203,7 @@ describe("grouped chat rendering", () => {
     expect(items.filter((item) => item.kind === "stream")).toHaveLength(1);
     renderActivityGroup(groups, { showReasoning: false, isToolMessageExpanded: () => true });
     await settleToolBridges(harness.view);
-    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands, called Wait");
+    expect(elementText(".chat-activity-group__label")?.trim()).toBe("Ran commands, used tools");
     expectCount(".chat-tool-row", 2);
   });
 

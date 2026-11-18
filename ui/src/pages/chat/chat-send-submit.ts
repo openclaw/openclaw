@@ -75,6 +75,7 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
+import { foldPastedTextAttachments } from "./pasted-text-card.ts";
 import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
@@ -130,17 +131,20 @@ export async function handleSendChat(
   const intent = opts?.intent;
   const rawMessage = messageOverride ?? host.chatMessage;
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
-  const submitted = trimHumanMentions(rawMessage, draftMentions);
-  const userMessage = intent ? rawMessage : submitted.text;
+  const attachmentsToSend = snapshotChatAttachments(
+    messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
+  );
+  // Pasted-text cards are composer presentation: submit as if "Show in text field" ran first,
+  // so commands, recipients and delivery treat the paste exactly like typed text.
+  const draft = foldPastedTextAttachments(rawMessage, attachmentsToSend);
+  const submitted = trimHumanMentions(draft.text, draftMentions);
+  const userMessage = intent ? draft.text : submitted.text;
   const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedSessionId = host.currentSessionId;
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
   let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
-  const attachmentsToSend = snapshotChatAttachments(
-    messageOverride == null ? host.chatAttachments : (opts?.attachmentsOverride ?? []),
-  );
   const submitGuardOptions = {
     attachments: messageOverride == null ? attachmentsToSend : [],
     scope: resolveUiConversationIdentity(host, submittedSessionKey),
@@ -160,10 +164,10 @@ export async function handleSendChat(
           retainAttachments,
         )
       : {};
-  const hasAttachments = attachmentsToSend.length > 0;
-  // Selection comments travel as message text, so only real files need uploads.
+  const hasAttachments = draft.attachments.length > 0;
+  // Selection comments and pasted text travel as message text, so only real files need uploads.
   if (
-    attachmentsToSend.some((item) => !item.selectionAnnotation) &&
+    draft.attachments.some((item) => !item.selectionAnnotation) &&
     !uploadsEnabled(host.uploadConfig)
   ) {
     setChatError(host, uploadsDisabledMessage());
@@ -178,7 +182,7 @@ export async function handleSendChat(
       setChatError(host, t("chat.goals.offline"));
       return undefined;
     }
-    if (attachmentsToSend.some((item) => item.browserAnnotation || item.selectionAnnotation)) {
+    if (draft.attachments.some((item) => item.browserAnnotation || item.selectionAnnotation)) {
       setChatError(host, t("chat.goals.annotationUnsupported"));
       return undefined;
     }
@@ -240,12 +244,12 @@ export async function handleSendChat(
   const message =
     rawParsedCommand || intent
       ? userMessage
-      : [...attachmentsToSend.map(annotationMessageContext), userMessage]
+      : [...draft.attachments.map(annotationMessageContext), userMessage]
           .filter(Boolean)
           .join("\n\n");
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   // Selection comments are already message text and never upload as files.
-  const deliveredAttachments = attachmentsToSend.filter(
+  const deliveredAttachments = draft.attachments.filter(
     (item) => !item.selectionAnnotation && !(rawParsedCommand && item.browserAnnotation),
   );
   const rejectOversizedAttachments = () => {

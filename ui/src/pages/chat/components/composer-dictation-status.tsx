@@ -27,10 +27,14 @@ export function ActiveDictationStatus(props: {
 }) {
   const phase = createMemo((): MicrophoneMeterStatus | null => {
     const dictation = props.readDictation();
-    if (!dictation?.active) {
+    if (!dictation?.active && !dictation?.transcribing) {
       return null;
     }
-    return dictation.connecting ? "connecting" : dictation.finalizing ? "thinking" : "listening";
+    return dictation.connecting
+      ? "connecting"
+      : dictation.finalizing || !dictation.active
+        ? "thinking"
+        : "listening";
   });
   return (
     <div class="agent-chat__composer-status-stack">
@@ -41,8 +45,9 @@ export function ActiveDictationStatus(props: {
               "agent-chat__dictation-status",
               { "agent-chat__dictation-status--finalizing": current === "thinking" },
             ]}
-            role={current === "connecting" ? "status" : undefined}
-            aria-live={current === "connecting" ? "polite" : undefined}
+            role={current === "listening" ? undefined : "status"}
+            aria-live={current === "listening" ? undefined : "polite"}
+            aria-atomic={current === "listening" ? undefined : "true"}
           >
             <span
               class={[

@@ -13,8 +13,9 @@ import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import "../../components/tooltip.ts";
 import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
+import "../../components/tooltip.ts";
+import { measuredPromptTokens } from "../../lib/sessions/usage.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { formatIsoDate } from "./helpers.ts";
 import {
@@ -364,7 +365,7 @@ export function UsageInsights(props: {
       ? Math.round(totals.totalTokens / aggregates.messages.total)
       : 0;
     const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
-    const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
+    const cacheBase = measuredPromptTokens(totals);
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
     const cacheHitLabel = cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
     const errorRatePct = stats.errorRate * 100;

@@ -11,6 +11,7 @@ import {
   TALK_READY_HISTORY_MESSAGE,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ONE_PIXEL_PNG_B64 } from "./new-session-page.test-support.ts";
 
 function catalog(transcription: boolean, realtime?: boolean) {
   return {
@@ -338,7 +339,7 @@ suite.define(() => {
         }),
       ).toBe(true);
       if (cancel) {
-        await button(page, "Sessions", true).click();
+        await button(page, "Collapse sidebar", true).click();
         await page.locator(".shell--nav-collapsed").waitFor();
         expect(await isFocused(textarea)).toBe(false);
         await page.keyboard.press("Escape");
@@ -406,6 +407,67 @@ suite.define(() => {
         }
       }),
   );
+
+  it("restores the new-session image drop highlight after keeping dictated text", () =>
+    suite.withPage(
+      {
+        permissions: ["microphone"],
+        viewport: { width: 1056, height: 740 },
+        colorScheme: "dark",
+        reducedMotion: "reduce",
+      },
+      async ({ page }) => {
+        const { gateway, textarea, admit, emit, close } = await openDictation(page, {
+          route: "new",
+        });
+        await button(page, "Dictate", true).click();
+        await admit();
+        await emit("Describe this image");
+        await expectDraft(textarea, "Describe this image");
+
+        const input = page.locator(".new-session-page__composer > .agent-chat__input");
+        const tintOpacity = () =>
+          input.evaluate((element) => Number(getComputedStyle(element, "::before").opacity));
+        expect(await tintOpacity()).toBe(0);
+        const transfer = await page.evaluateHandle((base64) => {
+          const data = new DataTransfer();
+          data.items.add(
+            new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], "pixel.png", {
+              type: "image/png",
+            }),
+          );
+          return data;
+        }, ONE_PIXEL_PNG_B64);
+        const drag = (type: string) => textarea.dispatchEvent(type, { dataTransfer: transfer });
+        try {
+          await drag("dragenter");
+          await drag("dragover");
+          expect(await tintOpacity()).toBe(0);
+          const draft = "Describe this image in detail";
+          await emit(draft);
+          await expectDraft(textarea, draft);
+          await drag("dragleave");
+
+          await button(page, "Stop and keep text", true).click();
+          await gateway.waitForRequest("talk.session.close");
+          await emit(draft, true);
+          await close();
+          await expect.poll(() => textarea.isEditable()).toBe(true);
+
+          await drag("dragenter");
+          await drag("dragover");
+          await expect.poll(tintOpacity).toBeGreaterThan(0);
+          await expectDraft(textarea, draft);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await captureFullPage(page, "dictation-image-drag.png");
+          }
+          await drag("dragleave");
+          await expect.poll(tintOpacity).toBe(0);
+        } finally {
+          await transfer.dispose();
+        }
+      },
+    ));
 
   it("cancels new-session dictation after dismissing its tooltip", () =>
     suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {

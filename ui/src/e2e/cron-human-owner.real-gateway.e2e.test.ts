@@ -28,7 +28,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { selectChatModel, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
@@ -339,6 +339,7 @@ suite.define(() => {
     for (const [index, page] of pages.entries()) {
       await page.goto(new URL("automations?job=" + job.id, urls[index]).toString());
       await waitForControlUiGatewayReady(page);
+      await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("#cron-name").waitFor();
     }
     expect(await alice.locator("#cron-name").isDisabled()).toBe(false);
@@ -362,6 +363,8 @@ suite.define(() => {
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: job.id })).name)
       .toBe("Hourly ping edited by Alice");
+    await alice.locator('[data-test-id="cron-edit"]').click();
+    await alice.locator('[data-test-id="cron-advanced"]').click();
     await selectPickerValue(ownerPicker, profiles[2]!);
     await alice.locator('[data-test-id="cron-submit"]').click();
     await expect
@@ -369,12 +372,14 @@ suite.define(() => {
       .toBe(profiles[2]);
     const transferred = await rpc<CronJob>(admin, "cron.get", { id: job.id });
     expect(transferred.enabled).toBe(false);
+    await alice.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => alice.locator("#cron-name").isDisabled()).toBe(true);
     await expect(
       rpc(alice, "cron.update", { id: job.id, patch: { name: "Former owner cannot edit" } }),
     ).rejects.toThrow();
     await bob.reload();
     await waitForControlUiGatewayReady(bob);
+    await bob.locator('[data-test-id="cron-edit"]').click();
     await expect.poll(() => bob.locator("#cron-name").isDisabled()).toBe(false);
     await bob.locator("#cron-name").fill("Hourly ping edited by Bob");
     await bob.locator('[data-test-id="cron-submit"]').click();
@@ -416,11 +421,9 @@ suite.define(() => {
     // The same administrator edits a fresh legacy job through the actual page.
     await admin.goto(new URL("automations?job=legacy-ui-edit", urls[0]).toString());
     await waitForControlUiGatewayReady(admin);
+    await admin.locator('[data-test-id="cron-edit"]').click();
     await admin.locator("#cron-name").waitFor();
-    await selectPickerValue(
-      admin.locator("openclaw-select-picker:has(#cron-payload-model-picker)"),
-      "fixture/edited",
-    );
+    await selectChatModel(admin.locator(".cron-prompt__run-controls"), "fixture/edited");
     await admin.locator('[data-test-id="cron-submit"]').click();
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: "legacy-ui-edit" })).payload)

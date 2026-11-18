@@ -14,10 +14,16 @@ const completionSelectionEntries = [
   "src/system-agent/setup-inference-detect.ts",
   "src/agents/simple-completion-selection.ts",
 ];
+const passivePathEntries = [
+  "src/infra/path-existence.ts",
+  "src/agents/auth-profiles/shared-main-dir.ts",
+  "src/state/openclaw-state-db.paths.ts",
+];
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
     ...completionSelectionEntries,
+    ...passivePathEntries,
     "src/gateway/call.ts",
     "src/gateway/config-get-response.ts",
     "src/gateway/method-scopes.ts",
@@ -64,6 +70,23 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(passivePathEntries)(
+    "resolves paths in %s without loading broader filesystem operations",
+    (entry) => {
+      const modules = collectStaticValueImports(entry);
+      for (const deferred of [
+        "src/infra/boundary-path.ts",
+        "src/config/paths.ts",
+        "src/utils.ts",
+      ]) {
+        expect(modules).not.toContain(path.normalize(deferred));
+      }
+      expect(
+        modules.flatMap((file) => graph.dependencies(file).map(({ specifier }) => specifier)),
+      ).not.toContain("@openclaw/fs-safe/advanced");
+    },
+  );
+
   it.each(completionSelectionEntries)(
     "selects models in %s without loading completion execution",
     (entry) => {
@@ -128,6 +151,7 @@ console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: r
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
           utilityModel: "fixture/utility",
@@ -169,6 +193,7 @@ console.log("prewarm-cold-selection-ok");`,
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("prewarm-cold-selection-ok");
       },
@@ -179,6 +204,8 @@ console.log("prewarm-cold-selection-ok");`,
     ["src/gateway/call.ts", "src/gateway/method-scopes.ts"],
     ["src/gateway/call.ts", "src/infra/worker-task-pool.ts"],
     ["src/gateway/call.ts", "src/infra/client-credential-store.ts"],
+    ["src/infra/client-credential.worker.ts", "src/infra/exec-approvals-config.ts"],
+    ["src/infra/client-credential-native-bootstrap.ts", "src/infra/exec-approvals-config.ts"],
     ["src/gateway/config-get-response.ts", "src/config/runtime-schema.ts"],
     ["src/daemon/service-command.ts", "src/daemon/launchd-runtime.ts"],
     ["src/daemon/service-command.ts", "src/daemon/schtasks-layout.ts"],

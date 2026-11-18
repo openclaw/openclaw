@@ -9,7 +9,6 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Home command recovery across presentations",
@@ -50,8 +49,8 @@ suite.define(() => {
           "openclaw-assistant-panel .agent-chat__composer-combobox textarea",
         );
         if (handoff) {
-          const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+          // Sessions opens from a group heading, and this ungrouped roster has none.
+          await page.evaluate(() => window.openclawControlUi?.navigate("sessions"));
           await page.waitForURL((url) => url.pathname.endsWith("/sessions"));
           await page.locator("openclaw-sessions-page").waitFor();
           await page.getByRole("button", { name: "Talk to your Home agent", exact: true }).click();

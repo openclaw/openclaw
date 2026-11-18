@@ -380,8 +380,13 @@ export async function resolveGatewayScopedTools(
     agentId: policyAgentId,
     model: { provider: params.modelProvider, id: params.modelId },
   });
+  let messageToolAvailable = true;
   const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
     ...commonToolOptions(),
+    retainUnavailableMessageTool: true,
+    onMessageToolAvailability: (available) => {
+      messageToolAvailable = available;
+    },
     computerExecutionId: params.admittedRunContext?.operationalRunInstance.instanceId,
     sessionPortalTarget,
     gatewayConfigReadAllowed,
@@ -727,9 +732,12 @@ export async function resolveGatewayScopedTools(
     nativeCapture,
   );
 
+  const permissionTools = applyToolAvailabilityDescriptions(tools);
   return {
     agentId: sessionAgentId,
-    tools: applyToolAvailabilityDescriptions(tools),
+    tools: permissionTools.filter((tool) => messageToolAvailable || tool.name !== "message"),
+    // Only route omission needs a separate candidate surface for MCP grant/schema capture.
+    ...(messageToolAvailable ? {} : { permissionTools }),
     workspaceDir,
     // Only the MCP owner knows which tools survived its grant and schema gates.
     captureFinalCronCreatorTools: cronCreatorToolAllowlistCaptureRef

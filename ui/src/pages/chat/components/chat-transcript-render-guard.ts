@@ -114,6 +114,7 @@ export function transcriptContextDependencies(
   props: Pick<
     ChatThreadProps,
     | "onRetryRun"
+    | "onStartNewSession"
     | "failedMessageEditSource"
     | "failureActionsRunId"
     | "modelCatalog"
@@ -125,6 +126,7 @@ export function transcriptContextDependencies(
   if (item.kind === "notice") {
     return [
       props.onRetryRun,
+      props.onStartNewSession,
       props.failedMessageEditSource,
       props.failureActionsRunId,
       item.modelChange ? props.modelCatalog : undefined,

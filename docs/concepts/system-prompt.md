@@ -230,7 +230,10 @@ prompt keeps discovery instructions and omits the static catalog. The agent uses
 `skills.search(query)` for an unfamiliar workflow or `skills.read(name)` for a
 known skill. This preserves the eligible catalog and complete instruction reads
 while avoiding repeated catalog text. Without search, Code Mode retains the
-listing. A new workflow may require a discovery call; known names need no search.
+listing. Specialized or unfamiliar tasks and reusable workflows require discovery;
+known names can be read directly. Fully specified simple local file work and
+self-contained answers need no search unless another instruction requires it.
+Repository, safety, and task-specific skill requirements still apply.
 Existing pinned conversation prefixes remain intact; the full size reduction
 appears when a new session or compaction starts a fresh prompt series.
 

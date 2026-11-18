@@ -751,18 +751,6 @@ openclaw-systems-page {
       order: 2;
     }
   }
-  /* The window controls share one box; fullscreen otherwise keeps the browser's button. */
-  .systems-desktop .desktop-fullscreen-button {
-    display: inline-flex;
-    border: 0;
-    border-radius: 4px;
-    padding: 5px 7px;
-    background: transparent;
-    color: var(--muted);
-  }
-  .systems-desktop .desktop-fullscreen-icon {
-    display: inline-flex;
-  }
   /* Safari's native control ignores height, so the picker draws its own chevron to match its 32px neighbors. */
   .systems-toolbar > .systems-mobile-picker {
     height: 32px;

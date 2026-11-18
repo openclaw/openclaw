@@ -721,6 +721,18 @@
   min-width: 0;
 }
 
+/* iPadOS can float its hardware-keyboard accessory over the bottom-right
+   controls without changing the visual viewport or safe-area insets. Keep a
+   physical-right gutter, including RTL, and keep it stable across focus changes:
+   the browser exposes neither the accessory bounds nor keyboard attachment. */
+:root[data-ipad-browser] .agent-chat__input {
+  --chat-composer-keyboard-clearance: var(--chat-composer-send-size);
+}
+
+:root[data-ipad-browser] .agent-chat__composer-footer {
+  padding-right: calc(6px + var(--chat-composer-keyboard-clearance));
+}
+
 .agent-chat__composer-actions {
   display: flex;
   align-items: center;
@@ -1248,30 +1260,35 @@
 }
 
 @media (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .agent-chat__input {
+  /* Native mobile composers already budget their editor against the pane.
+     Keep the older whole-surface scrollport and sticky footer out of that layout. */
+  .agent-chat__input:where(:not([data-mobile-composer="true"] *)) {
     max-height: min(36vh, 164px);
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
   }
 
-  .agent-chat__input:has(.chat-attachments-preview) {
+  .agent-chat__input:where(:not([data-mobile-composer="true"] *)):has(.chat-attachments-preview) {
     /* The rail's top overhang must also clear this outer scrollport. */
     padding-block-start: var(--chat-attachment-hit-slop);
   }
 
-  .agent-chat__input:has(.agent-chat__attach-menu[open]) {
+  .agent-chat__input:where(:not([data-mobile-composer="true"] *)):has(
+      .agent-chat__attach-menu[open]
+    ) {
     overflow: visible;
   }
 
-  .agent-chat__composer-footer {
+  .agent-chat__composer-footer:where(:not([data-mobile-composer="true"] *)) {
     position: sticky;
     bottom: 0;
     z-index: 3;
     background: var(--chat-composer-surface);
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input, .cm-editor) {
+  .agent-chat__composer-combobox:where(:not([data-mobile-composer="true"] *))
+    > :is(textarea, input, .cm-editor) {
     min-height: 48px;
     max-height: 56px;
     overflow-y: auto;

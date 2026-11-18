@@ -266,6 +266,12 @@ and the ordered manifest hash; each child records its sequence range, counts,
 file hash, and sizes. Backups embed each chunk in its own blob. Parents without
 children keep the original single-file representation.
 
+Interrupted file-archive cleanup is discovered incrementally: each maintenance
+pass examines at most 128 archive records and 65,536 transcript rows, resuming by
+session ID and event sequence. Discovery wraps after the final archive; restarting
+the process resets its position. Newly archived transcripts are cleaned immediately.
+Cleanup still commits in batches of at most 256 rows and yields between batches.
+
 The default archive directory is
 `~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
 `<sha256>.jsonl.zst`. A database in a directory named `agent` uses its sibling
@@ -465,6 +471,13 @@ That marker permanently excludes the run from automatic reconciliation, even
 if known parents later exit; existing recorded identities remain protected.
 A fresh run without identity follows the legacy explicit repair/supersession
 rules below.
+On Linux and macOS each adopter also stores an optional `namespace` string on
+its `origin.driver` entry, retained with it in `origin.previousDrivers`: the
+platform, kernel boot, Linux PID namespace, and digested machine identity it ran
+under, or `null` when they could not be read. A later `openclaw update` reads it
+only to show that a killed run's processes ended with an earlier boot of the
+same machine. Older readers drop the key; lease payloads, recovery receipts, and
+the public run record never carry it.
 This is additive JSON metadata;
 there are no new columns, tables, or schema versions. The separate
 `verification.pid` still identifies the Gateway service, not the updater.
@@ -476,6 +489,18 @@ write failures warn once per driver run and do not abort commands or finalizatio
 step and outcome writes retain their existing failure behavior. Encoding
 reserves space for exact identity bytes before bounding and redacting other
 origin diagnostics.
+
+An update of a source checkout that replaces the checkout's build in place
+records optional `origin.gitActivation` in the same `origin_json` column, before
+it reserves its plugin recovery: `sha` (the activated commit), `buildId` (the
+activated build) and `previousBuildId` (the build it replaced, or `null`). The
+next `openclaw update` reads it only for a killed run and only together with the
+checkout on disk; it never grants execution authority. It is an exact retained
+receipt like the driver identities: when the origin outgrows its byte budget,
+driver `namespace` values are dropped first and the activation stays exact.
+Public history projections omit it. This is
+additive JSON metadata with no new columns, tables, or schema versions; older
+readers drop the key, and runs without it keep the earlier behavior.
 
 The ledger owns abandonment classification and terminalization. Automatic
 recovery requires more than 30 minutes since both `updated_at_ms` and the latest
@@ -860,3 +885,12 @@ it does not automatically scan or import existing transcripts.
 
 See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
 for authenticated inspection, explicit transcript import, reset, and privacy.
+
+### Pending-input endings
+
+Agent schema 43 adds nullable `end_cause` and `origin_source_json` columns to
+`session_pending_inputs` on SQLite and PostgreSQL. The forward migration marks
+legacy cancelled inputs carrying a user Stop or dismissal marker as `user-stop`,
+without changing their message bytes. Stores without the optional pending-input
+table keep it absent until first use. `origin_source_json` reserves storage for
+the original input source; this migration does not populate it.

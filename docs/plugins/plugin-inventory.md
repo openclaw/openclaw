@@ -214,7 +214,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-105 plugins
+106 plugins
 
 - **[abliteration](/plugins/reference/abliteration)** (`@openclaw/abliteration-provider`) - npm or ClawHub: `@openclaw/abliteration-provider`. OpenClaw Abliteration provider plugin.
 
@@ -285,6 +285,8 @@ Each entry lists the package, distribution route, and description.
 - **[fireworks](/plugins/reference/fireworks)** (`@openclaw/fireworks-provider`) - npm or ClawHub: `@openclaw/fireworks-provider`. Adds Fireworks model provider support to OpenClaw.
 
 - **[fish-audio-speech](/plugins/reference/fish-audio-speech)** (`@openclaw/fish-audio-speech`) - npm or ClawHub: `@openclaw/fish-audio-speech`. Fish Audio hosted text-to-speech with streaming, voice notes, and telephony output.
+
+- **[gbrain](/plugins/reference/gbrain)** (`@openclaw/gbrain`) - npm or ClawHub: `@openclaw/gbrain`. Connects OpenClaw to a GBrain brain: sets up GBrain's own service when needed and adds it as the gbrain MCP server.
 
 - **[gmi](/plugins/reference/gmi)** (`@openclaw/gmi-provider`) - npm or ClawHub: `@openclaw/gmi-provider`. OpenClaw GMI Cloud provider plugin.
 

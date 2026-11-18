@@ -7,7 +7,6 @@ import {
   Show,
   type Element as SolidElement,
 } from "solid-js";
-import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
@@ -72,26 +71,38 @@ export type ChatModelPickerParams = {
 };
 
 export function ChatModelPicker(params: ChatModelPickerParams) {
+  return (
+    <Show
+      when={Boolean(
+        params.modelCatalogState?.status === "ready" &&
+        params.modelCatalogState.hasSnapshot &&
+        !params.modelCatalogState.pendingProviders?.length &&
+        params.modelOptions.length === 0 &&
+        // Automatic selection exists even before the first account is configured.
+        (!params.accountSection ||
+          params.accountSection.viewProps(0).selectionKind === "automatic") &&
+        !params.targetGroups?.length &&
+        !params.modelSelectionLocked &&
+        params.onModelSetup,
+      )}
+      fallback={<ModelPickerPopover {...params} />}
+    >
+      <button
+        class="chat-controls__inline-select-trigger chat-controls__model-trigger"
+        type="button"
+        data-chat-model-setup="true"
+        disabled={params.disabled}
+        aria-description={params.disabledReason}
+        onClick={() => params.onModelSetup?.()}
+      >
+        <span class="chat-controls__inline-select-label">{t("modelSetup.required.action")}</span>
+      </button>
+    </Show>
+  );
+}
+
+function ModelPickerPopover(params: ChatModelPickerParams) {
   const search = createChatModelSearch();
-  let summary: HTMLElement;
-  let searchInput: HTMLInputElement | undefined;
-  let details: HTMLDetailsElement | undefined;
-  let pendingSearchFocus: Element | null | undefined;
-  const focusSearch = () => {
-    if (pendingSearchFocus === undefined || !details) {
-      return;
-    }
-    if (
-      !details.isConnected ||
-      !details.open ||
-      details.ownerDocument.activeElement !== pendingSearchFocus
-    ) {
-      pendingSearchFocus = undefined;
-    } else if (searchInput?.isConnected) {
-      pendingSearchFocus = undefined;
-      searchInput.focus({ preventScroll: true });
-    }
-  };
   // Retain the panel after first use so expanded model lists survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
@@ -101,62 +112,52 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     }
     params.onOpenChange?.(target.open);
     if (!target.open) {
-      pendingSearchFocus = undefined;
       params.accountSection?.onClose();
       resetModelSearch(target);
       return;
     }
     void params.onOpen?.();
-    pendingSearchFocus = target.ownerDocument.activeElement;
-    requestAnimationFrame(focusSearch);
+    search.focusOnOpen();
   }, "top");
-  const state = createMemo(() => {
-    const activeModelOption = params.modelOptions.find((option) =>
-      isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
-    );
+  const triggerModel = createMemo(() => {
     const triggerModelValue = params.triggerModelValue;
-    const triggerModelOption =
-      triggerModelValue === undefined
-        ? activeModelOption
-        : triggerModelValue === ""
-          ? undefined
-          : params.modelOptions.find((option) =>
-              isModelPickerOptionSelected(option, triggerModelValue, params.selectedAgentRuntime),
-            );
-    const modelToolsUnavailable = triggerModelOption?.supportsTools === false;
-    const selectedContextWindowOption = params.contextWindow?.options.find(
-      (option) => option.id === params.contextWindow?.selected,
-    );
-    const showContextWindowBadge =
-      selectedContextWindowOption !== undefined &&
-      params.contextWindow?.selected !== params.contextWindow?.defaultId;
-    const triggerTitle = [
-      params.triggerStatusLabel ?? params.triggerModelLabel,
-      modelToolsUnavailable ? t("chat.modelControls.chatOnly") : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    return {
-      triggerModelOption,
-      selectedContextWindowOption,
-      showContextWindowBadge,
-      triggerTitle,
-    };
+    return triggerModelValue === ""
+      ? undefined
+      : params.modelOptions.find((option) =>
+          isModelPickerOptionSelected(
+            option,
+            triggerModelValue ?? params.selectedModelValue,
+            params.selectedAgentRuntime,
+          ),
+        );
   });
-  const closeModelPickerAfterSelection = (event: MouseEvent) => {
-    // Option buttons live inside the picker overlay; its summary lives outside it.
-    if (event.currentTarget instanceof Element) {
-      findOverlayParent(event.currentTarget)?.request(false);
-    }
-    if (event.detail === 0) {
-      summary.focus({ preventScroll: true });
-    }
+  const contextWindowBadge = createMemo(() => {
+    const contextWindow = params.contextWindow;
+    return contextWindow?.selected === contextWindow?.defaultId
+      ? undefined
+      : contextWindow?.options.find((option) => option.id === contextWindow.selected);
+  });
+  const triggerLabel = () => params.triggerStatusLabel ?? params.triggerModelLabel;
+  const triggerAriaLabel = () => {
+    const label = triggerLabel();
+    const detail =
+      label && triggerModel()?.supportsTools === false
+        ? `${label} · ${t("chat.modelControls.chatOnly")}`
+        : label;
+    return `${t("chat.selectors.model")}${detail ? `: ${detail}` : ""}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`;
+  };
+  const showProviderIcon = () => {
+    const model = triggerModel();
+    return Boolean(
+      !params.triggerStatusLabel &&
+      model &&
+      (model.presentation || hasProviderBrandIcon(model.provider)),
+    );
   };
   return (
     <ChatModelSearchContext value={search}>
       <details
         ref={(element) => {
-          details = element;
           search.detailsRef(element);
           pickerOverlay.details(element);
         }}
@@ -168,7 +169,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         onKeyDown={handleModelPickerKeydown}
       >
         <summary
-          ref={[(element) => (summary = element), search.summaryRef, pickerOverlay.trigger]}
+          ref={[search.summaryRef, pickerOverlay.trigger]}
           class="chat-controls__inline-select-trigger chat-controls__model-trigger"
           data-chat-model-select="true"
           data-chat-model-locked={params.modelSelectionLocked ? "true" : "false"}
@@ -178,30 +179,25 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
               ? "true"
               : "false"
           }
-          aria-label={`${t("chat.selectors.model")}: ${state().triggerTitle}${params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""}`}
+          aria-label={triggerAriaLabel()}
           aria-busy="false"
           aria-disabled={params.disabled ? "true" : "false"}
           aria-description={params.disabledReason}
         >
-          {!params.triggerStatusLabel &&
-          state().triggerModelOption &&
-          (state().triggerModelOption!.presentation ||
-            hasProviderBrandIcon(state().triggerModelOption!.provider)) ? (
+          <Show when={showProviderIcon()}>
             <ProviderBrandIcon
-              provider={state().triggerModelOption!.provider}
-              presentation={state().triggerModelOption!.presentation}
+              provider={triggerModel()!.provider}
+              presentation={triggerModel()!.presentation}
               class="chat-controls__trigger-provider-icon"
             />
-          ) : undefined}
-          <span class="chat-controls__inline-select-label">
-            {params.triggerStatusLabel ?? params.triggerModelLabel}
-          </span>
-          {state().showContextWindowBadge ? (
+          </Show>
+          <span class="chat-controls__inline-select-label">{triggerLabel()}</span>
+          {contextWindowBadge() ? (
             <span
               class="chat-controls__locked-model-badge chat-controls__model-context-badge"
               data-chat-model-context-badge
             >
-              {state().selectedContextWindowOption?.label}
+              {contextWindowBadge()?.label}
             </span>
           ) : undefined}
           <span class="chat-controls__inline-select-chevron" aria-hidden="true">
@@ -229,14 +225,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
               )}
             >
               <Loading>
-                <ChatModelPickerPanel
-                  params={params}
-                  onSelectionClose={closeModelPickerAfterSelection}
-                  searchRef={(element) => {
-                    searchInput = element;
-                    queueMicrotask(focusSearch);
-                  }}
-                />
+                <ChatModelPickerPanel params={params} />
               </Loading>
             </Errored>
           </Show>
