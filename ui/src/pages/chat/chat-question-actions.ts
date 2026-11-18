@@ -45,9 +45,10 @@ export function createChatQuestionActions({
       }
       // Snapshot only this conversation's docked questions before sending. A new
       // question raised by the replacement turn must remain answerable.
-      const pending = parseSlashCommand(state.chatMessage)
-        ? []
-        : prompts.filter((prompt) => prompt.status === "pending").map((prompt) => prompt.id);
+      const pending =
+        args[0] === "queue" || parseSlashCommand(state.chatMessage)
+          ? []
+          : prompts.filter((prompt) => prompt.status === "pending").map((prompt) => prompt.id);
       const client = questionState.client;
       const generation = questionState.clientGeneration;
       const accepted = await sendActions.onSend(...args);

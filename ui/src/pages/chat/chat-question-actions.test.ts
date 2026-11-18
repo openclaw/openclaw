@@ -127,7 +127,7 @@ it("retains a failed cancellation without failing or replaying the accepted prom
 
 it("settles a question once when another prompt sends during cancellation", async () => {
   const { actions, questionState, request } = sendingQuestion(async () => true);
-  const cancelling = createDeferred<void>();
+  const cancelling = createDeferred();
   const result = createDeferred<{ status: "cancelled" }>();
   request.mockImplementationOnce(async () => {
     cancelling.resolve();
@@ -140,6 +140,15 @@ it("settles a question once when another prompt sends during cancellation", asyn
   await Promise.all([first, second]);
   expect(request).toHaveBeenCalledOnce();
   expect(questionState.prompts.get("question-1")?.status).toBe("cancelled");
+});
+
+it("does not supersede a question for an explicitly queued message", async () => {
+  const send = vi.fn(async () => true);
+  const { actions, questionState, request } = sendingQuestion(send);
+  await expect(actions.onSend("queue")).resolves.toBe(true);
+  expect(send).toHaveBeenCalledWith("queue");
+  expect(request).not.toHaveBeenCalled();
+  expect(questionState.prompts.get("question-1")?.status).toBe("pending");
 });
 
 it("does not supersede a question for a slash command", async () => {

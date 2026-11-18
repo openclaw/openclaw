@@ -204,8 +204,8 @@ the Gateway questions already docked in that conversation, including child-sessi
 questions shown there. They are cancelled through the normal question lifecycle,
 not answered: an ordinary question returns `status: "no_answer"`, and a required
 manual step remains `action_unresolved`. A new prompt never grants approval, requests
-verification, or proves the manual step complete. Blank, rejected, and command
-submissions do not dismiss questions. Questions arriving during the send remain
+verification, or proves the manual step complete. Blank, rejected, command, and
+explicitly queued submissions do not dismiss questions. Questions arriving during the send remain
 answerable; failed cancellation leaves the question and its error visible.
 
 Gateway question records include the optional originating `runId`. Clients can

@@ -167,7 +167,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       placementStartup !== null,
     );
     const multiIdentity = this.hasMultipleIdentities();
-    const catalogDisabledReason = this.catalogComposerReason(catalogKey)?.text ?? null;
+    const catalogReason = this.catalogComposerReason(catalogKey);
     const { closePanelSlot, openPanelSlot, onFindWorkspaceFile, sessionWorkspace } =
       createChatPaneRails({
         state,
@@ -268,7 +268,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       workspaceConflict: Boolean(workspaceConflict),
     });
     const sessionDisabledBanner = this.sessionDisabledBanner({
-      catalogDisabledReason,
+      catalogDisabledReason: catalogReason?.text ?? null,
       modelSetupRequired,
       selectedSessionArchived,
       selectedSessionId: selectedSession?.sessionId?.trim() || undefined,
@@ -326,7 +326,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       canSend: composerAccess && available,
       modelRequiredReason: catalog || suggestionViewer ? undefined : requiredReason,
       disabledReason:
-        catalogDisabledReason ??
+        catalogReason?.text ??
         (!composerAccess ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
         disabledReason ??
         placementComposer.busyMessage ??
