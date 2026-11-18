@@ -131,7 +131,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
   }
 }
 
-/** Without journal data or WAL frames, the verified family proves no commit; the index can come or go. */
+/** The verified family binds durable bytes independently of the WAL index. */
 function sameWalCommitPublication(
   before: Buffer | null,
   after: Buffer | null,
@@ -140,8 +140,22 @@ function sameWalCommitPublication(
   if (before === null ? after === null : after?.equals(before)) {
     return true;
   }
-  if (generation.journal || (generation.wal?.size ?? 0n) !== 0n) {
+  if (generation.journal) {
     return false;
+  }
+  if ((generation.wal?.size ?? 0n) !== 0n) {
+    // Rebuilding the index over the same committed frames resets iChange (8–11)
+    // and recomputes the header checksum (40–47). All commit fields must match.
+    return (
+      before !== null &&
+      after !== null &&
+      before[12] === 1 &&
+      before.readUInt32LE(16) !== 0 &&
+      before.readUInt32LE(8) !== 0 &&
+      after.readUInt32LE(8) === 0 &&
+      before.subarray(0, 8).equals(after.subarray(0, 8)) &&
+      before.subarray(12, 40).equals(after.subarray(12, 40))
+    );
   }
   // The last close removes the index, even one with commit evidence; bind the closed state.
   // A non-writing open builds one whose iChange and commit checksum stay zero.

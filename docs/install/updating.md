@@ -597,6 +597,10 @@ the stale backup. Existing integrity, schema, and maintenance-ownership checks
 still apply, as do checks for writes after maintenance admission. The candidate must contain
 this repair; the installed updater's capture and backup checks are unchanged.
 Empty WAL-index transitions without write evidence remain rollback-eligible.
+When a read-only connection rebuilds the index over retained WAL frames during a
+generation read, Doctor can verify publication if the database family and the
+last committed frame stay the same. The runtime verifying the generation must
+contain this repair.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
