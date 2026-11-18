@@ -68,7 +68,9 @@ export class CodexRetainedThreadResumeRefusedError extends Error {
     // Existing worker error projection preserves messages, not custom Error fields.
     super(
       "Retained Codex thread cannot be resumed under its current policy or native state; " +
-        `no input was submitted and a fresh thread is refused (reason=${reason})`,
+        `no input was submitted and a fresh thread is refused (reason=${reason}). ` +
+        "Restore the retained worker native state and retry with a compatible policy, or start a separate conversation. " +
+        "The saved binding has been preserved.",
     );
     this.name = "CodexRetainedThreadResumeRefusedError";
   }

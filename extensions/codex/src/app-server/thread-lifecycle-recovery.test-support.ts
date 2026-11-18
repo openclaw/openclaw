@@ -162,6 +162,9 @@ export function registerThreadRecoveryBindingTests({
             ? "canonical bounded available history"
             : "no input was submitted and a fresh thread is refused",
       );
+      if (scenario !== "seed failure" && scenario !== "missing budget") {
+        await expect(result).rejects.toThrow("start a separate conversation");
+      }
       expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe("old-worker-thread");
       expect(fixture.request.mock.calls.map(([method]) => method)).not.toContain("turn/start");
     }

@@ -1,2 +1,2 @@
-# Native startup/binding continuity, bounded diagnostics, and provider-confirmed loss receipt publication, restart, redispatch and refusal contracts.
-314
+# Native startup/binding continuity, bounded diagnostics, provider-confirmed loss persistence, and actionable retained-state refusal guidance.
+330

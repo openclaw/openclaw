@@ -186,7 +186,8 @@ export async function runCodexNodeAppServer(params: {
       (!priorHome?.isDirectory() || priorHome.isSymbolicLink())
     ) {
       throw new Error(
-        "Retained Codex session home is missing; no input was submitted and replacement is refused",
+        "Retained Codex session home is missing; no input was submitted and replacement is refused. " +
+          "Restore the retained worker native state and retry, or start a separate conversation; the saved binding has been preserved.",
       );
     }
     await fs.mkdir(home, { recursive: true, mode: 0o700 });
@@ -391,7 +392,8 @@ export async function runCodexNodeAppServer(params: {
                     error: {
                       code: -32001,
                       message:
-                        "Retained Codex session requires its existing thread; a fresh thread was refused before input submission.",
+                        "Retained Codex session requires its existing thread; a fresh thread was refused before input submission. " +
+                        "Reconnect the retained worker and retry, or start a separate conversation; the saved binding has been preserved.",
                     },
                   }),
                 ),

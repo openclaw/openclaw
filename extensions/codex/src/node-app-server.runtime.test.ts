@@ -301,7 +301,10 @@ describe("Codex worker model process", () => {
           await request(1, "initialize", buildCodexAppServerInitializeParams());
           await notify("initialized");
           await expect(request(99, "thread/start", {})).resolves.toMatchObject({
-            error: { code: -32001 },
+            error: {
+              code: -32001,
+              message: expect.stringContaining("start a separate conversation"),
+            },
           });
           await expect(request(2, "thread/resume", { threadId })).resolves.toMatchObject({
             result: { thread: { id: threadId } },
@@ -327,6 +330,16 @@ describe("Codex worker model process", () => {
             params: { threadId, turn: { status: "completed" } },
           });
         });
+        const nativeHome = path.join(
+          root,
+          ".openclaw-worker",
+          "codex",
+          createHash("sha256").update("worker-session").digest("hex"),
+        );
+        await fs.rename(nativeHome, `${nativeHome}.retained`);
+        await expect(runConnection(async () => undefined)).rejects.toThrow(
+          "start a separate conversation",
+        );
       },
     );
   }, 45_000);

@@ -140,7 +140,7 @@ it("persists provider-confirmed lineage through restart, failed-spare retry and 
   const replacement = await activate(store, requested, "replacement-worker");
   const sandbox = await createRemoteExecPlacementSandbox({
     placement: replacement,
-    environments: support.testState.store,
+    environments: providerService(),
     workspaceDir: "/local/workspace",
   });
   expect(sandbox.nativeWorkerPlacement?.recovery).toEqual(recovery);
