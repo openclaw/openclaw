@@ -1,7 +1,17 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { GatewayService } from "../../daemon/service.js";
-import type { UpdateStateVerification } from "../../infra/update-data-at-risk.js";
+import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
+import {
+  verifyUpdateStateConsistency,
+  type UpdateStateVerification,
+} from "../../infra/update-data-at-risk.js";
+import {
+  dataAtRiskVerifiedStep,
+  findLatestUnverifiedDataAtRisk,
+} from "../../infra/update-run-data-at-risk.js";
+import { listUpdateRuns, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
+import { formatCliCommand } from "../command-format.js";
 import { confirmGatewayReachable } from "../daemon-cli/restart-health-probe.js";
 import {
   readGatewayServiceStateForUpdate,
@@ -76,4 +86,60 @@ export function formatDataAtRiskRefusal(params: {
       ? `Verification against installed OpenClaw ${VERSION} could not complete: ${verification.detail}.`
       : `Verification against installed OpenClaw ${VERSION} found that ${verification.detail}.`;
   return `Update ${params.runId} recorded data at risk (${params.mark}). ${finding} ${describeGateway(params.gateway)} ${params.unchanged} ${verification.nextAction}`;
+}
+
+/**
+ * Before a plain update creates its run: verify the newest unverified data-at-risk mark.
+ * Consistent: report one line and return the recorder for the receipt on the new run.
+ * Newer state or an unreadable database: warn and continue, since the update's own
+ * schema checks still guard activation and updating is the named fix. Any other
+ * finding refuses with nothing changed.
+ */
+export async function verifyRecordedDataAtRiskBeforeUpdate(
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number | undefined,
+): Promise<((runId: string) => void) | undefined> {
+  const latest = findLatestUnverifiedDataAtRisk(listUpdateRuns({ limit: 100 }, { env }));
+  if (!latest) {
+    return undefined;
+  }
+  const verification = await verifyUpdateStateConsistency({
+    env,
+    formatCommand: (command) => formatCliCommand(command, env),
+  });
+  const markedRunId = latest.run.runId;
+  if (verification.status === "consistent") {
+    const detail = formatDataAtRiskResolved({
+      runId: markedRunId,
+      mark: latest.mark,
+      verification,
+    });
+    defaultRuntime.error(detail);
+    return (runId) =>
+      recordUpdateRunStep(
+        runId,
+        {
+          step: dataAtRiskVerifiedStep(markedRunId),
+          status: "completed",
+          endedAtMs: Date.now(),
+          detail,
+        },
+        { env },
+      );
+  }
+  const continues = verification.status === "unverifiable" || verification.newerState === true;
+  const refusal = formatDataAtRiskRefusal({
+    runId: markedRunId,
+    mark: latest.mark,
+    verification,
+    gateway: await observeGatewayForGuidance({ service: resolveGatewayService(), env, timeoutMs }),
+    unchanged: continues
+      ? "The update continues; its own checks still guard activation."
+      : "The update changed nothing.",
+  });
+  if (!continues) {
+    throw new Error(refusal);
+  }
+  defaultRuntime.error(`Warning: ${refusal}`);
+  return undefined;
 }

@@ -28,6 +28,8 @@ export type UpdateStateVerification =
       detail: string;
       /** One sentence naming the command that makes progress from this state. */
       nextAction: string;
+      /** State is newer than the installed build: an update to a build that supports it is the fix. */
+      newerState?: true;
     };
 
 function retryRepair(formatCommand: (command: string) => string): string {
@@ -49,6 +51,7 @@ function classify(
   if (schemas.incompatible.length > 0) {
     return {
       status: "inconsistent",
+      newerState: true,
       detail: schemas.incompatible.map(describeAhead).join("; "),
       // The installed build cannot open newer state; a build that supports it can.
       nextAction: `Run \`${formatCommand("openclaw update")}\` to install a version that supports this state, or restore the pre-update backup.`,

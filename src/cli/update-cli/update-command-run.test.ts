@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
+import * as dataAtRisk from "../../infra/update-data-at-risk.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
@@ -26,6 +27,7 @@ import {
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
@@ -170,6 +172,90 @@ it("keeps restored-generation completion with its helper across CLI unwind", () 
   finishUpdateRun(run.runId, { status: "rolled-back", reason: result.reason }, { env });
   completeUpdateCommandRun(result, run);
   expect(getUpdateRun(run.runId, { env })?.status).toBe("rolled-back");
+});
+
+function markedFailedUpdate(prefix: string) {
+  const root = dirs.make(prefix);
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+  vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
+  // The row shape published updaters leave after a failed post-activation schema read.
+  const marked = createUpdateRun({ trigger: "cli" });
+  recordUpdateRunVerification(marked.runId, {
+    recovery: {
+      serviceRestartSafe: false,
+      reason: "state-migration-started",
+      dataAtRisk: "rollback-state-unverified",
+    },
+  });
+  finishUpdateRun(marked.runId, { status: "failed", reason: "rollback-state-unverified" });
+  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  return { root, marked, error };
+}
+
+it("verifies a recorded data-at-risk mark before the next update and records the receipt", async () => {
+  const { root, marked, error } = markedFailedUpdate("update-admission-marked-");
+
+  const next = await admitUpdateCommandRun({ env: process.env, opts: {}, root });
+
+  expect(error).toHaveBeenCalledWith(
+    expect.stringMatching(
+      new RegExp(
+        `^Update ${marked.runId} recorded data at risk \\(rollback-state-unverified\\); verification found the state schemas match .* so that mark is resolved\\.$`,
+      ),
+    ),
+  );
+  expect(getUpdateRun(next.runId)?.steps).toContainEqual(
+    expect.objectContaining({
+      step: `finalize:data-at-risk-verified:${marked.runId}`,
+      status: "completed",
+    }),
+  );
+  // History is not rewritten, and the receipt keeps a later update from checking again.
+  expect(getUpdateRun(marked.runId)?.verification.recovery).toMatchObject({
+    dataAtRisk: "rollback-state-unverified",
+  });
+  finishUpdateRun(next.runId, { status: "skipped", reason: "already-current" });
+  error.mockClear();
+  await admitUpdateCommandRun({ env: process.env, opts: {}, root });
+  expect(error).not.toHaveBeenCalledWith(expect.stringContaining("recorded data at risk"));
+});
+
+it.each([
+  { finding: "unfinished migration", refuses: true },
+  { finding: "newer state", refuses: false },
+] as const)("handles a recorded mark whose verification finds $finding", async ({ refuses }) => {
+  const { root, marked, error } = markedFailedUpdate("update-admission-marked-refused-");
+  vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue({
+    status: "inconsistent",
+    detail: "the state database is at schema 7",
+    nextAction: "Run `openclaw doctor --fix` to finish the migration.",
+    ...(refuses ? {} : { newerState: true as const }),
+  });
+  const runsBefore = updateRunLedger.listUpdateRuns({ limit: 100 }).length;
+
+  const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
+
+  if (refuses) {
+    await expect(admission).rejects.toThrow(
+      `Update ${marked.runId} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw`,
+    );
+    await expect(admission).rejects.toThrow(
+      "The update changed nothing. Run `openclaw doctor --fix` to finish the migration.",
+    );
+    expect(updateRunLedger.listUpdateRuns({ limit: 100 })).toHaveLength(runsBefore);
+    return;
+  }
+  const next = await admission;
+  expect(error).toHaveBeenCalledWith(
+    expect.stringContaining("The update continues; its own checks still guard activation."),
+  );
+  // Unverified, so no receipt: the next repair or update checks again.
+  expect(
+    getUpdateRun(next.runId)?.steps.some((step) =>
+      step.step.startsWith("finalize:data-at-risk-verified:"),
+    ),
+  ).toBe(false);
 });
 
 it.each([false, true])(
