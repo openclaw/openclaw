@@ -1,11 +1,21 @@
 // Capacity policy reads this state without importing the queue runtime.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CommandQueueAdmissionOptions, CommandQueueWait } from "./command-queue.types.js";
-import { CommandLane, SUBAGENT_LANE_PREFIX, SWARM_LANE_PREFIX } from "./lanes.js";
+import {
+  CommandLane,
+  CRON_NESTED_LANE_PREFIX,
+  SUBAGENT_LANE_PREFIX,
+  SWARM_LANE_PREFIX,
+} from "./lanes.js";
 
 export function getDefaultLaneConcurrency(lane: string): number {
   if (lane === "restart-recovery") {
     return 4;
+  }
+  // Per-agent cron lanes are scoped like subagent lanes: each agent keeps its
+  // own width, while the shared cron group still bounds the aggregate.
+  if (lane.startsWith(CRON_NESTED_LANE_PREFIX)) {
+    return getQueueState().lanes.get(CommandLane.CronNested)?.maxConcurrent ?? 1;
   }
   return lane.startsWith(SUBAGENT_LANE_PREFIX) && !lane.startsWith(SWARM_LANE_PREFIX)
     ? (getQueueState().lanes.get(CommandLane.Subagent)?.maxConcurrent ?? 1)
@@ -77,6 +87,13 @@ export type LaneGroupState = {
   group: string;
   budget: number;
   members: Set<string>;
+  /**
+   * Lanes whose names start with one of these prefixes also belong to the
+   * group. Per-agent cron lanes are named at run time, so an exact member
+   * list cannot enumerate them; a prefix keeps them inside the same shared
+   * budget without publishing every agent id up front.
+   */
+  memberPrefixes: string[];
   reservations: Map<string, number>;
 };
 
@@ -187,6 +204,7 @@ const queueState = resolveGlobalSingleton(COMMAND_QUEUE_STATE_KEY, () => ({
   nextQueueSequence: 1,
   laneGroups: new Map<string, LaneGroupState>(),
   laneGroupByLane: new Map<string, string>(),
+  laneGroupByPrefix: new Map<string, string>(),
 }));
 
 export function getQueueState() {
