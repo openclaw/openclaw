@@ -352,7 +352,7 @@ it.each(["legacy updater", "current updater", "activation fails", "mode repair",
     if (scenario === "backup fails") {
       const writeFile = fs.writeFile.bind(fs);
       vi.spyOn(fs, "writeFile").mockImplementation(async (file, data, options) => {
-        if (String(file).startsWith(`${f.sourcePath}.reconcile-`)) {
+        if (typeof file === "string" && file.startsWith(`${f.sourcePath}.reconcile-`)) {
           throw new Error("injected backup failure");
         }
         return await writeFile(file, data, options);
