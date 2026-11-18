@@ -1,3 +1,4 @@
+export { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
 export { stripGatewayAllocatorEnv } from "../process/child-env.js";
 export { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 export {
