@@ -25,7 +25,7 @@ import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.t
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("recalls older prompts after returning to the draft", async () => {
+  it("recalls unloaded older prompts without loading the transcript", async () => {
     const page = await newChatPage(suite, {
       locale: "en-US",
       serviceWorkers: "block",
@@ -86,23 +86,12 @@ suite.define(() => {
     await waitForChatScrollIdle(page);
     expect(await gateway.getRequests("chat.history")).toHaveLength(0);
     await recallPrompt("ArrowUp", "Latest prompt");
-    await recallPrompt("ArrowDown", "");
-
-    await gateway.deferNext("chat.history");
-    await thread.hover();
-    await page.mouse.wheel(0, -1_000_000);
-    await waitForRequests(gateway, "chat.history", 1);
-    await gateway.resolveDeferred("chat.history");
-    await waitForChatScrollIdle(page);
-    await thread.hover();
-    await page.mouse.wheel(0, -1_000_000);
-    await thread.getByText("Earlier prompt", { exact: true }).waitFor();
+    await recallPrompt("ArrowUp", "Recent prompt");
+    await recallPrompt("ArrowUp", "Earlier prompt");
+    expect(await thread.getByText("Earlier prompt", { exact: true }).count()).toBe(0);
     const requests = await gateway.getRequests("chat.history");
     expect(requests).toHaveLength(1);
     expect(requests[0]?.params).toMatchObject({ cursor: "older-recall" });
-    await recallPrompt("ArrowUp", "Latest prompt");
-    await recallPrompt("ArrowUp", "Recent prompt");
-    await recallPrompt("ArrowUp", "Earlier prompt");
     await recallPrompt("ArrowDown", "Recent prompt");
     await recallPrompt("ArrowDown", "Latest prompt");
     await recallPrompt("ArrowDown", "");

@@ -1,5 +1,6 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
 import { keepMobileReturnNative } from "../../../lib/browser-platform.ts";
+import { composerInputHasFocus } from "../../../lib/composer-input.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
@@ -134,11 +135,25 @@ export function createComposerKeyDownHandler({
       });
       if (result.handled) {
         state.editRevision += 1;
+        const revision = state.editRevision;
         if (result.preventDefault) {
           event.preventDefault();
         }
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
+        }
+        if (result.completion) {
+          void result.completion.then((completed) => {
+            if (
+              completed.handled &&
+              completed.restoreCaret &&
+              state.editRevision === revision &&
+              target.isConnected &&
+              composerInputHasFocus(target)
+            ) {
+              restoreHistoryCaret(target, completed.restoreCaret);
+            }
+          });
         }
         return;
       }
