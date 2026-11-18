@@ -76,35 +76,27 @@ vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => {
 
 const SESSION_KEY = "agent:main:dashboard:test";
 
-function conflictingAttempt(failures: number) {
-  const state = { calls: 0 };
-  const attempt = async () => {
-    state.calls += 1;
-    if (state.calls <= failures) {
-      throw new ReplySessionInitConflictError(SESSION_KEY);
+function conflictingAttempt(
+  failures: number,
+  error: unknown = new ReplySessionInitConflictError(SESSION_KEY),
+) {
+  let calls = 0;
+  return vi.fn(async () => {
+    if (++calls <= failures) {
+      throw error;
     }
     return "ok" as const;
-  };
-  return { attempt, state };
+  });
 }
 
 const instantSleep = async (_ms: number) => {};
 
 describe("runWithSessionInitConflictRetry", () => {
-  it("retries conflict messages rejected as strings", async () => {
-    const attempt = vi
-      .fn<() => Promise<string>>()
-      .mockRejectedValueOnce(`reply session initialization conflicted for ${SESSION_KEY}`)
-      .mockResolvedValue("ok");
-
-    await expect(runWithSessionInitConflictRetry(attempt, { sleep: instantSleep })).resolves.toBe(
-      "ok",
-    );
-    expect(attempt).toHaveBeenCalledTimes(2);
-  });
-
-  it("executes an attempt after every caller-provided retry delay", async () => {
-    const { attempt, state } = conflictingAttempt(3);
+  it.each([
+    new ReplySessionInitConflictError(SESSION_KEY),
+    `reply session initialization conflicted for ${SESSION_KEY}`,
+  ])("executes every retry delay for typed and serialized conflicts: %s", async (error) => {
+    const attempt = conflictingAttempt(3, error);
     const delays: number[] = [];
     await expect(
       runWithSessionInitConflictRetry(attempt, {
@@ -114,7 +106,7 @@ describe("runWithSessionInitConflictRetry", () => {
         },
       }),
     ).resolves.toBe("ok");
-    expect(state.calls).toBe(4);
+    expect(attempt).toHaveBeenCalledTimes(4);
     expect(delays).toEqual([1, 2, 3]);
   });
 
@@ -149,7 +141,7 @@ describe("runWithSessionInitConflictRetry", () => {
 
   it("applies capped exponential backoff between attempts", async () => {
     const delays: number[] = [];
-    const { attempt, state } = conflictingAttempt(Number.POSITIVE_INFINITY);
+    const attempt = conflictingAttempt(Number.POSITIVE_INFINITY);
     using _ = vi.spyOn(Math, "random").mockReturnValue(0);
 
     await expect(
@@ -159,7 +151,7 @@ describe("runWithSessionInitConflictRetry", () => {
         },
       }),
     ).rejects.toBeInstanceOf(ReplySessionInitConflictError);
-    expect(state.calls).toBe(5);
+    expect(attempt).toHaveBeenCalledTimes(5);
     expect(delays).toEqual([250, 500, 1_000, 2_000]);
   });
 });
