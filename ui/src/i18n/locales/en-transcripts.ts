@@ -24,9 +24,6 @@ const enTranscripts = {
     nextPage: "Next page",
     emptyHint:
       "Try clearing the filters, or set up a source in Meeting capture. Agent conversations are on the Sessions page.",
-    choose: "Select a transcript",
-    chooseHint:
-      "Select a transcript to read the conversation, search its text, or download a copy.",
     forbidden: "Transcript access is restricted",
     forbiddenHint:
       "You need read access and permission to read the shared archive. Ask an admin to review your access.",
