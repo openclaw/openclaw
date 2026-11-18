@@ -1625,6 +1625,7 @@ src/plugins/bundled-plugin-scan.ts
 src/plugins/bundled-provider-compat.ts
 src/plugins/bundled-source-overlays.ts
 src/plugins/candidate-install-owner.ts
+src/plugins/capability-summary.ts
 src/plugins/channel-catalog-registry.ts
 src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
@@ -1683,6 +1684,7 @@ src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
 src/plugins/hardlink-policy.ts
+src/plugins/hook-policy-decisions.ts
 src/plugins/host-hook-cleanup-result.ts
 src/plugins/host-hook-cleanup-timeout.ts
 src/plugins/host-hook-json.ts

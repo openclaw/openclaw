@@ -171,7 +171,8 @@ the Control UI and never delivers a reply. Cache reuse is not guaranteed:
 compaction, images and one-shot payload hooks can still change bytes, so use the
 returned cache-read usage to measure actual reuse.
 
-Conversation access is required through
+Conversation access is required: approved through the plugin's capability review
+when its manifest declares `contracts.conversationAccess: ["read"]`, or set with
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
 bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain

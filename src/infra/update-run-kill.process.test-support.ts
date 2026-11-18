@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -24,16 +25,24 @@ import {
 // set to `stopped` records the managed Gateway stop that precedes activation
 // and `restarted` also the verified restart that follows it, and `installed`
 // set to `candidate` puts the candidate's version in the package, as the core
-// mutation does. `end` set to `killed` then SIGKILLs the child; `stalled`
-// reports and stays alive until its parent kills it.
+// mutation does. For a source checkout, `checkout` names the built candidate
+// commit: the child checks it out and installs its build before the cohort, as
+// the Git activation does, and records the activation fact unless `marker` is
+// `none` (an older updater) or names another build. `end` set to `killed` then
+// SIGKILLs the child; `stalled` reports and stays alive until its parent kills it.
 const [installKey, authority, options] = process.argv.slice(2);
 assert(installKey && authority && options);
-const { end, candidate, installed, trigger, gateway } = JSON.parse(options) as {
+const { end, candidate, installed, trigger, gateway, checkout } = JSON.parse(options) as {
   end: "killed" | "stalled";
   candidate: string;
   installed: "previous" | "candidate";
   trigger: "cli" | "api";
   gateway: "untouched" | "stopped" | "restarted";
+  checkout?: {
+    sha: string;
+    buildId: string;
+    marker?: "none" | { buildId?: string; previousBuildId?: string };
+  };
 };
 const manifest = path.join(installKey, "package.json");
 const { version, buildId = null } = await readPackageUpdateIdentity(installKey);
@@ -49,12 +58,29 @@ await withUpdateCommandExecutor(
     createUpdateRun({ runId, trigger, origin: { driver: readUpdateRunDriver() } }, ledger);
     adoptUpdateRun(runId, ledger);
     recordUpdateRunPhase(runId, "activating", {}, ledger);
+    if (checkout) {
+      execFileSync("git", ["-C", installKey, "checkout", "-q", "--detach", checkout.sha]);
+      const { sha: head } = checkout;
+      for (const [file, value] of Object.entries({
+        "build-info.json": { commit: head, buildId: checkout.buildId },
+        ".buildstamp": { head },
+        ".runtime-postbuildstamp": { head },
+      })) {
+        fs.writeFileSync(path.join(installKey, "dist", file), JSON.stringify(value));
+      }
+      const { marker = {} } = checkout;
+      if (marker !== "none") {
+        const recorded = { buildId: checkout.buildId, previousBuildId: buildId, ...marker };
+        const gitActivation = { sha: head, ...recorded };
+        recordUpdateRunPhase(runId, "activating", { origin: { gitActivation } }, ledger);
+      }
+    }
     const cohort = { runId, installKey, env: process.env };
     await beginUpdatePluginCohort({
       ...cohort,
       fence,
       from: { ...runtime, version, buildId },
-      to: { ...runtime, version: candidate, buildId: null },
+      to: { ...runtime, version: candidate, buildId: checkout?.buildId ?? null },
     });
     if (gateway !== "untouched") {
       const stopped = { step: "service-stop", status: "completed", endedAtMs: Date.now() } as const;
@@ -66,12 +92,17 @@ await withUpdateCommandExecutor(
         gateway: { mode: "local" },
       }),
     );
-    if (installed === "candidate") {
+    if (installed === "candidate" && !checkout) {
       const installedManifest = JSON.parse(fs.readFileSync(manifest, "utf8"));
       fs.writeFileSync(manifest, JSON.stringify({ ...installedManifest, version: candidate }));
     }
     if (gateway === "restarted") {
-      const serving = { serviceRunning: true, versionMatch: true, runningVersion: candidate };
+      const serving = {
+        serviceRunning: true,
+        versionMatch: true,
+        runningVersion: candidate,
+        ...(checkout ? { runningBuildId: checkout.buildId } : {}),
+      };
       recordUpdateRunVerification(runId, { ...serving, settled: true }, ledger);
     }
     fs.writeSync(1, `${JSON.stringify({ runId })}\n`);

@@ -328,6 +328,13 @@ When sender identity is available, agent hook contexts also include:
 - `ctx.channelContext.chat.id` - the same conversation ID as `ctx.chatId`,
   under a channel-owned object plugins can extend with channel-specific
   fields.
+- `ctx.requesterDeviceId` - the paired device id of the Gateway connection
+  that sent the turn, set only after the Gateway verified that device's
+  signature. It never comes from request params or the client's declared
+  name, and it is absent for runs that did not start from a device
+  connection. It is also absent once another device or a device-less
+  source steers input into the run, so it always names the device that
+  wrote the input, or nothing.
 
 Core only defines the nested `id` fields. Channel plugins that pass richer
 sender or chat metadata through the inbound helper can augment

@@ -33,8 +33,10 @@ import {
 } from "./hook-isolation.js";
 import { createModelHookBindings } from "./hook-model.js";
 import { createPluginSystemContextLimiter, mergeAgentTurnPrepare } from "./hook-prompt-context.js";
-import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-registry.types.js";
+import { getHooksForName, getHooksForNameAndPlugin } from "./hook-registration-select.js";
+import type { GlobalHookRunnerRegistry } from "./hook-registry.types.js";
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
+import { projectHookRequesterDevice } from "./hook-requester-device.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
   HookFailurePolicy,
@@ -81,13 +83,8 @@ import {
   withPluginSubagentRequesterContext,
 } from "./runtime/subagent-requester-context.js";
 import { projectSessionEndTranscriptContext } from "./session-end-transcript.js";
-import {
-  createPluginToolMatcherScope,
-  pluginToolMatcherCoversTool,
-  type PluginToolMatcherScope,
-} from "./tool-hook-matcher.js";
-
 export type { VoidHookRunOptions } from "./hook-runner-types.js";
+export { getToolHookMatcherScope } from "./hook-registration-select.js";
 
 const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> =
   Object.fromEntries(
@@ -131,36 +128,6 @@ type PluginTargetedInboundClaimOutcome =
 type SyncHookName = "tool_result_persist" | "before_message_write";
 type SyncHookMessage = PluginHookToolResultPersistEvent["message"];
 type SyncMessageHookStepResult = { message?: SyncHookMessage; block?: true };
-
-/** Get hooks for a specific hook name, sorted by priority (higher first). */
-function getHooksForName<K extends PluginHookName>(
-  registry: HookRunnerRegistry,
-  hookName: K,
-  ctx?: unknown,
-  toolName?: string,
-): PluginHookRegistration<K>[] {
-  return (registry.typedHooks as PluginHookRegistration<K>[])
-    .filter((hook) => hook.hookName === hookName && isHookContextEligible(hook, ctx))
-    .filter((hook) => toolName === undefined || pluginToolMatcherCoversTool(hook.matcher, toolName))
-    .toSorted((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
-}
-
-export function getToolHookMatcherScope(
-  registry: HookRunnerRegistry,
-  hookName: "before_tool_call" | "after_tool_call",
-): PluginToolMatcherScope | undefined {
-  return createPluginToolMatcherScope(
-    getHooksForName(registry, hookName).map((registration) => registration.matcher),
-  );
-}
-
-function getHooksForNameAndPlugin<K extends PluginHookName>(
-  registry: HookRunnerRegistry,
-  hookName: K,
-  pluginId: string,
-): PluginHookRegistration<K>[] {
-  return getHooksForName(registry, hookName).filter((hook) => hook.pluginId === pluginId);
-}
 
 export function createHookRunner(
   registry: GlobalHookRunnerRegistry,
@@ -446,11 +413,12 @@ export function createHookRunner(
   async function runVoidHook<K extends PluginHookName>(
     hookName: K,
     event: HookEvent<K>,
-    ctx: HookContext<K>,
+    hostCtx: HookContext<K>,
     optionsValue: VoidHookRunOptions = {},
     matcherToolName?: string,
     projectContext?: VoidHookContextProjection<HookContext<K>, K>,
   ): Promise<void> {
+    const ctx = projectHookRequesterDevice(hostCtx);
     const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     if (hooks.length === 0) {
       return;
@@ -526,10 +494,11 @@ export function createHookRunner(
   async function runModifyingHook<K extends PluginHookName>(
     hookName: K,
     event: HookEvent<K>,
-    ctx: HookContext<K>,
+    hostCtx: HookContext<K>,
     policy: ModifyingHookPolicy<K> = {},
     matcherToolName?: string,
   ): Promise<HookResult<K> | undefined> {
+    const ctx = projectHookRequesterDevice(hostCtx);
     const hooks = getHooksForName(registry, hookName, undefined, matcherToolName);
     const selectedHooks = policy.includeRegistration
       ? hooks.filter(policy.includeRegistration)

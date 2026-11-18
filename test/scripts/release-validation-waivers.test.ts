@@ -430,7 +430,7 @@ describe("2026.10.33 mobile validation exception", () => {
   });
 });
 
-it.each(["2026.10.33", "2026.11.5"])(
+it.each(["2026.10.33", "2026.11.5", "2026.11.6"])(
   "admits only the authorized %s Kova failure without skipping qualification",
   (targetVersion) => {
     const kova = {
@@ -442,7 +442,7 @@ it.each(["2026.10.33", "2026.11.5"])(
     expect(kova.conclusion).toBe("failure");
     expect(kova.jobs).toMatchObject([{ conclusion: "failure" }]);
     expect(releaseQualificationExemptions(targetVersion, "stable")).toEqual([]);
-    expect(terminalPolicyPass(kova, "2026.11.6")).toBe(false);
+    expect(terminalPolicyPass(kova, "2026.11.7")).toBe(false);
     expect(terminalPolicyPass({ ...kova, key: "normalCi" }, targetVersion)).toBe(false);
     for (const conclusion of ["cancelled", "timed_out"]) {
       expect(
