@@ -154,7 +154,7 @@ function prepareBlockedSubagentCompletion(
   if (
     !successful &&
     !params.operatorAuthorityUnavailable &&
-    ((params.suspendedReason !== undefined && !params.storeReplaced) ||
+    (params.suspendedReason !== undefined ||
       !["pending", "in_progress", "failed"].includes(subagent.delivery?.status ?? "pending"))
   ) {
     return undefined;
@@ -174,25 +174,15 @@ function prepareBlockedSubagentCompletion(
     completion.capturedAt ??= retiredEndedAt;
   }
   const delivery = ensureDeliveryState(subagent);
-  if (
-    params.storeReplaced &&
-    (delivery.status === "delivered" ||
-      delivery.announcedAt !== undefined ||
-      delivery.deliveredAt !== undefined)
-  ) {
-    return undefined;
-  }
   delivery.payload ??= loadPendingFinalDeliveryPayload(subagent);
   if (typeof params.enqueuedAt === "number") {
     delivery.enqueuedAt ??= params.enqueuedAt;
   }
   Object.assign(delivery, {
     status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
-    disposition: params.storeReplaced
-      ? ("intentional_non_delivery" as const)
-      : params.suspendedReason
-        ? ("permanent_failure" as const)
-        : (params.disposition ?? delivery.disposition),
+    disposition: params.suspendedReason
+      ? ("permanent_failure" as const)
+      : (params.disposition ?? delivery.disposition),
     lastError: params.reason,
     deliveredAt: undefined,
     announcedAt: undefined,
@@ -203,9 +193,7 @@ function prepareBlockedSubagentCompletion(
     queueId: undefined,
   });
   Object.assign(subagent, { cleanupHandled: false, wakeOnDescendantSettle: undefined });
-  if (params.storeReplaced) {
-    subagent.requesterSettleWake = undefined;
-  } else if (params.suspendedReason) {
+  if (params.suspendedReason) {
     if (isCompletedRequesterDeliveryBlocked(subagent)) {
       // This requester already ran. An ordinary settle wake would replay it;
       // a separately owned yield batch still has genuine unfinished work.
@@ -345,7 +333,6 @@ function mutateRequesterBatch(
     if (consumeSubagentPauseNotice(subagent)) {
       // A notice is one paused member's input, not settlement of its frozen cohort.
       if (
-        params.outcome.storeReplaced ||
         params.outcome.disposition === "intentional_non_delivery" ||
         params.outcome.reason === "operator_authority_unavailable"
       ) {
@@ -387,8 +374,6 @@ function mutateRequesterBatch(
             params.outcome.reason === "visible_reply_missing"
               ? { lastDropReason: params.outcome.reason }
               : {}),
-            storeReplaced: params.outcome.storeReplaced,
-            suspendedReason: params.outcome.storeReplaced ? "permanent_failure" : undefined,
           },
           now,
           subagent,

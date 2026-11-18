@@ -140,9 +140,7 @@ export function registerCompletedFollowupAuthorityTests({
           (revokeOriginal ? original.revoked : followup.revoked).abort(
             new Error("operator revoked"),
           );
-          expect(() => completionSource(revokeOriginal ? retained : successor)).toThrow(
-            /authority/,
-          );
+          expect(completionSource(revokeOriginal ? retained : successor)).toBeUndefined();
           expect(completionSource(revokeOriginal ? successor : retained)).toBe(
             revokeOriginal ? followup.authority.source : original.authority.source,
           );

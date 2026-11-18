@@ -9,6 +9,7 @@ import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
+import { GatewayOperatorAccessUnavailableError } from "./operator-access-errors.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 
@@ -22,12 +23,7 @@ export class GatewayOperatorAccessDeniedError extends Error {
   }
 }
 
-export class GatewayOperatorAccessUnavailableError extends Error {
-  constructor() {
-    super("Gateway access policy is unavailable; retry after its plugin is ready.");
-    this.name = "GatewayOperatorAccessUnavailableError";
-  }
-}
+export { GatewayOperatorAccessUnavailableError } from "./operator-access-errors.js";
 
 // A retained signal keeps its identity check alive without pinning abandoned HTTP captures.
 // An abort listener on AbortSignal.any would itself keep the composite signal alive in Node.

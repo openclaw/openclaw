@@ -56,6 +56,7 @@ import {
   retainedOperatorFixture,
   registerCompletedFollowupAuthorityTests,
 } from "./subagent-registry.completed-followup-authority.test-support.js";
+import { registerCompletionCompatibilityTests } from "./subagent-registry.completion-compatibility.test-support.js";
 import {
   adoptSubagentRunForRequesterTurn,
   registerSubagentRun,
@@ -160,6 +161,8 @@ afterEach(async () => {
 describe("registered completion source custody", () => {
   registerSubagentRegistrationOwnershipTests({ registration, updateRun });
   registerCompletedFollowupAuthorityTests({ registration, updateRun });
+
+  registerCompletionCompatibilityTests(registration);
 
   it.each([
     "current",
@@ -350,10 +353,10 @@ describe("registered completion source custody", () => {
         expect(source.authority.assertCurrent).toThrow();
         const ambient = vi.fn();
         expect(() => subagentRuns.runWithCompletionAuthority(entry, ambient)).toThrow(
-          "Subagent completion requester store was retired",
+          "Subagent completion source was retired",
         );
         expect(() => subagentRuns.runWithCompletionBatchAuthority([entry], ambient)).toThrow(
-          "Subagent completion requester store was retired",
+          "Subagent completion source was retired",
         );
         expect(ambient).not.toHaveBeenCalled();
         expect(callGateway).not.toHaveBeenCalled();
@@ -364,7 +367,7 @@ describe("registered completion source custody", () => {
         const current = subagentRuns.get(entry.runId)!;
         expect(current).not.toBe(entry);
         expect(() => subagentRuns.runWithCompletionAuthority(current, ambient)).toThrow(
-          "Subagent completion requester store was retired",
+          "Subagent completion source was retired",
         );
         expect(getGatewayContextResolver(current)).toBe(resolveGatewayContext);
         expect(ambient).not.toHaveBeenCalled();
@@ -628,25 +631,16 @@ describe("registered completion source custody", () => {
         ),
       );
       await inGateway({ ...source, client }, async () => {
-        if (scenario === "completed System parent") {
-          for (const deliver of [
-            () => subagentRuns.runWithCompletionAuthority(entry, dispatch),
-            () => subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
-          ]) {
-            await expect(deliver()).resolves.toMatchObject({
-              ok: true,
-              payload: { scopes: ["operator.write"], runtime: undefined },
-            });
-          }
-        } else {
-          expect(() =>
-            subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
-          ).toThrow(
-            scenario === "mixed System scopes"
-              ? "Subagent completion batch has incompatible operator authority"
-              : /Subagent completion authority is no longer active|Gateway continuation authority is no longer active/,
-          );
-          expect(dispatch).not.toHaveBeenCalled();
+        for (const deliver of [
+          ...(scenario === "completed System parent"
+            ? [() => subagentRuns.runWithCompletionAuthority(entry, dispatch)]
+            : []),
+          () => subagentRuns.runWithCompletionBatchAuthority([entry, sibling], dispatch),
+        ]) {
+          await expect(deliver()).resolves.toMatchObject({
+            ok: true,
+            payload: { scopes: ["operator.write"], runtime: undefined },
+          });
         }
       });
     });
@@ -920,9 +914,12 @@ describe("registered completion source custody", () => {
           } else {
             await markCancelled(other.runId);
             if (differentSource) {
-              expect(() =>
-                subagentRuns.runWithCompletionBatchAuthority([entry, other], () => "wrong caller"),
-              ).toThrow(/incompatible operator authority/);
+              subagentRuns.runWithCompletionBatchAuthority([entry, other], () => {
+                expect(completionAuthority()).toBeUndefined();
+                expect(getPluginRuntimeGatewayRequestScope()?.client?.connect.scopes).toEqual([
+                  "operator.write",
+                ]);
+              });
             } else {
               subagentRuns.runWithCompletionBatchAuthority([other, entry], () =>
                 expect(completionAuthority()?.source).toBe(source.authority.source),
@@ -969,9 +966,18 @@ describe("registered completion source custody", () => {
           ).rejects.toThrow(/authority/);
         }
         expect(source.authority.assertCurrent).toThrow();
-        expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
-          /authority/,
-        );
+        if (ending === "revoke" || ending === "gateway-close") {
+          subagentRuns.runWithCompletionAuthority(entry, () => {
+            expect(completionAuthority()).toBeUndefined();
+            expect(getPluginRuntimeGatewayRequestScope()?.client?.connect.scopes).toEqual([
+              "operator.write",
+            ]);
+          });
+        } else {
+          expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
+            /authority/,
+          );
+        }
       } finally {
         source.release();
         await resetSubagentRegistryForTests({ persist: false });

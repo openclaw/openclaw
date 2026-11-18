@@ -3,7 +3,6 @@ import type {
   CapturedSessionEntryCurrentRead,
   SessionEntryCurrentFacts,
 } from "../../../config/sessions/session-entry-current.types.js";
-import { captureSystemEventStoreCurrentCheck } from "../../../infra/system-event-ownership.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { recordGatewaySessionRunFailure } from "../../../sessions/session-run-error.js";
 import { evaluateGatewayToolCallerReceiptAdmission } from "../../tools/gateway-caller-context.js";
@@ -56,16 +55,12 @@ export async function recordRequesterReplacementNotice(params: {
   }
 }
 
-/** Watch effects retain their original stores; the durable wake keeps its ordinary handoff rules. */
+/** Admission follows the current store but retains the exact requester incarnation. */
 export function createRequesterSettleReceiptAdmission(params: {
   requester: { canonicalKey: string; agentId?: string; storePath?: string };
   identity: { sessionId: string; lifecycleRevision?: string };
-  storeSessionKey: string;
-  storeAgentId?: string;
-  storePaths(): readonly (string | null | undefined)[];
   isSourceCurrent(): boolean;
   readCurrent(): SessionEntryCurrentFacts | undefined;
-  isStoreCurrent(): boolean;
 }) {
   const isEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) =>
     entry?.sessionId === params.identity.sessionId &&
@@ -73,10 +68,6 @@ export function createRequesterSettleReceiptAdmission(params: {
     params.isSourceCurrent();
   const admission: GatewayToolCallerReceiptAdmission = {
     async prepare() {
-      const storeCurrent = captureSystemEventStoreCurrentCheck(
-        params.storeSessionKey,
-        params.storeAgentId,
-      );
       const [
         { withSessionEntryReadOnlyInWorker },
         { captureSessionEntryCurrentRead, captureNativeSessionEntryCurrentRead },
@@ -98,10 +89,7 @@ export function createRequesterSettleReceiptAdmission(params: {
         const isCurrent = () => {
           try {
             current.assertSourceCurrent();
-            return (
-              params.storePaths().every(storeCurrent) &&
-              isEntryCurrent(current.kind === "file" ? currentEntry : current.readCurrent())
-            );
+            return isEntryCurrent(current.kind === "file" ? currentEntry : current.readCurrent());
           } catch {
             return false;
           }
@@ -146,7 +134,5 @@ export function createRequesterSettleReceiptAdmission(params: {
         return false;
       }
     },
-    isStoreCurrent: () =>
-      evaluateGatewayToolCallerReceiptAdmission(admission, () => params.isStoreCurrent()),
   });
 }

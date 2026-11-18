@@ -181,22 +181,19 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   it closes. Retiring the delivered child batch cannot revoke a still-running
   requester. A new direct user turn retires the automation entitlement, not the
   child batch’s separately retained completion source. Valid results can still
-  return under their original caller’s restrictions; they never borrow the new
+  return under live original custody or the System write-only baseline; they never borrow the new
   turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
-  separately from execution. Individual delivery and requester settlement use
-  that captured permission ceiling, not the async caller that later schedules
-  cleanup. Committed settlement, retirement, or source/Gateway revocation
-  releases it; provisional writes and same-task replacement cannot drop it.
-  Retained results do not retain usable authority after that release, and a
-  batch cannot combine incompatible operator sources. Cancellation-only batches
-  keep the existing cancellation caller's admission, rather than using the
-  revoked target to authorize a new turn. Mixed result/cancellation batches
-  require every original source to remain live and compatible. An explicit
-  delivery redrive captures its newly admitted caller while live and transfers
-  custody only after the new delivery generation commits; it does not reopen the
-  expired source. Restart still admits a
-  fresh recovery owner rather than reviving the previous process capability.
+  separately from execution. Delivery uses live retained custody rather than the
+  async caller scheduling cleanup. A batch retains custody only when every member
+  has the same live source, invocation, and permission ceiling. Missing, revoked,
+  or mixed custody uses the System write-only baseline without borrowing a sibling's
+  profile or runtime identity. Temporary access-policy unavailability leaves the
+  completion owed for retry. Committed settlement, explicit retirement, or source
+  revocation releases custody; provisional writes and same-task replacement cannot
+  drop it. Cancellation-only notices without custody retain their independently
+  admitted cancellation caller. Explicit redrive captures its newly admitted caller
+  and transfers custody only after the new generation commits.
   Visible settlement cohorts use the host-only binding when every captured
   requester session and lifecycle revision matches the current parent. Private
   cohorts retain their strict requester identity checks. This lets a guest's own yielded session

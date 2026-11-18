@@ -393,10 +393,6 @@ export async function blockSubagentCompletionDelivery(
     assertCurrent: _assertCurrent,
     ...request
   } = params;
-  if (params.storeReplaced) {
-    const current = currentCompletionOwner(subagentRuns, params.subagent);
-    subagentRuns.retireCompletionAuthority(current);
-  }
   const result = await mutateCompletion(
     [params.subagent],
     (rows) => {
@@ -415,7 +411,6 @@ export async function blockSubagentCompletionDelivery(
           applied === true &&
           (params.suspendedReason ||
             params.operatorAuthorityUnavailable ||
-            params.storeReplaced ||
             params.disposition === "permanent_failure")
         ) {
           // The durable outcome precedes releasing the completion input.

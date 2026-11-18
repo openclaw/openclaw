@@ -95,6 +95,11 @@ work, then can send a fresh instruction to a retained child or spawn a replaceme
 Check whether files or external actions already changed before repeating work.
 New execution uses current authority and the session's current tool policy.
 
+A changed session-store path alone does not discard finished results. Completion
+uses live compatible custody or a System write-only baseline, while temporary
+access-policy unavailability leaves delivery owed for retry. Explicit cancellation,
+requester incarnation checks, and consumed-result receipts remain authoritative.
+
 If a requester wake is refused because the child's completion owner changed,
 that attempt ends instead of retrying indefinitely. The same requester and wake
 generation can still record a result already delivered after child cleanup. Otherwise, OpenClaw records failed delivery and attempts to append a

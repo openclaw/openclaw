@@ -1,8 +1,6 @@
 /**
  * Run with --expose-gc; use --trace-gc-nvp only for a separate promotion pass.
- * Startup's notification-retirement scan over retained subagent history:
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/subagent-sweep-measure.ts
- *   --operation notification-retirement --runs 10000 --operations 3000 --yield-ms 0
  * Run baseline and candidate in alternating order with separate state/output paths.
  */
 import assert from "node:assert/strict";
@@ -32,7 +30,6 @@ const { values } = parseArgs({
     operations: { type: "string", default: "4000" },
     runs: { type: "string", default: "500" },
     workload: { type: "string", default: "settled" },
-    operation: { type: "string", default: "sweep" },
     "yield-ms": { type: "string", default: "1" },
     "start-at": { type: "string", default: "0" },
     "gc-log": { type: "string" },
@@ -46,8 +43,7 @@ const runCount = integer("runs", 10);
 const yieldMs = integer("yield-ms", 0);
 const startAt = integer("start-at", 0);
 const workload = values.workload;
-const operation = values.operation;
-assert.ok(operation === "sweep" || operation === "notification-retirement");
+const operation = "sweep";
 assert.ok(workload === "settled" || workload === "mixed", "--workload must be settled or mixed");
 assert.ok(global.gc, "Run with --expose-gc");
 const stateDir = values["state-dir"]
@@ -117,13 +113,7 @@ const sweeper = createSubagentRegistrySweeper({
   getRunsForCollectorGroup: memory.getSubagentRunsForCollectorGroup,
   warn: unexpected,
 });
-const { suspendReplacedStoreNotifications } =
-  await import("../../src/agents/subagents/registry/subagent-registry-lifecycle-cleanup.js");
-const retirementOptions = { runs: subagentRuns, resumedRuns: new Set<object>() };
-const sweepOnce =
-  operation === "notification-retirement"
-    ? () => suspendReplacedStoreNotifications(retirementOptions)
-    : () => sweeper.sweepOnce();
+const sweepOnce = () => sweeper.sweepOnce();
 
 const composition = { settled: 0, running: 0, pendingDelivery: 0, futureArchive: 0 };
 const claims = new Map<string, string | undefined>();

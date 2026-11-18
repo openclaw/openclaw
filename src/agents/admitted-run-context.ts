@@ -16,6 +16,7 @@ import {
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isGatewayOperatorAccessUnavailable } from "../gateway/operator-access-errors.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
   claimAgentRunDelegatedAuthority,
@@ -74,8 +75,10 @@ export function createAdmittedRunOperatorAuthority(
       signal?.throwIfAborted();
       assertSource();
     } catch (error) {
-      revoked = true;
-      revocationReason = error;
+      if (!isGatewayOperatorAccessUnavailable(error)) {
+        revoked = true;
+        revocationReason = error;
+      }
       throw error;
     }
   });

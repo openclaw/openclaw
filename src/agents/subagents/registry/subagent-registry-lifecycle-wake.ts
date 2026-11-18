@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import { isGatewayOperatorAccessUnavailable } from "../../../gateway/operator-access-errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -607,6 +608,7 @@ export function scheduleRequesterSettleWake(
               !settleObserved &&
               ((error instanceof AgentDatabaseAdmissionError &&
                 error.refusal.code === "agent-database-inspection-pending") ||
+                isGatewayOperatorAccessUnavailable(error) ||
                 error instanceof SubagentAnnouncePreparationConflictError ||
                 (error instanceof WorkerTaskError && error.code === "overloaded"));
             const safeError = buildSafeLifecycleErrorMeta(error);

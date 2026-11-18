@@ -1,6 +1,6 @@
 import { withGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { getRuntimeConfig } from "../../../config/config.js";
-import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
+import { isGatewayOperatorAccessUnavailable } from "../../../gateway/operator-access-errors.js";
 import { getSharedGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   retireSessionControllerInput,
@@ -269,26 +269,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const waitForDescendants = (facts: NonNullable<typeof initialDescendants>) =>
     !pauseNotice && waitForRequesterDescendants(facts, frozen, params.onDescendantsPending);
-  const isStoreCurrent = () =>
-    settledBatch.every((entry) =>
-      isSystemEventStoreCurrent(requesterSessionKey, entry.requesterStorePath, requesterAgentId),
-    );
-  const retireReplacedStore = async (): Promise<boolean> => {
-    if (isStoreCurrent()) {
-      return false;
-    }
-    await completeBatch(settledBatch, selectedState, {
-      delivered: false,
-      path: "none",
-      error: "store replaced",
-      storeReplaced: true,
-      disposition: "intentional_non_delivery",
-    });
-    return true;
-  };
-  if (await retireReplacedStore()) {
-    return false;
-  }
   const followup = pauseNotice ? undefined : getFollowupForCohort(settledBatch);
   const getRequesterRun = () =>
     followup
@@ -393,7 +373,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         rearmGeneration: selectedState.rearmGeneration,
         assertCommitAllowed: () => {
           params.signal?.throwIfAborted();
-          if (!params.isSourceCurrent() || !isStoreCurrent() || !isBatchCurrent()) {
+          if (!params.isSourceCurrent() || !isBatchCurrent()) {
             throw new Error("Subagent completion notice lost its source");
           }
         },
@@ -414,9 +394,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const preparedFindings = pauseNotice
       ? { text: pauseNotice.acknowledgment, isCurrent: () => true }
       : await readChildCompletionFindings(completionRows.filter(needsRequesterSettleFindings));
-    if (await retireReplacedStore()) {
-      return false;
-    }
     // Recheck owned descendants after loading findings and before dispatch.
     const currentDescendants = await readRequesterDescendants();
     if (
@@ -443,13 +420,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const sourceReceiptAdmission = createRequesterSettleReceiptAdmission({
       requester,
       identity: requesterIdentity,
-      storeSessionKey: requesterSessionKey,
-      storeAgentId: requesterAgentId,
-      storePaths: () => settledBatch.map((entry) => entry.requesterStorePath),
       isSourceCurrent: () =>
         matchingRows.every((entry) => matchesSubagentRequesterSession(entry, requesterIdentity)),
       readCurrent: requesterCurrent.readCurrent,
-      isStoreCurrent,
     });
     const isRequesterCurrent = () => {
       if (!sourceReceiptAdmission.isRequesterCurrent()) {
@@ -474,7 +447,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     const isSourceSessionEffectsAllowed = () =>
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
-      sourceReceiptAdmission.isStoreCurrent() &&
       preparedFindings.isCurrent() &&
       !isGatewayClosed() &&
       areCompletionRowsCurrent() &&
@@ -558,12 +530,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         await params.transitionBatch(settledBatch, state, refreshBatch);
         return true;
       }
-      if (
-        params.signal?.aborted ||
-        isGatewayClosed() ||
-        !isBatchCurrent() ||
-        (await retireReplacedStore())
-      ) {
+      if (params.signal?.aborted || isGatewayClosed() || !isBatchCurrent()) {
         return true;
       }
       if (!isBatchDeliveryClosed() && isRequesterCurrent()) {
@@ -681,7 +648,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     } catch (error) {
       await joinConsumption?.();
       retireUnadoptedInput();
-      if (!dispatchPrepared) {
+      if (isGatewayOperatorAccessUnavailable(error) || !dispatchPrepared) {
         throw error;
       }
       if (await settleRevokedBatch()) {

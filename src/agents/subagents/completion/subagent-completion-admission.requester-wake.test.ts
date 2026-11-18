@@ -669,10 +669,10 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it.each(["delivered", "store replaced", "operator authority lost"] as const)(
+  it.each(["delivered", "cancelled", "operator authority lost"] as const)(
     "settles a pause notice across reopen (%s)",
     async (settlement) => {
-      const storeReplaced = settlement === "store replaced";
+      const cancelled = settlement === "cancelled";
       const paused = records();
       const sibling = records();
       sibling.subagent.runId = "running-sibling";
@@ -698,9 +698,7 @@ describe("persisted subagent requester wakes", () => {
       await settleOne(paused, {
         delivered: settlement === "delivered",
         path: "direct",
-        ...(storeReplaced
-          ? { storeReplaced: true, disposition: "intentional_non_delivery" as const }
-          : {}),
+        ...(cancelled ? { disposition: "intentional_non_delivery" as const } : {}),
         ...(settlement === "operator authority lost"
           ? {
               disposition: "permanent_failure" as const,

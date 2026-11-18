@@ -65,6 +65,12 @@ origin only identifies the channel. When an override selects a different
 chat or topic, it does not inherit the previous route's thread. An explicit
 thread from the binding or hook is preserved.
 
+Finished results follow the current requester agent and session key even when the
+recorded session store path changes. Live completion custody is retained only for
+same-source, same-invocation, same-ceiling batches; missing, revoked, or mixed
+custody uses a System write-only baseline. This does not relax private requester
+session ID or lifecycle-revision checks, nor replay an already consumed result.
+
 Child completion aggregation is scoped to the current requester run when
 building nested completion findings, preventing stale prior-run child
 outputs from leaking into the current announce. Announce replies preserve

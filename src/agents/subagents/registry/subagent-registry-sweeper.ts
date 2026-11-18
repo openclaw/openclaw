@@ -276,9 +276,8 @@ export function createSubagentRegistrySweeper(params: {
         ) {
           await blockSubagentCompletionDelivery({
             subagent: selected,
-            reason: "store replaced",
+            reason: "completion source retired",
             suspendedReason: "permanent_failure",
-            storeReplaced: true,
           });
           continue;
         }

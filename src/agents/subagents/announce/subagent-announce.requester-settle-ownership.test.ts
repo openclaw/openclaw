@@ -289,34 +289,32 @@ it.each(["same", "before admission", "during admission", "rearm"] as const)(
       completeBatch: complete,
     });
     try {
-      if (replacement !== "before admission") {
-        await awaitGateBeforeSettlement(
-          admitted.promise,
-          pending,
-          "Requester delivery settled before reaching admission",
-        );
-        if (rearm) {
-          if (!child.requesterSettleWake) {
-            throw new Error("The admitted requester wake must remain owned until it settles.");
-          }
-          current = copySubagentRunRuntimeOwner<SubagentRunRecord>(child, {
-            ...child,
-            requesterSettleWake: {
-              ...child.requesterSettleWake,
-              requesterYieldBatch: true,
-              rearmGeneration: 2,
-            },
-          });
-          registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([current]);
-        } else {
-          publishSystemEventStoreResolver(() =>
-            replacement === "same" ? "original-store" : "replacement-store",
-          );
+      await awaitGateBeforeSettlement(
+        admitted.promise,
+        pending,
+        "Requester delivery settled before reaching admission",
+      );
+      if (rearm) {
+        if (!child.requesterSettleWake) {
+          throw new Error("The admitted requester wake must remain owned until it settles.");
         }
+        current = copySubagentRunRuntimeOwner<SubagentRunRecord>(child, {
+          ...child,
+          requesterSettleWake: {
+            ...child.requesterSettleWake,
+            requesterYieldBatch: true,
+            rearmGeneration: 2,
+          },
+        });
+        registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([current]);
+      } else {
+        publishSystemEventStoreResolver(() =>
+          replacement === "same" ? "original-store" : "replacement-store",
+        );
       }
       execute.resolve();
-      expect(await pending).toBe(replacement === "same");
-      expect(startedTurns).toEqual(replacement === "same" ? [REQUESTER] : []);
+      expect(await pending).toBe(!rearm);
+      expect(startedTurns).toEqual(!rearm ? [REQUESTER] : []);
       if (rearm) {
         expect(current.requesterSettleWake).toMatchObject({ rearmGeneration: 2 });
         expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
@@ -326,17 +324,6 @@ it.each(["same", "before admission", "during admission", "rearm"] as const)(
           requesterSettleWake: undefined,
           completion: { resultText: "retained child result" },
         });
-      }
-      if (!rearm && replacement !== "same") {
-        expect(complete).toHaveBeenCalledWith(
-          [child],
-          1,
-          expect.objectContaining({
-            error: "store replaced",
-            disposition: "intentional_non_delivery",
-          }),
-          expect.any(Function),
-        );
       }
     } finally {
       execute.resolve();

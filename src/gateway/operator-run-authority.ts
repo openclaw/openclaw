@@ -33,6 +33,7 @@ import {
   readGatewayDeviceReconnectSourceIdentity,
   retainGatewayDeviceRevocation,
 } from "./device-revocation.js";
+import { isGatewayOperatorAccessUnavailable } from "./operator-access-errors.js";
 import {
   onOperatorRolePolicyChanged,
   resolveGatewayOperatorRoleActor,
@@ -414,7 +415,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
       try {
         check();
       } catch (error) {
-        revoke(error);
+        if (!isGatewayOperatorAccessUnavailable(error)) {
+          revoke(error);
+        }
       }
     }
   };
@@ -444,7 +447,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
       assertSource();
       assertRoleCurrent();
     } catch (error) {
-      revoked = true;
+      if (!isGatewayOperatorAccessUnavailable(error)) {
+        revoked = true;
+      }
       throw error;
     }
   });

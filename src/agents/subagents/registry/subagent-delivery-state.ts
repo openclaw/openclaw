@@ -304,7 +304,6 @@ export function resolveRequesterDeliveryOutcome(
     (outcome?.reason === undefined || REQUESTER_TURN_FAILURES.has(outcome.reason));
   return outcome &&
     !outcome.delivered &&
-    !outcome.storeReplaced &&
     outcome.disposition !== "intentional_non_delivery" &&
     outcome.disposition !== "ambiguous" &&
     outcome.finalAssistantVisibleText === undefined &&

@@ -1,7 +1,9 @@
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  getGatewayContextResolver,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
@@ -581,9 +583,17 @@ export const startSubagentAnnounceCleanupFlow = (
           throw new Error("Subagent completion requester is unavailable");
         }
       }
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        params.runSubagentAnnounceFlow({
+      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () => {
+        // Select the delivery source once. Revocation after admission must not
+        // downgrade the in-flight send to fresh System authority.
+        const authority =
+          getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
+        return params.runSubagentAnnounceFlow({
           ...announceParams,
+          isCompletionDeliveryAllowed: () => {
+            authority?.assertCurrent();
+            return announceParams.isCompletionDeliveryAllowed?.() ?? false;
+          },
           controllerInput,
           childAgentId: entry.childAgentId,
           childSessionIdentity: entry.childSessionIdentity,
@@ -594,8 +604,8 @@ export const startSubagentAnnounceCleanupFlow = (
             releasePreparation();
             clearTimeout(deadlineTimer);
           },
-        }),
-      );
+        });
+      });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;
@@ -610,26 +620,6 @@ export const startSubagentAnnounceCleanupFlow = (
       }
     }
     assertPersistenceCurrent();
-    if (
-      context.isCleanupAttemptCurrent(entry, cleanupGeneration) &&
-      getCurrentSubagentRunOwner(params.runs, entry)?.delivery?.status !== "delivered" &&
-      (subagentRuns.isCompletionAuthorityRetired(entry) ||
-        (shouldSuspendPendingFinalDelivery(entry) &&
-          !isSystemEventStoreCurrent(
-            entry.requesterSessionKey,
-            entry.requesterStorePath,
-            entry.requesterAgentId,
-          )))
-    ) {
-      await suspendPendingFinalDelivery(context, {
-        runId,
-        entry,
-        reason: "permanent_failure",
-        error: "store replaced",
-        storeReplaced: true,
-      });
-      return;
-    }
     await finalizeAnnounceCleanup(announceOutcome);
   });
   return true;

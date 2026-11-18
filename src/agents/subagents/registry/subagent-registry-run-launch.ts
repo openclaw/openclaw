@@ -276,7 +276,9 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                 "Accepted run already has another completion owner; inspect it before retrying.",
               );
             }
-            subagentRuns.runWithCompletionAuthority(previous, () => options.assertCurrent?.());
+            subagentRuns.runWithCompletionAuthority(previous, () => options.assertCurrent?.(), {
+              requireRetainedAuthority: true,
+            });
             return { value: undefined };
           }
           if (selected ? !isSameSubagentRunOwner(previous, selected) : previous !== undefined) {
