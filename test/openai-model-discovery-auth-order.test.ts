@@ -41,17 +41,6 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
-// mock-isolation: catalog events count model-list requests; the npm Codex version read is
-// covered by extensions/openai/openai-codex-discovery.test.ts.
-vi.mock("../extensions/openai/codex-client-version.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../extensions/openai/codex-client-version.js")>();
-  return {
-    ...actual,
-    resolveOpenAICodexClientVersion: async () => actual.OPENAI_CODEX_CLIENT_VERSION_FLOOR,
-  };
-});
-
 // mock-isolation: Discovery and runtime hooks share fixture providers without real plugin loading.
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
@@ -323,9 +312,13 @@ describe("Provider model discovery auth preparation", () => {
       const requests: string[] = [];
       const outcomes: ProviderCatalogOutcome[] = [];
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        // ChatGPT listing reads the newest Codex version first; it is not a catalog request.
+        if (url.hostname === "registry.npmjs.org") {
+          return Response.json({ version: "0.169.0" });
+        }
         events.push("catalog");
         requests.push(new Headers(init?.headers).get("authorization") ?? "");
-        const url = new URL(input instanceof Request ? input.url : input);
         return Response.json(
           url.hostname === "chatgpt.com"
             ? { models: [] }

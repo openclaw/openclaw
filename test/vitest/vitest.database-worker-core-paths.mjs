@@ -1359,7 +1359,6 @@ export const databaseWorkerCoreTestFiles = [
   "test/matrix-channel-read-authority.integration.test.ts",
   "test/telegram-history-read.integration.test.ts",
   "test/plugins/beam-http-identity.test.ts",
-  "test/plugins/codex-client-version-catalog-worker.test.ts",
   "test/plugins/codex-session-catalog-naming.test.ts",
   "test/gateway-rpc-exporters.test.ts",
   "test/scripts/mantis-telegram-proof.test.ts",
