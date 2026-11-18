@@ -29,6 +29,7 @@ export function cronAgentTurnPayloadSchema<
     kind: Type.Literal("agentTurn"),
     message: params.message,
     model: Type.Optional(params.model),
+    modelRuntime: Type.Optional(Type.Union([Type.String({ minLength: 1 }), Type.Null()])),
     fallbacks: Type.Optional(params.fallbacks),
     thinking: Type.Optional(params.thinking),
     timeoutSeconds: Type.Optional(params.timeoutSeconds),

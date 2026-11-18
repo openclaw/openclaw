@@ -16,6 +16,7 @@ import JSON5 from "json5";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { tryResolveAmbientOwnerAgentId } from "../../src/agents/agent-scope-config.js";
 import { resolveAgentConfig } from "../../src/agents/agent-scope.js";
+import { splitTrailingAuthProfile } from "../../src/agents/model-ref-profile.js";
 import { isCliProvider } from "../../src/agents/model-selection-cli.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../src/agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../../src/agents/thinking-runtime.js";
@@ -51,6 +52,7 @@ import {
   resolveCronModelSelectionOwner,
 } from "../../src/cron/isolated-agent/model-selection.js";
 import { resolveCarriedCronModelSelection } from "../../src/cron/isolated-agent/session-carried-model.js";
+import { resolveCronModelPin } from "../../src/cron/run-inference.js";
 import { resolveCronSessionTargetSessionKey } from "../../src/cron/session-target.js";
 import { resolveCronRunToolsAllow } from "../../src/cron/tools-allow.js";
 import type { CronStoredJob } from "../../src/cron/types.js";
@@ -141,7 +143,7 @@ export async function replayInferenceRuntimes(
   cfg: OpenClawConfig,
   readRow: (sessionKey: string) => SessionEntry | undefined,
 ): Promise<ReplayInference> {
-  const binding = job.inferenceBinding;
+  const binding = resolveCronModelPin(job, cfg, agentId);
   if (!binding || job.payload.kind !== "agentTurn") {
     return undefined;
   }
@@ -473,12 +475,13 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
           },
         }
       : {}),
-    ...(job.inferenceBinding
+    ...(job.payload.kind === "agentTurn" &&
+    job.payload.model &&
+    splitTrailingAuthProfile(job.payload.model).profile
       ? {
-          inferenceBinding: {
-            ...job.inferenceBinding,
-            profileId: "provider:profile",
-            authorizationId: "authorization",
+          payload: {
+            ...job.payload,
+            model: splitTrailingAuthProfile(job.payload.model).model + "@provider:profile",
           },
         }
       : {}),

@@ -1,3 +1,4 @@
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { SessionCreatedActor } from "../config/sessions/session-entry-provenance.js";
 import type { CronStoredJob } from "./types.js";
 
@@ -23,26 +24,18 @@ export function cronExecutionActor(
     : job.createdActor;
 }
 
-/** Model runs must not borrow a retained session's previous owner's credentials. */
-export function resolveCronOwnerTransferRecoveryError(
-  job: Pick<CronStoredJob, "ownerTransferPending" | "payload">,
-): string | undefined {
-  if (
-    job.ownerTransferPending &&
-    (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent")
-  ) {
-    return "This automation needs fresh execution authority. Select an inference account or reauthorize it from an authenticated owner turn before running it.";
-  }
-  return undefined;
-}
-
 /** A management transfer is not permission to lend the previous person's credentials. */
 export function retireTransferredCronAuthority(job: CronStoredJob): void {
   job.enabled = false;
-  job.ownerTransferPending = true;
   delete job.state.nextRunAtMs;
   delete job.operatorSource;
-  delete job.inferenceBinding;
+  if (job.payload.kind === "agentTurn" && job.payload.model) {
+    const { model, profile } = splitTrailingAuthProfile(job.payload.model);
+    if (profile) {
+      job.payload = { ...job.payload, model };
+      delete job.payload.modelRuntime;
+    }
+  }
   delete job.runtimeAuthority;
   job.runtimeAuthorityRecoveryRequired = true;
   delete job.toolsAllowProvenance;

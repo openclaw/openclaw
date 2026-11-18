@@ -437,7 +437,8 @@
           "read",
           "automations"
         ],
-        "toolsAllowIsDefault": true
+        "toolsAllowIsDefault": true,
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -458,14 +459,6 @@
         "type": "human",
         "source": "profile",
         "id": "profile-1"
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -506,7 +499,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -515,14 +509,6 @@
       "scheduledToolPolicy": {
         "version": 1,
         "mode": "trusted"
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -711,7 +697,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -720,14 +707,6 @@
       "scheduledToolPolicy": {
         "version": 1,
         "mode": "trusted"
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -770,7 +749,8 @@
           "read",
           "automations"
         ],
-        "toolsAllowIsDefault": true
+        "toolsAllowIsDefault": true,
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -799,14 +779,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -1081,7 +1053,8 @@
         "message": "fixture",
         "toolsAllow": [
           "read"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1110,14 +1083,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -1158,7 +1123,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1187,14 +1153,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -1235,7 +1193,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1263,14 +1222,6 @@
         "callerOrigin": {
           "kind": "unknown"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -1380,7 +1331,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1414,14 +1366,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "parentRow": {
@@ -1470,7 +1414,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1504,14 +1449,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "parentRow": {
@@ -1560,7 +1497,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1594,14 +1532,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "user"
       }
     },
     "parentRow": {
@@ -1649,7 +1579,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1683,14 +1614,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "parentRow": {
@@ -1738,7 +1661,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1772,14 +1696,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "parentRow": {
@@ -1888,7 +1804,8 @@
         "message": "fixture",
         "toolsAllow": [
           "*"
-        ]
+        ],
+        "model": "openai/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
@@ -1917,14 +1834,6 @@
           "kind": "external",
           "channel": "webchat"
         }
-      },
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "openai",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
       }
     },
     "expected": {
@@ -1970,20 +1879,13 @@
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
-        "message": "fixture"
+        "message": "fixture",
+        "model": "anthropic/fixture@provider:profile"
       },
       "delivery": {
         "mode": "none"
       },
-      "state": {},
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "anthropic",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto"
-      }
+      "state": {}
     },
     "inferenceRuntimes": {
       "legacy": "claude-cli"
@@ -2025,21 +1927,14 @@
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
-        "message": "fixture"
+        "message": "fixture",
+        "model": "anthropic/fixture@provider:profile",
+        "modelRuntime": "claude-cli"
       },
       "delivery": {
         "mode": "none"
       },
-      "state": {},
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "anthropic",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto",
-        "runtime": "claude-cli"
-      }
+      "state": {}
     },
     "inferenceRuntimes": {
       "legacy": "openclaw"
@@ -2081,21 +1976,14 @@
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
-        "message": "fixture"
+        "message": "fixture",
+        "model": "anthropic/fixture@provider:profile",
+        "modelRuntime": "claude-cli"
       },
       "delivery": {
         "mode": "none"
       },
-      "state": {},
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "anthropic",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto",
-        "runtime": "claude-cli"
-      }
+      "state": {}
     },
     "inferenceRuntimes": {
       "legacy": "claude-cli"
@@ -2137,21 +2025,14 @@
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
-        "message": "fixture"
+        "message": "fixture",
+        "model": "anthropic/fixture@provider:profile",
+        "modelRuntime": "claude-cli"
       },
       "delivery": {
         "mode": "none"
       },
-      "state": {},
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "anthropic",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto",
-        "runtime": "claude-cli"
-      }
+      "state": {}
     },
     "inferenceRuntimes": {
       "legacy": "claude-cli",
@@ -2197,21 +2078,14 @@
       "wakeMode": "now",
       "payload": {
         "kind": "agentTurn",
-        "message": "fixture"
+        "message": "fixture",
+        "model": "anthropic/fixture@provider:profile",
+        "modelRuntime": "claude-cli"
       },
       "delivery": {
         "mode": "none"
       },
-      "state": {},
-      "inferenceBinding": {
-        "version": 1,
-        "provider": "anthropic",
-        "profileId": "provider:profile",
-        "authorizationId": "authorization",
-        "authRequirement": "api-key",
-        "source": "auto",
-        "runtime": "claude-cli"
-      }
+      "state": {}
     },
     "inferenceRuntimes": {
       "legacy": "claude-cli",

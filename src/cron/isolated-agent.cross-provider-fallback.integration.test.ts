@@ -24,7 +24,6 @@ import {
   loopbackProviderConfig,
   QUOTA_EXHAUSTED_BODY,
 } from "./cross-provider-fallback.test-support.js";
-import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent/run.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "./scheduled-occurrence.test-support.js";
 import { loadCronJobsStore, saveCronJobsStore } from "./store.js";
@@ -119,7 +118,7 @@ function withFallbackFixture(run: (fixture: Fixture) => Promise<void>) {
             await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
             clearRuntimeAuthProfileStoreSnapshots();
             const [reloaded] = (await loadCronJobsStore(storePath)).jobs;
-            expect(reloaded?.inferenceBinding).toEqual(job.inferenceBinding);
+            expect(reloaded?.payload).toEqual(job.payload);
             return reloaded!;
           },
           async run(job) {
@@ -148,18 +147,10 @@ function withFallbackFixture(run: (fixture: Fixture) => Promise<void>) {
 
 /** A job exactly as 2026.10.10 and 2026.11.2 store it: one recorded account, no fallback state. */
 async function boundJob(
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig,
   id: string,
   payload: Partial<CronStoredJob["payload"]> = { model: "openai/gpt-4.1@openai:primary" },
 ): Promise<CronStoredJob> {
-  const binding = await captureCronInferenceBinding({
-    cfg,
-    agentId: "main",
-    model: "openai/gpt-4.1@openai:primary",
-  });
-  if (!binding) {
-    throw new Error("Expected a recorded primary account");
-  }
   return {
     id,
     name: id,
@@ -173,7 +164,6 @@ async function boundJob(
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message: "Reply.", lightContext: true, ...payload },
     state: {},
-    inferenceBinding: binding,
   } as CronStoredJob;
 }
 
@@ -188,7 +178,7 @@ afterEach(async () => {
 it("fails over to another provider's live account when the primary is out of quota", async () => {
   await withFallbackFixture(async ({ cfg, hits, reload, run, state }) => {
     const job = await reload(await boundJob(cfg, "xprov"));
-    expect(job.inferenceBinding).toMatchObject({ provider: "openai", profileId: "openai:primary" });
+    expect(job.payload).toMatchObject({ model: "openai/gpt-4.1@openai:primary" });
     const first = await run(job);
     expect(first.status, first.error).toBe("ok");
     expect(first.summary).toContain("served by backup provider");
@@ -205,27 +195,23 @@ it("fails over to another provider's live account when the primary is out of quo
     expect(hits.primary.every((auth) => auth === "Bearer key-primary")).toBe(true);
     expect(hits.backup).toEqual(["Bearer key-backup", "Bearer key-backup-other"]);
     // Nothing new is recorded; the binding is exactly what the job stored.
-    expect((await reload(job)).inferenceBinding).toEqual(job.inferenceBinding);
+    expect((await reload(job)).payload).toEqual(job.payload);
   });
 });
 
-it.each(["replaced", "removed", "signed out"] as const)(
+it.each(["removed", "signed out"] as const)(
   "still fails over when the recorded account was %s",
   async (change) => {
     await withFallbackFixture(async ({ cfg, hits, reload, run, setPrimary }) => {
       const job = await reload(await boundJob(cfg, `primary-${change}`));
-      if (change === "replaced") {
-        await persistAuthProfileBatch({ profiles: [apiKeyProfile("openai:primary", "key-new")] });
-      } else {
-        expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] })).toBe(
-          true,
-        );
-        if (change === "signed out") {
-          // `openclaw models auth logout` also drops the profile from config; the fallback must
-          // not inherit the gone account as its own selection.
-          delete cfg.auth!.profiles!["openai:primary"];
-          setRuntimeConfigSnapshot(cfg);
-        }
+      expect(await removeAuthProfilesAcrossOwnerStores({ profileIds: ["openai:primary"] })).toBe(
+        true,
+      );
+      if (change === "signed out") {
+        // `openclaw models auth logout` also drops the profile from config; the fallback must
+        // not inherit the gone account as its own selection.
+        delete cfg.auth!.profiles!["openai:primary"];
+        setRuntimeConfigSnapshot(cfg);
       }
       // A healthy primary would still be refused: the job never adopts a changed account.
       setPrimary("ok");

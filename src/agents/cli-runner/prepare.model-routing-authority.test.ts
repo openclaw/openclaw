@@ -149,13 +149,8 @@ describe("CLI model-routing receipt authority", () => {
         nativeAuthOnly: true,
         ...(kind === "selected" ? { authProfileId: profileId } : {}),
       });
-      if (kind === "native") {
-        expect((await prepared).effectiveAuthProfileId).toBeUndefined();
-        expect(prepareExecution).toHaveBeenCalledOnce();
-      } else {
-        await expect(prepared).rejects.toThrow("Automation has no recorded inference account");
-        expect(prepareExecution).not.toHaveBeenCalled();
-      }
+      expect((await prepared).effectiveAuthProfileId).toBeUndefined();
+      expect(prepareExecution).toHaveBeenCalledOnce();
     },
   );
 

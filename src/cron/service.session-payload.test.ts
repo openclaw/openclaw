@@ -83,51 +83,32 @@ const schedule = (kind: "at" | "every" | "cron", at: number): CronJobCreate["sch
       : { kind, expr: "* * * * *", tz: "UTC", staggerMs: 0 };
 
 describe("ordinary session agent turns", () => {
-  it.each(["isolated", "main", "session:agent:main:project:inbox"] as const)(
-    "requires fresh authority after a human transfer on %s, including a transfer back",
-    async (sessionTarget) => {
-      const { cron, storePath, run } = await service();
-      await cron.start();
-      const job = await cron.add(jobInput({ enabled: false, sessionTarget }), {
-        createdActor: { type: "human", source: "profile", id: "alice" },
-      });
-      for (const ownerProfileId of ["bob", "alice"]) {
-        await cron.update(job.id, { ownerProfileId });
-        await cron.run(job.id, "force");
-        expect(run).not.toHaveBeenCalled();
-        expect(cron.getJob(job.id)?.state.lastError).toContain("fresh execution authority");
-        expect(
-          (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
-        ).toMatchObject({
-          ownerProfileId,
-          ownerTransferPending: true,
-          enabled: false,
-        });
-      }
-      await cron.update(job.id, { name: "Still awaiting reauthorization" });
-      await cron.run(job.id, "force");
-      expect(run).not.toHaveBeenCalled();
-      await cron.update(
-        job.id,
-        {},
-        {
-          inferenceBinding: {
-            version: 1,
-            provider: "openai",
-            profileId: "synthetic-owner-account",
-            authorizationId: "a".repeat(64),
-            authRequirement: "api-key",
-            source: "user",
-          },
+  it("pauses a transferred job and removes the previous owner's explicit account", async () => {
+    const { cron } = await service();
+    const job = await cron.add(
+      {
+        name: "Report",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Report",
+          model: "openai/gpt-4.1@openai:old",
+          modelRuntime: "openclaw",
         },
-      );
-      await cron.run(job.id, "force");
-      expect(run).toHaveBeenCalledOnce();
-      expect(
-        (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
-      ).not.toHaveProperty("ownerTransferPending");
-    },
-  );
+      },
+      { createdActor: { type: "human", source: "profile", id: "alice" } },
+    );
+    await cron.update(job.id, { ownerProfileId: "bob" });
+    expect(cron.getJob(job.id)).toMatchObject({
+      enabled: false,
+      ownerProfileId: "bob",
+      payload: { model: "openai/gpt-4.1" },
+    });
+    expect(cron.getJob(job.id)?.payload).not.toHaveProperty("modelRuntime");
+  });
 
   it.each(
     (["ok", "error"] as const).flatMap((status) =>

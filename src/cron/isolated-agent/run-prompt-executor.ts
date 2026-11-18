@@ -26,7 +26,6 @@ import {
 } from "../../agents/model-catalog-lookup.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
-import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
@@ -164,10 +163,9 @@ export function createCronPromptExecutor(
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     let currentContextSnapshot: CronCompletedPromptRun["currentContextSnapshot"];
     using inferenceLease = new DisposableStack();
-    const binding = params.job.inferenceBinding;
     const inference = await prepareCronRunInference({
       job: params.job,
-      binding,
+      agentId: params.agentId,
       cfg: params.cfgWithAgentDefaults,
       agentDir: params.agentDir,
     });
@@ -269,7 +267,7 @@ export function createCronPromptExecutor(
         cyberAccessProgram: params.job.cyberAccessProgram,
         agentDir: params.agentDir,
         userLockedAuthProfileId:
-          params.liveSelection.authProfileIdSource === "user"
+          !inference && params.liveSelection.authProfileIdSource === "user"
             ? params.liveSelection.authProfileId
             : undefined,
         fallbacksOverride: cronFallbacksOverride,
@@ -558,13 +556,6 @@ export function createCronPromptExecutor(
                         resolveForwardedProfile(undefined),
                     )
                   : await resolveLiveProfile();
-                if (trigger === "cron" && !binding && authProfileId) {
-                  throw createUnrecordedScheduledAccountRefusal({
-                    runtime: executionProvider,
-                    modelRef: `${providerOverride}/${modelOverride}`,
-                    profileId: authProfileId,
-                  });
-                }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
@@ -586,6 +577,12 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
+                  nativeAuthOnly: inference?.usesNativeCliAccount(
+                    providerOverride,
+                    executionProvider,
+                  )
+                    ? true
+                    : undefined,
                   // Keep the recorded credential lifetime live through CLI preparation and launch.
                   assertCurrent: inference
                     ? () => {
@@ -593,7 +590,6 @@ export function createCronPromptExecutor(
                         inference.assertCurrent(providerOverride);
                       }
                     : undefined,
-                  nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: params.cliSessionBindingFacts,

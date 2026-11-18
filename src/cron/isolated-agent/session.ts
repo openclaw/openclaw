@@ -151,11 +151,11 @@ type CronSessionParams = {
   exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
   /**
-   * The job recorded its inference runtime and account at creation. A differing source
+   * The job explicitly pins its inference runtime. A differing source
    * row then seeds no model, runtime or account selection, so a creating conversation
    * that later switches model or runtime does not change the job's runs.
    */
-  inferenceCaptured?: boolean;
+  inferenceRuntimePinned?: boolean;
 };
 
 export async function prepareCronSession(params: CronSessionParams) {
@@ -251,7 +251,7 @@ export function resolveCronSession(
     ? isNewSession
       ? sanitizeFreshCronSessionEntry(entry, {
           preserveAmbientContext: !params.forceNew,
-          carryInference: !(sourceSessionDiffers && params.inferenceCaptured),
+          carryInference: !(sourceSessionDiffers && params.inferenceRuntimePinned),
         })
       : entry
     : undefined;

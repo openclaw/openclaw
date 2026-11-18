@@ -98,7 +98,6 @@ export function resolveCronRequesterExecutionRevision(job: CronStoredJob): strin
     displayName: _displayName,
     createdActor: _createdActor,
     ownerProfileId: _ownerProfileId,
-    ownerTransferPending: _ownerTransferPending,
     toolsAllowProvenance: _toolsAllowProvenance,
     ...executableJob
   } = job;

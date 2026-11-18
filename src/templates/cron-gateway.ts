@@ -16,7 +16,6 @@ type TemplateCronCreatorCapture = CronAddOptions & {
   assertInferenceSelectionCurrent?: () => void;
   assertOperatorSourceCurrent?: () => void;
   disposeOperatorSource?: () => void;
-  disposeInferenceAuthorization?: () => void;
 };
 
 /** Both transports use the ordinary scheduler owner, with the same declaration and commit guards. */
@@ -76,7 +75,6 @@ export function createTemplateCronGateway(
         });
       } finally {
         creator?.disposeOperatorSource?.();
-        creator?.disposeInferenceAuthorization?.();
       }
     },
     list: async (agentId) => ({

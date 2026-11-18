@@ -28,9 +28,9 @@ import {
 } from "../../state/agent-database-preparation-context.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronExecutionActor } from "../human-owner.js";
-import { resolveCronRuntimeSessionEntry } from "../inference-binding.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
+import { resolveCronModelPin, resolveCronRuntimeSessionEntry } from "../run-inference.js";
 import type { CronWorkspaceLease } from "../run-workspace.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronRunToolsAllow } from "../tools-allow.js";
@@ -241,7 +241,9 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
       forceNew: usesDetachedRunSession,
       exactRunSession: usesExactRunSession,
       hookExternalContentSource,
-      inferenceCaptured: Boolean(input.job.inferenceBinding?.runtime),
+      inferenceRuntimePinned: Boolean(
+        input.job.payload.kind === "agentTurn" && input.job.payload.modelRuntime,
+      ),
     });
     const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
     // An automation reaches its creating conversation by key: delivery follows edits, branch
@@ -380,13 +382,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
         };
       }
       const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
-      // A captured runtime replaces the override the cron session copied from its source row.
+      // An explicitly pinned runtime replaces the override the cron session copied from its source row.
+      const modelPin = resolveCronModelPin(input.job, cfgWithAgentDefaults, agentId);
       const runtimeSessionEntryFor = (candidateProvider: string) =>
-        resolveCronRuntimeSessionEntry(
-          input.job.inferenceBinding,
-          cronSession.sessionEntry,
-          candidateProvider,
-        );
+        resolveCronRuntimeSessionEntry(modelPin, cronSession.sessionEntry, candidateProvider);
       const runtimeSessionEntry = runtimeSessionEntryFor(provider);
       const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
         cfg: cfgWithAgentDefaults,
@@ -593,18 +592,10 @@ async function resolveCronRunPreparation(params: CronRunPreparationParams) {
           job: input.job,
           cronSession,
         });
-        // A recorded account selects only for its own provider; another provider selects live.
-        const recordedBinding =
-          input.job.inferenceBinding?.provider === provider
-            ? input.job.inferenceBinding
-            : undefined;
         const authSelection = input.job.runtimeAuthority
           ? undefined
-          : recordedBinding
-            ? {
-                profileId: recordedBinding.profileId,
-                source: recordedBinding.source,
-              }
+          : modelPin?.provider === provider
+            ? { profileId: modelPin.profileId, source: "user" as const }
             : await resolveCronAuthSelection({
                 agentId,
                 cfg: admittedConfig,

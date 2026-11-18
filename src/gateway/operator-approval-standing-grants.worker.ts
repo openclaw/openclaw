@@ -94,7 +94,7 @@ function decodeDefinitionGeneration(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
 }
 
-/** Preserve derivative references when offline Doctor only narrows a legacy job to an account. */
+/** Preserve derivative references when offline Doctor converts the same account to an authored model pin. */
 export function migrateCronInferenceStandingGrantReferences(
   db: EngineConnection,
   previous: CronStoredJob,
@@ -108,7 +108,10 @@ export function migrateCronInferenceStandingGrantReferences(
     );
   }
   maintenance.assertAdmission();
-  const { inferenceBinding, ...unchanged } = next;
+  const { inferenceBinding, ...original } = previous as CronStoredJob & {
+    inferenceBinding?: { provider: string; profileId: string; runtime?: string };
+  };
+  const unchanged = { ...next, payload: previous.payload };
   const source = previous.operatorSource;
   if (
     source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
@@ -121,9 +124,12 @@ export function migrateCronInferenceStandingGrantReferences(
     unchanged.operatorSource = source;
   }
   if (
-    previous.inferenceBinding !== undefined ||
     !inferenceBinding ||
-    !isDeepStrictEqual(previous, unchanged)
+    next.payload.kind !== "agentTurn" ||
+    !next.payload.model?.startsWith(inferenceBinding.provider + "/") ||
+    !next.payload.model.endsWith("@" + inferenceBinding.profileId) ||
+    next.payload.modelRuntime !== inferenceBinding.runtime ||
+    !isDeepStrictEqual(original, unchanged)
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }

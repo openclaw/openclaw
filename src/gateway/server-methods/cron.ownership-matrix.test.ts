@@ -51,10 +51,6 @@ vi.mock("../../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js")),
   getRuntimeConfig,
 }));
-vi.mock("../../cron/inference-binding.runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cron/inference-binding.runtime.js")>()),
-  captureCronInferenceBinding: async () => undefined,
-}));
 vi.mock("../../cron/delivery-preview.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cron/delivery-preview.js")>()),
   resolveCronDeliveryFailurePreview: async () => undefined,

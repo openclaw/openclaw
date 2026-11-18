@@ -639,7 +639,6 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
         expect(stored).toMatchObject({
           agentId: allowed.agentId,
           enabled: false,
-          inferenceBinding: { provider: "openai", profileId: "openai:template-scheduling" },
           operatorSource: {
             source: {
               kind: "gateway",
@@ -647,7 +646,7 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
             },
           },
         });
-        assert(stored?.inferenceBinding);
+        assert(stored);
         expect(stored.payload).not.toHaveProperty("model");
         // Controller B forces the unchanged job; each occurrence restores creator A's authority.
         const run = () =>

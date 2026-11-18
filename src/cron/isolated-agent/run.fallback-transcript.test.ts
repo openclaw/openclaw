@@ -12,7 +12,6 @@ import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { captureCronInferenceBinding } from "../inference-binding.runtime.js";
 import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 // Keep lazy runner imports outside the turn's timeout budget.
 import "./run-executor.runtime.js";
@@ -70,10 +69,6 @@ it("continues one cron user turn when the primary times out after provider dispa
         },
       ],
     });
-    const inferenceBinding = expectDefined(
-      await captureCronInferenceBinding({ cfg: config, agentId: "main" }),
-      "stored inference account",
-    );
     const requests: string[] = [];
     const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
     vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, options) => {
@@ -122,7 +117,6 @@ it("continues one cron user turn when the primary times out after provider dispa
       message,
       job: {
         ...createDueIsolatedJob({ id: "fallback-transcript", nowMs: 1, nextRunAtMs: 1 }),
-        inferenceBinding,
         name: "Fallback transcript proof",
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },

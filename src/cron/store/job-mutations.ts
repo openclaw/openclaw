@@ -290,12 +290,6 @@ export function planCronJobMutation(
       next.jobs = next.jobs.map((job) => (job.id === nextJob.id ? nextJob : job));
       return plan;
     }
-    // Declarative re-registration is not a fresh authorization of an existing account.
-    if (options.inferenceBinding && (!previousJob || mutation.kind === "update")) {
-      nextJob.inferenceBinding = options.inferenceBinding;
-    } else if (mutation.kind === "update" && options.inferenceBinding === null) {
-      delete nextJob.inferenceBinding;
-    }
     const explicitlyMutatesToolsAllow =
       mutation.kind === "add"
         ? mutation.input.payload.toolsAllow !== undefined
@@ -307,18 +301,6 @@ export function planCronJobMutation(
       runtimeAuthority: options.runtimeAuthority,
       explicitlyMutatesToolsAllow,
     });
-    // Neither an ordinary edit nor an app-only recovery flag proves fresh inference consent.
-    // Capture is admitted and rechecked by the caller's existing mutation commit guard.
-    if (
-      mutation.kind === "update" &&
-      (options.runtimeAuthority || options.inferenceBinding !== undefined)
-    ) {
-      delete nextJob.ownerTransferPending;
-    }
-    if (nextJob.runtimeAuthority) {
-      // Native inference authority replaces, rather than supplements, host credentials.
-      delete nextJob.inferenceBinding;
-    }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
       // Bind only records the parent link; the authenticated requester stays bound to an

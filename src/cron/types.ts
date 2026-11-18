@@ -469,10 +469,6 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
     source: import("../gateway/operator-run-recovery-source.codec.js").RestartRecoveryOperatorSource;
     executionRevision: string;
   };
-  /** A human transfer retired inference authority; only fresh capture clears this marker. */
-  ownerTransferPending?: true;
-  /** Captured inference owner; private and independent of scheduled tool authority. */
-  inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;

@@ -667,7 +667,6 @@ export type CronUpdateOptions = Pick<
   | "toolsAllowExecTarget"
   | "commitGuard"
   | "captureRuntimeAuthority"
-  | "inferenceBinding"
   | "execPolicy"
   | "streamExecApproval"
   | "streamSandbox"

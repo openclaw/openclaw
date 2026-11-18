@@ -240,87 +240,26 @@ while the response is pending.
 
 ### Inference account continuity
 
-New isolated agent-turn jobs privately retain their selected stored inference account
-and compatible authentication route. OAuth and API keys can remain enabled together:
-changing interactive defaults, profile order, or the job’s plain model selection does
-not switch the job’s account or billing route. Automatic ownership remains distinct
-from an explicit user profile pin. Token refresh within the same authorization is
-allowed. Deleting, replacing, or revoking that authorization refuses the job's models on
-that provider instead of switching to another of its accounts. Model and route
-compatibility still apply.
+Automations use the normal account selection for the agent and model. To pin an
+account, append `@<profileId>` to the model in the editor or use
+`openclaw automations edit <jobId> --model 'openai/gpt-4.1@openai:work'`.
+Remove the suffix to return to normal selection for that model. Use
+`openclaw models auth list --agent <agentId>` to find profile IDs. Tool and
+delivery accounts are separate.
 
-The recorded account governs only its own provider. Configured fallback models on other
-providers select their credentials live, the same way an interactive run does, so a job
-bound to one provider still fails over when that provider is out of quota or down. This
-also applies when the recorded account was replaced or removed: its provider is refused,
-and the rest of the fallback chain still runs. If a job has no model of its own and the
-default model moves to another provider, the job follows it with live credentials.
+The pin applies only to its provider. A deleted or revoked account makes
+candidates on that provider fail rather than charge another account. Configured
+fallback models from other providers still use their normal account selection.
+For Claude CLI's native sign-in, use `anthropic/<model>@anthropic:claude-cli`
+with the Claude CLI runtime. OpenClaw does not forward a stored credential for
+that native sign-in.
 
-At creation, account capture follows scheduled-model selection, including an
-allowed `model@profile` value in per-agent or global `subagents.model`. A disallowed
-scheduled model falls back without retaining that model's account.
-
-To change an account deliberately, update the job with a model/profile selection,
-for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
-For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
-the account the job's next unbound run would use: an explicit selection, or else the
-first account in the run's normal account order, ignoring temporary rate-limit
-cooldowns. With `auth.order` set, that is the account every earlier run used; without
-it, runs rotated between accounts of the same type by last use, and Doctor records one
-of them. When several accounts are eligible, Doctor names the others and the command
-to change the choice.
-Doctor can also adopt host-managed accounts on an explicitly selected Codex runtime; it records that runtime with the account. Native-owned or model-locked sessions remain unchanged.
-Doctor uses normal automation model selection, preserves inherited defaults and
-fallback lists, leaves existing bindings unchanged, and backs up cron state before
-committing. Missing accounts, and personal accounts needing their owner's
-authorization, are left unchanged with job-specific adoption instructions.
-Run `openclaw doctor --lint` to preview missing bindings. Add `--all` to inspect
-unavailable profiles referenced by saved account order. An empty per-agent credential store
-can be valid when credentials are inherited from the shared store; Doctor checks
-effective credentials before reporting a missing profile. It does not remove a
-missing profile from account order or recreate its credentials automatically.
-
-Managed updates and the standard container entrypoint run repairing Doctor before
-activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
-delaying cron readiness or operations. The scan has a five-second aggregate budget;
-if it expires, one warning reports how many jobs were not checked and points to
-`openclaw doctor --lint` for a complete check. Startup does not capture credentials
-or rewrite jobs.
-
-Keys in the environment or provider config have no stored account to record. A job
-on such a route stays unbound and runs on that key; once a stored account becomes eligible for its route, the
-job stops with the adoption instructions instead of switching to that account. Job
-creation follows the same rule. An account refusal ends the run; it never falls back
-to another model or provider. Credentialless models remain usable without an account.
-
-Unbound CLI-runtime automations need no inference binding when the CLI account
-selector chooses native login. If it selects a stored profile, scheduled runs refuse
-to borrow that account: Doctor, lint, and startup name the job and its explicit
-`openclaw automations edit <jobId> --model <provider/model>@<profileId>` recovery
-command. This edit also sets the primary model; Doctor never adopts CLI accounts
-automatically. To explicitly choose Claude CLI's native login, use
-`anthropic/<model>@anthropic:claude-cli` with the same edit command.
-OpenClaw does not forward a stored inference profile on the native-only path.
-Jobs with a saved inference binding keep using that account.
-Known provider-auth environment variables and the backend's credential exclusions
-are removed after environment overrides, even when the live-test preserve-env
-option is set. Runtime settings, such as the context window, are retained.
-For paired-node runs, the Gateway withholds host credentials on every node. Nodes
-advertising native-only auth support also use their own provider inventory to
-remove credentials. Older nodes retain their existing local environment behavior
-and receive no new invocation parameter. Update the node and approve its new
-capability to apply node-side filtering.
-
-Native runtime-owned jobs retain their runtime’s existing authorization checks, and a
-native connection cannot silently replace a job’s recorded host-managed inference account.
-An explicit update from an authorized native creator can adopt its runtime authority.
-An authorized `--model anthropic/<model>@anthropic:claude-cli` edit can replace a
-stored account with Claude CLI’s native login when the job’s execution route uses
-that CLI. This preserves the job’s identity, history and tool cap; ordinary
-model or default changes never clear a stored account.
-Moving a job to an agent with a different credential owner requires explicit account adoption.
-Tool and delivery accounts remain separate from the inference account.
+Upgrading from a version that saved accounts privately? Run
+`openclaw doctor --fix` before starting the Gateway after a manual upgrade.
+Doctor backs up cron state and reports each conversion to an explicit model and
+account, including the recorded runtime when present. It pauses jobs it cannot
+convert safely; review the reported model or account before re-enabling them.
+Jobs without a saved account aren't changed.
 
 `--model` selects the job's primary model ahead of any carried session preference. It does not erase the session's saved `/model` preference; that preference can apply again after the job's model is cleared. Configured fallback chains still apply. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
@@ -345,7 +284,7 @@ Fast mode follows the resolved live selection. Isolated automation resolves it i
 
 When a runtime reports token usage without a cost, automation estimates use the selected agent's local `models.json` prices and the model metadata retained for that run.
 
-If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that model selection for the active run. A job with a recorded inference account retains that account and its compatible authentication route; a switch cannot adopt a different account. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
+If a run hits a live model-switch handoff, the scheduler retries with the switched provider/model and persists that model selection for the active run. A pinned account still applies to candidates on its provider. Retries are bounded: after the initial attempt plus 2 switch retries, the scheduler aborts instead of looping.
 
 Before an isolated run starts, OpenClaw checks reachable local endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. This preflight walks the job's configured fallback chain and only marks the run `skipped` once every candidate is unreachable; `--fallbacks ""` keeps that walk strict to just the primary model, and a user-selected stored session model keeps it strict to that model. A down endpoint records the run as `skipped` with a clear error instead of starting a model call. The result is cached for 5 minutes per endpoint (not per job or model), so many due jobs sharing a dead local Ollama/vLLM/SGLang/LM Studio server cost one check instead of a request storm. Skipped preflight runs do not increment execution-error backoff. They use the existing [failure-alert policy](/automation/cron-jobs/delivery#failure-notifications) without requiring `failureAlert.includeSkipped`; recurring jobs remain enabled and recover automatically when a later preflight finds the provider reachable.
 
@@ -527,7 +466,7 @@ With `announce`, agent, command, and script results belong to the chat or topic 
   <Accordion title="Main session vs current vs isolated vs custom">
     **Main session** jobs run their system event or agent-turn payload through the owning agent’s ordinary session queue, with that session’s existing context and delivery context. The automation remains running until the turn settles; queue acceptance alone is not success. Internal automation turns do not extend daily or idle reset freshness; only visible user activity updates session freshness. **Current-session** jobs run as a child of the conversation that created them: each run has its own `cron:<jobId>` run session, works with that conversation's resources and authority, reads a bounded tail of the conversation, and delivers the final visible assistant result to the resolved destination (the creating conversation when no external route is configured). **Isolated** jobs run a dedicated agent turn with a fresh session. **Custom sessions** (`session:xxx`) persist context across runs, enabling workflows like daily standups that build on previous summaries.
 
-    `current` binds conversation context, not the original agent execution; announce results belong to the resolved delivery destination. The child run has its own session identity and captured tool restrictions, and the conversation's own session row is not changed by it. While the conversation is current, a linked `current` job uses that conversation's dashboard and memory. It runs on its own scheduled model (its `--model`, or the agent's default) with the runtime and inference account recorded when the job was created, so switching the conversation's model or runtime later does not change the job's runs. A job with no recorded account, such as one on a CLI backend that uses its own login, keeps following the conversation's model selection. So does a job whose account was recorded before OpenClaw recorded runtimes, until its account is selected again with `--model <provider/model>@<profile>`. A `current` or `isolated` job linked to the conversation that created it works in that conversation's saved workspace and working directory while the conversation is current, at the workspace root rather than a subdirectory, and keeps the conversation's required sandbox. An unlinked job, or one whose conversation was reset, uses the scheduled agent's workspace. A job whose conversation was removed or archived, or whose bound worktree is gone, pauses instead of running. Resetting the conversation during a run ends the run: OpenClaw tools refuse further effects, and a CLI backend's process is stopped so its own file tools cannot keep writing to the workspace. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
+    `current` binds conversation context, not the original agent execution; announce results belong to the resolved delivery destination. The child run has its own session identity and captured tool restrictions, and the conversation's own session row is not changed by it. While the conversation is current, a linked `current` job uses that conversation's dashboard and memory. An explicit job model takes precedence over the conversation’s model. Without a job model, it uses the normal scheduled model selection. A `current` or `isolated` job linked to the conversation that created it works in that conversation's saved workspace and working directory while the conversation is current, at the workspace root rather than a subdirectory, and keeps the conversation's required sandbox. An unlinked job, or one whose conversation was reset, uses the scheduled agent's workspace. A job whose conversation was removed or archived, or whose bound worktree is gone, pauses instead of running. Resetting the conversation during a run ends the run: OpenClaw tools refuse further effects, and a CLI backend's process is stopped so its own file tools cannot keep writing to the workspace. It does not inherit the conversation's cloud worker placement. Messages sent to the job's cron session address its latest run, independently of the bound conversation. In-flight turns sent through that stable cron key are canceled if the key is reassigned. A task-specific checkout path in the prompt does not grant access to it. Before using a job to continue repository work, verify that its execution environment can access the required checkout and tools; otherwise keep the work with its existing execution owner. A result committed to the conversation does not itself resume the original agent.
 
     Custom-session agent turns enter the session's ordinary turn queue and wait for active work before preparing context, so a scheduled tick cannot invalidate an in-progress compaction. The automation remains running until that turn settles; queue acceptance alone does not count as success. Saved authenticated continuations retain their original source and its current permissions through execution and delivery.
 

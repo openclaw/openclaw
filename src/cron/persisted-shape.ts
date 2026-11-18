@@ -77,6 +77,7 @@ type InvalidPersistedCronJobReason =
   | "invalid-state"
   | "invalid-plugin-command"
   | "invalid-execution-policy"
+  | "inference-account-needs-doctor"
   | "unsatisfiable-schedule"
   | "invalid-trigger"
   | "missing-payload"
@@ -86,6 +87,13 @@ type InvalidPersistedCronJobReason =
 export function getInvalidPersistedCronJobReason(
   candidate: Record<string, unknown>,
 ): InvalidPersistedCronJobReason | null {
+  // Fail closed if a manually upgraded Gateway starts before Doctor has moved the pin.
+  if (
+    Object.hasOwn(candidate, "inferenceBinding") ||
+    Object.hasOwn(candidate, "ownerTransferPending")
+  ) {
+    return "inference-account-needs-doctor";
+  }
   const id = candidate.id;
   if (typeof id !== "string" || !id.trim()) {
     return "missing-id";
