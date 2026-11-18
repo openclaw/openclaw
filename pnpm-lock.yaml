@@ -227,7 +227,6 @@ patchedDependencies:
   minizlib@3.1.0: 9669b7a5b10b7831ff19c6066787f9dbed0dca18685d6ea8a17bad8282c3f39c
   playwright-core@1.64.1: eedf680682a6840d82c6ad530a60875857aa8c0372785acf8e8e5df9c2e3ac16
   proper-lockfile@4.1.2: ef83b3d51ecb27f8b06d2a3660d509c3da303d7e1d2074712b0ecc2f6256b7cf
-  tar@7.5.22: fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c
   vitest@5.0.5: a2a78abe9470cc2ceb0d4eeb81acfc62d6180e9990bc866a7771ba60b1320ea6
 
 importers:
@@ -434,7 +433,7 @@ importers:
         version: 7.8.5
       tar:
         specifier: 7.5.22
-        version: 7.5.22(patch_hash=fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c)
+        version: 7.5.22
       tslog:
         specifier: 5.4.0
         version: 5.4.0
@@ -18845,7 +18844,7 @@ snapshots:
       - bare-buffer
       - react-native-b4a
 
-  tar@7.5.22(patch_hash=fd38a2350a01d3eec80c7c393b88647baea164251683cffc481cb3aa5df2a75c):
+  tar@7.5.22:
     dependencies:
       '@isaacs/fs-minipass': 4.0.1
       chownr: 3.0.0

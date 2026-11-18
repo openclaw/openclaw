@@ -19,7 +19,6 @@ const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   ["@openclaw/crabline@0.2.0", "patches/@openclaw__crabline@0.2.0.patch"],
   ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
   ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
-  ["tar@7.5.22", "patches/tar@7.5.22.patch"],
   ["chrome-devtools-mcp@1.12.0", "patches/chrome-devtools-mcp@1.12.0.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
   ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],

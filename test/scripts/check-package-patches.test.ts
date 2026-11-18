@@ -44,7 +44,6 @@ it("allows approved pnpm patches together", () => {
     ["@openclaw/crabline@0.2.0", "patches/@openclaw__crabline@0.2.0.patch"],
     ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
     ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
-    ["tar@7.5.22", "patches/tar@7.5.22.patch"],
     ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],
     ["vitest@5.0.5", "patches/vitest@5.0.5.patch"],
     ["matrix-js-sdk@44.0.0", "patches/matrix-js-sdk@44.0.0.patch"],
@@ -67,6 +66,7 @@ it("allows approved pnpm patches together", () => {
 
 it.each([
   ["left-pad@1.3.0", "patches/left-pad@1.3.0.patch"],
+  ["tar@7.5.22", "patches/tar@7.5.22.patch"],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
   ["matrix-js-sdk@42.4.1", "patches/matrix-js-sdk@42.4.1.patch"],

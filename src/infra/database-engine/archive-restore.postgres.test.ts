@@ -6,7 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { describe, expect, it, vi } from "vitest";
 import { backupRestoreCommand } from "../../commands/backup-restore.js";
 import { verifyBackupArchive } from "../../commands/backup-verify.js";
