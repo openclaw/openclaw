@@ -352,7 +352,7 @@ it.each<InvalidPatch>([
   [
     "disabledScript",
     () => createTestJob(agentInput()),
-    { payload: { kind: "script", script: "return {}" } },
+    { check: { script: "return {}" } },
     { cronConfig: { triggers: { enabled: false } } },
   ],
   ["channel", explicitChannelJob, { delivery: { channel: "last" } }, options],

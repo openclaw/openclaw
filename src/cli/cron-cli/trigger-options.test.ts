@@ -172,8 +172,8 @@ it("validates trigger files before reading an existing job", async () => {
   await fs.writeFile(path.join(dir, "empty.js"), " \n");
   await fs.writeFile(path.join(dir, "oversized.js"), "x".repeat(65_537));
   for (const [file, message] of [
-    ["empty.js", "Trigger script must not be empty"],
-    ["oversized.js", "Trigger script exceeds 65536 bytes"],
+    ["empty.js", "Check script must not be empty"],
+    ["oversized.js", "Check script exceeds 65536 bytes"],
     ["missing.js", "ENOENT"],
   ] as const) {
     vi.mocked(defaultRuntime.error).mockClear();
