@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronJobsListResponse } from "../test-helpers/cron.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -334,6 +335,7 @@ suite.define(() => {
         await installMockGateway(page, {
           sessionKey,
           historyMessages: [{ role: "assistant", content: "Reload keeps the composer still." }],
+          methodResponses: route === "chat" ? { "cron.list": cronJobsListResponse() } : undefined,
         });
         await page.goto(
           route === "chat"
@@ -341,6 +343,26 @@ suite.define(() => {
             : suite.server.baseUrl + "new",
         );
         await page.locator(".agent-chat__composer-shell").waitFor();
+        if (route === "chat") {
+          // Reload persisted Details geometry instead of replaying its first uncached entrance.
+          await page.waitForFunction((targetKey) => {
+            const pane = document.querySelector(".chat-pane-cache__pane--active");
+            const cache = pane && Reflect.get(pane, "state")?.chatMessagesBySession;
+            const snapshot =
+              cache && [...cache].find(([key]) => key.endsWith(`\u0000${targetKey}`))?.[1].snapshot;
+            return (
+              snapshot?.details?.docking?.wide &&
+              snapshot.details.subagents &&
+              snapshot.details.automations
+            );
+          }, sessionKey);
+          await page.evaluate(async () => {
+            await Reflect.get(
+              document.querySelector(".chat-pane-cache__pane--active")!,
+              "sessionSnapshotStore",
+            ).flush();
+          });
+        }
         await waitForLayoutSettled(page, ".agent-chat__composer-shell");
         const expectedWidth = await page
           .locator(".agent-chat__composer-shell")
