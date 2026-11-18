@@ -213,9 +213,7 @@ function inconclusiveInspectionStep(
   gitRelease: boolean,
   continues: boolean,
 ): UpdateStepResult {
-  const state = gitRelease
-    ? "The previous Gateway kept serving and no data was changed."
-    : "No data was changed because no new-version process had opened the state.";
+  const state = "No data was changed because no new-version process had opened the state.";
   const outcome = !continues
     ? ""
     : gitRelease
@@ -285,20 +283,19 @@ export async function reinspectInconclusiveGitReleaseState(
       env: params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env,
       timeoutMs: params.updateStepTimeoutMs,
     });
-    if (blocked || retried.status !== "ok") {
+    // Reversing a recorded hold needs a complete reread that matches the baseline;
+    // an inconclusive reread only appends its warning.
+    if (blocked || retried.status !== "ok" || retried.steps.length !== recordedSteps) {
       return params;
     }
-    // An inconclusive reread already recorded its own warning in place of this one.
-    if (retried.steps.length === recordedSteps) {
-      retried.steps.splice(
-        failedIndex,
-        0,
-        schemaVerificationAdvisory(
-          failed.cwd,
-          `The installed updater's copy of the live stores did not stabilize while the previous Gateway kept writing (${oneLine(failed.stderrTail)}). The new release reread them directly: no schema moved and no data was changed. The update continues.`,
-        ),
-      );
-    }
+    retried.steps.splice(
+      failedIndex,
+      0,
+      schemaVerificationAdvisory(
+        failed.cwd,
+        `The installed updater's copy of the live stores did not stabilize while the previous Gateway kept writing (${oneLine(failed.stderrTail)}). The new release reread them directly: no schema moved and no data was changed. The update continues.`,
+      ),
+    );
     return { ...params, result: retried, rollbackBlockedReason: undefined };
   } catch {
     // The recheck is best effort; the recorded outcome still stands.
