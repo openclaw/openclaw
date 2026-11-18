@@ -114,22 +114,23 @@ it("records once its own store's turn settles while another store stays busy", a
   const [ownStore, otherStore] = [state.path("own.json"), state.path("other.json")];
   const own = { agentId: "main", storePath: ownStore, sessionKey, sessionId: "own" };
   await upsertSessionEntry({ ...own, entry: { sessionId: "own", updatedAt: 1 } });
-  const finishes = [createDeferred(), createDeferred()];
-  const starts = [createDeferred(), createDeferred()];
-  const turns = [ownStore, otherStore].map((storePath, index) =>
-    withSessionTurn(
-      { sessionKey, sessionId: `t${index}`, storePath, agentId: "main" },
+  const runTurn = (storePath: string, sessionId: string) => {
+    const [started, finish] = [createDeferred(), createDeferred()];
+    const turn = withSessionTurn(
+      { sessionKey, sessionId, storePath, agentId: "main" },
       async (operation) => {
         markReplyOperationExecutionStarted(operation!);
-        starts[index].resolve();
-        await finishes[index].promise;
+        started.resolve();
+        await finish.promise;
       },
-    ),
-  );
-  await Promise.all(starts.map((start) => start.promise));
+    );
+    return { started, finish, turn };
+  };
+  const [ownTurn, otherTurn] = [runTurn(ownStore, "t0"), runTurn(otherStore, "t1")] as const;
+  await Promise.all([ownTurn.started.promise, otherTurn.started.promise]);
   onTestFinished(async () => {
-    finishes[1].resolve();
-    await Promise.all(turns);
+    otherTurn.finish.resolve();
+    await Promise.all([ownTurn.turn, otherTurn.turn]);
   });
 
   await expect(
@@ -142,8 +143,8 @@ it("records once its own store's turn settles while another store stays busy", a
       replyText: "Choose level for /think.",
     }),
   ).resolves.toMatchObject({ ok: false, reason: "deferred until the active turn settles" });
-  finishes[0].resolve();
-  await turns[0];
+  ownTurn.finish.resolve();
+  await ownTurn.turn;
   // The other store's turn is still running; it must not hold this exchange back.
   await vi.waitFor(
     async () => expect(await readVisibleSessionTranscriptMessageEntries(own)).toHaveLength(2),
