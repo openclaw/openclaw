@@ -185,7 +185,13 @@ export function renderSanitizedMarkdown(
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
     rendered = toPlainTextElement(input, renderOptions);
   }
-  return sanitizer.sanitize(rendered);
+  const html = sanitizer.sanitize(rendered);
+  if (html.includes("<openclaw-math")) {
+    void import("./markdown-math-element.tsx").catch((error: unknown) => {
+      console.warn("[markdown] Math rendering unavailable:", error);
+    });
+  }
+  return html;
 }
 
 // Bare JSON bypasses Markdown normalization, which can alter literal Unicode separators.

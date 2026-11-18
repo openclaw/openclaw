@@ -225,6 +225,7 @@ export function createUiBrowserVitestConfig(
         "ipaddr.js",
         "json5",
         "jsonc-parser",
+        "katex",
         "markdown-it",
         "markdown-it-cjk-friendly",
         "markdown-it-emoji/lib/data/full.mjs",

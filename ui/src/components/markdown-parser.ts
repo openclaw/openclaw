@@ -22,6 +22,7 @@ import {
 import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
+import { installMarkdownMath } from "./markdown-math.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
@@ -140,6 +141,7 @@ export function createMarkdownParser(): MarkdownItParser {
   });
   markdownParser.use(markdownItCjkFriendly);
   markdownParser.enable("strikethrough");
+  installMarkdownMath(markdownParser);
   markdownParser.block.ruler.before(
     "reference",
     "audio_transcript",
