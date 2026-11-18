@@ -245,7 +245,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   const newSession: TranslationMap = {};
   for (const [key, value] of Object.entries(registerNewSessionSetupEnglish.catalog.newSession)) {
     newSession[key] = value;
-    if (key === "worktree") {
+    if (key === "browse") {
       for (const workspaceKey of [
         "newWorkspace",
         "newWorkspaceDescription",

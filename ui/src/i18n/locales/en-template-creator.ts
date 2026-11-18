@@ -4,12 +4,9 @@ import { en } from "./en.ts";
 
 const enTemplateCreator = {
   templatesDraft: {
-    railHint: "Turn this agent into a shareable template",
     reviewTitle: "Review your template",
-    intro: "Preview the assembled package, then publish it to ClawHub.",
     name: "Name",
     description: "Description",
-    behavior: "Behavior and authority",
     input: "Input",
     output: "Output",
     authority: "Authority",
@@ -63,9 +60,6 @@ const enTemplateCreator = {
       timeout: "Timeout",
       connectTimeout: "Connection timeout",
     },
-    packageContents: "Package contents",
-    packageNote:
-      "These are the exact text files in the current archive. Dependencies above are declarations.",
     view: "View",
     viewAll: "View all",
     updating: "Updating package preview…",

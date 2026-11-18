@@ -39,8 +39,6 @@ const enSessionPlacement = {
     stopDeviceWorker: "Stop session on device…",
     offlineDeviceStopUnavailable:
       "Reconnect the device to stop and sync its workspace, or continue on the Gateway.",
-    stopDeviceWorkerConfirm: "Stop “{session}” on its device?",
-    stopDeviceWorkerConfirmAction: "Stop",
     restartSession: "Restart session…",
     restartingSession: "Restarting session…",
     restartSessionTitle: "Restart this session?",

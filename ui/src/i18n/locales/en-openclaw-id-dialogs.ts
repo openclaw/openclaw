@@ -43,8 +43,6 @@ const enOpenClawIdDialogs = {
       "{device} disconnects now. To use it again, approve it from another device or use your recovery kit.",
     revokeCascade:
       "{device} loses access now, and so do the devices it approved: {devices}. To restore access, approve them from another device or use your recovery kit.",
-    notOwnerDevice:
-      "This browser can view devices but cannot remove their access. Use one of your approved owner browsers to make changes.",
     recoveryKitLine:
       "Keep your recovery kit safe. You need it if you lose access to all your devices.",
     signedInLinkCode: "Signed in as {account}.",
@@ -66,7 +64,6 @@ const enOpenClawIdDialogs = {
     welcomeDone: "People here see you as {name}. You can change this in Profile.",
     dialogTitle: "Turn on remote access",
     dialogDescription: "Open this claw from your other devices.",
-    nameBody: "Choose a name for this claw.",
     enrollmentCode: "Link code",
     enrollmentCodeHint: "Paste the code from the Add a claw page.",
     getLinkCode: "Get a link code",
@@ -77,15 +74,10 @@ const enOpenClawIdDialogs = {
     nameTaken: "https://{host} is taken. Choose another name.",
     continue: "Continue",
     ownerKeyTitle: "Protect your access",
-    ownerKeyBody:
-      "You control who can use this claw. Save a recovery kit so you can get back in if you lose your devices.",
-    createOwnerKey: "Create recovery kit",
     kitTitle: "Save your recovery kit",
-    kitHeading: "OpenClaw Recovery Kit",
     kitBody:
       "Save this kit somewhere safe. You need it to recover this claw if you lose your devices. It appears only once.",
     kitOwnerFingerprint: "Recovery kit ID",
-    kitOwner: "Owner",
     kitClaw: "First claw",
     kitCreated: "Created",
     kitWarning:
