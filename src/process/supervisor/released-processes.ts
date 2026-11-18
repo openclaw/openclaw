@@ -113,18 +113,41 @@ function processGroupOf(pid: number): number | undefined {
   }
 }
 
+/** Members that outlive the survivor keep the rest of the shared grace, then are forced. */
+async function forceGroupAfterGrace(pgid: number, graceEnds: number): Promise<void> {
+  const groupAlive = () => {
+    try {
+      process.kill(-pgid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  while (groupAlive() && Date.now() < graceEnds) {
+    await sleep(100);
+  }
+  if (groupAlive()) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      // The group emptied.
+    }
+  }
+}
+
 /**
  * SIGTERM, then SIGKILL after the cancel grace; each signal re-checks process identity.
  * A group stop signals the group the survivor ran in at hand-off, while it still runs there,
  * so children it forked after adoption stop with it. That group was created for its command,
- * never the Gateway's own. Accepted edge: a group emptied in the instant after the survivor
- * exited can be reused before the final SIGKILL.
+ * never the Gateway's own. Accepted edge: a group emptied in the instant before the final
+ * SIGKILL can be reused.
  */
 async function terminate(
   entry: Pick<AdoptedProcess, "pid" | "startTime" | "pgid">,
   group: boolean,
 ): Promise<StopOutcome> {
   let pgid: number | undefined;
+  const graceEnds = Date.now() + GRACEFUL_CANCEL_TIMEOUT_MS;
   // "sent", "gone", or the reason the signal failed.
   const signal = async (
     name: NodeJS.Signals,
@@ -154,13 +177,8 @@ async function terminate(
     return { status: "stopped" };
   }
   if ("result" in term && (await waitForExit(entry, GRACEFUL_CANCEL_TIMEOUT_MS))) {
-    // Group members that outlived the grace are forced too.
     if (pgid) {
-      try {
-        process.kill(-pgid, "SIGKILL");
-      } catch {
-        // The group already emptied.
-      }
+      await forceGroupAfterGrace(pgid, graceEnds);
     }
     return { status: "stopped" };
   }
