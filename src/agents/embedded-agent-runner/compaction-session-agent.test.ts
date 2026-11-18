@@ -5,6 +5,7 @@ import {
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import type { StreamFn } from "../runtime/index.js";
 import { AuthStorage } from "../sessions/auth-storage.core.js";
 import { ModelRegistry } from "../sessions/model-registry.core.js";
@@ -75,11 +76,16 @@ async function prepare() {
       effectiveWorkspace: "/fixture",
       agentDir: "/fixture/agent",
       contextTokenBudget: 32_768,
-      runtimePlan: undefined,
+      runtimePlan: buildAgentRuntimePlan({
+        provider: "fixture",
+        modelId: "fixture",
+        model,
+        workspaceDir: "/fixture",
+      }),
       resolvedMessageProvider: undefined,
       modelRegistry: ModelRegistry.inMemory(authStorage),
       hasRuntimeAuthExchange: false,
-      apiKeyInfo: undefined,
+      apiKeyInfo: { source: "fixture", mode: "api-key" },
       params: { sessionId: "fixture-session-id", sessionKey: "fixture-session" },
       trigger: "manual",
     },
