@@ -4,12 +4,13 @@
  * Default fixture: 50,000 events / 220,291,661 raw UTF-8 bytes, qualified navigation and full FTS.
  * Run against a fresh copy: --state-dir <copy> [--source-root <baseline-checkout>] [--sweep].
  * --sweep selects the candidate's deferred cleanup; baseline has no sweep operation.
- * --profile records native SQL, zstd and iterator costs separately from uninstrumented timings.
+ * --profile records native SQL and zstd costs separately from uninstrumented timings.
  * --flow uses actual maintenance and concurrent transcript appends, with the companion observer preloaded:
  * NODE_OPTIONS=--import=./scripts/perf/session-cold-writer-observer.mjs node --import ./scripts/tsx.mjs \
  *   scripts/perf/session-cold-writer.mjs --state-dir <copy> --flow
+ * --restore-flow measures public restoration and concurrent appends from a closed cold fixture.
  * Imports, fixture generation, pre/post digests and close are outside measured owner timings.
- * Archive elapsed includes preparation + publication + all cleanup sweeps; restore remains one transaction.
+ * Elapsed includes preparation and all bounded writes through final publication.
  * Holds include COMMIT, exclude BEGIN wait. Native profile timings include instrumentation overhead.
  * Set OPENCLAW_COLD_WRITER_PROFILE_DIR to an existing directory for sampled allocations
  * (including collected objects) and CPU profiles, flushed before worker teardown.
