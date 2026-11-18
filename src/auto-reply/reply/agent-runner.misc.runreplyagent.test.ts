@@ -49,6 +49,7 @@ import {
   runCliAgentMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
+  registerRawTracePayloadTest,
   runtimeErrorMock,
   sessionFixture,
   sessionState,
@@ -682,75 +683,20 @@ describe("runReplyAgent Active Memory inline debug", () => {
     },
   );
 
-  it("appends raw trace payloads with escaped fences when trace raw is enabled", async () => {
-    const { sessionKey, reply } = await storedSession({ traceLevel: "raw" });
-
-    runWithModelFallbackMock.mockImplementationOnce(async (params: RunWithModelFallbackParams) => ({
-      result: await runFallbackModelAttempt(params, "anthropic", "claude", "timeout"),
-      provider: "anthropic",
-      model: "claude",
-      attempts: [
-        {
-          provider: "openai",
-          model: "gpt-5.5",
-          error: "LLM request timed out.",
-          reason: "timeout",
-          status: 408,
+  registerRawTracePayloadTest({
+    run: (sessionKey, reply) =>
+      channelRun("telegram", "chat:1", {
+        context: { CommandBody: "/trace raw show me everything" },
+        run: {
+          agentId: "main",
+          sessionKey,
+          sessionFile: sessionKey,
+          reasoningLevel: "on",
+          thinkLevel: "low",
+          traceAuthorized: true,
         },
-      ],
-    }));
-    runEmbeddedAgentMock.mockImplementationOnce(async () => {
-      return replyResult("Visible reply", {
-        finalPromptText:
-          "Context:\n<active_memory_plugin>\nPrefer from/to failover logs.\n</active_memory_plugin>\n\n/trace raw show me everything\n~~~\nnot a fence",
-        finalAssistantVisibleText: "Visible reply",
-        finalAssistantRawText: "<final>Visible reply\n~~~\nresponse</final>",
-        executionTrace: {
-          winnerProvider: "anthropic",
-          winnerModel: "claude",
-          runner: "embedded",
-          fallbackUsed: false,
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              result: "success",
-              stage: "assistant",
-              elapsedMs: 4200,
-            },
-          ],
-        },
-      });
-    });
-
-    const result = await channelRun("telegram", "chat:1", {
-      context: { CommandBody: "/trace raw show me everything" },
-      run: {
-        agentId: "main",
-        sessionKey,
-        sessionFile: sessionKey,
-        reasoningLevel: "on",
-        thinkLevel: "low",
-        traceAuthorized: true,
-      },
-      reply,
-    }).run();
-
-    expect(Array.isArray(result)).toBe(true);
-    expect((result as { text?: string }[])[0]?.text).toBe("Visible reply");
-    const traceText = (result as { text?: string }[])[1]?.text ?? "";
-    expect(traceText).toContain("winner=anthropic/claude");
-    expect(traceText).toContain("fallbackUsed=yes");
-    expect(traceText).toContain("attempts=2");
-    expect(traceText).toContain("1. openai/gpt-5.5");
-    expect(traceText).toContain("result=timeout");
-    expect(traceText).toContain("status=408");
-    expect(traceText).toContain("2. anthropic/claude");
-    expect(traceText).toContain("result=success");
-    expect(traceText).toContain("🔎 Model Input (User Role):");
-    expect(traceText).toContain("🔎 Model Output (Assistant Role):");
-    expect(traceText).toContain("show me everything\n\\~~~\nnot a fence");
-    expect(traceText).toContain("<final>Visible reply\n\\~~~\nresponse</final>");
+        reply,
+      }).run(),
   });
 });
 

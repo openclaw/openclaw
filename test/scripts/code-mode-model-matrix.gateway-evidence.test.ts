@@ -24,6 +24,7 @@ import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fix
 import {
   collectGatewayMatrixTrace,
   createGatewayMatrixWorkload,
+  requireGatewayMatrixTools,
 } from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   BUILD_STAMP_FILE,
@@ -517,10 +518,41 @@ it.each([
     cost: { total: 0.5 },
     usageReport: { state: "unavailable" },
   });
+  unavailable.message.content.push({
+    type: "toolCall",
+    id: "unavailable",
+    name: "exec",
+    arguments: { code: "return await matrix_read({});" },
+  });
   const trace = collectGatewayMatrixTrace([
     ...(known === "before" ? [observed] : []),
     unavailable,
+    {
+      customType: "openclaw.nested-tool.v1",
+      details: {
+        parentToolCallId: "unavailable",
+        toolName: "matrix_read",
+        input: {},
+        result: { content: [], details: { value: 1 } },
+        isError: false,
+      },
+    },
+    {
+      message: {
+        role: "toolResult",
+        toolCallId: "unavailable",
+        toolName: "exec",
+        details: { status: "completed", value: 1 },
+      },
+    },
     ...(known === "after" ? [observed] : []),
+  ]);
+  expect(trace.calls).toMatchObject([{ id: "unavailable", name: "exec" }]);
+  expect(trace.outcomes).toMatchObject([
+    { id: "unavailable", details: { status: "completed", value: 1 } },
+  ]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "matrix_read", result: { value: 1 } }),
   ]);
   expect(trace.usage).toBeUndefined();
   expect(trace.costUsd).toBeUndefined();
@@ -537,7 +569,13 @@ it.each([
 
 function matrixUsageEvent(usage?: Record<string, unknown>) {
   return {
-    message: { role: "assistant", provider: "openai", model: "fixture", usage, content: [] },
+    message: {
+      role: "assistant",
+      provider: "openai",
+      model: "fixture",
+      usage,
+      content: [] as { type: string; id: string; name: string; arguments: { code: string } }[],
+    },
   };
 }
 
@@ -570,3 +608,24 @@ it("retains genuinely measured zero usage and cost", () => {
   expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
   expect(trace.costUsd).toBe(0);
 });
+
+it.each(["registered", "wrong-plugin"] as const)(
+  "requires the fixture's registered capability: %s",
+  (registration) => {
+    const required = ["exec", "matrix_invoice_export"];
+    const tools = [
+      { id: "exec", source: "core" },
+      {
+        id: "matrix_invoice_export",
+        source: "plugin",
+        pluginId: registration === "registered" ? "code-mode-matrix-fixture" : "unrelated-plugin",
+      },
+    ];
+    const check = () => requireGatewayMatrixTools({ groups: [{ tools }] }, required);
+    if (registration === "registered") {
+      expect(check()).toEqual(required);
+    } else {
+      expect(check).toThrow("preflight failed before model call: matrix_invoice_export");
+    }
+  },
+);

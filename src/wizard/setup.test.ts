@@ -24,6 +24,7 @@ import {
   expectSavedSetupCredential,
   modelConfigWithApiKey,
   openAiAuthProfile,
+  registerSetupCompletionTests,
 } from "./setup.credentials.test-support.js";
 import { createGatewayPasswordRefConfig } from "./setup.finalize.fixtures.test-support.js";
 import { runSetupWizard } from "./setup.js";
@@ -500,6 +501,14 @@ describe("runSetupWizard", () => {
     runSetupMemoryImportStep.mockReset().mockResolvedValue(undefined);
     runMemorySetupFlow.mockReset().mockImplementation(async (config) => config);
     ensureOnboardingConfig.mockClear();
+  });
+
+  registerSetupCompletionTests({
+    finalizeSetupWizard,
+    runSearchSetupFlow,
+    runWizard,
+    createRuntime,
+    readInitialConfig,
   });
 
   const configuredRemoteProbeArgs = {

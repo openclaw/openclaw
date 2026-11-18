@@ -234,6 +234,10 @@ function invoke(
   });
 }
 
+function expectUnsupported(response: Awaited<ReturnType<typeof runRoute>>, message: string) {
+  expectResponseContaining(response, { error: expect.stringContaining(message) }, 501);
+}
+
 function expectLabelCleanup() {
   expect(evaluate).toHaveBeenLastCalledWith(
     expect.objectContaining({ signal: undefined, fn: expect.stringContaining("node.remove()") }),
@@ -263,6 +267,16 @@ describe("existing-session browser routes", () => {
       .mockResolvedValue(true)
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(true);
+  });
+
+  it("forwards an empty select value to Chrome MCP", async () => {
+    const value = "";
+    const response = await invoke("act", { kind: "select", ref: "select-1", values: [value] });
+
+    expect(response.statusCode).toBe(200);
+    expect(mcp.selectChromeMcpOption).toHaveBeenCalledWith(
+      expect.objectContaining({ targetId: "7", uid: "select-1", value }),
+    );
   });
 
   it("preserves screenshot cancellation when label cleanup fails", async () => {
@@ -483,6 +497,32 @@ describe("existing-session browser routes", () => {
     });
   });
 
+  it("rejects selector-based element screenshots for existing-session profiles", async () => {
+    const response = await invoke("screenshot", { element: "#submit" });
+
+    expect(response.statusCode).toBe(400);
+    const body = requireRecord(response.body, "response body");
+    expect(String(body.error)).toContain("element screenshots are not supported");
+    expect(screenshotMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["act", { kind: "wait", loadState: "networkidle" }, "loadState=networkidle", evaluate],
+    [
+      "act",
+      { kind: "type", ref: "input-1", text: "hello", timeoutMs: 1234 },
+      "type does not support timeoutMs",
+      fill,
+    ],
+    ["dialog", { accept: true, dialogId: "d1" }, "dialogId", evaluate],
+  ] as const)(
+    "rejects unsupported existing-session %s/%s before effects",
+    async (routeName, body, error, effect) => {
+      expectUnsupported(await runRoute(route(routeName), { body }), error);
+      expect(effect).not.toHaveBeenCalled();
+    },
+  );
+
   it("explains unsupported focused paste without forwarding or echoing its text", async () => {
     const response = await invoke("act", { kind: "insertText", text: "synthetic-password-paste" });
 
@@ -498,6 +538,39 @@ describe("existing-session browser routes", () => {
     expect(JSON.stringify(response.body)).not.toContain("synthetic-password-paste");
     expect(fill).not.toHaveBeenCalled();
     expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("supports glob URL waits for existing-session profiles", async () => {
+    const probe = vi.fn(async (_fn: string) => "https://example.com/");
+    withDocument.mockImplementationOnce(async (_params, task) => await task({ evaluate: probe }));
+
+    const response = await invoke("act", { kind: "wait", url: "**/example.com/" });
+
+    expectResponseContaining(response, { ok: true, targetId: "7" });
+    const documentParams = requireRecord(withDocument.mock.calls[0]?.[0], "document params");
+    expect(documentParams).toMatchObject(existingTarget);
+    expect(documentParams.userDataDir).toBeUndefined();
+    expect(probe).toHaveBeenCalledOnce();
+    expect(String(probe.mock.calls[0]?.[0])).toContain("location.href");
+  });
+
+  it("forwards click timeoutMs to the existing-session click executor", async () => {
+    const ctrl = new AbortController();
+    const response = await runRoute(route("act"), {
+      body: { kind: "click", ref: "btn-1", timeoutMs: 1234 },
+      signal: ctrl.signal,
+    });
+
+    expect(response.statusCode).toBe(200);
+    const clickParams = requireRecord(click.mock.calls[0]?.[0], "click params");
+    expect(clickParams).toMatchObject(existingTarget);
+    expect(clickParams.uid).toBe("btn-1");
+    expect(clickParams.doubleClick).toBe(false);
+    expect(clickParams.timeoutMs).toBe(1234);
+    expect(clickParams.signal).toBeInstanceOf(AbortSignal);
+    const reason = new Error("caller cancelled");
+    ctrl.abort(reason);
+    expect(clickParams.signal).toMatchObject({ aborted: true, reason });
   });
 
   it("supports coordinate clicks for existing-session profiles", async () => {
@@ -636,6 +709,19 @@ describe("existing-session interaction navigation guard", () => {
     setWaitReadyAfter(30_000);
     const request = await startClientAction({ kind: "wait", text: "ready" });
     await expectPendingThenSuccess(request, 25_001, 4_999, successfulTab);
+  });
+
+  it("budgets a normalized click through navigation verification", async () => {
+    click.mockImplementationOnce(delayed(40_000, undefined));
+    evaluate.mockImplementation(delayed(10_000, publicUrl));
+    const request = await startClientAction(
+      { kind: "click", ref: "button", button: " left ", selector: " " },
+      DEFAULT_SSRF_POLICY,
+    );
+
+    await expectPendingThenSuccess(request, 65_001, 5_749, successfulTab);
+    expect(click).toHaveBeenCalledOnce();
+    expect(evaluate).toHaveBeenCalledTimes(3);
   });
 
   it("lets an existing-session evaluation use its requested timeout beyond two minutes", async () => {
@@ -902,6 +988,24 @@ describe("existing-session interaction navigation guard", () => {
 
     await expect(pending).rejects.toThrow(/aborted|cancelled/i);
     expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("normalizes ref-scoped statement-body evaluate sources before Chrome MCP execution", async () => {
+    evaluate.mockResolvedValueOnce("Ada");
+
+    const response = await runAction(
+      { kind: "evaluate", ref: "7", fn: "const text = el.textContent; return text;" },
+      null,
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(evaluate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        args: ["7"],
+        fn: "async (el) => {\nconst text = el.textContent; return text;\n}",
+      }),
+    );
   });
 
   it("blocks evaluate before execution when the current tab URL is disallowed", async () => {

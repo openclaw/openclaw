@@ -831,8 +831,23 @@ it("does not persist credentials returned after app-owned cancellation", async (
 it("keeps workspace plugins untrusted while applying the selected login model", async () => {
   currentConfig = { agents: { defaults: claudeDefaults("anthropic") } };
   const migrated = claudeDefaults("claude-cli");
+  const { note, select } = usePrompter();
   const runApiKeyAuth = vi.fn();
-  const runClaudeCliMigration = vi.fn().mockImplementation(async () => {
+  const runClaudeCliMigration = vi.fn().mockImplementation(async (ctx) => {
+    expect(ctx.config).toEqual(currentConfig);
+    expect(ctx).toMatchObject({
+      agentDir: "/tmp/openclaw/agents/main",
+      workspaceDir: "/tmp/openclaw/workspace",
+      allowSecretRefPrompt: false,
+      isRemote: false,
+    });
+    expect(ctx.prompter.note).toBe(note);
+    expect(ctx.prompter.select).toBe(select);
+    expect(ctx.runtime).toBe(runtime);
+    expect(ctx.env).toBe(process.env);
+    await ctx.openUrl("https://example.com/auth");
+    expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
+    expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");
     return {
       profiles: [],
       defaultModel: "claude-cli/claude-sonnet-4-6",
@@ -955,6 +970,24 @@ it("opens the provider picker when a CLI backend has no provider auth method", a
     2,
     expect.not.objectContaining({ providerRefs: expect.anything() }),
   );
+});
+
+it("writes pasted Anthropic setup-tokens to the selected profile", async () => {
+  mocks.clackPassword.mockResolvedValue(`sk-ant-oat01-${"a".repeat(80)}`);
+
+  await modelsAuthPasteTokenCommand({ provider: "anthropic" }, runtime);
+
+  expect(mocks.clackPassword).toHaveBeenCalledOnce();
+  expect(mocks.clackText).not.toHaveBeenCalled();
+  expect(mocks.upsertAuthProfileWithLock).toHaveBeenCalledWith({
+    profileId: "anthropic:manual",
+    credential: {
+      type: "token",
+      provider: "anthropic",
+      token: `sk-ant-oat01-${"a".repeat(80)}`,
+    },
+    agentDir: "/tmp/openclaw/agents/main",
+  });
 });
 
 it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {
