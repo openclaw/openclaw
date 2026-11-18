@@ -195,7 +195,7 @@ suite.define(() => {
         }
         await worktreeOption(page).click();
         const base = checkoutBaseRefInput(picker);
-        await base.fill("release/custom");
+        await base.fill("mai");
         await picker.locator("[data-worktree-name]").fill("my-task");
         await base.focus();
         await picker.locator('[data-worktree-suggestion="main"]').waitFor({ state: "visible" });
@@ -205,15 +205,15 @@ suite.define(() => {
           ...branchList(),
           branches: [
             { kind: "local", name: "main" },
-            { kind: "local", name: "feature/new" },
+            { kind: "local", name: "main-preview" },
           ],
         });
         await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
         await picker
-          .locator('[data-worktree-suggestion="feature/new"]')
+          .locator('[data-worktree-suggestion="main-preview"]')
           .waitFor({ state: "visible" });
         await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "hidden" });
-        expect(await base.inputValue()).toBe("release/custom");
+        expect(await base.inputValue()).toBe("mai");
         expect(await picker.locator("[data-worktree-name]").inputValue()).toBe("my-task");
         expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 3 : 2);
         await captureUiProof(suite, page, "checkout-branches-refreshed.png");
