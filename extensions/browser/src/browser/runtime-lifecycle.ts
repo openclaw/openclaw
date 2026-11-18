@@ -1,4 +1,7 @@
 import type { Server } from "node:http";
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
+import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
+import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   getExtensionRelayModule,
   getGatewayExtensionRelayModule,
@@ -7,31 +10,59 @@ import { stopBrowserScreencasts } from "./screencast/session.js";
 import type { BrowserServerState } from "./server-context.js";
 import { markBrowserRuntimeStopping } from "./server-context.lifecycle.js";
 import { stopKnownBrowserProfiles } from "./server-lifecycle.js";
-import { registerBrowserUnhandledRejectionHandler } from "./unhandled-rejections.js";
 
-type CreateBrowserRuntimeStateParams = {
+const PLAYWRIGHT_DIALOG_METHODS = ["Page.handleJavaScriptDialog", "Dialog.handleJavaScriptDialog"];
+const NO_DIALOG_MESSAGE = "no dialog is showing";
+
+function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+    current.data,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
+    const error = asOptionalObjectRecord(candidate);
+    const message =
+      typeof candidate === "string" ? candidate : (readStringField(error, "message") ?? "");
+    const normalizedMessage = message.toLowerCase();
+    if (!normalizedMessage.includes(NO_DIALOG_MESSAGE)) {
+      continue;
+    }
+
+    const method = readStringField(error, "method");
+    if (
+      PLAYWRIGHT_DIALOG_METHODS.some(
+        (playwrightMethod) => method === playwrightMethod || message.includes(playwrightMethod),
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export async function createBrowserRuntimeState(params: {
   resolved: BrowserServerState["resolved"];
   port: number;
   server?: Server | null;
-};
-
-export async function createBrowserRuntimeState(
-  params: CreateBrowserRuntimeStateParams,
-): Promise<BrowserServerState> {
+}): Promise<BrowserServerState> {
   const state: BrowserServerState = {
     server: params.server ?? null,
     port: params.port,
     resolved: params.resolved,
     profiles: new Map(),
   };
-  state.stopUnhandledRejectionHandler = registerBrowserUnhandledRejectionHandler();
+  state.stopUnhandledRejectionHandler = registerUnhandledRejectionHandler(
+    isPlaywrightDialogRaceUnhandledRejection,
+  );
   return state;
 }
 
 type StopBrowserRuntimeParams = {
   current: BrowserServerState | null;
-  /** Public API compatibility; cleanup is intentionally pinned to `current`. */
-  getState: () => BrowserServerState | null;
   clearState: () => void;
   closeServer?: boolean;
   onWarn: (message: string) => void;

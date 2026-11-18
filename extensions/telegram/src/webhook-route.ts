@@ -34,7 +34,7 @@ export function resolveTelegramWebhookPathConflict(
   const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
   const probe = classifyGatewayProbePath(pathname);
   if (probe === "live" || probe === "ready" || probe === "startup") {
-    return { kind: "probe", message: "is reserved for Gateway probes" };
+    return { kind: "probe", message: "is reserved for Gateway checks" };
   }
   if (isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))) {
     return { kind: "auth", message: "requires Gateway authentication" };

@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
-// Blocks new raw fetch callsites in channel and plugin runtime sources.
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { bundledPluginCallsite } from "./lib/bundled-plugin-paths.mjs";
 import { runCallsiteGuard } from "./lib/callsite-guard.mts";
 import {

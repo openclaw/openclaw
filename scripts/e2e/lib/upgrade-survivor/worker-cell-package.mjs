@@ -82,7 +82,7 @@ export async function resolveWorkerCellFunctionBinding(
   symbol,
   parser,
 ) {
-  const ts = await import("typescript/unstable/ast");
+  const ts = await import("typescript/ast");
   const root = fs.realpathSync(packageRoot);
   const sources = [];
   for (const relative of Object.keys(identity.files)) {

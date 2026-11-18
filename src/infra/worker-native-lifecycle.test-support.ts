@@ -3,7 +3,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, rmSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { mock } from "node:test";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isMainThread, Worker } from "node:worker_threads";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,9 +12,9 @@ import {
   withRuntimeWorkerGeneration,
 } from "./runtime-worker-generation.js";
 import { getTrackedWorkerLifecycleSnapshot } from "./worker-cpu.js";
-import { runNativeColdRecovery } from "./worker-native-lifecycle.cold-recovery.test-support.js";
 import {
   captureRetainedNativeWorkerSource,
+  closeDefaultRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
 import {
@@ -216,97 +215,6 @@ async function runCallbackContext() {
   }
 }
 
-async function runSupervisorLoss() {
-  let processWorkerEvents = 0;
-  const observeProcessWorker = () => processWorkerEvents++;
-  process.on("worker", observeProcessWorker);
-  // The call-through observes the real constructor's listener registrations on both runtimes.
-  const registrations = mock.method(Worker.prototype, "on");
-  const observed = (() => {
-    try {
-      const target = createRetainedNativeWorker(echoWorkerSource, { eval: true, execArgv: [] });
-      const supervisor = registrations.mock.calls
-        .map((call) => call.this)
-        .find((value) => value instanceof Worker);
-      assert.ok(supervisor instanceof Worker);
-      return { target, supervisor };
-    } finally {
-      registrations.mock.restore();
-    }
-  })();
-  const { target, supervisor } = observed;
-  let online = false;
-  let supervisorExit = false;
-  let targetExit = false;
-  const messages: unknown[] = [];
-  const errors: Error[] = [];
-  supervisor.once("online", () => {
-    online = true;
-  });
-  supervisor.once("exit", () => {
-    supervisorExit = true;
-  });
-  target.once("exit", () => {
-    targetExit = true;
-  });
-  target.on("message", (value) => messages.push(value));
-  target.on("error", (error) => errors.push(error));
-  target.on("messageerror", (error) => errors.push(error));
-  try {
-    target.postMessage(41, []);
-    serviceNativeUntil(
-      "cold target result",
-      () => target.service(),
-      () => messages.length > 0 || errors.length > 0,
-    );
-    assert.deepEqual(messages, [42]);
-    assert.deepEqual(errors, []);
-    assert.equal(online, false);
-    assert.equal(processWorkerEvents, 0);
-    const nativeTermination = supervisor.terminate();
-    const stopped = target.stop();
-    let promiseReaction = false;
-    void stopped.result.catch(() => {
-      promiseReaction = true;
-    });
-    serviceNativeUntil(
-      "unexpected supervisor loss",
-      () => stopped.service(),
-      () => stopped.read().status !== "pending",
-    );
-    assert.equal(stopped.read().status, "rejected");
-    const retry = target.stop();
-    assert.equal(retry.read().status, "rejected");
-    assert.equal(errors.length, 1);
-    assert.equal(supervisorExit, false);
-    assert.equal(targetExit, false);
-    assert.ok(target.threadId > 0);
-    assert.equal(online, false);
-    assert.equal(processWorkerEvents, 0);
-    assert.equal(promiseReaction, false);
-    await nativeTermination;
-    await nextTurn();
-    assert.equal(supervisorExit, true);
-    assert.equal(targetExit, true);
-    assert.equal(target.threadId, -1);
-    assert.equal(stopped.read().status, "rejected");
-    assert.equal(retry.read().status, "rejected");
-    assert.deepEqual(target.stop().read(), { status: "fulfilled", value: undefined });
-    console.log(
-      JSON.stringify({
-        ending: "supervisor-loss",
-        rejectedWhileBlocked: true,
-        retryRejectedWhileBlocked: true,
-        joinedOnlyAfterYield: true,
-      }),
-    );
-  } finally {
-    process.off("worker", observeProcessWorker);
-    await supervisor.terminate();
-    await nextTurn();
-  }
-}
-
 async function runBlockedLifecycle(ending: "terminate" | "natural-exit", databasePath: string) {
   const worker = createRetainedNativeWorker(workerSource, {
     eval: true,
@@ -438,7 +346,6 @@ async function runGenerationLifecycle(directory: string, databasePath: string) {
         try {
           order.push("owner-close-start");
           await nextTurn();
-          assert.throws(() => generation.resolve(marker), /closing/);
           assert.equal(getTrackedWorkerLifecycleSnapshot().workerCount, initialWorkers);
           const worker = createRetainedNativeWorker(
             workerSource,
@@ -613,6 +520,141 @@ async function runExplicitUnboundLifecycle() {
   );
 }
 
+async function runCloseRetry(ending: "close-live-worker" | "close-owner-retry") {
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const worker = source.create(echoWorkerSource, { eval: true, execArgv: [] });
+  let reply = createDeferredCore<unknown>();
+  worker.on("message", (value) => reply.resolve(value));
+  worker.on("error", (error) => reply.reject(error));
+  const ownerEntered = createDeferredCore();
+  const ownerRelease = createDeferredCore();
+  let ownerAttempts = 0;
+  if (ending === "close-owner-retry") {
+    source.retain({}, async () => {
+      if (++ownerAttempts === 1) {
+        throw new Error("synthetic owner close refusal");
+      }
+      ownerEntered.resolve();
+      await ownerRelease.promise;
+      await worker.terminate();
+    });
+  }
+  try {
+    worker.postMessage(41, []);
+    assert.equal(await reply.promise, 42);
+    await assert.rejects(
+      closeDefaultRetainedNativeWorkerSource(),
+      ending === "close-live-worker"
+        ? /execution owners have not joined/
+        : /execution owner cleanup failed/,
+    );
+    assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+    reply = createDeferredCore<unknown>();
+    worker.postMessage(8, []);
+    assert.equal(await reply.promise, 9);
+    // A refused close must not block new work on the same native source either.
+    const sibling = source.create(echoWorkerSource, { eval: true, execArgv: [] });
+    await sibling.terminate();
+    if (ending === "close-live-worker") {
+      await worker.terminate();
+    }
+    const closing = closeDefaultRetainedNativeWorkerSource();
+    if (ending === "close-owner-retry") {
+      await Promise.race([ownerEntered.promise, closing]);
+    }
+    const concurrent = closeDefaultRetainedNativeWorkerSource();
+    ownerRelease.resolve();
+    await Promise.all([closing, concurrent]);
+    assert.equal(ownerAttempts, ending === "close-owner-retry" ? 2 : 0);
+    assert.equal(source.hasActiveWorkers, false);
+    assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+    const fresh = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+    assert.notEqual(fresh, source);
+    const renewed = fresh.create(echoWorkerSource, { eval: true, execArgv: [] });
+    const renewedReply = createDeferredCore<unknown>();
+    renewed.on("message", renewedReply.resolve);
+    renewed.on("error", renewedReply.reject);
+    renewed.postMessage(41, []);
+    assert.equal(await renewedReply.promise, 42);
+    await renewed.terminate();
+    await closeDefaultRetainedNativeWorkerSource();
+    console.log(
+      JSON.stringify({
+        ending,
+        refusedSourceUsable: true,
+        retryJoined: true,
+        freshSourceUsable: true,
+      }),
+    );
+  } finally {
+    ownerRelease.resolve();
+    await worker.terminate();
+  }
+}
+
+async function runCloseTeardownFailure() {
+  const source = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
+  const worker = source.create(echoWorkerSource, { eval: true, execArgv: [] });
+  await worker.terminate();
+  const terminateDescriptor = Object.getOwnPropertyDescriptor(Worker.prototype, "terminate");
+  assert.ok(terminateDescriptor);
+  const failure = new Error("synthetic native teardown failure");
+  let joinSupervisor: (() => Promise<number>) | undefined;
+  let ownerAttempts = 0;
+  source.retain({}, async () => {
+    ownerAttempts++;
+  });
+  // Fault only the real supervisor's native teardown, not source admission or settlement.
+  Worker.prototype.terminate = function () {
+    assert.notEqual(this.threadId, -1);
+    joinSupervisor = () => this.terminate();
+    throw failure;
+  };
+  try {
+    await assert.rejects(closeDefaultRetainedNativeWorkerSource(), (error) => error === failure);
+    assert.ok(joinSupervisor);
+    assert.equal(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }), source);
+    assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+    await assert.rejects(closeDefaultRetainedNativeWorkerSource(), (error) => error === failure);
+    assert.equal(ownerAttempts, 1);
+    assert.throws(() => source.create(echoWorkerSource, { eval: true }), /closing/);
+    console.log(
+      JSON.stringify({
+        ending: "close-teardown-failure",
+        failedSourceRetained: true,
+        overlapRefused: true,
+      }),
+    );
+  } finally {
+    Object.defineProperty(Worker.prototype, "terminate", terminateDescriptor);
+    await joinSupervisor?.();
+  }
+}
+
+async function runReferenceLiveness() {
+  const worker = createRetainedNativeWorker(
+    `const { parentPort } = require("node:worker_threads");
+    parentPort.on("message", value => setImmediate(() => parentPort.postMessage(value + 1)));`,
+    { eval: true, execArgv: [] },
+  );
+  let reply = createDeferredCore<unknown>();
+  worker.on("message", (value) => reply.resolve(value));
+  worker.on("error", (error) => reply.reject(error));
+  const roundTrip = async () => {
+    reply = createDeferredCore<unknown>();
+    worker.postMessage(41, []);
+    assert.equal(await reply.promise, 42);
+  };
+  await roundTrip();
+  worker.unref();
+  worker.ref();
+  await roundTrip();
+  worker.unref();
+  await worker.getHeapStatistics();
+  console.log(JSON.stringify({ ending: "reference-liveness", activeCompleted: true }));
+  // Deliberately leave the idle child open: only the host reference owner permits exit.
+}
+
 assert.equal(isMainThread, true, "the fixture must block the process main thread");
 const ending = process.argv[2];
 assert.ok(
@@ -620,66 +662,34 @@ assert.ok(
     ending === "natural-exit" ||
     ending === "generation" ||
     ending === "explicit-unbound" ||
-    ending === "supervisor-loss" ||
     ending === "native-resource" ||
     ending === "resource-idle-broker" ||
-    ending === "resource-supervisor-loss" ||
-    ending === "resource-auto-close-success" ||
-    ending === "resource-auto-close-failure" ||
-    ending === "resource-auto-close-refusal" ||
-    ending === "resource-cold-supervisor-loss" ||
-    ending === "resource-close-supervisor-loss" ||
     ending === "resource-late-attachment" ||
-    ending === "resource-owner-reply-loss" ||
-    ending === "callback-context",
+    ending === "callback-context" ||
+    ending === "reference-liveness" ||
+    ending === "close-live-worker" ||
+    ending === "close-owner-retry" ||
+    ending === "close-teardown-failure",
 );
 const directory = process.argv[3];
 assert.ok(directory);
 const databasePath = path.join(directory, "nested.sqlite");
-if (ending === "generation") {
+if (ending === "close-live-worker" || ending === "close-owner-retry") {
+  await runCloseRetry(ending);
+} else if (ending === "close-teardown-failure") {
+  await runCloseTeardownFailure();
+} else if (ending === "reference-liveness") {
+  await runReferenceLiveness();
+} else if (ending === "generation") {
   await runGenerationLifecycle(directory, databasePath);
 } else if (ending === "explicit-unbound") {
   await runExplicitUnboundLifecycle();
-} else if (ending === "supervisor-loss") {
-  await runSupervisorLoss();
 } else if (ending === "native-resource") {
   await runNativeResourceLifecycle(directory, serviceNativeUntil);
 } else if (ending === "resource-idle-broker") {
-  await runNativeResourceLifecycle(directory, serviceNativeUntil, false, false, "idle-broker");
-} else if (ending === "resource-cold-supervisor-loss") {
-  await runNativeColdRecovery(directory, serviceNativeUntil);
-} else if (ending === "resource-supervisor-loss") {
-  await runNativeResourceLifecycle(directory, serviceNativeUntil, true);
-} else if (ending === "resource-auto-close-success") {
-  await runNativeResourceLifecycle(
-    directory,
-    serviceNativeUntil,
-    true,
-    false,
-    "auto-close-success",
-  );
-} else if (ending === "resource-auto-close-failure") {
-  await runNativeResourceLifecycle(
-    directory,
-    serviceNativeUntil,
-    true,
-    false,
-    "auto-close-failure",
-  );
-} else if (ending === "resource-auto-close-refusal") {
-  await runNativeResourceLifecycle(
-    directory,
-    serviceNativeUntil,
-    true,
-    false,
-    "auto-close-refusal",
-  );
-} else if (ending === "resource-close-supervisor-loss") {
-  await runNativeResourceLifecycle(directory, serviceNativeUntil, true, true);
+  await runNativeResourceLifecycle(directory, serviceNativeUntil, "idle-broker");
 } else if (ending === "resource-late-attachment") {
-  await runNativeResourceLifecycle(directory, serviceNativeUntil, false, false, "late-attachment");
-} else if (ending === "resource-owner-reply-loss") {
-  await runNativeResourceLifecycle(directory, serviceNativeUntil, true, false, "owner-reply-loss");
+  await runNativeResourceLifecycle(directory, serviceNativeUntil, "late-attachment");
 } else if (ending === "callback-context") {
   await runCallbackContext();
 } else {

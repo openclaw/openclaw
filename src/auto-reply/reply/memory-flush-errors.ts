@@ -1,11 +1,9 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { truncateUtf16WithEllipsis } from "../../shared/text-truncate.js";
 import { isRenderablePayload } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 
-const MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS = 600;
 const MAX_FLUSH_ERROR_LENGTH = 200;
 
 export function resolveVisibleMemoryFlushErrorPayloads(payloads?: ReplyPayload[]): ReplyPayload[] {
@@ -20,21 +18,6 @@ export function buildVisibleMemoryFlushFailure(payloads: ReplyPayload[]): Error 
     .filter((text): text is string => Boolean(text))
     .join("\n");
   return new Error(message || "Memory flush returned an error response");
-}
-
-export function buildMemoryFlushErrorPayload(err: unknown): ReplyPayload | undefined {
-  if (isAbortError(err)) {
-    return undefined;
-  }
-  const message = normalizeOptionalString(formatErrorMessage(err));
-  if (!message) {
-    return undefined;
-  }
-  const visibleText = message.startsWith("⚠️") ? message : `⚠️ ${message}`;
-  return {
-    text: truncateUtf16WithEllipsis(visibleText, MAX_VISIBLE_MEMORY_FLUSH_ERROR_CHARS),
-    isError: true,
-  };
 }
 
 export function truncateMemoryFlushErrorMessage(err: unknown): string {

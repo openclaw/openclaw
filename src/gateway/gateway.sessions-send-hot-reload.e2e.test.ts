@@ -1,21 +1,23 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import os from "node:os";
-import path from "node:path";
+import type { ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, onTestFailed } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { resetConfigOverrides } from "../config/runtime-overrides.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { readSessionStoreSummaryReadOnly } from "../config/sessions/session-accessor.sqlite-summary.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { getActiveGatewayRootWorkHolders } from "../process/gateway-work-admission.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import {
+  createGatewayConfigPath,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const MODEL_A = "reload-proof/model-a";
 const MODEL_B = "reload-proof/model-b";
@@ -39,99 +41,17 @@ type AgentResult = {
 
 const cleanups: Array<() => Promise<void>> = [];
 
-function resetGatewayState(): void {
-  resetConfigOverrides();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
-  resetAgentEventsForTest({ preserveListeners: true });
-}
-
 afterEach(async () => {
-  const errors: unknown[] = [];
-  for (const cleanup of cleanups.splice(0).toReversed()) {
-    try {
-      await cleanup();
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-  if (errors.length > 0) {
-    throw new AggregateError(errors, "sessions_send reload proof cleanup failed");
-  }
-  resetGatewayState();
+  await runQaGatewayFixture(async () => {}, ...cleanups.splice(0).toReversed());
+  resetGatewayTestState();
 });
 
 function textResponse(response: ServerResponse, text: string): void {
-  const id = randomUUID();
-  const item = {
-    type: "message",
-    id: `msg_${id}`,
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text, annotations: [] }],
-  };
-  writeOpenAiResponsesSse(response, [
-    { type: "response.output_item.added", output_index: 0, item },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
-}
-
-function toolResponse(response: ServerResponse): void {
-  const id = randomUUID();
-  const args = JSON.stringify({
-    agentId: "target",
-    message: TARGET_MESSAGE,
-    timeoutSeconds: 0,
+  writeOpenAiResponsesText(response, {
+    text,
+    messageId: `msg_${randomUUID()}`,
+    responseId: `resp_${randomUUID()}`,
   });
-  const item = {
-    type: "function_call",
-    id: `fc_${id}`,
-    call_id: `call_${id}`,
-    name: "sessions_send",
-    arguments: args,
-    status: "completed",
-  };
-  writeOpenAiResponsesSse(response, [
-    {
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...item, status: "in_progress", arguments: "" },
-    },
-    {
-      type: "response.function_call_arguments.done",
-      item_id: item.id,
-      output_index: 0,
-      arguments: args,
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [item],
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-      },
-    },
-  ]);
-}
-
-async function readBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 function readTargetToolResult(raw: string): Record<string, unknown> | undefined {
@@ -144,126 +64,71 @@ function readTargetToolResult(raw: string): Record<string, unknown> | undefined 
   return parsed && typeof parsed === "object" ? parsed : undefined;
 }
 
-type DiagnosticRow = {
-  kind: string;
-  model?: string;
-  phase?: string;
-  role?: string;
-  status?: string;
-  disposition?: string;
-  error?: string;
-  stopReason?: string;
-  timeoutPhase?: string;
-  providerStarted?: boolean;
-};
-
-function diagnosticText(value: unknown): string | undefined {
-  return typeof value === "string" ? value.slice(0, 160) : undefined;
-}
-
-async function startProvider(trace: (row: DiagnosticRow) => void) {
+async function startProvider() {
   const targetStarted = createDeferred();
   const releaseTarget = createDeferred();
   const calls: ModelCall[] = [];
-  const recordCall = (call: ModelCall) => {
-    calls.push(call);
-    trace({ kind: call.kind, model: diagnosticText(call.model) });
-  };
   let targetRunId: string | undefined;
-  const server = createServer((request, response) => {
-    void (async () => {
-      if (request.method === "GET" && request.url === "/v1/models") {
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify({
-            data: [
-              { id: "model-a", object: "model" },
-              { id: "model-b", object: "model" },
-            ],
-          }),
-        );
-        return;
-      }
-      if (request.method !== "POST" || request.url !== "/v1/responses") {
-        response.writeHead(404).end();
-        return;
-      }
-      const raw = await readBody(request);
-      const body = JSON.parse(raw) as {
-        model?: unknown;
-        tools?: Array<{ type?: string; name?: string }>;
-      };
-      const rawModel = body.model;
-      const modelId = typeof rawModel === "string" ? rawModel : "";
-      if (raw.includes(TARGET_REPLY)) {
-        recordCall({ kind: "reply", model: modelId, raw });
-        textResponse(response, "Requester received the target result.");
-      } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
-        recordCall({ kind: "dispatch-complete", model: modelId, raw });
-        const result = readTargetToolResult(raw);
-        trace({
-          kind: "tool-result",
-          status: diagnosticText(result?.status),
-          disposition: diagnosticText(result?.targetDisposition),
-        });
-        targetRunId = typeof result?.runId === "string" ? result.runId : undefined;
-        textResponse(response, DISPATCH_COMPLETE);
-      } else if (raw.includes(TARGET_MESSAGE)) {
-        recordCall({ kind: "target", model: modelId, raw });
-        targetStarted.resolve();
-        await releaseTarget.promise;
-        textResponse(response, TARGET_REPLY);
-      } else if (raw.includes(INITIAL_PROMPT)) {
-        recordCall({ kind: "dispatch", model: modelId, raw });
-        expect(body.tools).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ type: "function", name: "sessions_send" }),
-          ]),
-        );
-        toolResponse(response);
-      } else {
-        throw new Error(
-          `unexpected model request for ${diagnosticText(modelId) || "<missing model>"}`,
-        );
-      }
-    })().catch((error: unknown) => {
-      response.writeHead(500).end(error instanceof Error ? error.message : String(error));
-    });
+  const server = createTrackedProvider(async (raw, response, request) => {
+    if (request.method === "GET" && request.url === "/v1/models") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          data: ["model-a", "model-b"].map((id) => ({ id, object: "model" })),
+        }),
+      );
+      return;
+    }
+    if (request.method !== "POST" || request.url !== "/v1/responses") {
+      response.writeHead(404).end();
+      return;
+    }
+    const body = JSON.parse(raw) as {
+      model?: unknown;
+      tools?: Array<{ type?: string; name?: string }>;
+    };
+    const rawModel = body.model;
+    const modelId = typeof rawModel === "string" ? rawModel : "";
+    if (raw.includes(TARGET_REPLY)) {
+      calls.push({ kind: "reply", model: modelId, raw });
+      textResponse(response, "Requester received the target result.");
+    } else if (raw.includes(INITIAL_PROMPT) && raw.includes("function_call_output")) {
+      calls.push({ kind: "dispatch-complete", model: modelId, raw });
+      const result = readTargetToolResult(raw);
+      targetRunId = typeof result?.runId === "string" ? result.runId : undefined;
+      textResponse(response, DISPATCH_COMPLETE);
+    } else if (raw.includes(TARGET_MESSAGE)) {
+      calls.push({ kind: "target", model: modelId, raw });
+      targetStarted.resolve();
+      await releaseTarget.promise;
+      textResponse(response, TARGET_REPLY);
+    } else if (raw.includes(INITIAL_PROMPT)) {
+      calls.push({ kind: "dispatch", model: modelId, raw });
+      expect(body.tools).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: "function", name: "sessions_send" }),
+        ]),
+      );
+      writeToolCall(response, "sessions_send", {
+        agentId: "target",
+        message: TARGET_MESSAGE,
+        timeoutSeconds: 0,
+      });
+    } else {
+      throw new Error(`unexpected model request for ${modelId || "<missing model>"}`);
+    }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("reload proof provider did not bind a loopback port");
-  }
+  const baseUrl = await server.listen();
   return {
-    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    baseUrl,
     calls,
     releaseTarget: () => releaseTarget.resolve(),
     targetRunId: () => targetRunId,
     targetStarted: targetStarted.promise,
     close: async () => {
       releaseTarget.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      await server.close();
     },
-  };
-}
-
-function modelDefinition(id: string): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    api: "openai-responses" as const,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 4_096,
   };
 }
 
@@ -272,101 +137,40 @@ describe("sessions_send across prepared runtime reload", () => {
     "finishes model-A work and re-admits one detached requester reply on model B",
     { timeout: 90_000 },
     async () => {
-      const started = performance.now();
-      const rows: Array<DiagnosticRow & { elapsedMs: number }> = [];
-      const trace = (row: DiagnosticRow) => {
-        if (rows.length < 64) {
-          rows.push({ ...row, elapsedMs: Math.round(performance.now() - started) });
-        }
-      };
-      const provider = await startProvider(trace);
+      const provider = await startProvider();
       cleanups.push(provider.close);
       let phase = "starting Gateway";
       onTestFailed(() => {
-        trace({ kind: "failure", phase });
         process.stderr.write(
-          `sessions_send reload failure: ${JSON.stringify({ phase, rows, limitReached: rows.length === 64 })}\n`,
+          `sessions_send reload failure: ${JSON.stringify({
+            phase,
+            calls: provider.calls.map(({ kind, model }) => ({ kind, model })),
+          })}\n`,
         );
       });
-      resetGatewayState();
-      const unsubscribe = onAgentEvent((event) => {
-        if (event.stream !== "lifecycle" && event.stream !== "error") {
-          return;
-        }
-        const eventPhase = event.data.phase;
-        trace({
-          kind: event.stream,
-          role:
-            event.sessionKey === SENDER_SESSION
-              ? "sender"
-              : event.sessionKey === "agent:target:main"
-                ? "target"
-                : "other",
-          phase: diagnosticText(eventPhase),
-          error: diagnosticText(event.data.error),
-          stopReason: diagnosticText(event.data.stopReason),
-          timeoutPhase: diagnosticText(event.data.timeoutPhase),
-          providerStarted:
-            typeof event.data.providerStarted === "boolean"
-              ? event.data.providerStarted
-              : undefined,
-        });
+      resetGatewayTestState();
+      const {
+        tempHome: home,
+        workspaceDir: workspace,
+        envSnapshot,
+      } = await setupGatewayTempHome({
+        prefix: "openclaw-sessions-reload-",
       });
-      cleanups.push(async () => unsubscribe());
-      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-reload-"));
       cleanups.push(() => fs.rm(home, { recursive: true, force: true }));
-      const stateDir = path.join(home, ".openclaw");
-      const workspace = path.join(home, "workspace");
-      const bundledPluginsDir = path.join(home, "empty-bundled-plugins");
-      const env = captureEnv([
-        "HOME",
-        "OPENCLAW_STATE_DIR",
-        "OPENCLAW_CONFIG_PATH",
-        "OPENCLAW_GATEWAY_TOKEN",
-        "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
-        "OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN",
-        "OPENCLAW_TEST_MINIMAL_GATEWAY",
-        "OPENCLAW_SKIP_CHANNELS",
-        "OPENCLAW_SKIP_CRON",
-        "OPENCLAW_SKIP_GMAIL_WATCHER",
-        "OPENCLAW_SKIP_CANVAS_HOST",
-        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-        "OPENCLAW_SKIP_PROVIDERS",
-        "OPENCLAW_BUNDLED_PLUGINS_DIR",
-        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      ]);
-      cleanups.push(async () => env.restore());
+      cleanups.push(async () => envSnapshot.restore());
+      const configPath = await createGatewayConfigPath(home);
       const token = `reload-proof-${randomUUID()}`;
-      for (const [key, value] of Object.entries({
-        HOME: home,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_GATEWAY_TOKEN: token,
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      })) {
-        setTestEnvValue(key, value);
-      }
-      deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       deleteTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN");
       deleteTestEnvValue("OPENCLAW_TEST_RUNTIME_OVERRIDE_TOKEN");
-      deleteTestEnvValue("OPENCLAW_TEST_MINIMAL_GATEWAY");
-      await Promise.all([
-        fs.mkdir(stateDir, { recursive: true }),
-        fs.mkdir(workspace, { recursive: true }),
-        fs.mkdir(bundledPluginsDir, { recursive: true }),
-      ]);
       const providerConfig = {
         baseUrl: provider.baseUrl,
         apiKey: "test-token-placeholder",
         api: "openai-responses" as const,
         request: { allowPrivateNetwork: true },
-        models: [modelDefinition("model-a"), modelDefinition("model-b")],
+        models: ["model-a", "model-b"].map(
+          (id) => buildMockOpenAiResponsesProvider(provider.baseUrl, id).config.models[0],
+        ),
       };
       const cfg = {
         agents: {
@@ -395,7 +199,7 @@ describe("sessions_send across prepared runtime reload", () => {
       } satisfies OpenClawConfig;
       const gateway = await startGatewayWithClient({
         cfg,
-        configPath: path.join(stateDir, "openclaw.json"),
+        configPath,
         token,
         scopes: ["operator.admin", "operator.read", "operator.write"],
       });
@@ -406,7 +210,6 @@ describe("sessions_send across prepared runtime reload", () => {
 
       const senderRunId = randomUUID();
       phase = "starting sender";
-      trace({ kind: "phase", phase });
       await expect(
         withTestTimeout(
           gateway.client.request<AgentResult>(
@@ -424,15 +227,12 @@ describe("sessions_send across prepared runtime reload", () => {
         ),
       ).resolves.toMatchObject({ runId: senderRunId, status: "accepted" });
       phase = "waiting for target admission";
-      trace({ kind: "phase", phase });
       await withTestTimeout(provider.targetStarted, 15_000, "target admission timed out").catch(
         (error: unknown) => {
-          trace({ kind: "target-wait-timeout" });
           throw new Error("target admission failed", { cause: error });
         },
       );
       phase = "waiting for sender completion";
-      trace({ kind: "phase", phase });
       await expect(
         gateway.client.request<AgentResult>("agent.wait", {
           runId: senderRunId,
@@ -451,7 +251,6 @@ describe("sessions_send across prepared runtime reload", () => {
         "config.get timed out",
       );
       phase = "patching model B";
-      trace({ kind: "phase", phase });
       await expect(
         withTestTimeout(
           gateway.client.request("config.patch", {
@@ -463,10 +262,8 @@ describe("sessions_send across prepared runtime reload", () => {
         ),
       ).resolves.toMatchObject({ hash: expect.any(String) });
       phase = "releasing target";
-      trace({ kind: "phase", phase });
       provider.releaseTarget();
       phase = "waiting for target completion";
-      trace({ kind: "phase", phase });
       const targetWait = await gateway.client.request<AgentResult>("agent.wait", {
         runId: targetRunId,
         timeoutMs: 20_000,
@@ -478,7 +275,6 @@ describe("sessions_send across prepared runtime reload", () => {
       });
 
       phase = "waiting for detached reply";
-      trace({ kind: "phase", phase });
       await expect
         .poll(() => provider.calls.filter((call) => call.kind === "reply").length, {
           timeout: 20_000,
@@ -498,7 +294,7 @@ describe("sessions_send across prepared runtime reload", () => {
         { agentId: "target", env: process.env },
         { recentLimit: 10, agentIds: ["target"] },
       ).recent.find(({ sessionKey }) => sessionKey === "agent:target:main");
-      expect(target?.entry.status, target?.entry.lastRunError).toBe("done");
+      expect(target?.entry.status).toBe("done");
       expect(target?.entry.lastRunError).toBeUndefined();
       expect(provider.calls).toEqual(
         expect.arrayContaining([

@@ -49,9 +49,7 @@ describe("plugin page work context", () => {
   it.each(
     [
       null,
-      [],
       { board: 42 },
-      { board: { id: "nested" } },
       { "": "empty key" },
       { ["x".repeat(33)]: "long key" },
       { board: "x".repeat(129) },

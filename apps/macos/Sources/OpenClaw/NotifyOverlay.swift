@@ -110,19 +110,16 @@ final class NotifyOverlayController {
         let titleFont = NSFont.systemFont(ofSize: 13, weight: .semibold)
         let bodyFont = NSFont.systemFont(ofSize: 12, weight: .regular)
 
-        let titleRect = (self.model.title as NSString).boundingRect(
-            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: titleFont],
-            context: nil)
-
-        let bodyRect = (self.model.body as NSString).boundingRect(
-            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: bodyFont],
-            context: nil)
-
-        let contentHeight = ceil(titleRect.height + 6 + bodyRect.height)
+        func height(_ text: String, font: NSFont) -> CGFloat {
+            (text as NSString).boundingRect(
+                with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font],
+                context: nil).height
+        }
+        let contentHeight = ceil(height(self.model.title, font: titleFont) + 6 + height(
+            self.model.body,
+            font: bodyFont))
         let total = contentHeight + self.padding * 2
         return max(self.minHeight, min(total, self.maxHeight))
     }

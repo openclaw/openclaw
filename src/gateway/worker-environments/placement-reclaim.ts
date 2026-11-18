@@ -1,37 +1,36 @@
 import { randomUUID } from "node:crypto";
-import {
-  isExactAttachedEnvironment,
-  type WorkerDispatchPlacement,
-} from "./placement-dispatch-failure.js";
-import { resolvePriorWorkspaceResultConflict } from "./placement-dispatch-pending-results.js";
-import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
+import type { WorkerDispatchPlacement } from "./placement-dispatch-failure.js";
+import { settleRepositoryDiskGatewayMove } from "./placement-dispatch-pending-move.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import type {
   WorkerPlacementReclaimBarriers,
   WorkerReclaimPlacement,
 } from "./placement-reclaim-contract.js";
 import { placementTurnOwner, reportPlacementTransition } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
-import {
-  completeMovedWorkspaceTeardown,
-  completeReclaimedWorkspaceTeardown,
-} from "./placement-teardown.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
+import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementReclaimRequest,
+  WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   sessionWorkspaceRoot,
 } from "./session-workspace.js";
+import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 import {
   verifyReconciledWorkspaceFinal,
   WorkerWorkspaceFinalFenceError,
 } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  adoptReclaimedWorkspaceHistory,
   createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
+  resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
 } from "./workspace-result-settlement.js";
 import {
@@ -55,19 +54,21 @@ export type WorkerPlacementReclaimOptions = Pick<
 
 export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOptions) {
   const { environments, placements } = options;
-  const reclaimOnce = async (
+  return async (
     request: WorkerPlacementReclaimRequest,
     moveIntent?: WorkerPlacementMoveIntent,
     authorize?: WorkerPlacementAuthorization,
-    beforeDrain?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementReclaimSourceCheck,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ): Promise<WorkerReclaimPlacement> =>
     await options.runReclaimBarrier({
       ...request,
       authorize,
       beforeDrain,
-      begin: () => {
-        const current = placements.get(request.sessionId);
+      begin: async (assertCurrent) => {
+        const current = await placements.getAsync(request.sessionId);
+        assertCurrent?.();
+        beforeDrain?.assertCurrent?.();
         // A queued stop can observe the previous stop's completion only after
         // entering the lifecycle fence; joining an outside promise can deadlock it.
         if (
@@ -89,12 +90,32 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
         if (current.state === "draining") {
           return current;
         }
-        const draining = placements.startDrain({
-          sessionId: current.sessionId,
-          environmentId: current.environmentId,
-          ownerEpoch: current.activeOwnerEpoch,
-          expectedGeneration: current.generation,
-        });
+        let draining: WorkerDispatchPlacement;
+        try {
+          draining = await placements.startDrain(
+            {
+              sessionId: current.sessionId,
+              environmentId: current.environmentId,
+              ownerEpoch: current.activeOwnerEpoch,
+              expectedGeneration: current.generation,
+              expectedUpdatedAtMs: current.updatedAtMs,
+              requireUnclaimed: true,
+            },
+            () => {
+              assertCurrent?.();
+              beforeDrain?.assertCurrent?.();
+              if (!isExactAttachedEnvironment(environments.get(current.environmentId), current)) {
+                throw new Error("Active cloud worker does not match its session placement");
+              }
+            },
+          );
+        } catch (error) {
+          if (!(error instanceof AcceptedWorkspacePublicationIndeterminateError)) {
+            // Classify a settled refusal without replaying a write or inspecting an unknown one.
+            beforeDrain?.();
+          }
+          throw error;
+        }
         if (draining.state !== "draining") {
           throw new Error(`Session ${request.sessionKey} did not enter draining placement`);
         }
@@ -104,6 +125,94 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
       reclaim: async (workspace, current, reauthorize) => {
         if (current.state === "reclaimed") {
           return current;
+        }
+        if (workspace.kind === "device-folder") {
+          if (moveIntent || request.recoverToGateway) {
+            throw new Error(
+              "Device folders cannot move to the Gateway; reconnect the original device.",
+            );
+          }
+          const claimId = `reclaim-${randomUUID()}`;
+          const claim = await placements.claimReclaimWorkspaceResult(
+            {
+              sessionId: current.sessionId,
+              sessionKey: current.sessionKey,
+              agentId: current.agentId,
+              claimId,
+              runId: claimId,
+              owner: placementTurnOwner(current),
+            },
+            undefined,
+            reauthorize,
+          );
+          reauthorize?.();
+          await placements.acceptWorkspaceResult(claim);
+          await placements.closeWorkerTurnToolState(claim);
+          reauthorize?.();
+          // Destroy stops the worker and releases its private state, never the user-owned folder.
+          await environments.destroy(current.environmentId);
+          const completed = await completeWorkerWorkspaceTeardown({
+            placements,
+            turnClaim: claim,
+            environmentId: current.environmentId,
+            ownerEpoch: current.activeOwnerEpoch,
+          });
+          reportPlacementTransition(onTransition, completed);
+          await environments
+            .stopTunnel(current.environmentId, current.activeOwnerEpoch)
+            .catch(() => undefined);
+          return completed;
+        }
+        if (workspace.kind === "repository" && workspace.repository.diskAuthority) {
+          if (moveIntent?.target.kind !== "gateway" || moveIntent.abandonSource) {
+            throw new Error(
+              "This repository disk requires an explicit Move to Gateway; the original disk is preserved",
+            );
+          }
+          const claimId = "reclaim-" + randomUUID();
+          const claim = await placements.claimReclaimWorkspaceResult(
+            {
+              sessionId: current.sessionId,
+              sessionKey: current.sessionKey,
+              agentId: current.agentId,
+              claimId,
+              runId: claimId,
+              owner: placementTurnOwner(current),
+            },
+            undefined,
+            reauthorize,
+          );
+          try {
+            const completed = await options.withPreparedRecovery(
+              current,
+              () => {
+                reauthorize?.();
+                if (!placements.validateWorkspaceResultClaim(claim)) {
+                  throw new Error("Repository disk move lost its durable result owner");
+                }
+              },
+              (recovery) =>
+                options.workspaceOperations.run(current.environmentId, () =>
+                  settleRepositoryDiskGatewayMove({
+                    deps: options,
+                    placement: current,
+                    turnClaim: claim,
+                    workspace: recovery.workspace,
+                    assertCurrent: recovery.assertCurrent,
+                  }),
+                ),
+            );
+            reportPlacementTransition(onTransition, completed);
+            return completed;
+          } catch (error) {
+            if (
+              !(error instanceof AcceptedWorkspacePublicationIndeterminateError) &&
+              (await findPendingWorkerWorkspaceResult(placements, claim))
+            ) {
+              await placements.handoffWorkspaceResultRecovery(claim);
+            }
+            throw error;
+          }
         }
         const root = sessionWorkspaceRoot(workspace);
         const journalPlacement = { ...current };
@@ -187,7 +296,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                 }
               });
             };
-            const finishReclaim = async (): Promise<WorkerReclaimPlacement> => {
+            try {
               const pending = await journal.load();
               if (pending) {
                 reauthorize?.();
@@ -232,8 +341,10 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     }
                   };
                   assertCurrent();
-                  reauthorize?.();
-                  const quiescence = await tunnel.quiesceWorkspace(current.remoteWorkspaceDir);
+                  const quiescence = await tunnel.quiesceWorkspace(
+                    current.remoteWorkspaceDir,
+                    assertCurrent,
+                  );
                   try {
                     assertCurrent();
                     const reconciliation = await tunnel.reconcileWorkspace(
@@ -244,14 +355,12 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                         journal,
                         stagedResult: {
                           ref: reclaimResultRef,
-                          record: (ref) => {
+                          record: (ref, workspaceId) => {
                             assertCurrent();
                             return placements.recordStagedWorkspaceResult(
                               reclaimClaim,
                               ref,
-                              workspace.kind === "repository"
-                                ? workspace.repository.workspaceId
-                                : undefined,
+                              workspaceId,
                               assertCurrent,
                             );
                           },
@@ -266,7 +375,6 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                     if (reconciliation.changed && !wasAccepted()) {
                       throw new Error("Cloud worker stop did not commit its reconciled workspace");
                     }
-                    reauthorize?.();
                     assertCurrent();
                     await placements.acceptWorkspaceResult(reclaimClaim, reauthorize);
                     const recordedStagedResultRef = (
@@ -281,7 +389,7 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       current,
                     );
                     reauthorize?.();
-                    const finalized = await finalizeWorkspaceResultConflicts({
+                    const conflictRetained = await finalizeWorkspaceResultConflicts({
                       assertCurrent: recovery.assertCurrent,
                       placements,
                       turnClaim: reclaimClaim,
@@ -294,13 +402,18 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                       report: recovery.reportConflict,
                     });
                     reauthorize?.();
+                    await adoptReclaimedWorkspaceHistory({
+                      ...recovery,
+                      assertCurrent,
+                      stagedResultRef: recordedStagedResultRef,
+                    });
                     return await settleStagedWorkspaceResult({
                       assertCurrent: recovery.assertCurrent,
                       placements,
                       turnClaim: reclaimClaim,
                       workspace,
                       stagedResultRef: recordedStagedResultRef,
-                      conflictRetained: finalized.conflictRetained,
+                      conflictRetained,
                       beforeComplete: async () => {
                         assertCurrent();
                         if (
@@ -315,39 +428,25 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
                             sessionKey: current.sessionKey,
                             agentId: current.agentId,
                             assertCurrent,
+                            quiescence,
                           });
                           assertCurrent();
                         }
-                        await environments.destroy(current.environmentId);
+                        await environments.reclaim(current.environmentId);
                       },
                       complete: async () => {
-                        // Destroy is the final privileged effect. Once it commits, durable placement
-                        // completion must finish even if caller authority closes during the await.
-                        const completed = moveIntent
-                          ? await completeMovedWorkspaceTeardown({
-                              placements,
-                              turnClaim: reclaimClaim,
-                              environmentId: current.environmentId,
-                              ownerEpoch: current.activeOwnerEpoch,
-                              operationId: moveIntent.operationId,
-                            })
-                          : await completeReclaimedWorkspaceTeardown({
-                              placements,
-                              turnClaim: reclaimClaim,
-                              environmentId: current.environmentId,
-                              ownerEpoch: current.activeOwnerEpoch,
-                            });
+                        // Session shutdown and cleanup acceptance are committed. Physical release
+                        // remains with the environment owner while placement completion settles.
+                        const completed = await completeWorkerWorkspaceTeardown({
+                          placements,
+                          turnClaim: reclaimClaim,
+                          environmentId: current.environmentId,
+                          ownerEpoch: current.activeOwnerEpoch,
+                          move: moveIntent,
+                        });
                         // Publish the committed owner before cleanup refs and the tunnel can yield.
                         reportPlacementTransition(onTransition, completed);
                         return completed;
-                      },
-                      validateCompleted: (completed) => {
-                        const expectedState = moveIntent ? "local" : "reclaimed";
-                        if (completed.state !== expectedState) {
-                          throw new Error(
-                            `Cloud worker teardown did not produce ${expectedState} placement`,
-                          );
-                        }
                       },
                     });
                   } finally {
@@ -362,16 +461,13 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
               if (reclaimed.state !== "local" && reclaimed.state !== "reclaimed") {
                 throw new Error("Cloud worker teardown produced a nonterminal placement");
               }
-              try {
-                await environments.stopTunnel(current.environmentId, current.activeOwnerEpoch);
-              } catch {
-                // Provider teardown is authoritative; local tunnel cleanup is best effort.
-              }
+              // reclaim already stopped the session transport before provider acceptance.
+              // Reentering its environment lock would wait for physical release again.
               return reclaimed;
-            };
-            try {
-              return await finishReclaim();
             } catch (error) {
+              if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
+                throw error;
+              }
               // An unstaged final-fence failure is retryable even after an unchanged
               // manifest commit; the journal remains authoritative for the next attempt.
               await cancelUnstagedFailedReclaim(
@@ -393,6 +489,4 @@ export function createWorkerPlacementReclaim(options: WorkerPlacementReclaimOpti
         );
       },
     });
-
-  return reclaimOnce;
 }

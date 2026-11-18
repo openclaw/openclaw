@@ -7,6 +7,8 @@ type SessionTranscriptCorpusArtifactKind =
   | "archive-artifact";
 
 export type SessionTranscriptCorpusOptions = {
+  /** Use the caller's prepared config when discovering its session store. */
+  config?: OpenClawConfig;
   /** Include rotated SQLite transcript identities retained behind current logical sessions. */
   includeRetainedSqlite?: boolean;
   /** Skip per-transcript revision reads when a caller only needs discovery metadata. */
@@ -23,6 +25,8 @@ export type SessionTranscriptCorpusEntry = {
   contentRevision?: string;
   artifactKind: SessionTranscriptCorpusArtifactKind;
   sessionKey?: string;
+  /** Recorded owner of a plugin-managed transcript. */
+  pluginOwnerId?: string;
   storePath?: string;
   /** Present when an active transcript is addressed by SQLite identity, not a JSONL path. */
   transcriptSource?: "sqlite";

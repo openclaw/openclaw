@@ -55,6 +55,11 @@ enum AppNavigationActions {
         }
     }
 
+    static func openSelectedWebRoute(_ path: String, search: String? = nil) {
+        let target = self.selectedGatewayTarget ?? MacGatewaySelectionPreferences.shared.target
+        Task { await DashboardManager.shared.show(atPath: path, search: search, target: target) }
+    }
+
     /// Gateway-owned onboarding has no native equivalent.
     static func openDashboardOnboarding() {
         self.openPrimaryWebRoute(
@@ -106,15 +111,14 @@ enum AppNavigationActions {
                 guard isCurrent(), !(error is CancellationError) else { return }
                 let alert = NSAlert()
                 alert.messageText = "Could Not Open Chat"
-                alert.informativeText = "Connect to the Gateway, then select this conversation in the Dashboard."
+                alert.informativeText = "Connect to the Gateway, then select this conversation in OpenClaw."
                 AppActivation.shared.presentAlert(alert)
             }
         }
     }
 
     static func openSettings() {
-        let target = self.selectedGatewayTarget ?? MacGatewaySelectionPreferences.shared.target
-        Task { await DashboardManager.shared.show(atPath: DashboardRouteMap.appearanceSettingsPath, target: target) }
+        self.openSelectedWebRoute(DashboardRouteMap.appearanceSettingsPath)
     }
 
     static func openConnection(tab: ConnectionTab = .connection) {

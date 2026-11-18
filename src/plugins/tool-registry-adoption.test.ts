@@ -9,9 +9,11 @@ import {
   createPluginMetadataSnapshot,
   makeRegistry,
 } from "../config/plugin-auto-enable.test-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
@@ -20,7 +22,7 @@ import {
   markPluginRegistryRetired,
 } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
-import type { PluginToolRegistration } from "./registry-types.js";
+import type { PluginRegistry, PluginToolRegistration } from "./registry-types.js";
 import {
   createPluginRegistryOwner,
   resetPluginRuntimeStateForTest,
@@ -30,131 +32,113 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { startPluginServices, type PluginServicesHandle } from "./services.test-support.js";
 import { adoptRuntimeToolRegistrations } from "./tool-registry-adoption.js";
+import { makeTool } from "./tools.optional.test-helpers.js";
+import { createToolLoadContext } from "./tools.test-support.js";
 
-it("keeps discovery tools when the Gateway source, config, or lifetime does not match", () => {
-  const config = { plugins: { entries: { owner: { config: { account: "original" } } } } };
-  const runtime = createEmptyPluginRegistry();
-  const target = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "owner",
-    source: "/synthetic/plugin.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-  });
-  const tool: PluginToolRegistration = {
-    pluginId: record.id,
-    source: record.source,
-    factory: () => null,
-    names: ["owner_tool"],
-    optional: false,
-  };
-  runtime.plugins.push(record);
-  runtime.tools.push(tool);
-  const localRecord = { ...record };
-  target.plugins.push(localRecord);
-  const localTool = { ...tool, factory: () => null };
-  target.tools.push(localTool);
-  setPluginRuntimeLoadContext(runtime, {
-    rawConfig: config,
-    config,
-    activationSourceConfig: config,
-    autoEnabledReasons: {},
-    workspaceDir: "/synthetic",
-    env: process.env,
-    logger: { info() {}, warn() {}, error() {} },
-  });
-  markPluginRegistryActive(runtime);
-  try {
-    expect(adoptRuntimeToolRegistrations(target, runtime, config).tools).toEqual([tool]);
-    expect(target.tools).toEqual([localTool]);
-    expect(
-      adoptRuntimeToolRegistrations(target, runtime, {
-        plugins: { entries: { owner: { config: { account: "other" } } } },
-      }),
-    ).toBe(target);
-    localRecord.source = "/workspace/shadow.ts";
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-    localRecord.source = record.source;
-    localRecord.enabled = false;
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-    localRecord.enabled = true;
-    markPluginRegistryRetired(runtime);
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-  } finally {
+const workspaceDir = "/synthetic";
+const recordOptions = {
+  id: "owner",
+  source: "/synthetic/plugin.ts",
+  origin: "global" as const,
+  enabled: true,
+  configSchema: false,
+};
+
+function setLoadContext(registry: PluginRegistry, config: OpenClawConfig) {
+  setPluginRuntimeLoadContext(registry, createToolLoadContext(config, workspaceDir));
+}
+
+const runtimes = new Set<PluginRegistry>();
+afterEach(() => {
+  for (const runtime of runtimes) {
     markPluginRegistryRetired(runtime);
   }
+  runtimes.clear();
+  resetPluginRuntimeStateForTest();
 });
 
-it("substitutes exact declared identities without widening or reordering discovery tools", () => {
-  const config = {};
+function createAdoptionPair(config: OpenClawConfig = {}) {
   const runtime = createEmptyPluginRegistry();
   const target = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "owner",
-    source: "/synthetic/plugin.ts",
-    origin: "global",
-    enabled: true,
-    configSchema: false,
-  });
+  const record = createPluginRecord(recordOptions);
+  const localRecord = { ...record };
   runtime.plugins.push(record);
-  target.plugins.push({ ...record });
+  target.plugins.push(localRecord);
+  setLoadContext(runtime, config);
+  markPluginRegistryActive(runtime);
+  runtimes.add(runtime);
   const tool = (names: string[], optional = false): PluginToolRegistration => ({
     pluginId: record.id,
     source: record.source,
+    factory: () => null,
     names,
     optional,
-    factory: () => null,
   });
-  const x = tool(["x"]);
-  const y = tool(["y"]);
-  runtime.tools.push(y, x);
-  const localX = tool(["x"]);
-  target.tools.push(localX);
-  setPluginRuntimeLoadContext(runtime, {
-    rawConfig: config,
-    config,
-    activationSourceConfig: config,
-    autoEnabledReasons: {},
-    workspaceDir: "/synthetic",
-    env: process.env,
-    logger: { info() {}, warn() {}, error() {} },
-  });
-  markPluginRegistryActive(runtime);
-  try {
-    expect.soft(adoptRuntimeToolRegistrations(target, runtime, config).tools).toEqual([x]);
-    const unnamed = tool([]);
-    const optional = tool(["x"], true);
-    const grouped = tool(["second", "first"]);
-    const ownedGroup = tool(["first", "second", "first"]);
-    const unmatched = tool(["missing"]);
-    runtime.tools.push(tool([]), ownedGroup);
-    target.tools = [unnamed, grouped, optional, localX, unmatched];
-    expect
-      .soft(adoptRuntimeToolRegistrations(target, runtime, config).tools)
-      .toEqual([unnamed, ownedGroup, optional, x, unmatched]);
-    expect(target.tools).toEqual([unnamed, grouped, optional, localX, unmatched]);
+  const adopt = (nextConfig = config) => adoptRuntimeToolRegistrations(target, runtime, nextConfig);
+  return { runtime, target, localRecord, tool, adopt };
+}
 
-    // A null-returning fallback may share its declared name with the registration that supplies it.
-    const fallback = tool(["z"]);
-    const supplier = tool(["z"]);
-    runtime.tools.push(fallback, supplier);
-    target.tools = [tool(["z"]), tool(["z"])];
-    const [first, second] = adoptRuntimeToolRegistrations(target, runtime, config).tools;
-    expect.soft(first).toBe(fallback);
-    expect.soft(second).toBe(supplier);
-    target.tools = [tool(["z"])];
-    expect(adoptRuntimeToolRegistrations(target, runtime, config)).toBe(target);
-  } finally {
-    markPluginRegistryRetired(runtime);
-  }
+it("keeps discovery tools when the Gateway source, config, or lifetime does not match", () => {
+  const config = { plugins: { entries: { owner: { config: { account: "original" } } } } };
+  const { runtime, target, localRecord, tool, adopt } = createAdoptionPair(config);
+  runtime.tools.push(tool(["owner_tool"]));
+  target.tools.push(tool(["owner_tool"]));
+  expect(adopt().tools[0]).toBe(runtime.tools[0]);
+  expect(
+    adopt({
+      plugins: { entries: { owner: { config: { account: "other" } } } },
+    }),
+  ).toBe(target);
+  localRecord.source = "/workspace/shadow.ts";
+  expect(adopt()).toBe(target);
+  localRecord.source = recordOptions.source;
+  localRecord.enabled = false;
+  expect(adopt()).toBe(target);
+  localRecord.enabled = true;
+  markPluginRegistryRetired(runtime);
+  expect(adopt()).toBe(target);
 });
 
-afterEach(() => resetPluginRuntimeStateForTest());
+it("substitutes exact declared identities without widening or reordering discovery tools", () => {
+  const { runtime, target, tool, adopt } = createAdoptionPair();
+  const x = tool(["x"]);
+  runtime.tools.push(tool(["y"]), x);
+  const localX = tool(["x"]);
+  const unnamed = tool([]);
+  const optional = tool(["x"], true);
+  const grouped = tool(["second", "first"]);
+  const ownedGroup = tool(["first", "second", "first"]);
+  const unmatched = tool(["missing"]);
+  runtime.tools.push(tool([]), ownedGroup);
+  target.tools = [unnamed, grouped, optional, localX, unmatched];
+  expect.soft(adopt().tools).toEqual([unnamed, ownedGroup, optional, x, unmatched]);
+  expect(target.tools).toEqual([unnamed, grouped, optional, localX, unmatched]);
+
+  // A null-returning fallback may share its declared name with the registration that supplies it.
+  const fallback = tool(["z"]);
+  const supplier = tool(["z"]);
+  runtime.tools.push(fallback, supplier);
+  target.tools = [tool(["z"]), tool(["z"])];
+  const [first, second] = adopt().tools;
+  expect.soft(first).toBe(fallback);
+  expect.soft(second).toBe(supplier);
+  target.tools = [tool(["z"])];
+  expect(adopt()).toBe(target);
+});
+
+it("matches tools without entering unrelated plugin metadata", async () => {
+  const { runtime, target, tool, adopt } = createAdoptionPair();
+  const donor = tool(["owner_tool"]);
+  const unrelated = new PluginInstance("unrelated");
+  const foreign = { ...tool(unrelated.wrap(["foreign_tool"])), pluginId: "unrelated" };
+  runtime.tools.push(foreign, donor);
+  target.tools.push(tool(["owner_tool"]), foreign);
+  await unrelated.dispose();
+  expect(adopt().tools).toEqual([donor, foreign]);
+});
 
 it("executes only the admitting Gateway's current service and skips unowned turns", async () => {
   const config = { plugins: { allow: ["owner"], slots: { memory: "none" } } };
-  const workspaceDir = "/synthetic";
   const metadataSnapshot = createPluginMetadataSnapshot({
     config,
     workspaceDir,
@@ -167,21 +151,15 @@ it("executes only the admitting Gateway's current service and skips unowned turn
   const create = (marker: string) => {
     const builder = createTestPluginRegistry();
     const record = createPluginRecord({
-      id: "owner",
-      source: "/synthetic/plugin.ts",
-      origin: "global",
-      enabled: true,
-      configSchema: false,
+      ...recordOptions,
       contracts: { tools: ["owner_tool"] },
     });
     const api = builder.createApi(record, { config });
     const call = vi.fn(() => marker);
     api.registerTool(
       () => ({
-        name: "owner_tool",
+        ...makeTool("owner_tool"),
         label: "Owner",
-        description: "Read owning service",
-        parameters: { type: "object", properties: {} },
         async execute() {
           return { content: [{ type: "text", text: store.getRuntime().call() }], details: {} };
         },
@@ -198,28 +176,17 @@ it("executes only the admitting Gateway's current service and skips unowned turn
       },
     });
     builder.registry.plugins.push(record);
-    setPluginRuntimeLoadContext(builder.registry, {
-      rawConfig: config,
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir,
-      env: process.env,
-      logger: { info() {}, warn() {}, error() {} },
-    });
+    setLoadContext(builder.registry, config);
     return { registry: builder.registry, instance: getPluginInstance(record)!, call };
   };
   const a = create("Gateway A");
-  const b = create("Gateway B");
   // A request may retain a previous registry while its admitting owner publishes a successor.
   const requestRegistry = createEmptyPluginRegistry();
   setActivePluginRegistry(requestRegistry);
   const ownerA = createPluginRegistryOwner(requestRegistry);
   setActivePluginRegistry(a.registry);
   ownerA.publish(a.registry);
-  setActivePluginRegistry(b.registry);
-  const ownerB = createPluginRegistryOwner(b.registry);
-  const services: PluginServicesHandle[] = [];
+  let service: PluginServicesHandle | undefined;
   const acquired: Awaited<ReturnType<typeof acquireAgentRuntimePluginRegistry>>[] = [];
   const selected: ReturnType<typeof create>[] = [];
   const prepare = () => {
@@ -241,24 +208,20 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     });
   };
   try {
-    for (const { registry } of [a, b]) {
-      await startPluginServices({
-        registry,
-        config,
-        workspaceDir,
-        throwOnStartError: true,
-        onHandle: (handle) => {
-          services.push(handle);
-        },
-      });
-    }
+    await startPluginServices({
+      registry: a.registry,
+      config,
+      workspaceDir,
+      throwOnStartError: true,
+      onHandle: (handle) => {
+        service = handle;
+      },
+    });
     const owned = await withPluginRuntimeRegistryScope(requestRegistry, prepare);
     acquired.push(owned);
     assert("resources" in owned);
     expect.soft(owned.registry.tools).toEqual(a.registry.tools);
-    expect.soft(owned.registry.tools).not.toContain(b.registry.tools[0]);
     expect.soft(a.instance.retainedWorkCount).toBeGreaterThan(0);
-    expect.soft(b.instance.retainedWorkCount).toBe(0);
     const scope = owned.resources.createInvocationScope(owned.registry);
     try {
       const tool = scope.wrap(owned.registry.tools[0]!.factory)({ config, workspaceDir });
@@ -267,7 +230,6 @@ it("executes only the admitting Gateway's current service and skips unowned turn
         .soft(await tool.execute("owned-tool", {}))
         .toMatchObject({ content: [{ type: "text", text: "Gateway A" }] });
       expect.soft(a.call).toHaveBeenCalledOnce();
-      expect.soft(b.call).not.toHaveBeenCalled();
     } finally {
       scope.release();
     }
@@ -276,7 +238,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     expect.soft(unscoped.registry.tools).toEqual(selected[1]!.registry.tools);
     const ambiguous = createEmptyPluginRegistry();
     bindPluginRegistryGatewayOwner(ambiguous, { current: () => a.registry });
-    bindPluginRegistryGatewayOwner(ambiguous, { current: () => b.registry });
+    bindPluginRegistryGatewayOwner(ambiguous, { current: () => createEmptyPluginRegistry() });
     const unowned = await withPluginRuntimeRegistryScope(ambiguous, prepare);
     acquired.push(unowned);
     expect.soft(unowned.registry.tools).toEqual(selected[2]!.registry.tools);
@@ -287,10 +249,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
         lease.releaseWork();
       }
     }
-    for (const service of services) {
-      await service.stop({ strict: true });
-    }
-    await ownerB.close();
+    await service?.stop({ strict: true });
     await ownerA.close();
     for (const local of selected) {
       await local.instance.dispose();

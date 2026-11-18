@@ -11,7 +11,7 @@ extension ChatSessionSidebar {
                     Image(systemName: "square.and.pencil")
                     Text("New Thread")
                     Spacer(minLength: 4)
-                    Text(verbatim: "⇧⌘N")
+                    Text(verbatim: "⌘N")
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.tertiary)
                 }
@@ -20,7 +20,7 @@ extension ChatSessionSidebar {
                 .frame(height: 38)
                 .contentShape(Rectangle())
             }
-            .help(String(localized: "New thread"))
+            .help(String(localized: "New thread (⌘N)"))
             .accessibilityIdentifier("chat-new-thread")
             Divider()
                 .frame(height: 16)
@@ -33,7 +33,6 @@ extension ChatSessionSidebar {
                     .contentShape(Rectangle())
             }
             .accessibilityLabel(String(localized: "New thread options"))
-            .help(String(localized: "New thread options"))
             .popover(isPresented: self.$isPresentingNewSessionOptions) {
                 ChatNewSessionOptionsPopover(viewModel: self.viewModel) {
                     self.isPresentingNewSessionOptions = false
@@ -77,8 +76,12 @@ extension ChatSessionSidebar {
             .accessibilityLabel(String(localized: "View options"))
             .accessibilityIdentifier("chat-sidebar-view-options")
             .popover(isPresented: self.$isPresentingFilters) {
-                ChatSessionSidebarFilters(options: self.filterBinding, ownership: ownership)
-                    .onExitCommand { self.isPresentingFilters = false }
+                VStack(spacing: 0) {
+                    ChatSessionSidebarFilters(options: self.filterBinding, ownership: ownership)
+                    ChatSidebarCatalogVisibilityOptions(data: self.catalogData, ownerFilter: self.$sessionOwnerFilter)
+                        .padding(16)
+                }
+                .onExitCommand { self.isPresentingFilters = false }
             }
         }
         .padding(.top, 14)
@@ -142,7 +145,7 @@ extension ChatSessionSidebar {
             .buttonStyle(.plain)
             .accessibilityIdentifier("chat-agent-\(agent.id)")
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-            .help(String(format: String(localized: "Open %@"), agent.displayName))
+            .help(agent.displayName)
             self.attentionBadge(summary: attention, targetID: "agent:\(agent.id)")
         }
         .padding(.horizontal, 8)
@@ -165,31 +168,6 @@ extension ChatSessionSidebar {
             return String(format: String(localized: "%lld queued"), summary.queuedCount)
         }
         return activity.text
-    }
-
-    var connectionFooter: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(self.viewModel.healthOK ? .green : .orange)
-                .frame(width: 7, height: 7)
-            Text(self.viewModel.healthOK
-                ? String(localized: "Gateway connected")
-                : String(localized: "Connecting…"))
-                .font(OpenClawChatTypography.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            if self.groupLoadFailed {
-                Button {
-                    self.groupRefreshNonce += 1
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help(String(localized: "Retry thread groups"))
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
     }
 }
 

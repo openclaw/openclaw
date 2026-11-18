@@ -12,7 +12,6 @@ export function buildZalouserGroupCandidates(params: {
   groupChannel?: string | null;
   groupName?: string | null;
   includeGroupIdAlias?: boolean;
-  includeWildcard?: boolean;
   allowNameMatching?: boolean;
 }): string[] {
   const groupId = toGroupCandidate(params.groupId);
@@ -26,10 +25,8 @@ export function buildZalouserGroupCandidates(params: {
   if (params.allowNameMatching !== false) {
     candidates.push(groupChannel, groupName, normalizeChannelSlug(groupName));
   }
-  if (params.includeWildcard !== false) {
-    candidates.push("*");
-  }
-  return uniqueStrings(candidates.map(toGroupCandidate).filter(Boolean));
+  candidates.push("*");
+  return uniqueStrings(candidates.filter(Boolean));
 }
 
 export function findZalouserGroupEntry(
@@ -46,7 +43,7 @@ export function resolveZalouserGroupScope(
   candidates: string[],
 ) {
   // Whole-entry selection: an exact candidate hides every wildcard field.
-  // Candidate construction owns aliases, names, and wildcard opt-in; the monitor
+  // Candidate construction owns aliases, names, and wildcard fallback; the monitor
   // requests group:<id>, groupName, and "*" through buildZalouserGroupCandidates.
   const tree: ScopeTree = { scopes: groups ?? {} };
   const key =

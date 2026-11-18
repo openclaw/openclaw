@@ -6,12 +6,12 @@ vi.mock("../../agents/subagents/registry/subagent-control.js", () => {
   throw new Error("ordinary messages must not initialize cancellation owners");
 });
 
-it.each(["direct", "group"])(
-  "keeps %s ordinary messages outside cancellation runtime",
-  async (chatType) => {
+it.each(["continue the conversation", "[example] /stop", "Ada: /stop"])(
+  "keeps ordinary group text outside cancellation runtime: %j",
+  async (body) => {
     await expect(
       tryFastAbortFromMessage({
-        ctx: buildTestCtx({ CommandBody: "continue the conversation", ChatType: chatType }),
+        ctx: buildTestCtx({ CommandBody: body, ChatType: "group" }),
         cfg: {},
       }),
     ).resolves.toEqual({ handled: false, aborted: false });

@@ -28,12 +28,10 @@ export function createScopedAuthProfileStore(
       return credential ? [[profileId, credential] as const] : [];
     }),
   );
-  const scopedRuntimeExternalProfileIds = (store.runtimeExternalProfileIds ?? []).filter(
-    (profileId) => scopedProfiles[profileId],
-  );
-  const scopedRuntimePersistedProfileIds = (store.runtimePersistedProfileIds ?? []).filter(
-    (profileId) => scopedProfiles[profileId],
-  );
+  const filterProfiles = (ids?: readonly string[]) =>
+    (ids ?? []).filter((profileId) => scopedProfiles[profileId]);
+  const scopedRuntimeExternalProfileIds = filterProfiles(store.runtimeExternalProfileIds);
+  const scopedRuntimePersistedProfileIds = filterProfiles(store.runtimePersistedProfileIds);
   return Object.keys(scopedProfiles).length > 0
     ? {
         version: store.version,

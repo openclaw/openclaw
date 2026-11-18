@@ -11,11 +11,12 @@ import type { EventCreateParams } from "openai/resources/beta/agents/sessions/ev
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
-import { DEFAULT_NATIVE_TOOLS, type AgentsApiConfig, type AgentsApiEnvironment } from "./config.js";
+import type { AgentsApiConfig, AgentsApiEnvironment } from "./config.js";
 
 const usageSchema = z.looseObject({
   input_tokens: z.number(),
@@ -182,7 +183,7 @@ export class AgentsApiClient {
         });
         const guarded = await fetchWithSsrFGuard({
           url,
-          init: { ...init, headers },
+          init: { ...init, headers: omitNullRequestHeaders(headers) },
           signal: init?.signal ?? undefined,
           beforeRequest: assertRequestCurrent,
         });
@@ -204,31 +205,27 @@ export class AgentsApiClient {
     signal: AbortSignal,
     instructions: string,
     model: string,
-    options?: {
-      nativeTools?: AgentsApiConfig["nativeTools"];
-      functions?: AgentToolParam.AgentToolConfigParamFunction[];
-      mcpTools?: AgentToolParam.AgentToolConfigParamMcp[];
+    options: {
+      nativeTools: AgentsApiConfig["nativeTools"];
+      functions: AgentToolParam.AgentToolConfigParamFunction[];
+      mcpTools: AgentToolParam.AgentToolConfigParamMcp[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
       environment?: AgentsApiEnvironment;
     },
   ): Promise<string> {
-    const environment: AgentsApiEnvironment = options?.environment ?? { type: "openai_hosted" };
-    const tools = [
-      ...(options?.nativeTools ?? DEFAULT_NATIVE_TOOLS),
-      ...(options?.mcpTools ?? []),
-      ...(options?.functions ?? []),
-    ];
+    const environment: AgentsApiEnvironment = options.environment ?? { type: "openai_hosted" };
+    const tools = [...options.nativeTools, ...options.mcpTools, ...options.functions];
     const body = {
       agent: {
         model,
         instructions,
-        reasoning: options?.reasoning,
+        reasoning: options.reasoning,
         multi_agent: { enabled: false },
       },
       environment:
         environment.type === "openai_hosted"
-          ? { ...environment, files: options?.files ?? [] }
+          ? { ...environment, files: options.files ?? [] }
           : environment,
     };
     const session = await this.sessions.create(body, {
@@ -329,7 +326,7 @@ export class AgentsApiClient {
         session.environment.type === "self_hosted" &&
         action.environment_id === session.environment.id
       ) {
-        // The operator's executor connects independently; keep the event stream open.
+        // The operator owns connecting the external executor.
         continue;
       }
       if (action.type !== "function_call") {

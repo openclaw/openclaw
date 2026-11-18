@@ -1,3 +1,4 @@
+import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AgentsApiClient,
@@ -5,6 +6,7 @@ import {
   type AgentsApiInputFile,
 } from "./agentsapi-client.js";
 import { createTurn } from "./agentsapi.test-support.js";
+import { agentsApiConfigSchema } from "./config.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock:
@@ -23,7 +25,7 @@ afterEach(() => {
 const signal = new AbortController().signal;
 
 describe("Agents API self-hosted session connection", () => {
-  it("retains self-hosted metadata while waiting for the matching external executor", async () => {
+  it("allows an external executor to satisfy matching self-hosted connection actions", async () => {
     const environment = {
       type: "self_hosted",
       id: "environment-fixture",
@@ -129,7 +131,12 @@ describe("Agents API session creation", () => {
     queueResponse(Response.json({ id: "session-fixture" }));
     const client = new AgentsApiClient("fixture-not-a-real-api-key", vi.fn());
 
-    await expect(client.create(signal, "Fixture instructions", model)).resolves.toBe(
+    const options = {
+      nativeTools: agentsApiConfigSchema.parse({}).nativeTools,
+      functions: [],
+      mcpTools: [],
+    };
+    await expect(client.create(signal, "Fixture instructions", model, options)).resolves.toBe(
       "session-fixture",
     );
 
@@ -330,7 +337,6 @@ describe("Agents API file upload transport", () => {
       type: "conflict_error",
       message: dormantUploadMessage,
     },
-    { name: "server failure", status: 500, type: "conflict_error", message: dormantUploadMessage },
     {
       name: "malformed error",
       status: 409,
@@ -344,30 +350,6 @@ describe("Agents API file upload transport", () => {
     await expect(
       createClient().uploadFile("session-fixture", inputFile, signal),
     ).rejects.toMatchObject({ status, type, error: { type, message } });
-  });
-
-  it("preserves the dormant conflict when it comes from session lookup", async () => {
-    queueResponse(
-      Response.json(
-        { error: { type: "conflict_error", message: dormantUploadMessage } },
-        { status: 409 },
-      ),
-    );
-
-    await expect(
-      createClient().uploadFile("session-fixture", inputFile, signal),
-    ).rejects.toMatchObject({ status: 409, type: "conflict_error" });
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves a transport failure instead of accepting its dormant error wording", async () => {
-    queueUploadContext();
-    const failure = new Error(dormantUploadMessage);
-    fetchWithSsrFGuardMock.mockRejectedValueOnce(failure);
-
-    await expect(
-      createClient().uploadFile("session-fixture", inputFile, signal),
-    ).rejects.toMatchObject({ cause: failure });
   });
 
   it.each(["abort", "authority revocation"])(
@@ -614,14 +596,6 @@ function artifact(overrides: Partial<AgentsApiArtifact> = {}): AgentsApiArtifact
     size_bytes: 4,
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((settle) => {
-    resolve = settle;
-  });
-  return { promise, resolve };
 }
 
 function serverError(status: number, headers?: HeadersInit) {

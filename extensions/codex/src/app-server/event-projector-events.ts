@@ -1,6 +1,7 @@
 import {
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
+  formatSubagentProgressReference,
   projectAgentActivityItem,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
@@ -25,6 +26,7 @@ import {
   isCommandBearingToolItem,
   itemToolArgs,
   itemToolResult,
+  itemTranscriptResultText,
   projectCodexToolActivity,
   shouldSuppressChannelProgressForItem,
 } from "./event-projector-tool-items.js";
@@ -102,6 +104,7 @@ export function projectNormalizedToolItem(params: {
   phase: "start" | "result";
   item: CodexThreadItem | undefined;
   detailMode?: ToolProgressDetailMode;
+  outputTextByItem?: ReadonlyMap<string, string>;
 }): NormalizedToolItemProjection | undefined {
   const { item } = params;
   if (!item || !isProjectedNativeToolItem(item)) {
@@ -116,7 +119,15 @@ export function projectNormalizedToolItem(params: {
   const commandBearing = isCommandBearingToolItem(item, args);
   const meta = itemMeta(item, params.detailMode);
   const emit = shouldEmitTranscriptToolProgress(name);
-  const result = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const metadata = emit && params.phase === "result" ? itemToolResult(item) : undefined;
+  const result =
+    emit && params.phase === "result" && item.type === "commandExecution"
+      ? {
+          text: itemTranscriptResultText(item, params.outputTextByItem),
+          exitCode: item.exitCode,
+          details: metadata,
+        }
+      : metadata;
   const event = emit
     ? {
         stream: "tool",
@@ -304,7 +315,6 @@ export class CodexEventProjection {
         data: { fromModel, toModel, ...(reason ? { reason } : {}) },
       });
       if (reason === "highRiskCyberActivity") {
-        this.cyberNoticeState = "fallback";
         this.emitCyberNotice("fallback", { model: fromModel, fallbackModel: toModel });
       }
     }
@@ -325,7 +335,6 @@ export class CodexEventProjection {
     ) {
       return;
     }
-    this.cyberNoticeState = "buffering";
     const model = readString(params, "model");
     const fallbackModel = readString(params, "fasterModel");
     this.emitCyberNotice("buffering", {
@@ -338,7 +347,6 @@ export class CodexEventProjection {
     if (codexErrorInfo !== "cyberPolicy" || this.cyberNoticeState === "blocked") {
       return;
     }
-    this.cyberNoticeState = "blocked";
     this.emitCyberNotice("blocked", { model: this.responseModel ?? model });
   }
 
@@ -357,7 +365,6 @@ export class CodexEventProjection {
     if (this.cyberNoticeState !== "buffering") {
       return;
     }
-    this.cyberNoticeState = undefined;
     this.emitCyberNotice("cleared");
   }
 
@@ -365,6 +372,7 @@ export class CodexEventProjection {
     state: "buffering" | "blocked" | "fallback" | "cleared",
     models: { model?: string; fallbackModel?: string } = {},
   ): void {
+    this.cyberNoticeState = state === "cleared" ? undefined : state;
     if (this.provider !== "openai") {
       return;
     }
@@ -460,6 +468,12 @@ export class CodexEventProjection {
       return;
     }
     const subagent = activity || item.type === "collabAgentToolCall";
+    const references = activity
+      ? [readString(item, "agentThreadId")]
+      : Array.isArray(item.receiverThreadIds)
+        ? item.receiverThreadIds.filter((id): id is string => typeof id === "string")
+        : [];
+    const reference = references.map(formatSubagentProgressReference).filter(Boolean).join(", ");
     const kind = subagent ? "tool" : itemKind(item);
     if (!kind) {
       return;
@@ -486,6 +500,7 @@ export class CodexEventProjection {
                 : itemStatus(item);
     const meta = subagent
       ? [
+          reference,
           interaction ? "message sent" : activity ? subagentStatus : status,
           readString(item, activity ? "agentPath" : "tool"),
         ]
@@ -503,7 +518,7 @@ export class CodexEventProjection {
               : item.id,
           phase: params.phase,
           kind,
-          title: itemTitle(item),
+          title: subagent ? "Subagent" : itemTitle(item),
           ...(status ? { status } : {}),
           ...(status === undefined
             ? { summary: "Outcome unknown", title: `${itemTitle(item)} — outcome unknown` }
@@ -559,6 +574,7 @@ export class CodexEventProjection {
     const projection = projectNormalizedToolItem({
       ...params,
       detailMode: this.toolProgress.toolProgressDetailMode(),
+      outputTextByItem: this.toolProgress.outputTextByItem,
     });
     if (!projection || !params.item) {
       return;

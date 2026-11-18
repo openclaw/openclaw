@@ -33,7 +33,7 @@ openclaw plugins install @openclaw/zai-provider
 
 <Tabs>
   <Tab title="Auto-detect endpoint">
-    **Best for:** most users. OpenClaw probes supported Z.AI endpoints with your API key and applies the correct base URL automatically.
+    **Best for:** most users. OpenClaw checks supported Z.AI endpoints with your API key and applies the correct base URL automatically.
 
     <Steps>
       <Step title="Run onboarding">
@@ -93,7 +93,7 @@ Z.AI also publishes the Anthropic-compatible Coding Plan base URL
 OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
 speak Anthropic Messages directly.
 
-`zai-api-key` auto-detects one of these four by probing your key against each
+`zai-api-key` auto-detects one of these four by checking your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
 then `zai-cn`) before Coding Plan endpoints (`zai-coding-global`, then
 `zai-coding-cn`), and stopping at the first endpoint that accepts a request.
@@ -258,6 +258,9 @@ Setting thinking to `off` avoids responses that spend the output budget on
     Unknown `glm-5*` ids still forward-resolve on the provider path by
     synthesizing provider-owned metadata from the `glm-4.7` template when the id
     matches the current GLM-5 family shape.
+    If live discovery is unavailable, retained catalog metadata still uses your
+    selected Coding Plan, regional, or custom endpoint; model-level endpoint
+    overrides remain authoritative.
   </Accordion>
 
   <Accordion title="Tool-call streaming">
@@ -322,7 +325,7 @@ Setting thinking to `off` avoids responses that spend the output budget on
 
   <Accordion title="Auth details">
     - Z.AI uses Bearer auth with your API key.
-    - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint by probing supported endpoints with your key.
+    - The `zai-api-key` onboarding choice auto-detects the matching Z.AI endpoint by checking supported endpoints with your key.
     - Use the explicit regional choices (`zai-coding-global`, `zai-coding-cn`, `zai-global`, `zai-cn`) when you want to force a specific API surface.
     - The legacy env var `Z_AI_API_KEY` is still accepted; OpenClaw copies it to `ZAI_API_KEY` at startup if `ZAI_API_KEY` is unset.
 

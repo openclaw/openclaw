@@ -100,7 +100,7 @@ describe("configureGatewayForSetup", () => {
           id: "OPENCLAW_GATEWAY_TOKEN",
         });
         const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
-        const stored = readSecretStoreValue({
+        const stored = await readSecretStoreValue({
           scope: { kind: "team" },
           name: "OPENCLAW_GATEWAY_TOKEN",
         });

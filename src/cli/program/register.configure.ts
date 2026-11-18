@@ -1,4 +1,3 @@
-// Configure command registration: lazy-loads the interactive configuration wizard.
 import type { Command } from "commander";
 import { CONFIGURE_WIZARD_SECTIONS } from "../../commands/configure.shared.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -21,7 +20,7 @@ export function registerConfigureCommand(program: Command): void {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { configureCommandFromSectionsArg } =
           await import("../../commands/configure.commands.js");
-        await configureCommandFromSectionsArg(opts.section, defaultRuntime);
+        await configureCommandFromSectionsArg(opts.section);
       });
     });
 }

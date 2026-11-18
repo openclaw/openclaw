@@ -1,5 +1,7 @@
 import type { PreparedAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import type { MemoryFlushToolRunContext } from "../../agents/agent-tools.memory-flush.types.js";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import type { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -9,7 +11,26 @@ import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
+import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
+import type { MemoryFlushPlan } from "../../plugins/registry-contribution-types.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+
+export function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
+}
+
+export function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return createSessionEntry({
+    totalTokensFresh: true,
+    totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+    ...overrides,
+  });
+}
+
+export function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
+}
 
 export async function seedMemoryAccountingTranscript(
   scope: SessionTranscriptRuntimeTarget,
@@ -58,9 +79,28 @@ export async function seedMemoryAccountingTranscript(
   }
 }
 
+type FileFlushPlan = Extract<MemoryFlushPlan, { relativePath: string }>;
+
+/** File-arm fixture shared by the runner's flush scenarios. */
+export function createMemoryFlushPlan(): FileFlushPlan {
+  return {
+    softThresholdTokens: 4_000,
+    forceFlushTranscriptBytes: 1_000_000_000,
+    reserveTokensFloor: 20_000,
+    prompt: "Pre-compaction memory flush.\nNO_REPLY",
+    systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+    relativePath: "memory/2023-11-14.md",
+  };
+}
+
+/** Override a file-arm fixture without admitting incompatible tools-arm fields. */
+export function createModifiedMemoryFlushPlan(overrides: Partial<FileFlushPlan>): MemoryFlushPlan {
+  return { ...createMemoryFlushPlan(), ...overrides };
+}
+
 export type ModelFallbackParams = {
-  provider?: string;
-  model?: string;
+  provider: string;
+  model: string;
   abortSignal?: AbortSignal;
   agentId?: string;
   sessionId?: string;
@@ -85,14 +125,31 @@ export type ModelFallbackParams = {
   ) => Promise<EmbeddedAgentRunResult>;
 };
 
+export function modelRoutingProvenance(
+  requestedProvider: string,
+  requestedModel: string,
+  stage: ModelFallbackAttemptProvenance["stage"] = "initial",
+): ModelFallbackAttemptProvenance {
+  return { requestedProvider, requestedModel, stage };
+}
+
+export async function runSelectedMemoryModel({ provider, model, run }: ModelFallbackParams) {
+  return {
+    result: await run(provider, model, {
+      modelRoutingProvenance: modelRoutingProvenance(provider, model),
+    }),
+    provider,
+    model,
+    attempts: [],
+  };
+}
+
 export function createMemoryRunEntryMockImplementation(deps: {
   runWithModelFallback: (params: ModelFallbackParams) => Promise<unknown>;
   ensureSelectedAgentHarnessPlugin: typeof ensureSelectedAgentHarnessPlugin;
 }) {
   return async (params: Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0]) => {
-    const assistantErrorTranscript = createAssistantErrorTranscript({
-      runId: params.identity.runId,
-    });
+    const assistantErrorTranscript = createAssistantErrorTranscript();
     const fallbackResult = (await deps.runWithModelFallback({
       ...params.selection,
       ...params.identity,
@@ -151,6 +208,13 @@ export function createMemoryRunEntryMockImplementation(deps: {
 }
 
 export type EmbeddedAgentParams = {
+  sessionId?: string;
+  sessionKey?: string;
+  sessionPersistence?: "detached";
+  senderIsOwner?: boolean;
+  sandboxSessionKey?: string;
+  memoryAudience?: MemoryAudience;
+  memoryFlushTools?: MemoryFlushToolRunContext;
   preparedRunAdmission?: PreparedAgentRunAdmission;
   sessionManager?: SessionManager;
   provider?: string;
@@ -195,5 +259,20 @@ export type CompactEmbeddedAgentSessionParams = {
   sessionEntry?: SessionEntry;
   sessionFile?: string;
   sessionId?: string;
+  skillsSnapshot?: unknown;
   trigger?: string;
 };
+
+export function registerClaudeCliBackend(ownsNativeCompaction = false): void {
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+        ownsNativeCompaction,
+      },
+    ],
+  });
+}

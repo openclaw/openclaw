@@ -59,13 +59,7 @@ export function parseRemoteBackupTimestamp(key: string): number | undefined {
 }
 
 /** Keep the newest snapshot in each selected nonempty UTC calendar bucket (Monday weeks). */
-export function selectBackupRetention(
-  keys: readonly string[],
-  options: BackupRetention,
-): {
-  kept: string[];
-  deleted: string[];
-} {
+export function selectBackupRetention(keys: readonly string[], options: BackupRetention) {
   const backups = [...new Set(keys)]
     .flatMap((key) => {
       const timestamp = parseRemoteBackupTimestamp(key);

@@ -2,10 +2,17 @@ import type {
   SystemAgentChatQuestion,
   SystemAgentChatResult,
 } from "../packages/gateway-protocol/src/index.js";
+import type {
+  SessionProcessSummary,
+  SessionsProcessesListParams,
+  SessionsProcessesListResult,
+  SessionsProcessesStopParams,
+  SessionsProcessesStopResult,
+} from "../packages/gateway-protocol/src/schema/session-processes.js";
 import type { ControlUiMockGateway } from "../ui/src/test-helpers/control-ui-e2e.ts";
 
 // Serialized into the preview page; runtime dependencies must stay inside this function.
-function installControlUiPreview(newAgentWelcome: string): void {
+function installControlUiPreview(newAgentWelcome: string, processSessionKey: string): void {
   const previewWindow = window as Window & {
     __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string };
     openclawControlUiE2eGateway?: ControlUiMockGateway;
@@ -21,6 +28,98 @@ function installControlUiPreview(newAgentWelcome: string): void {
   if (!gateway) {
     throw new Error("Preview Gateway must be installed before its request handlers");
   }
+
+  // Same synthetic examples as session-details-background-work.e2e.test.ts.
+  // This page-local fixture never starts, polls, or kills an operating-system process.
+  const processSession = gateway.getSessionRow(processSessionKey);
+  const now = Date.now();
+  const processes: SessionProcessSummary[] = [
+    {
+      processId: "dev-server",
+      instanceId: "dev-server-1",
+      name: "pnpm ui:dev --port 5173",
+      status: "running",
+      startedAt: now - 1_380_000,
+      tail: "ready in 412 ms",
+      truncated: false,
+      canStop: true,
+    },
+    {
+      processId: "watch-tests",
+      instanceId: "watch-tests-1",
+      name: "node scripts/run-vitest.mjs run ui/src/pages/chat",
+      status: "running",
+      startedAt: now - 74_000,
+      tail: "",
+      truncated: false,
+      canStop: true,
+    },
+    {
+      processId: "build",
+      instanceId: "build-1",
+      name: "pnpm ui:build",
+      status: "completed",
+      startedAt: now - 900_000,
+      endedAt: now - 846_000,
+      exitCode: 0,
+      tail: "built in 53.2s",
+      truncated: false,
+      canStop: false,
+    },
+    {
+      processId: "typecheck",
+      instanceId: "typecheck-1",
+      name: "pnpm tsgo:ui",
+      status: "failed",
+      startedAt: now - 820_000,
+      endedAt: now - 790_000,
+      exitCode: 2,
+      tail: "error TS2322",
+      truncated: false,
+      canStop: false,
+    },
+  ];
+  const processTarget = (input: SessionsProcessesListParams) => {
+    const row = gateway.getSessionRow(input.key);
+    const agentId = row.agentId ?? row.key.split(":")[1];
+    if (!row.sessionId || (input.agentId && input.agentId !== agentId)) {
+      return null;
+    }
+    return {
+      sessionId: row.sessionId,
+      processes:
+        row.key === processSession.key && row.sessionId === processSession.sessionId
+          ? processes
+          : [],
+      truncated: false,
+    } satisfies SessionsProcessesListResult;
+  };
+  const processTargetError = {
+    __mockError: { code: "INVALID_REQUEST", message: "Session process fixture scope changed." },
+  };
+  gateway.setRequestHandler("sessions.processes.list", ({ params, respond }) => {
+    respond(processTarget(params as SessionsProcessesListParams) ?? processTargetError);
+  });
+  gateway.setRequestHandler("sessions.processes.stop", ({ params, respond }) => {
+    const input = params as SessionsProcessesStopParams;
+    const target = processTarget(input);
+    if (!target || input.sessionId !== target.sessionId) {
+      respond(processTargetError);
+      return;
+    }
+    const row = target.processes.find(
+      (candidate) =>
+        candidate.processId === input.processId && candidate.instanceId === input.instanceId,
+    );
+    const requested = row?.status === "running" && row.canStop;
+    if (requested && row) {
+      row.status = "killed";
+      row.canStop = false;
+      row.endedAt = Date.now();
+      row.exitSignal = "SIGTERM";
+    }
+    respond({ requested } satisfies SessionsProcessesStopResult);
+  });
 
   gateway.setRequestHandler("chat.send", ({ params, respond, emit }) => {
     const input = params && typeof params === "object" ? (params as Record<string, unknown>) : {};
@@ -113,6 +212,9 @@ function installControlUiPreview(newAgentWelcome: string): void {
   });
 }
 
-export function createControlUiPreviewInitScript(newAgentWelcome: string): string {
-  return `(() => { const __name = (target) => target; (${installControlUiPreview.toString()})(${JSON.stringify(newAgentWelcome)}); })();`;
+export function createControlUiPreviewInitScript(
+  newAgentWelcome: string,
+  processSessionKey: string,
+): string {
+  return `(() => { const __name = (target) => target; (${installControlUiPreview.toString()})(${JSON.stringify(newAgentWelcome)}, ${JSON.stringify(processSessionKey)}); })();`;
 }

@@ -76,9 +76,8 @@ export function normalizePluginLoaderAliasMapForJiti(
   }
   const normalizedAliasMap = Object.fromEntries(
     Object.entries(aliasMap)
-      .map((entry) => ({ entry, depth: entry[0].split("/").length }))
-      .toSorted((left, right) => right.depth - left.depth)
-      .map(({ entry }) => entry),
+      .map(([key, target]) => [key.replaceAll("\\", "/"), target] as const)
+      .toSorted(([left], [right]) => right.split("/").length - left.split("/").length),
   );
   const aliasKeys = Object.keys(normalizedAliasMap);
   for (const aliasKey of aliasKeys) {

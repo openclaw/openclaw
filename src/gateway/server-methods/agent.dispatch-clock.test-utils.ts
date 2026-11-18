@@ -24,7 +24,7 @@ describe("gateway accepted dispatch clock", () => {
     const respond = vi.fn();
     respond(true, { status: "accepted" });
     let pumps = 0;
-    const pump = vi.spyOn(vi, "runOnlyPendingTimersAsync").mockImplementation(async () => {
+    const pump = vi.spyOn(vi, "advanceTimersByTimeAsync").mockImplementation(async () => {
       // Bound the broken implementation too, so the regression fails without hanging CI.
       if (++pumps === 2_000) {
         throw new Error("unbounded dispatch loop reached the regression guard");
@@ -61,10 +61,10 @@ describe("gateway accepted dispatch clock", () => {
         });
         const prepared = createDeferred();
         const originalYield = agentHandlerHelpers.yieldAfterAgentAcceptedAck;
-        const advancePending = vi.runOnlyPendingTimersAsync.bind(vi);
+        const advancePending = vi.advanceTimersByTimeAsync.bind(vi);
         let pumps = 0;
-        const pump = vi.spyOn(vi, "runOnlyPendingTimersAsync").mockImplementation(async () => {
-          const advanced = await advancePending();
+        const pump = vi.spyOn(vi, "advanceTimersByTimeAsync").mockImplementation(async (ms) => {
+          const advanced = await advancePending(ms);
           // Release asynchronous preparation at the former final pump. Its acknowledgement
           // timer is now queued, but that pump's timer snapshot has already been drained.
           if (++pumps === 50) {

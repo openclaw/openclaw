@@ -4,7 +4,7 @@ import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import {
   type PreparedWorkerSsh,
   workerSshCommandOptions,
-  workerSshOptions,
+  workerSshCommandPrefix,
   workerSshRemoteCommand,
 } from "./ssh.js";
 
@@ -44,13 +44,7 @@ export async function runSshScript(params: {
 }): Promise<SpawnResult> {
   return await params.runCommand(
     [
-      "ssh",
-      ...workerSshOptions(params.prepared, { forwarding: "disabled" }),
-      "-a",
-      "-x",
-      "-T",
-      "-p",
-      String(params.port ?? params.prepared.port),
+      ...workerSshCommandPrefix(params.prepared, params.port ?? params.prepared.port),
       "--",
       params.prepared.sshTarget,
       workerSshRemoteCommand(["sh", "-s", "--", ...params.scriptArgs]),

@@ -138,18 +138,16 @@ function matchToolsBySenderPolicy(
 ): GroupToolPolicyConfig | undefined {
   const senderIdCandidates = normalizeSenderIdCandidates(params.senderId);
   const channel = normalizeSenderPolicyChannel(params.messageProvider);
-  if (channel) {
+  for (const type of ["channel", "id"] as const) {
+    if (type === "channel" && !channel) {
+      continue;
+    }
     for (const senderIdCandidate of senderIdCandidates) {
-      const match = compiled.buckets.channel.get(`${channel}:${senderIdCandidate}`);
+      const key = type === "channel" ? `${channel}:${senderIdCandidate}` : senderIdCandidate;
+      const match = compiled.buckets[type].get(key);
       if (match) {
         return match;
       }
-    }
-  }
-  for (const senderIdCandidate of senderIdCandidates) {
-    const match = compiled.buckets.id.get(senderIdCandidate);
-    if (match) {
-      return match;
     }
   }
   for (const [type, value] of [

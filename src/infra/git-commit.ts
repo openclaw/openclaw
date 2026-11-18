@@ -27,12 +27,6 @@ const GIT_COMMIT_CACHE_LIMIT = 256;
 const cachedGitCommitBySearchDir = new LruCache<string | null>(GIT_COMMIT_CACHE_LIMIT);
 declare const WORKER_DEPLOY_BUILD: boolean;
 
-type CommitMetadataReaders = {
-  readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
-  readBuildInfoCommit?: () => string | null;
-  readPackageJsonCommit?: () => string | null;
-};
-
 const resolveCommitSearchDir = (options: { cwd?: string; moduleUrl?: string }) => {
   if (options.cwd) {
     return path.resolve(options.cwd);
@@ -144,12 +138,9 @@ export const resolveCommitHash = (
     cwd?: string;
     env?: NodeJS.ProcessEnv;
     moduleUrl?: string;
-    readers?: CommitMetadataReaders;
   } = {},
 ) => {
   const env = options.env ?? process.env;
-  const readers = options.readers ?? {};
-  const readGitCommit = readers.readGitCommit ?? readCommitFromGit;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();
   const normalized = formatCommit(envCommit);
   if (normalized) {
@@ -165,26 +156,22 @@ export const resolveCommitHash = (
     moduleUrl: options.moduleUrl,
   });
   try {
-    const gitCommit = readGitCommit(searchDir, packageRoot);
+    const gitCommit = readCommitFromGit(searchDir, packageRoot);
     if (gitCommit !== undefined) {
       return cacheGitCommit(searchDir, gitCommit);
     }
   } catch {
     // Fall through to baked metadata for packaged installs that are not in a live checkout.
   }
-  const buildInfoCommit = readers.readBuildInfoCommit?.() ?? readCommitFromBuildInfo();
+  const buildInfoCommit = readCommitFromBuildInfo();
   if (buildInfoCommit) {
     return cacheGitCommit(searchDir, buildInfoCommit);
   }
-  const pkgCommit = readers.readPackageJsonCommit?.() ?? readCommitFromPackageJson();
+  const pkgCommit = readCommitFromPackageJson();
   if (pkgCommit) {
     return cacheGitCommit(searchDir, pkgCommit);
   }
-  try {
-    return cacheGitCommit(searchDir, readGitCommit(searchDir, packageRoot) ?? null);
-  } catch {
-    return cacheGitCommit(searchDir, null);
-  }
+  return cacheGitCommit(searchDir, null);
 };
 
 /** Resolve the commit that produced the loaded artifact, not the checkout's current revision. */

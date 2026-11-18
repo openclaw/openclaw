@@ -7,18 +7,17 @@ import type { Client } from "../internal/discord.js";
 import type { DiscordLivePolicyReader } from "../monitor/live-policy.js";
 import type { DiscordAudioFrame } from "./audio-worker-protocol.js";
 import {
-  beginVoiceCapture,
   clearVoiceCaptureFinalizeTimer,
   finishVoiceCapture,
   scheduleVoiceCaptureFinalize,
   waitForVoiceCaptureAdmission,
+  type VoiceCaptureEntry,
 } from "./capture-state.js";
 import {
   type DiscordVoiceIngressContext,
   runDiscordVoiceAgentTurn,
   resolveDiscordVoiceIngressContext,
 } from "./ingress.js";
-import { formatVoiceLogPreview } from "./log-preview.js";
 import type { DiscordVoiceMembershipTracker } from "./membership.js";
 import { resolveDiscordVoiceIngressContextWithParticipants } from "./participant-context.js";
 import { DiscordRealtimeRecordingInput } from "./realtime-recording.js";
@@ -33,7 +32,6 @@ import type { DiscordVoiceAudioReceipt } from "./recording-types.js";
 import { respondToDiscordVoiceTranscript } from "./segment.js";
 import {
   CAPTURE_FINALIZE_GRACE_MS,
-  resolveVoiceTimeoutMs,
   logVoiceVerbose,
   MIN_SEGMENT_SECONDS,
   type VoiceOperationResult,
@@ -46,9 +44,6 @@ import type { DiscordCaptureReceiptReader } from "./transcripts-source.js";
 import { DiscordVoiceRecording } from "./voice-recording.js";
 
 const logger = createSubsystemLogger("discord/voice");
-// UDP cannot apply backpressure; bound pending packets as well as their encoded bytes.
-const MAX_PENDING_OPUS_PACKETS = 1_000;
-const MAX_PENDING_OPUS_BYTES = 1024 * 1024;
 
 export class DiscordVoiceReceive {
   readonly daveRecoveryAttempts = new Map<string, number>();
@@ -59,11 +54,11 @@ export class DiscordVoiceReceive {
       bindCaptureReceipts: (entry: VoiceSessionEntry) => DiscordCaptureReceiptReader;
       accountId: string;
       admissionAllowFrom?: string[];
-      botUserId: () => string | undefined;
+      botUserId?: string;
       cfg: OpenClawConfig;
       client: Client;
       discordConfig: DiscordAccountConfig;
-      getSession: (guildId: string) => VoiceSessionEntry | undefined;
+      sessions: ReadonlyMap<string, VoiceSessionEntry>;
       isEntryCurrent: (entry: VoiceSessionEntry) => boolean;
       isFollowOwnedGuild: (guildId: string) => boolean;
       join: (
@@ -89,10 +84,7 @@ export class DiscordVoiceReceive {
     scheduleVoiceCaptureFinalize({
       state: entry.capture,
       userId,
-      delayMs: resolveVoiceTimeoutMs(
-        this.params.discordConfig.voice?.captureSilenceGraceMs,
-        CAPTURE_FINALIZE_GRACE_MS,
-      ),
+      delayMs: this.params.discordConfig.voice?.captureSilenceGraceMs ?? CAPTURE_FINALIZE_GRACE_MS,
     });
   }
 
@@ -105,7 +97,7 @@ export class DiscordVoiceReceive {
       return;
     }
 
-    if (userId === this.params.botUserId()) {
+    if (userId === this.params.botUserId) {
       return;
     }
     this.params.membership.notePresent(entry, userId);
@@ -139,7 +131,8 @@ export class DiscordVoiceReceive {
     }
     // A recorder can promote this reservation while native conversation admission
     // waits, without repeating admission or subscribing before either authority exists.
-    const reservation = beginVoiceCapture(entry.capture, userId);
+    const reservation: VoiceCaptureEntry = {};
+    entry.capture.set(userId, reservation);
     try {
       let realtimeIngress: Promise<DiscordVoiceIngressContext | null> | undefined;
       if (realtime && !capture) {
@@ -181,16 +174,9 @@ export class DiscordVoiceReceive {
 
   private responseContext(entry: VoiceSessionEntry, userId: string) {
     return {
-      readPolicy: this.params.readPolicy,
+      ...this.params,
       entry,
       userId,
-      accountId: this.params.accountId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      runtime: this.params.runtime,
-      speakerContext: this.params.speakerContext,
-      client: this.params.client,
       enqueuePlayback: (playbackEntry: VoiceSessionEntry, task: () => Promise<void>) => {
         playbackEntry.playbackQueue = playbackEntry.playbackQueue
           .then(task)
@@ -204,7 +190,7 @@ export class DiscordVoiceReceive {
   private async receiveSpeaker(
     entry: VoiceSessionEntry,
     userId: string,
-    reservation: ReturnType<typeof beginVoiceCapture>,
+    reservation: VoiceCaptureEntry,
     conversationAllowed: boolean,
     admittedIngress?: Promise<DiscordVoiceIngressContext | null>,
   ): Promise<void> {
@@ -243,12 +229,9 @@ export class DiscordVoiceReceive {
     // without destroying packets already received under the source subscription.
     const input = new PassThrough({ objectMode: true });
     let failed = false;
-    let pendingPackets = 0;
-    let pendingBytes = 0;
     let resetReceiveRecovery = false;
     const acceptPacket = (frame: DiscordAudioFrame) => {
-      const packetBytes = frame.packet.byteLength;
-      if (failed || !packetBytes || stream.destroyed) {
+      if (failed || !frame.packet.byteLength || stream.destroyed) {
         stream.acknowledge(frame);
         return;
       }
@@ -257,29 +240,18 @@ export class DiscordVoiceReceive {
         stream.acknowledge(frame);
         return;
       }
-      if (
-        pendingPackets >= MAX_PENDING_OPUS_PACKETS ||
-        packetBytes > MAX_PENDING_OPUS_BYTES - pendingBytes
-      ) {
-        onError(new Error("Discord voice receive backlog exceeded; try speaking again."));
-        input.destroy();
-        stream.destroy();
-        return;
-      }
       // Reset in worker-message order, before asynchronous recording/admission.
       // A queued healthy frame must not erase another speaker's later failure.
       if (!resetReceiveRecovery && frame.pcm.byteLength > 0 && this.params.isEntryCurrent(entry)) {
         resetReceiveRecovery = true;
         this.resetDecryptFailureState(entry);
       }
-      pendingPackets += 1;
-      pendingBytes += packetBytes;
       const receipt: DiscordVoiceAudioReceipt = {
         capture,
         startedAt: frame.receivedAt,
         recordingEpoch: frame.recordingEpoch,
       };
-      input.write({ pcm: Buffer.from(frame.pcm), packetBytes, receipt, frame });
+      input.write({ pcm: Buffer.from(frame.pcm), receipt, frame });
     };
     const endInput = () => input.end();
     let aborted = false;
@@ -361,7 +333,6 @@ export class DiscordVoiceReceive {
         for await (const decoded of input) {
           const frame: {
             pcm: Buffer;
-            packetBytes: number;
             receipt: DiscordVoiceAudioReceipt;
             frame: DiscordAudioFrame;
           } = decoded;
@@ -369,8 +340,6 @@ export class DiscordVoiceReceive {
             if (failed) {
               continue;
             }
-            pendingPackets -= 1;
-            pendingBytes -= frame.packetBytes;
             const { pcm, receipt } = frame;
             if (!receipt.capture && conversation && !conversation.ingress) {
               const admitted = await waitForVoiceCaptureAdmission({
@@ -430,7 +399,7 @@ export class DiscordVoiceReceive {
         }
       }
     } finally {
-      realtimeRecording?.sealBatch();
+      realtimeRecording?.seal("batch");
       if (conversationCompletion) {
         void conversationCompletion.catch((error: unknown) =>
           logger.warn(`discord voice: conversation failed: ${formatErrorMessage(error)}`),
@@ -486,22 +455,16 @@ export class DiscordVoiceReceive {
     userId: string,
   ): Promise<DiscordVoiceIngressContext | null> {
     return await resolveDiscordVoiceIngressContextWithParticipants({
-      readPolicy: this.params.readPolicy,
-      client: this.params.client,
+      ...this.params,
       entry,
       userId,
-      cfg: this.params.cfg,
-      discordConfig: this.params.discordConfig,
-      admissionAllowFrom: this.params.admissionAllowFrom,
-      botUserId: this.params.botUserId(),
-      speakerContext: this.params.speakerContext,
     });
   }
 
   async runDiscordRealtimeAgentTurn(
     params: VoiceRealtimeAgentTurnParams & { entry: VoiceSessionEntry },
   ): Promise<string> {
-    const { context, entry, message, toolsAllow, userId } = params;
+    const { context, entry, message, userId } = params;
     params.signal?.throwIfAborted();
     const currentContext = await this.resolveDiscordVoiceIngressContext(entry, userId);
     params.signal?.throwIfAborted();
@@ -518,19 +481,12 @@ export class DiscordVoiceReceive {
       );
     }
     logger.info(
-      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} speaker=${context.speakerLabel} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} message=${formatVoiceLogPreview(message)}`,
+      `discord voice: agent turn start guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId} user=${userId} owner=${context.senderIsOwner} model=${this.params.discordConfig.voice?.model ?? "route-default"} chars=${message.length}`,
     );
     const text = await runDiscordVoiceAgentTurn({
-      entry,
-      accountId: this.params.accountId,
-      userId,
-      message,
-      discordConfig: this.params.discordConfig,
-      runtime: this.params.runtime,
+      ...this.params,
+      ...params,
       context: currentContext,
-      toolsAllow,
-      voiceSelection: params.voiceSelection,
-      ...(params.signal ? { signal: params.signal } : {}),
     });
     if (text === null) {
       logVoiceVerbose(
@@ -539,7 +495,7 @@ export class DiscordVoiceReceive {
       return "";
     }
     logger.info(
-      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}: ${formatVoiceLogPreview(text)}`,
+      `discord voice: agent turn answer (${text.length} chars) guild=${entry.guildId} channel=${entry.channelId} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
     );
     return text;
   }
@@ -548,7 +504,7 @@ export class DiscordVoiceReceive {
     let recovery: Promise<unknown>;
     if (force) {
       if (
-        this.params.getSession(entry.guildId) !== entry ||
+        this.params.sessions.get(entry.guildId) !== entry ||
         entry.sessionLifecycle.status === "stopped" ||
         entry.receiveRecovery.decryptRecoveryInFlight
       ) {
@@ -596,7 +552,7 @@ export class DiscordVoiceReceive {
   }
 
   private async recoverFromDecryptFailures(entry: VoiceSessionEntry): Promise<void> {
-    const active = this.params.getSession(entry.guildId);
+    const active = this.params.sessions.get(entry.guildId);
     if (!active || active.audio !== entry.audio) {
       return;
     }

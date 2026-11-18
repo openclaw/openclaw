@@ -7,6 +7,7 @@ import {
   type GoogleMeetEntryPointAccess,
   type GoogleMeetSpaceConfig,
 } from "./meet-api.js";
+import type { GoogleMeetOAuthRuntime } from "./oauth-owner.js";
 import { resolveGoogleMeetTokenFromParams } from "./plugin-helpers.js";
 import { normalizeMode, normalizeTransport } from "./plugin-registration.js";
 import type { GoogleMeetRuntime } from "./runtime.js";
@@ -53,8 +54,12 @@ export function hasCreateSpaceConfigInput(raw: Record<string, unknown>): boolean
   );
 }
 
-async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<string, unknown>) {
-  const token = await resolveGoogleMeetTokenFromParams(config, raw);
+export async function createSpaceFromParams(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+  runtime?: GoogleMeetOAuthRuntime,
+) {
+  const token = await resolveGoogleMeetTokenFromParams(config, raw, runtime);
   const result = await createGoogleMeetSpace({
     accessToken: token.accessToken,
     config: resolveCreateSpaceConfig(raw),
@@ -62,7 +67,10 @@ async function createSpaceFromParams(config: GoogleMeetConfig, raw: Record<strin
   return { source: "api" as const, token, ...result };
 }
 
-function hasGoogleMeetOAuth(config: GoogleMeetConfig, raw: Record<string, unknown>): boolean {
+export function hasGoogleMeetOAuth(
+  config: GoogleMeetConfig,
+  raw: Record<string, unknown>,
+): boolean {
   return Boolean(
     normalizeOptionalString(raw.accessToken) ??
     normalizeOptionalString(raw.refreshToken) ??
@@ -75,9 +83,14 @@ export async function createMeetFromParams(params: {
   config: GoogleMeetConfig;
   runtime: OpenClawPluginApi["runtime"];
   raw: Record<string, unknown>;
+  createViaBrowser?: () => ReturnType<GoogleMeetRuntime["createViaBrowser"]>;
 }) {
   if (hasGoogleMeetOAuth(params.config, params.raw)) {
-    const { token: _token, ...result } = await createSpaceFromParams(params.config, params.raw);
+    const { token: _token, ...result } = await createSpaceFromParams(
+      params.config,
+      params.raw,
+      params.runtime,
+    );
     return {
       ...result,
       joined: false,
@@ -90,10 +103,9 @@ export async function createMeetFromParams(params: {
       "Google Meet access policy options require OAuth/API room creation. Configure Google Meet OAuth or remove accessType/entryPointAccess.",
     );
   }
-  const browser = await createMeetWithBrowserProxyOnNode({
-    runtime: params.runtime,
-    config: params.config,
-  });
+  const browser = await (params.createViaBrowser
+    ? params.createViaBrowser()
+    : createMeetWithBrowserProxyOnNode({ runtime: params.runtime, config: params.config }));
   return {
     source: browser.source,
     meetingUri: browser.meetingUri,
@@ -120,7 +132,10 @@ export async function createAndJoinMeetFromParams(params: {
   raw: Record<string, unknown>;
   ensureRuntime: () => Promise<GoogleMeetRuntime>;
 }) {
-  const created = await createMeetFromParams(params);
+  const created = await createMeetFromParams({
+    ...params,
+    createViaBrowser: async () => (await params.ensureRuntime()).createViaBrowser(),
+  });
   const rt = await params.ensureRuntime();
   const join = await rt.join({
     url: created.meetingUri,

@@ -17,13 +17,7 @@ export function resolveSkillFileHost(skill: SkillFileHostCarrier): SkillFileHost
 
 export function clearSkillFileHost<T extends SkillFileHostCarrier>(skill: T): T {
   Reflect.deleteProperty(skill, "fileHost");
+  // Transferred paths cannot retain the Gateway directory's admission.
+  Reflect.deleteProperty(skill, "resourceRootIdentity");
   return skill;
-}
-
-export function copySkillFileHost<T extends SkillFileHostCarrier>(
-  source: SkillFileHostCarrier,
-  target: T,
-): T {
-  const host = resolveSkillFileHost(source);
-  return host ? recordSkillFileHost(target, host) : target;
 }

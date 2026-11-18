@@ -44,7 +44,10 @@ extension DashboardWindowOwnershipTests {
         defer { server.stop() }
         let autosaveName = "OpenClawDashboardWindow-Test-\(UUID().uuidString)"
         defer { NSWindow.removeFrame(usingName: autosaveName) }
-        let auth = DashboardWindowAuth(gatewayUrl: server.websocketURL().absoluteString, token: nil, password: nil)
+        let auth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: server.websocketURL().absoluteString,
+            token: nil,
+            password: nil)
         let sessionStore = transition == "revoke-session" ? DashboardBrowserSessionStore(dataStore: .nonPersistent()) :
             nil
         let controller = DashboardWindowController(
@@ -85,6 +88,17 @@ extension DashboardWindowOwnershipTests {
         defer {
             other?.closeDashboard()
             NSWindow.removeFrame(usingName: otherAutosaveName)
+        }
+        let retirement = DashboardRetirementNavigation()
+        if transition == "close" || transition == "replacement" {
+            controller.webView.navigationDelegate = retirement
+        }
+        defer {
+            if transition == "close" || transition == "replacement" {
+                controller.webView.navigationDelegate = nil
+                controller.webView.loadHTMLString("", baseURL: nil)
+            }
+            withExtendedLifetime(retirement) {}
         }
         switch transition {
         case "revoke-session":

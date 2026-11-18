@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
+import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import { observeSecretStoreMutation } from "./secret-store-changes.js";
+import { assertSecretStoreValue } from "./secret-store-validation.js";
 import type {
   SecretStoreBatchWriteParams as KernelBatchParams,
   SecretStoreWriteParams as KernelWriteParams,
@@ -42,21 +45,25 @@ function write(params: SecretStoreBatchWriteParams, capturePrevious: boolean) {
       registerSecretValueForRedaction(entry.expectedValue);
     }
   }
-  const result = runOpenClawStateWorkerOperation(
-    context,
-    async (scope) => {
-      const results = await scope.execute({
-        type: "secrets.write",
-        input: { ...captured, capturePrevious, now },
-      });
-      for (const written of results) {
-        if (written.previous) {
-          registerSecretValueForRedaction(written.previous.value);
+  const result = observeSecretStoreMutation(
+    runOpenClawStateWorkerOperation(
+      context,
+      async (scope) => {
+        const results = await scope.execute({
+          type: "secrets.write",
+          input: { ...captured, capturePrevious, now },
+        });
+        for (const written of results) {
+          if (written.previous) {
+            registerSecretValueForRedaction(written.previous.value);
+          }
         }
-      }
-      return results;
-    },
-    admission(context, assertCurrent),
+        return results;
+      },
+      admission(context, assertCurrent),
+    ),
+    context.admission.databasePath,
+    captured.entries.map((entry) => entry.name),
   );
   return { context, result };
 }
@@ -86,14 +93,18 @@ export async function deleteSecretStoreEntry(
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext(params.database);
   const input = { scope: { ...params.scope }, name: params.name, now: Date.now() };
-  await runOpenClawStateWorkerOperation(
-    context,
-    (owner) =>
-      owner.execute({
-        type: "secrets.delete",
-        input,
-      }),
-    admission(context, params.assertCurrent),
+  await observeSecretStoreMutation(
+    runOpenClawStateWorkerOperation(
+      context,
+      (owner) =>
+        owner.execute({
+          type: "secrets.delete",
+          input,
+        }),
+      admission(context, params.assertCurrent),
+    ),
+    context.admission.databasePath,
+    [params.name],
   );
 }
 
@@ -122,22 +133,80 @@ export async function writeSecretStoreEntryWithRollback(params: SecretStoreWrite
   return {
     rollback: () => {
       const now = Date.now();
-      return (rollback ??= runOpenClawStateWorkerOperation(
-        pending.context,
-        (owner) =>
-          owner.execute({
-            type: "secrets.rollback",
-            input: {
-              scope: capturedScope,
-              name: entry.name,
-              expectedUpdatedBy: writer,
-              previous,
-              now,
-            },
-          }),
-        // Exact-write compensation retains cleanup authority after the requester ends.
-        admission(pending.context),
+      return (rollback ??= observeSecretStoreMutation(
+        runOpenClawStateWorkerOperation(
+          pending.context,
+          (owner) =>
+            owner.execute({
+              type: "secrets.rollback",
+              input: {
+                scope: capturedScope,
+                name: entry.name,
+                expectedUpdatedBy: writer,
+                previous,
+                now,
+              },
+            }),
+          // Exact-write compensation retains cleanup authority after the requester ends.
+          admission(pending.context),
+        ),
+        pending.context.admission.databasePath,
+        [entry.name],
       ));
     },
   };
+}
+
+/**
+ * Saves a secret for one config key in a fresh team-store entry through the
+ * state worker and returns the entry name. `assertCurrent` is the requester's
+ * live authority; the worker checks it again at transaction and commit
+ * admission, so a revoked request writes nothing.
+ */
+export async function writeSecretStoreEntryForConfigRef(params: {
+  baseName: string;
+  value: string;
+  updatedBy: string;
+  assertCurrent?: () => void;
+  database?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+}): Promise<string> {
+  registerSecretValueForRedaction(params.value);
+  assertSecretStoreValue(params.value, "secret", params.baseName);
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { name } = await runOpenClawStateWorkerOperation(
+    context,
+    (scope) =>
+      scope.execute({
+        type: "secrets.writeForConfigRef",
+        input: {
+          baseName: params.baseName,
+          value: params.value,
+          writer: params.updatedBy,
+          now: Date.now(),
+        },
+      }),
+    admission(context, () => params.assertCurrent?.()),
+  );
+  return name;
+}
+
+export async function updateSecretStoreAllowedHosts(
+  params: Pick<
+    SecretStoreWriteParams,
+    "scope" | "name" | "database" | "assertCurrent" | "updatedBy"
+  > & {
+    allowedHosts: readonly string[];
+  },
+): Promise<void> {
+  const context = captureOpenClawStateWorkerContext(params.database);
+  const { database: _database, assertCurrent, ...input } = params;
+  await runOpenClawStateWorkerOperation(
+    context,
+    (owner) =>
+      owner.execute({
+        type: "secrets.allowedHosts",
+        input: { ...structuredClone(input), now: Date.now() },
+      }),
+    admission(context, assertCurrent),
+  );
 }

@@ -5,7 +5,6 @@ export const MEDIA_LEGACY_PROJECTION_COMPAT_RECORD = {
   code: "media-legacy-projection",
   status: "removal-pending",
   owner: "sdk",
-  introduced: "2026-07-24",
   deprecated: "2026-07-24",
   warningStarts: "2026-07-24",
   // Operator-approved window: two release trains / >=60 days after the
@@ -28,13 +27,4 @@ export const MEDIA_LEGACY_PROJECTION_COMPAT_RECORD = {
     "plugin boundary report compatibility inventory with the approved removeAfter date",
     "SDK, hook, and media template migration documentation",
   ],
-  tests: [
-    "src/sessions/user-turn-transcript.media.test.ts",
-    "src/hooks/message-hook-mappers.test.ts",
-    "src/media-understanding/runner.cli-audio.test.ts",
-    "src/plugins/compat/registry.test.ts",
-    "src/plugins/contracts/plugin-sdk-subpaths.test.ts",
-  ],
-  releaseNote:
-    "Legacy parallel media projections remain available as deprecated compatibility while plugins move to ordered facts, typed hook media, Attachment templates, and the focused media-local-roots SDK.",
 } as const satisfies PluginCompatRecord;

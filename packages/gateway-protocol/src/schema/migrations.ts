@@ -1,8 +1,9 @@
-// Gateway protocol schemas for reviewed migration surfaces.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+// Gateway protocol schemas for reviewed migration surfaces.
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const MAX_MEMORY_MIGRATION_ITEMS = 2000;
 const MemoryMigrationPlanFingerprintSchema = Type.String({
@@ -11,13 +12,13 @@ const MemoryMigrationPlanFingerprintSchema = Type.String({
   pattern: "^[a-f0-9]{64}$",
 });
 
-const MemoryMigrationItemStatusSchema = Type.Union([
-  Type.Literal("planned"),
-  Type.Literal("migrated"),
-  Type.Literal("skipped"),
-  Type.Literal("warning"),
-  Type.Literal("conflict"),
-  Type.Literal("error"),
+const MemoryMigrationItemStatusSchema = stringLiteralUnion([
+  "planned",
+  "migrated",
+  "skipped",
+  "warning",
+  "conflict",
+  "error",
 ]);
 
 const MemoryMigrationItemSchema = closedObject({
@@ -48,9 +49,7 @@ const MemoryMigrationProviderPlanSchema = closedObject({
   found: Type.Boolean(),
   source: Type.Optional(NonEmptyString),
   target: Type.Optional(NonEmptyString),
-  confidence: Type.Optional(
-    Type.Union([Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")]),
-  ),
+  confidence: Type.Optional(stringLiteralUnion(["low", "medium", "high"])),
   message: Type.Optional(Type.String()),
   error: Type.Optional(Type.String()),
   summary: MemoryMigrationSummarySchema,

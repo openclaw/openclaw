@@ -1,7 +1,10 @@
 import {
-  prepareCompaction,
-  type CompactionPreparation,
-  type CompactionSettings,
+  prepareCompactionEntries,
+  type CompactionMessageProjection,
+} from "../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
+import type {
+  CompactionPreparation,
+  CompactionSettings,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { SessionEntry } from "./session-manager.js";
 
@@ -13,21 +16,30 @@ type ManualCompactionPreflight =
 export function preflightManualSessionCompaction(
   pathEntries: SessionEntry[],
   settings: CompactionSettings,
+  onMessageProjection?: CompactionMessageProjection,
 ): ManualCompactionPreflight {
-  const initial = prepareCompaction(pathEntries, settings);
-  if (!initial.ok) {
-    throw initial.error;
-  }
-  let preparation = initial.value;
-  if (!preparation) {
+  let result = prepareCompactionEntries(
+    pathEntries,
+    settings,
+    undefined,
+    undefined,
+    onMessageProjection,
+  );
+  if (result.ok && !result.value) {
     // Explicit manual compaction uses the smallest valid history rather than
     // treating a session that fits the configured keep budget as a no-op.
-    const smallest = prepareCompaction(pathEntries, { ...settings, keepRecentTokens: 0 });
-    if (!smallest.ok) {
-      throw smallest.error;
-    }
-    preparation = smallest.value;
+    result = prepareCompactionEntries(
+      pathEntries,
+      { ...settings, keepRecentTokens: 0 },
+      undefined,
+      undefined,
+      onMessageProjection,
+    );
   }
+  if (!result.ok) {
+    throw result.error;
+  }
+  const preparation = result.value;
   if (preparation) {
     return { compactable: true, preparation };
   }

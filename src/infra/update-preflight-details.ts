@@ -1,5 +1,65 @@
-// Public descriptions are fixed text: registry responses and local paths stay local.
+// Closed producer conditions; captured before long stack traces evict the cause.
+export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
+  [/\bInvalid config at |\bOpenClaw config is invalid\b/u, "Invalid configuration field"],
+  [
+    /\bOpenClaw state database schema migration required\b|\bgateway requires (?:state migration|offline media migration|state database schema migration|cron run history migration)\b|\bOpenClaw agent database .+; run openclaw doctor --fix to migrate persisted media before using it\./u,
+    "schema migration required",
+  ],
+  [
+    /\bGateway refused startup because \d+ OpenClaw database schema\(s\) are newer than this build\./u,
+    "database schema newer than candidate",
+  ],
+  [
+    /\bplugin load failed: ([^:\r\n]+):|\[plugins\] (.+) failed during (?:validation|load|register) from /u,
+    "plugin load failed",
+  ],
+  [/\bEADDRINUSE\b|\banother gateway instance is already listening on /u, "port in use"],
+  [
+    /\bwas compiled against a different Node\.js version using\b|\bModule did not self-register\b|\bGLIBC_\d+(?:\.\d+)+['"] not found\b/u,
+    "native module ABI mismatch",
+  ],
+  [/\bCannot find (?:module|package) ['"][^\r\n]+\.node['"]/u, "native module missing"],
+  [
+    /FATAL ERROR: (?:Reached heap limit|Ineffective mark-compacts near heap limit) Allocation failed - JavaScript heap out of memory/u,
+    "startup ran out of memory",
+  ],
+] as const;
+
+// Public descriptions contain only platform facts: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
+  get "gateway-stop-unverified"() {
+    const manager =
+      process.platform === "linux"
+        ? "its systemd user/system unit"
+        : process.platform === "darwin"
+          ? "launchd"
+          : process.platform === "win32"
+            ? "Task Scheduler"
+            : "its service manager";
+    return `Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through ${manager}, its original terminal, or openclaw gateway stop, then rerun openclaw update. Run openclaw gateway status --deep --json to inspect the service failure. No package replacement was attempted.`;
+  },
+  "windows-task-elevation-required":
+    "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
+  "windows-task-inspection-timeout":
+    "Windows Task Scheduler task lookup/elevation check timed out before update staging. Check Task Scheduler, then retry openclaw update from an elevated terminal (Run as administrator).",
+  "handoff-permission-denied":
+    "Update handoff permission was denied. Run openclaw gateway status --deep and check access to the installation and state directory as the service owner.",
+  "handoff-runtime-unavailable":
+    "The update helper runtime or a required file is unavailable. Run openclaw doctor and check the Gateway service's Node executable before retrying.",
+  "handoff-helper-start-failed":
+    "The update helper could not be spawned. Check available process and memory resources, then retry openclaw update from an external terminal.",
+  "handoff-service-refused":
+    "Native service inspection or management refused the handoff. Run openclaw gateway status --deep and repair the service through its installation owner.",
+  "handoff-ownership-refused":
+    "Update handoff ownership could not be verified. Run openclaw update status and retry through the current Gateway owner after any active update finishes.",
+  "handoff-payload-failed":
+    "The update handoff payload or control channel could not be written or read. Check state-directory access and free disk space, then retry openclaw update.",
+  "handoff-timeout":
+    "The update helper did not acknowledge the handoff before its deadline. Run openclaw update status and openclaw gateway status --deep before retrying.",
+  "handoff-helper-exited":
+    "The update helper exited before acknowledging the handoff. Check the helper startup diagnostics in this update report, correct the reported problem, then retry the update. The Gateway kept serving.",
+  "handoff-preparation-failed":
+    "The update handoff could not be prepared. Run openclaw triage or retry openclaw update from an external terminal to diagnose the recorded failure.",
   "npm-EACCES":
     "Check the npm global prefix and run the update as its owning account: https://docs.openclaw.ai/cli/update.",
   "npm-ENOSPC": "Free disk space on the npm prefix and cache volumes, then retry the update.",
@@ -18,7 +78,7 @@ export const UPDATE_PREFLIGHT_DETAILS = {
   "target-git-metadata":
     "The Git target manifest or revision could not be inspected. Check Git remote access and the selected ref, then retry openclaw update; a dry-run does not fetch missing objects.",
   "target-git-cache-stale":
-    "The cached Git target differs from the current remote target. A dry-run leaves local refs unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the current remote target.",
+    "The selected Git target is not fully available in the local checkout. A dry-run leaves local refs and objects unchanged, so the target remains unresolved. A real openclaw update will fetch and validate the selected target.",
   "inside-gateway-process-tree":
     "The update is running inside the Gateway process tree. Use the Gateway update action for a managed handoff, or run openclaw update from a terminal outside the Gateway process tree.",
   "inside-gateway-service":
@@ -49,8 +109,28 @@ export const UPDATE_PREFLIGHT_DETAILS = {
     "Scheduled Task ownership could not be verified. Inspect the task's autostart state through its service owner, then retry openclaw update.",
 } as const;
 
+export const UPDATE_HANDOFF_BEFORE_TRANSFER_DETAIL =
+  "Gateway kept serving; handoff failed before ownership transfer";
+
 export function updatePreflightDetailMessage(code: string): string | undefined {
   return Object.entries(UPDATE_PREFLIGHT_DETAILS).find(([key]) => key === code)?.[1];
+}
+
+export function updateRepairRefusalNextAction(
+  code: string | null | undefined,
+  formatCommand: (command: string) => string = (command) => command,
+): string | undefined {
+  switch (code) {
+    case "inside-gateway-process-tree":
+    case "inside-gateway-service":
+    case "service-membership-unverified":
+    case "service-ancestry-unverified":
+      return `Run \`${formatCommand("openclaw update repair")}\` from a terminal outside the Gateway process tree. Do not run this repair through the Gateway's exec tool.`;
+    case "inside-triage-process-tree":
+      return `Run \`${formatCommand("openclaw update repair")}\` from a terminal outside automatic triage and the Gateway process tree. Do not stop the Gateway from its fixing subtree.`;
+    default:
+      return undefined;
+  }
 }
 
 export function createUpdatePreflightFailure(

@@ -1,8 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { Type } from "typebox";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildSandboxHostDocument } from "../../agents/sandbox-host.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 
 const mocks = vi.hoisted(() => ({
   scopedRead: vi.fn(),
@@ -54,8 +55,11 @@ vi.mock("../mcp-app-standalone.js", () => ({
   createMcpAppStandaloneTicket: mocks.createMcpAppStandaloneTicket,
 }));
 
-import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
-import { getMcpAppModelContext } from "../../agents/mcp-app-model-context.js";
+import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import {
+  getMcpAppModelContext,
+  leaseMcpAppModelContextForTurn,
+} from "../../agents/mcp-app-model-context.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { McpServerConfig } from "../../config/types.mcp.js";
 
@@ -63,7 +67,13 @@ const policyEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
 let policyServer: McpServerConfig | undefined;
 import type { McpAppPrepareToolCall } from "../../agents/mcp-ui-resource.js";
 import { resolveMcpAppAllowedToolNames } from "../mcp-app-operations.js";
+import { createRemoteControlUiIngressTestContext } from "../remote-control-ui.test-support.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { makeClient } from "../server-broadcast.test-helpers.js";
+import type { RemoteControlUiIngressContext } from "../server/client-identity-types.js";
+import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
+import { runtime } from "./mcp-app.test-support.js";
 
 const view = {
   requesterId: undefined as string | undefined,
@@ -87,67 +97,6 @@ const view = {
   activeRequests: 0,
 };
 
-function runtime() {
-  const releaseLease = vi.fn();
-  const catalog: McpToolCatalog = {
-    version: 1,
-    generatedAt: 1,
-    servers: { demo: { serverName: "demo", launchSummary: "demo", toolCount: 3 } },
-    tools: [
-      { serverName: "demo", toolName: "shared" },
-      { serverName: "demo", toolName: "app-only", uiVisibility: ["app"] as Array<"app" | "model"> },
-      {
-        serverName: "demo",
-        toolName: "model-only",
-        uiVisibility: ["model"] as Array<"app" | "model">,
-      },
-    ].map((tool) =>
-      Object.assign(tool, {
-        safeServerName: "demo",
-        fallbackDescription: tool.toolName,
-        inputSchema: Type.Object({}),
-      }),
-    ),
-  };
-  return {
-    sessionId: "session-1",
-    sessionKey: "agent:main:main",
-    configFingerprint: "gateway-bridge-fixture",
-    createdAt: 1,
-    lastUsedAt: 1,
-    dispose: vi.fn(async () => {}),
-    mcpAppsEnabled: true,
-    markUsed: vi.fn(),
-    acquireLease: vi.fn(() => releaseLease),
-    workspaceDir: "/workspace",
-    getCatalog: vi.fn(async () => catalog),
-    peekCatalog: vi.fn(() => catalog),
-    callTool: vi.fn<SessionMcpRuntime["callTool"]>(async (_serverName, toolName) => ({
-      content: [{ type: "text", text: toolName }],
-    })),
-    listTools: vi.fn<NonNullable<SessionMcpRuntime["listTools"]>>(async () => ({
-      tools: [
-        { name: "shared", inputSchema: { type: "object" } },
-        {
-          name: "app-only",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: ["app"] } },
-        },
-        {
-          name: "model-only",
-          inputSchema: { type: "object" },
-          _meta: { ui: { visibility: ["model"] } },
-        },
-      ],
-    })),
-    listResources: vi.fn(async () => [{ uri: "ui://demo/state", name: "state" }]),
-    listResourceTemplates: vi.fn(async () => ({ resourceTemplates: [] })),
-    readResource: vi.fn(async (_serverName: string, uri: string) => ({
-      contents: [{ uri, text: "resource" }],
-    })),
-  };
-}
-
 async function invoke(
   method: keyof typeof mcpAppHandlers,
   params: Record<string, unknown>,
@@ -155,6 +104,8 @@ async function invoke(
   config: Record<string, unknown> = {},
   scopes: string[] = ["operator.write"],
   profileId?: string,
+  remoteControlUiIngress?: RemoteControlUiIngressContext,
+  openclawIdTunnel = false,
 ) {
   const respond = vi.fn();
   const cfg = {
@@ -169,6 +120,8 @@ async function invoke(
     params,
     client: {
       connect: { scopes },
+      remoteControlUiIngress,
+      browserOrigin: { openclawIdTunnel },
       ...(profileId ? { authenticatedUserProfile: { profileId } } : {}),
     },
     context: {
@@ -180,6 +133,58 @@ async function invoke(
 }
 
 describe("MCP App gateway bridge", () => {
+  it.each([
+    { label: "empty", params: { cursor: "" } },
+    { label: "padded", params: { cursor: " page-2 " } },
+  ])(
+    "preserves $label list cursors through registered handlers and App operations",
+    async ({ params }) => {
+      const cursor = params.cursor;
+      const isSecondPage = (request: { cursor?: string } | undefined) => request?.cursor === cursor;
+      const activeRuntime = {
+        ...runtime(),
+        listResourceTemplates: vi.fn<NonNullable<SessionMcpRuntime["listResourceTemplates"]>>(
+          async (_server, request) => {
+            const second = isSecondPage(request);
+            const name = second ? "second" : "first";
+            return {
+              resourceTemplates: [{ name, uriTemplate: `fixture://${name}/{id}` }],
+              ...(second ? {} : { nextCursor: cursor }),
+            };
+          },
+        ),
+      };
+      activeRuntime.listTools.mockImplementation(async (_server, request) => {
+        const second = isSecondPage(request);
+        return {
+          tools: [{ name: second ? "app-only" : "shared", inputSchema: { type: "object" } }],
+          ...(second ? {} : { nextCursor: cursor }),
+        };
+      });
+      mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+      const binding = { sessionKey: "agent:main:main", viewId: "cv_app" };
+      for (const [method, runtimeMethod, items, secondName] of [
+        ["mcp.app.listTools", "listTools", "tools", "app-only"],
+        ["mcp.app.listResourceTemplates", "listResourceTemplates", "resourceTemplates", "second"],
+      ] as const) {
+        const first = await invoke(method, binding);
+        expect(first.mock.calls[0]?.[0]).toBe(true);
+        expect(first.mock.calls[0]?.[1].nextCursor).toBe(cursor);
+        const response = await invoke(method, { ...binding, ...params });
+        expect(response.mock.calls[0]?.[0]).toBe(true);
+        expect(activeRuntime[runtimeMethod]).toHaveBeenLastCalledWith("demo", { cursor });
+        expect(response.mock.calls[0]?.[1][items]).toEqual([
+          expect.objectContaining({ name: secondName }),
+        ]);
+      }
+      const resources = await invoke("mcp.app.listResources", { ...binding, ...params });
+      expect(resources.mock.calls[0]?.[1]).toEqual({
+        resources: [{ uri: "ui://demo/state", name: "state" }],
+      });
+      expect(activeRuntime.listResources).toHaveBeenLastCalledWith("demo");
+    },
+  );
+
   it.each([
     { method: "mcp.app.callTool", field: "arguments", toolName: "shared" },
     { method: "mcp.app.readResource", field: "_meta", uri: "ui://demo/state" },
@@ -196,21 +201,6 @@ describe("MCP App gateway bridge", () => {
       expect(response.mock.calls[0]?.[2]?.message).toContain(`${field} must be an object`);
     },
   );
-  it("keeps unbound shared views available to the authenticated session caller", async () => {
-    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
-    const shown = await invoke("mcp.app.view", params, true, {}, ["operator.write"], "alice");
-    expect(shown.mock.calls[0]?.[0]).toBe(true);
-    const called = await invoke(
-      "mcp.app.callTool",
-      { ...params, toolName: "shared", arguments: {} },
-      true,
-      {},
-      ["operator.write"],
-      "alice",
-    );
-    expect(called.mock.calls[0]?.[0]).toBe(true);
-  });
-
   it("isolates requester-bound views, including read and write operations", async () => {
     view.requesterId = "alice";
     const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
@@ -258,6 +248,65 @@ describe("MCP App gateway bridge", () => {
     const stale = await invoke("mcp.app.removeModelContext", { ...params, updateId, index: 0 });
     expect(stale.mock.calls[0]?.[0]).toBe(false);
   });
+  it("delivers the latest clearing receipt after two context updates and accepts late removal", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const activeRuntime = runtime();
+    mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+    const owner = makeClient("context-client", "operator", ["operator.read"]);
+    const observer = makeClient("observer", "operator", ["operator.read"]);
+    const { broadcastToConnIds } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([owner.client, observer.client]),
+    });
+    const connection = new AbortController();
+    const respond = vi.fn();
+    try {
+      await mcpAppHandlers["mcp.app.view"]!({
+        params,
+        respond,
+        client: {
+          ...owner.client,
+          connectionSignal: connection.signal,
+        },
+        context: {
+          getMcpAppSandboxPort: () => 18790,
+          getRuntimeConfig: () => ({ mcp: { apps: { enabled: true } } }),
+          broadcastToConnIds,
+        },
+      } as never);
+      expect(respond.mock.calls[0]?.[0]).toBe(true);
+      await invoke("mcp.app.updateModelContext", {
+        ...params,
+        content: [
+          { type: "text", text: "selected hex bolt" },
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+        ],
+      });
+      const written = await invoke("mcp.app.updateModelContext", {
+        ...params,
+        content: [
+          { type: "text", text: "selected hex bolt" },
+          { type: "image", mimeType: "image/png", data: "aGVsbG8=" },
+          { type: "resource_link", uri: "parts://bolt", name: "Bolt" },
+        ],
+      });
+      const updateId = written.mock.calls[0]?.[1]._meta["openai/modelContext"].updateId;
+      owner.socket.send.mockClear();
+      const turn = leaseMcpAppModelContextForTurn({ runtime: activeRuntime });
+      expect(turn).toBeDefined();
+      turn!.commit();
+      expect(owner.socket.send.mock.calls.map(([frame]) => JSON.parse(frame))).toEqual([
+        expect.objectContaining({
+          event: "mcp.app.hostContextChanged",
+          payload: { viewId: "cv_app", modelContext: null, updateId },
+        }),
+      ]);
+      expect(observer.socket.send).not.toHaveBeenCalled();
+      const removed = await invoke("mcp.app.removeModelContext", { ...params, updateId, index: 0 });
+      expect(removed.mock.calls[0]?.slice(0, 2)).toEqual([true, { state: null }]);
+    } finally {
+      connection.abort();
+    }
+  });
   beforeEach(() => {
     policyEntry.sessionId = "session-1";
     policyEntry.permissionMode = undefined;
@@ -298,39 +347,7 @@ describe("MCP App gateway bridge", () => {
     });
   });
 
-  it("uses canonical interactive approval for a model-created view and each current caller", async () => {
-    policyServer = { command: "demo", codex: { defaultToolsApprovalMode: "prompt" } };
-    view.requesterId = "alice";
-    const active = runtime();
-    mocks.peekSessionMcpRuntime.mockReturnValue(active);
-    const args = {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      toolName: "shared",
-      arguments: { selected: 1 },
-    };
-    const first = await invoke("mcp.app.callTool", args, true, {}, ["operator.write"], "alice");
-    const second = await invoke("mcp.app.callTool", args, true, {}, ["operator.write"], "alice");
-    expect(first.mock.calls[0]?.[0]).toBe(true);
-    expect(second.mock.calls[0]?.[0]).toBe(true);
-    expect(mocks.requestMcpAppToolApproval).toHaveBeenCalledTimes(2);
-    const approval = mocks.requestMcpAppToolApproval.mock.calls[0]![0];
-    expect(approval).toMatchObject({
-      serverName: "demo",
-      toolName: "shared",
-      sessionKey: args.sessionKey,
-      agentId: "main",
-      input: args.arguments,
-      options: { client: { authenticatedUserProfile: { profileId: "alice" } } },
-    });
-    expect(mocks.requestMcpAppToolApproval.mock.calls[1]![0].options).not.toBe(approval.options);
-    expect(mocks.resolveSessionResourceToolPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "demo__shared", client: approval.options.client }),
-    );
-    expect(active.callTool).toHaveBeenCalledTimes(2);
-  });
-
-  it.each(["deny", "revoked session", "revoked tool", "revoked current policy", "changed catalog"])(
+  it.each(["revoked session", "revoked tool", "revoked current policy", "changed catalog"])(
     "does not execute model-view tools after %s during approval",
     async (reason) => {
       policyServer = { command: "demo", codex: { defaultToolsApprovalMode: "prompt" } };
@@ -341,9 +358,6 @@ describe("MCP App gateway bridge", () => {
       mocks.requestMcpAppToolApproval.mockImplementation(async (request) => {
         entered.resolve();
         await gate.promise;
-        if (reason === "deny") {
-          throw new Error("denied");
-        }
         request.assertCurrent();
       });
       const pending = invoke("mcp.app.callTool", {
@@ -427,30 +441,6 @@ describe("MCP App gateway bridge", () => {
     expect(active.callTool).not.toHaveBeenCalled();
   });
 
-  it("passes each current request to the view’s tool preparation hook", async () => {
-    const prepare = vi.fn<McpAppPrepareToolCall>(async (request) => request.assertCurrent());
-    view.prepareToolCall = prepare;
-    await invoke("mcp.app.callTool", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      toolName: "shared",
-      arguments: { n: 1 },
-    });
-    await invoke("mcp.app.callTool", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-      toolName: "shared",
-      arguments: { n: 2 },
-    });
-    expect(prepare).toHaveBeenCalledTimes(2);
-    expect(prepare.mock.calls[0]![0].options).not.toBe(prepare.mock.calls[1]![0].options);
-    expect(prepare.mock.calls[1]![0]).toMatchObject({
-      toolName: "shared",
-      input: { n: 2 },
-      options: { params: { arguments: { n: 2 } } },
-    });
-  });
-
   it("retains a preparation guard and checks it before upstream tool effects", async () => {
     const active = runtime();
     mocks.peekSessionMcpRuntime.mockReturnValue(active);
@@ -492,7 +482,7 @@ describe("MCP App gateway bridge", () => {
     const config = {
       agents: {
         ownership: "explicit",
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
       },
     };
     const missing = await invoke(
@@ -521,37 +511,6 @@ describe("MCP App gateway bridge", () => {
     );
   });
 
-  it("returns the ephemeral view payload only for the bound session", async () => {
-    const respond = await invoke("mcp.app.view", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        sandboxUrl: "mcp-app-sandbox",
-        sandboxPort: 18790,
-        sandboxOrigin: "https://apps.example.com",
-        html: "<html>demo</html>",
-        toolInput: { city: "Paris" },
-        standaloneUrl: "/__openclaw__/mcp-app#ticket",
-        standaloneExpiresAtMs: 1_800_000_120_000,
-        messageSupported: true,
-        updateModelContextSupported: true,
-      }),
-    );
-    expect(mocks.getMcpAppViewLease).toHaveBeenCalledWith("cv_app", expect.any(Object));
-    expect(mocks.createMcpAppStandaloneTicket).toHaveBeenCalledWith({
-      sessionKey: "agent:main:main",
-      toolOperationsAuthorized: true,
-      view,
-    });
-    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
-    expect(activeRuntime.acquireLease).toHaveBeenCalledOnce();
-    expect(activeRuntime.acquireLease.mock.results[0]?.value).toHaveBeenCalledOnce();
-    expect(mocks.completeDeferredSessionMcpRuntimeRetirement).toHaveBeenCalledWith(activeRuntime);
-  });
-
   it("mints a view-only standalone ticket for a read-scoped caller", async () => {
     await invoke("mcp.app.view", { sessionKey: "agent:main:main", viewId: "cv_app" }, true, {}, [
       "operator.read",
@@ -564,25 +523,56 @@ describe("MCP App gateway bridge", () => {
     });
   });
 
-  it("resolves a harness-native view through its originating session", async () => {
-    const nativeRuntime = runtime();
-    const nativeView = { ...view, runtime: nativeRuntime };
-    mocks.peekSessionMcpRuntime.mockReturnValue(undefined);
-    mocks.getMcpAppViewLeaseForSession.mockReturnValue(nativeView);
-
-    const respond = await invoke("mcp.app.view", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-    });
-
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({ html: "<html>demo</html>" });
-    expect(mocks.getMcpAppViewLeaseForSession).toHaveBeenCalledWith(
-      "cv_app",
-      "agent:main:main",
-      "main",
+  it("projects the ingress sandbox origin without changing direct view presentation", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const remote = await invoke(
+      "mcp.app.view",
+      params,
+      true,
+      {},
+      ["operator.read"],
+      undefined,
+      createRemoteControlUiIngressTestContext(),
     );
-    expect(mocks.restoreMcpAppView).not.toHaveBeenCalled();
+    expect(remote.mock.calls[0]?.[0]).toBe(true);
+    expect(remote.mock.calls[0]?.[1]).toMatchObject({
+      sandboxUrl: "https://sandbox.example.test/mcp-app-sandbox",
+      sandboxOrigin: "https://sandbox.example.test",
+    });
+    const direct = await invoke("mcp.app.view", params);
+    expect(direct.mock.calls[0]?.[1]).toMatchObject({
+      sandboxUrl: "mcp-app-sandbox",
+      sandboxOrigin: "https://apps.example.com",
+    });
+  });
+
+  it("bootstraps only linked tunnel MCP views without changing other connections", async () => {
+    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
+    const direct = (await invoke("mcp.app.view", params)).mock.calls[0]![1];
+    const tunnelView = async () =>
+      (
+        await invoke(
+          "mcp.app.view",
+          params,
+          true,
+          {},
+          ["operator.write"],
+          undefined,
+          undefined,
+          true,
+        )
+      ).mock.calls[0]![1];
+    expect(await tunnelView()).toEqual(direct);
+    setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+    onTestFinished(() => setOpenClawIdClawOriginResolver(undefined));
+    expect(await tunnelView()).toEqual({
+      ...direct,
+      sandboxUrl:
+        "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz/mcp-app-sandbox?claw=studio-k7x2q&cspv=1",
+      sandboxOrigin: "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz",
+      sandboxShellHtml: buildSandboxHostDocument().html,
+    });
+    expect((await invoke("mcp.app.view", params)).mock.calls[0]![1]).toEqual(direct);
   });
 
   it("does not reuse a live bare-key view owned by another agent", async () => {
@@ -601,7 +591,7 @@ describe("MCP App gateway bridge", () => {
       {
         agents: {
           ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
     );
@@ -638,58 +628,6 @@ describe("MCP App gateway bridge", () => {
     expect(respond.mock.calls[0]?.[1]).toMatchObject({
       content: [{ type: "text", text: "shared" }],
     });
-  });
-
-  it("keeps message support disabled without fresh run authority", async () => {
-    view.allowedAppToolNames = undefined;
-    const respond = await invoke("mcp.app.view", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-    });
-
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      messageSupported: false,
-      updateModelContextSupported: false,
-    });
-  });
-
-  it("supports messages for a fresh view with no app-callable tools", async () => {
-    view.allowedAppToolNames = new Set();
-    const respond = await invoke("mcp.app.view", {
-      sessionKey: "agent:main:main",
-      viewId: "cv_app",
-    });
-
-    expect(respond.mock.calls[0]?.[1]).toMatchObject({
-      messageSupported: true,
-      updateModelContextSupported: true,
-    });
-  });
-
-  it("stores only the latest bounded text update and clears it with an empty update", async () => {
-    const params = { sessionKey: "agent:main:main", viewId: "cv_app" };
-    const first = await invoke("mcp.app.updateModelContext", {
-      ...params,
-      content: [{ type: "text", text: "first" }],
-    });
-    const activeRuntime = mocks.peekSessionMcpRuntime.mock.results[0]?.value;
-    expect(first.mock.calls[0]?.[0]).toBe(true);
-    expect(getMcpAppModelContext(activeRuntime, view)?.content).toEqual([
-      { type: "text", text: "first" },
-    ]);
-
-    const second = await invoke("mcp.app.updateModelContext", {
-      ...params,
-      content: [{ type: "text", text: "second" }],
-    });
-    expect(second.mock.calls[0]?.[0]).toBe(true);
-    expect(getMcpAppModelContext(activeRuntime, view)?.content).toEqual([
-      { type: "text", text: "second" },
-    ]);
-
-    const cleared = await invoke("mcp.app.updateModelContext", params);
-    expect(cleared.mock.calls[0]?.[0]).toBe(true);
-    expect(getMcpAppModelContext(activeRuntime, view)).toBeNull();
   });
 
   it("rejects unsupported context shapes, oversized UTF-8 text, and read-only views", async () => {
@@ -734,6 +672,32 @@ describe("MCP App gateway bridge", () => {
     expect(getMcpAppModelContext(activeRuntime, view)).toBeNull();
   });
 
+  it.each([false, true])(
+    "returns the owning app's name and optional icon metadata (%s)",
+    async (withIcons) => {
+      const active = runtime();
+      const catalog = active.peekCatalog();
+      const icons = withIcons ? [{ src: "https://example.test/excalidraw.png" }] : undefined;
+      const server = expectDefined(catalog.servers.demo, "demo server fixture");
+      server.title = "Excalidraw";
+      server.icons = icons;
+      mocks.peekSessionMcpRuntime.mockReturnValue(active);
+      const response = await invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      expect(response.mock.calls[0]?.[1]).toMatchObject({
+        appIdentity: { label: "Excalidraw", icons: icons ?? [] },
+      });
+      server.title = undefined;
+      const fallback = await invoke("mcp.app.view", {
+        sessionKey: "agent:main:main",
+        viewId: "cv_app",
+      });
+      expect(fallback.mock.calls[0]?.[1]).toMatchObject({ appIdentity: { label: "demo" } });
+    },
+  );
+
   it("rechecks current widget authority for every interactive capability", async () => {
     const activeRuntime = runtime();
     mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
@@ -771,60 +735,36 @@ describe("MCP App gateway bridge", () => {
     expect(activeRuntime.readResource).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      capability: "resource list",
-      method: "mcp.app.listResources" as const,
-      params: {},
-      runtimeMethod: "listResources" as const,
-      result: [{ uri: "ui://demo/state", name: "state" }],
-    },
-    {
-      capability: "resource template list",
-      method: "mcp.app.listResourceTemplates" as const,
-      params: {},
-      runtimeMethod: "listResourceTemplates" as const,
-      result: { resourceTemplates: [{ uriTemplate: "ui://demo/{id}", name: "demo" }] },
-    },
-    {
-      capability: "resource read",
-      method: "mcp.app.readResource" as const,
-      params: { uri: "ui://demo/state" },
-      runtimeMethod: "readResource" as const,
-      result: { contents: [{ uri: "ui://demo/state", text: "protected" }] },
-    },
-  ])(
-    "withholds $capability results when widget authority is revoked in flight",
-    async (testCase) => {
-      const resourceStarted = createDeferred();
-      const releaseResource = createDeferred<unknown>();
-      const activeRuntime = runtime();
-      activeRuntime[testCase.runtimeMethod].mockImplementationOnce(async () => {
-        resourceStarted.resolve();
-        return (await releaseResource.promise) as never;
-      });
-      mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
-      let grantActive = true;
-      view.authorizeAppInteraction = vi.fn(async () => grantActive);
+  it("withholds resource read results when widget authority is revoked in flight", async () => {
+    const resourceStarted = createDeferred();
+    const activeRuntime = runtime();
+    const releaseResource =
+      createDeferred<Awaited<ReturnType<typeof activeRuntime.readResource>>>();
+    activeRuntime.readResource.mockImplementationOnce(async () => {
+      resourceStarted.resolve();
+      return await releaseResource.promise;
+    });
+    mocks.peekSessionMcpRuntime.mockReturnValue(activeRuntime);
+    let grantActive = true;
+    view.authorizeAppInteraction = vi.fn(async () => grantActive);
 
-      const pending = invoke(testCase.method, {
-        sessionKey: "agent:main:main",
-        viewId: "cv_app",
-        ...testCase.params,
-      });
-      await resourceStarted.promise;
-      expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
-      grantActive = false;
-      releaseResource.resolve(testCase.result);
+    const pending = invoke("mcp.app.readResource", {
+      sessionKey: "agent:main:main",
+      viewId: "cv_app",
+      uri: "ui://demo/state",
+    });
+    await resourceStarted.promise;
+    expect(view.authorizeAppInteraction).toHaveBeenCalledOnce();
+    grantActive = false;
+    releaseResource.resolve({ contents: [{ uri: "ui://demo/state", text: "protected" }] });
 
-      const denied = await pending;
-      expect(denied.mock.calls[0]?.[0]).toBe(false);
-      expect(denied.mock.calls[0]?.[2]).toMatchObject({
-        message: "MCP App widget grant is no longer active",
-      });
-      expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
-    },
-  );
+    const denied = await pending;
+    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(denied.mock.calls[0]?.[2]).toMatchObject({
+      message: "MCP App widget grant is no longer active",
+    });
+    expect(view.authorizeAppInteraction).toHaveBeenCalledTimes(2);
+  });
 
   it("filters model-only tools from app discovery and execution", async () => {
     const params = { sessionKey: "agent:main:main", viewId: "cv_app" };

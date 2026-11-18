@@ -29,9 +29,7 @@ extension DashboardManager {
         route.path = source.path
         return route.url
     }
-}
 
-extension DashboardManager {
     func primaryEndpoint(
         mode: AppState.ConnectionMode) async throws -> GatewayConnection.EndpointSnapshot
     {
@@ -40,7 +38,13 @@ extension DashboardManager {
             return try await testPrimaryEndpointProvider(mode)
         }
         #endif
-        return try await Self.resolvePrimaryEndpoint(mode: mode)
+        if let endpoint = Self.immediateDashboardEndpoint(mode: mode) {
+            return endpoint
+        }
+        return try await Task.detached(priority: .userInitiated) {
+            await GatewayEndpointStore.shared.refresh()
+            return try await GatewayEndpointStore.shared.requireEndpoint()
+        }.value
     }
 
     func profileEndpoint(profileID: String) async throws -> GatewayConnection.EndpointSnapshot {
@@ -69,26 +73,16 @@ extension DashboardManager {
         return try await DashboardGatewayCatalog.loadEntries()
     }
 
-    static func resolvePrimaryEndpoint(
-        mode: AppState.ConnectionMode) async throws -> GatewayConnection.EndpointSnapshot
-    {
-        if let endpoint = self.immediateDashboardEndpoint(mode: mode) {
-            return endpoint
-        }
-        return try await Task.detached(priority: .userInitiated) {
-            await GatewayEndpointStore.shared.refresh()
-            return try await GatewayEndpointStore.shared.requireEndpoint()
-        }.value
-    }
-
     static func immediateDashboardEndpoint(
         mode: AppState.ConnectionMode) -> GatewayConnection.EndpointSnapshot?
     {
         let root = OpenClawConfigFile.loadDict()
         let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        // An OpenClaw ID claw resolves through the endpoint store, which owns its tunnel route.
         if mode == .remote,
            resolution.transport == .direct,
-           let url = resolution.directURL
+           let url = resolution.directURL,
+           !MacOpenClawIDOperatorRoute.shared.serves(url)
         {
             return GatewayConnection.EndpointSnapshot(
                 config: (
@@ -108,9 +102,7 @@ extension DashboardManager {
 
         return nil
     }
-}
 
-extension DashboardManager {
     /// The card's native update path only makes sense when the app owns the
     /// local gateway and the post-relaunch repair is allowed to run; otherwise
     /// (external CLI, write-disabled launchd, extended-stable pin) the card
@@ -124,9 +116,7 @@ extension DashboardManager {
             installPolicy: CLIInstallPolicy.storedPolicy(),
             launchAgentWriteDisabled: GatewayLaunchAgentManager.isLaunchAgentWriteDisabled())
     }
-}
 
-extension DashboardManager {
     func presentGatewayError(title: String, message: String, over window: NSWindow? = nil) {
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -139,9 +129,7 @@ extension DashboardManager {
     func presentGatewayError(_ error: Error, title: String, over window: NSWindow? = nil) {
         self.presentGatewayError(title: title, message: error.localizedDescription, over: window)
     }
-}
 
-extension DashboardManager {
     func immediateWindowConfiguration()
         -> (configuration: WindowConfiguration, endpoint: GatewayConnection.EndpointSnapshot)?
     {
@@ -169,13 +157,17 @@ extension DashboardManager {
             legacyNativeCredentials: self.currentNativeStartupCredentials,
             nativeAuthProvider: self.nativeAuthProvider(target: .primary, endpoint: endpoint)), endpoint)
     }
-}
 
-extension DashboardManager {
     func navigateBack() {
         guard let controller = frontmostDashboard()?.controller,
               controller.window?.isKeyWindow == true else { return }
         controller.navigateBack()
+    }
+
+    func reloadDashboard() {
+        guard let controller = frontmostDashboard()?.controller,
+              controller.window?.isKeyWindow == true else { return }
+        controller.reloadDashboard()
     }
 
     func navigateForward() {
@@ -187,9 +179,7 @@ extension DashboardManager {
     func confirmSetPrimary(_ target: DashboardGatewayTarget) {
         self.presentSetPrimaryConfirmation(target, source: nil)
     }
-}
 
-extension DashboardManager {
     func frontmostDashboard()
         -> (target: DashboardGatewayTarget, controller: DashboardWindowController)?
     {
@@ -204,9 +194,7 @@ extension DashboardManager {
         }
         return controllers.last
     }
-}
 
-extension DashboardManager {
     func presentSetPrimaryConfirmation(
         _ target: DashboardGatewayTarget,
         source: DashboardWindowController?)
@@ -249,9 +237,7 @@ extension DashboardManager {
             over: source?.window ?? self.frontmostDashboard()?.controller.window,
             completion: apply)
     }
-}
 
-extension DashboardManager {
     func handleGatewayRequest(_ request: DashboardGatewaysRequest, from source: DashboardWindowController) {
         // Retained WebViews may still emit callbacks after their window closes or document is replaced.
         guard self.target(for: source) != nil, source.isWindowOpen else { return }

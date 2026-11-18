@@ -5,50 +5,26 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 
 type TelegramGroups = Record<string, TelegramGroupConfig>;
 
-type MigrationScope = "account" | "global";
-
-type TelegramGroupMigrationResult = {
-  migrated: boolean;
-  skippedExisting: boolean;
-  scopes: MigrationScope[];
-};
-
 function resolveAccountGroups(
   cfg: OpenClawConfig,
   accountId?: string | null,
-): { groups?: TelegramGroups } {
+): TelegramGroups | undefined {
   if (!accountId) {
-    return {};
+    return undefined;
   }
   const normalized = normalizeAccountId(accountId);
   const accounts = cfg.channels?.telegram?.accounts;
   if (!accounts || typeof accounts !== "object") {
-    return {};
+    return undefined;
   }
   const exact = accounts[normalized];
   if (exact?.groups) {
-    return { groups: exact.groups };
+    return exact.groups;
   }
   const matchKey = Object.keys(accounts).find(
     (key) => normalizeLowercaseStringOrEmpty(key) === normalizeLowercaseStringOrEmpty(normalized),
   );
-  return { groups: matchKey ? accounts[matchKey]?.groups : undefined };
-}
-
-function migrateTelegramGroupsInPlace(
-  groups: TelegramGroups | undefined,
-  oldChatId: string,
-  newChatId: string,
-): { migrated: boolean; skippedExisting: boolean } {
-  if (!groups || oldChatId === newChatId || !Object.hasOwn(groups, oldChatId)) {
-    return { migrated: false, skippedExisting: false };
-  }
-  if (Object.hasOwn(groups, newChatId)) {
-    return { migrated: false, skippedExisting: true };
-  }
-  groups[newChatId] = expectDefined(groups[oldChatId], "owned Telegram group config key");
-  delete groups[oldChatId];
-  return { migrated: true, skippedExisting: false };
+  return matchKey ? accounts[matchKey]?.groups : undefined;
 }
 
 export function migrateTelegramGroupConfig(params: {
@@ -56,27 +32,28 @@ export function migrateTelegramGroupConfig(params: {
   accountId?: string | null;
   oldChatId: string;
   newChatId: string;
-}): TelegramGroupMigrationResult {
-  const scopes: MigrationScope[] = [];
+}) {
+  let migrated = false;
   let skippedExisting = false;
 
-  const migrationTargets: Array<{
-    scope: MigrationScope;
-    groups: TelegramGroups | undefined;
-  }> = [
-    { scope: "account", groups: resolveAccountGroups(params.cfg, params.accountId).groups },
-    { scope: "global", groups: params.cfg.channels?.telegram?.groups },
+  const migrationTargets = [
+    resolveAccountGroups(params.cfg, params.accountId),
+    params.cfg.channels?.telegram?.groups,
   ];
 
-  for (const target of migrationTargets) {
-    const result = migrateTelegramGroupsInPlace(target.groups, params.oldChatId, params.newChatId);
-    if (result.migrated) {
-      scopes.push(target.scope);
+  const { oldChatId, newChatId } = params;
+  for (const groups of migrationTargets) {
+    if (!groups || oldChatId === newChatId || !Object.hasOwn(groups, oldChatId)) {
+      continue;
     }
-    if (result.skippedExisting) {
+    if (Object.hasOwn(groups, newChatId)) {
       skippedExisting = true;
+      continue;
     }
+    groups[newChatId] = expectDefined(groups[oldChatId], "owned Telegram group config key");
+    delete groups[oldChatId];
+    migrated = true;
   }
 
-  return { migrated: scopes.length > 0, skippedExisting, scopes };
+  return { migrated, skippedExisting };
 }

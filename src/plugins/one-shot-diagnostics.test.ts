@@ -1,15 +1,14 @@
-// One-shot diagnostics exporter start/flush lifecycle for embedded CLI runs.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import type { PluginServicesHandle } from "./services.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
 const acquirePluginRegistryForInspection = vi.hoisted(() => vi.fn());
 const startPluginServices = vi.hoisted(() => vi.fn());
 const waitForDiagnosticEventsDrained = vi.hoisted(() => vi.fn(async () => {}));
 const warn = vi.hoisted(() => vi.fn());
+const exporterId = "diagnostics-otel";
 
 vi.mock("./loader.js", () => ({ acquirePluginRegistryForInspection }));
 vi.mock("./services.js", () => ({ startPluginServices }));
@@ -26,288 +25,190 @@ import { startOneShotDiagnosticsExporters as startWithoutHost } from "./one-shot
 import { createOneShotDiagnosticsTestHost } from "./one-shot-diagnostics.test-support.js";
 
 let host: ReturnType<typeof createOneShotDiagnosticsTestHost>;
-const startOneShotDiagnosticsExporters: typeof startWithoutHost = (params) => host.start(params);
+let cleanups: (() => unknown)[];
+const start = (config = otelEnabledConfig, suppressStdoutDiagnosticLogs = false) =>
+  host.start({ config, suppressStdoutDiagnosticLogs });
 
-const otelEnabledConfig = {
-  diagnostics: { otel: { enabled: true, endpoint: "http://127.0.0.1:4318" } },
-} as OpenClawConfig;
+const otelEnabledConfig: OpenClawConfig = { diagnostics: { otel: { enabled: true } } };
 
-function mockRegistryWithServices(serviceIds: string[]) {
-  const registry = {
-    services: serviceIds.map((id) => ({
-      pluginId: id,
-      pluginName: id,
-      id: id.trim(),
-      service: { id },
-      source: "test",
-      origin: "bundled",
-    })),
-  };
-  acquirePluginRegistryForInspection.mockResolvedValue({
-    registry,
-    release: vi.fn(async () => {}),
-  });
-  return registry;
-}
-
-async function mockRealExporter(service: OpenClawPluginService, origin: "bundled" | "workspace") {
-  const { startPluginServices: startRealServices } =
-    await vi.importActual<typeof import("./services.js")>("./services.js");
+async function mockExporter(
+  overrides: Partial<OpenClawPluginService> = {},
+  origin: "bundled" | "workspace" = "bundled",
+  real = false,
+) {
+  const service: OpenClawPluginService = { id: exporterId, start() {}, ...overrides };
   const registry = createEmptyPluginRegistry();
   registry.services.push({
-    pluginId: "diagnostics-otel",
+    pluginId: service.id,
     id: service.id.trim(),
     service,
     source: "test",
     origin,
   });
-  acquirePluginRegistryForInspection.mockResolvedValue({
-    registry,
-    release: vi.fn(async () => {}),
-  });
-  let servicesHandle: PluginServicesHandle | undefined;
+  acquirePluginRegistryForInspection.mockResolvedValue({ registry, release: async () => {} });
+  if (!real) {
+    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
+    return;
+  }
+  const { startPluginServices: startRealServices } =
+    await vi.importActual<typeof import("./services.js")>("./services.js");
   startPluginServices.mockImplementationOnce(
     async (params: Parameters<typeof startRealServices>[0]) => {
-      servicesHandle = await startRealServices(params);
+      const servicesHandle = await startRealServices(params);
+      cleanups.unshift(() => servicesHandle.stop());
       return servicesHandle;
     },
   );
-  return { stop: () => servicesHandle?.stop() };
 }
 
 beforeEach(() => {
   host = createOneShotDiagnosticsTestHost();
+  cleanups = [];
   vi.clearAllMocks();
   waitForDiagnosticEventsDrained.mockResolvedValue(undefined);
 });
 
-describe("startOneShotDiagnosticsExporters", () => {
-  it("requires an existing host for enabled export before loading plugins", async () => {
-    await expect(startWithoutHost({ config: otelEnabledConfig })).rejects.toThrow(
-      "One-shot diagnostics requires a bound SDK host scheduler",
-    );
-    expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
-  });
-
-  it("retires the exporter service without stopping its host's sibling work", async () => {
-    const peer = vi.fn();
-    host.scheduler.schedule({ id: "peer", delayMs: 1, run: peer });
-    await mockRealExporter({ id: "diagnostics-otel", start() {}, stop() {} }, "workspace");
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-    expect(handle).not.toBeNull();
-    await handle?.stop();
-    expect(host.scheduler.signal.aborted).toBe(false);
-    await host.clock.advanceBy(1);
-    expect(peer).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["no diagnostics config", {}],
-    ["no otel config", { diagnostics: {} }],
-    ["diagnostics disabled", { diagnostics: { enabled: false, otel: { enabled: true } } }],
-    ["otel disabled", { diagnostics: { otel: { enabled: false } } }],
-  ])("skips plugin loading when otel export is not configured (%s)", async (_label, config) => {
-    const handle = await startWithoutHost({ config: config as OpenClawConfig });
-
-    expect(handle).toBeNull();
-    expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
-    expect(startPluginServices).not.toHaveBeenCalled();
-  });
-
-  it("starts only the diagnostics-otel service from a scoped non-activating load", async () => {
-    mockRegistryWithServices(["diagnostics-otel", "other-service"]);
-    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
-
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-
-    expect(handle).not.toBeNull();
-    expect(acquirePluginRegistryForInspection).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: otelEnabledConfig,
-        onlyPluginIds: ["diagnostics-otel"],
-        preferBuiltPluginArtifacts: true,
-      }),
-    );
-    expect(startPluginServices).toHaveBeenCalledTimes(1);
-    const startParams = startPluginServices.mock.calls[0]?.[0] as {
-      registry: { services: Array<{ service: { id: string } }> };
-      config: OpenClawConfig;
-    };
-    expect(startParams.config).toBe(otelEnabledConfig);
-    expect(startParams.registry.services.map((entry) => entry.service.id)).toEqual([
-      "diagnostics-otel",
-    ]);
-  });
-
-  it("keeps OTLP logs but suppresses stdout JSONL logs when requested", async () => {
-    const config = {
-      diagnostics: { otel: { enabled: true, logs: true, logsExporter: "both" } },
-    } as OpenClawConfig;
-    mockRegistryWithServices(["diagnostics-otel"]);
-    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
-
-    const handle = await startOneShotDiagnosticsExporters({
-      config,
-      suppressStdoutDiagnosticLogs: true,
-    });
-
-    expect(handle).not.toBeNull();
-    const startParams = startPluginServices.mock.calls[0]?.[0] as {
-      config: OpenClawConfig;
-    };
-    expect(startParams.config.diagnostics?.otel?.logs).toBe(true);
-    expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
-    expect(config.diagnostics?.otel?.logsExporter).toBe("both");
-  });
-
-  it("disables stdout-only JSONL logs when requested", async () => {
-    const config = {
-      diagnostics: { otel: { enabled: true, logs: true, logsExporter: "stdout" } },
-    } as OpenClawConfig;
-    mockRegistryWithServices(["diagnostics-otel"]);
-    startPluginServices.mockResolvedValue({ stop: vi.fn(async () => {}) });
-
-    const handle = await startOneShotDiagnosticsExporters({
-      config,
-      suppressStdoutDiagnosticLogs: true,
-    });
-
-    expect(handle).not.toBeNull();
-    const startParams = startPluginServices.mock.calls[0]?.[0] as {
-      config: OpenClawConfig;
-    };
-    expect(startParams.config.diagnostics?.otel?.logs).toBe(false);
-    expect(startParams.config.diagnostics?.otel?.logsExporter).toBe("otlp");
-    expect(config.diagnostics?.otel?.logsExporter).toBe("stdout");
-  });
-
-  it("drains queued diagnostic events before stopping services on flush", async () => {
-    const exporterStop = vi.fn();
-    const services = await mockRealExporter(
-      { id: "diagnostics-otel", start: () => {}, stop: exporterStop },
-      "bundled",
-    );
-    const drain = createDeferredCore();
-    const draining = createDeferredCore();
-    waitForDiagnosticEventsDrained.mockImplementation(() => {
-      draining.resolve();
-      return drain.promise;
-    });
-    let stopping: Promise<void> | undefined;
-    try {
-      const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-      stopping = handle?.stop();
-      await draining.promise;
-      expect(exporterStop).not.toHaveBeenCalled();
-      drain.resolve();
-      await stopping;
-      expect(exporterStop).toHaveBeenCalledOnce();
-    } finally {
-      drain.resolve();
-      await stopping;
-      await services.stop();
+afterEach(async () => {
+  try {
+    for (const cleanup of cleanups.toReversed()) {
+      await cleanup();
     }
-  });
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
-  it("reports drain and exporter failures without failing the CLI shutdown", async () => {
-    const exporterStop = vi.fn(() => {
-      throw new Error("exporter shutdown failed");
-    });
-    const services = await mockRealExporter(
-      { id: "diagnostics-otel", start: () => {}, stop: exporterStop },
-      "bundled",
-    );
-    waitForDiagnosticEventsDrained.mockRejectedValue(new Error("event drain failed"));
-    try {
-      const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-      await expect(handle?.stop()).resolves.toBeUndefined();
-      expect(exporterStop).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringMatching(/one-shot diagnostics .*event drain failed/),
-      );
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringMatching(/one-shot diagnostics .*exporter shutdown failed/),
-      );
-    } finally {
-      await Promise.allSettled([services.stop()]);
-    }
-  });
-
-  it.each([
-    { drainOutcome: "immediate completion", drainWaitMs: 0, origin: "bundled" },
-    { drainOutcome: "early completion", drainWaitMs: 2_000, origin: "bundled" },
-    { drainOutcome: "timeout", drainWaitMs: 5_000, origin: "bundled" },
-    { drainOutcome: "timeout", drainWaitMs: 5_000, origin: "workspace" },
-  ] as const)(
-    "gives the $origin exporter a separate flush window after drain $drainOutcome",
-    async ({ drainWaitMs, origin }) => {
-      const drain = createDeferredCore();
-      const flush = createDeferredCore();
-      const exporterStop = vi.fn(() => flush.promise);
-      let internalDiagnostics: OpenClawPluginServiceContext["internalDiagnostics"];
-      const services = await mockRealExporter(
-        {
-          id: "diagnostics-otel",
-          start: (context) => {
-            internalDiagnostics = context.internalDiagnostics;
-          },
-          stop: exporterStop,
-        },
-        origin,
-      );
-      waitForDiagnosticEventsDrained.mockImplementation(() => drain.promise);
-      let stopping: Promise<void> | undefined;
-      let stopped = false;
-      vi.useFakeTimers();
-      try {
-        const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
-        expect(handle).not.toBeNull();
-        expect(Boolean(internalDiagnostics)).toBe(origin === "bundled");
-        stopping = handle?.stop().then(() => {
-          stopped = true;
-        });
-        if (drainWaitMs > 0) {
-          await vi.advanceTimersByTimeAsync(drainWaitMs - 1);
-          expect(exporterStop).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-        }
-        if (drainWaitMs < 5_000) {
-          drain.resolve();
-          await vi.advanceTimersByTimeAsync(0);
-        }
-
-        // Observe the exporter itself: a service-manager stop can still be waiting on another drain.
-        expect(exporterStop).toHaveBeenCalledOnce();
-        expect(stopped).toBe(false);
-        await vi.advanceTimersByTimeAsync(9_999);
-        expect(stopped).toBe(false);
-        await vi.advanceTimersByTimeAsync(1);
-        await stopping;
-        expect(stopped).toBe(true);
-        if (internalDiagnostics) {
-          expect(internalDiagnostics.getRuntimeIdentity).toThrow("no longer active");
-        }
-      } finally {
-        drain.resolve();
-        flush.resolve();
-        try {
-          await vi.advanceTimersByTimeAsync(0);
-          await stopping;
-          await services.stop();
-        } finally {
-          vi.useRealTimers();
-        }
-      }
-    },
+it("requires an existing host for enabled export before loading plugins", async () => {
+  await expect(startWithoutHost({ config: otelEnabledConfig })).rejects.toThrow(
+    "One-shot diagnostics requires a bound SDK host scheduler",
   );
+  expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
+});
 
-  it("warns when otel is configured but the diagnostics-otel plugin is absent", async () => {
-    mockRegistryWithServices(["other-service"]);
+it("retires the exporter service without stopping its host's sibling work", async () => {
+  const peer = vi.fn();
+  host.scheduler.schedule({ id: "peer", delayMs: 1, run: peer });
+  await mockExporter({ stop() {} }, "workspace", true);
+  const handle = await start();
+  expect(handle).not.toBeNull();
+  await handle?.stop();
+  expect(host.scheduler.signal.aborted).toBe(false);
+  await host.clock.advanceBy(1);
+  expect(peer).toHaveBeenCalledOnce();
+});
 
-    const handle = await startOneShotDiagnosticsExporters({ config: otelEnabledConfig });
+it.each([
+  ["no diagnostics config", {}],
+  ["no otel config", { diagnostics: {} }],
+  ["diagnostics disabled", { diagnostics: { enabled: false, otel: { enabled: true } } }],
+  ["otel disabled", { diagnostics: { otel: { enabled: false } } }],
+])("skips plugin loading when otel export is not configured (%s)", async (_label, config) => {
+  const handle = await startWithoutHost({ config: config as OpenClawConfig });
 
-    expect(handle).toBeNull();
-    expect(startPluginServices).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("diagnostics-otel plugin is not"));
+  expect(handle).toBeNull();
+  expect(acquirePluginRegistryForInspection).not.toHaveBeenCalled();
+  expect(startPluginServices).not.toHaveBeenCalled();
+});
+
+it.each([
+  { logsExporter: "both", logs: true },
+  { logsExporter: "stdout", logs: false },
+] as const)(
+  "suppresses $logsExporter stdout logs without changing caller config",
+  async ({ logsExporter, logs }) => {
+    const config: OpenClawConfig = {
+      diagnostics: { otel: { enabled: true, logs: true, logsExporter } },
+    };
+    await mockExporter();
+    const handle = await start(config, true);
+    expect(handle).not.toBeNull();
+    const startParams = startPluginServices.mock.calls[0]?.[0] as { config: OpenClawConfig };
+    expect(startParams.config.diagnostics?.otel).toMatchObject({ logs, logsExporter: "otlp" });
+    expect(config.diagnostics?.otel?.logsExporter).toBe(logsExporter);
+  },
+);
+
+it("reports drain and exporter failures without failing the CLI shutdown", async () => {
+  const exporterStop = vi.fn(() => {
+    throw new Error("exporter shutdown failed");
   });
+  await mockExporter({ stop: exporterStop }, "bundled", true);
+  waitForDiagnosticEventsDrained.mockRejectedValue(new Error("event drain failed"));
+  const handle = await start();
+  await expect(handle?.stop()).resolves.toBeUndefined();
+  expect(exporterStop).toHaveBeenCalledOnce();
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringMatching(/one-shot diagnostics .*event drain failed/),
+  );
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringMatching(/one-shot diagnostics .*exporter shutdown failed/),
+  );
+});
+
+it.each([
+  { drainOutcome: "immediate completion", drainWaitMs: 0, origin: "bundled" },
+  { drainOutcome: "early completion", drainWaitMs: 2_000, origin: "bundled" },
+  { drainOutcome: "timeout", drainWaitMs: 5_000, origin: "bundled" },
+  { drainOutcome: "timeout", drainWaitMs: 5_000, origin: "workspace" },
+] as const)(
+  "gives the $origin exporter a separate flush window after drain $drainOutcome",
+  async ({ drainWaitMs, origin }) => {
+    const drain = createDeferredCore();
+    const flush = createDeferredCore();
+    const exporterStop = vi.fn(() => flush.promise);
+    let internalDiagnostics: OpenClawPluginServiceContext["internalDiagnostics"];
+    await mockExporter(
+      {
+        start: (context) => {
+          internalDiagnostics = context.internalDiagnostics;
+        },
+        stop: exporterStop,
+      },
+      origin,
+      true,
+    );
+    waitForDiagnosticEventsDrained.mockImplementation(() => drain.promise);
+    const stopped = vi.fn<() => void>();
+    vi.useFakeTimers();
+    cleanups.push(async () => {
+      drain.resolve();
+      flush.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const handle = await start();
+    expect(handle).not.toBeNull();
+    expect(Boolean(internalDiagnostics)).toBe(origin === "bundled");
+    const stopping = handle?.stop().then(stopped);
+    if (drainWaitMs > 0) {
+      await vi.advanceTimersByTimeAsync(drainWaitMs - 1);
+      expect(exporterStop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+    }
+    if (drainWaitMs < 5_000) {
+      drain.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+    }
+
+    // Observe the exporter itself: a service-manager stop can still be waiting on another drain.
+    expect(exporterStop).toHaveBeenCalledOnce();
+    expect(stopped).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(stopped).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await stopping;
+    expect(stopped).toHaveBeenCalledOnce();
+    if (internalDiagnostics) {
+      expect(internalDiagnostics.getRuntimeIdentity).toThrow("no longer active");
+    }
+  },
+);
+
+it("warns when otel is configured but the diagnostics-otel plugin is absent", async () => {
+  await mockExporter({ id: "other-service" });
+
+  const handle = await start();
+
+  expect(handle).toBeNull();
+  expect(startPluginServices).not.toHaveBeenCalled();
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("diagnostics-otel plugin is not"));
 });

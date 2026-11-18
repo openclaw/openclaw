@@ -54,13 +54,19 @@ struct ChatMarkdownRenderer: View {
 
     struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
-        static let callout = Self(size: 16, relativeTo: .callout)
+        static let callout = Self(size: OpenClawChatTypography.scaled(16), relativeTo: .callout)
 
         let size: CGFloat
         let relativeTo: Font.TextStyle
     }
 
-    let snapshot: ChatMarkdownRenderSnapshot
+    private enum Input {
+        case text(String, isComplete: Bool)
+        case snapshot(ChatMarkdownRenderSnapshot)
+    }
+
+    private let input: Input
+    @State private var preparation = ChatMarkdownPreparation()
     let context: Context
     let variant: ChatMarkdownVariant
     let typography: Typography
@@ -80,7 +86,7 @@ struct ChatMarkdownRenderer: View {
         isComplete: Bool = true)
     {
         self.init(
-            snapshot: ChatMarkdownRenderSnapshot(text: text, isComplete: isComplete),
+            input: .text(text, isComplete: isComplete),
             context: context,
             variant: variant,
             typography: typography,
@@ -95,7 +101,24 @@ struct ChatMarkdownRenderer: View {
         textColor: Color,
         reveal: ChatMarkdownProseReveal? = nil)
     {
-        self.snapshot = snapshot
+        self.init(
+            input: .snapshot(snapshot),
+            context: context,
+            variant: variant,
+            typography: typography,
+            textColor: textColor,
+            reveal: reveal)
+    }
+
+    private init(
+        input: Input,
+        context: Context,
+        variant: ChatMarkdownVariant,
+        typography: Typography,
+        textColor: Color,
+        reveal: ChatMarkdownProseReveal? = nil)
+    {
+        self.input = input
         self.context = context
         self.variant = variant
         self.typography = typography
@@ -107,15 +130,51 @@ struct ChatMarkdownRenderer: View {
             relativeTo: inlineMath.relativeTo)
     }
 
+    #if os(iOS)
+    @Environment(\.openClawReaderAnchor) private var readerAnchor
+    #endif
+
+    /// Block position distinguishes repeated prefixes; the prefix tolerates live/final whitespace changes.
+    static func readerBlockKey(_ block: ChatMarkdownRenderedBlock, index: Int) -> String? {
+        let prose: ChatMarkdownProse
+        switch block {
+        case let .prose(value): prose = value
+        case let .heading(_, value): prose = value
+        default: return nil
+        }
+        let key = String(String(prose.attributed.characters).filter { !$0.isWhitespace }.prefix(48))
+        return key.isEmpty ? nil : "\(index):\(key)"
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(Array(self.snapshot.blocks.enumerated()), id: \.offset) { entry in
+        let snapshot = self.snapshot
+        return VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(snapshot.blocks.enumerated()), id: \.offset) { entry in
                 self.blockView(entry.element, index: entry.offset)
+                    #if os(iOS)
+                        .chatReaderBlockAnchor(
+                            self.readerAnchor,
+                            key: self.readerAnchor == nil ? nil : Self.readerBlockKey(
+                                entry.element,
+                                index: entry.offset))
+                    #endif
             }
 
-            if !self.snapshot.images.isEmpty {
-                InlineImageList(images: self.snapshot.images)
+            if !snapshot.images.isEmpty {
+                InlineImageList(images: snapshot.images)
             }
+        }
+    }
+
+    private var snapshot: ChatMarkdownRenderSnapshot {
+        switch self.input {
+        case let .text(text, isComplete):
+            self.preparation.snapshot(
+                text: text,
+                isComplete: isComplete,
+                defaultDisclosureSummary: String(localized: "Details"))
+        case let .snapshot(snapshot):
+            snapshot
         }
     }
 
@@ -144,7 +203,7 @@ struct ChatMarkdownRenderer: View {
         case let .math(math):
             ChatMathBlockView(block: math, textColor: self.textColor)
         case let .table(table):
-            ChatMarkdownTableView(table: table)
+            self.tableView(table)
         case let .list(list):
             self.listView(list)
         case let .disclosure(disclosure):
@@ -160,13 +219,18 @@ struct ChatMarkdownRenderer: View {
         }
     }
 
+    func tableView(_ table: ChatMarkdownTable) -> ChatMarkdownTableView {
+        ChatMarkdownTableView(table: table, typography: self.typography)
+    }
+
     func listView(_ list: ChatMarkdownList) -> ChatMarkdownListView {
         ChatMarkdownListView(
             list: list,
             context: self.context,
             variant: self.variant,
             typography: self.typography,
-            textColor: self.textColor)
+            textColor: self.textColor,
+            isStreaming: !self.snapshot.isComplete)
     }
 
     private func proseText(_ prose: ChatMarkdownProse, index: Int) -> SwiftUI.Text {
@@ -192,12 +256,53 @@ struct ChatMarkdownProseReveal {
     let now: TimeInterval
 }
 
+/// One mounted renderer owns one prepared source, not a history of Markdown prefixes.
+/// This is intentionally not observable: preparation derives synchronously from the
+/// view's current input and must not schedule another render or show stale content.
+@MainActor
+final class ChatMarkdownPreparation {
+    private struct Input: Equatable {
+        let text: String
+        let isComplete: Bool
+        let defaultDisclosureSummary: String
+    }
+
+    private var prepared: (input: Input, snapshot: ChatMarkdownRenderSnapshot)?
+
+    func snapshot(
+        text: String,
+        isComplete: Bool,
+        defaultDisclosureSummary: String) -> ChatMarkdownRenderSnapshot
+    {
+        let input = Input(
+            text: text,
+            isComplete: isComplete,
+            defaultDisclosureSummary: defaultDisclosureSummary)
+        if let prepared = self.prepared, prepared.input == input {
+            return prepared.snapshot
+        }
+        let snapshot = ChatMarkdownRenderSnapshot(
+            text: text,
+            isComplete: isComplete,
+            defaultDisclosureSummary: defaultDisclosureSummary)
+        self.prepared = (input, snapshot)
+        return snapshot
+    }
+}
+
 @MainActor
 struct ChatMarkdownRenderSnapshot {
     let blocks: [ChatMarkdownRenderedBlock]
     let images: [ChatMarkdownPreprocessor.InlineImage]
+    let isComplete: Bool
 
-    init(text: String, isComplete: Bool, preparesReveal: Bool = false) {
+    init(
+        text: String,
+        isComplete: Bool,
+        preparesReveal: Bool = false,
+        defaultDisclosureSummary: String = String(localized: "Details"))
+    {
+        self.isComplete = isComplete
         let processed = ChatMarkdownPreprocessor.preprocess(markdown: text)
         let segments = ChatMarkdownBlockSegmenter.segments(
             markdown: processed.cleaned,
@@ -216,7 +321,8 @@ struct ChatMarkdownRenderSnapshot {
             Self.renderedBlock(
                 block,
                 isComplete: isComplete,
-                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex))
+                preparesReveal: preparesReveal && (isComplete || index == lastProseIndex),
+                defaultDisclosureSummary: defaultDisclosureSummary)
         }
         self.images = processed.images
     }
@@ -224,12 +330,14 @@ struct ChatMarkdownRenderSnapshot {
     init(blocks: [ChatMarkdownRenderedBlock], images: [ChatMarkdownPreprocessor.InlineImage] = []) {
         self.blocks = blocks
         self.images = images
+        self.isComplete = true
     }
 
     private static func renderedBlock(
         _ block: ChatMarkdownBlock,
         isComplete: Bool,
-        preparesReveal: Bool) -> ChatMarkdownRenderedBlock
+        preparesReveal: Bool,
+        defaultDisclosureSummary: String) -> ChatMarkdownRenderedBlock
     {
         switch block {
         case let .prose(markdown):
@@ -256,7 +364,7 @@ struct ChatMarkdownRenderSnapshot {
             .disclosure(ChatMarkdownRenderedDisclosure(
                 summary: ChatMarkdownProse(
                     markdown: chatMarkdownDisclosureSummarySource(disclosure.summary) {
-                        String(localized: "Details")
+                        defaultDisclosureSummary
                     },
                     isComplete: true,
                     preparesReveal: false),
@@ -267,7 +375,8 @@ struct ChatMarkdownRenderSnapshot {
                     Self.renderedBlock(
                         $0,
                         isComplete: isComplete,
-                        preparesReveal: false)
+                        preparesReveal: false,
+                        defaultDisclosureSummary: defaultDisclosureSummary)
                 }))
         case .thematicBreak:
             .thematicBreak
@@ -347,6 +456,9 @@ private struct ChatMarkdownDisclosureView: View {
                     self.disclosure.summary.inlineAccessibilityText
                         ?? String(self.disclosure.summary.attributed.characters))
         }
+        #if os(iOS)
+        .disclosureGroupStyle(ChatInlineDisclosureStyle())
+        #endif
         .tint(self.context == .user ? self.textColor : OpenClawChatTheme.accent)
     }
 }
@@ -638,25 +750,14 @@ enum ChatMarkdownDisplayPreprocessor {
         guard lines.count > 1 else { return normalized }
         let codeLines = self.codeLineIndices(in: normalized)
 
-        var output = ""
-        for index in lines.indices {
-            output += lines[index]
-
-            guard index < lines.index(before: lines.endIndex) else {
-                continue
-            }
-
-            if !codeLines.contains(index),
-               !codeLines.contains(index + 1),
-               self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
-            {
-                output += "  \n"
-            } else {
-                output += "\n"
-            }
-        }
-
-        return output
+        return lines.indices.map { index in
+            guard index < lines.index(before: lines.endIndex),
+                  !codeLines.contains(index),
+                  !codeLines.contains(index + 1),
+                  self.shouldPreserveSoftBreak(after: lines[index], before: lines[index + 1])
+            else { return lines[index] }
+            return lines[index] + "  "
+        }.joined(separator: "\n")
     }
 
     private static func codeLineIndices(in markdown: String) -> Set<Int> {

@@ -1,13 +1,11 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
-type SessionActivityClock = {
+export function sessionActivityTimestamp(row: {
   lastActivityAt?: number;
   lastInteractionAt?: number;
   updatedAt?: number | null;
   createdAt?: number;
-};
-
-export function sessionActivityTimestamp(row: SessionActivityClock): number {
+}): number {
   const lastActivityAt = asPositiveFiniteNumber(row.lastActivityAt);
   const lastInteractionAt = asPositiveFiniteNumber(row.lastInteractionAt);
   if (lastActivityAt !== undefined || lastInteractionAt !== undefined) {

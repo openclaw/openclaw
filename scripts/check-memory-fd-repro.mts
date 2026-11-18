@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Reproduces memory-search file descriptor retention with a synthetic workspace.
 import { spawnSync, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
@@ -15,6 +14,7 @@ import { asNullableRecord as asRecord } from "../packages/normalization-core/src
 import { readNonBlankString } from "../packages/normalization-core/src/string-coerce.ts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import { hasUnjoinedWork, runManagedCommand } from "./lib/managed-child-process.mts";
 import { parseStrictNonNegativeDecimal as parseNonNegativeInteger } from "./lib/numeric-options.mjs";
@@ -52,9 +52,6 @@ const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
-/**
- * Probe query expected to hit the synthetic top-level memory file.
- */
 const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
@@ -252,8 +249,8 @@ function logStep(message: string) {
   console.log(`[memory-fd-repro] ${message}`);
 }
 
-async function getFreePort() {
-  return await new Promise<number>((resolve, reject) => {
+function getFreePort() {
+  return new Promise<number>((resolve, reject) => {
     const server = net.createServer();
     server.unref();
     server.on("error", reject);
@@ -723,10 +720,8 @@ async function main() {
     const configPath = writeConfig({ homeDir, workspaceDir, port, token });
     const workspaceRealPath = fs.realpathSync.native(workspaceDir);
     const env: NodeJS.ProcessEnv = {
-      ...process.env,
+      ...createBuildSmokeEnv(homeDir),
       ...SKIP_GATEWAY_ENV,
-      HOME: homeDir,
-      OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw"),
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_GATEWAY_TOKEN: token,
       // The measured PID must not respawn for compile-cache activation.
@@ -916,12 +911,7 @@ async function main() {
   }
 }
 
-function isMainModule() {
-  const entrypoint = process.argv[1];
-  return Boolean(entrypoint && import.meta.url === pathToFileURL(path.resolve(entrypoint)).href);
-}
-
-if (isMainModule()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   main().catch((error: unknown) => {
     console.error(
       `[memory-fd-repro] failed: ${error instanceof Error ? error.message : String(error)}`,

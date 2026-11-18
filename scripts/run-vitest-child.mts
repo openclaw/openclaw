@@ -1,5 +1,4 @@
-// The JavaScript launcher owns reporting after this execution process closes.
-import { exitVitestBySignal } from "./lib/vitest-process.mts";
-import { runVitest } from "./run-vitest.mts";
+// The JavaScript launcher reports only after this execution process closes.
+import { runVitestEntry } from "./lib/vitest-cli-bootstrap.mts";
 
-await runVitest(exitVitestBySignal);
+await runVitestEntry(undefined, async () => (await import("./run-vitest.mts")).runVitest);

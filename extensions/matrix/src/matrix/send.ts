@@ -1,8 +1,10 @@
+import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MessageReceiptPartKind } from "openclaw/plugin-sdk/channel-outbound";
 import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../types.js";
 import {
   createMatrixPlannedEvents,
@@ -30,12 +32,7 @@ import {
   resolveMatrixMentionsForBody,
   resolveMatrixMsgType,
 } from "./send/formatting.js";
-import {
-  buildMediaContent,
-  prepareImageInfo,
-  resolveMediaDurationMs,
-  uploadMediaWithEncryption,
-} from "./send/media.js";
+import { prepareImageInfo, uploadMediaWithEncryption } from "./send/media.js";
 import { createMatrixSendReceipt, type MatrixReceiptEvent } from "./send/receipt.js";
 import { normalizeThreadId, resolveMatrixRoomId } from "./send/targets.js";
 import {
@@ -44,6 +41,7 @@ import {
   MsgType,
   RelationType,
   type MatrixExtraContentFields,
+  type MatrixMediaContent,
   type MatrixOutboundContent,
   type MatrixSendOpts,
   type MatrixSendResult,
@@ -56,26 +54,72 @@ export { resolveMatrixRoomId } from "./send/targets.js";
 
 type MatrixClientResolveOpts = Parameters<typeof withResolvedMatrixControlClient>[0];
 
-function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
-  if (!previousEvent || typeof previousEvent !== "object") {
-    return undefined;
-  }
-  const content = (previousEvent as { content?: unknown }).content;
-  if (!content || typeof content !== "object") {
-    return undefined;
-  }
-  const relation = (content as Record<string, unknown>)["m.relates_to"];
-  if (!relation || typeof relation !== "object") {
-    return undefined;
-  }
-  const relationRecord = relation as { event_id?: unknown; rel_type?: unknown };
+const AIFC_IMA4_BYTES_PER_CHANNEL_PACKET = 34;
+const AIFC_IMA4_FRAMES_PER_PACKET = 64;
+
+function resolveAifcIma4DurationSeconds(buffer: Buffer, sampleRate?: number): number | undefined {
   if (
-    relationRecord.rel_type !== RelationType.Thread ||
-    typeof relationRecord.event_id !== "string"
+    !sampleRate ||
+    !Number.isFinite(sampleRate) ||
+    buffer.length < 12 ||
+    buffer.toString("ascii", 0, 4) !== "FORM" ||
+    buffer.toString("ascii", 8, 12) !== "AIFC"
   ) {
     return undefined;
   }
-  return normalizeThreadId(relationRecord.event_id) ?? undefined;
+
+  let channels: number | undefined;
+  let declaredFrameCount: number | undefined;
+  let soundDataBytes: number | undefined;
+  for (let offset = 12; offset + 8 <= buffer.length;) {
+    const chunkType = buffer.toString("ascii", offset, offset + 4);
+    const chunkSize = buffer.readUInt32BE(offset + 4);
+    const chunkStart = offset + 8;
+    if (chunkSize > buffer.length - chunkStart) {
+      return undefined;
+    }
+    if (chunkType === "COMM") {
+      if (chunkSize < 22 || buffer.toString("ascii", chunkStart + 18, chunkStart + 22) !== "ima4") {
+        return undefined;
+      }
+      channels = buffer.readUInt16BE(chunkStart);
+      declaredFrameCount = buffer.readUInt32BE(chunkStart + 2);
+    } else if (chunkType === "SSND") {
+      if (chunkSize < 8) {
+        return undefined;
+      }
+      const soundDataOffset = buffer.readUInt32BE(chunkStart);
+      if (soundDataOffset > chunkSize - 8) {
+        return undefined;
+      }
+      soundDataBytes = chunkSize - 8 - soundDataOffset;
+    }
+    offset = chunkStart + chunkSize + (chunkSize & 1);
+  }
+
+  if (!channels || !declaredFrameCount || !soundDataBytes) {
+    return undefined;
+  }
+  const packetSize = channels * AIFC_IMA4_BYTES_PER_CHANNEL_PACKET;
+  if (soundDataBytes % packetSize !== 0) {
+    return undefined;
+  }
+  const packetCount = soundDataBytes / packetSize;
+  if (packetCount !== declaredFrameCount) {
+    return undefined;
+  }
+  // Apple AIFC stores IMA4 packet count in COMM; each packet decodes to 64
+  // sample frames. Other encoders can store decoded frames, so verify SSND first.
+  return (packetCount * AIFC_IMA4_FRAMES_PER_PACKET) / sampleRate;
+}
+
+function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
+  const content = asOptionalObjectRecord(asOptionalObjectRecord(previousEvent)?.content);
+  const relation = asOptionalObjectRecord(content?.["m.relates_to"]);
+  if (relation?.rel_type !== RelationType.Thread || typeof relation.event_id !== "string") {
+    return undefined;
+  }
+  return normalizeThreadId(relation.event_id) ?? undefined;
 }
 
 function withMatrixExtraContentFields<T extends Record<string, unknown>>(
@@ -145,12 +189,11 @@ export async function sendMessageMatrix(
             wireEventType: wireEventType!,
           })
         : null;
-      let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
+      let plannedEvents: readonly MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
         const preparedText = chunkMatrixText(messageText, {
           cfg,
           accountId: opts.accountId,
-          preserveWhitespace: true,
         });
         const { chunks, convertedText, preparedBody, fitsInSingleEvent, tableMode } = preparedText;
         const singleEventBody = fitsInSingleEvent ? preparedBody : undefined;
@@ -159,10 +202,18 @@ export async function sendMessageMatrix(
         let textRelation = relation;
         let pendingExtraContent = opts.extraContent;
         const events: Omit<MatrixPreparedEvent, "transactionId">[] = [];
-        const prepareContent = (
+        const prepareContent = async (
           content: MatrixOutboundContent,
           receiptKind: MessageReceiptPartKind,
+          markdown: string,
         ) => {
+          await enrichMatrixFormattedContent({
+            client,
+            content,
+            markdown,
+            preparedBody: markdown === convertedText ? singleEventBody : undefined,
+            tableMode,
+          });
           events.push({
             content: withMatrixExtraContentFields(content, pendingExtraContent),
             receiptKind,
@@ -182,12 +233,31 @@ export async function sendMessageMatrix(
             contentType: media.contentType,
             filename: media.fileName,
           });
-          const durationMs = await resolveMediaDurationMs({
-            buffer: media.buffer,
-            contentType: media.contentType,
-            fileName: media.fileName,
-            kind: media.kind === "sticker" ? "unknown" : (media.kind ?? "unknown"),
-          });
+          let durationMs: number | undefined;
+          if (media.kind === "audio" || media.kind === "video") {
+            try {
+              const fileInfo: IFileInfo | string | undefined =
+                media.contentType || media.fileName
+                  ? {
+                      mimeType: media.contentType,
+                      size: media.buffer.byteLength,
+                      path: media.fileName,
+                    }
+                  : undefined;
+              const metadata = await parseBuffer(media.buffer, fileInfo, {
+                duration: true,
+                skipCovers: true,
+              });
+              const durationSeconds =
+                resolveAifcIma4DurationSeconds(media.buffer, metadata.format.sampleRate) ??
+                metadata.format.duration;
+              if (typeof durationSeconds === "number" && Number.isFinite(durationSeconds)) {
+                durationMs = Math.max(0, Math.round(durationSeconds * 1000));
+              }
+            } catch {
+              // Duration is optional; ignore parse failures.
+            }
+          }
           const baseMsgType = resolveMatrixMsgType(media.contentType);
           const useVoice = opts.audioAsVoice === true && isVoiceMessageCompatibleAudio(media);
           const msgtype = useVoice ? MsgType.Audio : baseMsgType;
@@ -202,27 +272,36 @@ export async function sendMessageMatrix(
               : undefined;
           const [firstChunk, ...rest] = chunks;
           const captionMarkdown = useVoice ? "" : (firstChunk ?? "");
-          const content = buildMediaContent({
+          const content: MatrixMediaContent = {
             msgtype,
             body: useVoice ? "Voice message" : captionMarkdown || media.fileName || "(file)",
-            url: uploaded.url,
-            file: uploaded.file,
             filename: media.fileName,
-            mimetype: media.contentType,
-            size: media.buffer.byteLength,
-            durationMs,
-            relation,
-            isVoice: useVoice,
-            imageInfo,
-          });
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: captionMarkdown,
-            preparedBody: captionMarkdown === convertedText ? singleEventBody : undefined,
-            tableMode,
-          });
-          prepareContent(content, receiptKind);
+            info: {
+              size: media.buffer.byteLength,
+              ...(media.contentType ? { mimetype: media.contentType } : {}),
+              ...imageInfo,
+              ...(typeof durationMs === "number" ? { duration: durationMs } : {}),
+            },
+          };
+          // Encrypted media should only include the "file" payload, not top-level "url".
+          if (!uploaded.file && uploaded.url) {
+            content.url = uploaded.url;
+          }
+          if (uploaded.file) {
+            content.file = uploaded.file;
+          }
+          if (useVoice) {
+            content["org.matrix.msc3245.voice"] = {};
+            if (typeof durationMs === "number") {
+              content["org.matrix.msc1767.audio"] = {
+                duration: durationMs,
+              };
+            }
+          }
+          if (relation) {
+            content["m.relates_to"] = relation;
+          }
+          await prepareContent(content, receiptKind, captionMarkdown);
           textChunks = useVoice ? chunks : rest;
           textRelation = useVoice || threadId ? relation : undefined;
         }
@@ -230,15 +309,7 @@ export async function sendMessageMatrix(
           if (!chunk.trim()) {
             continue;
           }
-          const content = buildTextContent(chunk, textRelation);
-          await enrichMatrixFormattedContent({
-            client,
-            content,
-            markdown: chunk,
-            preparedBody: chunk === convertedText ? singleEventBody : undefined,
-            tableMode,
-          });
-          prepareContent(content, "text");
+          await prepareContent(buildTextContent(chunk, textRelation), "text", chunk);
         }
         plannedEvents = durableIdentity
           ? createMatrixPlannedEvents({ identity: durableIdentity, events })
@@ -412,7 +483,6 @@ export async function sendSingleTextMessageMatrix(
   } = prepareMatrixSingleText(text.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId,
-    preserveWhitespace: true,
   });
   if (!trimmedText.trim()) {
     throw new Error("Matrix single-message send requires text");
@@ -500,7 +570,6 @@ export async function editMessageMatrix(
       const { convertedText, preparedBody, tableMode } = prepareMatrixSingleText(newText, {
         cfg,
         accountId: opts.accountId,
-        preserveWhitespace: true,
       });
       const newContent = withMatrixExtraContentFields(
         buildTextContent(convertedText, undefined, {

@@ -1,67 +1,63 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveChannelDraftStreamingChunking } from "./draft-streaming-chunking.js";
+import {
+  resolveChannelDraftStreamingChunking,
+  type ChannelDraftStreamingChunking,
+} from "./draft-streaming-chunking.js";
 
-describe("resolveChannelDraftStreamingChunking", () => {
-  it.each([
-    { channelId: "discord", cfg: {}, accountId: undefined, fallbackLimit: 2000 },
-    { channelId: "telegram", cfg: undefined, accountId: "default", fallbackLimit: 4096 },
-  ] as const)(
-    "returns draft stream defaults when $channelId chunking is unset",
-    ({ channelId, cfg, accountId, fallbackLimit }) => {
-      expect(
-        resolveChannelDraftStreamingChunking(cfg, channelId, accountId, { fallbackLimit }),
-      ).toEqual({
-        minChars: 200,
-        maxChars: 800,
-        breakPreference: "paragraph",
-      });
-    },
-  );
-
-  it("clamps requested draft chunk sizes to the resolved text limit", () => {
-    const cfg: OpenClawConfig = {
+const defaults: ChannelDraftStreamingChunking = {
+  minChars: 200,
+  maxChars: 800,
+  breakPreference: "paragraph",
+};
+const cases: Array<{
+  name: string;
+  channelId: "discord" | "telegram";
+  cfg?: OpenClawConfig;
+  accountId?: string;
+  fallbackLimit: number;
+  expected: ChannelDraftStreamingChunking;
+}> = [
+  {
+    name: "empty channel defaults",
+    channelId: "discord",
+    cfg: {},
+    fallbackLimit: 2000,
+    expected: defaults,
+  },
+  {
+    name: "absent config defaults",
+    channelId: "telegram",
+    accountId: "default",
+    fallbackLimit: 4096,
+    expected: defaults,
+  },
+  {
+    name: "channel sizes clamped to text limit",
+    channelId: "discord",
+    fallbackLimit: 2000,
+    cfg: {
       channels: {
         discord: {
           textChunkLimit: 500,
           streaming: {
-            preview: {
-              chunk: {
-                minChars: 900,
-                maxChars: 1200,
-                breakPreference: "sentence",
-              },
-            },
+            preview: { chunk: { minChars: 900, maxChars: 1200, breakPreference: "sentence" } },
           },
         },
       },
-    };
-
-    expect(
-      resolveChannelDraftStreamingChunking(cfg, "discord", undefined, {
-        fallbackLimit: 2000,
-      }),
-    ).toEqual({
-      minChars: 500,
-      maxChars: 500,
-      breakPreference: "sentence",
-    });
-  });
-
-  it("prefers account draft chunking over channel defaults", () => {
-    const cfg: OpenClawConfig = {
+    },
+    expected: { minChars: 500, maxChars: 500, breakPreference: "sentence" },
+  },
+  {
+    name: "account overrides channel",
+    channelId: "telegram",
+    accountId: "default",
+    fallbackLimit: 4096,
+    cfg: {
       channels: {
         telegram: {
           allowFrom: ["*"],
-          streaming: {
-            preview: {
-              chunk: {
-                minChars: 200,
-                maxChars: 800,
-                breakPreference: "paragraph",
-              },
-            },
-          },
+          streaming: { preview: { chunk: { ...defaults } } },
           accounts: {
             default: {
               allowFrom: ["*"],
@@ -78,16 +74,16 @@ describe("resolveChannelDraftStreamingChunking", () => {
           },
         },
       },
-    };
+    },
+    expected: { minChars: 10, maxChars: 20, breakPreference: "newline" },
+  },
+];
 
+it.each(cases)(
+  "resolves draft chunking: $name",
+  ({ cfg, channelId, accountId, fallbackLimit, expected }) => {
     expect(
-      resolveChannelDraftStreamingChunking(cfg, "telegram", "default", {
-        fallbackLimit: 4096,
-      }),
-    ).toEqual({
-      minChars: 10,
-      maxChars: 20,
-      breakPreference: "newline",
-    });
-  });
-});
+      resolveChannelDraftStreamingChunking(cfg, channelId, accountId, { fallbackLimit }),
+    ).toEqual(expected);
+  },
+);

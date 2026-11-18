@@ -1,10 +1,9 @@
 import { buildOfficialChannelDocsCatalog } from "../write-official-channel-catalog.mts";
 
-type MaturityInventoryMember = {
-  id: string;
-  label: string;
-  docsPath: string;
-};
+type MaturityInventoryMember = Pick<
+  ReturnType<typeof buildOfficialChannelDocsCatalog>["entries"][number],
+  "id" | "label" | "docsPath"
+>;
 
 export type MaturityInventoryProjection = {
   membersBySurface: ReadonlyMap<string, readonly MaturityInventoryMember[]>;

@@ -1,9 +1,5 @@
 import type { Command } from "commander";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
-import {
-  buildCommandGroupEntries,
-  type CommandGroupDescriptorSpec,
-} from "./command-group-descriptors.js";
 import type { ProgramContext } from "./context.js";
 import {
   getCoreCliCommandDescriptors,
@@ -16,7 +12,10 @@ import {
   type CommandGroupEntry,
 } from "./register-command-groups.js";
 
-const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>[] = [
+const coreEntrySpecs: readonly (readonly [
+  commandNames: readonly string[],
+  register: (program: Command, ctx: ProgramContext) => Promise<void> | void,
+])[] = [
   [
     ["setup", "crestodian"],
     async (program) => (await import("./register.setup.js")).registerSetupCommand(program),
@@ -30,7 +29,10 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
     async (program) => (await import("./register.configure.js")).registerConfigureCommand(program),
   ],
   [["config"], async (program) => (await import("../config-cli.js")).registerConfigCli(program)],
-  [["claws"], async (program) => (await import("../claws-cli.js")).registerClawsCli(program)],
+  [
+    ["templates"],
+    async (program) => (await import("../templates-cli.js")).registerTemplatesCli(program),
+  ],
   [
     ["backup"],
     async (program) => (await import("./register.backup.js")).registerBackupCommand(program),
@@ -87,8 +89,14 @@ const coreEntrySpecs: readonly CommandGroupDescriptorSpec<[ctx: ProgramContext]>
 ];
 
 function resolveCoreCommandGroups(ctx: ProgramContext): CommandGroupEntry[] {
-  // Descriptor metadata and import specs stay separate so help can stay cheap.
-  return buildCommandGroupEntries(getCoreCliCommandDescriptors(), coreEntrySpecs, ctx);
+  // Core registration order differs from descriptor order (audit precedes maintenance).
+  const descriptors = getCoreCliCommandDescriptors();
+  return coreEntrySpecs.flatMap(([names, register]) => {
+    const placeholders = descriptors.filter((descriptor) => names.includes(descriptor.name));
+    return placeholders.length === names.length
+      ? [{ names, placeholders, register: (program: Command) => register(program, ctx) }]
+      : [];
+  });
 }
 
 export function getCoreCliCompletionGroups(ctx: ProgramContext): CommandGroupEntry[] {

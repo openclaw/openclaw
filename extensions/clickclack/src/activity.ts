@@ -28,47 +28,10 @@ const STREAMING_COMMENTARY_ITEM_KINDS = new Set([
   "reasoning",
 ]);
 
-/** Provider-specific reasoning lanes normalized into one ClickClack label. */
 const THINKING_ITEM_KINDS = new Set(["analysis", "thinking", "reasoning"]);
 
 function normalizedItemKind(payload: ClickClackItemEventPayload): string {
   return payload.kind?.trim().toLowerCase() ?? "";
-}
-
-function commentaryBody(payload: ClickClackItemEventPayload): string {
-  const text =
-    payload.progressText?.trim() || payload.summary?.trim() || payload.meta?.trim() || "";
-  if (!text) {
-    return "";
-  }
-  const kind = normalizedItemKind(payload);
-  if (THINKING_ITEM_KINDS.has(kind)) {
-    return `**Thinking**\n\n${text}`;
-  }
-  return text;
-}
-
-function activityBody(payload: ClickClackItemEventPayload): string {
-  const line = formatChannelProgressDraftLineForEntry(undefined, {
-    ...payload,
-    event: "item",
-    itemKind: payload.kind,
-  })?.trim();
-  if (line) {
-    return line;
-  }
-  const head = payload.name?.trim() || payload.title?.trim();
-  const text = payload.progressText?.trim() || payload.summary?.trim();
-  if (head && text) {
-    return `**${head}**\n\n${text}`;
-  }
-  if (text) {
-    return text;
-  }
-  if (head) {
-    return head;
-  }
-  return payload.status?.trim() || payload.kind?.trim() || "";
 }
 
 type CommentarySegment = {
@@ -85,16 +48,7 @@ type ToolRow = {
   sentBody?: string;
 };
 
-export type ClickClackActivityPublisher = {
-  onItemEvent: (payload: ClickClackItemEventPayload) => false;
-  /**
-   * Records the resolved model/thinking for this turn (from
-   * `replyOptions.onModelSelected`); stamped onto subsequent activity rows.
-   */
-  setProvenance: (provenance: ClickClackMessageProvenance) => void;
-  /** Flushes pending commentary and awaits all outstanding POST/PATCH work. */
-  finalize: () => Promise<void>;
-};
+export type ClickClackActivityPublisher = ReturnType<typeof createClickClackActivityPublisher>;
 
 /**
  * Creates a per-turn activity publisher. Publishing is best-effort: transport
@@ -104,10 +58,8 @@ export function createClickClackActivityPublisher(params: {
   client: Pick<ClickClackClient, "createActivityMessage" | "updateMessageBody">;
   target: ClickClackActivityTarget;
   turnId: string;
-  flushMs?: number;
   onError?: (error: unknown) => void;
-}): ClickClackActivityPublisher {
-  const flushMs = params.flushMs ?? CLICKCLACK_COMMENTARY_FLUSH_MS;
+}) {
   const commentaryByItem = new Map<string, CommentarySegment>();
   const toolRows = new Map<string, ToolRow>();
   let provenance: ClickClackMessageProvenance | undefined;
@@ -136,11 +88,9 @@ export function createClickClackActivityPublisher(params: {
     if (!segment) {
       return Promise.resolve();
     }
-    if (segment.timer) {
-      clearTimeout(segment.timer);
-      segment.timer = undefined;
-    }
-    if (!segment.dirty || !segment.body.trim()) {
+    clearTimeout(segment.timer);
+    segment.timer = undefined;
+    if (!segment.dirty || !segment.body) {
       return Promise.resolve();
     }
     segment.dirty = false;
@@ -161,10 +111,15 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleCommentary = (payload: ClickClackItemEventPayload): void => {
-    const body = commentaryBody(payload);
+    const text =
+      payload.progressText?.trim() || payload.summary?.trim() || payload.meta?.trim() || "";
+    const body =
+      text && THINKING_ITEM_KINDS.has(normalizedItemKind(payload))
+        ? `**Thinking**\n\n${text}`
+        : text;
     const key = payload.itemId?.trim() || "turn";
     let segment = commentaryByItem.get(key);
-    if (!body.trim()) {
+    if (!body) {
       if (segment) {
         clearTimeout(segment.timer);
         commentaryByItem.delete(key);
@@ -190,7 +145,7 @@ export function createClickClackActivityPublisher(params: {
       segment.timer = setTimeout(() => {
         segment.timer = undefined;
         void flushCommentary(key);
-      }, flushMs);
+      }, CLICKCLACK_COMMENTARY_FLUSH_MS);
     }
   };
 
@@ -199,7 +154,19 @@ export function createClickClackActivityPublisher(params: {
   };
 
   const handleDiscreteItem = (payload: ClickClackItemEventPayload): void => {
-    const body = activityBody(payload);
+    let body = formatChannelProgressDraftLineForEntry(undefined, {
+      ...payload,
+      event: "item",
+      itemKind: payload.kind,
+    });
+    if (!body) {
+      const head = payload.name?.trim() || payload.title?.trim();
+      const text = payload.progressText?.trim() || payload.summary?.trim();
+      body =
+        head && text
+          ? `**${head}**\n\n${text}`
+          : text || head || payload.status?.trim() || payload.kind?.trim() || "";
+    }
     if (!body) {
       return;
     }
@@ -220,9 +187,10 @@ export function createClickClackActivityPublisher(params: {
       void enqueue(async () => {
         // Late read is intentional: if the body was upgraded before this POST
         // ran, post the richer body directly and skip the follow-up PATCH.
-        const posted = await postRow(kind, row.body);
+        const submittedBody = row.body;
+        const posted = await postRow(kind, submittedBody);
         row.messageId = posted.id;
-        row.sentBody = row.body;
+        row.sentBody = submittedBody;
       });
       return;
     }
@@ -232,14 +200,15 @@ export function createClickClackActivityPublisher(params: {
     existing.body = body;
     void enqueue(async () => {
       if (existing.messageId && existing.body !== existing.sentBody) {
-        await params.client.updateMessageBody(existing.messageId, existing.body);
-        existing.sentBody = existing.body;
+        const submittedBody = existing.body;
+        await params.client.updateMessageBody(existing.messageId, submittedBody);
+        existing.sentBody = submittedBody;
       }
     });
   };
 
   return {
-    onItemEvent: (payload) => {
+    onItemEvent: (payload: ClickClackItemEventPayload): false => {
       if (
         payload.hideFromChannelProgress ||
         payload.suppressChannelProgress ||
@@ -272,9 +241,11 @@ export function createClickClackActivityPublisher(params: {
       // Activity transport is serialized in the background; queueing is not visibility.
       return false;
     },
-    setProvenance: (next) => {
+    /** Model/thinking from onModelSelected is stamped onto subsequent activity rows. */
+    setProvenance: (next: ClickClackMessageProvenance) => {
       provenance = next;
     },
+    /** Flushes pending commentary and awaits all outstanding POST/PATCH work. */
     finalize: async () => {
       await flushAllCommentary();
       await chain;

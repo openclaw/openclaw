@@ -1,16 +1,14 @@
-import type { ModelCompatConfig, ModelMediaInputConfig } from "../../config/types.models.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelDataMediaInputConfig as ModelMediaInputConfig } from "../../../packages/llm-core/src/model-data.js";
+import type { ModelCompatConfig } from "../../config/zod-schema.model-compat.js";
 import { isVllmQwenThinkingCompat } from "../model-compat-catalog.js";
-import { normalizeProviderId } from "../model-selection.js";
 
 export function mergeModelMediaInput(
   base: ModelMediaInputConfig | undefined,
   override: ModelMediaInputConfig | undefined,
 ): ModelMediaInputConfig | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
+  if (!base || !override) {
+    return base || override;
   }
   return {
     ...base,

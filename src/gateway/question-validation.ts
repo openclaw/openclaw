@@ -2,11 +2,8 @@ import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import type { QuestionRequestParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   isQuestionThumbnail,
-  readQuestionResourceInput,
   readQuestionResourcePreview,
 } from "../../packages/gateway-protocol/src/question-media.js";
-import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
-import { SECRET_STORE_ALLOWED_HOSTS_MAX } from "../secrets/store/secret-store-validation-error.js";
 
 /** Shape rules after protocol validation; callers retain admission policy and error types. */
 export function questionShapeError(
@@ -34,10 +31,7 @@ export function questionShapeError(
     if (question.presentation !== "form" && question.options.length > 4) {
       return `question '${question.questionId}' supports at most four standard options`;
     }
-    if (
-      question.resource &&
-      (!readQuestionResourceInput(question.resource) || question.presentation !== "form")
-    ) {
+    if (question.resource && question.presentation !== "form") {
       return `question '${question.questionId}' requires form presentation for resource input`;
     }
     if (question.resource?.userOptions && !question.resource.viewId) {
@@ -54,14 +48,8 @@ export function questionShapeError(
       if (questions.length !== 1 || question.options.length !== 0 || question.multiSelect) {
         return `question '${question.questionId}': secret store requests require one free-text, single-select question`;
       }
-      if (!ENV_SECRET_REF_ID_RE.test(binding.name)) {
-        return `question '${question.questionId}': invalid secret store entry name`;
-      }
       if (binding.kind !== "secret") {
         return `question '${question.questionId}': masked requests require kind "secret"; set environment values in Settings or the CLI`;
-      }
-      if ((binding.allowedHosts?.length ?? 0) > SECRET_STORE_ALLOWED_HOSTS_MAX) {
-        return `question '${question.questionId}': secret store allowed hosts exceed the limit`;
       }
     }
     const optionLabels = new Set<string>();

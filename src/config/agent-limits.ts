@@ -18,9 +18,7 @@ function resolveDefaultAgentMaxConcurrent(): number {
 
 /** Default maximum concurrent child-agent runs per immediate spawning/controller session. */
 export const DEFAULT_SUBAGENT_MAX_CONCURRENT = 8;
-/** Default maximum direct children a single agent run may spawn. */
 export const DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT = 5;
-/** Default age before completed subagent state is archived. */
 export const DEFAULT_SUBAGENT_ARCHIVE_AFTER_MINUTES = 60;
 // Allow recursive delegation by default while bounding each spawn lineage.
 export const DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH = 5;

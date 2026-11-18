@@ -3,7 +3,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { fetchWithZaloSendContext } from "./send-context.js";
 import type { ZaloEventMessage } from "./types.js";
 
-type ZcaJsRuntime = Pick<typeof import("zca-js"), "Zalo">;
+type ZcaJsRuntime = { Zalo: ZaloCtor };
 
 const require = createRequire(import.meta.url);
 
@@ -218,10 +218,7 @@ type ZaloCtor = new (options?: {
   ): Promise<API>;
 };
 
-export async function createZalo(
-  options?: ConstructorParameters<ZaloCtor>[0],
-): Promise<InstanceType<ZaloCtor>> {
-  const zcaJs = await loadZcaJsRuntime();
-  const Zalo = zcaJs.Zalo as ZaloCtor;
-  return new Zalo({ ...options, polyfill: fetchWithZaloSendContext });
+export async function createZalo(): Promise<InstanceType<ZaloCtor>> {
+  const { Zalo } = await loadZcaJsRuntime();
+  return new Zalo({ logging: false, selfListen: false, polyfill: fetchWithZaloSendContext });
 }

@@ -1,11 +1,13 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { parse as parseSemver, type SemVer } from "semver";
-import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
-import { compareValidSemver, normalizeLegacyDotBetaVersion } from "./semver.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
+import { normalizeLegacyDotBetaVersion } from "./semver.js";
 import type { UpdateInstallKind } from "./update-install-kind.js";
 
+const UPDATE_CHANNELS = ["stable", "extended-stable", "beta", "dev"] as const;
+
 /** Release stream used to choose registry tags and update policy defaults. */
-export type UpdateChannel = "stable" | "extended-stable" | "beta" | "dev";
+export type UpdateChannel = (typeof UPDATE_CHANNELS)[number];
 /** Evidence source that decided the effective update channel. */
 type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "installed-version" | "default";
 
@@ -13,8 +15,6 @@ type UpdateChannelSource = "config" | "git-tag" | "git-branch" | "installed-vers
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 /** Default channel for source installs where branch metadata is unavailable. */
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
-/** Machine-readable validation failure when a tag override conflicts with the exact extended-stable contract. */
-export const EXTENDED_STABLE_TAG_UNSUPPORTED_REASON = "extended-stable-tag-unsupported";
 /**
  * Env var carrying the *effective* update channel into `openclaw update finalize`
  * (e.g. the git/dev channel a source update actually ran on) without making it a
@@ -26,26 +26,10 @@ export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 
-/** Orders the configured Dev upstream before any detached-checkout fallbacks. */
-export function resolveDevUpstreamRefs(
-  detached: boolean,
-  fallbacks: readonly string[] = [],
-): string[] {
-  return detached ? [`${DEV_BRANCH}@{upstream}`, ...fallbacks] : ["@{upstream}"];
-}
-
 /** Normalizes config or CLI channel input to a supported update channel. */
 export function normalizeUpdateChannel(value?: string | null): UpdateChannel | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    normalized === "stable" ||
-    normalized === "extended-stable" ||
-    normalized === "beta" ||
-    normalized === "dev"
-  ) {
-    return normalized;
-  }
-  return null;
+  return UPDATE_CHANNELS.find((channel) => channel === normalized) ?? null;
 }
 
 /** Maps an OpenClaw update channel to the npm dist-tag used for package lookups. */
@@ -66,12 +50,7 @@ export function selectNpmChannelVersion<T extends { version: string | null }>(
   if (!beta.version) {
     return latest;
   }
-  const comparison =
-    compareOpenClawReleaseVersions(beta.version, latest.version) ??
-    compareValidSemver(
-      normalizeLegacyDotBetaVersion(beta.version),
-      normalizeLegacyDotBetaVersion(latest.version),
-    );
+  const comparison = compareSemverStrings(beta.version, latest.version);
   return comparison !== null && comparison < 0 ? latest : beta;
 }
 
@@ -143,6 +122,10 @@ export function resolveEffectiveUpdateChannel(params: {
   // A one-off package tag does not replace the operator's saved update policy.
   if (params.configChannel) {
     return { channel: params.configChannel, source: "config" };
+  }
+
+  if (params.installKind === "immutable") {
+    return { channel: DEFAULT_GIT_CHANNEL, source: "default" };
   }
 
   if (params.currentVersion && isBetaTag(params.currentVersion)) {

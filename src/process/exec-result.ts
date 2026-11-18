@@ -48,6 +48,14 @@ export function hasCommandProcessCleanupError(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(isCanonicalCommandProcessCleanupError);
 }
 
+/** Best-effort command reads must still propagate uncertain cleanup. */
+export function ignoreNonCleanupCommandError(error: unknown): null {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  return null;
+}
+
 export type SpawnResult = {
   pid?: number;
   stdout: string;
@@ -69,9 +77,28 @@ export type SpawnResult = {
   outputErrorStream?: "stdout" | "stderr";
 };
 
+type CommandProcessCleanup = Promise<NonNullable<SpawnResult["cleanup"]>>;
+const commandProcessCleanup = Symbol.for("openclaw.command-process-cleanup");
+
+/** Carry the existing cleanup owner without putting a Promise in public result payloads. */
+export function recordCommandProcessCleanup<Result extends object>(
+  result: Result,
+  cleanup: CommandProcessCleanup | undefined,
+): Result {
+  return cleanup
+    ? Object.defineProperty(result, commandProcessCleanup, { value: cleanup })
+    : result;
+}
+
+export function readCommandProcessCleanup(result: object): CommandProcessCleanup | undefined {
+  const descriptor: TypedPropertyDescriptor<CommandProcessCleanup> | undefined =
+    Object.getOwnPropertyDescriptor(result, commandProcessCleanup);
+  return descriptor?.value;
+}
+
 export type CommandProcessOutcome = Pick<
   SpawnResult,
-  "pid" | "code" | "cleanup" | "termination"
+  "pid" | "code" | "cleanup" | "termination" | "killIssuedByAbort" | "outputLimitExceeded"
 > & {
   /** False only while a managed beforeInput callback has withheld every input byte. */
   inputReleased?: boolean;
@@ -93,34 +120,12 @@ export function recordCommandProcessFailure(error: unknown, outcome: CommandProc
 export function readCommandProcessFailure(error: unknown): CommandProcessOutcome | undefined {
   for (const cause of collectNestedErrorCandidates(error)) {
     try {
-      const outcome: unknown = isRecord(cause)
-        ? Object.getOwnPropertyDescriptor(cause, commandFailureOutcome)?.value
+      // Only recordCommandProcessFailure publishes this process-local lifecycle fact.
+      const descriptor: TypedPropertyDescriptor<CommandProcessOutcome> | undefined = isRecord(cause)
+        ? Object.getOwnPropertyDescriptor(cause, commandFailureOutcome)
         : undefined;
-      if (
-        isRecord(outcome) &&
-        (outcome.pid === undefined ||
-          (typeof outcome.pid === "number" &&
-            Number.isSafeInteger(outcome.pid) &&
-            outcome.pid > 0)) &&
-        (outcome.code === null || typeof outcome.code === "number") &&
-        (outcome.inputReleased === undefined || typeof outcome.inputReleased === "boolean") &&
-        (outcome.cleanup === undefined ||
-          outcome.cleanup === "normal" ||
-          outcome.cleanup === "cooperative" ||
-          outcome.cleanup === "forced" ||
-          outcome.cleanup === "uncertain") &&
-        (outcome.termination === "exit" ||
-          outcome.termination === "signal" ||
-          outcome.termination === "timeout" ||
-          outcome.termination === "no-output-timeout")
-      ) {
-        return {
-          pid: outcome.pid,
-          code: outcome.code,
-          cleanup: outcome.cleanup,
-          termination: outcome.termination,
-          inputReleased: outcome.inputReleased,
-        };
+      if (descriptor?.value) {
+        return descriptor.value;
       }
     } catch {
       return undefined;
@@ -130,6 +135,25 @@ export function readCommandProcessFailure(error: unknown): CommandProcessOutcome
 }
 
 export const TIMEOUT_EXIT_CODE = 124;
+
+export function createInterruptedCommandOutcome(params: {
+  reason: Exclude<SpawnResult["termination"], "exit"> | "output-limit";
+  pid: number | undefined;
+  killed: boolean;
+}) {
+  const { reason, pid, killed } = params;
+  return {
+    pid,
+    code: reason === "timeout" || reason === "no-output-timeout" ? TIMEOUT_EXIT_CODE : null,
+    signal: null,
+    killed,
+    killIssuedByAbort: reason === "signal" || reason === "output-limit" || undefined,
+    cleanup: "uncertain" as const,
+    termination: reason === "output-limit" ? ("signal" as const) : reason,
+    noOutputTimedOut: reason === "no-output-timeout",
+    outputLimitExceeded: reason === "output-limit" || undefined,
+  };
+}
 
 export function createSanitizedCommandError(result: {
   code?: unknown;
@@ -161,15 +185,9 @@ export function createSanitizedCommandError(result: {
   });
 }
 
-type CommandFailure = {
+type CommandFailure = Omit<Parameters<typeof createSanitizedCommandError>[0], "code"> & {
   failed: boolean;
-  exitCode?: unknown;
-  signal?: unknown;
   cause?: unknown;
-  timedOut?: boolean;
-  isCanceled?: boolean;
-  isMaxBuffer?: boolean;
-  isTerminated?: boolean;
 };
 
 export function isPlainCommandExitFailure(result: CommandFailure): boolean {

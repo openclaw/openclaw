@@ -200,7 +200,7 @@ struct NativeConversationBridgeTests {
     {
         let url = server.url("/control/")
         return ControlUIDocumentHost(
-            url: url, auth: .init(gatewayUrl: nil, token: nil, password: nil),
+            url: url, auth: .unauthenticated,
             websiteDataStore: .nonPersistent())
         { controller in
             controller.addScriptMessageHandler(

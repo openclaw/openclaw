@@ -1,12 +1,5 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getAiTransportHost } from "../host.js";
-
-type ReplayMessage = {
-  role?: unknown;
-  content?: unknown;
-  toolCallId?: unknown;
-  operatorMessage?: unknown;
-};
 
 export const ANTHROPIC_OMITTED_REASONING_TEXT = "[assistant reasoning omitted]";
 
@@ -60,10 +53,6 @@ export function logAnthropicThinkingDrops(transformations: unknown[] | undefined
   );
 }
 
-function asReplayMessage(value: unknown): ReplayMessage | undefined {
-  return value && typeof value === "object" ? (value as ReplayMessage) : undefined;
-}
-
 /**
  * Anthropic tool results continue the preceding assistant turn. Preserve that
  * turn's signed thinking even when the next request disables new thinking.
@@ -73,7 +62,7 @@ export function findActiveAnthropicToolTurnAssistantIndex(messages: readonly unk
   let index = messages.length - 1;
 
   while (index >= 0) {
-    const message = asReplayMessage(messages[index]);
+    const message = asOptionalObjectRecord(messages[index]);
     if (message?.role === "user" && isRecord(message.operatorMessage)) {
       index -= 1;
       continue;
@@ -91,17 +80,17 @@ export function findActiveAnthropicToolTurnAssistantIndex(messages: readonly unk
     return -1;
   }
 
-  const assistant = asReplayMessage(messages[index]);
+  const assistant = asOptionalObjectRecord(messages[index]);
   if (assistant?.role !== "assistant" || !Array.isArray(assistant.content)) {
     return -1;
   }
 
   const toolCallIds = new Set<string>();
   for (const block of assistant.content) {
-    if (!block || typeof block !== "object") {
+    const record = asOptionalObjectRecord(block);
+    if (!record) {
       continue;
     }
-    const record = block as { type?: unknown; id?: unknown };
     if (
       (record.type === "toolCall" ||
         record.type === "tool_use" ||

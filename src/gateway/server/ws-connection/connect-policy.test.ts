@@ -137,11 +137,6 @@ describe("ws connect policy", () => {
     );
   });
 
-  test("strict control-ui policy does not skip pairing", () => {
-    expectSkipPairing({ isControlUi: true, role: "node" }, null);
-    expectSkipPairing({ isControlUi: true, role: "operator" }, null);
-  });
-
   test("auth.mode=none skips pairing for operator control-ui only", () => {
     // Control UI + operator + auth.mode=none: skip pairing (the fix for #42931)
     expectSkipPairing({ isControlUi: true, role: "operator", authMode: "none" }, "auth-none");

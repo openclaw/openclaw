@@ -54,6 +54,7 @@ export function createPluginReloadChannels({
       await attempt(errors, async () => {
         // Whole-channel targets include preparation that had not reserved an account at drain.
         const result = await channelManager.startChannel(plugin.id, undefined, {
+          reason: "plugin-reload",
           manual: false,
           preserveManualStop: true,
           skipUnavailableAccounts: true,

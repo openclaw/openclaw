@@ -1,11 +1,5 @@
 import { readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type GoogleOauthApiKeyCredential = {
-  type?: string;
-  access?: string;
-  projectId?: string;
-};
-
 export function parseGoogleOauthApiKey(apiKey: string): {
   token?: string;
   projectId?: string;
@@ -21,7 +15,11 @@ export function parseGoogleOauthApiKey(apiKey: string): {
   }
 }
 
-export function formatGoogleOauthApiKey(cred: GoogleOauthApiKeyCredential): string {
+export function formatGoogleOauthApiKey(cred: {
+  type?: string;
+  access?: string;
+  projectId?: string;
+}): string {
   if (cred.type !== "oauth" || typeof cred.access !== "string" || !cred.access.trim()) {
     return "";
   }

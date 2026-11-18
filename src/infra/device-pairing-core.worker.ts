@@ -1,10 +1,67 @@
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import * as approval from "./device-pairing-approval.kernel.js";
+import {
+  cancelBrowserPairRequestInWorker,
+  collectBrowserPairRequestInWorker,
+  decideBrowserPairRequestInWorker,
+  inspectBrowserPairRequestInWorker,
+  startBrowserPairRequestInWorker,
+} from "./device-pairing-browser-code.worker.js";
 import * as core from "./device-pairing-core.kernel.js";
 import { devicePairingMutation } from "./device-pairing-dispatch.worker.js";
+import {
+  registerDevicePairingJoinCodeInWorker,
+  redeemDevicePairingJoinCodeInWorker,
+} from "./device-pairing-join-code.worker.js";
+import {
+  approveOpenClawIdNodeInWorker,
+  consumeOpenClawIdNodePairingInWorker,
+  removeOpenClawIdNodePairingsInWorker,
+} from "./device-pairing-openclaw-id.worker.js";
 import * as tokens from "./device-pairing-tokens.kernel.js";
 
 export const devicePairingOperations = {
+  "devicePairing.approveOpenClawIdNode": devicePairingMutation(
+    (input: Parameters<typeof approveOpenClawIdNodeInWorker>[1], { database }) =>
+      approveOpenClawIdNodeInWorker(database.db, input),
+  ),
+  "devicePairing.removeOpenClawIdNodes": devicePairingMutation(
+    removeOpenClawIdNodePairingsInWorker,
+  ),
+  "devicePairing.registerJoinCode": devicePairingMutation(
+    (input: Parameters<typeof registerDevicePairingJoinCodeInWorker>[1], { database }) =>
+      registerDevicePairingJoinCodeInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.redeemJoinCode": devicePairingMutation(
+    (input: Parameters<typeof redeemDevicePairingJoinCodeInWorker>[1], { database }) =>
+      redeemDevicePairingJoinCodeInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.startBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof startBrowserPairRequestInWorker>[1], { database }) =>
+      startBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.cancelBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof cancelBrowserPairRequestInWorker>[1], { database }) =>
+      cancelBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.collectBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof collectBrowserPairRequestInWorker>[1], { database }) =>
+      collectBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.inspectBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof inspectBrowserPairRequestInWorker>[1], { database }) =>
+      inspectBrowserPairRequestInWorker(database.db, input),
+    { publishPairing: false },
+  ),
+  "devicePairing.decideBrowserRequest": devicePairingMutation(
+    (input: Parameters<typeof decideBrowserPairRequestInWorker>[1], { database }) =>
+      decideBrowserPairRequestInWorker(database.db, input),
+  ),
   "devicePairing.request": devicePairingMutation(
     (input: { request: Parameters<typeof core.requestDevicePairingInWorker>[0]; nowMs: number }) =>
       core.requestDevicePairingInWorker(input.request, input.nowMs),
@@ -17,19 +74,17 @@ export const devicePairingOperations = {
     core.removePairedDeviceInWorker(input.deviceId, input.nowMs),
   ),
   "devicePairing.pruneSilent": devicePairingMutation(
-    (
-      input: Omit<Parameters<typeof core.pruneSupersededSilentPairedDevicesInWorker>[0], "baseDir">,
-    ) => core.pruneSupersededSilentPairedDevicesInWorker(input),
+    core.pruneSupersededSilentPairedDevicesInWorker,
   ),
-  "devicePairing.removeRole": devicePairingMutation(
-    (input: Omit<Parameters<typeof core.removePairedDeviceRoleInWorker>[0], "baseDir">) =>
-      core.removePairedDeviceRoleInWorker(input),
-  ),
+  "devicePairing.removeRole": devicePairingMutation(core.removePairedDeviceRoleInWorker),
   "devicePairing.updateMetadata": devicePairingMutation(
     (input: {
       deviceId: string;
       patch: Parameters<typeof core.updatePairedDeviceMetadataInWorker>[1];
-    }) => core.updatePairedDeviceMetadataInWorker(input.deviceId, input.patch),
+      accessIdentity?: Parameters<typeof core.updatePairedDeviceMetadataInWorker>[2];
+    }) =>
+      core.updatePairedDeviceMetadataInWorker(input.deviceId, input.patch, input.accessIdentity),
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.updatePresence": devicePairingMutation(
     (input: {
@@ -42,6 +97,7 @@ export const devicePairingOperations = {
         input.patch,
         input.expectedPairingGeneration,
       ),
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.approve": devicePairingMutation(
     (input: {
@@ -77,20 +133,23 @@ export const devicePairingOperations = {
       return result;
     },
   ),
-  "devicePairing.verifyToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.verifyDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.verifyDeviceTokenInWorker(input),
-  ),
+  "devicePairing.verifyToken": devicePairingMutation(tokens.verifyDeviceTokenInWorker, {
+    pairedDeviceId: (input) => input.deviceId,
+  }),
   "devicePairing.ensureToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.ensureDeviceTokenInWorker(input),
+    (input: Parameters<typeof tokens.ensureDeviceTokenInWorker>[0], { database }) => {
+      const token = tokens.ensureDeviceTokenInWorker(input);
+      if (token?.role === "node" && token.approval) {
+        // Same transaction as issuance: explicit removal must not restore this listing's eligibility.
+        consumeOpenClawIdNodePairingInWorker(database.db, token.approval);
+      }
+      return token;
+    },
+    { pairedDeviceId: (input) => input.deviceId },
   ),
   "devicePairing.rotateToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.rotateDeviceTokenInWorker(input),
+    (input: Parameters<typeof tokens.rotateDeviceTokenInWorker>[0], { recordRetiredNodeToken }) =>
+      tokens.rotateDeviceTokenInWorker(input, recordRetiredNodeToken),
   ),
-  "devicePairing.revokeToken": devicePairingMutation(
-    (input: Omit<Parameters<typeof tokens.revokeDeviceTokenInWorker>[0], "baseDir">) =>
-      tokens.revokeDeviceTokenInWorker(input),
-  ),
+  "devicePairing.revokeToken": devicePairingMutation(tokens.revokeDeviceTokenInWorker),
 } satisfies WorkerOperationHandlers;

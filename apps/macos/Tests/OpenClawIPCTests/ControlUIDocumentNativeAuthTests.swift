@@ -15,18 +15,6 @@ private final class ConversationAuthDocumentReady: NSObject, WKScriptMessageHand
     }
 }
 
-/// Keep the retiring page alive to exercise the interval before WebKit's blank commit.
-@MainActor
-private final class ConversationAuthRetirementNavigation: NSObject, WKNavigationDelegate {
-    func webView(
-        _: WKWebView,
-        decidePolicyFor navigationAction: WKNavigationAction,
-        decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
-    {
-        decisionHandler(navigationAction.request.url?.absoluteString == "about:blank" ? .cancel : .allow)
-    }
-}
-
 /// Runs only in the disposable macOS runner; owns its HTTP, native socket, identity and WebKit state.
 @Suite(.serialized)
 @MainActor
@@ -134,7 +122,7 @@ struct ControlUIDocumentNativeAuthTests {
                 pendingReply = pending
                 try await AsyncTimeout.withTimeout(
                     seconds: 5, onTimeout: { URLError(.timedOut) }, operation: { await requested.wait() })
-                let retirement = ConversationAuthRetirementNavigation()
+                let retirement = DashboardRetirementNavigation()
                 defer { withExtendedLifetime(retirement) {} }
                 document.webView.navigationDelegate = retirement
                 bridge.close()
@@ -237,7 +225,6 @@ struct ControlUIDocumentNativeAuthTests {
                 }
                 for document in documents {
                     #expect(!document.auth.hasAcceptedNativeBinding)
-                    #expect(document.auth.legacyCredentials.isEmpty)
                     #expect(document.nativeGatewayAuthProvider != nil)
                 }
                 #expect(controller.window === window)
@@ -264,7 +251,10 @@ struct ControlUIDocumentNativeAuthTests {
         }
     }
 
-    @Test func `saved profile reconnect refreshes retained document before old socket retirement`() async throws {
+    @Test(arguments: [false, true])
+    func `saved profile reconnect preserves the document across socket retirement`(
+        _ retireBeforeReconnect: Bool) async throws
+    {
         _ = AppKitTestSupport.application
         let server = try await DashboardHTTPFixture.start()
         defer { server.stop() }
@@ -306,8 +296,13 @@ struct ControlUIDocumentNativeAuthTests {
                             scopes: attempt == 0 ? ["operator.read"] : ["operator.read", "operator.write"]))
                     })
             })
+            let endpointGate = GatewayConnectionSuspensionGate()
+            let suspendEndpoint = LockIsolated(false)
             let connection = GatewayConnection(
-                endpointProvider: { endpoint }, currentEndpointRevision: { 1 },
+                endpointProvider: {
+                    if suspendEndpoint.value { await endpointGate.suspend() }
+                    return endpoint
+                }, currentEndpointRevision: { 1 },
                 supportsSharedEndpointRecovery: false, activationBindingKeyProvider: { nil },
                 sessionBox: WebSocketSessionBox(session: session))
             let originalLease = LockIsolated<GatewayConnection.ServerLease?>(nil)
@@ -374,14 +369,23 @@ struct ControlUIDocumentNativeAuthTests {
                 let window = controller.window
                 let webView = controller.webView
                 _ = try await webView.evaluateJavaScript(
-                    "history.pushState({}, '', '/control/settings?panel=privacy'); window.unsavedDraft='keep me';")
+                    "history.pushState({}, '', '/control/settings?panel=privacy'); window.unsavedDraft='keep me'; sessionStorage.setItem('queued-input', 'keep my queued input');")
                 let route = webView.url
                 let socket = try #require(session.latestTask())
+                suspendEndpoint.setValue(retireBeforeReconnect)
                 socket.emitReceiveFailure()
                 try await AsyncTimeout.withTimeout(
                     seconds: 5, onTimeout: { URLError(.timedOut) },
                     operation: { await retirementObserved.wait() })
                 #expect(!oldCredentials.isCurrent())
+                if retireBeforeReconnect {
+                    await endpointGate.waitUntilStarted()
+                    releaseRetirement.open()
+                    await oldObservation?.value
+                    #expect(!controller.documentHost.hasCurrentNativeStartupCredentials)
+                    suspendEndpoint.setValue(false)
+                    await endpointGate.open()
+                }
                 // This gate opens only when profile reconciliation installs the
                 // new projection on its document, not merely when hello arrives.
                 try await AsyncTimeout.withTimeout(
@@ -395,8 +399,15 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(retained.webView === webView)
                 #expect(webView.url == route)
                 #expect(try await webView.evaluateJavaScript("window.unsavedDraft") as? String == "keep me")
+                #expect(try await webView.evaluateJavaScript("sessionStorage.getItem('queued-input')")
+                    as? String == "keep my queued input")
                 #expect(retained.documentHost.hasCurrentNativeStartupCredentials)
-                #expect(retained.auth.legacyCredentials == ["token": "accepted-profile-token"])
+                let credentials: [String: String]? = if case let .nativeDevice(_, _, _, credentials) = retained.auth {
+                    credentials
+                } else {
+                    nil
+                }
+                #expect(credentials == ["token": "accepted-profile-token"])
                 #expect(helloIdentities.value == [identity.deviceId, identity.deviceId])
                 try scopeNativeDashboardIdentity(retained.documentHost, stateDirectory: stateDir)
                 let providerRevision = retained.documentHost.nativeGatewayAuthRevision
@@ -423,6 +434,8 @@ struct ControlUIDocumentNativeAuthTests {
                 #expect(startup["nativeConnectAuth"] as? Bool == true)
                 outcome = .success(())
             } catch { outcome = .failure(error) }
+            suspendEndpoint.setValue(false)
+            await endpointGate.open()
             releaseRetirement.open()
             manager.close()
             await oldObservation?.value

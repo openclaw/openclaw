@@ -174,7 +174,8 @@ public final class OpenClawVoiceNoteRecorder {
             return false
         }
 
-        let fileURL = self.makeTemporaryFileURL()
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
         self.onRecordingActiveChanged?(true)
         do {
             try self.capture.start(url: fileURL)
@@ -277,11 +278,6 @@ public final class OpenClawVoiceNoteRecorder {
         try? FileManager.default.removeItem(at: fileURL)
         self.fail(message: String(localized: "Recording was interrupted. Try again."))
     }
-
-    private func makeTemporaryFileURL() -> URL {
-        FileManager.default.temporaryDirectory
-            .appendingPathComponent("voice-note-\(UUID().uuidString).m4a")
-    }
 }
 
 /// AVAudioRecorder-backed AAC voice-note capture.
@@ -312,33 +308,11 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
 
     public func requestPermission() async -> Bool {
         #if os(iOS)
-        switch AVAudioApplication.shared.recordPermission {
-        case .granted:
-            return true
-        case .denied:
-            return false
-        case .undetermined:
-            return await withCheckedContinuation { continuation in
-                AVAudioApplication.requestRecordPermission { granted in
-                    continuation.resume(returning: granted)
-                }
-            }
-        @unknown default:
-            return false
-        }
+        await AVAudioApplication.requestRecordPermission()
         #elseif os(macOS)
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            return true
-        case .denied, .restricted:
-            return false
-        case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
-        @unknown default:
-            return false
-        }
+        await AVCaptureDevice.requestAccess(for: .audio)
         #else
-        return false
+        false
         #endif
     }
 

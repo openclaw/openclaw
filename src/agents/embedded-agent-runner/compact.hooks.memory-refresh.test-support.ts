@@ -2,65 +2,18 @@ import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getMemoryProviderMock,
-  getMemorySearchManagerMock,
   getMemoryProviderRuntimeMock,
 } from "./compact.hooks.memory.test-support.js";
 import type { CompactHooksQueuedCompaction } from "./compact.hooks.metadata.test-support.js";
 
 type CompactionConfig = (mode: "await" | "off" | "async") => OpenClawConfig;
 
-type DirectRefreshTestParams = {
+export function registerDirectProviderRefreshTests(params: {
   compactTesting: () => typeof import("./compact.hooks.owner-test-support.js");
   compactionConfig: CompactionConfig;
   sessionKey: string;
   sessionFile: () => string;
-};
-
-/** Registers direct post-compaction provider refresh coverage. */
-export function registerDirectProviderRefreshTests(params: DirectRefreshTestParams): void {
-  it("refreshes a native provider with the compacted session authority", async () => {
-    const refresh = vi.fn().mockResolvedValue(undefined);
-    const close = vi.fn().mockResolvedValue(undefined);
-    getMemoryProviderRuntimeMock.mockReturnValue({ open: vi.fn() });
-    getMemoryProviderMock.mockResolvedValue({
-      providerId: "records",
-      provider: { refresh, close },
-    });
-    const audience = {
-      kind: "conversation" as const,
-      agentId: "main",
-      sessionKey: params.sessionKey,
-      sessionId: "session-1",
-    };
-
-    await params.compactTesting().runPostCompactionSideEffects({
-      config: params.compactionConfig("await"),
-      sessionKey: params.sessionKey,
-      sessionId: "session-1",
-      memoryAudience: audience,
-      sandboxed: true,
-      sessionFile: params.sessionFile(),
-    });
-
-    expect(getMemoryProviderMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "main",
-        context: expect.objectContaining({
-          authority: {
-            kind: "session",
-            sessionKey: params.sessionKey,
-            sessionId: "session-1",
-            sandboxed: true,
-            audience,
-          },
-        }),
-      }),
-    );
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(close).toHaveBeenCalledOnce();
-    expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
-  });
-
+}): void {
   it("awaits an asynchronous caller authority check before native refresh", async () => {
     const refresh = vi.fn().mockResolvedValue(undefined);
     const close = vi.fn().mockResolvedValue(undefined);
@@ -70,18 +23,16 @@ export function registerDirectProviderRefreshTests(params: DirectRefreshTestPara
       writerReplaced = true;
       return { providerId: "records", provider: { refresh, close } };
     });
-    const assertActive = vi.fn(async () => {
-      if (writerReplaced) {
-        throw new Error("compaction writer replaced");
-      }
-    });
-
     await expect(
       params.compactTesting().runPostCompactionSideEffects({
         config: params.compactionConfig("await"),
         sessionKey: params.sessionKey,
         sessionFile: params.sessionFile(),
-        assertActive,
+        assertActive: async () => {
+          if (writerReplaced) {
+            throw new Error("compaction writer replaced");
+          }
+        },
       }),
     ).rejects.toThrow("compaction writer replaced");
 
@@ -92,57 +43,62 @@ export function registerDirectProviderRefreshTests(params: DirectRefreshTestPara
   });
 }
 
-type QueuedRefreshTestParams = {
+export function registerQueuedProviderRefreshTest(params: {
   compact: () => CompactHooksQueuedCompaction;
   wrappedArgs: (overrides?: Record<string, unknown>) => Parameters<CompactHooksQueuedCompaction>[0];
   compactionConfig: CompactionConfig;
   sessionKey: string;
   sessionId: () => string;
-};
-
-/** Registers queued compaction provider authority coverage. */
-export function registerQueuedProviderRefreshTest(params: QueuedRefreshTestParams): void {
+}): void {
   it("preserves an explicit sandbox in queued provider refresh authority", async () => {
-    const refresh = vi.fn().mockResolvedValue(undefined);
-    const close = vi.fn().mockResolvedValue(undefined);
+    // The harness resets modules before loading compaction; bind in that same module lifetime.
+    const { bindMemoryProvider } = await import("../../plugins/memory-provider-adapter.js");
     const audience = {
       kind: "conversation" as const,
       agentId: "main",
       sessionKey: params.sessionKey,
       sessionId: params.sessionId(),
     };
+    const provider = {
+      capabilities: {
+        sources: ["sessions"],
+        candidates: [],
+        pagination: false,
+        projectFilter: false,
+      },
+      search: async () => ({ hits: [] }),
+      get: async () => ({ status: "not_found" }),
+      health: async () => ({ status: "ready" }),
+      refresh: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+    } satisfies Parameters<typeof bindMemoryProvider>[0];
     getMemoryProviderRuntimeMock.mockReturnValue({ open: vi.fn() });
     getMemoryProviderMock.mockResolvedValue({
       providerId: "records",
-      provider: { refresh, close },
+      provider: bindMemoryProvider(provider, "records", {
+        authority: { kind: "host", operation: "test-refresh" },
+        assertCurrent: () => {},
+      }),
     });
 
-    try {
-      const result = await params.compact()(
-        params.wrappedArgs({
-          agentId: "main",
-          config: params.compactionConfig("await"),
-          memoryAudience: audience,
-          sandbox: { enabled: true },
-        }),
-      );
-      expect(result.ok).toBe(true);
-      expect(getMemoryProviderMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          context: expect.objectContaining({
-            authority: expect.objectContaining({
-              kind: "session",
-              sandboxed: true,
-              audience,
-            }),
-          }),
-        }),
-      );
-      expect(refresh).toHaveBeenCalledOnce();
-      expect(close).toHaveBeenCalledOnce();
-    } finally {
-      getMemoryProviderRuntimeMock.mockReturnValue(undefined);
-      getMemoryProviderMock.mockReset();
-    }
+    const result = await params.compact()(
+      params.wrappedArgs({
+        agentId: "main",
+        config: params.compactionConfig("await"),
+        memoryAudience: audience,
+        sandbox: { enabled: true },
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(getMemoryProviderMock).toHaveBeenCalledOnce();
+    expect(getMemoryProviderMock.mock.calls[0]?.[0]?.context.authority).toMatchObject({
+      kind: "session",
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId(),
+      sandboxed: true,
+      audience,
+    });
+    expect(provider.refresh).toHaveBeenCalledOnce();
+    expect(provider.close).toHaveBeenCalledOnce();
   });
 }

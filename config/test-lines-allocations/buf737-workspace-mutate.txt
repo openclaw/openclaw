@@ -1,0 +1,2 @@
+# Real writer payload bound, durable fingerprint equivalence, and mismatched checkpoint refusal.
+22

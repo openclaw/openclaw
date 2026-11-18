@@ -3,7 +3,9 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import {
   appendTranscriptMessage,
@@ -11,12 +13,13 @@ import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { READ_SCOPE, SESSION_WRITE_SCOPE } from "../operator-scopes.js";
@@ -54,14 +57,9 @@ function createFixture(
       providers: {
         example: {
           baseUrl: "https://example.invalid",
-          models: catalog.map<ModelDefinitionConfig>(({ id, name }) => ({
-            id,
-            name,
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            maxTokens: 4096,
-          })),
+          models: catalog.map(({ id, name }) =>
+            modelDefinition(id, { name, reasoning: false, maxTokens: 4096 }),
+          ),
         },
       },
     },
@@ -156,6 +154,7 @@ describe("operator model discovery at registered reads", () => {
       };
       f.role.modelPolicy = expected.policy;
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       const scope = { agentId: "main", sessionKey: "agent:main:model-default" };
       await upsertSessionEntryCore(scope, {
         sessionId: "model-default",
@@ -204,7 +203,16 @@ describe("operator model discovery at registered reads", () => {
         refreshFailed: true,
       };
       const f = createFixture(diagnostics);
+      expectDefined(f.cfg.models?.providers, "configured providers")["hidden-family"] = {
+        baseUrl: "https://hidden.example.invalid",
+        models: [],
+        name: "Private model-less provider",
+        icon: { source: "builtin", name: "server" },
+      };
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      prepareGatewayRecipientProfile(f.client);
       const read = async (method: "models.list" | "chat.metadata", view?: string) => {
         const respond = await f.request(method, { agentId: "main", ...(view ? { view } : {}) });
         expect(respond.mock.calls).toHaveLength(1);
@@ -221,6 +229,7 @@ describe("operator model discovery at registered reads", () => {
         expect(result.pendingProviders).toEqual(["example"]);
         expect(result.providerOutcomes).toEqual([{ provider: "example", status: "ready" }]);
         expect(result.refreshFailed).toBe(false);
+        expect(result.providerPresentations?.["hidden-family"]).toBeUndefined();
       }
       expect((await read("chat.metadata")).models.map(({ id }) => id).toSorted()).toEqual([
         "fallback",
@@ -264,6 +273,7 @@ describe("operator model discovery at registered reads", () => {
       const accountResult = {
         ...custom,
         ...diagnostics,
+        utilityModel: { modelRef: "example/fallback@example:private", source: "config" as const },
         accountSelection: {
           kind: "personal" as const,
           label: "Selected account",
@@ -272,6 +282,7 @@ describe("operator model discovery at registered reads", () => {
       };
       expect(presentation.catalog(accountResult)).toMatchObject({
         providerOutcomes: diagnostics.providerOutcomes.slice(0, 2),
+        utilityModel: { modelRef: "example/fallback@example:private", source: "config" },
         refreshFailed: true,
       });
       expect(
@@ -281,6 +292,7 @@ describe("operator model discovery at registered reads", () => {
         }),
       ).toMatchObject({
         providerOutcomes: [{ provider: "example", status: "ready" }],
+        utilityModel: { modelRef: "example/fallback", source: "config" },
         refreshFailed: false,
       });
 
@@ -308,23 +320,39 @@ describe("operator model discovery at registered reads", () => {
   });
 
   it.each([
-    { utilityModel: "example/fallback", routeVisible: true },
-    { utilityModel: "example/restricted-model", routeVisible: false },
+    { utilityModel: "example/fallback", routeVisible: true, visibleModel: "example/fallback" },
+    { utilityModel: "example/restricted-model", routeVisible: false, visibleModel: undefined },
+    {
+      utilityModel: "example/fallback@work",
+      routeVisible: false,
+      visibleModel: "example/fallback",
+    },
+    { utilityModel: "example/restricted-model@work", routeVisible: false, visibleModel: undefined },
   ])(
-    "discloses the utility route only when $utilityModel is visible to the role",
-    async ({ utilityModel, routeVisible }) => {
+    "discloses only permitted utility metadata for $utilityModel at the response publisher",
+    async ({ utilityModel, routeVisible, visibleModel }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const f = createFixture();
         expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel = utilityModel;
         expectDefined(f.cfg.models?.providers?.example, "example provider").apiKey =
           "synthetic-key";
         await state.writeConfig(f.cfg);
-        const respond = await f.request("models.list", { agentId: "main", view: "configured" });
+        setRuntimeConfigSnapshot(f.cfg);
+        const respond = await f.request("models.list", {
+          agentId: "main",
+          view: "configured",
+          includeDefaultModels: true,
+        });
         expect(respond.mock.calls[0]?.[0]).toBe(true);
-        const { defaultModels } = expectDefined(
+        const result = expectDefined(
           respond.mock.calls[0]?.[1] as ModelsListResult | undefined,
           "models.list result",
         );
+        expect(result.utilityModel).toEqual(
+          visibleModel ? { modelRef: visibleModel, source: "config" } : undefined,
+        );
+        expect(f.cfg.agents?.defaults?.utilityModel).toBe(utilityModel);
+        const { defaultModels } = result;
         if (routeVisible) {
           expect(defaultModels?.utilityRuntime).toEqual({
             id: "openclaw",
@@ -339,10 +367,51 @@ describe("operator model discovery at registered reads", () => {
     },
   );
 
+  it("filters held utility metadata against committed policy at the models.list publisher", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const f = createFixture();
+      expectDefined(f.cfg.agents?.defaults, "agent defaults").utilityModel =
+        "example/fallback@work";
+      await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
+      let committedConfig = f.cfg;
+      f.context.getCommittedRuntimeConfig = () => committedConfig;
+      const entered = createDeferred();
+      const release = createDeferred();
+      f.context.readPreparedModelsList = async () => {
+        entered.resolve();
+        await release.promise;
+        return undefined;
+      };
+      const pending = f.request("models.list", {
+        agentId: "main",
+        view: "all",
+        includeDefaultModels: true,
+      });
+      const settled = Promise.allSettled([pending]);
+      try {
+        await Promise.race([entered.promise, pending]);
+        committedConfig = structuredClone(f.cfg);
+        expectDefined(
+          committedConfig.gateway?.roles?.definitions.visitor,
+          "committed role",
+        ).modelPolicy = { allow: ["example/primary"] };
+      } finally {
+        release.resolve();
+        await settled;
+      }
+      const payload = response(await pending);
+      expect(payload.models).toEqual([expect.objectContaining({ id: "primary" })]);
+      expect(payload).not.toHaveProperty("utilityModel");
+      expect(f.cfg.agents?.defaults?.utilityModel).toBe("example/fallback@work");
+    });
+  });
+
   it("does not publish held metadata after a role policy change", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = createFixture();
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       const entered = createDeferred();
       const release = createDeferred();
       f.readChatMetadata.mockImplementationOnce(async () => {
@@ -379,6 +448,7 @@ describe("operator model discovery at registered reads", () => {
         fallbacks: ["example/fallback"],
       };
       await state.writeConfig(f.cfg);
+      setRuntimeConfigSnapshot(f.cfg);
       const tentative = structuredClone(f.cfg);
       const tentativeRole = expectDefined(
         tentative.gateway?.roles?.definitions.visitor,

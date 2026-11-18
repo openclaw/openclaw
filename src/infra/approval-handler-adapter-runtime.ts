@@ -1,15 +1,18 @@
 // Builds lazy native approval runtime adapters.
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
   ChannelApprovalNativeAvailabilityAdapter,
+  ChannelApprovalNativeAvailabilityAdapterAsync,
   ChannelApprovalNativeRuntimeAdapter,
+  ChannelApprovalNativeRuntimeAdapterAsync,
 } from "./approval-handler-runtime-types.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 
 /** Runtime-context capability key used by channels to register native approval resources. */
 export const CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY = "approval.native";
 
-/** Creates an approval runtime adapter that loads heavy channel code only when delivery hooks run. */
+/** @deprecated Use createLazyChannelApprovalNativeRuntimeAdapterAsync with awaited availability callbacks. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createLazyChannelApprovalNativeRuntimeAdapter<
   TPendingPayload = unknown,
   TPreparedTarget = unknown,
@@ -43,8 +46,53 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
       TBinding,
       TFinalPayload
     > {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createLazyChannelApprovalNativeRuntimeAdapter",
+    replacement: "createLazyChannelApprovalNativeRuntimeAdapterAsync",
+  });
+  return {
+    ...createLazyChannelApprovalNativeRuntimeAdapterAsync(params),
+    availability: { isConfigured: params.isConfigured, shouldHandle: params.shouldHandle },
+  } as never; // SAFETY: the compatibility wrapper retains its synchronous availability contract.
+}
+
+/** Creates an approval runtime adapter that loads heavy channel code only when delivery hooks run. */
+export function createLazyChannelApprovalNativeRuntimeAdapterAsync<
+  TPendingPayload = unknown,
+  TPreparedTarget = unknown,
+  TPendingEntry = unknown,
+  TBinding = unknown,
+  TFinalPayload = unknown,
+  TCapabilityBoundary extends boolean = false,
+>(params: {
+  load: () => Promise<
+    ChannelApprovalNativeRuntimeAdapterAsync<
+      TPendingPayload,
+      TPreparedTarget,
+      TPendingEntry,
+      TBinding,
+      TFinalPayload
+    >
+  >;
+  isConfigured: ChannelApprovalNativeAvailabilityAdapterAsync["isConfigured"];
+  shouldHandle: ChannelApprovalNativeAvailabilityAdapterAsync["shouldHandle"];
+  eventKinds?: readonly ChannelApprovalKind[];
+  /** Erases payload types only when registering with the non-generic channel capability. */
+  capabilityBoundary?: TCapabilityBoundary;
+  /** @deprecated Trusted compatibility override; omit to derive ownership from the payload. */
+  resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapterAsync["resolveApprovalKind"];
+}): TCapabilityBoundary extends true
+  ? ChannelApprovalNativeRuntimeAdapterAsync
+  : ChannelApprovalNativeRuntimeAdapterAsync<
+      TPendingPayload,
+      TPreparedTarget,
+      TPendingEntry,
+      TBinding,
+      TFinalPayload
+    > {
   const loadRuntime = createLazyRuntimeModule(params.load);
-  type Runtime = ChannelApprovalNativeRuntimeAdapter<
+  type Runtime = ChannelApprovalNativeRuntimeAdapterAsync<
     TPendingPayload,
     TPreparedTarget,
     TPendingEntry,
@@ -81,29 +129,19 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
       deliverPending: async (runtimeParams) =>
         (await loadHook((runtime) => runtime.transport.deliverPending))(runtimeParams),
       updateEntry: async (runtimeParams) =>
-        await (
-          await loadHook((runtime) => runtime.transport.updateEntry)
-        )?.(runtimeParams),
+        (await loadHook((runtime) => runtime.transport.updateEntry))?.(runtimeParams),
       deleteEntry: async (runtimeParams) =>
-        await (
-          await loadHook((runtime) => runtime.transport.deleteEntry)
-        )?.(runtimeParams),
+        (await loadHook((runtime) => runtime.transport.deleteEntry))?.(runtimeParams),
     },
     interactions: {
       bindPending: async (runtimeParams) =>
         (await loadHook((runtime) => runtime.interactions?.bindPending))?.(runtimeParams) ?? null,
       unbindPending: async (runtimeParams) =>
-        await (
-          await loadHook((runtime) => runtime.interactions?.unbindPending)
-        )?.(runtimeParams),
+        (await loadHook((runtime) => runtime.interactions?.unbindPending))?.(runtimeParams),
       clearPendingActions: async (runtimeParams) =>
-        await (
-          await loadHook((runtime) => runtime.interactions?.clearPendingActions)
-        )?.(runtimeParams),
+        (await loadHook((runtime) => runtime.interactions?.clearPendingActions))?.(runtimeParams),
       cancelDelivered: async (runtimeParams) =>
-        await (
-          await loadHook((runtime) => runtime.interactions?.cancelDelivered)
-        )?.(runtimeParams),
+        (await loadHook((runtime) => runtime.interactions?.cancelDelivered))?.(runtimeParams),
     },
     observe: {
       // Observe hooks are fire-and-forget at call sites. Reuse the already
@@ -117,7 +155,7 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
     // `capabilityBoundary` opts into the non-generic registration contract;
     // otherwise this object preserves every type inferred from `load`.
     // SAFETY: the conditional return type selects exactly those two representations.
-  } satisfies ChannelApprovalNativeRuntimeAdapter<
+  } satisfies ChannelApprovalNativeRuntimeAdapterAsync<
     TPendingPayload,
     TPreparedTarget,
     TPendingEntry,

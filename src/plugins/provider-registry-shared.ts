@@ -17,7 +17,6 @@ export function resolveProviderRuntimeWorkspaceDir(
   );
 }
 
-/** Normalizes provider ids used by capability-provider registries. */
 export function normalizeCapabilityProviderId(providerId: string | undefined): string | undefined {
   const normalized = normalizeOptionalLowercaseString(providerId);
   return normalized && !isBlockedObjectKey(normalized) ? normalized : undefined;
@@ -88,4 +87,19 @@ export function buildCapabilityProviderIndex<T extends { id: string; aliases?: r
   }
 
   return index;
+}
+
+/** Keeps provider lookups within one already-acquired operation scope. */
+export function createCapabilityProviderLookup<
+  T extends { id: string; aliases?: readonly string[] },
+>(providers: readonly T[]) {
+  const canonical = buildCapabilityProviderIndex(providers, "canonical");
+  const aliases = buildCapabilityProviderIndex(providers, "aliases");
+  return {
+    getProvider: (id: string | undefined) => {
+      const normalized = normalizeCapabilityProviderId(id);
+      return normalized ? aliases.get(normalized) : undefined;
+    },
+    listProviders: () => [...canonical.values()],
+  };
 }

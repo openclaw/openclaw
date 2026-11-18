@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/** Normalizes provider auth input metadata collected from plugin setup flows. */
 import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
@@ -9,7 +8,6 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SecretInput } from "../config/types.secrets.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
@@ -17,12 +15,9 @@ import type { SecretInputMode } from "./provider-auth-types.js";
 
 export { resolveSecretInputModeForEnvSelection } from "./provider-auth-mode.js";
 
-const loadModelAuthEnv = createLazyRuntimeModule(() => import("../agents/model-auth-env.js"));
-const loadProviderAuthRef = createLazyRuntimeModule(() => import("./provider-auth-ref.js"));
-
 /** Keeps secret resolution out of synchronous provider setup metadata imports. */
 export const promptSecretRefForSetup: typeof import("./provider-auth-ref.js").promptSecretRefForSetup =
-  async (...args) => (await loadProviderAuthRef()).promptSecretRefForSetup(...args);
+  async (...args) => (await import("./provider-auth-ref.js")).promptSecretRefForSetup(...args);
 
 const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
 
@@ -87,24 +82,6 @@ export function formatApiKeyPreview(
   return `${sliceUtf16Safe(trimmed, 0, head)}…${sliceUtf16Safe(trimmed, -tail)}`;
 }
 
-/** Normalizes a token-provider selector from CLI/options input. */
-export function normalizeTokenProviderInput(
-  tokenProvider: string | null | undefined,
-): string | undefined {
-  return normalizeOptionalLowercaseString(tokenProvider);
-}
-
-/** Normalizes secret input mode values accepted by provider setup. */
-export function normalizeSecretInputModeInput(
-  secretInputMode: string | null | undefined,
-): SecretInputMode | undefined {
-  const normalized = normalizeOptionalLowercaseString(secretInputMode);
-  if (normalized === "plaintext" || normalized === "ref") {
-    return normalized;
-  }
-  return undefined;
-}
-
 /** Resolves an API key from CLI options first, then environment or prompt fallback. */
 export async function ensureApiKeyFromOptionEnvOrPrompt(
   params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0] & {
@@ -115,12 +92,12 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(
     noteTitle?: string;
   },
 ): Promise<string> {
-  const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
+  const tokenProvider = normalizeOptionalLowercaseString(params.tokenProvider);
   if (
     params.token &&
     tokenProvider &&
     params.expectedProviders.some(
-      (provider) => normalizeTokenProviderInput(provider) === tokenProvider,
+      (provider) => normalizeOptionalLowercaseString(provider) === tokenProvider,
     )
   ) {
     const apiKey = params.normalize(params.token);
@@ -166,7 +143,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       promptSecretRefForSetup: promptSecretRef,
       resolveRefFallbackInput,
     },
-  ] = await Promise.all([loadModelAuthEnv(), loadProviderAuthRef()]);
+  ] = await Promise.all([import("../agents/model-auth-env.js"), import("./provider-auth-ref.js")]);
   const env = params.env ?? process.env;
   // Setup must resolve the same trusted workspace/provider descriptors as
   // runtime; dropping the staged config silently changes credential ownership.

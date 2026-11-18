@@ -1,3 +1,4 @@
+import { shellEscape as shellEscapeSingleArg } from "../shared/shell-quote.js";
 import type { SourceSpan } from "./command-explainer/types.js";
 import type { ExecSegmentSatisfiedBy } from "./exec-approvals-allowlist.js";
 import { resolvePlannedSegmentArgv } from "./exec-approvals-analysis.js";
@@ -20,11 +21,6 @@ type SourceReplacement = {
 
 const SHELL_BARE_TOKEN_PATTERN = /^[A-Za-z0-9_@%+=:,./-]+$/u;
 
-function shellEscapeSingleArg(value: string): string {
-  const singleQuoteEscape = `'"'"'`;
-  return `'${value.replace(/'/g, singleQuoteEscape)}'`;
-}
-
 function renderBareShellToken(value: string): string {
   return value.length > 0 && SHELL_BARE_TOKEN_PATTERN.test(value)
     ? value
@@ -32,19 +28,22 @@ function renderBareShellToken(value: string): string {
 }
 
 function hasUnquotedShellExpansionSource(value: string): boolean {
-  let quote: "single" | "double" | null = null;
+  let quote: "single" | "double" | "ansi" | null = null;
   let escaped = false;
   let atWordStart = true;
+  let previousUnescapedDollar = false;
   for (const char of value) {
     if (escaped) {
       escaped = false;
+      previousUnescapedDollar = false;
       continue;
     }
     if (quote !== "single" && char === "\\") {
       escaped = true;
+      previousUnescapedDollar = false;
       continue;
     }
-    if (quote === "single") {
+    if (quote === "single" || quote === "ansi") {
       if (char === "'") {
         quote = null;
       }
@@ -57,9 +56,12 @@ function hasUnquotedShellExpansionSource(value: string): boolean {
       continue;
     }
     if (char === "'") {
-      quote = "single";
+      quote = previousUnescapedDollar ? "ansi" : "single";
+      previousUnescapedDollar = false;
       continue;
     }
+    // Each $$ pair is a complete PID parameter; only an unmatched $ starts $'...'.
+    previousUnescapedDollar = char === "$" && !previousUnescapedDollar;
     if (char === '"') {
       quote = "double";
       continue;
@@ -108,6 +110,16 @@ function validateSpan(params: {
   return { ok: true, command: "" };
 }
 
+function validatedReplacement(
+  command: string,
+  span: SourceSpan,
+  expectedText: string,
+  text: string,
+): AuthorizedShellRenderResult | SourceReplacement {
+  const result = validateSpan({ command, span, expectedText });
+  return result.ok ? { startIndex: span.startIndex, endIndex: span.endIndex, text } : result;
+}
+
 function sourceStepSlice(params: {
   candidate: ExecAuthorizationCandidate;
   span: SourceSpan;
@@ -123,19 +135,6 @@ function sourceStepSlice(params: {
   return params.candidate.sourceStep.text.slice(relativeStart, relativeEnd);
 }
 
-function shouldRewriteCandidate(params: {
-  mode: AuthorizedShellRenderMode;
-  satisfiedBy: ExecSegmentSatisfiedBy | undefined;
-}): boolean {
-  if (params.mode === "enforced") {
-    // Safe builtins (cd, :, true, false, pwd, test) are handled by the shell itself, not by an
-    // external executable. Rewriting them to a resolved path (e.g. /usr/bin/cd) is semantically
-    // wrong and does not strengthen PATH-shadowing protection, so enforced mode leaves them as-is.
-    return params.satisfiedBy !== "safeBuiltins";
-  }
-  return params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
-}
-
 function replacementForCandidate(params: {
   command: string;
   candidate: ExecAuthorizationCandidate;
@@ -145,7 +144,12 @@ function replacementForCandidate(params: {
   if (params.mode === "enforced" && hasArgumentShellExpansionSource(params.candidate)) {
     return { ok: false, reason: "shell expansion in enforced arguments" };
   }
-  if (!shouldRewriteCandidate({ mode: params.mode, satisfiedBy: params.satisfiedBy })) {
+  // Shell builtins must stay in the shell; rewriting them to paths changes their semantics.
+  const shouldRewrite =
+    params.mode === "enforced"
+      ? params.satisfiedBy !== "safeBuiltins"
+      : params.satisfiedBy === "safeBins" || params.satisfiedBy === "inlineChain";
+  if (!shouldRewrite) {
     return null;
   }
   const plannedArgv = resolvePlannedSegmentArgv(params.candidate.sourceSegment);
@@ -159,19 +163,12 @@ function replacementForCandidate(params: {
     return { ok: false, reason: "shell quoting required in wrapper payload" };
   }
   if (params.candidate.sourceSegment.resolution?.wrapperChain?.length) {
-    const spanResult = validateSpan({
-      command: params.command,
-      span: params.candidate.sourceStep.span,
-      expectedText: params.candidate.sourceStep.text,
-    });
-    if (!spanResult.ok) {
-      return spanResult;
-    }
-    return {
-      startIndex: params.candidate.sourceStep.span.startIndex,
-      endIndex: params.candidate.sourceStep.span.endIndex,
-      text: plannedArgv.map(renderBareShellToken).join(" "),
-    };
+    return validatedReplacement(
+      params.command,
+      params.candidate.sourceStep.span,
+      params.candidate.sourceStep.text,
+      plannedArgv.map(renderBareShellToken).join(" "),
+    );
   }
   const executable = plannedArgv[0];
   if (!executable) {
@@ -185,22 +182,13 @@ function replacementForCandidate(params: {
   ) {
     return { ok: false, reason: "shell quoting required in wrapper payload" };
   }
-  const spanResult = validateSpan({
-    command: params.command,
-    span: params.candidate.sourceStep.executableSpan,
-    expectedText: sourceStepSlice({
-      candidate: params.candidate,
-      span: params.candidate.sourceStep.executableSpan,
-    }),
-  });
-  if (!spanResult.ok) {
-    return spanResult;
-  }
-  return {
-    startIndex: params.candidate.sourceStep.executableSpan.startIndex,
-    endIndex: params.candidate.sourceStep.executableSpan.endIndex,
-    text: renderedExecutable,
-  };
+  const span = params.candidate.sourceStep.executableSpan;
+  return validatedReplacement(
+    params.command,
+    span,
+    sourceStepSlice({ candidate: params.candidate, span }),
+    renderedExecutable,
+  );
 }
 
 function applyReplacements(params: {
@@ -334,20 +322,17 @@ export function buildReviewedShellCommandFromPlan(params: {
       if (!operand?.executable || !operand.invocationPath.startsWith("/")) {
         return { ok: false, reason: "bound executable unavailable" };
       }
-      const spanResult = validateSpan({
-        command: params.plan.originalCommand,
+      const replacement = validatedReplacement(
+        params.plan.originalCommand,
         span,
-        expectedText: sourceStepSlice({ candidate, span }),
-      });
-      if (!spanResult.ok) {
-        return spanResult;
-      }
-      replacements.push({
-        startIndex: span.startIndex,
-        endIndex: span.endIndex,
+        sourceStepSlice({ candidate, span }),
         // Quote even ordinary paths: aliases can themselves be named absolute paths.
-        text: shellEscapeSingleArg(operand.invocationPath),
-      });
+        shellEscapeSingleArg(operand.invocationPath),
+      );
+      if ("ok" in replacement) {
+        return replacement;
+      }
+      replacements.push(replacement);
     }
   }
   if (replacements.length === 0) {

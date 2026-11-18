@@ -4,7 +4,12 @@ import { asFiniteNumber, asSafeIntegerInRange } from "@openclaw/normalization-co
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { estimateAcpEventRowBytes, estimateAcpSessionRowBytes } from "../acp/event-ledger-bytes.js";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
-import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+  iterateSqliteQuerySync,
+} from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
@@ -186,24 +191,27 @@ export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
   `);
 }
 
-/** Canonicalize the shipped suspension reason before runtime hydrates subagent state. */
-export function repairLegacySubagentSuspensionReasons(db: DatabaseSync): void {
-  if (!tableExists(db, "subagent_runs")) {
-    return;
-  }
-  // v2026.6.34 persisted retry-limit; remove this backfill after its 7-day retention window.
-  db.exec(`
-    UPDATE subagent_runs
-    SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'permanent_failure')
-    WHERE json_valid(payload_json)
-      AND json_extract(payload_json, '$.delivery.suspendedReason') = 'retry-limit';
-  `);
-}
-
-export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
+export function backfillAcpReplayEstimatedBytes(db: DatabaseSync, columnsAdded = false): void {
   if (
     !tableExists(db, "acp_replay_events") ||
     !tableHasColumn(db, "acp_replay_events", "estimated_bytes")
+  ) {
+    return;
+  }
+  const completionKey = "state.repair.acpReplayUtf8Accounting";
+  const completionDb = tableExists(db, "config_machine_state")
+    ? getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(db)
+    : undefined;
+  if (
+    !columnsAdded &&
+    completionDb &&
+    executeSqliteQueryTakeFirstSync(
+      db,
+      completionDb
+        .selectFrom("config_machine_state")
+        .select("state_key")
+        .where("state_key", "=", completionKey),
+    )
   ) {
     return;
   }
@@ -261,6 +269,15 @@ export function backfillAcpReplayEstimatedBytes(db: DatabaseSync): void {
     if (sqliteNumber(row.estimated_bytes) !== expected) {
       updateSession.run(expected, row.session_id);
     }
+  }
+  if (completionDb) {
+    executeSqliteQuerySync(
+      db,
+      completionDb
+        .insertInto("config_machine_state")
+        .values({ state_key: completionKey, value_json: "true", updated_at_ms: Date.now() })
+        .onConflict((conflict) => conflict.column("state_key").doNothing()),
+    );
   }
 }
 

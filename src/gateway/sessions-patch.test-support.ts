@@ -1,7 +1,7 @@
 // Shared Gateway patch fixtures exercise the real entry projection without persistence.
 import { expect } from "vitest";
 import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/index.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
@@ -48,7 +48,6 @@ export async function runPatch(params: {
   storeKey?: string;
   agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
-  providerAuthMetadataSnapshot?: ApplySessionsPatchArgs["providerAuthMetadataSnapshot"];
   archivedBy?: SessionCreatedActor;
 }) {
   return applySessionsPatchToStore({
@@ -58,7 +57,6 @@ export async function runPatch(params: {
     agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
-    providerAuthMetadataSnapshot: params.providerAuthMetadataSnapshot,
     archivedBy: params.archivedBy,
   });
 }

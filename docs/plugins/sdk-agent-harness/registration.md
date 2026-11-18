@@ -53,6 +53,40 @@ export default definePluginEntry({
 `authBootstrap: "harness"` only when the harness meets the
 [harness-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#harness-owned-auth-bootstrap).
 
+<a id="executor-controller-plugins" />
+
+### Hosted workspaces and executor lifecycle
+
+A harness with a provider-managed workspace may declare
+`workspaceEnvironment: { kind: "provider-hosted", label: "Provider workspace" }`.
+The Gateway projects this metadata on configured model/runtime choices so the
+Control UI can distinguish hosted workspaces from local folders and cloud workers.
+Declare it only for the active hosted configuration, not a self-hosted executor.
+This presentation metadata grants no availability, authentication, placement, or
+file-synchronization capability; those stay with their existing owners.
+
+`api.registerAgentExecutorController` has been removed. For Agents API
+self-hosted execution, configure an external lifecycle owner for session-scoped
+startup, reconnection, and cleanup; see the
+[self-hosted execution guide](/plugins/agentsapi#self-hosted-execution).
+This does not automatically replace an existing controller plugin. Before
+upgrading, retire its controlled sessions using the previous OpenClaw version
+and original plugin, verify their executors stopped, then remove
+`executorController` configuration. Saved controlled bindings are retained and
+refused until that cleanup is complete.
+
+The published `AgentExecutorController`, `AgentExecutorBinding`, and
+`AgentExecutorContext` types remain available for compatibility.
+`resolveAgentExecutorController(pluginId)` now reports that the capability has
+been removed; it cannot resolve an active executor controller.
+
+A harness whose `reset` cannot settle required native work throws
+`AgentHarnessSessionCleanupError` from `openclaw/plugin-sdk/agent-harness-runtime`.
+The host waits for the other cleanup callbacks, then rejects the reset before
+replacing the local session. Ordinary reset-hook errors remain best effort.
+Reply-driven resets use the same required-cleanup check before committing their
+session boundary.
+
 ### Isolated completion
 
 The optional `runIsolatedCompletionV2(params)` capability serves product paths
@@ -65,6 +99,13 @@ deadline controls, and one prepared `authorization`:
   snapshot restricted to the single profile selected for that call. Core owns
   automatic fallback order and invokes the harness separately for each candidate.
 
+When supplied, `onRequestComplete(durationMs)` reports inference dispatch through
+settlement, including a dispatched failure. Measure at the runtime's request
+boundary, not around its entire completion method: credential, model, client,
+and session preparation and post-request cleanup are excluded. Preparation
+failures must not report request timing. Core does not invent a duration when
+a harness does not report one.
+
 Agents API is a documented exception to the literal empty tool surface: it
 creates a fresh session without an executor, supplied functions, web search,
 vaults, or subagents, but the service may retain built-in helpers. This restricted
@@ -74,7 +115,11 @@ guarantee must select a runtime that provides it.
 
 Each new isolated completion uses the configuration and agent/workspace directories
 of its admitted runtime generation. Explicit model, auth-profile, and runtime
-selections remain fixed while that generation is prepared.
+selections remain fixed while that generation is prepared. Registry preparation
+selects provider and harness owners, including their declared harness dependencies.
+Preparation does not add memory or context-engine plugins merely because the
+agent selects them, or unrelated startup plugins, and does not adopt Gateway
+agent capabilities.
 
 Host-authorized calls must use the supplied model and credential without substitution.
 Harnesses using the shared host-prepared completion helper
@@ -112,8 +157,18 @@ Older external harnesses may ignore the policy; a final title filter cannot
 restore provenance that a harness already discarded, so this is not a universal
 reasoning-privacy guarantee. Except for the documented Agents API limitation,
 if the harness cannot enforce isolation, omit the capability.
-Callers that require isolated completion then fail closed before invoking that
+Callers that require isolated completion then reject the run before invoking that
 harness; OpenClaw does not replay the request through another runtime.
+
+`outputSchema`, when present, carries an advisory JSON Schema for native
+final-output constraint. The host forwards the schema by reference only when
+its JSON encoding fits within 1 KiB; otherwise it is not forwarded natively.
+Callers must not mutate it after handoff. Harnesses may use the schema when
+their transport supports structured output. A
+harness may retry with a prompt-level constraint when its transport explicitly
+rejects the schema dialect; callers remain responsible for validating the
+returned value.
+
 Plugin callers request isolated execution through
 `api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
 the harness callback is the provider-side enforcement SPI, not a second caller

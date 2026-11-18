@@ -1,7 +1,6 @@
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
-import type { OpenClawStateWorkerErrorPayload } from "../../state/openclaw-state-worker-error.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   movePendingDeliveryQueueEntryNamespaceInDatabase,
@@ -10,6 +9,7 @@ import {
 import { upsertDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
 import type { DeliveryQueueEntryState } from "../delivery-queue-sqlite.types.js";
 import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
+import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import {
   DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -27,15 +27,7 @@ export function executeDeliveryQueueEnqueue(
     | { kind: "prepared"; preparationJson: string }
   ),
   writeOptions: { database: OpenClawStateDatabase; env: NodeJS.ProcessEnv },
-):
-  | "created"
-  | "existing"
-  | "missing"
-  | "moved"
-  | "source-changed"
-  | "destination-exists"
-  | "staging-missing"
-  | { status: "not-published"; error: OpenClawStateWorkerErrorPayload } {
+) {
   // SAFETY: Only the host enqueue owner supplies this canonical, typed queue-entry JSON.
   const entry = JSON.parse(input.entryJson) as QueuedDelivery;
   const queueName = outboundDeliveryQueueName(entry);
@@ -45,27 +37,27 @@ export function executeDeliveryQueueEnqueue(
     OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
     LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   ];
-  const transaction: { outcome: "unobserved" | "pending" | "committed" | "rolled-back" } = {
-    outcome: "unobserved",
-  };
+  let rolledBack = false;
   try {
     return runOpenClawStateWriteTransaction(
       (database) => {
+        // Idempotent/conflicting enqueues may wake one harmless, coalesced recovery check.
+        deferSqliteWorkerCommitReceipt(database.db, true);
         stageSqliteTransactionState(database.db, {
           stage: () => {
-            transaction.outcome = "pending";
+            rolledBack = false;
           },
           commit: () => {
-            transaction.outcome = "committed";
+            rolledBack = false;
           },
           rollback: () => {
-            transaction.outcome = "rolled-back";
+            rolledBack = true;
           },
         });
         // Random inserts need the same rollback evidence as staged enqueues.
         if (input.kind === "random" && !input.mediaStageId) {
           upsertDeliveryQueueEntryInDatabase({ queueName, entry }, database);
-          return "created";
+          return "created" as const;
         }
         if (input.kind === "prepared") {
           return movePendingDeliveryQueueEntryNamespaceInDatabase(database, {
@@ -99,18 +91,18 @@ export function executeDeliveryQueueEnqueue(
           });
         }
         return upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase(database, params)
-          ? "created"
-          : "existing";
+          ? ("created" as const)
+          : ("existing" as const);
       },
       writeOptions,
       { operationLabel: "enqueue outbound delivery" },
     );
   } catch (cause) {
     // Coordinator cleanup happens after commit publication and cannot prove rollback.
-    if (transaction.outcome === "rolled-back") {
+    if (rolledBack) {
       const error = encodeOpenClawStateWorkerError(cause, { includeOrdinary: true });
       if (error) {
-        return { status: "not-published", error };
+        return { status: "not-published" as const, error };
       }
     }
     throw cause;

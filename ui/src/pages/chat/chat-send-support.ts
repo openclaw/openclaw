@@ -1,6 +1,8 @@
+import { isAbortTrigger } from "../../../../src/auto-reply/reply/abort-trigger-text.js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { RetainedChatSubmission } from "../../app/chat-submissions.ts";
 import { t } from "../../i18n/index.ts";
+import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
 import { findChatSubmissionMessage } from "../../lib/chat/history-message-identity.ts";
@@ -9,7 +11,7 @@ import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store-scope.ts
 import { chatOutboxDeliveryKey } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import { visibleSessionMatches } from "../../lib/sessions/index.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -25,9 +27,8 @@ import {
   removeDeliveredQueuedChatSendForRun,
   updateQueuedMessage,
 } from "./chat-queue.ts";
-import type { TerminalFailureChatSendAck } from "./chat-send-ack.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import type { ChatQueueAdmissionResult } from "./composer-persistence.ts";
+import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
   retireChatSubmissionDisplay,
@@ -39,13 +40,12 @@ import {
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
 import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-message-cache.ts";
+import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
 
-export const UNCONFIRMED_CHAT_SEND_ERROR =
-  "Delivery has not been confirmed. Check the conversation — retry only if your message didn't arrive.";
-
-export const OFFLINE_QUEUE_STORAGE_ERROR =
-  "Could not store this message for reconnect. Free browser storage or reconnect before sending.";
+export function chatOfflineQueueStorageError(): string {
+  return t("chat.queue.storageFailed");
+}
 
 export function formatChatQueueAdmissionError(
   result: Exclude<ChatQueueAdmissionResult, "admitted">,
@@ -57,7 +57,7 @@ export function formatChatQueueAdmissionError(
   if (result === "full") {
     return t("chat.queue.full");
   }
-  return editing ? t("chat.queue.editStorageFailed") : OFFLINE_QUEUE_STORAGE_ERROR;
+  return editing ? t("chat.queue.editStorageFailed") : chatOfflineQueueStorageError();
 }
 
 export function isChatResetCommand(text: string) {
@@ -68,9 +68,42 @@ export function isChatResetCommand(text: string) {
   );
 }
 
+/** Commands and Goals never acquire ambient context, including during queued-row edits. */
+export function acceptsChatAmbientContext(
+  message: string,
+  quotedMessage: string,
+  intent?: ChatQueueItem["intent"],
+): boolean {
+  return (
+    !intent &&
+    !message.startsWith("/") &&
+    !message.startsWith("!") &&
+    !isAbortTrigger(quotedMessage)
+  );
+}
+
 /** Commands and Goals have their own terminal receipts; chat needs input consumption. */
 export function requiresChatInputConsumption(item: ChatQueueItem): boolean {
   return !item.intent && !item.localCommandName && !item.text.trimStart().startsWith("/");
+}
+
+/** Local queue admission does not require the initial turn to have settled. */
+export function chatSendAdmissionHoldReason(
+  host: ChatHost,
+  sessionKey: string,
+  agentId?: string,
+): string | null {
+  if (sessionKey === host.sessionKey && host.isRouteSessionPending?.()) {
+    return t("chat.thread.loading");
+  }
+  if (isExpiredIncognitoSession(host, sessionKey)) {
+    return t("chat.incognitoExpiredTitle");
+  }
+  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
+  if (sendDisabledReason) {
+    return sendDisabledReason;
+  }
+  return chatConnectionPendingReason(host);
 }
 
 export function chatSendHoldReason(
@@ -79,40 +112,32 @@ export function chatSendHoldReason(
   initialTurnPending = false,
   agentId?: string,
 ): string | null {
-  if (isExpiredIncognitoSession(host, sessionKey)) {
-    return t("chat.incognitoExpiredTitle");
-  }
-  const sendDisabledReason = chatProviderReviewRow(host, sessionKey, agentId)?.sendDisabledReason;
-  if (sendDisabledReason) {
-    return sendDisabledReason;
-  }
-  return chatSendPendingReason(host, sessionKey, initialTurnPending);
+  return (
+    (host.gatewayWorkPaused ? t("chat.queue.states.waitingForReconnect") : null) ??
+    chatSendAdmissionHoldReason(host, sessionKey, agentId) ??
+    chatSendPendingReason(host, sessionKey, initialTurnPending)
+  );
 }
 
-// Hello permits RPCs before account recovery has claimed any retained first turn.
+function chatConnectionPendingReason(host: Pick<ChatHost, "client" | "connected">): string | null {
+  return host.connected && host.client && !host.client.recoveryScopeReady
+    ? t("chat.queue.connectionPending")
+    : null;
+}
+
+// Sending waits for the authenticated outbox scope and locally owned session creation.
 // Renderers show loading only for these transient holds, never terminal expiry.
 export function chatSendPendingReason(
   host: Pick<ChatHost, "client" | "connected" | "hasPendingInitialTurn">,
   sessionKey: string,
   initialTurnPending = false,
 ): string | null {
-  if (host.connected && host.client && !host.client.recoveryScopeReady) {
-    return t("chat.queue.connectionPending");
-  }
-  return initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
-    ? t("chat.queue.initialTurnPending")
-    : null;
-}
-
-export function formatTerminalChatSendAckError(
-  ack: TerminalFailureChatSendAck,
-  context: "chat" | "detached",
-): string {
-  return ack.status === "error"
-    ? "Chat failed before the run started; try again."
-    : context === "detached"
-      ? "The active run ended before the detached message was accepted."
-      : "The run ended before the message was accepted.";
+  return (
+    chatConnectionPendingReason(host) ??
+    (initialTurnPending || host.hasPendingInitialTurn?.(sessionKey)
+      ? t("chat.queue.initialTurnPending")
+      : null)
+  );
 }
 
 function preserveDeliveredUserTurn(
@@ -160,17 +185,17 @@ export function retireDeliveredQueuedUserTurn(
   const owner = client ?? host;
   const submissions = host.chatSubmissions;
   const deliveryKey = chatOutboxDeliveryKey(host, scope, runId);
-  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const stored = readDeliveredQueuedChatSendForRun(host, runId, scope);
   if (options?.inputConsumed && runId) {
     const remembered = submissions.readDelivered(deliveryKey, owner);
-    if (remembered) {
+    if (remembered && !persistedSteerTargetRunId(remembered.message)) {
       remembered.pending = false;
     }
     if (
       visibleSessionMatches(host, scope.sessionKey, scope.agentId) &&
       (!stored?.sessionId || stored.sessionId === host.currentSessionId)
     ) {
-      retireChatSubmissionDisplay(host, new Set([runId]));
+      retireChatSubmissionDisplay(host, new Set([runId]), { awaitTranscriptReceipt: true });
     }
     return !stored || removeDeliveredQueuedChatSendForRun(host, runId, scope)
       ? "retired"
@@ -187,7 +212,7 @@ export function retireDeliveredQueuedUserTurn(
     host.connected === connected &&
     host.connectionEpoch === connectionEpoch &&
     payloadOwnerIsCurrent();
-  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope)?.item;
+  const currentItem = () => readDeliveredQueuedChatSendForRun(host, runId, scope);
   const commit = (
     message: NonNullable<ReturnType<typeof buildLocalUserMessage>>,
   ): DeliveredTurnRetirement => {
@@ -201,14 +226,12 @@ export function retireDeliveredQueuedUserTurn(
       // attempt still owns the row; an absent row must not swallow chat.final.
       return readQueuedMessageById(host, stored.id) ? "stale" : "retired";
     }
-    if (!sameQueuedDeliveryVersion(current, stored)) {
-      return "stale";
-    }
-    if (!stored.sendRunId) {
+    if (!sameQueuedDeliveryVersion(current, stored) || !stored.sendRunId) {
       return "stale";
     }
     // Every pane receives the terminal. Retain complete message bytes before
     // the first pane removes the outbox item and releases its Blob/preview URLs.
+    const remembered = submissions.readDelivered(deliveryKey, owner);
     const submission = submissions.retain({
       kind: "delivered",
       deliveryKey,
@@ -217,7 +240,12 @@ export function retireDeliveredQueuedUserTurn(
       agentId: stored.agentId,
       sessionId: stored.sessionId,
       pendingRunId: stored.sendRunId,
-      message,
+      message:
+        remembered?.kind === "delivered" &&
+        remembered.pending &&
+        persistedSteerTargetRunId(remembered.message)
+          ? remembered.message
+          : message,
     });
     preserveDeliveredUserTurn(host, submission);
     const beforeRemoval = currentItem();
@@ -270,11 +298,10 @@ export function retireDeliveredQueuedUserTurn(
       return "stale";
     }
     const reason = result.status === "failed" ? result.reason : "missing";
-    // Delivery proof must never become a fresh-send retry because local bytes
-    // were unavailable. Keep the same run identity and its no-replay barrier.
+    // Keep the same key if local projection fails after delivery.
     updateQueuedMessage(host, stored.id, (item) =>
       failOutboxPayload(
-        { ...item, sendState: item.sendState === "held" ? "held" : "unconfirmed" },
+        { ...item, sendState: item.sendState === "held" ? "held" : "failed" },
         reason,
       ),
     );
@@ -282,15 +309,13 @@ export function retireDeliveredQueuedUserTurn(
   });
 }
 
-type ChatDeliveryFailureHost = Parameters<typeof visibleSessionMatches>[0] & {
-  lastError?: string | null;
-  chatError?: string | null;
-  sessionsResult?: SessionsListResult | null;
-};
-
 /** Surface a terminal delivery failure in the owning pane or a named toast. */
 export function surfaceChatDeliveryFailure(
-  host: ChatDeliveryFailureHost,
+  host: Parameters<typeof visibleSessionMatches>[0] & {
+    lastError?: string | null;
+    chatError?: string | null;
+    sessionsResult?: SessionsListResult | null;
+  },
   sessionKey: string,
   agentId: string | undefined,
   error: string,
@@ -310,7 +335,18 @@ export function surfaceChatDeliveryFailure(
         !scopedAgentId ||
         (session.agentId !== undefined && normalizeAgentId(session.agentId) === scopedAgentId)),
   );
-  showToast({ message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}` });
+  showToast({
+    placement: "top-right",
+    severity: "error",
+    message: `${resolveSessionDisplayName(sessionKey, row)}: ${message}`,
+  });
+}
+
+/** Model-facing text an annotation contributes ahead of the user's own message. */
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+  return attachment.selectionAnnotation
+    ? formatChatSelectionQuote(attachment.selectionAnnotation)
+    : attachment.browserAnnotation?.modelContext.trim();
 }
 
 export function prependReplyQuote(

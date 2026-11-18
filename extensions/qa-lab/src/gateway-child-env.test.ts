@@ -1,37 +1,29 @@
-import { describe, expect, it } from "vitest";
-import { buildQaRuntimeEnv } from "./gateway-child-env.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 
-function createParams(baseEnv: NodeJS.ProcessEnv) {
-  return {
-    baseEnv,
-    configPath: "/tmp/openclaw-qa/openclaw.json",
-    gatewayToken: "qa-token",
-    homeDir: "/tmp/openclaw-qa/home",
-    stateDir: "/tmp/openclaw-qa/state",
-    tempRoot: "/tmp/openclaw-qa",
-    xdgConfigHome: "/tmp/openclaw-qa/xdg-config",
-    xdgDataHome: "/tmp/openclaw-qa/xdg-data",
-    xdgCacheHome: "/tmp/openclaw-qa/xdg-cache",
-    developmentSourceRoot: null,
-  };
-}
+const setup = createQaGatewaySetupHarness();
+afterEach(() => setup.cleanup());
 
 describe("QA child service identity", () => {
-  it("keeps cron suppression under the child's runtime controls", () => {
-    const params = createParams({ OPENCLAW_SKIP_CRON: "1" });
-
-    expect(buildQaRuntimeEnv(params).OPENCLAW_SKIP_CRON).toBeUndefined();
+  it("keeps cron suppression under the child's runtime controls", async () => {
     expect(
-      buildQaRuntimeEnv({
-        ...params,
-        runtimeEnvPatch: { OPENCLAW_SKIP_CRON: "1" },
-      }).OPENCLAW_SKIP_CRON,
+      (await setup.prepare({}, { OPENCLAW_SKIP_CRON: "1" })).env.OPENCLAW_SKIP_CRON,
+    ).toBeUndefined();
+    expect(
+      (
+        await setup.prepare(
+          {
+            runtimeEnvPatch: { OPENCLAW_SKIP_CRON: "1" },
+          },
+          { OPENCLAW_SKIP_CRON: "1" },
+        )
+      ).env.OPENCLAW_SKIP_CRON,
     ).toBe("1");
   });
 
   it.each(["parent", "runtime patch"])(
     "keeps %s supervision out of QA-owned children",
-    (source) => {
+    async (source) => {
       const supervisorEnv = {
         OPENCLAW_SUPERVISOR_MODE: "external",
         OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
@@ -46,15 +38,16 @@ describe("QA child service identity", () => {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
       };
-      const env = buildQaRuntimeEnv({
-        ...createParams(
-          source === "parent" ? { ...supervisorEnv, OPENCLAW_PROFILE: "operator" } : {},
-        ),
-        runtimeEnvPatch:
-          source === "runtime patch"
-            ? { ...supervisorEnv, OPENCLAW_PROFILE: "operator" }
-            : undefined,
-      });
+      const child = await setup.prepare(
+        {
+          runtimeEnvPatch:
+            source === "runtime patch"
+              ? { ...supervisorEnv, OPENCLAW_PROFILE: "operator" }
+              : undefined,
+        },
+        source === "parent" ? { ...supervisorEnv, OPENCLAW_PROFILE: "operator" } : {},
+      );
+      const { env } = child;
 
       for (const key of Object.keys(supervisorEnv)) {
         expect(env[key], key).toBeUndefined();
@@ -64,12 +57,10 @@ describe("QA child service identity", () => {
       expect(env.OPENCLAW_PROFILE).toMatch(/^[a-z0-9][a-z0-9_-]{0,63}$/u);
       expect(env.OPENCLAW_PROFILE).not.toBe("operator");
       expect(env.OPENCLAW_PROFILE).not.toBe("default");
-      expect(env.OPENCLAW_PROFILE).toBe(buildQaRuntimeEnv(createParams({})).OPENCLAW_PROFILE);
-      expect(env.OPENCLAW_PROFILE).not.toBe(
-        buildQaRuntimeEnv({ ...createParams({}), tempRoot: "/tmp/another-qa" }).OPENCLAW_PROFILE,
-      );
-      expect(env.OPENCLAW_STATE_DIR).toBe(createParams({}).stateDir);
-      expect(env.OPENCLAW_CONFIG_PATH).toBe(createParams({}).configPath);
+      expect(env.OPENCLAW_PROFILE).toBe((await child.prepareAttempt()).env.OPENCLAW_PROFILE);
+      expect(env.OPENCLAW_PROFILE).not.toBe((await setup.prepare()).env.OPENCLAW_PROFILE);
+      expect(env.OPENCLAW_STATE_DIR).toBe(child.stateDir);
+      expect(env.OPENCLAW_CONFIG_PATH).toBe(child.configPath);
     },
   );
 });

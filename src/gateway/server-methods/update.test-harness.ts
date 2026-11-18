@@ -4,6 +4,11 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { validateUpdateRunResult } from "../../../packages/gateway-protocol/src/index.js";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
@@ -21,12 +26,14 @@ let ledgerHome: TempHomeEnv | undefined;
 let lifecycle: UpdateCheckLifecycle;
 beforeEach(async () => {
   ledgerHome = await createTempHomeEnv("openclaw-update-rpc-");
+  setRuntimeConfigSnapshot({ update: {} });
   lifecycle = createGatewayUpdateLifecycle(createTestGatewayScheduler());
 });
 afterEach(async () => {
   await lifecycle.stop();
   await ledgerHome?.restore();
   ledgerHome = undefined;
+  clearRuntimeConfigSnapshot();
 });
 
 export const sentinelState: {
@@ -81,7 +88,7 @@ export const startManagedServiceUpdateHandoffMock = vi.fn<
 }));
 export const claimManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").claimManagedServiceUpdateHandoff
->(() => true);
+>(async () => true);
 export const transferManagedServiceUpdateHandoffMock = vi.fn<
   typeof import("../../infra/update-managed-service-handoff.js").transferManagedServiceUpdateHandoff
 >(async () => true);
@@ -102,6 +109,8 @@ export async function withTransferredUpdateHandoff(
   const managerStatePath = path.join(root, "manager-state.json");
   const managerPath = path.join(root, "manager.cjs");
   const managerPreloadPath = path.join(root, "manager-preload.cjs");
+  const managerEntryPath = path.join(root, "manager-entry.cjs");
+  const managerUsedPath = path.join(root, "manager-used");
   await fs.writeFile(
     updaterPath,
     `
@@ -122,6 +131,7 @@ export async function withTransferredUpdateHandoff(
   );
   const tempRoot = await import("../../infra/tmp-openclaw-dir.js");
   const tmp = vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
+  const leaseWorker = installPrivateUpdateHandoffWorker(root);
   const handoff = await vi.importActual<
     typeof import("../../infra/update-managed-service-handoff.js")
   >("../../infra/update-managed-service-handoff.js");
@@ -151,34 +161,49 @@ export async function withTransferredUpdateHandoff(
       managerPreloadPath,
       `
     const children = require("node:child_process");
+    const fs = require("node:fs");
     const spawn = children.spawn;
-    children.spawn = (command, args, options) => command === "launchctl"
-      ? spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options)
-      : spawn(command, args, options);
+    children.spawn = (command, args, options) => {
+      if (command !== "launchctl") return spawn(command, args, options);
+      fs.writeFileSync(${JSON.stringify(managerUsedPath)}, "launchctl");
+      return spawn(process.execPath, [${JSON.stringify(managerPath)}, ...args], options);
+    };
   `,
     );
+    await fs.writeFile(
+      managerEntryPath,
+      `require(${JSON.stringify(managerPreloadPath)});
+process.argv.splice(1, 1);
+require(process.argv[1]);`,
+    );
+    const workerRuntime = await import("../../infra/runtime-worker-url.js");
+    const resolveRuntimeArgs = workerRuntime.resolveRuntimeArgs;
     startManagedServiceUpdateHandoffMock.mockImplementationOnce(async (params) => {
-      helper = await handoff.startManagedServiceUpdateHandoff({
-        ...params,
-        root,
-        supervisor: "launchd",
-        env: {
-          ...process.env,
-          NODE_OPTIONS:
-            `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(managerPreloadPath)}`.trim(),
-        },
-        parentPid,
-        execPath: process.execPath,
-        argv1: updaterPath,
-        runId: undefined,
-        meta: {},
-        beforePark: async () => {
-          await params.beforePark?.();
-          await onNotice(params.runId!);
-          expect(parent.exitCode).toBeNull();
-        },
-      });
-      return helper;
+      // The helper resolves its launch argv before building the updater commands.
+      const launch = vi
+        .spyOn(workerRuntime, "resolveRuntimeArgs")
+        .mockImplementationOnce((execPath) => [...resolveRuntimeArgs(execPath), managerEntryPath]);
+      try {
+        helper = await handoff.startManagedServiceUpdateHandoff({
+          ...params,
+          root,
+          supervisor: "launchd",
+          env: { ...process.env },
+          parentPid,
+          execPath: process.execPath,
+          argv1: updaterPath,
+          runId: undefined,
+          meta: {},
+          beforePark: async () => {
+            await params.beforePark?.();
+            await onNotice(params.runId!);
+            expect(parent.exitCode).toBeNull();
+          },
+        });
+        return helper;
+      } finally {
+        launch.mockRestore();
+      }
     });
     transferManagedServiceUpdateHandoffMock.mockImplementationOnce(
       handoff.transferManagedServiceUpdateHandoff,
@@ -192,6 +217,7 @@ export async function withTransferredUpdateHandoff(
       },
       { timeout: 5_000 },
     );
+    expect(await fs.readFile(managerUsedPath, "utf8")).toBe("launchctl");
     parent.stdin?.end();
     await vi.waitFor(() => fs.access(updatedPath), { timeout: 5_000 });
   } finally {
@@ -207,6 +233,7 @@ export async function withTransferredUpdateHandoff(
       await fs.rm(path.dirname(helper.logPath), { recursive: true, force: true });
     }
     tmp.mockRestore();
+    leaseWorker.mockRestore();
   }
 }
 
@@ -239,8 +266,10 @@ export const scheduleGatewayRestartMock = vi.fn(
   }),
 );
 
-export const readGatewayOwnerLeaseMock =
-  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>();
+const readGatewayOwnerLeaseAsyncMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLeaseAsync>(),
+);
+export { readGatewayOwnerLeaseAsyncMock };
 
 export type UpdateRunPayload = {
   runId: string;
@@ -365,30 +394,23 @@ vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
 
 vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-owner-lease.js")>()),
-  readGatewayOwnerLease: readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsync: readGatewayOwnerLeaseAsyncMock,
 }));
 
-vi.mock("../../../packages/gateway-protocol/src/index.js", async () => {
-  const { ErrorCodes, errorShape } =
-    await import("../../../packages/gateway-protocol/src/schema/error-codes.js");
-  const { validateUpdateRunResult: validateResult } =
-    await import("../../../packages/gateway-protocol/src/validator-registry.js");
-  return {
-    ErrorCodes,
-    errorShape,
-    validateUpdateRunResult: validateResult,
-    validateUpdateRunsGetParams: () => true,
-    validateUpdateRunsListParams: () => true,
-    validateUpdateStatusParams: () => true,
-    validateUpdateStatusResult: () => true,
-    validateUpdateRunParams: () => true,
-  };
-});
+vi.mock("../../../packages/gateway-protocol/src/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../packages/gateway-protocol/src/index.js")>()),
+  validateUpdateRunsGetParams: () => true,
+  validateUpdateRunsListParams: () => true,
+  validateUpdateStatusParams: () => true,
+  validateUpdateStatusResult: () => true,
+  validateUpdateRunParams: () => true,
+}));
 
-vi.mock("../server-restart-sentinel.js", () => ({
+vi.mock("../server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../server-update-sentinel.js")>()),
   getLatestUpdateRestartSentinel: getLatestUpdateRestartSentinelMock,
   recordLatestUpdateRestartSentinel: recordLatestUpdateRestartSentinelMock,
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
+  prepareLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelMock,
 }));
 
 vi.mock("./restart-request.js", () => ({
@@ -412,7 +434,8 @@ vi.mock("../../infra/update-managed-service-handoff.js", async () => ({
   cancelManagedServiceUpdateHandoff: cancelManagedServiceUpdateHandoffMock,
 }));
 
-vi.mock("./validation.js", () => ({
+vi.mock("./validation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./validation.js")>()),
   assertValidParams: () => true,
 }));
 
@@ -477,7 +500,7 @@ beforeEach(() => {
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockReset();
   transferManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
-  claimManagedServiceUpdateHandoffMock.mockReset().mockReturnValue(true);
+  claimManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue(true);
   cancelManagedServiceUpdateHandoffMock.mockReset().mockResolvedValue("restored-in-process");
   startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
     status: "started",
@@ -489,7 +512,7 @@ beforeEach(() => {
   }));
   scheduleGatewayRestartMock.mockClear();
   scheduleGatewayRestartMock.mockReturnValue({ scheduled: true });
-  readGatewayOwnerLeaseMock.mockReset().mockImplementation(() =>
+  readGatewayOwnerLeaseAsyncMock.mockReset().mockImplementation(async () =>
     detectRespawnSupervisorMock.mock.results.at(-1)?.value
       ? undefined
       : {
@@ -519,6 +542,7 @@ export async function invokeUpdateRun(
     "sessionMutationCommitGuard" | "hasCurrentClientAuthority"
   > = {},
 ) {
+  setRuntimeConfigSnapshot(runtimeConfig);
   const { updateHandlers } = await import("./update.js");
   const onRespond = respond ?? (() => {});
   await expectDefined(
@@ -563,17 +587,17 @@ export async function captureUpdateRunPayload(
   return payload;
 }
 
-export function mockGlobalInstallSurface() {
+export function mockGlobalInstallSurface(root = "/tmp/openclaw-global") {
   resolveStartupInstallStatusMock.mockResolvedValueOnce({
-    root: "/tmp/openclaw-global",
-    status: { root: "/tmp/openclaw-global", installKind: "package", packageManager: "npm" },
+    root,
+    status: { root, installKind: "package", packageManager: "npm" },
     installReceipt: null,
   });
   resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
     kind: "global",
     mode: "npm",
-    root: "/tmp/openclaw-global",
-    packageRoot: "/tmp/openclaw-global",
+    root,
+    packageRoot: root,
   });
 }
 

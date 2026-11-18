@@ -80,6 +80,7 @@ extension OpenClawChatViewModel {
     }
 
     func beginSessionBranchSwitchActivity(for session: SessionSnapshot) -> SessionBranchSwitchActivity {
+        self.invalidateHistoryCursor(replacingCanonicalHistory: true)
         self.nextSessionBranchSwitchGeneration &+= 1
         let activity = SessionBranchSwitchActivity(
             session: session,
@@ -132,6 +133,7 @@ extension OpenClawChatViewModel {
     @discardableResult
     func performStartNewSession(
         agentID: String? = nil,
+        inheritCurrentSession: Bool = false,
         worktree: Bool,
         worktreeBaseRef: String? = nil,
         routeLease: OpenClawChatNewSessionRouteLease? = nil) async -> Bool
@@ -150,7 +152,8 @@ extension OpenClawChatViewModel {
                 self.activeAgentId ??
                 OpenClawChatSessionKey.agentID(from: self.resolvedMainSessionKey))?
             .lowercased()
-        let parentSessionKey = requestedAgentID == nil || requestedAgentID == currentAgentID
+        // Global/sidebar creation uses Gateway defaults; only in-chat /new inherits.
+        let parentSessionKey = inheritCurrentSession && (requestedAgentID == nil || requestedAgentID == currentAgentID)
             ? self.sessionKey
             : nil
         let next: String
@@ -270,7 +273,7 @@ extension OpenClawChatViewModel {
         // sessions.groups.put, so memberships survive. Accepted tradeoff until the
         // gateway grows a revisioned groups API.
         let current = try await self.fetchSessionGroups(using: routeLease)
-        let response = try await routeLease.putGroups(names: current.map(\.name) + [name])
+        let response = try await routeLease.putGroups(current.map(\.name) + [name])
         self.sessionGroupsRevision += 1
         return response.groups
     }
@@ -283,7 +286,7 @@ extension OpenClawChatViewModel {
     {
         let nextName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !nextName.isEmpty else { return try await self.fetchSessionGroups(using: routeLease) }
-        let response = try await routeLease.renameGroup(name: name, to: nextName)
+        let response = try await routeLease.renameGroup(name, nextName)
         self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
@@ -294,7 +297,7 @@ extension OpenClawChatViewModel {
         _ name: String,
         using routeLease: OpenClawChatSessionGroupsRouteLease) async throws -> [OpenClawChatSessionGroup]
     {
-        let response = try await routeLease.deleteGroup(name: name)
+        let response = try await routeLease.deleteGroup(name)
         self.sessionGroupsRevision += 1
         self.refreshSessions(limit: Self.sessionListFetchLimit)
         return response.groups
@@ -575,6 +578,7 @@ extension OpenClawChatViewModel {
             return
         }
         do {
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let result = try await self.transport.rewindSession(
                 sessionKey: initiatingSession.key,
                 entryId: entryID)
@@ -590,6 +594,7 @@ extension OpenClawChatViewModel {
             self.input = result.editorText ?? ""
             self.narration = ChatNarration()
             self.restoreEditorAttachments(result.editorAttachments)
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             let historyRequest = self.beginHistoryRequest(for: initiatingSession)
             _ = await self.refreshHistoryAfterRun(historyRequest: historyRequest)
             guard self.isCurrentSession(initiatingSession) else {
@@ -681,10 +686,10 @@ extension OpenClawChatViewModel {
                 }
             case .reconcile:
                 guard await self.reconcileOutboxBranchScope(
-                    session,
+                    self.outboxBranchScope(for: session),
                     branches: response.branches,
                     previousState: previousState,
-                    connectionGeneration: connectionGeneration)
+                    capturedSession: session)
                 else {
                     self.pauseOutboxBranchScope(session)
                     return false
@@ -789,6 +794,7 @@ extension OpenClawChatViewModel {
             self.runMessageScopesByRunID.removeAll()
             self.provisionalFinalMessagesByID.removeAll()
             self.narration = ChatNarration()
+            self.invalidateHistoryCursor(replacingCanonicalHistory: true)
             await self.reconcileSessionBranchChange(
                 switchActivity,
                 confirmedLeafEntryID: normalizedLeafEntryID)

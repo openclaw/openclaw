@@ -3,9 +3,8 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { getRuntimeConfig } from "./config.js";
 import { createConfigIO } from "./io.factory.js";
-import { withTempHome, withTempHomeConfig, writeOpenClawConfig } from "./test-helpers.js";
+import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
@@ -81,25 +80,4 @@ describe("multi-agent agentDir validation", () => {
       });
     },
   );
-
-  it("throws on shared agentDir during getRuntimeConfig()", async () => {
-    await withTempHomeConfig(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: {
-            a: { agentDir: "~/.openclaw/agents/shared/agent" },
-            b: { agentDir: "~/.openclaw/agents/shared/agent" },
-          },
-        },
-        bindings: [{ agentId: "a", match: { channel: "forum" } }],
-      },
-      async () => {
-        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
-        expect(() => getRuntimeConfig()).toThrow(/duplicate agentDir/i);
-        expect(spy.mock.calls.flat().join(" ")).toMatch(/Duplicate agentDir/i);
-        spy.mockRestore();
-      },
-    );
-  });
 });

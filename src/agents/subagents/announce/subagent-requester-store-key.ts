@@ -17,7 +17,7 @@ export function resolveRequesterStoreKey(
     config: cfg,
     agentId: explicitAgentId,
   });
-  const mainKey = normalizeMainKey(cfg?.session?.mainKey);
+  const mainKey = normalizeMainKey(cfg.session?.mainKey);
   if (raw === "main" || raw === mainKey) {
     return cfg.session?.scope === "global"
       ? "global"

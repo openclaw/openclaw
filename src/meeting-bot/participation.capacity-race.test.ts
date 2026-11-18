@@ -1,128 +1,109 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type {
-  MeetingParticipationAttempt,
-  MeetingParticipationOptions,
-} from "./participation-types.js";
+import type { MeetingParticipationAttempt } from "./participation-types.js";
 import { MeetingParticipation } from "./participation.js";
 
-describe("meeting participation concurrent capacity recovery", () => {
-  it("admits both source claims when a sibling reclaimed their shared cleanup snapshot", async () => {
-    const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
-      await import("../plugin-state/plugin-state-store.js");
-    await withOpenClawTestState(
-      { label: "participation-cleanup-race", applyEnv: false },
-      async (state) => {
-        try {
-          const real = createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", {
-            namespace: "meeting-participation",
-            maxEntries: 4,
-            overflowPolicy: "reject-new",
-            env: state.env,
-          });
-          for (const requestId of ["old-0", "old-1"]) {
-            await real.register("closed:request:" + requestId, {
-              kind: "meeting-participation-attempt",
-              sessionId: "closed",
-              requestId,
-              fingerprint: "seed",
-              actionType: "chat",
-            });
-          }
-          const roles = new AsyncLocalStorage<"A" | "B">();
-          const requestClaims = createDeferredCore();
-          const snapshots = createDeferredCore();
-          const firstCleanup = createDeferredCore();
-          let registered = 0;
-          let observed = 0;
-          let removedByA = 0;
-          const deleted: Array<{ role: "A" | "B" | undefined; removed: boolean }> = [];
-          const store: MeetingParticipationOptions<object>["store"] = {
-            lookup: (key) => real.lookup(key),
-            register: (key, value) => real.register(key, value),
-            registerIfAbsent: async (key, value) => {
-              const inserted = await real.registerIfAbsent(key, value);
-              if (key.startsWith("active:request:")) {
-                if (++registered === 2) {
-                  requestClaims.resolve();
-                }
-                await requestClaims.promise;
-              }
-              return inserted;
-            },
-            entries: async () => {
-              const entries = await real.entries();
-              if (++observed === 2) {
-                snapshots.resolve();
-              }
-              await snapshots.promise;
-              return entries;
-            },
-            delete: async (key) => {
-              const role = roles.getStore();
-              if (role === "B") {
-                await firstCleanup.promise;
-              }
-              const removed = await real.delete(key);
-              deleted.push({ role, removed });
-              if (role === "A" && removed && ++removedByA === 2) {
-                firstCleanup.resolve();
-              }
-              return removed;
-            },
-          };
-          const executed: string[] = [];
-          const owner = new MeetingParticipation({
-            store,
-            current: (id) => (id === "active" ? { session: {}, assertCurrent() {} } : undefined),
-            capabilities: () => ["chat"],
-            validateAction: () => undefined,
-            execute: async (_session, request) => {
-              executed.push(request.requestId);
-              return { status: "succeeded" };
-            },
-          });
-          owner.close("closed");
-          const requests = (["A", "B"] as const).map((role) => {
-            const sourceId = owner.observe("active", {
-              id: "source-" + role,
-              epoch: "page",
-              revision: "1",
-              kind: "caption",
-              text: "Please reply to " + role,
-              finalized: true,
-              ownEcho: false,
-            });
-            if (!sourceId) {
-              throw new Error("Expected a current source");
+it("admits both source claims when a sibling reclaimed their shared cleanup snapshot", async () => {
+  const { createPluginStateKeyedStore, resetPluginStateStoreForTests } =
+    await import("../plugin-state/plugin-state-store.js");
+  await withOpenClawTestState({ label: "capacity-race", applyEnv: false }, async ({ env }) => {
+    try {
+      const real = createPluginStateKeyedStore<MeetingParticipationAttempt>("google-meet", {
+        namespace: "meeting-participation",
+        maxEntries: 4,
+        overflowPolicy: "reject-new",
+        env,
+      });
+      for (const requestId of ["old-0", "old-1"]) {
+        await real.register("closed:request:" + requestId, {
+          kind: "meeting-participation-attempt",
+          sessionId: "closed",
+          requestId,
+          fingerprint: "seed",
+          actionType: "chat",
+        });
+      }
+      const requestClaims = createDeferredCore();
+      const snapshots = createDeferredCore();
+      const firstCleanup = createDeferredCore();
+      let registered = 0;
+      let observed = 0;
+      let removedRows = 0;
+      const deleted: boolean[] = [];
+      const store: typeof real = {
+        ...real,
+        registerIfAbsent: async (key, value) => {
+          const inserted = await real.registerIfAbsent(key, value);
+          if (key.startsWith("active:request:")) {
+            if (++registered === 2) {
+              requestClaims.resolve();
             }
-            return { requestId: role, sourceId, action: { type: "chat", text: role } };
-          });
-          const results = await Promise.all([
-            roles.run("A", () => owner.execute("active", requests[0]!)),
-            roles.run("B", () => owner.execute("active", requests[1]!)),
-          ]);
-          expect(results.map((result) => result.status)).toEqual(["succeeded", "succeeded"]);
-          expect(
-            deleted.filter((entry) => entry.role === "B").map((entry) => entry.removed),
-          ).toEqual([false, false]);
-          expect(executed.toSorted()).toEqual(["A", "B"]);
-          expect(await real.entries()).toHaveLength(4);
-          expect(await real.lookup("closed:request:old-0")).toBeUndefined();
-          expect(await real.lookup("active:request:B")).toMatchObject({
-            result: { status: "succeeded" },
-          });
-          expect(await owner.execute("active", requests[1]!)).toMatchObject({
-            status: "succeeded",
-            replayed: true,
-          });
-          expect(executed).toHaveLength(2);
-        } finally {
-          resetPluginStateStoreForTests();
-        }
-      },
-    );
+            await requestClaims.promise;
+          }
+          return inserted;
+        },
+        entries: async () => {
+          const entries = await real.entries();
+          if (++observed === 2) {
+            snapshots.resolve();
+            // Return the second stale snapshot after the first sweep reclaims its rows.
+            await firstCleanup.promise;
+          }
+          await snapshots.promise;
+          return entries;
+        },
+        delete: async (key) => {
+          const removed = await real.delete(key);
+          deleted.push(removed);
+          if (removed && ++removedRows === 2) {
+            firstCleanup.resolve();
+          }
+          return removed;
+        },
+      };
+      const executed: string[] = [];
+      const owner = new MeetingParticipation({
+        store,
+        current: (id) => (id === "active" ? { session: {}, assertCurrent() {} } : undefined),
+        capabilities: () => ["chat"],
+        validateAction: () => undefined,
+        execute: async (_session, request) => {
+          executed.push(request.requestId);
+          return { status: "succeeded" };
+        },
+      });
+      owner.close("closed");
+      const requests = (["A", "B"] as const).map((role) => {
+        const sourceId = owner.observe("active", {
+          id: "source-" + role,
+          epoch: "page",
+          revision: "1",
+          kind: "caption",
+          text: "Please reply to " + role,
+          finalized: true,
+        });
+        expect(sourceId).toBeTruthy();
+        return { requestId: role, sourceId, action: { type: "chat", text: role } };
+      });
+      const results = await Promise.all(
+        requests.map((request) => owner.execute("active", request)),
+      );
+      expect(results.map((result) => result.status)).toEqual(["succeeded", "succeeded"]);
+      expect(deleted).toEqual([true, true, false, false]);
+      expect(executed.toSorted()).toEqual(["A", "B"]);
+      expect(await real.entries()).toHaveLength(4);
+      expect(await real.lookup("closed:request:old-0")).toBeUndefined();
+      expect(await real.lookup("active:request:B")).toMatchObject({
+        result: { status: "succeeded" },
+      });
+      expect(await owner.execute("active", requests[1]!)).toMatchObject({
+        status: "succeeded",
+        replayed: true,
+      });
+      expect(executed).toHaveLength(2);
+    } finally {
+      resetPluginStateStoreForTests();
+    }
   });
 });

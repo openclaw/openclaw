@@ -79,11 +79,10 @@ export async function readClaudeCatalogMetadata(
 type CatalogJsonCacheEntry<T> = {
   mtimeMs: number;
   size: number;
-  ino?: number;
   value: T;
 };
 
-type FileSignature = { mtimeMs: number; size: number; ino: number };
+type FileSignature = { mtimeMs: number; size: number };
 type SafeSessionFile = ({ filePath: string } & FileSignature) | undefined;
 
 type ClaudeProjectDirectorySnapshot = {
@@ -153,7 +152,7 @@ async function safeSessionFile(
     }
     const stat = await fs.stat(resolvedCandidate);
     return stat.isFile()
-      ? { filePath: resolvedCandidate, mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino }
+      ? { filePath: resolvedCandidate, mtimeMs: stat.mtimeMs, size: stat.size }
       : undefined;
   } catch (error) {
     const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -207,7 +206,7 @@ export function createCatalogJsonReader<T>(project: (value: unknown) => T) {
     filePath: string,
     options: {
       onIoFailure?: () => void;
-      signature?: { mtimeMs: number; size: number; ino?: number };
+      signature?: FileSignature;
     } = {},
   ): Promise<T | undefined> => {
     const stat =
@@ -224,12 +223,7 @@ export function createCatalogJsonReader<T>(project: (value: unknown) => T) {
       return undefined;
     }
     const cached = cache.get(filePath);
-    if (
-      cached &&
-      cached.mtimeMs === stat.mtimeMs &&
-      cached.size === stat.size &&
-      cached.ino === stat.ino
-    ) {
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
       setBoundedCache(cache, filePath, cached, MAX_CATALOG_JSON_CACHE_ENTRIES);
       return cached.value;
     }
@@ -245,7 +239,7 @@ export function createCatalogJsonReader<T>(project: (value: unknown) => T) {
       setBoundedCache(
         cache,
         filePath,
-        { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino, value },
+        { mtimeMs: stat.mtimeMs, size: stat.size, value },
         MAX_CATALOG_JSON_CACHE_ENTRIES,
       );
       return value;
@@ -295,7 +289,7 @@ export async function readProjectsTreeSnapshot(
   const full =
     !previous?.resolvedRoot ||
     options.forceRefresh ||
-    current.hardExpiresAt <= Date.now() ||
+    current.hardExpiresAt <= performance.now() ||
     dirty === "all";
   setBoundedCache(projectTreeSlots, root, current, 8, (evicted) => {
     void evicted.watch.close().catch((error: unknown) => {
@@ -360,7 +354,7 @@ export async function readProjectsTreeSnapshot(
           ? dir.childNames.map((name) => async () => {
               const stat = await fs.lstat(path.join(dir.directory, name)).catch(onReadFailure);
               if (stat?.isFile()) {
-                dir.files.set(name, { mtimeMs: stat.mtimeMs, size: stat.size, ino: stat.ino });
+                dir.files.set(name, { mtimeMs: stat.mtimeMs, size: stat.size });
               }
             })
           : [],
@@ -370,7 +364,6 @@ export async function readProjectsTreeSnapshot(
     });
     for (const dir of results) {
       if (dir) {
-        // Include inode so atomic replacements invalidate even with identical size and mtime.
         const files = dir.childNames.map((name) => [name, dir.files.get(name)]);
         directories.set(dir.name, {
           ...dir,
@@ -382,13 +375,13 @@ export async function readProjectsTreeSnapshot(
       a.name.localeCompare(b.name),
     );
     if (full) {
-      current.hardExpiresAt = Date.now() + CLAUDE_SESSION_SCAN_HARD_TTL_MS;
+      current.hardExpiresAt = performance.now() + CLAUDE_SESSION_SCAN_HARD_TTL_MS;
     }
     if (!complete) {
       // Another dirty directory must not postpone recovery of an earlier failed read.
       current.hardExpiresAt = Math.min(
         current.hardExpiresAt,
-        Date.now() + CLAUDE_PARTIAL_SCAN_TTL_MS,
+        performance.now() + CLAUDE_PARTIAL_SCAN_TTL_MS,
       );
     }
     return {

@@ -1,13 +1,12 @@
 // Gateway CLI backend connect tests exercise the minimal WebSocket handshake,
 // device identity payload, auth token forwarding, and backend request framing.
 import type { AddressInfo } from "node:net";
-import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
 import {
@@ -20,12 +19,6 @@ import {
 
 const GATEWAY_CONNECT_OPERATION_TIMEOUT_MS = 1_000;
 const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 15_000;
-const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-" });
-
-async function createTempDeviceIdentity() {
-  const tempRoot = await tempDirs.make("device");
-  return loadOrCreateDeviceIdentity({ path: path.join(tempRoot, "device.sqlite") });
-}
 
 async function startMinimalGatewayServer(params: { token: string }) {
   const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
@@ -56,11 +49,6 @@ async function startMinimalGatewayServer(params: { token: string }) {
               stateVersion: { presence: 0, health: 0 },
               uptimeMs: 0,
             },
-            policy: {
-              maxPayload: 1,
-              maxBufferedBytes: 1,
-              tickIntervalMs: 60_000,
-            },
           }),
         );
         return;
@@ -88,12 +76,9 @@ async function startMinimalGatewayServer(params: { token: string }) {
 }
 
 describe("gateway cli backend connect", () => {
-  beforeAll(async () => {
-    await tempDirs.setup();
-  });
-
-  afterAll(async () => {
-    await tempDirs.cleanup();
+  beforeEach(async () => {
+    const state = await createOpenClawTestState({ scenario: "minimal" });
+    onTestFinished(() => state.cleanup());
   });
 
   it.each([
@@ -103,7 +88,7 @@ describe("gateway cli backend connect", () => {
     "connects a test gateway client through the live helper with $label",
     async ({ caps }) => {
       const token = `test-${Date.now()}`;
-      const deviceIdentity = await createTempDeviceIdentity();
+      const deviceIdentity = loadOrCreateDeviceIdentity();
       const server = await startMinimalGatewayServer({ token });
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 

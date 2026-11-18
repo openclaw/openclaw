@@ -269,7 +269,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
       const params = createCodexUserInputTestParams();
       params.prompt = "Run the deterministic sandbox write probe.";
       params.hostCapabilities = createCodexTestHostCapabilities();
-      const turn = buildTurnStartParams(params, {
+      const turn = await buildTurnStartParams(params, {
         threadId: thread.thread.id,
         cwd,
         appServer,

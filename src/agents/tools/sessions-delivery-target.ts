@@ -52,9 +52,7 @@ export async function resolveSessionsSendReplyTarget(params: {
     if (context?.channel && context.to) {
       return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };
     }
-  } catch {
-    // ignore
-  }
+  } catch {}
 
   return fallback;
 }

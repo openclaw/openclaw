@@ -5,6 +5,7 @@ import {
   buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelPreviewStreamingConfigSchema,
+  ChannelThreadBindingsSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ProviderCommandsSchema,
@@ -181,6 +182,7 @@ const TelegramAccountSchemaBase = z
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     richMessages: z.boolean().optional(),
+    widgets: z.boolean().optional(),
     network: z
       .object({
         autoSelectFamily: z.boolean().optional(),
@@ -242,16 +244,7 @@ const TelegramAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     ...buildChannelReactionShape({
       notificationModes: ["off", "own", "all"],
       reactionLevels: ["off", "ack", "minimal", "extensive"],

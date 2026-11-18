@@ -5,6 +5,7 @@ import {
   buildJsonChannelConfigSchema,
 } from "../channels/plugins/config-schema.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   normalizeBundledPluginStringList,
@@ -20,14 +21,14 @@ import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 
-const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
-  path.join("src", "config-schema.ts"),
-  path.join("src", "config-schema.js"),
-  path.join("src", "config-schema.mts"),
-  path.join("src", "config-schema.mjs"),
-  path.join("src", "config-schema.cts"),
-  path.join("src", "config-schema.cjs"),
-] as const;
+const log = createSubsystemLogger("plugins");
+
+const CONFIG_SCHEMA_CANDIDATES = [
+  ...[".ts", ".js", ".mts", ".mjs", ".cts", ".cjs"].map((extension) =>
+    path.join("src", `config-schema${extension}`),
+  ),
+  ...PUBLIC_SURFACE_SOURCE_EXTENSIONS.map((extension) => `channel-config-api${extension}`),
+];
 
 type ChannelConfigSurface = {
   schema: JsonSchemaObject;
@@ -87,19 +88,9 @@ function resolveConfigSchemaExport(imported: Record<string, unknown>): ChannelCo
 }
 
 function resolveChannelConfigSchemaModulePath(pluginDir: string): string | undefined {
-  for (const relativePath of SOURCE_CONFIG_SCHEMA_CANDIDATES) {
-    const candidate = path.join(pluginDir, relativePath);
-    if (pluginCacheExistsSync(candidate)) {
-      return candidate;
-    }
-  }
-  for (const extension of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
-    const candidate = path.join(pluginDir, `channel-config-api${extension}`);
-    if (pluginCacheExistsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
+  return CONFIG_SCHEMA_CANDIDATES.map((relativePath) => path.join(pluginDir, relativePath)).find(
+    pluginCacheExistsSync,
+  );
 }
 
 function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSurface | null {
@@ -112,7 +103,11 @@ function loadChannelConfigSurfaceModuleSync(modulePath: string): ChannelConfigSu
     });
     const imported = load(modulePath) as Record<string, unknown>;
     return resolveConfigSchemaExport(imported);
-  } catch {
+  } catch (error) {
+    log.warn(
+      `Unable to load bundled channel config metadata from ${modulePath}; using manifest metadata`,
+      { error },
+    );
     return null;
   }
 }

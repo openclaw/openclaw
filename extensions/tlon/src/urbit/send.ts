@@ -3,14 +3,11 @@ import {
   createMessageReceiptFromOutboundResults,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { UrbitSSEClient } from "./sse-client.js";
 import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./story.js";
 
-type TlonPokeApi = {
-  poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
-};
-
 type SendStoryParams = {
-  api: TlonPokeApi;
+  api: { poke: (...args: Parameters<UrbitSSEClient["poke"]>) => Promise<unknown> };
   fromShip: string;
   toShip: string;
   story: Story;
@@ -83,14 +80,10 @@ export async function sendDmWithStory({
   };
 }
 
-type SendGroupStoryParams = {
-  api: TlonPokeApi;
-  fromShip: string;
+type SendGroupStoryParams = Omit<SendStoryParams, "toShip"> & {
   hostShip: string;
   channelName: string;
-  story: Story;
   replyToId?: string | null;
-  kind?: MessageReceiptPartKind;
 };
 
 export async function sendGroupMessage({
@@ -114,11 +107,7 @@ export async function sendGroupMessageWithStory({
   // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
-    try {
-      formattedReplyId = scot("ud", BigInt(replyToId));
-    } catch {
-      // Fall back to raw ID if formatting fails
-    }
+    formattedReplyId = scot("ud", BigInt(replyToId));
   }
 
   const memo = { content: story, author: fromShip, sent: sentAt };

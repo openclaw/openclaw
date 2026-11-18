@@ -38,7 +38,7 @@ enum DeepLinkAgentPolicy {
         }
         let channel = GatewayAgentChannel(raw: link.channel)
         let deliver = channel.shouldDeliver(link.deliver)
-        let to = link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        let to = link.to?.nonEmpty
         return (deliver: deliver, to: to, channel: channel)
     }
 }
@@ -62,6 +62,11 @@ final class DeepLinkHandler {
     }
 
     func handle(url: URL) async {
+        if let link = CatalogInstallDeepLink(url: url) {
+            // No action query: opening a package never installs or enables executable code.
+            await DashboardManager.shared.show(atPath: link.dashboardPath, search: link.dashboardSearch)
+            return
+        }
         guard let route = DeepLinkParser.parse(url) else {
             deepLinkLogger.debug("ignored deep link \(Self.invalidRouteMetadata(url), privacy: .public)")
             return
@@ -96,7 +101,7 @@ final class DeepLinkHandler {
             return
         }
 
-        let allowUnattended = link.key == Self.canvasUnattendedKey || link.key == Self.expectedKey()
+        let allowUnattended = link.key == Self.canvasUnattendedKey || link.key == Self.currentKey()
         if !allowUnattended {
             if Date().timeIntervalSince(self.lastPromptAt) < 1.0 {
                 deepLinkLogger.debug("throttling deep link prompt")
@@ -125,9 +130,7 @@ final class DeepLinkHandler {
 
         do {
             let effectiveDelivery = DeepLinkAgentPolicy.effectiveDelivery(link: link, allowUnattended: allowUnattended)
-            let explicitSessionKey = link.sessionKey?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .nonEmpty
+            let explicitSessionKey = link.sessionKey?.nonEmpty
             let resolvedSessionKey: String = if let explicitSessionKey {
                 explicitSessionKey
             } else {
@@ -136,7 +139,7 @@ final class DeepLinkHandler {
             let invocation = GatewayAgentInvocation(
                 message: messagePreview,
                 sessionKey: resolvedSessionKey,
-                thinking: link.thinking?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty,
+                thinking: link.thinking?.nonEmpty,
                 deliver: effectiveDelivery.deliver,
                 to: effectiveDelivery.to,
                 channel: effectiveDelivery.channel,
@@ -155,13 +158,7 @@ final class DeepLinkHandler {
         }
     }
 
-    // MARK: - Auth
-
     static func currentKey() -> String {
-        self.expectedKey()
-    }
-
-    private static func expectedKey() -> String {
         let defaults = AppDefaults.standard
         if let key = defaults.string(forKey: deepLinkKeyKey), !key.isEmpty {
             return key
@@ -181,8 +178,6 @@ final class DeepLinkHandler {
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
-
-    // MARK: - UI
 
     private func confirm(title: String, message: String) async -> Bool {
         let alert = NSAlert()

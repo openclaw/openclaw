@@ -1,12 +1,4 @@
-/**
- * Matrix Poll Types (MSC3381)
- *
- * Defines types for Matrix poll events:
- * - m.poll.start - Creates a new poll
- * - m.poll.response - Records a vote
- * - m.poll.end - Closes a poll
- */
-
+// Matrix polls follow MSC3381.
 import {
   M_POLL_KIND_DISCLOSED,
   type PollKind as MatrixPollKind,
@@ -327,13 +319,6 @@ function buildTextContent(body: string): TextContent {
   };
 }
 
-function buildPollFallbackText(question: string, answers: string[]): string {
-  if (answers.length === 0) {
-    return question;
-  }
-  return `${question}\n${answers.map((answer, idx) => `${idx + 1}. ${answer}`).join("\n")}`;
-}
-
 export function buildPollStartContent(poll: PollInput): PollStartContent {
   const normalized = normalizePollInput(poll);
   const answers = normalized.options.map((option, idx) => ({
@@ -342,7 +327,7 @@ export function buildPollStartContent(poll: PollInput): PollStartContent {
   }));
 
   const isMultiple = normalized.maxSelections > 1;
-  const fallbackText = buildPollFallbackText(normalized.question, normalized.options);
+  const fallbackText = `${normalized.question}\n${normalized.options.map((option, idx) => `${idx + 1}. ${option}`).join("\n")}`;
 
   return {
     [M_POLL_START]: {

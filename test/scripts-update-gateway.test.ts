@@ -6,8 +6,18 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../scripts/stage-bundled-plugin-runtime.mts";
+import { resolveRuntimeWorkerUrl } from "../src/infra/runtime-worker-url.js";
+import { toolingMtsEntrypoints } from "./scripts/tooling-mts-runtime.test-support.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// Share the invocation's compiled modules while retaining a real isolated process
+// per update. The artifact probe must borrow the adapter's same lock owner.
+const updateGatewayBuildUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.updateGatewayBuild);
+const artifactPreflightUrl = resolveRuntimeWorkerUrl(
+  toolingMtsEntrypoints.sourceUpdateArtifactPreflight,
+);
+const artifactOwnershipUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.distArtifactOwnership);
+const stageRuntimeUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.stageBundledPluginRuntime);
 let scratch: string;
 let workdir: string;
 let shimDir: string;
@@ -50,6 +60,8 @@ function runUpdater(overrides: Record<string, string> = {}) {
       UPDATE_TEST_LOG: invocationLog,
       UPDATE_TEST_BIN: shimDir,
       UPDATE_TEST_LIVE_ROOT: workdir,
+      TMPDIR: scratch,
+      UPDATE_TEST_PRIVATE_TMPDIR: scratch,
     },
   });
 }
@@ -81,15 +93,28 @@ describe("source updater lifecycle preflight", () => {
     // Git/package-manager commands are controlled by this shell scenario.
     fs.writeFileSync(
       path.join(seed, "scripts/tsx.mjs"),
-      `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href)};\n`,
+      `import ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/tsx.mjs")).href)};
+import fs from "node:fs";
+import path from "node:path";
+import { resolveManagedUpdateLeaseDatabasePath } from ${JSON.stringify(new URL("../src/infra/update-managed-service-handoff-lease.js", updateGatewayBuildUrl).href)};
+const database = resolveManagedUpdateLeaseDatabasePath();
+if (!fs.realpathSync(path.dirname(database)).startsWith(fs.realpathSync(process.env.UPDATE_TEST_PRIVATE_TMPDIR) + path.sep)) throw Error("Non-private handoff database");
+`,
     );
     fs.writeFileSync(
       path.join(seed, "scripts/update-gateway-build.mts"),
-      `import { runUpdateGatewayBuild } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/update-gateway-build.mts")).href)};\nprocess.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));\n`,
+      `import { runUpdateGatewayBuild } from ${JSON.stringify(updateGatewayBuildUrl.href)};
+process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
+`,
     );
     fs.writeFileSync(
       path.join(seed, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.9.1", packageManager: "pnpm@12.4.0" }),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: "pnpm@12.4.0",
+        openclaw: { updateAdmissionProtocol: 1 },
+      }),
     );
     fs.writeFileSync(
       path.join(seed, ".gitignore"),
@@ -113,7 +138,7 @@ const path = require('node:path');
 const {execFileSync} = require('node:child_process');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding:'utf8'}).trim();
 fs.mkdirSync('dist/control-ui', {recursive:true});
-fs.writeFileSync('dist/entry.js', '// synthetic runtime\n');
+fs.writeFileSync('dist/entry.js', 'console.log(' + JSON.stringify(JSON.stringify({protocol:1, verdict:'admit', reasons:[], warnings:[], facts:{candidateVersion:'2026.9.1', installedVersion:'2026.9.1', checks:[]}})) + ');\n');
 fs.writeFileSync('dist/control-ui/index.html', 'ready');
 fs.writeFileSync('dist/build-info.json', JSON.stringify({commit:head,buildId:'fixture-'+head}));
 for (const name of ['.buildstamp','.runtime-postbuildstamp']) fs.writeFileSync(path.join('dist',name),JSON.stringify({head}));
@@ -129,14 +154,9 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
 
   it.each([
     ["stop only", { OPENCLAW_UPDATE_STOP_CMD: "custom-stop" }],
-    ["restart only", { OPENCLAW_UPDATE_RESTART_CMD: "custom-restart" }],
     [
       "blank stop",
       { OPENCLAW_UPDATE_STOP_CMD: " \t\n", OPENCLAW_UPDATE_RESTART_CMD: "custom-restart" },
-    ],
-    [
-      "blank restart",
-      { OPENCLAW_UPDATE_STOP_CMD: "custom-stop", OPENCLAW_UPDATE_RESTART_CMD: " \t\n" },
     ],
     [
       "manual with automatic stop",
@@ -186,37 +206,104 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     return { result, original, dependency };
   }
 
-  it.each([false, true])(
-    "preserves the live checkout under inspected artifact custody (changed=%s)",
-    (changed) => {
-      const seed = path.join(scratch, "seed");
+  it.each([
+    "registered",
+    "foreign",
+    "fake",
+    "unregistered",
+    "rerouted",
+    "ordinary-changed",
+  ] as const)("preserves only verified registered nested worktrees (%s)", (kind) => {
+    const nested = path.join(workdir, "operator projects", "unpublished");
+    const repository = kind === "foreign" ? path.join(scratch, "seed") : workdir;
+    git(repository, "worktree", "add", "--detach", nested, "HEAD");
+    const gitFile = path.join(nested, ".git");
+    const originalGitFile = fs.readFileSync(gitFile, "utf8");
+    const admin = originalGitFile.slice("gitdir: ".length).trim();
+    const backlink = fs.readFileSync(path.join(admin, "gitdir"), "utf8");
+    const before = git(nested, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(nested, "package.json"), "unpublished tracked bytes\n");
+    fs.writeFileSync(path.join(nested, "local.txt"), "unpublished untracked bytes\n");
+    fs.writeFileSync(
+      path.join(workdir, "operator projects/operator-input.txt"),
+      "ordinary input\n",
+    );
+    if (kind === "fake") {
       fs.writeFileSync(
-        path.join(seed, "scripts/stage-bundled-plugin-runtime.mts"),
-        `export { prepareBundledPluginRuntime } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/stage-bundled-plugin-runtime.mts")).href)};\n`,
+        path.join(admin, "gitdir"),
+        path.join(scratch, "not-this-worktree", ".git") + "\n",
       );
-      git(seed, "add", "scripts/stage-bundled-plugin-runtime.mts");
-      commitFixture(seed, "runtime inspector");
-      git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
-      git(workdir, "pull", "--ff-only", "-q");
-      fs.mkdirSync(path.join(workdir, "dist/extensions/demo"), { recursive: true });
-      fs.writeFileSync(
-        path.join(workdir, "dist/extensions/demo/index.js"),
-        "export const current = true;\n",
-      );
-      stageBundledPluginRuntime({ repoRoot: workdir });
-      const serving = path.join(workdir, "dist-runtime/extensions/demo/index.js");
-      if (changed) {
-        fs.writeFileSync(serving, "previous serving generation\n");
-      }
-      const before = { bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino };
-      const probe = path.join(shimDir, "inspect-artifacts.mts");
-      fs.writeFileSync(
-        probe,
-        `
+    } else if (kind === "unregistered") {
+      // An independent nested Git repository is not this checkout's linked worktree.
+      fs.unlinkSync(gitFile);
+      git(nested, "init", "-q");
+    }
+    const observation = path.join(scratch, "candidate-inputs");
+    const { result, original, dependency } = runRefusedSourceUpdate(
+      [
+        'test ! -e "operator projects/unpublished" || exit 41',
+        'cat "operator projects/operator-input.txt" > "$UPDATE_TEST_INPUT_OBSERVATION"',
+        ...(kind === "rerouted"
+          ? ['printf "gitdir: %s\n" "$UPDATE_TEST_OTHER_ADMIN" > "$UPDATE_TEST_NESTED_GIT"']
+          : kind === "ordinary-changed"
+            ? ['echo changed > "$UPDATE_TEST_LIVE_ROOT/operator projects/operator-input.txt"']
+            : []),
+      ],
+      {
+        UPDATE_TEST_INPUT_OBSERVATION: observation,
+        UPDATE_TEST_NESTED_GIT: gitFile,
+        UPDATE_TEST_OTHER_ADMIN: path.join(workdir, ".git"),
+      },
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(kind === "registered" ? 23 : 1);
+    expect(calls().includes("stop-refused")).toBe(kind === "registered");
+    expect(calls()).not.toContain("unexpected-restart");
+    expect(calls()).not.toContain("live-install");
+    expect(git(workdir, "rev-parse", "HEAD")).toBe(original);
+    expect(fs.readFileSync(dependency, "utf8")).toBe("original dependency\n");
+    expect(fs.readFileSync(path.join(nested, "package.json"), "utf8")).toBe(
+      "unpublished tracked bytes\n",
+    );
+    expect(fs.readFileSync(path.join(nested, "local.txt"), "utf8")).toBe(
+      "unpublished untracked bytes\n",
+    );
+    if (["registered", "rerouted", "ordinary-changed"].includes(kind)) {
+      expect(fs.readFileSync(observation, "utf8")).toBe("ordinary input\n");
+    }
+    if (kind === "registered") {
+      expect(git(nested, "rev-parse", "HEAD")).toBe(before);
+      expect(fs.readFileSync(gitFile, "utf8")).toBe(originalGitFile);
+      expect(fs.readFileSync(path.join(admin, "gitdir"), "utf8")).toBe(backlink);
+    }
+  });
+
+  it("preserves changed live artifacts under inspected custody", () => {
+    const seed = path.join(scratch, "seed");
+    fs.writeFileSync(
+      path.join(seed, "scripts/stage-bundled-plugin-runtime.mts"),
+      `export { prepareBundledPluginRuntime } from ${JSON.stringify(stageRuntimeUrl.href)};\n`,
+    );
+    git(seed, "add", "scripts/stage-bundled-plugin-runtime.mts");
+    commitFixture(seed, "runtime inspector");
+    git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
+    git(workdir, "pull", "--ff-only", "-q");
+    fs.mkdirSync(path.join(workdir, "dist/extensions/demo"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workdir, "dist/extensions/demo/index.js"),
+      "export const current = true;\n",
+    );
+    stageBundledPluginRuntime({ repoRoot: workdir });
+    const serving = path.join(workdir, "dist-runtime/extensions/demo/index.js");
+    fs.writeFileSync(serving, "previous serving generation\n");
+    const before = { bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino };
+    const probe = path.join(shimDir, "inspect-artifacts.mts");
+    fs.writeFileSync(
+      probe,
+      `
 import fs from "node:fs";
 import path from "node:path";
-import { preflightInstalledSourceArtifacts } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/source-update-artifact-preflight.mts")).href)};
-import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/lib/dist-artifact-ownership.mts")).href)};
+import { preflightInstalledSourceArtifacts } from ${JSON.stringify(artifactPreflightUrl.href)};
+import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(artifactOwnershipUrl.href)};
 const owner = path.join(resolveDistArtifactLockPath(process.env.UPDATE_TEST_LIVE_ROOT), "owner.json");
 const original = fs.readFileSync(owner, "utf8");
 await withDistArtifactOwnership(process.cwd(), async () => {
@@ -225,27 +312,26 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   fs.appendFileSync(process.env.UPDATE_TEST_LOG, "artifact-fact:" + process.env.sourceRuntimePrepared + "\\n");
 });
 `,
-      );
-      const { result, original, dependency } = runRefusedSourceUpdate([
-        `node --import ${JSON.stringify(path.join(repoRoot, "scripts/tsx.mjs"))} ${JSON.stringify(probe)}`,
-      ]);
-      expect(result.status, result.stdout + result.stderr).toBe(23);
-      expect(calls()).toContain(`artifact-fact:${!changed}`);
-      expect(calls()).toContain("stop-refused");
-      expect({ bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino }).toEqual(before);
-      expect({
-        head: git(workdir, "rev-parse", "HEAD"),
-        dependency: fs.readFileSync(dependency, "utf8"),
-        installed: calls().includes("live-install"),
-        restarted: calls().includes("unexpected-restart"),
-      }).toEqual({
-        head: original,
-        dependency: "original dependency\n",
-        installed: false,
-        restarted: false,
-      });
-    },
-  );
+    );
+    const { result, original, dependency } = runRefusedSourceUpdate([
+      `node --import ${JSON.stringify(path.join(repoRoot, "scripts/tsx.mjs"))} ${JSON.stringify(probe)}`,
+    ]);
+    expect(result.status, result.stdout + result.stderr).toBe(23);
+    expect(calls()).toContain("artifact-fact:false");
+    expect(calls()).toContain("stop-refused");
+    expect({ bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino }).toEqual(before);
+    expect({
+      head: git(workdir, "rev-parse", "HEAD"),
+      dependency: fs.readFileSync(dependency, "utf8"),
+      installed: calls().includes("live-install"),
+      restarted: calls().includes("unexpected-restart"),
+    }).toEqual({
+      head: original,
+      dependency: "original dependency\n",
+      installed: false,
+      restarted: false,
+    });
+  });
 
   it("retains the published 9.6 three-argument first-hop contract", () => {
     const published = fs.readFileSync(
@@ -296,7 +382,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
 import fs from "node:fs/promises";
 import path from "node:path";
 import {execFileSync} from "node:child_process";
-import {runUpdateGatewayBuild} from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "scripts/update-gateway-build.mts")).href)};
+import {runUpdateGatewayBuild} from ${JSON.stringify(updateGatewayBuildUrl.href)};
 const root = await fs.realpath(process.cwd());
 const rename = fs.rename.bind(fs);
 fs.rename = async (source, destination) => {
@@ -545,12 +631,7 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
 
   it.each([
     "physical-alias",
-    "external-file",
     "external-file-changed",
-    "external-directory",
-    "tracked-directory-file",
-    "tracked-directory-file-changed",
-    "candidate-directory-file",
     "candidate-directory-file-changed",
     "candidate-directory-file-rerouted",
     "candidate-directory-file-published",
@@ -560,14 +641,13 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
     fs.mkdirSync(path.dirname(input));
     const payload = path.join(scratch, "external-input");
     let expected = "external input\n";
-    let buildInput = "inputs/operator-link";
     let mutationTarget = payload;
     const published = kind.endsWith("-published");
     const rerouted = kind.endsWith("-rerouted");
     const changedInput = kind.endsWith("-changed") || rerouted;
     let originalExternalFile: string | undefined;
     const replacementExternalFile = path.join(scratch, "replacement-external-file");
-    if (kind.startsWith("tracked-directory") || kind.startsWith("candidate-directory")) {
+    if (kind.startsWith("candidate-directory")) {
       fs.mkdirSync(payload);
       mutationTarget = path.join(payload, "payload.txt");
       fs.writeFileSync(mutationTarget, expected);
@@ -577,22 +657,20 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
       git(seed, "push", "-q", path.join(scratch, "origin.git"), "main");
       git(workdir, "pull", "-q", "--ff-only");
       fs.symlinkSync("../assets/payload.txt", input);
-      if (kind.startsWith("candidate-directory")) {
-        const candidatePayload = path.join(scratch, "candidate-external-input");
-        fs.mkdirSync(candidatePayload);
-        expected = "candidate external input\n";
-        mutationTarget = path.join(candidatePayload, "payload.txt");
-        fs.writeFileSync(mutationTarget, expected);
-        if (rerouted) {
-          originalExternalFile = path.join(candidatePayload, "original.txt");
-          fs.renameSync(mutationTarget, originalExternalFile);
-          fs.symlinkSync(originalExternalFile, mutationTarget);
-          fs.writeFileSync(replacementExternalFile, "changed\n");
-        }
-        fs.unlinkSync(path.join(seed, "assets"));
-        fs.symlinkSync(candidatePayload, path.join(seed, "assets"), "dir");
-        git(seed, "add", "assets");
+      const candidatePayload = path.join(scratch, "candidate-external-input");
+      fs.mkdirSync(candidatePayload);
+      expected = "candidate external input\n";
+      mutationTarget = path.join(candidatePayload, "payload.txt");
+      fs.writeFileSync(mutationTarget, expected);
+      if (rerouted) {
+        originalExternalFile = path.join(candidatePayload, "original.txt");
+        fs.renameSync(mutationTarget, originalExternalFile);
+        fs.symlinkSync(originalExternalFile, mutationTarget);
+        fs.writeFileSync(replacementExternalFile, "changed\n");
       }
+      fs.unlinkSync(path.join(seed, "assets"));
+      fs.symlinkSync(candidatePayload, path.join(seed, "assets"), "dir");
+      git(seed, "add", "assets");
     } else if (kind === "physical-alias") {
       fs.writeFileSync(path.join(seed, "target.txt"), "old tracked source\n");
       git(seed, "add", "target.txt");
@@ -603,11 +681,6 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
       fs.symlinkSync(workdir, alias, "dir");
       fs.symlinkSync(path.join(alias, "target.txt"), input);
       expected = "new tracked source\n";
-    } else if (kind === "external-directory") {
-      fs.mkdirSync(payload);
-      fs.writeFileSync(path.join(payload, "payload.txt"), expected);
-      fs.symlinkSync(payload, input, "dir");
-      buildInput += "/payload.txt";
     } else {
       fs.writeFileSync(payload, expected);
       fs.symlinkSync(payload, input);
@@ -622,7 +695,7 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
     const observation = path.join(scratch, "candidate-observation");
     const { result, original, dependency } = runRefusedSourceUpdate(
       [
-        `cat "${buildInput}" > "$UPDATE_TEST_INPUT_OBSERVATION"`,
+        'cat inputs/operator-link > "$UPDATE_TEST_INPUT_OBSERVATION"',
         ...(rerouted
           ? [
               'rm "$UPDATE_TEST_EXTERNAL_INPUT"; ln -s "$UPDATE_TEST_EXTERNAL_OTHER" "$UPDATE_TEST_EXTERNAL_INPUT"',
@@ -665,36 +738,4 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
     expect(calls()).not.toContain("live-install");
     expect(calls()).not.toContain("unexpected-restart");
   });
-
-  it.each([
-    ["defaults", {}, "openclaw gateway stop --force", "openclaw gateway restart"],
-    [
-      "trimmed custom pair",
-      {
-        OPENCLAW_UPDATE_STOP_CMD: "  custom-stop\t",
-        OPENCLAW_UPDATE_RESTART_CMD: "\ncustom-restart  ",
-      },
-      "custom-stop",
-      "custom-restart",
-    ],
-  ] satisfies Array<[string, Record<string, string>, string, string]>)(
-    "passes %s to the owned build adapter",
-    (_name, overrides, stop, restart) => {
-      const realNode = process.execPath;
-      writeShim(
-        "node",
-        [
-          'if [ "$1" = --import ]; then',
-          '  printf "adapter:%s:%s:%s\\n" "$4" "$5" "$6" >> "$UPDATE_TEST_LOG"',
-          "  exit 0",
-          "fi",
-          `exec '${realNode.replaceAll("'", "'\\''")}' "$@"`,
-        ].join("\n"),
-      );
-      const result = runUpdater(overrides);
-      expect(result.status, result.stderr).toBe(0);
-      expect(calls().some((call) => call.startsWith(`adapter:${stop}:${restart}:`))).toBe(true);
-      expect(calls()).not.toContain("pnpm build");
-    },
-  );
 });

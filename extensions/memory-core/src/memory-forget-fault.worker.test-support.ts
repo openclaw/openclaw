@@ -4,6 +4,7 @@ import { bindSqliteWorkerBackend as bindBackend } from "./memory-entry-origins.w
 
 export type MemoryForgetFault = {
   trigger?: { event: string; message: string; action: "ABORT" | "FAIL" };
+  originTrigger?: { name: string; createSql: string };
   reportPath?: string;
   failResult?: "forget.mark" | "forget.purge";
 };
@@ -17,6 +18,9 @@ export function bindSqliteWorkerBackend(
   const prepare = db.prepare.bind(db);
   const restoreStatements: Array<() => void> = [];
   const counts = { sourceDeletes: 0, tombstoneInserts: 0 };
+  if (input.originTrigger) {
+    db.exec(input.originTrigger.createSql);
+  }
   if (input.trigger) {
     const { event, message, action } = input.trigger;
     db.exec(
@@ -24,7 +28,7 @@ export function bindSqliteWorkerBackend(
     );
   }
   if (input.reportPath) {
-    db.prepare = (sql) => {
+    db.prepare = (sql: string) => {
       const statement = prepare(sql);
       const counter = sql.startsWith('delete from "memory_index_sources"')
         ? "sourceDeletes"
@@ -58,36 +62,35 @@ export function bindSqliteWorkerBackend(
     },
     close() {
       const failures: unknown[] = [];
-      try {
-        backend.close();
-      } catch (error) {
-        failures.push(error);
-      }
+      const attempt = (cleanup: () => void) => {
+        try {
+          cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      attempt(() => backend.close());
       if (input.reportPath) {
         db.prepare = prepare;
-        for (const restore of restoreStatements) {
-          restore();
-        }
+        restoreStatements.forEach((restore) => restore());
       }
-      try {
+      attempt(() => {
         if (db.isOpen && input.trigger) {
           db.exec("DROP TRIGGER temp.forget_fixture_failure");
         }
-      } catch (error) {
-        failures.push(error);
-      }
-      try {
+        if (db.isOpen && input.originTrigger) {
+          db.exec(`DROP TRIGGER ${input.originTrigger.name}`);
+        }
+      });
+      attempt(() => {
         if (input.reportPath) {
           appendFileSync(input.reportPath, `${JSON.stringify(counts)}\n`);
         }
-      } catch (error) {
-        failures.push(error);
-      }
-      if (failures.length === 1) {
-        throw failures[0];
-      }
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Memory Forget fixture cleanup failed");
+      });
+      if (failures.length) {
+        throw failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, "Memory Forget fixture cleanup failed");
       }
     },
   };

@@ -107,13 +107,12 @@ enum CloudflareAccessJWT {
 
     /// Decoding is only for selecting the constrained issuer or checking an already verified token.
     static func decode<T: Decodable>(_ type: T.Type, token: String) throws -> T {
-        let parts = try self.parts(token)
+        let (_, parts) = try self.parts(token)
         return try JSONDecoder().decode(type, from: self.base64URL(parts[1]))
     }
 
     static func verify(_ token: String, jwks: Data) throws {
-        let parts = try self.parts(token)
-        let header = try JSONDecoder().decode(Header.self, from: self.base64URL(parts[0]))
+        let (header, parts) = try self.parts(token)
         let keySet = try JSONDecoder().decode(KeySet.self, from: jwks)
         guard keySet.keys.count <= 64,
               let key = keySet.keys.first(where: {
@@ -156,7 +155,7 @@ enum CloudflareAccessJWT {
         return data
     }
 
-    private static func parts(_ token: String) throws -> [Substring] {
+    private static func parts(_ token: String) throws -> (Header, [Substring]) {
         guard token.utf8.count <= 32768 else { throw CloudflareAccessError.invalidSession }
         let parts = token.split(separator: ".", omittingEmptySubsequences: false)
         guard parts.count == 3,
@@ -164,7 +163,7 @@ enum CloudflareAccessJWT {
               header.alg == "RS256", !header.kid.isEmpty, header.kid.utf8.count <= 512,
               header.crit?.isEmpty ?? true
         else { throw CloudflareAccessError.invalidSession }
-        return parts
+        return (header, parts)
     }
 
     private static func integer(_ data: Data) -> Data {

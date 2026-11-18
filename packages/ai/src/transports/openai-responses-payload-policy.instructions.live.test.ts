@@ -1,5 +1,6 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import { afterEach, describe, expect, it } from "vitest";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import { captureOpenAIResponses } from "./openai-responses-live-capture.test-support.js";
@@ -39,18 +40,12 @@ describeLive("instructions-field default on the real native OpenAI Responses API
   it(
     "carries the system prompt via top-level instructions and still continues via previous_response_id",
     async () => {
-      const model: Model<"openai-responses"> = {
-        id: LIVE_MODEL_ID,
-        name: LIVE_MODEL_ID,
-        api: "openai-responses",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200_000,
-        maxTokens: 8192,
-      } satisfies Model<"openai-responses">;
+      const model: Model<"openai-responses"> = makeProviderModel(
+        "openai-responses",
+        "openai",
+        LIVE_MODEL_ID,
+        { baseUrl: "https://api.openai.com/v1", contextWindow: 200_000 },
+      ) satisfies Model<"openai-responses">;
 
       const sessionId = "live-instructions-default-continuation";
       const secretCode = "GRANITE-ORBIT-4127";

@@ -1,3 +1,4 @@
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
@@ -9,7 +10,10 @@ import {
   type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type {
+  SessionEntryStream,
+  SessionEntrySummary,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { chunkSessionContentAtResetBoundary } from "./manager-reset-chunk-boundary.js";
 import type { resolveMemoryPathClassification } from "./memory-path-provenance.js";
@@ -21,21 +25,23 @@ export type MemoryIndexEntry = {
   size: number;
   hash: string;
   kind?: "markdown" | "multimodal";
-  content?: string;
   contentText?: string;
-  lineMap?: number[];
-  lineProvenance?: MemoryEntryProvenance[];
   sessionId?: string;
+  /** Session sources stream their export again while chunking, under this entry's state. */
+  streamSessionExport?: (stream: SessionEntryStream) => Promise<SessionEntrySummary | null>;
 };
 
 export type MemoryIndexPreparationInput = {
-  entry: Pick<MemoryIndexEntry, "path" | "mtimeMs" | "lineMap" | "lineProvenance">;
+  entry: Pick<MemoryIndexEntry, "path" | "mtimeMs"> & {
+    lineMap?: number[];
+    lineProvenance?: MemoryEntryProvenance[];
+  };
   source: MemorySource;
   content: string;
   pathClassification: Awaited<ReturnType<typeof resolveMemoryPathClassification>>;
   chunking: { tokens: number; overlap: number };
   cutoffLine?: number;
-  provider?: Pick<EmbeddingProvider, "id" | "maxInputTokens">;
+  provider?: Pick<MemoryEmbeddingProvider, "id" | "maxInputTokens">;
   hardMaxInputTokens: number;
 };
 
@@ -59,18 +65,45 @@ export function prepareMemoryIndexChunks({
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
-  const baseChunks = (
-    source === "sessions"
-      ? chunkSessionContentAtResetBoundary({
-          content: indexingContent,
-          cutoffLine,
-          lineMap: entry.lineMap,
-          chunking: chunkOptions,
-        })
-      : chunkMarkdown(indexingContent, chunkOptions)
-  ).filter((chunk) => chunk.text.trim().length > 0);
-  for (const chunk of baseChunks) {
+  const baseChunks: MemoryChunk[] = [];
+  for (const chunk of source === "sessions"
+    ? chunkSessionContentAtResetBoundary({
+        content: indexingContent,
+        cutoffLine,
+        lineMap: entry.lineMap,
+        chunking: chunkOptions,
+      })
+    : chunkMarkdown(indexingContent, chunkOptions)) {
+    if (!chunk.text.trim()) {
+      continue;
+    }
+    const previous = baseChunks.at(-1);
+    if (
+      source === "memory" &&
+      previous &&
+      previous.entryStartLine === undefined &&
+      chunk.endLine > previous.endLine &&
+      // Annotated headings own their metadata; size-split headings also differ from source lines.
+      previous.text
+        .split("\n")
+        .every(
+          (line, index) =>
+            (!line.trim() || /^ {0,3}#{1,6}(?:\s|$)/u.test(line)) &&
+            !line.includes("<!--") &&
+            line.trimEnd() === (sourceLines[previous.startLine + index - 1] ?? "").trimEnd(),
+        )
+    ) {
+      // Keep the following entry's annotation span, and do not repeat overlapping headings.
+      const following = chunk.text
+        .split("\n")
+        .slice(Math.max(0, previous.endLine - chunk.startLine + 1));
+      chunk.text = [previous.text, ...following].join("\n");
+      chunk.startLine = previous.startLine;
+      chunk.hash = hashText(chunk.text);
+      baseChunks.pop();
+    }
     chunk.provenance = resolveChunkProvenance(entry, source, chunk, pathClassification.originClass);
+    baseChunks.push(chunk);
   }
   // Fragments inherit one entry's metadata; parse each source span once,
   // not once per fragment of a long line or oversized entry.
@@ -80,6 +113,8 @@ export function prepareMemoryIndexChunks({
       ? enforceEmbeddingMaxInputTokens(provider, baseChunks, hardMaxInputTokens)
       : baseChunks
   ).map((chunk): IndexedMemoryChunk => {
+    // Plain text already lives in chunk.text; repeating it doubles the worker payload.
+    delete chunk.embeddingInput;
     const start = chunk.entryStartLine ?? chunk.startLine;
     const end = chunk.entryEndLine ?? chunk.endLine;
     const span = `${start}:${end}`;
@@ -102,7 +137,7 @@ export function prepareMemoryIndexChunks({
 }
 
 export function resolveChunkProvenance(
-  entry: Pick<MemoryIndexEntry, "lineProvenance" | "mtimeMs">,
+  entry: Pick<MemoryIndexEntry, "mtimeMs"> & { lineProvenance?: readonly MemoryEntryProvenance[] },
   source: MemorySource,
   chunk: MemoryChunk,
   pathOriginClass: MemoryEntryProvenance["originClass"],

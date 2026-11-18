@@ -6,12 +6,13 @@ type PluginWorkspaceParams = Omit<
   "guard"
 > & {
   guard?: { assertHost?: () => void };
-  /** @deprecated Runs before dispatch. Use SQL-free guard.assertHost for live commit authority. */
+  /** @deprecated Runs before dispatch. Use SQL-free guard.assertHost for live commit authority. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   beforePersistentApply?: () => void;
 };
 
 export function ensurePluginAgentWorkspace(params?: PluginWorkspaceParams) {
   const legacy = params?.beforePersistentApply;
+  const assertHost = params?.guard?.assertHost;
   if (!legacy) {
     return ensureAgentWorkspace(params);
   }
@@ -30,7 +31,7 @@ export function ensurePluginAgentWorkspace(params?: PluginWorkspaceParams) {
   };
   resolveGlobalSingleton(Symbol.for("openclaw.workspaceGuardDeprecation"), () => {
     process.emitWarning(
-      "ensureAgentWorkspace.beforePersistentApply runs before dispatch; synchronous OpenClaw DB access in this callback is deprecated. Use SQL-free guard.assertHost for live revocation at commit. Removal: next Plugin SDK major.",
+      "ensureAgentWorkspace.beforePersistentApply runs before dispatch; synchronous OpenClaw DB access in this callback is deprecated. Await owner preparation and use SQL-free guard.assertHost for live revocation at commit. Final compatibility day: 2026-12-31. Removal ships in the first January 2027 stable release; no SDK major is required.",
       { code: "DEP_WORKSPACE_MUTATION_GUARD", type: "DeprecationWarning" },
     );
     return true;
@@ -38,7 +39,7 @@ export function ensurePluginAgentWorkspace(params?: PluginWorkspaceParams) {
   return ensureAgentWorkspace({
     ...params,
     guard: {
-      assertHost: () => check(params?.guard?.assertHost),
+      assertHost: () => check(assertHost),
       beforeLegacyApply: () => check(legacy),
     },
   });

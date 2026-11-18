@@ -4,9 +4,10 @@ import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-h
 import { SUBAGENT_ENDED_REASON_ERROR } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { persistRegistryFixture } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
-import { onceMessage, writeSessionStore } from "./test-helpers.server.js";
+import { waitForSessionEvent } from "./session-message-event.test-support.js";
+import { writeSessionStore } from "./test-helpers.server.js";
 
-export function registerRecoveredSubagentSessionEventTest({
+export function registerTerminalSubagentSessionEventTest({
   createSessionStoreFile,
   withOperatorSessionSubscriber,
   expectNoMessageWithin,
@@ -21,22 +22,25 @@ export function registerRecoveredSubagentSessionEventTest({
   }) => Promise<void>;
   expectRecordFields: (value: unknown, expected: Record<string, unknown>) => void;
 }) {
-  test("broadcasts a recovered subagent terminal session to a subscribed gateway exactly once", async () => {
+  test("broadcasts a subagent terminal session to a subscribed gateway exactly once", async () => {
     const storePath = await createSessionStoreFile();
+    const identity = {
+      sessionId: "sess-recovered-subscriber",
+      lifecycleRevision: "recovered-subscriber-revision",
+    };
     const entry = createSubagentRunRecord({
       runId: "run-recovered-subscriber",
       childSessionKey: "agent:main:subagent:recovered-subscriber",
+      childSessionIdentity: identity,
       requesterSessionKey: "agent:main:parent",
       requesterDisplayKey: "parent",
-      task: "finish recovered child work",
-      cleanup: "keep",
       createdAt: 1_000,
       execution: { status: "running", startedAt: 2_000 },
     });
     await writeSessionStore({
       entries: {
         [entry.childSessionKey]: {
-          sessionId: "sess-recovered-subscriber",
+          ...identity,
           spawnedBy: entry.requesterSessionKey,
           updatedAt: Date.now(),
         },
@@ -62,6 +66,7 @@ export function registerRecoveredSubagentSessionEventTest({
       notifyContextEngineSubagentEnded: vi.fn(async () => {}),
       retireSupersededRun: vi.fn(async () => {}),
       resumeSubagentRun: vi.fn(),
+      confirmProvisionalKill: vi.fn(),
       callGateway: async <T = Record<string, unknown>>() => ({}) as T,
       captureSubagentCompletionReply: vi.fn(async () => undefined),
       runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
@@ -71,22 +76,20 @@ export function registerRecoveredSubagentSessionEventTest({
     const completion = {
       runId: entry.runId,
       endedAt: 4_000,
-      outcome: { status: "error" as const, error: "restart interrupted run" },
+      outcome: { status: "error" as const, error: "subagent run failed" },
       reason: SUBAGENT_ENDED_REASON_ERROR,
       triggerCleanup: false,
-      recoverInterrupted: true,
     } satisfies Parameters<typeof controller.completeSubagentRun>[0];
 
     await withOperatorSessionSubscriber(async (ws) => {
       const waitForRecoveredTerminal = (timeoutMs?: number) =>
-        onceMessage(
+        waitForSessionEvent(
           ws,
-          (message) =>
-            message.type === "event" &&
-            message.event === "sessions.changed" &&
-            (message.payload as { sessionKey?: string; reason?: string } | undefined)
-              ?.sessionKey === entry.childSessionKey &&
-            (message.payload as { reason?: string } | undefined)?.reason === "subagent-status",
+          "sessions.changed",
+          {
+            sessionKey: entry.childSessionKey,
+            reason: "subagent-status",
+          },
           timeoutMs,
         );
       const changedEvent = waitForRecoveredTerminal();
@@ -97,7 +100,7 @@ export function registerRecoveredSubagentSessionEventTest({
       expectRecordFields(event.payload, {
         sessionKey: entry.childSessionKey,
         reason: "subagent-status",
-        status: "interrupted",
+        status: "failed",
         endedAt: completion.endedAt,
         spawnedBy: entry.requesterSessionKey,
       });
@@ -112,8 +115,6 @@ export function registerRecoveredSubagentSessionEventTest({
       });
       expect(emitSubagentProgressEndedForRun).toHaveBeenCalledExactlyOnceWith(terminalEntry);
 
-      // A resumed callback must not publish a second terminal event to an
-      // already-subscribed Control UI client for the same child generation.
       await expectNoMessageWithin({
         action: () => controller.completeSubagentRun(completion),
         watch: waitForRecoveredTerminal,

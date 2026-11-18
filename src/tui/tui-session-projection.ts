@@ -4,6 +4,7 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
   type SessionProjectionEvent,
+  type SessionProjectionRunStatus,
   type SessionProjectionScope,
   type SessionProjectionState,
 } from "../../packages/gateway-client/src/session-projection.js";
@@ -167,4 +168,8 @@ export function projectTuiSessionFinal(
     envelope: { runId: event.runId },
     scope: readTuiSessionProjectionScope(state),
   });
+}
+
+export function isFailedTuiRunStatus(status: SessionProjectionRunStatus | undefined): boolean {
+  return status === "aborted" || status === "error" || status === "timeout";
 }

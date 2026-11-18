@@ -212,17 +212,15 @@ func (ri *routeIndex) localizeBodyLinks(body string) string {
 	}
 
 	state := NewPlaceholderState(body)
-	placeholders := make([]string, 0, 8)
-	mapping := map[string]string{}
-	masked := maskMatches(body, fencedBacktickCodeBlock, state.Next, &placeholders, mapping)
-	masked = maskMatches(masked, fencedTildeCodeBlock, state.Next, &placeholders, mapping)
-	masked = maskMatches(masked, inlineCodeRe, state.Next, &placeholders, mapping)
+	masked := maskMatches(body, fencedBacktickCodeBlock, state)
+	masked = maskMatches(masked, fencedTildeCodeBlock, state)
+	masked = maskMatches(masked, inlineCodeRe, state)
 
 	masked = rewriteCapturedTargets(masked, markdownLinkTargetRe, ri, true)
 	masked = rewriteCapturedTargets(masked, hrefDoubleQuotedValueRe, ri, false)
 	masked = rewriteCapturedTargets(masked, hrefSingleQuotedValueRe, ri, false)
 
-	return unmaskMarkdown(masked, placeholders, mapping)
+	return unmaskMarkdown(masked, state.placeholders, state.mapping)
 }
 
 func rewriteCapturedTargets(text string, re *regexp.Regexp, ri *routeIndex, skipImages bool) string {
@@ -251,7 +249,8 @@ func (ri *routeIndex) localizeURL(raw string) string {
 	}
 
 	canonical := normalizeRoute(pathPart)
-	if ri.routeHasLocalePrefix(canonical) {
+	segment := firstPathSegment(strings.TrimPrefix(canonical, "/"))
+	if _, ok := ri.localePrefixes[segment]; segment != "" && ok {
 		return raw
 	}
 
@@ -282,16 +281,4 @@ func splitURLSuffix(raw string) (string, string) {
 		return raw, ""
 	}
 	return raw[:index], raw[index:]
-}
-
-func (ri *routeIndex) routeHasLocalePrefix(route string) bool {
-	return ri.isLocalePrefix(firstPathSegment(strings.TrimPrefix(route, "/")))
-}
-
-func (ri *routeIndex) isLocalePrefix(segment string) bool {
-	if segment == "" {
-		return false
-	}
-	_, ok := ri.localePrefixes[segment]
-	return ok
 }

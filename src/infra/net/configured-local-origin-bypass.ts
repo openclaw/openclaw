@@ -1,28 +1,28 @@
 // Configured local-origin bypass logic decides when managed proxy routing may
-// skip proxying a known loopback provider origin.
+// skip proxying a known loopback provider origin, and which host-granted
+// address exemptions apply to that exact origin.
 import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import { normalizeHostname } from "./hostname.js";
 import { getActiveManagedProxyLoopbackMode } from "./proxy/active-proxy-state.js";
-import { SsrFBlockedError } from "./ssrf.js";
+import { withTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
+import { SsrFBlockedError, type SsrFPolicy } from "./ssrf.js";
 
 // Configured local-origin bypass allows managed proxy calls to skip proxying
 // only when config, DNS, and active loopback policy all prove a loopback target.
 export type ConfiguredLocalOriginManagedProxyBypass = {
   kind: "configured-local-origin";
   baseUrl: string;
+  /** Grant link-local DNS only to the exact configured host.containers.internal origin. */
+  allowPodmanHostGatewayLinkLocal?: boolean;
 };
 
 function parseHttpUrl(value: string): URL | undefined {
-  try {
-    const parsed = new URL(value.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
-    return parsed;
-  } catch {
+  const parsed = URL.parse(value.trim());
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
+  parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+  return parsed;
 }
 
 function isLoopbackManagedProxyBypassHost(hostname: string): boolean {
@@ -67,4 +67,24 @@ export function shouldUseConfiguredLocalOriginManagedProxyBypass(params: {
     params.resolvedAddresses.length > 0 &&
     params.resolvedAddresses.every((address) => isLoopbackIpAddress(address))
   );
+}
+
+/** Derive the host-only grant independently for each exact-origin hop. */
+export function resolveConfiguredLocalOriginLinkLocalHopPolicy(params: {
+  url: URL;
+  policy: SsrFPolicy | undefined;
+  managedProxyBypass: ConfiguredLocalOriginManagedProxyBypass | undefined;
+}): SsrFPolicy | undefined {
+  const { policy, managedProxyBypass } = params;
+  if (!policy || managedProxyBypass?.allowPodmanHostGatewayLinkLocal !== true) {
+    return policy;
+  }
+  const baseUrl = parseHttpUrl(managedProxyBypass.baseUrl);
+  if (
+    baseUrl?.hostname !== "host.containers.internal" ||
+    parseHttpUrl(params.url.href)?.origin !== baseUrl.origin
+  ) {
+    return policy;
+  }
+  return withTrustedHostPodmanGatewayLinkLocalExemption(policy);
 }

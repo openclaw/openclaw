@@ -1,20 +1,18 @@
 import { availableParallelism } from "node:os";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   isSqliteInspectionDeadlineOwnedByCaller,
-  resolveSqliteInspectionSignal,
   withSqliteReadOnlyWorkerScope,
 } from "../infra/sqlite-readonly-worker.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
+import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "./openclaw-agent-db-contract.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type {
   AgentDatabasePreflightStats,
   OpenClawDatabaseSchemaPreflight,
 } from "./openclaw-database-preflight.types.js";
 
-// Snapshot preparation can be disk-heavy; overlap one additional agent
-// without fanning out across every registered database.
-export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
 // Slow disks keep their full inspection budget without holding the Gateway listener.
 const AGENT_DATABASE_STARTUP_WAIT_MS = 5_000;
 
@@ -25,18 +23,21 @@ export async function preflightAgentDatabasesBounded<T>(
     inspection: OpenClawDatabaseSchemaPreflight,
     claimAgentTarget: (realPath: string, agentId: string | undefined) => boolean,
     inspectSchema: ReturnType<typeof createAgentSchemaInspectionWorker>["inspect"],
-  ) => Promise<void>,
+  ) => Promise<"defer" | void>,
   result: OpenClawDatabaseSchemaPreflight,
   signal?: AbortSignal,
   startup?: {
     signal: AbortSignal;
     canDefer: (target: T) => boolean;
+    /** Clean-closed stores admit in-process; unsealed ones need a cold reader process. */
+    cleanClose?: (target: T) => boolean;
     track: (work: Promise<unknown>) => void;
     defer: (
       inspections: { target: T; result: Promise<OpenClawDatabaseSchemaPreflight> }[],
       reason: string,
     ) => AgentDatabaseAdmissionRefusal[];
   },
+  takePrestartedReader?: () => ReturnType<typeof createAgentSchemaInspectionWorker> | undefined,
 ): Promise<AgentDatabasePreflightStats> {
   const inspectedAgentPaths = new Set<string>();
   const inspectedAgentTargets = new Set<string>();
@@ -53,6 +54,15 @@ export async function preflightAgentDatabasesBounded<T>(
     return true;
   };
 
+  // Inspect cheap clean-closed stores first so slow unsealed stores at the head of the list
+  // cannot hold both slots past the startup wait and defer the whole fleet. The partition is
+  // stable, so targets sharing a path keep their claim order and results keep list order.
+  const sealed = startup?.cleanClose;
+  const inspectionOrder = targets.map((_, index) => index);
+  if (sealed) {
+    const isSealed = targets.map((target) => sealed(target));
+    inspectionOrder.sort((left, right) => Number(isSealed[right]) - Number(isSealed[left]));
+  }
   const inspections: Array<OpenClawDatabaseSchemaPreflight | undefined> = [];
   const failures = new Map<number, unknown>();
   let nextInspectionIndex = 0;
@@ -88,7 +98,7 @@ export async function preflightAgentDatabasesBounded<T>(
           target: targets[index]!,
           result: completions[index]!.promise,
         })),
-        `The ${AGENT_DATABASE_STARTUP_WAIT_MS / 1000} second foreground startup budget elapsed; inspection continues.`,
+        "Inspection and writable admission continue after the Gateway listener binds.",
       );
       foreground.resolve();
     } catch (error) {
@@ -97,17 +107,17 @@ export async function preflightAgentDatabasesBounded<T>(
   };
 
   const worker = async () => {
-    await using reader = createAgentSchemaInspectionWorker();
+    await using reader = takePrestartedReader?.() ?? createAgentSchemaInspectionWorker();
     readers.push(reader);
     while (true) {
       if (inspectionSignal?.aborted || failures.size > 0) {
         return;
       }
 
-      const index = nextInspectionIndex;
-      if (index >= targets.length) {
+      if (nextInspectionIndex >= inspectionOrder.length) {
         return;
       }
+      const index = inspectionOrder[nextInspectionIndex]!;
       nextInspectionIndex += 1;
 
       const target = targets[index];
@@ -120,11 +130,18 @@ export async function preflightAgentDatabasesBounded<T>(
         indeterminate: [],
       };
       try {
-        await inspect(target, inspection, claimAgentTarget, (input, requestSignal, snapshot) =>
-          reader.inspect(input, inspectionSignal ?? requestSignal, snapshot),
+        const disposition = await inspect(
+          target,
+          inspection,
+          claimAgentTarget,
+          (input, requestSignal, snapshot) =>
+            reader.inspect(input, inspectionSignal ?? requestSignal, snapshot),
         );
         inspections[index] = inspection;
         completions[index]!.resolve(inspection);
+        if (disposition === "defer" && startup?.canDefer(target)) {
+          deferred.add(index);
+        }
       } catch (error) {
         failures.set(index, error);
         completions[index]!.reject(error);

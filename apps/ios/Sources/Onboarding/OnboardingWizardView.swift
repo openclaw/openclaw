@@ -1,5 +1,4 @@
 import Combine
-import CoreImage
 import OpenClawKit
 import PhotosUI
 import SwiftUI
@@ -18,6 +17,7 @@ struct OnboardingWizardView: View {
     @Environment(NodeAppModel.self) private var appModel: NodeAppModel
     @Environment(GatewayConnectionController.self) private var gatewayController: GatewayConnectionController
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("gateway.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("onboarding.developerMode") private var developerModeEnabled: Bool = false
@@ -49,7 +49,7 @@ struct OnboardingWizardView: View {
     @State private var qrCodeCompletion = OnboardingQRCodeCompletion()
     @State private var setupCode: String = ""
     @State private var setupCodeStatus: String?
-    @State private var setupAttemptID: UUID?
+    @State private var setupAttemptID: GatewaySetupAttempt?
     @State private var manualConnectGeneration: UInt64 = 0
     @FocusState private var focusedField: OnboardingFocusedField?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
@@ -145,6 +145,15 @@ struct OnboardingWizardView: View {
                     self.successStep
                 default:
                     Form {
+                        if self.dynamicTypeSize.isAccessibilitySize {
+                            Section {
+                                self.stepHeading
+                                    .frame(maxWidth: .infinity)
+                                    .multilineTextAlignment(.center)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .listRowBackground(Color.clear)
+                            }
+                        }
                         switch self.step {
                         case .mode:
                             self.modeStep
@@ -162,19 +171,19 @@ struct OnboardingWizardView: View {
                     .scrollDismissesKeyboard(.interactively)
                 }
             }
-            .navigationTitle(self.isFullScreenStep ? "" : self.step.title)
+            .navigationTitle(self.isFullScreenStep || self.dynamicTypeSize.isAccessibilitySize ? "" : self.step.title)
             .navigationBarTitleDisplayMode(.inline)
             .tint(OpenClawBrand.activationPrimaryAction)
             .toolbar {
-                if !self.isFullScreenStep {
+                if !self.isFullScreenStep, self.dynamicTypeSize.isAccessibilitySize {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Button("Back", systemImage: "chevron.left", action: self.navigateBack)
+                            .labelStyle(.iconOnly)
+                    }
+                }
+                if !self.isFullScreenStep, !self.dynamicTypeSize.isAccessibilitySize {
                     ToolbarItem(placement: .principal) {
-                        VStack(spacing: 2) {
-                            Text(self.step.title)
-                                .font(OpenClawType.headline)
-                            Text(self.step.manualProgressTitle)
-                                .font(OpenClawType.caption2)
-                                .foregroundStyle(.secondary)
-                        }
+                        self.stepHeading
                     }
                 }
             }
@@ -183,9 +192,11 @@ struct OnboardingWizardView: View {
             self.keyboardDismissControl
         }
         .overlay(alignment: .topLeading) {
-            self.leadingChromeButton
-                .padding(.leading, 16)
-                .padding(.top, 10)
+            if self.isFullScreenStep || !self.dynamicTypeSize.isAccessibilitySize {
+                self.leadingChromeButton
+                    .padding(.leading, 16)
+                    .padding(.top, 10)
+            }
         }
         .gatewayTrustPromptAlert()
         .alert("QR Scanner Unavailable", isPresented: Binding(
@@ -259,9 +270,9 @@ struct OnboardingWizardView: View {
             self.clearStagedGatewaySetupLink()
         }
         .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
-            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayStatusText)
+            self.updateConnectionIssue(problem: newValue, statusText: self.appModel.gatewayDisplayStatusText)
         }
-        .onChange(of: self.appModel.gatewayStatusText) { _, newValue in
+        .onChange(of: self.appModel.gatewayDisplayStatusText) { _, newValue in
             self.updateConnectionIssue(problem: self.appModel.lastGatewayProblem, statusText: newValue)
         }
         .onChange(of: self.appModel.gatewaySetupRequestID) { _, _ in
@@ -520,10 +531,10 @@ struct OnboardingWizardView: View {
 
     private var developerConnectSection: some View {
         Section {
-            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.manualHostFieldRows
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.manualConnectionSecurityRows
+            ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
             self.manualConnectButton
         } header: {
             Text("Developer Local")
@@ -539,11 +550,11 @@ struct OnboardingWizardView: View {
         Section {
             self.onboardingSecureField(
                 "Gateway Auth Token",
-                text: self.gatewayTokenBinding,
+                text: self.gatewayCredentialBinding(\.token),
                 focusedField: .gatewayToken)
             self.onboardingSecureField(
                 "Gateway Password",
-                text: self.gatewayPasswordBinding,
+                text: self.gatewayCredentialBinding(\.password),
                 focusedField: .gatewayPassword)
 
             if let problem = self.currentProblem {
@@ -656,9 +667,26 @@ extension OnboardingWizardView {
         return "Gateway Status"
     }
 
+    private var stepHeading: some View {
+        VStack(spacing: 2) {
+            Text(self.step.title)
+                .font(OpenClawType.headline)
+                .accessibilityAddTraits(.isHeader)
+            Text(self.step.manualProgressTitle)
+                .font(OpenClawType.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var setupCodeLayout: AnyLayout {
+        self.dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(spacing: 12))
+    }
+
     private var setupCodeSection: some View {
         Section {
-            HStack(spacing: 12) {
+            self.setupCodeLayout {
                 self.onboardingTextField("Enter setup code", text: self.$setupCode, focusedField: .setupCode)
                     .lineLimit(1)
                     .submitLabel(.go)
@@ -708,10 +736,10 @@ extension OnboardingWizardView {
 
     private func manualConnectionFieldsSection(title: LocalizedStringKey) -> some View {
         Section {
-            self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+            self.manualHostFieldRows
             self.onboardingTextField("Port", text: self.manualPortTextBinding, focusedField: .manualPort)
                 .keyboardType(.numberPad)
-            self.manualConnectionSecurityRows
+            ManualGatewaySecurityRows(presentation: self.manualTransport, useTLS: self.manualTLSBinding)
             self.onboardingTextField(
                 "Discovery Domain (optional)",
                 text: self.$discoveryDomain,
@@ -719,17 +747,27 @@ extension OnboardingWizardView {
             if self.selectedMode == .remoteDomain {
                 self.onboardingSecureField(
                     "Gateway Auth Token",
-                    text: self.gatewayTokenBinding,
+                    text: self.gatewayCredentialBinding(\.token),
                     focusedField: .gatewayToken)
                 self.onboardingSecureField(
                     "Gateway Password",
-                    text: self.gatewayPasswordBinding,
+                    text: self.gatewayCredentialBinding(\.password),
                     focusedField: .gatewayPassword)
             }
             self.manualConnectButton
         } header: {
             Text(title)
                 .font(OpenClawType.footnoteSemiBold)
+        }
+    }
+
+    @ViewBuilder
+    private var manualHostFieldRows: some View {
+        self.onboardingTextField("Host", text: self.manualHostBinding, focusedField: .manualHost)
+        if let hostIssue = self.manualHostIssue {
+            Text(hostIssue)
+                .font(OpenClawType.footnote)
+                .foregroundStyle(OpenClawBrand.warn)
         }
     }
 
@@ -747,29 +785,6 @@ extension OnboardingWizardView {
                 self.manualContextPath = nil
                 self.manualTLS = enabled
             })
-    }
-
-    @ViewBuilder
-    private var manualConnectionSecurityRows: some View {
-        Picker(selection: self.manualTLSBinding) {
-            Text("Unencrypted")
-                .font(OpenClawType.captionSemiBold)
-                .tag(false)
-            Text("Secure (TLS)")
-                .font(OpenClawType.captionSemiBold)
-                .tag(true)
-        } label: {
-            Text("Connection security")
-                .font(OpenClawType.captionSemiBold)
-        }
-        .pickerStyle(.segmented)
-        .disabled(self.manualTransport.requiresTLS)
-
-        if let helperText = self.manualTransport.helperText {
-            Text(helperText)
-                .font(OpenClawType.footnote)
-                .foregroundStyle(.secondary)
-        }
     }
 
     private func onboardingLabeledContent(_ title: LocalizedStringKey, value: String) -> some View {
@@ -837,9 +852,7 @@ extension OnboardingWizardView {
                     .font(OpenClawType.subheadSemiBold)
             }
         }
-        .font(OpenClawType.subheadSemiBold)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .contentShape(Rectangle())
+        .buttonStyle(OpenClawPrimaryActionButtonStyle())
         .disabled(!self.canConnectManual || self.connectingGateway != nil)
     }
 
@@ -893,6 +906,8 @@ extension OnboardingWizardView {
                 self.handleScannedLink(link)
             case let .setupCode(code):
                 self.handleScannedSetupCode(code)
+            case .espDevice:
+                return
             }
         }
         if delivery == nil {
@@ -907,7 +922,7 @@ extension OnboardingWizardView {
         Task { await self.connectScannedLink(link, attemptID: attemptID) }
     }
 
-    private func connectScannedLink(_ parsedLink: GatewayConnectDeepLink, attemptID: UUID) async {
+    private func connectScannedLink(_ parsedLink: GatewayConnectDeepLink, attemptID: GatewaySetupAttempt) async {
         defer {
             self.finishSetupAttempt(attemptID)
             self.pendingTargetSuppression.resumeAutoConnect(.qrScanner, controller: self.gatewayController)
@@ -942,6 +957,7 @@ extension OnboardingWizardView {
     }
 
     private func connectStagedGatewaySetupLink() async {
+        let admissionCheckpoint = self.gatewayController.ingress.admissionCheckpoint()
         guard self.connectingGateway == nil else { return }
         guard let link = self.stagedGatewaySetupLink else { return }
         guard link.isValidEndpoint else {
@@ -964,7 +980,11 @@ extension OnboardingWizardView {
         self.issue = .none
         self.connectMessage = "Connecting to \(link.host)…"
         self.statusLine = "Connecting to \(link.host):\(link.port)…"
-        await self.connectCurrentManualGateway(host: link.host, port: link.port, forceReconnect: false)
+        await self.connectCurrentManualGateway(
+            host: link.host,
+            port: link.port,
+            forceReconnect: false,
+            admissionCheckpoint: admissionCheckpoint)
     }
 
     private func clearStagedGatewaySetupLink() {
@@ -1033,7 +1053,8 @@ extension OnboardingWizardView {
         self.pendingTargetSuppression.releaseAutoConnect(.qrScanner, controller: self.gatewayController)
     }
 
-    private func openQRScannerFromOnboarding(status: String = "Opening QR scanner…") {
+    private func openQRScannerFromOnboarding(status: String = "") {
+        // The scanner sheet provides opening feedback; keep the parent neutral when it is canceled.
         // Stop active reconnect loops before scanning new credentials.
         self.qrCodeCompletion.cancel()
         self.invalidateSetupAttempt()
@@ -1050,26 +1071,19 @@ extension OnboardingWizardView {
         self.showQRScanner = true
     }
 
-    private func resumeAfterPairingApproval() {
+    private func resumeAfterPairingApproval(silent: Bool = false) {
         // We intentionally stop reconnect churn while unpaired to avoid generating multiple pending requests.
-        self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
+        // The forced reconnect below leaves the pause and allows reconnects when it commits; resuming
+        // here too would let the waiting loops attempt first and send a second pairing request.
         // Pairing state is sticky to prevent UI flip-flop during reconnect churn.
         // Once the user explicitly resumes after approving, clear the sticky issue
         // so new status/auth errors can surface instead of being masked as pairing.
-        self.issue = .none
-        self.connectMessage = "Retrying after approval…"
-        self.statusLine = "Retrying after approval…"
-        Task { await self.retryLastAttempt() }
-    }
-
-    private func resumeAfterPairingApprovalInBackground() {
-        // Keep the pairing issue sticky to avoid visual flicker while we probe for approval.
-        self.appModel.gatewayAutoReconnectEnabled = true
-        self.appModel.gatewayPairingPaused = false
-        self.appModel.gatewayPairingRequestId = nil
-        Task { await self.retryLastAttempt(silent: true) }
+        if !silent {
+            self.issue = .none
+            self.connectMessage = "Retrying after approval…"
+            self.statusLine = "Retrying after approval…"
+        }
+        Task { await self.retryLastAttempt(silent: silent) }
     }
 
     private func attemptAutomaticPairingResumeIfNeeded() {
@@ -1077,35 +1091,37 @@ extension OnboardingWizardView {
         guard self.step == .auth else { return }
         guard self.issue.needsPairing else { return }
         guard self.connectingGateway == nil else { return }
+        // The view's pairing issue is sticky; retry automatically only while every live pause is a
+        // pairing approval, never alongside a rate limit or rejected credential.
+        guard self.appModel.connection.isPausedOnlyForPairing else { return }
 
         let now = Date()
         if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
             return
         }
         self.lastPairingAutoResumeAttemptAt = now
-        self.resumeAfterPairingApprovalInBackground()
+        self.resumeAfterPairingApproval(silent: true)
     }
 
     private func updateConnectionIssue(problem: GatewayConnectionProblem?, statusText: String) {
         let wasOnAuthStep = self.step == .auth
         let next = GatewayConnectionIssue.detect(problem: problem)
-        let fallback = next == .none ? GatewayConnectionIssue.detect(from: statusText) : next
 
         // Avoid "flip-flopping" the UI by clearing actionable issues when the underlying connection
         // transitions through intermediate statuses (e.g. Offline/Connecting while reconnect churns).
-        if self.issue.needsPairing, fallback.needsPairing {
-            let mergedRequestId = fallback.requestId ?? self.issue.requestId ?? self.pairingRequestId
+        if self.issue.needsPairing, next.needsPairing {
+            let mergedRequestId = next.requestId ?? self.issue.requestId ?? self.pairingRequestId
             self.issue = .pairingRequired(requestId: mergedRequestId)
-        } else if self.issue.needsPairing, !fallback.needsPairing {
+        } else if self.issue.needsPairing, !next.needsPairing {
             // Ignore non-pairing statuses until the user explicitly retries/scans again, or we connect.
-        } else if self.issue.needsAuthCredentials, !fallback.needsAuthCredentials, !fallback.needsPairing {
+        } else if self.issue.needsAuthCredentials, !next.needsAuthCredentials, !next.needsPairing {
             // Same idea for auth: once we learn credentials are missing/rejected, keep that sticky until
             // the user retries/scans again or we successfully connect.
         } else {
-            self.issue = fallback
+            self.issue = next
         }
 
-        if let requestId = problem?.requestId ?? fallback.requestId, !requestId.isEmpty {
+        if let requestId = problem?.requestId ?? next.requestId, !requestId.isEmpty {
             self.pairingRequestId = requestId
         }
 
@@ -1135,21 +1151,6 @@ extension OnboardingWizardView {
             self.connectMessage = trimmedStatus
             self.statusLine = trimmedStatus
         }
-    }
-
-    private func detectQRCode(from data: Data) -> String? {
-        guard let ciImage = CIImage(data: data) else { return nil }
-        let detector = CIDetector(
-            ofType: CIDetectorTypeQRCode,
-            context: nil,
-            options: [CIDetectorAccuracy: CIDetectorAccuracyHigh])
-        let features = detector?.features(in: ciImage) ?? []
-        for feature in features {
-            if let qr = feature as? CIQRCodeFeature, let message = qr.messageString {
-                return message
-            }
-        }
-        return nil
     }
 
     private func advanceFromIntro() {
@@ -1196,16 +1197,16 @@ extension OnboardingWizardView {
         self.step = target
     }
 
-    private func beginSetupAttempt() -> UUID? {
+    private func beginSetupAttempt() -> GatewaySetupAttempt? {
         guard self.connectingGateway == nil else { return nil }
         self.manualConnectGeneration &+= 1
-        let attemptID = UUID()
+        let attemptID = GatewaySetupAttempt(admissionCheckpoint: gatewayController.ingress.admissionCheckpoint())
         self.setupAttemptID = attemptID
         self.connectingGateway = .setupCode
         return attemptID
     }
 
-    private func finishSetupAttempt(_ attemptID: UUID) {
+    private func finishSetupAttempt(_ attemptID: GatewaySetupAttempt) {
         guard self.setupAttemptID == attemptID else { return }
         self.invalidateSetupAttempt()
     }
@@ -1218,7 +1219,11 @@ extension OnboardingWizardView {
 
     private var canConnectManual: Bool {
         let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !host.isEmpty && self.resolvedManualPort(host: host) != nil
+        return !host.isEmpty && self.manualHostIssue == nil && self.resolvedManualPort(host: host) != nil
+    }
+
+    private var manualHostIssue: String? {
+        GatewayConnectionController.manualHostValidationMessage(host: self.manualHost)
     }
 
     private func initializeState() {
@@ -1299,22 +1304,13 @@ extension OnboardingWizardView {
             port: self.manualPort)
     }
 
-    private var gatewayTokenBinding: Binding<String> {
+    private func gatewayCredentialBinding(
+        _ field: WritableKeyPath<GatewayConnectionController.ManualAuthOverride.Fields, String>) -> Binding<String>
+    {
         Binding(
-            get: { self.gatewayAuthFields.token },
+            get: { self.gatewayAuthFields[keyPath: field] },
             set: { value in
-                self.gatewayAuthFields.token = value
-                self.gatewayAuthFields.persist(
-                    instanceId: GatewaySettingsStore.currentInstanceID(),
-                    targetStableID: self.gatewayCredentialTargetStableID)
-            })
-    }
-
-    private var gatewayPasswordBinding: Binding<String> {
-        Binding(
-            get: { self.gatewayAuthFields.password },
-            set: { value in
-                self.gatewayAuthFields.password = value
+                self.gatewayAuthFields[keyPath: field] = value
                 self.gatewayAuthFields.persist(
                     instanceId: GatewaySettingsStore.currentInstanceID(),
                     targetStableID: self.gatewayCredentialTargetStableID)
@@ -1325,13 +1321,8 @@ extension OnboardingWizardView {
         Binding(
             get: { self.manualHost },
             set: { value in
-                let previousStableID = self.currentManualGatewayStableID
-                self.manualContextPath = nil
-                self.manualHost = value
-                if GatewayStableIdentifier.key(previousStableID) !=
-                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-                {
-                    self.gatewayAuthFields = .init()
+                self.updateManualTarget {
+                    self.manualHost = value
                 }
             })
     }
@@ -1340,15 +1331,10 @@ extension OnboardingWizardView {
         Binding(
             get: { self.manualPortText },
             set: { value in
-                let previousStableID = self.currentManualGatewayStableID
-                self.manualContextPath = nil
-                let digits = value.filter(\.isNumber)
-                self.manualPortText = digits
-                self.manualPort = min(Int(digits) ?? 0, 65535)
-                if GatewayStableIdentifier.key(previousStableID) !=
-                    GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-                {
-                    self.gatewayAuthFields = .init()
+                self.updateManualTarget {
+                    let digits = value.filter(\.isNumber)
+                    self.manualPortText = digits
+                    self.manualPort = min(Int(digits) ?? 0, 65535)
                 }
             })
     }
@@ -1375,32 +1361,37 @@ extension OnboardingWizardView {
         self.applyModeDefaults(mode)
     }
 
-    private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
+    private func updateManualTarget(_ update: () -> Void) {
         let previousStableID = self.currentManualGatewayStableID
         self.manualContextPath = nil
-        defer {
-            if GatewayStableIdentifier.key(previousStableID) !=
-                GatewayStableIdentifier.key(self.currentManualGatewayStableID)
-            {
-                self.gatewayAuthFields = .init()
-            }
+        update()
+        if GatewayStableIdentifier.key(previousStableID) !=
+            GatewayStableIdentifier.key(self.currentManualGatewayStableID)
+        {
+            self.gatewayAuthFields = .init()
         }
-        let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let hostIsDefaultLike = host.isEmpty || host == "openclaw.local" || host == "localhost"
-
-        switch mode {
-        case .homeNetwork:
-            if hostIsDefaultLike { self.manualHost = "openclaw.local" }
-        case .remoteDomain:
-            if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
-        case .developerLocal:
-            if hostIsDefaultLike { self.manualHost = "localhost" }
-        }
-        self.manualTLS = mode != .developerLocal
-        if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
     }
 
-    private func connectManual(setupAttemptID: UUID? = nil) async {
+    private func applyModeDefaults(_ mode: OnboardingConnectionMode) {
+        self.updateManualTarget {
+            let host = self.manualHost.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let hostIsDefaultLike = host.isEmpty || host == "openclaw.local" || host == "localhost"
+            switch mode {
+            case .homeNetwork:
+                if hostIsDefaultLike { self.manualHost = "openclaw.local" }
+            case .remoteDomain:
+                if host == "openclaw.local" || host == "localhost" { self.manualHost = "" }
+            case .developerLocal:
+                if hostIsDefaultLike { self.manualHost = "localhost" }
+            }
+            self.manualTLS = mode != .developerLocal
+            if self.manualPort <= 0 || self.manualPort > 65535 { self.manualPort = 18789 }
+        }
+    }
+
+    private func connectManual(setupAttemptID: GatewaySetupAttempt? = nil) async {
+        let admissionCheckpoint = setupAttemptID?.admissionCheckpoint ?? self.gatewayController.ingress
+            .admissionCheckpoint()
         if let setupAttemptID {
             guard self.setupAttemptID == setupAttemptID else { return }
         } else {
@@ -1415,10 +1406,17 @@ extension OnboardingWizardView {
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(port)…"
         defer { self.connectingGateway = nil }
-        await self.connectCurrentManualGateway(host: host, port: port, forceReconnect: false)
+        await self.connectCurrentManualGateway(
+            host: host,
+            port: port,
+            forceReconnect: false,
+            admissionCheckpoint: admissionCheckpoint)
     }
 
-    private func connectCurrentManualGateway(host: String, port: Int, forceReconnect: Bool) async {
+    private func connectCurrentManualGateway(
+        host: String, port: Int, forceReconnect: Bool, admissionCheckpoint: UInt64? = nil) async
+    {
+        let admissionCheckpoint = admissionCheckpoint ?? self.gatewayController.ingress.admissionCheckpoint()
         let stableID = GatewayConnectionController.ManualAuthOverride.manualStableID(
             host: host,
             port: port,
@@ -1438,7 +1436,8 @@ extension OnboardingWizardView {
             useTLS: self.manualTLS,
             contextPath: self.manualContextPath,
             authOverride: authOverride,
-            forceReconnect: forceReconnect)
+            forceReconnect: forceReconnect,
+            admissionCheckpoint: admissionCheckpoint)
         guard !Task.isCancelled,
               generation == self.manualConnectGeneration,
               GatewayStableIdentifier.matches(self.currentManualGatewayStableID, stableID)

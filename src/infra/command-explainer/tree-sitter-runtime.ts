@@ -5,20 +5,23 @@ import type * as TreeSitter from "web-tree-sitter";
 
 const require = createRequire(import.meta.url);
 
-let parserPromise: Promise<TreeSitter.Parser> | null = null;
+export type BashCommandParser = (source: string) => TreeSitter.Tree;
+
+let parserPromise: Promise<BashCommandParser> | null = null;
 const MAX_COMMAND_EXPLANATION_SOURCE_CHARS = 128 * 1024;
 const MAX_COMMAND_EXPLANATION_PARSE_MS = 500;
 
-async function loadParser(): Promise<TreeSitter.Parser> {
+async function loadParser(): Promise<BashCommandParser> {
   const TreeSitter = await import("web-tree-sitter");
   await TreeSitter.Parser.init();
   const language = await TreeSitter.Language.load(
     require.resolve("tree-sitter-bash/tree-sitter-bash.wasm"),
   );
-  return new TreeSitter.Parser().setLanguage(language);
+  return parseBashForCommandExplanation.bind(null, new TreeSitter.Parser().setLanguage(language));
 }
 
-function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
+/** Callers own each returned tree and must delete it before yielding. */
+export function getBashParserForCommandExplanation(): Promise<BashCommandParser> {
   // Reset the cache on load failure so transient filesystem or WASM init errors
   // do not poison all later command explanations in the process.
   parserPromise ??= loadParser().catch((error: unknown) => {
@@ -26,16 +29,15 @@ function getBashParserForCommandExplanation(): Promise<TreeSitter.Parser> {
     throw error;
   });
   return parserPromise;
-} /**
- * Low-level parser access for tests and parser diagnostics.
- * Callers own the returned Tree and must call tree.delete().
- * Prefer explainShellCommand for normal command-explainer use.
- */
-export async function parseBashForCommandExplanation(source: string): Promise<TreeSitter.Tree> {
+}
+
+function parseBashForCommandExplanation(
+  parser: TreeSitter.Parser,
+  source: string,
+): TreeSitter.Tree {
   if (source.length > MAX_COMMAND_EXPLANATION_SOURCE_CHARS) {
     throw new Error("Shell command is too large to explain");
   }
-  const parser = await getBashParserForCommandExplanation();
   const deadlineMs = performance.now() + MAX_COMMAND_EXPLANATION_PARSE_MS;
   let timedOut = false;
   const tree = parser.parse(source, null, {

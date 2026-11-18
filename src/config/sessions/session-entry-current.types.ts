@@ -1,11 +1,40 @@
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
+import type { SessionEntry } from "./types.js";
 /** Identity is parser-validated; optional owner values retain their exact stored semantics. */
 export type SessionEntryCurrentFacts = {
   sessionId: string;
+  clientCapabilities?: string[];
+  createdVia?: unknown;
+  createdActor?: SessionEntry["createdActor"];
+  incognito?: SessionEntry["incognito"];
+  modelSelectionLocked?: SessionEntry["modelSelectionLocked"];
+  pluginOwnerId?: SessionEntry["pluginOwnerId"];
+  agentHarnessId?: SessionEntry["agentHarnessId"];
+  agentRuntimeOverride?: SessionEntry["agentRuntimeOverride"];
+  initializationPending?: SessionEntry["initializationPending"];
+  templateInitialization?: SessionEntry["templateInitialization"];
+  execHost?: SessionEntry["execHost"];
+  execNode?: SessionEntry["execNode"];
+  deviceFolder?: SessionEntry["deviceFolder"];
+  sandbox?: SessionEntry["sandbox"];
+  sandboxMode?: SessionEntry["sandboxMode"];
+  permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
+  sessionRoot?: SessionEntry["sessionRoot"];
+  authProfileOverride?: SessionEntry["authProfileOverride"];
+  authProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
+  modelOverride?: SessionEntry["modelOverride"];
+  providerOverride?: SessionEntry["providerOverride"];
+  model?: SessionEntry["model"];
+  modelProvider?: SessionEntry["modelProvider"];
+  previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
+  goal?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
+  lastRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;
@@ -13,12 +42,12 @@ export type SessionEntryCurrentFacts = {
   subagentRole?: unknown;
   subagentControlScope?: unknown;
   inheritedToolPolicyVersion?: unknown;
+  inheritedToolPolicySource?: unknown;
   inheritedToolAllow?: unknown;
   inheritedToolDeny?: unknown;
-  subagentRecovery?: {
-    lastRunId?: unknown;
-    sessionLifecycleRunId?: unknown;
-  };
+  delegatedToolPolicy?: unknown;
+  skillLibrarySelections?: unknown;
+  executionPolicy?: unknown;
 };
 
 export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &
@@ -27,6 +56,7 @@ export type SessionEntryCurrentSource = CapturedSessionEntryReadSource &
     sessionKey: string;
     sessionIdLookup?: string;
     projection?: "capability";
+    readCustody?: SessionStoreReadCustody;
   }>;
 
 /** A current-row restriction; the caller's existing admission still supplies authority. */
@@ -60,7 +90,7 @@ export type CapturedSessionEntryCurrentRead =
       readCurrent(): Promise<SessionEntryCurrentFacts | undefined>;
     }
   | {
-      kind: "native" | "missing";
+      kind: "native" | "incognito" | "missing";
       source?: undefined;
       assertSourceCurrent(this: void): void;
       readCurrent(): SessionEntryCurrentFacts | undefined;

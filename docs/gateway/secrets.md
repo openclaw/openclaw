@@ -16,7 +16,7 @@ Plaintext still works. SecretRefs are opt-in per credential.
 </Note>
 
 <Warning>
-Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
+Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local credential exposure once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
 </Warning>
 
 This page is an index. Secrets management is documented on five pages, one per reader job.
@@ -98,4 +98,4 @@ page that now holds the content.
 - [Security](/gateway/security) - security posture
 - [Configuration reference](/gateway/configuration-reference) - where each secrets and env setting is documented
 - [Ask user](/tools/ask-user) - asking the operator a non-secret question; never answer it with a credential, use the masked `secrets` tool for those
-- [Auth credential semantics](/auth-credential-semantics) - the canonical rules for auth profile ordering and runtime credential resolution
+- [Auth credential semantics](/auth-credential-semantics) - the shared rules for auth profile ordering and runtime credential resolution

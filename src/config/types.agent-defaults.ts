@@ -1,9 +1,5 @@
 import type { z } from "zod";
-import type {
-  AgentRuntimePolicyConfig,
-  AgentSandboxConfig,
-  AgentToolModelConfig,
-} from "./types.agents-shared.js";
+import type { AgentSandboxConfig } from "./types.agents-shared.js";
 import type { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 
 type SchemaAgentDefaultsConfig = NonNullable<z.input<typeof AgentDefaultsSchema>>;
@@ -27,27 +23,8 @@ export type AgentContextPruningConfig = NonNullable<SchemaAgentDefaultsConfig["c
 export type AgentContextLimitsConfig = NonNullable<SchemaAgentDefaultsConfig["contextLimits"]>;
 
 export type AgentDefaultsConfig = Omit<SchemaAgentDefaultsConfig, "sandbox"> & {
-  /** @deprecated Doctor-only legacy input. */
-  imageGenerationModel?: AgentToolModelConfig;
-  /** @deprecated Doctor-only legacy input. */
-  videoGenerationModel?: AgentToolModelConfig;
-  /** @deprecated Doctor-only legacy input. */
-  musicGenerationModel?: AgentToolModelConfig;
-  /** @deprecated Doctor-only legacy input. */
-  envelopeTimezone?: string;
-  /** @deprecated Doctor-only legacy input. */
-  envelopeTimestamp?: "on" | "off";
-  /** @deprecated Doctor-only legacy input. */
-  envelopeElapsed?: "on" | "off";
-  /** @deprecated Doctor-only legacy input. */
-  timeFormat?: "auto" | "12" | "24";
-  /** @deprecated Doctor-only legacy input. */
-  promptOverlays?: { gpt5?: { personality?: "friendly" | "on" | "off" } };
-  /**
-   * @deprecated Legacy raw config accepted only by doctor/migration repair.
-   * Normal schema parsing rejects this key; use per-model agentRuntime instead.
-   */
-  agentRuntime?: AgentRuntimePolicyConfig;
+  /** @deprecated Doctor input only; proactive checks are ordinary automation jobs. */
+  heartbeat?: LegacyHeartbeatConfig;
   sandbox?: AgentSandboxConfig;
 };
 export type AgentCompactionMode = NonNullable<AgentCompactionConfig["mode"]>;
@@ -55,3 +32,24 @@ export type AgentCompactionIdentifierPolicy = NonNullable<
   AgentCompactionConfig["identifierPolicy"]
 >;
 export type AgentCompactionConfig = NonNullable<SchemaAgentDefaultsConfig["compaction"]>;
+
+/** July 2026+ input for the one-way Heartbeat to Automations Doctor migration. */
+export type LegacyHeartbeatConfig = {
+  agentId?: string;
+  every?: string;
+  activeHours?: {
+    start?: string;
+    end?: string;
+    timezone?: string;
+  };
+  model?: string;
+  session?: string;
+  target?: string;
+  directPolicy?: "allow" | "block";
+  to?: string;
+  accountId?: string;
+  prompt?: string;
+  timeoutSeconds?: number;
+  lightContext?: boolean;
+  isolatedSession?: boolean;
+};

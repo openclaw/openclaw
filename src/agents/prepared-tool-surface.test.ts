@@ -6,94 +6,73 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
-import { prepareCoreToolPolicy, projectAgentToolDefinition } from "./prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "./prepared-tool-definition.js";
+import { prepareCoreToolPolicy } from "./prepared-tool-surface.js";
+import { fakeTool } from "./test-helpers/fake-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
 describe("prepared core tool policy", () => {
   it.each([
-    { mode: undefined, required: false, memory: false, workspaceOnly: true, readOnly: false },
-    { mode: "full", required: false, memory: false, workspaceOnly: false, readOnly: false },
-    { mode: "full", required: true, memory: false, workspaceOnly: true, readOnly: false },
-    { mode: "full", required: false, memory: true, workspaceOnly: true, readOnly: false },
-    { mode: "read-only", required: false, memory: false, workspaceOnly: true, readOnly: true },
-  ] as const)(
-    "preserves session precedence for $mode, required=$required, memory=$memory",
-    (testCase) => {
-      const policy = prepareCoreToolPolicy({
-        config: { tools: { fs: { workspaceOnly: true } } },
-        sessionPermissionPolicy: testCase.mode
-          ? { root: "/workspace", mode: testCase.mode }
-          : undefined,
-        requireWorkspaceOnly: testCase.required || undefined,
-        trigger: testCase.memory ? "memory" : "user",
-      });
-      expect(policy.workspaceOnly).toBe(testCase.workspaceOnly);
-      expect(policy.readOnly).toBe(testCase.readOnly);
-      expect(policy.applyPatchEnabled).toBe(!testCase.readOnly);
-      expect(policy.applyPatchContainmentSource).toBe(
-        testCase.required ? "required-root" : testCase.mode ? "session" : "config",
-      );
-    },
-  );
-
-  it.each([
-    { allowModels: [" OPENAI/model-a "], modelId: "model-a", expected: true },
-    { allowModels: ["model-a"], modelId: "model-a", expected: true },
-    { allowModels: ["openai/model-a"], modelId: "openai/model-a", expected: true },
-    { allowModels: ["model-b"], modelId: "model-a", expected: false },
-    { allowModels: ["model-a"], modelId: undefined, expected: false },
-  ])(
-    "resolves patch model eligibility for $allowModels and $modelId",
-    ({ allowModels, modelId, expected }) => {
-      expect(
-        prepareCoreToolPolicy({
-          config: { tools: { exec: { applyPatch: { allowModels } } } },
-          modelProvider: "openai",
-          modelId,
-        }).applyPatchEnabled,
-      ).toBe(expected);
-    },
-  );
-
-  it("projects the selected model budget, vision support, and image limits without credentials", () => {
+    [undefined, false, false, true, false],
+    ["full", false, false, false, false],
+    ["full", true, false, true, false],
+    ["full", false, true, true, false],
+    ["read-only", false, false, true, true],
+  ] as const)("resolves session policy (%#)", (mode, required, memory, workspaceOnly, readOnly) => {
     expect(
       prepareCoreToolPolicy({
-        config: { agents: { defaults: { imageMaxDimensionPx: 800 } } },
+        config: { tools: { fs: { workspaceOnly: true } } },
+        sessionPermissionPolicy: mode ? { root: "/workspace", mode } : undefined,
+        requireWorkspaceOnly: required || undefined,
+        trigger: memory ? "memory" : "user",
+      }),
+    ).toMatchObject({
+      workspaceOnly,
+      readOnly,
+      applyPatchEnabled: !readOnly,
+      applyPatchContainmentSource: required ? "required-root" : mode ? "session" : "config",
+    });
+  });
+
+  it.each([
+    [" OPENAI/model-a ", "model-a", true],
+    ["openai/model-a", "openai/model-a", true],
+    ["model-b", "model-a", false],
+    ["model-a", undefined, false],
+  ] as const)("checks patch model allowlist (%#)", (allowed, modelId, applyPatchEnabled) => {
+    expect(
+      prepareCoreToolPolicy({
+        config: {
+          tools: { exec: { applyPatch: { allowModels: [allowed] } } },
+          agents: { defaults: { imageMaxDimensionPx: 800 } },
+        },
+        modelProvider: "openai",
+        modelId,
         modelContextWindowTokens: 32000,
         modelHasVision: false,
       }),
-    ).toEqual({
-      workspaceOnly: false,
-      readOnly: false,
-      applyPatchEnabled: true,
-      applyPatchWorkspaceOnly: true,
-      applyPatchContainmentSource: "config",
+    ).toMatchObject({
+      applyPatchEnabled,
+      applyPatchWorkspaceOnly: false,
       imageSanitization: { maxDimensionPx: 800 },
       modelContextWindowTokens: 32000,
       modelHasVision: false,
     });
   });
 
-  it.each([
-    { tools: { fs: { workspaceOnly: true }, exec: { applyPatch: { enabled: false } } } },
-    {
-      tools: { fs: { workspaceOnly: false } },
-      agents: {
-        list: [
-          {
-            id: "restricted",
-            tools: {
-              fs: { workspaceOnly: true },
-              exec: { applyPatch: { allowModels: ["other-model"] } },
-            },
-          },
-        ],
-      },
-    },
-  ] satisfies OpenClawConfig[])(
+  it.each([false, true])(
     "enforces configured containment after policy transport (%#)",
-    async (config) => {
+    async (agentScoped) => {
+      const restrictions = {
+        fs: { workspaceOnly: true },
+        exec: { applyPatch: agentScoped ? { allowModels: ["other-model"] } : { enabled: false } },
+      };
+      const config: OpenClawConfig = agentScoped
+        ? {
+            tools: { fs: { workspaceOnly: false } },
+            agents: { entries: { restricted: { tools: restrictions } } },
+          }
+        : { tools: restrictions };
       const parent = await fs.realpath(tempDirs.make("prepared-tool-policy-"));
       const root = path.join(parent, "workspace");
       const outside = path.join(parent, "outside.txt");
@@ -124,15 +103,76 @@ describe("prepared core tool policy", () => {
       await expect(fs.readFile(path.join(root, "inside.txt"), "utf8")).resolves.toBe("permitted");
     },
   );
+
+  it.each(["session", "required-root"] as const)(
+    "keeps %s recovery within the recorded root when cwd selects another repository",
+    async (source) => {
+      const parent = await fs.realpath(tempDirs.make("prepared-tool-root-recovery-"));
+      const root = path.join(parent, "coordinator");
+      const cwd = path.join(parent, "target");
+      await fs.mkdir(root);
+      await fs.mkdir(cwd);
+      const target = path.join(cwd, "note.txt");
+      await fs.writeFile(target, "unchanged\n");
+      const policy = structuredClone(
+        prepareCoreToolPolicy({
+          sessionPermissionPolicy: { root, mode: source === "session" ? "workspace" : "full" },
+          requireWorkspaceOnly: source === "required-root" ? true : undefined,
+        }),
+      );
+      const tools = createCoreCodingTools({
+        ...policy,
+        codingRoot: cwd,
+        containmentRoot: root,
+        includeBaseCodingTools: true,
+        shellTools: "patch-only",
+        execDefaults: {},
+        processDefaults: {},
+      });
+      const guidance =
+        source === "session"
+          ? /sessions_spawn.*inherits this root.*operator.*session.*recorded root.*target/i
+          : /required root/i;
+      for (const [name, args] of [
+        ["read", { path: "note.txt" }],
+        ["write", { path: "note.txt", content: "changed\n" }],
+        ["edit", { path: "note.txt", edits: [{ oldText: "unchanged", newText: "changed" }] }],
+        ["ls", { path: "." }],
+        [
+          "apply_patch",
+          { input: "*** Begin Patch\n*** Add File: added.txt\n+changed\n*** End Patch" },
+        ],
+      ] as const) {
+        const tool = tools.find((entry) => entry.name === name)!;
+        const failure = await tool.execute(name, args).then(
+          () => {
+            throw new Error(`${name} unexpectedly escaped the recorded root`);
+          },
+          (error: unknown) => error,
+        );
+        expect(failure).toHaveProperty("message", expect.stringMatching(guidance));
+        expect(failure).toHaveProperty("message", expect.not.stringContaining("set cwd"));
+      }
+      await expect(fs.readFile(target, "utf8")).resolves.toBe("unchanged\n");
+      await expect(fs.readdir(cwd)).resolves.toEqual(["note.txt"]);
+      await tools
+        .find((tool) => tool.name === "write")!
+        .execute("inside", {
+          path: path.join(root, "permitted.txt"),
+          content: "permitted",
+        });
+      await expect(fs.readFile(path.join(root, "permitted.txt"), "utf8")).resolves.toBe(
+        "permitted",
+      );
+    },
+  );
 });
 
 it("issues byte-identical definitions to the local session adapter", () => {
   const tools = finalizeAgentTools({
     tools: [
       {
-        name: "sample",
-        label: "Sample",
-        description: "A canonical tool.",
+        ...fakeTool("sample", "A canonical tool."),
         parameters: {
           type: "object",
           properties: { value: { type: "string" } },
@@ -140,7 +180,7 @@ it("issues byte-identical definitions to the local session adapter", () => {
         },
         hideFromChannelProgress: true,
         executionMode: "sequential",
-        execute: async () => ({ content: [], details: {} }),
+        repeatable: { actions: ["poll"] },
       },
     ],
     modelProvider: "openai",
@@ -150,7 +190,21 @@ it("issues byte-identical definitions to the local session adapter", () => {
   const local = toToolDefinitions(tools);
   const placed = tools.map(projectAgentToolDefinition);
   expect(JSON.stringify(placed)).toBe(JSON.stringify(local));
-  expect(placed[0]?.executionMode).toBe("sequential");
-  expect(placed[0]?.hideFromChannelProgress).toBe(true);
+  expect(placed[0]).toMatchObject({ executionMode: "sequential", hideFromChannelProgress: true });
   expect(Object.keys(placed[0]!)).not.toContain("execute");
+  // Workers enforce the same repeat guard, so the plain-data exemption crosses the wire.
+  expect(placed[0]).toMatchObject({ repeatable: { actions: ["poll"] } });
+});
+
+it("tells workers when tools.loopDetection turns the repeat guard off", () => {
+  const off = { tools: { loopDetection: { enabled: false } } } as OpenClawConfig;
+  const agentOn = {
+    ...off,
+    agents: { list: [{ id: "main", tools: { loopDetection: { enabled: true } } }] },
+  } as OpenClawConfig;
+  expect(prepareCoreToolPolicy({}).toolRepeatGuard).toBeUndefined();
+  expect(prepareCoreToolPolicy({ config: off, agentId: "main" }).toolRepeatGuard).toBe(false);
+  expect(
+    prepareCoreToolPolicy({ config: agentOn, agentId: "main" }).toolRepeatGuard,
+  ).toBeUndefined();
 });

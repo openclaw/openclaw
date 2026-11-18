@@ -9,6 +9,12 @@ on:
       candidate_sha256:
         required: true
         type: string
+      target_context_ref:
+        required: false
+        type: string
+      qualification_baselines_json:
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -38,15 +44,35 @@ jobs:
         id: driver
         timeout-minutes: 1
         env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
           DRIVER_CACHE_MODE: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && 'read-write' || 'restore' }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
-          import { appendFileSync } from "node:fs";
+          import { appendFileSync, readFileSync } from "node:fs";
           import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
-          const version = JSON.parse(execFileSync("npm", ["view", "openclaw@latest", "version", "--json"], { encoding: "utf8" }));
+          const targetContextRef = (process.env.TARGET_CONTEXT_REF ?? "").replace(/^refs\/heads\//u, "");
+          const candidateVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+          const candidate = parseReleaseVersion(candidateVersion);
+          // PR-head dispatch refs need not carry the candidate's release line.
+          const frozenTarget = targetContextRef.startsWith("extended-stable/") ||
+            (candidate !== null && classifyReleaseTrain(candidate) === "extended-stable");
+          let version;
+          if (frozenTarget) {
+            // Frozen lines must not create state with a newer, incompatible driver.
+            const args = ["scripts/lib/release-upgrade-baseline.mjs", "--candidate-version", candidateVersion, "--target-context-ref", targetContextRef];
+            const captured = process.env.QUALIFICATION_BASELINES_JSON;
+            if (captured) args.push("--qualification-baselines-json", captured);
+            const resolved = execFileSync(process.execPath, args, { encoding: "utf8" }).trim();
+            const baseline = captured ? JSON.parse(resolved).upgradeBaseline : resolved;
+            version = baseline.replace(/^openclaw@/u, "");
+          } else {
+            version = JSON.parse(execFileSync("npm", ["view", "openclaw@latest", "version", "--json"], { encoding: "utf8" }));
+          }
           const parsed = parseReleaseVersion(version);
-          if (!parsed || classifyReleaseTrain(parsed) !== "stable") throw new Error("npm latest must resolve to stable");
+          const allowedTrains = frozenTarget ? ["stable", "extended-stable"] : ["stable"];
+          if (!parsed || !allowedTrains.includes(classifyReleaseTrain(parsed))) throw new Error("Driver must resolve to a supported final release");
           appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncache-mode=${process.env.DRIVER_CACHE_MODE}\n`);
           NODE
       - name: Restore published driver install
@@ -85,7 +111,7 @@ jobs:
           path: .cache/published-driver-install/${{ steps.driver.outputs.version }}/driver.tar
           key: published-driver-update-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/e2e/Dockerfile') }}-${{ steps.driver.outputs.version }}
       - name: Download candidate package
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         timeout-minutes: 2
         with:
           artifact-ids: ${{ inputs.candidate_artifact_id }}
@@ -96,6 +122,7 @@ jobs:
         env:
           CANDIDATE_SHA256: ${{ inputs.candidate_sha256 }}
           DRIVER_VERSION: ${{ steps.driver.outputs.version }}
+          OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE: "1"
         run: |
           set -euo pipefail
           package=.artifacts/published-driver-package/openclaw-candidate.tgz
@@ -125,10 +152,19 @@ jobs:
             exit 1
           fi
           exit "$cell_exit"
+      - name: Update published baseline under native systemd
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          # The native planner defaults to the published 2026.10.9 regression
+          # baseline. Reuse the exact candidate already checksum-verified above.
+          sudo "$(command -v node)" scripts/e2e/lib/upgrade-survivor/native-systemd.mjs \
+            "$PWD/.artifacts/published-driver-package/openclaw-candidate.tgz" \
+            "$PWD/.artifacts/published-driver-update/native-systemd"
       - name: Preserve synthetic update diagnostics
         if: always()
         timeout-minutes: 1
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: published-driver-update
           path: .artifacts/published-driver-update

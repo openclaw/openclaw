@@ -1,23 +1,22 @@
+import { isSystemCreatedSessionRow } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export function projectSidebarArchiveVisibility(input: {
   sessionData: Pick<
-    SessionDataController,
+    SessionDataOwner,
     | "childSessionRowsByParent"
     | "loadedChildSessionKeys"
     | "loadingChildSessionKeys"
     | "childSessionErrorsByParent"
-    | "sessionResultsByAgent"
-    | "sessionsAgentId"
-    | "sessionsResult"
   >;
+  sourceRows: readonly GatewaySessionRow[];
   selectedAgentId: string;
   statusFilter: SidebarSessionStatusFilter;
+  showSystem?: boolean;
   now: number;
   deletionState: SessionCapability["deletionState"];
   archiveVisibility: SessionCapability["archiveVisibility"];
@@ -31,17 +30,17 @@ export function projectSidebarArchiveVisibility(input: {
         visibility === "archived")
     );
   };
-  const isSessionHidden = (row: Pick<GatewaySessionRow, "key" | "archived" | "snoozedUntil">) =>
+  const isSessionHidden = (
+    row: Parameters<typeof isSystemCreatedSessionRow>[0] &
+      Pick<GatewaySessionRow, "archived" | "snoozedUntil">,
+  ) =>
     isLifecycleHidden(row.key) ||
+    (!input.showSystem && isSystemCreatedSessionRow(row)) ||
     (input.statusFilter === "archived" && row.archived !== true) ||
     (input.statusFilter === "active" && isSessionSnoozed(row, input.now)) ||
     (input.statusFilter === "snoozed" &&
       (row.archived === true || !isSessionSnoozed(row, input.now)));
-  const selectedAgentId = normalizeAgentId(input.selectedAgentId);
-  const sourceRows =
-    selectedAgentId === normalizeAgentId(input.sessionData.sessionsAgentId ?? "")
-      ? (input.sessionData.sessionsResult?.sessions ?? [])
-      : (input.sessionData.sessionResultsByAgent[selectedAgentId]?.sessions ?? []);
+  const sourceRows = input.sourceRows;
   const knownRows = new Map(
     [...Object.values(input.sessionData.childSessionRowsByParent).flat(), ...sourceRows].map(
       (row) => [row.key, row],

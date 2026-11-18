@@ -7,7 +7,7 @@ import type { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 
 export type NodeWorkerSupervisorControl = Pick<
   ReturnType<typeof createNodeWorkerSupervisor>,
-  "launch" | "status" | "retainWorkspaces" | "cancel" | "stopEnvironment"
+  "launch" | "status" | "retainWorkspaces" | "cancel" | "stopEnvironment" | "observeProcesses"
 >;
 
 export function projectNodeWorkerSupervisorReceipt(

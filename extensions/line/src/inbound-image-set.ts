@@ -21,7 +21,6 @@ type PendingImageSet<TEvent, TLifecycle> = {
   total?: number;
   release: () => void;
   timer?: ReturnType<typeof setTimeout>;
-  flushDelayMs: number;
 };
 
 type LineImageSetDelivery<TEvent, TLifecycle> = {
@@ -86,7 +85,6 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
     total?: number;
     event: TEvent;
     lifecycle: TLifecycle;
-    flushDelayMs?: number;
   }): Promise<LineImageSetDelivery<TEvent, TLifecycle> | null> => {
     const part: PendingImageSetPart<TEvent, TLifecycle> = {
       index: input.index,
@@ -108,8 +106,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
       // Reset only a running timer: queued time must not consume the gap budget.
       if (forming.timer) {
         clearTimeout(forming.timer);
-        forming.timer = setTimeout(forming.release, forming.flushDelayMs);
-        forming.timer.unref?.();
+        forming.timer = setTimeout(forming.release, IMAGE_SET_FLUSH_DELAY_MS).unref();
       }
       return null;
     }
@@ -118,7 +115,6 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
     const pending: PendingImageSet<TEvent, TLifecycle> = {
       parts: new Map([[input.messageId, part]]),
       total: input.total,
-      flushDelayMs: input.flushDelayMs ?? IMAGE_SET_FLUSH_DELAY_MS,
       release: () => {
         clearTimeout(pending.timer);
         release();
@@ -134,8 +130,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
     const releaseLane = await enterLane(input.laneKey);
     // The wait starts here, not on arrival: time spent queued behind earlier work
     // on this lane is not time LINE spent delivering the rest of the set.
-    pending.timer = setTimeout(pending.release, pending.flushDelayMs);
-    pending.timer.unref?.();
+    pending.timer = setTimeout(pending.release, IMAGE_SET_FLUSH_DELAY_MS).unref();
     if (pending.total !== undefined && pending.parts.size >= pending.total) {
       pending.release();
     }
@@ -150,8 +145,10 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>() {
       const carry: { messageIds: Set<string>; timer?: ReturnType<typeof setTimeout> } = {
         messageIds: deliveredMessageIds,
       };
-      carry.timer = setTimeout(() => deliveredBySet.delete(key), pending.flushDelayMs * 5);
-      carry.timer.unref?.();
+      carry.timer = setTimeout(
+        () => deliveredBySet.delete(key),
+        IMAGE_SET_FLUSH_DELAY_MS * 5,
+      ).unref();
       deliveredBySet.set(key, carry);
     }
     return {

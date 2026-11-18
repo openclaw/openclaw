@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { closeQaRuntimeStores } from "openclaw/plugin-sdk/qa-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { appendSqliteTrajectoryRuntimeEvents } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -10,6 +14,10 @@ import { vi } from "vitest";
 import { createQaBusState } from "../src/bus-state.js";
 import { createQaChannelTransport } from "../src/qa-channel-transport.js";
 import { runRuntimeToolFixture } from "../src/runtime-tool-fixture.js";
+import * as suiteRuntimeAgentMedia from "../src/suite-runtime-agent-media.js";
+import * as suiteRuntimeAgentProcess from "../src/suite-runtime-agent-process.js";
+import * as suiteRuntimeAgentSession from "../src/suite-runtime-agent-session.js";
+import * as suiteRuntimeGateway from "../src/suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "../src/suite-runtime-types.js";
 
 let suiteRoot: string | undefined;
@@ -46,7 +54,38 @@ async function makeEnv(overrides: Partial<QaSuiteRuntimeEnv> = {}): Promise<QaSu
 }
 
 type RuntimeToolFixtureConfig = Parameters<typeof runRuntimeToolFixture>[1];
-type RuntimeToolFixtureDeps = Parameters<typeof runRuntimeToolFixture>[2];
+type RuntimeToolFixtureDeps = {
+  createSession: typeof suiteRuntimeAgentSession.createSession;
+  readEffectiveTools: typeof suiteRuntimeAgentSession.readEffectiveTools;
+  runAgentPrompt: (
+    ...args: Parameters<typeof suiteRuntimeAgentProcess.runAgentPrompt>
+  ) => Promise<unknown>;
+  fetchJson: (url: string) => Promise<unknown>;
+  ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
+};
+
+function runRuntimeToolFixtureWithDeps(
+  env: QaSuiteRuntimeEnv,
+  config: RuntimeToolFixtureConfig,
+  deps: RuntimeToolFixtureDeps,
+  onSessionKeys?: Parameters<typeof runRuntimeToolFixture>[2],
+) {
+  vi.spyOn(suiteRuntimeAgentSession, "createSession").mockImplementation(deps.createSession);
+  vi.spyOn(suiteRuntimeAgentSession, "readEffectiveTools").mockImplementation(
+    deps.readEffectiveTools,
+  );
+  vi.spyOn(suiteRuntimeAgentProcess, "runAgentPrompt").mockImplementation(async (...args) => {
+    await deps.runAgentPrompt(...args);
+    return { started: {}, waited: {} };
+  });
+  vi.spyOn(suiteRuntimeGateway, "fetchJson").mockImplementation(deps.fetchJson);
+  vi.spyOn(suiteRuntimeAgentMedia, "ensureImageGenerationConfigured").mockImplementation(
+    async (envArg) => {
+      await deps.ensureImageGenerationConfigured(envArg);
+    },
+  );
+  return runRuntimeToolFixture(env, config, onSessionKeys);
+}
 
 function transcriptToolCall(
   toolName: string,
@@ -88,16 +127,18 @@ function runLiveRuntimeToolFixture(
     config?: RuntimeToolFixtureConfig;
     tools?: Iterable<string>;
     runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
+    onSessionKeys?: Parameters<typeof runRuntimeToolFixture>[2];
   } = {},
 ) {
   const toolName = params.toolName ?? "read";
-  return runRuntimeToolFixture(
+  return runRuntimeToolFixtureWithDeps(
     env,
     params.config ?? runtimeToolFixtureConfig(toolName),
     runtimeToolFixtureDeps({
       tools: params.tools ?? [toolName],
       runAgentPrompt: params.runAgentPrompt,
     }),
+    params.onSessionKeys,
   );
 }
 
@@ -196,13 +237,14 @@ async function runMockRuntimeToolFixture(params: {
   tools?: Iterable<string>;
   runAgentPrompt?: RuntimeToolFixtureDeps["runAgentPrompt"];
   forceCodex?: boolean;
+  onSessionKeys?: Parameters<typeof runRuntimeToolFixture>[2];
 }) {
   const toolName = params.toolName ?? "read";
   const env = params.env ?? (await makeEnv({ mock: { baseUrl: MOCK_BASE_URL } }));
   if (params.forceCodex) {
     env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME = "codex";
   }
-  return runRuntimeToolFixture(
+  return runRuntimeToolFixtureWithDeps(
     env,
     runtimeToolFixtureConfig(toolName, {
       promptSnippet: `target=${toolName}`,
@@ -214,6 +256,7 @@ async function runMockRuntimeToolFixture(params: {
       fetchJson: mockRequestLog(params.requests),
       runAgentPrompt: params.runAgentPrompt,
     }),
+    params.onSessionKeys,
   );
 }
 
@@ -253,6 +296,8 @@ export async function writeQaSessionTranscript(
     ...process.env,
     OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
   };
+  // The real transcript readers need the same authored config as the isolated writer.
+  setRuntimeConfigSnapshot(env.cfg);
   await upsertSessionEntry({
     agentId: "qa",
     env: sessionEnv,
@@ -335,6 +380,7 @@ export async function cleanupRuntimeToolFixtureTempRoots() {
     return;
   }
   await Promise.all(tempRoots.map((root) => closeQaRuntimeStores(root)));
+  clearRuntimeConfigSnapshot();
   await fs.rm(suiteRoot, { recursive: true, force: true });
   tempRoots.length = 0;
   suiteRoot = undefined;
@@ -346,6 +392,7 @@ export {
   mockToolRequests,
   runLiveRuntimeToolFixture,
   runMockRuntimeToolFixture,
+  runRuntimeToolFixtureWithDeps,
   runtimePatchAddInput,
   runtimePatchUpdateInput,
   runtimeToolFixtureConfig,

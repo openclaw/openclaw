@@ -1,5 +1,5 @@
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect } from "vitest";
+import { assert, expect } from "vitest";
 import { formatCliCommand } from "../../src/cli/command-format.js";
 import type { runSqliteSessionsTranscriptsFlipProof } from "./sqlite-sessions-transcripts-flip-proof.ts";
 
@@ -101,7 +101,10 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     expect(forcedExit.signal).toBe("SIGKILL");
   }
   expect(before.selected.sessionKey).toBe(report.fullTurnSessionKey);
-  expect(before.selected.messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+  expect(
+    before.selected.messages.map((message) => message.role),
+    JSON.stringify({ events: before.selected.events, history: before.selected.history.messages }),
+  ).toEqual(["user", "assistant"]);
   expect(before.selected.history.sessionId).toBe(before.selected.sessionId);
   expect(afterRestart).toEqual(before);
   expect(afterAppend.sibling).toEqual(before.sibling);
@@ -120,9 +123,22 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
   const messageIds = afterAppend.selected.messages.map((message) => message.id);
   expect(messageIds.every((id) => typeof id === "string" && id.length > 0)).toBe(true);
   expect(new Set(messageIds).size).toBe(messageIds.length);
-  expect(
-    afterAppend.selected.history.messages.slice(0, before.selected.history.messages.length),
-  ).toEqual(before.selected.history.messages);
+  const historyPrefix = afterAppend.selected.history.messages.slice(
+    0,
+    before.selected.history.messages.length,
+  );
+  const displaySource = asRecord(
+    asRecord(asRecord(historyPrefix[0])?.["__openclaw"])?.transcriptPosition,
+  )?.source;
+  assert(typeof displaySource === "string" && displaySource.length > 0);
+  const expectedHistory = structuredClone(before.selected.history.messages);
+  // Capturing the new user's prompt advances the display generation, not past message content.
+  for (const message of expectedHistory) {
+    const position = asRecord(asRecord(asRecord(message)?.["__openclaw"])?.transcriptPosition);
+    assert(position && typeof position.source === "string");
+    position.source = displaySource;
+  }
+  expect(historyPrefix).toEqual(expectedHistory);
   const appendedHistory = afterAppend.selected.history.messages.slice(
     before.selected.history.messages.length,
   );
@@ -188,23 +204,22 @@ export function assertSqliteFlipProofCore(report: SqliteFlipProofReport): void {
     "seeded-legacy-store",
     "after-startup-refusal",
     "after-doctor-fix",
+    "after-rollback-restore",
     "after-gateway-start",
     "after-doctor-inspect",
     "after-doctor-validate",
-    "after-rollback-restore",
-    "after-gateway-restart",
     "after-chat-send",
     "after-full-agent-turn",
+    "after-sessions-reset",
     "after-abrupt-gateway-exit",
     "after-abrupt-gateway-restart",
     "after-abrupt-restart-chat-send",
     "after-doctor-import-idempotence",
     "after-downgrade-reupgrade-import",
     "after-sqlite-busy-contention",
-    "after-concurrent-multi-client",
-    "after-sessions-reset",
     "after-second-startup-after-reset",
     "after-transcript-append",
+    "after-concurrent-multi-client",
     "after-sessions-delete",
     "after-shared-first-delete",
     "after-shared-final-delete",

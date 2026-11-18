@@ -9,7 +9,7 @@ import {
   getLatestUpdateRestartSentinel,
   recordLatestUpdateRestartSentinel,
   refreshLatestUpdateRestartSentinel,
-} from "./server-restart-sentinel.js";
+} from "./server-update-sentinel.js";
 
 it("shares immutable reads while detaching recorded caller input", () => {
   const input: RestartSentinelPayload = {

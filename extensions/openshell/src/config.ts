@@ -7,21 +7,13 @@ import {
 import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 
-export type ResolvedOpenShellPluginConfig = {
-  mode: "mirror" | "remote";
-  command: string;
-  gateway?: string;
-  gatewayEndpoint?: string;
-  workspace?: string;
-  from: string;
-  policy?: string;
-  providers: string[];
-  gpu: boolean;
-  autoProviders: boolean;
-  remoteWorkspaceDir: string;
-  remoteAgentWorkspaceDir: string;
-  timeoutMs: number;
-};
+type ProducedOpenShellPluginConfig = ReturnType<typeof resolveOpenShellPluginConfig>;
+type OptionalOpenShellFields = "gateway" | "gatewayEndpoint" | "workspace" | "policy";
+export type ResolvedOpenShellPluginConfig = Omit<
+  ProducedOpenShellPluginConfig,
+  OptionalOpenShellFields
+> &
+  Partial<Pick<ProducedOpenShellPluginConfig, OptionalOpenShellFields>>;
 
 const DEFAULT_COMMAND = "openshell";
 const DEFAULT_MODE = "mirror";
@@ -56,7 +48,63 @@ const openShellWorkspaceName = z
       "workspace must contain lowercase alphanumeric characters or single hyphens and must not start or end with a hyphen",
   });
 
+const OpenShellWorkerConfigSchema = z.strictObject({
+  agentWorkspace: z
+    .strictObject({
+      agentId: z
+        .string()
+        .trim()
+        .regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+      remoteRoot: openShellManagedRemotePath("worker.agentWorkspace.remoteRoot").refine(
+        (value) =>
+          path.posix.normalize(value) === value &&
+          !["/sandbox", "/agent"].includes(value) &&
+          !["\\", "\0", "*", "?", "[", "]", "{", "}", "!", "(", ")"].some((part) =>
+            value.includes(part),
+          ),
+        "worker.agentWorkspace.remoteRoot must be a normalized directory below /sandbox or /agent without glob characters",
+      ),
+    })
+    .optional(),
+  nodeCommand: nonEmptyTrimmedString("worker.nodeCommand must be a non-empty string").default(
+    "openclaw",
+  ),
+  nodeExecutable: nonEmptyTrimmedString("worker.nodeExecutable must be a non-empty string").default(
+    "node",
+  ),
+  stateDir: openShellManagedRemotePath("worker.stateDir").default("/sandbox/.openclaw-node"),
+  model: z.strictObject({
+    provider: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(/^[a-z0-9][a-z0-9_-]*$/),
+    id: z.string().trim().min(1),
+    api: z.enum(["openai-completions", "openai-responses", "anthropic-messages"]),
+    baseUrl: z.url().refine((value) => {
+      const url = new URL(value);
+      return (
+        url.protocol === "https:" && !url.username && !url.password && !url.search && !url.hash
+      );
+    }, "worker.model.baseUrl must be an HTTPS endpoint without credentials, query, or fragment"),
+    credentialEnv: z
+      .string()
+      .regex(
+        /^(?!NODE_|OPENCLAW_|OPENSHELL_|PATH$|HOME$|TMPDIR$|TMP$|TEMP$|LANG$|TZ$)[A-Z][A-Z0-9_]*$/,
+        "Use a dedicated model credential environment variable, not a runtime control variable",
+      ),
+    contextWindow: z.number().int().positive(),
+    maxTokens: z.number().int().positive(),
+    reasoning: z.boolean().default(false),
+    input: z
+      .array(z.enum(["text", "image"]))
+      .min(1)
+      .default(["text"]),
+  }),
+});
+
 const OpenShellPluginConfigSchema = z.strictObject({
+  worker: OpenShellWorkerConfigSchema.optional(),
   mode: z.enum(["mirror", "remote"], { error: "mode must be one of mirror, remote" }).optional(),
   command: nonEmptyTrimmedString("command must be a non-empty string").optional(),
   gateway: nonEmptyTrimmedString("gateway must be a non-empty string").optional(),
@@ -117,7 +165,7 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
   });
 }
 
-export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellPluginConfig {
+export function resolveOpenShellPluginConfig(value: unknown) {
   const parsed = OpenShellPluginConfigSchema.safeParse(value === undefined ? {} : value);
   if (!parsed.success) {
     const message = formatPluginConfigIssue(parsed.error.issues[0]);
@@ -125,6 +173,7 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
   }
   const cfg = parsed.data;
   return {
+    ...(cfg.worker ? { worker: cfg.worker } : {}),
     mode: cfg.mode ?? DEFAULT_MODE,
     command: cfg.command ?? DEFAULT_COMMAND,
     gateway: cfg.gateway,

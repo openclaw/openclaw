@@ -1,11 +1,13 @@
 // Lazy plugin-registry loader for CLI commands that need plugin command/capability metadata.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loggingState } from "../logging/state.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import type { CliPluginRegistryScope } from "./command-catalog-types.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
+import { withConsoleLogsRoutedToStderr } from "./json-output-mode.js";
 
-const pluginRegistryModuleLoader = createLazyImportLoader(() => import("./plugin-registry.js"));
+const pluginRegistryModuleLoader = createLazyImportLoader(
+  () => import("../plugins/runtime/runtime-registry-loader.js"),
+);
 const sandboxRegistryModuleLoader = createLazyImportLoader(
   () => import("../agents/sandbox/registry.js"),
 );
@@ -23,7 +25,6 @@ export async function ensureCliPluginRegistryLoaded(params: {
   scope: CliPluginRegistryScope;
   routeLogsToStderr?: boolean;
   config?: OpenClawConfig;
-  activationSourceConfig?: OpenClawConfig;
 }) {
   const persistedSandboxBackendIds =
     params.scope === "sandbox-management"
@@ -33,22 +34,13 @@ export async function ensureCliPluginRegistryLoaded(params: {
     "plugin-registry-module-import",
     pluginRegistryModuleLoader.load,
   );
-  await measureCliCommandStartup("plugin-registry-runtime-load", () => {
-    const previousForceStderr = loggingState.forceConsoleToStderr;
-    if (params.routeLogsToStderr) {
-      loggingState.forceConsoleToStderr = true;
-    }
-    try {
-      return ensurePluginRegistryLoaded({
-        scope: params.scope === "sandbox-management" ? "sandbox-backends" : params.scope,
-        ...(params.config ? { config: params.config } : {}),
-        ...(params.activationSourceConfig
-          ? { activationSourceConfig: params.activationSourceConfig }
-          : {}),
-        ...(persistedSandboxBackendIds ? { persistedSandboxBackendIds } : {}),
-      });
-    } finally {
-      loggingState.forceConsoleToStderr = previousForceStderr;
-    }
-  });
+  const load = () =>
+    ensurePluginRegistryLoaded({
+      scope: params.scope === "sandbox-management" ? "sandbox-backends" : params.scope,
+      ...(params.config ? { config: params.config } : {}),
+      ...(persistedSandboxBackendIds ? { persistedSandboxBackendIds } : {}),
+    });
+  await measureCliCommandStartup("plugin-registry-runtime-load", () =>
+    params.routeLogsToStderr ? withConsoleLogsRoutedToStderr(load) : load(),
+  );
 }

@@ -112,6 +112,7 @@ private final class GatedHistoryChatTransport: @unchecked Sendable, OpenClawChat
     private let historyResult: @Sendable (String, Int) async throws -> OpenClawChatHistoryPayload
     private let historyRequestLock = NSLock()
     private var historyRequestCount = 0
+    private var historyRequestWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
     private let stream: AsyncStream<OpenClawChatTransportEvent>
     private let continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation
 
@@ -123,6 +124,11 @@ private final class GatedHistoryChatTransport: @unchecked Sendable, OpenClawChat
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
         let requestNumber = self.historyRequestLock.withLock {
             self.historyRequestCount += 1
+            self.historyRequestWaiters.removeAll { count, continuation in
+                guard self.historyRequestCount >= count else { return false }
+                continuation.resume()
+                return true
+            }
             return self.historyRequestCount
         }
         return try await self.historyResult(sessionKey, requestNumber)
@@ -130,6 +136,18 @@ private final class GatedHistoryChatTransport: @unchecked Sendable, OpenClawChat
 
     func observedHistoryRequestCount() -> Int {
         self.historyRequestLock.withLock { self.historyRequestCount }
+    }
+
+    func waitForHistoryRequests(atLeast count: Int) async {
+        await withCheckedContinuation { continuation in
+            self.historyRequestLock.withLock {
+                if self.historyRequestCount >= count {
+                    continuation.resume()
+                } else {
+                    self.historyRequestWaiters.append((count, continuation))
+                }
+            }
+        }
     }
 
     func sendMessage(
@@ -179,6 +197,102 @@ private func makeViewModel(
 }
 
 struct ChatViewModelTranscriptCacheTests {
+    @Test(arguments: ["agent:main:main", "agent:other:main"])
+    @MainActor
+    func `canonical alias retains display but not live authority while fresh history waits`(
+        destination: String) async throws
+    {
+        let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
+        defer { releaseHistory.finish() }
+        let transport = GatedHistoryChatTransport { key, request in
+            if request > 1 {
+                var iterator = historyGate.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            return OpenClawChatHistoryPayload(
+                sessionKey: key,
+                sessionId: "canonical-session",
+                messages: request == 1
+                    ? [liveHistoryMessage(role: "assistant", text: "Keep this answer", timestamp: 1)] : [],
+                thinkingLevel: nil,
+                sessionInfo: .init(hasActiveRun: false, key: "agent:main:main", agentId: "main"),
+                deltaCursor: request == 1 ? "accepted-cursor" : nil)
+        }
+        let vm = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: transport,
+            activeAgentId: "main",
+            sessionRoutingContract: "per-sender|main|main")
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        let rows = vm.messages.map(\.id)
+        let generation = vm.sessionGeneration
+        #expect(!rows.isEmpty && vm.hasAppliedLiveHistory && vm.healthOK)
+        vm.input = "Unsent text"
+
+        vm.switchSession(to: destination)
+        let bootstrap = try #require(vm.bootstrapTask)
+        await transport.waitForHistoryRequests(atLeast: 2)
+        #expect(vm.messages.map(\.id) == (destination == "agent:main:main" ? rows : []))
+        #expect(vm.sessionGeneration > generation)
+        #expect(!vm.hasAppliedLiveHistory && !vm.healthOK)
+        #expect(vm.historyDeltaCursor == nil)
+        #expect(vm.pendingRunCount == 0)
+        if destination == "agent:main:main" { #expect(vm.input == "Unsent text") }
+
+        releaseHistory.yield(())
+        await bootstrap.value
+        #expect(vm.messages.isEmpty)
+        #expect(!vm.isShowingCachedTranscript)
+    }
+
+    @Test(arguments: ["per-sender|main|main", "global|main|main"])
+    @MainActor
+    func `routing hydration retains only the accepted canonical destination`(contract: String) async {
+        let (historyGate, releaseHistory) = AsyncStream<Void>.makeStream()
+        defer { releaseHistory.finish() }
+        let transport = GatedHistoryChatTransport { key, request in
+            if request > 1 {
+                var iterator = historyGate.makeAsyncIterator()
+                _ = await iterator.next()
+            }
+            return OpenClawChatHistoryPayload(
+                sessionKey: key,
+                sessionId: "initial-session",
+                messages: [liveHistoryMessage(role: "assistant", text: "Known owner", timestamp: 1)],
+                thinkingLevel: nil,
+                sessionInfo: .init(hasActiveRun: false, key: "agent:main:main", agentId: "main"))
+        }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        vm.load()
+        await vm.bootstrapTask?.value
+        vm.syncDeliveryIdentity(activeAgentId: "main", sessionRoutingContract: contract)
+        await transport.waitForHistoryRequests(atLeast: 2)
+        #expect(vm.messages.flatMap { $0.content.compactMap(\.text) } ==
+            (contract == "per-sender|main|main" ? ["Known owner"] : []))
+        releaseHistory.yield(())
+        await vm.bootstrapTask?.value
+    }
+
+    @Test @MainActor
+    func `retained presentation cannot keep a deleted answer on a foreground refresh`() async {
+        let transport = GatedHistoryChatTransport { key, _ in
+            OpenClawChatHistoryPayload(
+                sessionKey: key, sessionId: "empty-session", messages: [], thinkingLevel: nil)
+        }
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        vm.replaceMessages([
+            cacheMessage(role: "user", text: "Earlier question", timestamp: 1),
+            cacheMessage(role: "assistant", text: "Deleted answer", timestamp: 2),
+        ])
+        vm.isShowingCachedTranscript = true
+        await vm.resumeFromForeground().value
+        #expect(vm.messages.isEmpty)
+    }
+
     @Test func `cold open paints cached transcript then live history replaces it`() async throws {
         let cache = TestTranscriptCache(
             transcripts: [
@@ -200,17 +314,18 @@ struct ChatViewModelTranscriptCacheTests {
         let vm = await makeViewModel(transport: transport, cache: cache)
 
         // Cache pre-paint lands while live history is still gated.
-        try await waitUntil("cached transcript painted") {
-            await MainActor.run { vm.isShowingCachedTranscript && vm.messages.count == 2 }
+        await waitForObservedState {
+            vm.isShowingCachedTranscript && vm.messages.count >= 2
         }
+        #expect(await MainActor.run { vm.isShowingCachedTranscript && vm.messages.count == 2 })
         #expect(await visibleTexts(vm) == ["cached question", "cached answer"])
 
         releaseHistory.yield(())
 
         // Live history replaces the cached rows wholesale and clears the marker.
-        try await waitUntil("live history applied") {
-            await MainActor.run { vm.sessionId == "sess-live" }
-        }
+        let bootstrap = try #require(await MainActor.run { vm.bootstrapTask })
+        await bootstrap.value
+        #expect(await MainActor.run { vm.sessionId == "sess-live" })
         #expect(await visibleTexts(vm) == ["cached question", "live answer", "newer turn"])
         #expect(await MainActor.run { !vm.isShowingCachedTranscript })
     }
@@ -225,18 +340,18 @@ struct ChatViewModelTranscriptCacheTests {
         }
         let vm = await makeViewModel(transport: transport, cache: cache)
 
-        try await waitUntil("cached transcript painted") {
-            await MainActor.run { vm.isShowingCachedTranscript && !vm.messages.isEmpty }
+        await waitForObservedState {
+            vm.isShowingCachedTranscript && !vm.messages.isEmpty
         }
-        try await waitUntil("bootstrap finished") {
-            await MainActor.run { !vm.isLoading }
-        }
+        let bootstrap = try #require(await MainActor.run { vm.bootstrapTask })
+        await bootstrap.value
+        #expect(await MainActor.run { !vm.isLoading })
         // The failed live request must not clear the cached transcript.
         #expect(await visibleTexts(vm) == ["offline answer"])
         #expect(await MainActor.run { vm.isShowingCachedTranscript })
     }
 
-    @Test func `live history is written through to cache`() async throws {
+    @Test func `live history is written through to cache`() async {
         let cache = TestTranscriptCache()
         let transport = GatedHistoryChatTransport { sessionKey, _ in
             historyPayload(
@@ -245,9 +360,10 @@ struct ChatViewModelTranscriptCacheTests {
         }
         let vm = await makeViewModel(transport: transport, cache: cache)
 
-        try await waitUntil("write-through stored transcript") {
-            await !cache.storedTranscripts.isEmpty
-        }
+        await vm.bootstrapTask?.value
+        let write = await MainActor.run { vm.pendingCacheWriteTask }
+        await write?.value
+        #expect(await !cache.storedTranscripts.isEmpty)
         let stored = await cache.loadTranscript(sessionKey: "main")
         #expect(stored.map { $0.content.compactMap(\.text).joined() } == ["hello"])
         _ = vm
@@ -263,16 +379,16 @@ struct ChatViewModelTranscriptCacheTests {
                     : [])
         }
         let vm = await makeViewModel(transport: transport, cache: cache)
-        try await waitUntil("bootstrap finished") {
-            await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading }
-        }
-        await MainActor.run {
+        let bootstrap = try #require(await MainActor.run { vm.bootstrapTask })
+        await bootstrap.value
+        #expect(await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading })
+        let send = await MainActor.run {
             vm.input = "optimistic only"
-            vm.send()
+            return vm.send()
         }
-        try await waitUntil("post-send history refreshed") {
-            transport.observedHistoryRequestCount() >= 2
-        }
+        await send?.value
+        await transport.waitForHistoryRequests(atLeast: 2)
+        #expect(transport.observedHistoryRequestCount() >= 2)
 
         #expect(await visibleTexts(vm) == ["canonical answer", "optimistic only"])
         #expect(await cache.storedTranscripts.count == 1)
@@ -285,7 +401,8 @@ struct ChatViewModelTranscriptCacheTests {
     @Test @MainActor func `late cache prepaint cannot replace a live transient roster row`() async throws {
         func rows(_ label: String, date: Int) throws -> [OpenClawChatSessionEntry] {
             try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: Data(#"""
-            {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread","label":"\#(label)","updatedAt":\#(date)}]}
+            {"sessions":[{"key":"agent:main:thread","agentId":"main","sessionId":"thread",
+            "label":"\#(label)","updatedAt":\#(date)}]}
             """#.utf8)).sessions
         }
         let (started, startedSignal) = AsyncStream<Void>.makeStream()
@@ -333,9 +450,9 @@ struct ChatViewModelTranscriptCacheTests {
         let vm = await makeViewModel(transport: transport, cache: cache)
         // Bootstrap completes with a live empty session list while the cache
         // read is still gated.
-        try await waitUntil("bootstrap finished") {
-            await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading }
-        }
+        let bootstrap = try #require(await MainActor.run { vm.bootstrapTask })
+        await bootstrap.value
+        #expect(await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading })
         release.yield(())
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(await MainActor.run { vm.sessions.isEmpty })
@@ -388,8 +505,8 @@ struct ChatViewModelTranscriptCacheTests {
             #expect(await MainActor.run { vm.selectedAgentID } == "work")
             #expect(await MainActor.run { vm.sessions.isEmpty })
         } else {
-            try await waitUntil("canonical owner's cached roster painted") {
-                await MainActor.run { !vm.sessions.isEmpty }
+            await waitForObservedState {
+                !vm.sessions.isEmpty
             }
             #expect(await MainActor.run { vm.selectedAgentID } == "main")
             #expect(await MainActor.run { vm.sessions.map(\.key) } == ["global"])
@@ -442,7 +559,7 @@ struct ChatViewModelTranscriptCacheTests {
     }
 
     @Test(arguments: ["main", "gadget"])
-    func `cached session prepaint stays within the selected agent`(defaultAgentID: String) async throws {
+    func `cached session prepaint stays within the selected agent`(defaultAgentID: String) async {
         var matchingBare = cacheSessionEntry(key: "shared-tool", updatedAt: 2000)
         matchingBare.agentId = "main"
         var foreignBare = cacheSessionEntry(key: "foreign-tool", updatedAt: 1750)
@@ -469,8 +586,8 @@ struct ChatViewModelTranscriptCacheTests {
         let snapshot = await MainActor.run { vm.currentSessionSnapshot() }
 
         await MainActor.run { vm.paintFromCacheIfNeeded(session: snapshot) }
-        try await waitUntil("cached sessions painted") {
-            await MainActor.run { !vm.sessions.isEmpty }
+        await waitForObservedState {
+            !vm.sessions.isEmpty
         }
 
         #expect(await MainActor.run { vm.sessions.map(\.key) } == [
@@ -522,9 +639,9 @@ struct ChatViewModelTranscriptCacheTests {
             historyPayload(sessionKey: sessionKey)
         }
         let vm = await makeViewModel(transport: transport, cache: cache)
-        try await waitUntil("live history applied") {
-            await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading }
-        }
+        let bootstrap = try #require(await MainActor.run { vm.bootstrapTask })
+        await bootstrap.value
+        #expect(await MainActor.run { vm.sessionId == "sess-live" && !vm.isLoading })
         // Give any straggling cache paint a chance to (incorrectly) land.
         try await Task.sleep(nanoseconds: 100_000_000)
         #expect(await MainActor.run { vm.messages.isEmpty })

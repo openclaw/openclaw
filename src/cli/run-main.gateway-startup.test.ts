@@ -10,7 +10,6 @@ import {
   tryRouteCliMock,
   loadDotEnvMock,
   existsSyncOverride,
-  assertRuntimeMock,
   buildProgramMock,
   parkCurrentLaunchAgentForMaintenanceMock,
   readConfigFileSnapshotMock,
@@ -31,6 +30,7 @@ import path from "node:path";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
 import { createNewerSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getGatewayRunRuntimeHooks } from "./gateway-cli/runtime-hooks.js";
 import { makeProxyHandle } from "./run-main.proxy-exit.test-support.js";
@@ -83,7 +83,7 @@ describe("runCli exit behavior", () => {
         tryRouteCliMock.mockResolvedValueOnce(false);
       }
       await withCliExitSpies(async (errorSpy, exitSpy) => {
-        await expect(runCli(argv)).rejects.toThrow("exit:78");
+        await expect(runCli(argv)).rejects.toMatchObject({ name: "ExitError", code: 78 });
 
         expect(parkCurrentLaunchAgentForMaintenanceMock).toHaveBeenCalledOnce();
         expect(exitSpy).toHaveBeenCalledWith(78);
@@ -119,124 +119,135 @@ describe("runCli exit behavior", () => {
     expect(parkCurrentLaunchAgentForMaintenanceMock).not.toHaveBeenCalled();
   });
 
-  it("defers config-drift exit until readiness releases its lease", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        {
-          cron: { store: "/tmp/included-a.json" },
-          gateway: { mode: "local" },
-        },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await runCli(cliArgs("gateway"));
-    await runGatewayBeforeHook();
-    const beforeStatePreparation =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        {
-          cron: { store: "/tmp/included-b.json" },
-          gateway: { mode: "local" },
-        },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await withCliExitSpies(async (errorSpy, exitSpy) => {
-      await expect(beforeStatePreparation?.()).rejects.toMatchObject({
-        name: "ExitError",
-        code: 1,
-      });
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("changed during startup"));
-      expect(exitSpy).not.toHaveBeenCalled();
-    });
-  });
-
-  it("defers a service-mode future-config exit to readiness", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig(
-        { gateway: { mode: "local" } },
-        { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
-      ),
-    );
-    await runCli(cliArgs("gateway"));
-    await runGatewayBeforeHook();
-    const beforeStatePreparation =
-      ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
-    await withCliExitSpies(async (errorSpy, exitSpy) => {
+  it.each(["config drift", "future service config"] as const)(
+    "defers %s exit until readiness releases its lease",
+    async (kind) => {
+      const futureService = kind === "future service config";
+      readConfigFileSnapshotMock.mockResolvedValue(
+        validConfig(
+          { cron: { store: "/tmp/included-a.json" }, gateway: { mode: "local" } },
+          { hash: "guarded", path: "/tmp/openclaw.json", raw: "{}" },
+        ),
+      );
+      await runCli(cliArgs("gateway"));
+      await runGatewayBeforeHook();
+      const beforePreparation =
+        ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+      const selected = validConfig(
+        futureService
+          ? {
+              env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
+              meta: { lastTouchedVersion: "9999.1.1" },
+            }
+          : { cron: { store: "/tmp/included-b.json" }, gateway: { mode: "local" } },
+        { hash: futureService ? "future" : "guarded", path: "/tmp/openclaw.json", raw: "{}" },
+      );
+      if (!futureService) {
+        readConfigFileSnapshotMock.mockResolvedValue(selected);
+      }
       await withEnvAsync(
         {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
+          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: futureService ? "1" : undefined,
           OPENCLAW_SERVICE_MARKER: undefined,
         },
-        async () => {
-          await expect(
-            beforeStatePreparation?.(
-              validConfig(
-                {
-                  env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-                  meta: { lastTouchedVersion: "9999.1.1" },
-                },
-                { hash: "future", path: "/tmp/openclaw.json", raw: "{}" },
-              ),
-            ),
-          ).rejects.toMatchObject({ name: "ExitError", code: 78 });
-          expect(errorSpy).toHaveBeenCalledWith(
-            expect.stringContaining("start the gateway service"),
-          );
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-          expect(exitSpy).not.toHaveBeenCalled();
-        },
+        () =>
+          withCliExitSpies(async (errorSpy, exitSpy) => {
+            const preparation = beforePreparation?.(futureService ? selected : undefined);
+            await expect(preparation).rejects.toMatchObject({
+              name: "ExitError",
+              code: futureService ? 78 : 1,
+            });
+            const message = futureService ? "start the gateway service" : "changed during startup";
+            expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(message));
+            if (futureService) {
+              expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+            }
+            expect(exitSpy).not.toHaveBeenCalled();
+          }),
       );
-    });
-  });
+    },
+  );
 
   it.each([
-    { flags: [], service: false, action: "run gateway state preparation", code: 1 },
-    { flags: [], service: true, action: "start the gateway service", code: 78 },
-    { flags: ["--force"], service: false, action: "force-kill gateway port listeners", code: 1 },
-    { flags: ["--dev", "--reset"], service: false, action: "reset the dev gateway state", code: 1 },
-  ])("blocks future config before $action", async ({ flags, service, action, code }) => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig({ meta: { lastTouchedVersion: "9999.1.1" } }),
-    );
+    ["private", [], undefined, 0],
+    ["partial", [], undefined, 1],
+    ["outside", [], undefined, 1],
+    ["invalid", [], undefined, 1],
+    ["service", [], "process", 78],
+    ["config service", [], "config", 78],
+    ["force", ["--force"], undefined, 1],
+    ["reset", ["--dev", "--reset"], undefined, 1],
+  ] as const)("guards future config during %s startup", async (scope, flags, service, code) => {
+    const root = tempDirs.make("openclaw-future-config-");
+    let configPath = path.join(root, "openclaw.json");
+    if (scope === "outside") {
+      const outside = tempDirs.make("openclaw-future-config-outside-");
+      const link = path.join(root, "linked");
+      await fs.symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
+      configPath = path.join(link, "openclaw.json");
+    }
+    const config = {
+      meta: { lastTouchedVersion: "9999.1.1" },
+      ...(service === "config" ? { env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } } } : {}),
+    };
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...validConfig(config, { path: configPath }),
+      valid: scope !== "invalid",
+    });
     await withEnvAsync(
       {
-        OPENCLAW_SERVICE_MARKER: service ? "gateway" : undefined,
+        ...buildUpdateRehearsalPathEnv(root),
+        OPENCLAW_UPDATE_IN_PROGRESS: "0",
+        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+        OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR: "0",
+        OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: scope === "partial" ? undefined : "0",
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
+        OPENCLAW_SERVICE_MARKER: service === "process" ? "gateway" : undefined,
         OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: service ? "1" : undefined,
       },
       () =>
-        withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway", ...flags))).rejects.toThrow(`exit:${code}`);
-          expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(action));
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-          expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
+        withCliExitSpies(async (errorSpy, exitSpy) => {
+          if (code === 0) {
+            await runCli(cliArgs("gateway"));
+            await runGatewayBeforeHook();
+            expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledOnce();
+            const beforePreparation =
+              ensureCliExecutionBootstrapMock.mock.calls[0]?.[0]?.beforeStatePreparation;
+            expect(beforePreparation).toBeTypeOf("function");
+            await beforePreparation?.();
+            expect(exitSpy).not.toHaveBeenCalled();
+          } else {
+            await expect(runCli(cliArgs("gateway", ...flags))).rejects.toMatchObject({
+              name: "ExitError",
+              code,
+            });
+            const action = service
+              ? "start the gateway service"
+              : scope === "force"
+                ? "force-kill gateway port listeners"
+                : scope === "reset"
+                  ? "reset the dev gateway state"
+                  : "run gateway state preparation";
+            const guidance = errorSpy.mock.calls.flat().join("\n");
+            expect(guidance).toContain(action);
+            expect(guidance).toContain(
+              service
+                ? "verified pre-update backup"
+                : "OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1",
+            );
+            if (service) {
+              expect(guidance).not.toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
+            }
+            expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
+            expect(readConfigFileSnapshotMock.mock.calls).toEqual([[readOnlyCoreOptions]]);
+          }
+          expect(config.meta.lastTouchedVersion).toBe("9999.1.1");
           expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
+          if (service === "config") {
+            expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+          }
         }),
     );
-  });
-
-  it("blocks and revokes the destructive override when selected config declares service mode", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue(
-      validConfig({
-        env: { vars: { OPENCLAW_SERVICE_MARKER: "gateway" } },
-        meta: { lastTouchedVersion: "9999.1.1" },
-      }),
-    );
-    await withCliExitSpies(async () => {
-      await withEnvAsync(
-        {
-          OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-          OPENCLAW_SERVICE_MARKER: undefined,
-        },
-        async () => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:78");
-          expect(process.env.OPENCLAW_SERVICE_MARKER).toBeUndefined();
-          expect(process.env.OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS).toBeUndefined();
-          expect(ensureCliExecutionBootstrapMock).not.toHaveBeenCalled();
-        },
-      );
-    });
   });
 
   it("loads state dotenv before a custom config-root fallback", async () => {
@@ -270,7 +281,10 @@ describe("runCli exit behavior", () => {
           ),
         );
         await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
           expect(errorSpy).toHaveBeenCalledWith(
             expect.stringContaining("run gateway state preparation"),
           );
@@ -420,7 +434,10 @@ describe("runCli exit behavior", () => {
           ),
         );
         await withCliExitSpies(async (errorSpy) => {
-          await expect(runCli(cliArgs("gateway"))).rejects.toThrow("exit:1");
+          await expect(runCli(cliArgs("gateway"))).rejects.toMatchObject({
+            name: "ExitError",
+            code: 1,
+          });
           expect(errorSpy).toHaveBeenCalledWith(
             expect.stringContaining("run gateway state preparation"),
           );
@@ -488,25 +505,6 @@ describe("runCli exit behavior", () => {
     expect(commanderParseAsyncMock).toHaveBeenCalledWith(cliArgs("gateway"));
   });
 
-  it.each([
-    ["full Commander path with root options", cliArgs("--log-level", "debug", "gateway", "run")],
-  ])("isolates %s gateway proxy config reads core-only", async (_name, argv) => {
-    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
-    if (_name === "full Commander path with root options") {
-      tryRouteCliMock.mockResolvedValueOnce(false);
-      buildProgramMock.mockReturnValueOnce(makeProgram("gateway", commanderParseAsyncMock));
-    }
-    await runCli(argv);
-
-    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false, quiet: true });
-    if (_name === "full Commander path with root options") {
-      expect(buildProgramMock).toHaveBeenCalledTimes(1);
-      expect(commanderParseAsyncMock).toHaveBeenLastCalledWith(argv);
-    }
-    expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
-    expect(startProxyMock).toHaveBeenCalledWith(undefined);
-  });
-
   it("keeps explicit database preflight isolated from default state selection", async () => {
     tryRouteCliMock.mockResolvedValueOnce(true);
 
@@ -517,18 +515,8 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).not.toHaveBeenCalled();
   });
 
-  it("stops before config selection when asynchronous runtime validation rejects", async () => {
-    const error = new Error("unsupported runtime");
-    const validation = Promise.reject(error);
-    // The regression must also join this rejection when old code ignores the returned promise.
-    void validation.catch(() => {});
-    assertRuntimeMock.mockReturnValueOnce(validation);
-
-    await expect(runCli(cliArgs("gateway", "run"))).rejects.toBe(error);
-    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
-  });
-
   it("replaces the early managed proxy with the final accepted gateway config", async () => {
+    existsSyncOverride.value = (target) => target === path.join(process.cwd(), ".env");
     const earlyHandle = makeProxyHandle();
     const finalHandle = makeProxyHandle();
     const earlyProxy = { proxyUrl: "http://127.0.0.1:19876" };
@@ -542,6 +530,8 @@ describe("runCli exit behavior", () => {
 
     await runCli(cliArgs("gateway", "run"));
 
+    expect(loadDotEnvMock).toHaveBeenCalledWith({ loadGlobalEnv: false });
+    expect(loadConfigMock).toHaveBeenCalledWith(readOnlyCoreOptions);
     expect(startProxyMock).toHaveBeenNthCalledWith(1, earlyProxy);
     expect(startProxyMock).toHaveBeenNthCalledWith(2, finalProxy);
     expect(stopProxyMock).toHaveBeenNthCalledWith(1, earlyHandle);

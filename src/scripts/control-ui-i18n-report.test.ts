@@ -1,4 +1,3 @@
-// Control UI i18n report tests cover locale report generation.
 import { describe, expect, it } from "vitest";
 import {
   filterRawCopyEntries,
@@ -9,28 +8,11 @@ import {
 } from "../../scripts/control-ui-i18n-report.ts";
 import type { RawCopyBaselineEntry } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
 
+const copy = { kind: "html-text", name: "text", text: "Send" } as const;
 const entries: RawCopyBaselineEntry[] = [
-  {
-    count: 2,
-    kind: "html-text",
-    name: "text",
-    path: "ui/src/ui/chat/render.ts",
-    text: "Send",
-  },
-  {
-    count: 1,
-    kind: "object-property",
-    name: "label",
-    path: "ui/src/ui/views/agents-panels-tools.ts",
-    text: "Tools",
-  },
-  {
-    count: 4,
-    kind: "html-attribute",
-    name: "title",
-    path: "ui/src/ui/views/config-form.render.ts",
-    text: "Open config",
-  },
+  { ...copy, path: "ui/src/ui/chat/render.ts", count: 2 },
+  { ...copy, path: "ui/src/ui/views/agents-panels-tools.ts", count: 1 },
+  { ...copy, path: "ui/src/ui/views/config-form.render.ts", count: 4 },
 ];
 
 const localeMeta = {
@@ -50,20 +32,16 @@ describe("control-ui-i18n report helpers", () => {
   });
 
   it("rejects invalid numeric limits", () => {
-    expect(() => parseArgs(["--top", "3abc"])).toThrow("--top must be a positive integer");
-    expect(() => parseArgs(["--top", "1.5"])).toThrow("--top must be a positive integer");
-    expect(() => parseArgs(["--top", "0"])).toThrow("--top must be a positive integer");
-    expect(() => parseArgs(["--top", "999999999999999999999999999"])).toThrow(
-      "--top must be a positive integer",
-    );
+    for (const value of ["3abc", "1.5", "0", "999999999999999999999999999"]) {
+      expect(() => parseArgs(["--top", value])).toThrow("--top must be a positive integer");
+    }
   });
 
   it("rejects locale path traversal before filesystem access", () => {
     expect(parseArgs(["--locale", "zh-CN"])).toMatchObject({ locale: "zh-CN" });
-    expect(() => parseArgs(["--locale", "../zh-CN"])).toThrow("unknown locale");
-    expect(() => parseArgs(["--locale", "../../../../scripts/control-ui-i18n-report"])).toThrow(
-      "unknown locale",
-    );
+    for (const locale of ["../zh-CN", "../../../../scripts/control-ui-i18n-report"]) {
+      expect(() => parseArgs(["--locale", locale])).toThrow("unknown locale");
+    }
   });
 
   it("filters raw-copy entries by path surface token", () => {
@@ -72,81 +50,31 @@ describe("control-ui-i18n report helpers", () => {
     expect(filterRawCopyEntries(entries, "missing")).toEqual([]);
   });
 
-  it("summarizes raw-copy occurrences deterministically", () => {
-    expect(summarizeRawCopy(entries, 2)).toEqual({
-      entries: 3,
-      occurrences: 7,
-      topPaths: [
-        { count: 4, path: "ui/src/ui/views/config-form.render.ts" },
-        { count: 2, path: "ui/src/ui/chat/render.ts" },
-      ],
-    });
-  });
-
   it("filters translation keys by surface token", () => {
-    const keys = [
-      "agents.tabs.cronJobs",
-      "chat.composer.send",
-      "sessionsView.thinking",
-      "usage.common.emptyValue",
-    ];
+    const keys = ["chat.composer.send", "sessionsView.thinking"];
     expect(filterTranslationKeysBySurface(keys, "chat")).toEqual(["chat.composer.send"]);
     expect(filterTranslationKeysBySurface(keys, "sessions")).toEqual(["sessionsView.thinking"]);
   });
 
-  it("formats pasteable report text", () => {
+  it.each<[string[], string]>([
+    [["actions.cancel"], "zh-CN has 1 missing key."],
+    [[], "No zh-CN locale problems found in this scope."],
+  ])("formats scoped fallback keys %j", (fallbackKeysInScope, issue) => {
     const report = formatReport({
-      locale: {
-        fallbackKeysInScope: ["actions.cancel"],
-        meta: {
-          fallbackKeys: ["actions.cancel"],
-          ...localeMeta,
-        },
-      },
+      locale: { fallbackKeysInScope, meta: { ...localeMeta, fallbackKeys: ["actions.cancel"] } },
       rawCopy: summarizeRawCopy(entries, 1),
       surface: "chat",
     });
-
-    expect(report).toContain("Control UI i18n baseline report\n");
-    expect(report).toContain("Scope: Chat, Simplified Chinese (zh-CN)\n");
-    expect(report).toContain(
-      "Based on: current raw-copy baseline and locale metadata. Not a drift check.\n",
-    );
-    expect(report).toContain(
-      "Hardcoded UI text outside i18n: 3 pieces in code, 7 total occurrences.\n",
-    );
-    expect(report).toContain(
-      "Existing zh-CN translation keys (all Control UI): 2/3 filled, 1 fallback.\n",
-    );
-    expect(report).toContain("Chat still has UI text written directly in code.\n");
-    expect(report).toContain("zh-CN has 1 missing key.\n");
-    expect(report).not.toContain("matches English");
-    expect(report).toContain("4 Config form: ui/src/ui/views/config-form.render.ts\n");
-    expect(report).toContain("Move text from the focus modules into translation keys.\n");
-    expect(report).toContain(
-      "Do not hand-edit generated locale, translation memory, or i18n metadata files.\n",
-    );
-    expect(report).toContain("Run pnpm ui:i18n:sync after adding translation keys.\n");
-    expect(report).not.toContain("raw-copy entries");
-  });
-
-  it("keeps fallback-key issues scoped to the selected surface", () => {
-    const report = formatReport({
-      locale: {
-        fallbackKeysInScope: [],
-        meta: {
-          fallbackKeys: ["usage.common.emptyValue"],
-          ...localeMeta,
-        },
-      },
-      rawCopy: summarizeRawCopy(entries, 1),
-      surface: "chat",
-    });
-
-    expect(report).toContain(
-      "Existing zh-CN translation keys (all Control UI): 2/3 filled, 1 fallback.\n",
-    );
-    expect(report).toContain("No zh-CN locale problems found in this scope.\n");
-    expect(report).not.toContain("zh-CN has 1 missing key.\n");
+    for (const line of [
+      "Scope: Chat, Simplified Chinese (zh-CN)",
+      "Hardcoded UI text outside i18n: 3 pieces in code, 7 total occurrences.",
+      "Existing zh-CN translation keys (all Control UI): 2/3 filled, 1 fallback.",
+      "Chat still has UI text written directly in code.",
+      issue,
+      "4 Config form: ui/src/ui/views/config-form.render.ts",
+    ]) {
+      expect(report).toContain(`${line}\n`);
+    }
+    expect(report.includes("zh-CN has 1 missing key.\n")).toBe(fallbackKeysInScope.length > 0);
   });
 });

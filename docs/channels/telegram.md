@@ -102,7 +102,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`, `threadBindings`
 - streaming: `streaming` (modes `off | partial | block | progress`), `streaming.preview.toolProgress`
-- formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
+- formatting/delivery: `textChunkLimit`, `streaming.chunkMode`, `richMessages`, `widgets` (opt-in message widgets), `markdown.tables` (`off | bullets | code | block`), `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`), `trustedLocalFileRoots` (self-hosted Bot API absolute `file_path` roots)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookCertPath`, `legacyWebhook` (optional explicit forwarding endpoint; omitted or `false` uses only the Gateway port)
@@ -112,6 +112,9 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - writes/history: `configWrites`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 
 </Accordion>
+
+`mediaMaxMb` accepts fractional limits. Oversize warnings report the effective
+limit using binary units, so `mediaMaxMb: 0.5` appears as `512KB`.
 
 <Note>
 Multi-account precedence: with two or more account IDs configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Omitted account `dmPolicy`, `groupPolicy`, `allowFrom`, and `groupAllowFrom` inherit the channel root, not `accounts.default.*`. Explicit account policies win; if neither scope sets them, DMs use `pairing` and groups use `allowlist`.

@@ -1,5 +1,13 @@
 import type { CuaLastFrame } from "./frame.js";
 
+export const CLICK_ACTIONS = {
+  left_click: { button: "left", count: 1 },
+  right_click: { button: "right", count: 1 },
+  middle_click: { button: "middle", count: 1 },
+  double_click: { button: "left", count: 2 },
+  triple_click: { button: "left", count: 3 },
+} as const;
+
 const MODIFIER_ALIASES = new Map<string, string>([
   ["ctrl", "ctrl"],
   ["control", "ctrl"],
@@ -77,11 +85,7 @@ export function normalizeModifiers(value: string | undefined, platform: NodeJS.P
   return value?.trim() ? normalizeModifierList(value.split("+"), platform) : [];
 }
 
-function normalizeKey(value: string, platform: NodeJS.Platform): string {
-  const raw = value.trim();
-  if (!raw) {
-    throw unsupportedKey("key chord contains an empty key");
-  }
+function normalizeKey(raw: string, platform: NodeJS.Platform): string {
   const lowered = raw.toLowerCase();
   const named = modifierAlias(lowered, platform) ?? KEY_ALIASES.get(lowered);
   if (named) {

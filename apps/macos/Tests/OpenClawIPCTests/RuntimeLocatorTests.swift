@@ -10,10 +10,11 @@ struct RuntimeLocatorTests {
         return path
     }
 
-    @Test func `resolve succeeds with valid node`() async throws {
+    @Test(arguments: ["24.16.0", "26.1.0", "24.22.1"])
+    func `resolve succeeds with valid node`(version: String) async throws {
         let script = """
         #!/bin/sh
-        echo v24.16.0
+        echo v\(version)
         """
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -24,14 +25,14 @@ struct RuntimeLocatorTests {
             return
         }
         #expect(res.path == node.path)
-        #expect(res.version == Semver(major: 24, minor: 16, patch: 0))
+        #expect(res.version.description == version)
     }
 
     @Test func `runtime version probe tolerates loaded host delay`() async throws {
         let script = """
         #!/bin/sh
         /bin/sleep 2.1
-        echo v24.16.0
+        echo v24.22.1
         """
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -41,7 +42,7 @@ struct RuntimeLocatorTests {
             Issue.record("Expected delayed version probe to succeed, got \(result)")
             return
         }
-        #expect(resolution.version == Semver(major: 24, minor: 16, patch: 0))
+        #expect(resolution.version == Semver(major: 24, minor: 22, patch: 1))
     }
 
     @Test func `resolve fails on boundary below minimum`() async throws {
@@ -85,10 +86,15 @@ struct RuntimeLocatorTests {
         ("24.14.1", false),
         ("24.15.0", false),
         ("24.16.0", true),
+        ("24.22.0", true),
+        ("24.22.1", true),
         ("25.8.1", false),
         ("25.9.0", false),
         ("26.0.0", false),
         ("26.1.0", true),
+        ("26.12.0", true),
+        ("26.12.1", true),
+        ("27.0.0", true),
     ])
     func `node support matches the core runtime contract`(version: String, supported: Bool) throws {
         let parsed = try #require(RuntimeLocator.parseVersion(version))
@@ -134,7 +140,7 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: """
         #!/bin/sh
-        echo v24.16.0
+        echo v24.22.1
         exit 1
         """)
 

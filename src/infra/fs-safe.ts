@@ -13,27 +13,19 @@ import type { CompatibleFsSafeRoot, LegacyNonBlockingReadOption } from "./fs-saf
 
 export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
-  assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,
   findExistingAncestor,
   resolveAbsolutePathForRead,
   resolveAbsolutePathForWrite,
-  type AbsolutePathSymlinkPolicy,
-  type EnsureAbsoluteDirectoryOptions,
-  type EnsureAbsoluteDirectoryResult,
-  type ResolvedAbsolutePath,
-  type ResolvedWritableAbsolutePath,
 } from "@openclaw/fs-safe/advanced";
 export { isPathInside } from "@openclaw/fs-safe/path";
-export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
-export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
+export { pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { movePathToTrash } from "@openclaw/fs-safe/advanced";
 export { resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
-  appendRegularFileSync,
   readRegularFile,
   readRegularFileSync,
-  resolveRegularFileAppendFlags,
   statRegularFile,
   statRegularFileSync,
 } from "@openclaw/fs-safe/advanced";
@@ -45,19 +37,32 @@ export {
   type ReadResult,
 } from "@openclaw/fs-safe/root";
 export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
-export {
-  readSecureFile,
-  type SecureFileReadOptions,
-  type SecureFileReadResult,
-} from "@openclaw/fs-safe/secure-file";
-export {
-  walkDirectory,
-  walkDirectorySync,
-  type WalkDirectoryEntry,
-  type WalkDirectoryOptions,
-  type WalkDirectoryResult,
-} from "@openclaw/fs-safe/walk";
+export { readSecureFile } from "@openclaw/fs-safe/secure-file";
+export { walkDirectory, walkDirectorySync } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
+
+/** Follow links; all filesystem failures mean the optional path is unavailable. */
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    let target = filePath;
+    // fs-safe's async pathExists still uses statSync. Preserve its private
+    // Windows namespace-root adaptation while using asynchronous stat here.
+    if (process.platform === "win32" && /^[\\/]{2}[?.][\\/][A-Za-z]:[\\/]/.test(filePath)) {
+      if (filePath.length === 7) {
+        target = `${filePath[4]}:\\`;
+      } else {
+        const resolved = path.resolve(filePath);
+        if (/^[\\/]{2}[?.][\\/][A-Za-z]:$/.test(resolved) && !filePath.includes(":", 6)) {
+          target = `${resolved[4]}:\\`;
+        }
+      }
+    }
+    await fs.stat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Root.walk remains core-only on this facade; temp workspace stores keep their shipped full Root.
 export type Root = Omit<CompatibleFsSafeRoot, "walk">;
@@ -92,10 +97,16 @@ export async function ensureAbsoluteDirectory(
   const absolutePath = path.resolve(dirPath);
   const scopeLabel = options?.scopeLabel ?? "directory";
   const existingAncestor = await findExistingAncestor(absolutePath);
-  if (!existingAncestor) {
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
+  if (existingAncestor && existingAncestor !== absolutePath) {
+    const result = await ensureDirectoryWithinRoot({
+      rootDir: existingAncestor,
+      requestedPath: path.relative(existingAncestor, absolutePath),
+      scopeLabel,
+      mode: options?.mode,
+    });
+    return result.ok ? result : { ok: false, error: new Error(result.error) };
   }
-  if (existingAncestor === absolutePath) {
+  if (existingAncestor) {
     try {
       const stat = await fs.lstat(absolutePath);
       if (!stat.isSymbolicLink() && stat.isDirectory()) {
@@ -104,18 +115,8 @@ export async function ensureAbsoluteDirectory(
     } catch {
       // Fall through to the uniform invalid-path result below.
     }
-    return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
   }
-  const result = await ensureDirectoryWithinRoot({
-    rootDir: existingAncestor,
-    requestedPath: path.relative(existingAncestor, absolutePath),
-    scopeLabel,
-    mode: options?.mode,
-  });
-  if (result.ok) {
-    return result;
-  }
-  return { ok: false, error: new Error(result.error) };
+  return { ok: false, error: new Error(`Invalid path: must stay within ${scopeLabel}`) };
 }
 
 export async function writeExternalFileWithinRoot(

@@ -143,23 +143,19 @@ async function discoverCodexMemoryFile(
 
 export async function discoverCodexMemorySources(codexHome: string): Promise<CodexMemorySource[]> {
   const memoriesDir = path.join(codexHome, "memories");
-  return (
-    await Promise.all(
-      [
-        { id: "memory:codex:MEMORY.md", label: "Codex consolidated memory", name: "MEMORY.md" },
-        {
-          id: "memory:codex:memory_summary.md",
-          label: "Codex memory summary",
-          name: "memory_summary.md",
-        },
-      ].map(
-        async (candidate) =>
-          await discoverCodexMemoryFile({
-            id: candidate.id,
-            label: candidate.label,
-            path: path.join(memoriesDir, candidate.name),
-          }),
-      ),
-    )
-  ).filter((entry): entry is CodexMemorySource => entry !== undefined);
+  const candidates = [
+    {
+      id: "memory:codex:MEMORY.md",
+      label: "Codex consolidated memory",
+      path: path.join(memoriesDir, "MEMORY.md"),
+    },
+    {
+      id: "memory:codex:memory_summary.md",
+      label: "Codex memory summary",
+      path: path.join(memoriesDir, "memory_summary.md"),
+    },
+  ];
+  return (await Promise.all(candidates.map(discoverCodexMemoryFile))).filter(
+    (entry): entry is CodexMemorySource => entry !== undefined,
+  );
 }

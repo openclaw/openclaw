@@ -322,17 +322,10 @@ async function withPluginMigrationEligibility(params: {
     const apps = declaredApps.map((app) =>
       sourcePluginAppFactWithInventory(app, appInfoById.get(app.id), installedAppsById.get(app.id)),
     );
-    const blockCode = migrationBlockCodeForApps(apps);
-    if (!blockCode) {
-      evaluated.push({ ...plugin, apps, migratable: true });
-      continue;
-    }
-    evaluated.push({
-      ...plugin,
-      migratable: false,
-      migrationBlock: { code: blockCode, apps },
-      message: appInventoryBlockMessage(plugin, apps, blockCode),
-    });
+    const block = appInventoryMigrationBlock(plugin, apps);
+    evaluated.push(
+      block ? { ...plugin, migratable: false, ...block } : { ...plugin, apps, migratable: true },
+    );
   }
 
   return evaluated;
@@ -386,62 +379,44 @@ function sourcePluginAppFactWithInventory(
   if (!installedApp) {
     return app;
   }
-  if (!info) {
-    return installedApp.enabled
-      ? { ...app, isAccessible: false, isEnabled: true }
-      : { ...app, isEnabled: false };
-  }
-  if (!installedApp.enabled) {
-    return { ...app, isAccessible: true, isEnabled: false };
-  }
-  return {
-    ...app,
+  const fact: SourcePluginRuntimeAppFact = { ...app };
+  if (info) {
     // Metadata proves authorization, but only the committed runtime proves
     // that this enabled app actually exposes a model-callable tool.
-    isAccessible: installedApp.callable,
-    isEnabled: installedApp.enabled,
-    ...(!installedApp.callable ? { isCallable: false as const } : {}),
-  };
+    fact.isAccessible = !installedApp.enabled || installedApp.callable;
+  } else if (installedApp.enabled) {
+    fact.isAccessible = false;
+  }
+  fact.isEnabled = installedApp.enabled;
+  if (info && installedApp.enabled && !installedApp.callable) {
+    fact.isCallable = false;
+  }
+  return fact;
 }
 
-function migrationBlockCodeForApps(
-  apps: readonly SourcePluginRuntimeAppFact[],
-): CodexPluginMigrationBlockCode | undefined {
-  if (apps.some((app) => app.isAccessible === false)) {
-    return "app_inaccessible";
-  }
-  if (apps.some((app) => app.isEnabled === false)) {
-    return "app_disabled";
-  }
-  if (apps.some((app) => app.isAccessible === undefined || app.isEnabled === undefined)) {
-    return "app_missing";
-  }
-  return undefined;
-}
-
-function appInventoryBlockMessage(
+function appInventoryMigrationBlock(
   plugin: CodexPluginSource,
-  apps: readonly SourcePluginRuntimeAppFact[],
-  code: CodexPluginMigrationBlockCode,
-): string {
-  const status =
-    code === "app_inaccessible"
-      ? apps.some((app) => app.isCallable === false)
-        ? "not callable"
-        : "inaccessible"
-      : code === "app_disabled"
-        ? "disabled"
-        : "missing";
-  const blocking =
-    apps.find((app) =>
-      code === "app_inaccessible"
-        ? app.isAccessible === false
-        : code === "app_disabled"
-          ? app.isEnabled === false
-          : app.isAccessible === undefined || app.isEnabled === undefined,
-    ) ?? apps[0];
-  const appLabel = blocking ? ` app "${blocking.name}"` : " an owned app";
-  return `Codex plugin "${plugin.pluginName ?? plugin.name}" owns${appLabel} but the source app inventory reports it is ${status}; authenticate or enable the app in Codex before migrating it to OpenClaw.`;
+  apps: SourcePluginRuntimeAppFact[],
+): Pick<CodexPluginSource, "migrationBlock" | "message"> | undefined {
+  const inaccessible = apps.find((app) => app.isAccessible === false);
+  const disabled = apps.find((app) => app.isEnabled === false);
+  const missing = apps.find((app) => app.isAccessible === undefined || app.isEnabled === undefined);
+  const blocking = inaccessible ?? disabled ?? missing;
+  if (!blocking) {
+    return undefined;
+  }
+  const code = inaccessible ? "app_inaccessible" : disabled ? "app_disabled" : "app_missing";
+  const status = inaccessible
+    ? apps.some((app) => app.isCallable === false)
+      ? "not callable"
+      : "inaccessible"
+    : disabled
+      ? "disabled"
+      : "missing";
+  return {
+    migrationBlock: { code, apps },
+    message: `Codex plugin "${plugin.pluginName ?? plugin.name}" owns app "${blocking.name}" but the source app inventory reports it is ${status}; authenticate or enable the app in Codex before migrating it to OpenClaw.`,
+  };
 }
 
 export function codexPluginMigrationSubscriptionWarning(): string {

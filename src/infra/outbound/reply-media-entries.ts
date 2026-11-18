@@ -102,17 +102,16 @@ export function collectReplyMediaEntries(
   if (!projectedMediaUrls) {
     return mediaEntries.map(withSourceUrls);
   }
-  const attachmentByUrl = new Map(attachmentByReference);
   for (const { url, attachment } of mediaEntries) {
     const key = normalizeMediaReferenceForComparison(url);
-    if (key && attachment && !attachmentByUrl.has(key)) {
-      attachmentByUrl.set(key, attachment);
+    if (key && attachment && !attachmentByReference.has(key)) {
+      attachmentByReference.set(key, attachment);
     }
   }
   return projectedMediaUrls.map((url) =>
     withSourceUrls({
       url,
-      attachment: attachmentByUrl.get(normalizeMediaReferenceForComparison(url)),
+      attachment: attachmentByReference.get(normalizeMediaReferenceForComparison(url)),
     }),
   );
 }

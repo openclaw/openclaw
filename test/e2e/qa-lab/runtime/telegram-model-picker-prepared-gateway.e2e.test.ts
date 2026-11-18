@@ -5,7 +5,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { createWindowsCmdShimFixture, withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
+import { parse } from "@babel/parser";
+import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
 import { createChannelIngressQueue } from "../../../../src/channels/message/ingress-queue.js";
@@ -16,6 +17,7 @@ import type { DB } from "../../../../src/state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../../../../src/state/openclaw-state-db.js";
 import { withinTest, withTestTimeout } from "../../../helpers/promise.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { createNativeModelPickerCliFixture } from "./telegram-model-picker-native-cli-fixture.js";
 
 type JsonObject = Record<string, unknown>;
 type TelegramCall = { method: string; body: JsonObject };
@@ -216,21 +218,40 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
+/** Finds a hashed chunk by the bindings it exports; bundler formatting is not a contract. */
 async function resolveBuiltModule(params: {
   distDir: string;
   prefix: string;
-  exportMarker: string;
+  exports: string[];
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
     if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);
-    if ((await fs.readFile(filePath, "utf8")).includes(params.exportMarker)) {
+    const source = await fs.readFile(filePath, "utf8");
+    // Every exported name appears in the module text, so most chunks never need parsing.
+    if (!params.exports.every((binding) => source.includes(binding))) {
+      continue;
+    }
+    const exported = new Set(
+      parse(source, { sourceType: "module" }).program.body.flatMap((statement) =>
+        statement.type === "ExportNamedDeclaration"
+          ? statement.specifiers.map((specifier) =>
+              specifier.exported.type === "Identifier"
+                ? specifier.exported.name
+                : specifier.exported.value,
+            )
+          : [],
+      ),
+    );
+    if (params.exports.every((binding) => exported.has(binding))) {
       return pathToFileURL(filePath).href;
     }
   }
-  throw new Error(`Could not resolve built ${params.prefix} module`);
+  throw new Error(
+    `Could not resolve a built ${params.prefix} module exporting ${params.exports.join(", ")}`,
+  );
 }
 
 async function startControlledSourceGateway(params: {
@@ -245,15 +266,15 @@ async function startControlledSourceGateway(params: {
   const port = await reservePort();
   const distDir = path.join(params.repoRoot, "dist");
   const [serverUrl, runtimeUrl] = await Promise.all([
-    resolveBuiltModule({
-      distDir,
-      prefix: "server-",
-      exportMarker: "startGatewayServer, truncateCloseReason",
-    }),
+    resolveBuiltModule({ distDir, prefix: "server-", exports: ["startGatewayServer"] }),
     resolveBuiltModule({
       distDir,
       prefix: "prepared-model-runtime-",
-      exportMarker: "export { PreparedModelRuntimeOwnerNotPublishedError",
+      exports: [
+        "markPreparedModelRuntimeSnapshotsStale",
+        "refreshPreparedModelRuntimeSnapshots",
+        "rejectPendingPreparedModelRuntimeReplacement",
+      ],
     }),
   ]);
   await fs.writeFile(
@@ -625,6 +646,7 @@ test("initializes unrestricted Telegram model browsing and reuses its prepared c
               models: {
                 ...cfg.models,
                 mode: "merge",
+                catalogRefresh: { enabled: false },
                 providers: {
                   ...cfg.models?.providers,
                   ollama: {
@@ -767,26 +789,8 @@ test("lists native CLI-bound models through Telegram polling and provider callba
   };
 
   await withTempDir("openclaw-telegram-native-model-picker-", async (fixtureRoot) => {
-    const cliPath = path.join(fixtureRoot, process.platform === "win32" ? "claude.cjs" : "claude");
-    const authCallsPath = path.join(fixtureRoot, "native-auth-calls.jsonl");
-    if (process.platform === "win32") {
-      await createWindowsCmdShimFixture({
-        shimPath: path.join(fixtureRoot, "claude.cmd"),
-        scriptPath: cliPath,
-        shimLine: `@"${process.execPath}" "%~dp0\\claude.cjs" %*`,
-      });
-    }
-    await fs.writeFile(
-      cliPath,
-      `#!${process.execPath}
-const fs = require("node:fs");
-const argv = process.argv.slice(2);
-fs.appendFileSync(${JSON.stringify(authCallsPath)}, JSON.stringify(argv) + "\\n");
-if (JSON.stringify(argv) !== JSON.stringify(["auth", "status", "--json"])) process.exit(1);
-process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }));
-`,
-      { mode: 0o755 },
-    );
+    const { authCallsPath, nativeRequestsPath, authArgs, discoveryArgs } =
+      await createNativeModelPickerCliFixture(fixtureRoot);
     await withServer(
       (req, res) => {
         void handleRequest(req, res);
@@ -900,6 +904,13 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               fixtureProviderRequests: providerRequests,
             }),
           );
+          // Published model rows can precede the asynchronous native initialization.
+          await expect
+            .poll(async () => (await fs.readFile(nativeRequestsPath, "utf8")).trim(), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .not.toBe("");
           const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
             .trim()
             .split("\n")
@@ -919,9 +930,25 @@ process.stdout.write(JSON.stringify({ loggedIn: true, authMethod: "claude.ai" })
               }),
             ]),
           });
+          expect(cliCalls).toEqual(expect.arrayContaining([authArgs, discoveryArgs]));
           expect(
-            cliCalls.every((args) => JSON.stringify(args) === '["auth","status","--json"]'),
+            cliCalls.every(
+              (args) =>
+                JSON.stringify(args) === JSON.stringify(authArgs) ||
+                JSON.stringify(args) === JSON.stringify(discoveryArgs),
+            ),
           ).toBe(true);
+          const nativeRequests = (await fs.readFile(nativeRequestsPath, "utf8"))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          expect(nativeRequests.length).toBeGreaterThan(0);
+          for (const request of nativeRequests) {
+            expect(request).toMatchObject({
+              type: "control_request",
+              request: { subtype: "initialize" },
+            });
+          }
           expect(providerRequests).toBe(0);
         } finally {
           await stopQaGatewayFixture(gatewayOwner);

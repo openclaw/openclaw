@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { normalizeAcpProvenanceMode } from "../acp/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { resolveGatewayAuthOptions } from "./gateway-secret-options.js";
 import { formatDocsHelp } from "./help-format.js";
@@ -61,14 +61,20 @@ export function registerAcpCli(program: Command) {
       const inheritedVerbose = inheritOptionFromParent<boolean>(command, "verbose");
       try {
         const { runAcpClientInteractive } = await import("../acp/client.js");
-        await runAcpClientInteractive({
+        const exitCode = await runAcpClientInteractive({
           cwd: opts.cwd as string | undefined,
           serverCommand: opts.server as string | undefined,
           serverArgs: opts.serverArgs as string[] | undefined,
           serverVerbose: Boolean(opts.serverVerbose),
           verbose: Boolean(opts.verbose || inheritedVerbose),
         });
+        if (exitCode !== 0) {
+          defaultRuntime.exit(exitCode);
+        }
       } catch (err) {
+        if (err instanceof ExitError) {
+          throw err;
+        }
         defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }

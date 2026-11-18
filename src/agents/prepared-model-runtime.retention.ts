@@ -95,12 +95,10 @@ export class PreparedModelRuntimeOwnerRetention {
     }
     this.#retained.delete(key);
     this.#retained.set(key, owner);
-    while (this.#retained.size > this.maxSize) {
-      const oldest = this.#retained.entries().next().value;
-      if (!oldest) {
-        return;
+    for (const [oldestKey, oldestOwner] of this.#retained) {
+      if (this.#retained.size <= this.maxSize) {
+        break;
       }
-      const [oldestKey, oldestOwner] = oldest;
       this.#retained.delete(oldestKey);
       retirePreparedModelRuntimeOwnerIfUnused(owners, oldestKey, oldestOwner);
     }

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   convertMcpCallToolResult,
   type Tool as SdkTool,
@@ -18,19 +19,21 @@ import {
   isSubagentSessionKey,
   isToolResultError,
   resolveEmbeddedAttemptToolConstructionPlan,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
   sanitizeToolResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createAgentHarnessToolSurfaceRuntime } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
+import {
+  createAgentHarnessToolSurfaceRuntimeAsync,
+  type AgentHarnessToolSurfaceRuntime,
+} from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { toStringifiedError as toCopilotToolError } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { isRawCopilotModelRun } from "./attempt-mode.js";
 
 type CreateOpenClawCodingTools =
-  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
+  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingToolsAsync"];
 type OpenClawCodingToolsOptions = NonNullable<Parameters<CreateOpenClawCodingTools>[0]>;
-type AgentHarnessToolSurfaceRuntime = ReturnType<typeof createAgentHarnessToolSurfaceRuntime>;
 type CatalogExecuteParams = Parameters<
   NonNullable<AgentHarnessToolSurfaceRuntime["toolSearchCatalogExecutor"]>
 >[0];
@@ -89,6 +92,7 @@ interface CopilotToolBridgeInput {
 
 interface CopilotToolBridge {
   cleanup?: () => void;
+  settle?: () => Promise<void>;
   codeModeEngaged?: boolean;
   promptToolPolicy: {
     requireExplicitMessageTarget?: boolean;
@@ -128,7 +132,7 @@ export async function createCopilotToolBridge(
     return { codeModeEngaged: false, promptToolPolicy: EMPTY_PROMPT_TOOL_POLICY, sourceTools: [] };
   }
 
-  const toolSurfaceRuntime = createAgentHarnessToolSurfaceRuntime({
+  const toolSurfaceRuntime = await createAgentHarnessToolSurfaceRuntimeAsync({
     abortSignal: attemptParams.abortSignal,
     agentId: input.agentId,
     config: attemptParams.config,
@@ -156,8 +160,9 @@ export async function createCopilotToolBridge(
     scheduledToolPolicy: attemptParams.scheduledToolPolicy,
     sourceReplyDeliveryMode: attemptParams.sourceReplyDeliveryMode,
     toolsAllow: attemptParams.toolsAllow,
+    trigger: attemptParams.trigger,
   });
-  const toolOptions = buildOpenClawCodingToolsOptions(
+  const toolOptions = await buildOpenClawCodingToolsOptions(
     input,
     {
       ...toolPlan,
@@ -167,16 +172,13 @@ export async function createCopilotToolBridge(
   );
 
   const hostCapabilities = attemptParams.hostCapabilities;
-  if (!hostCapabilities) {
-    throw new Error("Copilot attempt tools require host-bound capabilities.");
-  }
   const bindingCwd = toolOptions.cwd ?? toolOptions.workspaceDir;
   const bindingOptions = bindingCwd ? { cwd: bindingCwd } : undefined;
-  const createToolSurface = hostCapabilities.createToolSurface;
-  if (!createToolSurface) {
+  const createToolSurfaceAsync = hostCapabilities.createToolSurfaceAsync;
+  if (!createToolSurfaceAsync) {
     throw new Error("Copilot tool construction requires a current host capability");
   }
-  const sourceTools = createToolSurface(toolOptions, bindingOptions);
+  const sourceTools = await createToolSurfaceAsync(toolOptions, bindingOptions);
   const boundSourceTools = new Set(sourceTools);
 
   const allowedSourceTools = applyEmbeddedAttemptToolsAllow(
@@ -195,9 +197,6 @@ export async function createCopilotToolBridge(
     newlyConstructedTools.length > 0
       ? hostCapabilities.bindToolSurface(newlyConstructedTools, bindingOptions)
       : newlyConstructedTools;
-  if (boundNewlyConstructedTools.length !== newlyConstructedTools.length) {
-    throw new Error("Copilot host capability changed the tool surface length.");
-  }
   const newlyBoundTools = new Map<AnyAgentTool, AnyAgentTool>();
   for (let index = 0; index < newlyConstructedTools.length; index += 1) {
     newlyBoundTools.set(newlyConstructedTools[index]!, boundNewlyConstructedTools[index]!);
@@ -212,13 +211,20 @@ export async function createCopilotToolBridge(
     throw new Error(`[copilot-tool-bridge] duplicate tool names: ${duplicateNames.join(", ")}`);
   }
 
+  // The pooled SDK client dispatches handlers in the context of the turn that
+  // opened it, whose async work scope is closed by a later turn.
+  const runInAttemptContext = AsyncLocalStorage.snapshot();
   let sequentialBarrier = Promise.resolve();
   const pendingCalls = new Set<Promise<void>>();
+  let acceptingCalls = true;
   const scheduleToolExecution: ScheduleToolExecution = (executionMode, execute) => {
+    if (!acceptingCalls) {
+      return Promise.reject(new Error("[copilot-tool-bridge] attempt is closing"));
+    }
     // SDK handlers arrive independently. An exclusive call waits for earlier
     // work across the attempt and blocks later calls, regardless of tool name.
     const ready = executionMode === "sequential" ? Promise.all(pendingCalls) : sequentialBarrier;
-    const run = ready.then(execute);
+    const run = ready.then(() => runInAttemptContext(execute));
     const settled = run.then(
       () => undefined,
       () => undefined,
@@ -235,6 +241,10 @@ export async function createCopilotToolBridge(
   );
   return {
     cleanup: toolSurfaceRuntime.cleanup,
+    settle: async () => {
+      acceptingCalls = false;
+      await Promise.all(pendingCalls);
+    },
     // Report the resolved auto mode, which only the tool-surface owner knows.
     codeModeEngaged: toolSurfaceRuntime.codeModeControlsEnabled,
     promptToolPolicy: {
@@ -265,11 +275,11 @@ export async function createCopilotToolBridge(
  * attempt context and prepared sandbox/construction policy to enforce access.
  * Missing fields here silently weaken or misapply the native harness contract.
  */
-function buildOpenClawCodingToolsOptions(
+async function buildOpenClawCodingToolsOptions(
   input: CopilotToolBridgeInput,
   toolPlan: ReturnType<typeof resolveEmbeddedAttemptToolConstructionPlan>,
-  toolSurfaceRuntime?: ReturnType<typeof createAgentHarnessToolSurfaceRuntime>,
-): OpenClawCodingToolsOptions {
+  toolSurfaceRuntime?: AgentHarnessToolSurfaceRuntime,
+): Promise<OpenClawCodingToolsOptions> {
   const a = input.attemptParams;
 
   // Sandbox policy may belong to a different key than the live session.
@@ -287,15 +297,8 @@ function buildOpenClawCodingToolsOptions(
   const sandbox = input.sandbox ?? undefined;
 
   const model = a.model;
-  const modelHasVision = Array.isArray(model?.input) && model.input.includes("image");
-  const modelCompat =
-    model &&
-    typeof model === "object" &&
-    "compat" in model &&
-    model.compat &&
-    typeof model.compat === "object"
-      ? (model.compat as OpenClawCodingToolsOptions["modelCompat"])
-      : undefined;
+  const modelHasVision = model?.input?.includes("image") ?? false;
+  const modelCompat = model?.compat;
 
   return {
     agentId: input.agentId,
@@ -343,16 +346,19 @@ function buildOpenClawCodingToolsOptions(
     modelApi: model?.api,
     modelContextWindowTokens: a.contextTokenBudget ?? model?.contextWindow,
     delegationCapability: a.delegationCapability,
-    modelAuthMode: resolveModelAuthMode(input.modelProvider, a.config, undefined, {
-      workspaceDir,
-    }),
+    modelAuthMode: await resolveModelAuthModeAsync(
+      input.modelProvider,
+      a.config,
+      a.toolAuthProfileStore ?? a.authProfileStore,
+      {
+        workspaceDir,
+      },
+    ),
     modelHasVision,
     requireExplicitMessageTarget:
       a.requireExplicitMessageTarget ?? isSubagentSessionKey(liveSessionKey),
     disableMessageTool: a.disableMessageTool,
     forceMessageTool: a.forceMessageTool,
-    enableHeartbeatTool: a.enableHeartbeatTool,
-    forceHeartbeatTool: a.forceHeartbeatTool,
     authProfileStore: a.toolAuthProfileStore ?? a.authProfileStore,
     computerContextEpoch: input.computerContextEpoch,
     onToolOutcome: a.onToolOutcome,
@@ -376,16 +382,6 @@ function convertOpenClawToolToSdkTool(
   input: CopilotToolBridgeInput,
   scheduleToolExecution: ScheduleToolExecution,
 ): SdkTool {
-  if (typeof sourceTool.name !== "string" || sourceTool.name.trim().length === 0) {
-    throw new Error("[copilot-tool-bridge] tool name must be a non-empty string");
-  }
-
-  if (typeof sourceTool.execute !== "function") {
-    throw new Error(
-      `[copilot-tool-bridge] tool '${sourceTool.name}' must define an execute function`,
-    );
-  }
-
   const ownerKey = getPluginToolSideEffectOwnerKey(sourceTool);
   const ownerMutation = ownerKey ? { ownerKey } : undefined;
   const notifyToolResult = (result: unknown, isError: boolean) => {
@@ -641,9 +637,6 @@ export function shouldForceCopilotMessageTool(params: CopilotToolAttemptParams):
 function findDuplicateToolNames(sourceTools: AnyAgentTool[]): string[] {
   const counts = new Map<string, number>();
   for (const sourceTool of sourceTools) {
-    if (typeof sourceTool.name !== "string" || sourceTool.name.length === 0) {
-      continue;
-    }
     counts.set(sourceTool.name, (counts.get(sourceTool.name) ?? 0) + 1);
   }
   return [...counts.entries()]

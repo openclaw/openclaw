@@ -4,12 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE } from "./local-build-metadata-paths.mts";
-import {
-  hasDirtyRuntimePostBuildInputs,
-  hasDirtySourceTree,
-  captureRunNodeInputState,
-  type RunNodeInputState,
-} from "./run-node-input-state.mts";
+import { hasDirtyRuntimePostBuildInputs, hasDirtySourceTree } from "./run-node-input-state.mts";
 import { shouldCopyStaticExtensionAssets } from "./static-extension-assets.mts";
 
 export { BUILD_STAMP_FILE, RUNTIME_POSTBUILD_STAMP_FILE };
@@ -25,7 +20,7 @@ type BuildMetadataParams = {
   fs?: typeof fs;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  inputState?: RunNodeInputState | null;
+  inputSignature?: string | null;
   spawnSync?: BuildMetadataSpawnSync;
 };
 
@@ -41,31 +36,6 @@ function resolveInputsClean(params: BuildMetadataParams, scope: "build" | "runti
   };
   const dirty = scope === "build" ? hasDirtySourceTree(deps) : hasDirtyRuntimePostBuildInputs(deps);
   return dirty === null ? null : !dirty;
-}
-
-function verifiedInputSignature(params: BuildMetadataParams, scope: "build" | "runtime") {
-  if (!params.inputState) {
-    return {};
-  }
-  const cwd = params.cwd ?? process.cwd();
-  const current = captureRunNodeInputState(
-    {
-      cwd,
-      distRoot: path.join(cwd, "dist"),
-      fs: params.fs ?? fs,
-      env: params.env ?? process.env,
-      spawnSync: params.spawnSync ?? spawnSync,
-    },
-    scope,
-  );
-  if (
-    !current ||
-    current.signature !== params.inputState.signature ||
-    current.generation !== params.inputState.generation
-  ) {
-    throw new Error("Build inputs changed during preparation; rerun the build");
-  }
-  return { inputSignature: current.signature };
 }
 
 /** Resolve the current git HEAD for build stamp metadata. */
@@ -103,7 +73,7 @@ export function writeBuildStamp(params: BuildMetadataParams = {}) {
   fsImpl.mkdirSync(distRoot, { recursive: true });
   fsImpl.writeFileSync(
     buildStampPath,
-    `${JSON.stringify({ builtAt: now(), head, inputsClean: resolveInputsClean(params, "build"), ...verifiedInputSignature(params, "build") })}\n`,
+    `${JSON.stringify({ builtAt: now(), head, inputsClean: resolveInputsClean(params, "build"), ...(params.inputSignature ? { inputSignature: params.inputSignature } : {}) })}\n`,
     "utf8",
   );
   return buildStampPath;
@@ -130,7 +100,7 @@ export function writeRuntimePostBuildStamp(params: BuildMetadataParams = {}) {
         ...(head ? { head } : {}),
         inputsClean: resolveInputsClean(params, "runtime"),
         staticAssets: shouldCopyStaticExtensionAssets({ env: params.env ?? process.env }),
-        ...verifiedInputSignature(params, "runtime"),
+        ...(params.inputSignature ? { inputSignature: params.inputSignature } : {}),
       },
       null,
       2,

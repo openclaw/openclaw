@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
 import type { BlockReplyChunking } from "../../agents/embedded-agent-block-chunker.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions.js";
@@ -33,6 +34,8 @@ export type CommandContext = {
   /** Captured host owner capability, rechecked by handlers at awaited effect boundaries. */
   assertOwnerCurrent?: () => void;
   isAuthorizedSender: boolean;
+  /** Original command admission, rechecked after awaited preparation. */
+  assertAuthorizedCurrent?: () => void;
   senderId?: string;
   abortKey?: string;
   rawBodyNormalized: string;
@@ -84,6 +87,7 @@ export type HandleCommandsParams = {
   provider: string;
   model: string;
   contextTokens: number;
+  contextTokenProjection?: ModelContextTokenProjection;
   isGroup: boolean;
   skillCommands?: SkillCommandSpec[];
   loadSkillCommands?: () => Promise<SkillCommandSpec[]>;

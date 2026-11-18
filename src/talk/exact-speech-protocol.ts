@@ -1,5 +1,8 @@
 import { formatErrorMessage } from "../infra/errors.js";
-import { buildRealtimeVoiceAgentConsultChatMessage } from "./agent-consult-tool.js";
+import {
+  buildRealtimeVoiceAgentConsultChatMessage,
+  parseRealtimeVoiceAgentConsultArgs,
+} from "./agent-consult-tool.js";
 
 export type RealtimeVoiceConsultToolCallOutcome =
   | { kind: "exact-speech-echo"; text: string }
@@ -17,6 +20,24 @@ export function buildRealtimeVoiceSpeakExactMessage(params: {
     `Speak this exact OpenClaw answer to ${params.surfaceLabel}, without adding, removing, or rephrasing words.`,
     `Answer: ${JSON.stringify(params.text)}`,
   ].join("\n");
+}
+
+/** Only a complete playback request may bypass a new consultation. */
+export function readRealtimeVoicePlaybackEcho(
+  args: unknown,
+  options: { retainedExactSpeechTexts: readonly string[]; surfaceLabel: string },
+): string | undefined {
+  let question: string;
+  try {
+    question = typeof args === "string" ? args : parseRealtimeVoiceAgentConsultArgs(args).question;
+  } catch {
+    return undefined;
+  }
+  return options.retainedExactSpeechTexts.find(
+    (text) =>
+      question ===
+      buildRealtimeVoiceSpeakExactMessage({ text, surfaceLabel: options.surfaceLabel }),
+  );
 }
 
 /** Classify a provider consult call before normal agent delegation. */

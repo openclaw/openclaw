@@ -27,13 +27,14 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { reportLimitViolations } from "./lib/check-limits.mts";
 import { GATEWAY_RUN_CHUNK_METADATA_VERSION } from "./lib/gateway-run-chunk-metadata.mts";
 import { importToolingTypeScript } from "./lib/import-tooling-typescript.mts";
 import { collectPackUnpackedSizeFindings } from "./lib/npm-pack-budget.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { isLegacyPluginDependencyInstallStagePath } from "./lib/package-dist-inventory.ts";
-import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mts";
+import { collectBundledPluginPackageDependencyErrors } from "./lib/plugin-package-dependencies.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
@@ -65,18 +66,18 @@ type ReleaseCheckCommandInvocation = {
 };
 
 const forbiddenPrivateQaContentMarkers = [
-  "//#region extensions/qa-lab/",
   "qa-channel/runtime-api.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
   "qa-lab/cli.js",
   "qa-lab/runtime-api.js",
 ] as const;
-const forbiddenPrivatePluginSdkDeclarationMarkers = [
-  "//#region src/agents/test-helpers/",
-  "//#region src/plugin-sdk/test-helpers/",
-  "//#region src/test-helpers/",
-  "//#region src/test-utils/",
+const forbiddenPrivateSourcePrefixes = [
+  "extensions/qa-lab/",
+  "src/agents/test-helpers/",
+  "src/plugin-sdk/test-helpers/",
+  "src/test-helpers/",
+  "src/test-utils/",
 ] as const;
 const forbiddenPrivateQaContentScanPrefixes = ["dist/"] as const;
 const appcastPath = resolve("appcast.xml");
@@ -127,15 +128,6 @@ const PACKED_PLUGIN_SDK_PROGRESS_CONSUMER_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-progress-consumer.ts",
   import.meta.url,
 );
-const PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS = new Set([
-  "2026.7.33",
-  "2026.7.34",
-  "2026.7.35",
-]);
-
-export function packedPluginSdkMayOmitSetupSurface(packageVersion: string): boolean {
-  return PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS.has(packageVersion);
-}
 const PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
   "scripts/test-built-bundled-channel-entry-smoke.mjs",
@@ -268,20 +260,9 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const bundledPackageDependencySpecs = collectBundledPluginPackageDependencySpecs(
-    resolve("extensions"),
-  );
-  const dependencyConflictErrors = [...bundledPackageDependencySpecs.entries()]
-    .flatMap(([dependencyName, record]) =>
-      record.conflicts.map(
-        (conflict) =>
-          `bundled plugin package dependency '${dependencyName}' has conflicting specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
-      ),
-    )
-    .toSorted((left, right) => left.localeCompare(right));
   checkValidationErrors("bundled extension manifest", [
     ...manifestErrors,
-    ...dependencyConflictErrors,
+    ...collectBundledPluginPackageDependencyErrors(resolve("extensions")),
   ]);
 }
 
@@ -302,30 +283,12 @@ export function resolveReleaseNpmCommand(
   return resolveNpmRunner({ ...params, npmArgs: args });
 }
 
-function execNpm(
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: BufferEncoding;
-    env?: NodeJS.ProcessEnv;
-    maxBuffer?: number;
-    stdio: "inherit" | ["ignore", "pipe", "pipe"];
-  },
-): string {
+function execNpm(args: string[], options: Parameters<typeof runReleaseCheckCommand>[1]): string {
   const invocation = resolveReleaseNpmCommand(args, { env: options.env ?? process.env });
   return runReleaseCheckCommand(invocation, options);
 }
 
-function execPnpm(
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: BufferEncoding;
-    env?: NodeJS.ProcessEnv;
-    maxBuffer?: number;
-    stdio: "inherit" | ["ignore", "pipe", "pipe"];
-  },
-): string {
+function execPnpm(args: string[], options: Parameters<typeof runReleaseCheckCommand>[1]): string {
   const invocation = resolvePnpmRunner({ env: options.env ?? process.env, pnpmArgs: args });
   return runReleaseCheckCommand(invocation, options);
 }
@@ -348,8 +311,6 @@ async function packRootPackage(packDestination: string): Promise<string> {
       new URL("./openclaw-prepack.ts", import.meta.url).href,
       import.meta.url,
     )) as typeof OpenClawPrepack;
-  // The canonical packer skips package hooks; retain prepared prepack's compatibility gate.
-  execPnpm(["update:compat:check"], { encoding: "utf8", stdio: "inherit" });
   const errors = collectPreparedPrepackErrorsFromDisk();
   if (errors.length > 0) {
     throw new Error(
@@ -800,27 +761,6 @@ function runPackedPluginSdkTypescriptSmoke(
       stdio: "inherit",
     });
 
-    const installedOpenClawRoot = join(consumerDir, "node_modules", "openclaw");
-    if (!target.setupConsumerOnly) {
-      const installedPackageVersion = (
-        JSON.parse(readFileSync(join(installedOpenClawRoot, "package.json"), "utf8")) as {
-          version?: unknown;
-        }
-      ).version;
-      if (
-        typeof installedPackageVersion === "string" &&
-        packedPluginSdkMayOmitSetupSurface(installedPackageVersion)
-      ) {
-        const indexPath = join(consumerDir, "src", "index.ts");
-        writeFileSync(
-          indexPath,
-          readFileSync(indexPath, "utf8").replace(
-            'import "./packed-plugin-sdk-setup-consumer.js";\n',
-            "",
-          ),
-        );
-      }
-    }
     const tscPath = join(consumerDir, "node_modules", "typescript", "bin", "tsc");
     if (!existsSync(tscPath)) {
       throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
@@ -845,7 +785,9 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
       {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-5.6-luna" },
+            models: {
+              "openai/*": { agentRuntime: { id: "openclaw" } },
+            },
           },
         },
         channels: {
@@ -853,17 +795,9 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
             enabled: true,
           },
         },
-        models: {
-          providers: {
-            openai: {
-              apiKey: "sk-openclaw-release-check",
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-            },
-          },
-        },
         plugins: {
           enabled: true,
+          allow: ["telegram"],
           entries: {
             telegram: {
               enabled: true,
@@ -878,12 +812,21 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
   );
 }
 
-function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+export function createPackedBundledPluginActivationSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  tmpRoot: string,
+): NodeJS.ProcessEnv {
   const homeDir = join(tmpRoot, "activation-home");
-  mkdirSync(homeDir, { recursive: true });
-  const env = createPackedCliSmokeEnv(process.env, {
+  return createPackedCliSmokeEnv(env, {
     HOME: homeDir,
+    OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
   });
+}
+
+function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+  const env = createPackedBundledPluginActivationSmokeEnv(process.env, tmpRoot);
+  const homeDir = expectDefined(env.HOME, "packed activation smoke home");
+  mkdirSync(homeDir, { recursive: true });
 
   writePackedBundledPluginActivationConfig(homeDir);
   runReleaseCheckCommand(
@@ -922,24 +865,15 @@ function runPackedCliSmoke(params: {
   const trustedCmdPath = join(windowsRoot, "System32", "cmd.exe");
 
   for (const args of PACKED_CLI_SMOKE_COMMANDS) {
-    if (process.platform === "win32") {
-      runReleaseCheckCommand(
-        {
-          command: trustedCmdPath,
-          args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
-          shell: false,
-          windowsVerbatimArguments: true,
-        },
-        {
-          cwd: params.cwd,
-          stdio: "inherit",
-          env,
-        },
-      );
-      continue;
-    }
     runReleaseCheckCommand(
-      { command: binaryPath, args: [...args], shell: false },
+      process.platform === "win32"
+        ? {
+            command: trustedCmdPath,
+            args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, [...args])],
+            shell: false,
+            windowsVerbatimArguments: true,
+          }
+        : { command: binaryPath, args: [...args], shell: false },
       {
         cwd: params.cwd,
         stdio: "inherit",
@@ -1076,7 +1010,11 @@ export function collectForbiddenPackContentPaths(
       }
       return (
         forbiddenPrivateQaContentMarkers.some((marker) => content.includes(marker)) ||
-        forbiddenPrivatePluginSdkDeclarationMarkers.some((marker) => content.includes(marker))
+        // Preserve literal historical metadata scans as well as current module labels.
+        forbiddenPrivateSourcePrefixes.some((prefix) => content.includes(`//#region ${prefix}`)) ||
+        [...bundledModuleRegions(content)].some((match) =>
+          forbiddenPrivateSourcePrefixes.some((prefix) => match[1]?.startsWith(prefix)),
+        )
       );
     })
     .toSorted((left, right) => left.localeCompare(right));

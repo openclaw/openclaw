@@ -1,4 +1,8 @@
 import { vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -34,10 +38,11 @@ export async function prepareDoctorContext(
     confirm?: Parameters<typeof loadAndMaybeMigrateDoctorConfig>[0]["confirm"];
     prompter?: DoctorPrompter;
   } = {},
-): Promise<DoctorHealthFlowContext> {
+): Promise<DoctorHealthFlowContext & AsyncDisposable> {
   const runtime: RuntimeEnv = { error: vi.fn(), exit: vi.fn(), log: vi.fn() };
   const options: DoctorOptions = params.options ?? { nonInteractive: true, repair: true };
   const prompter = params.prompter ?? createDoctorPrompter({ runtime, options });
+  const publishedBefore = getRuntimeConfigSnapshot() !== null;
   const configResult = await loadAndMaybeMigrateDoctorConfig({
     options,
     confirm: params.confirm ?? ((confirmation) => prompter.confirm(confirmation)),
@@ -45,6 +50,12 @@ export async function prepareDoctorContext(
     prompter,
   });
   return {
+    [Symbol.asyncDispose]: async () => {
+      await configResult[Symbol.asyncDispose]();
+      if (!publishedBefore) {
+        clearRuntimeConfigSnapshot();
+      }
+    },
     runtime,
     options,
     prompter,

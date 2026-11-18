@@ -1,4 +1,3 @@
-/** Evaluates node-host exec policy from security, approval, and allowlist context. */
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ASK, DEFAULT_SECURITY } from "../infra/exec-approvals-config.js";
@@ -28,7 +27,6 @@ export function resolveNodeExecConfigPolicy(params: {
 
 type ExecApprovalDecision = "allow-once" | "allow-always" | null;
 
-/** Normalizes raw approval decisions from node-host payloads. */
 export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecision {
   if (value === "allow-once" || value === "allow-always") {
     return value;
@@ -36,7 +34,6 @@ export function resolveExecApprovalDecision(value: unknown): ExecApprovalDecisio
   return null;
 }
 
-/** Combines exec security, allowlist analysis, and approval state into an allow/deny decision. */
 export function evaluateSystemRunPolicy(params: {
   security: ExecSecurity;
   ask: ExecAsk;

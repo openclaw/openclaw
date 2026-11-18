@@ -2,19 +2,16 @@
 import crypto from "node:crypto";
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { Cookie } from "playwright-core";
 
-export type SystemBrowser = "chrome" | "brave" | "edge" | "chromium";
+export const SUPPORTED_SYSTEM_BROWSERS = ["chrome", "brave", "edge", "chromium"] as const;
+export type SystemBrowser = (typeof SUPPORTED_SYSTEM_BROWSERS)[number];
 
-export type PlaywrightCookie = {
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires?: number;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite?: "Strict" | "Lax" | "None";
-};
+export type PlaywrightCookie = Pick<
+  Cookie,
+  "name" | "value" | "domain" | "path" | "httpOnly" | "secure"
+> &
+  Partial<Pick<Cookie, "expires" | "sameSite">>;
 
 type ChromeCookieRow = {
   host_key: string;

@@ -1,4 +1,8 @@
 import { jsonResult } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/param-readers";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import {
   cancelStandingIntent,
@@ -41,16 +45,6 @@ function renderArmedIntentMessage(scope: IntentScope): string {
   return `Intent is armed ${scopeDescription}. ${STANDING_INTENT_AUTOMATION_GUIDANCE}`;
 }
 
-function integerOption(value: unknown, field: string, fallback: number, minimum: 0 | 1): number {
-  if (value === undefined) {
-    return fallback;
-  }
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < minimum) {
-    throw new Error(`${field} must be a ${minimum === 1 ? "positive" : "non-negative"} integer`);
-  }
-  return value;
-}
-
 function normalizeKeywords(value: unknown): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error("triggerKeywords must be a non-empty string array");
@@ -79,18 +73,7 @@ function parseExpiry(value: unknown, nowMs: number): number {
   return parsed;
 }
 
-function parseStatus(value: unknown): StandingIntentStatus | undefined {
-  return value === undefined
-    ? undefined
-    : parseChoice<StandingIntentStatus>(
-        value,
-        "status",
-        ["pending", "armed", "fired", "done", "cancelled", "expired"],
-        "pending",
-      );
-}
-
-function parseChoice<T extends string>(
+function parseChoice<T extends string | undefined>(
   value: unknown,
   field: string,
   allowed: readonly T[],
@@ -121,11 +104,9 @@ export function createStandingIntentExecutor(options: {
       const provider = options.provider?.trim();
       const senderId = options.senderId?.trim();
       if (!provider || !senderId) {
-        const missingIdentity = !provider
-          ? senderId
-            ? "channel"
-            : "channel and sender"
-          : "sender";
+        const missingIdentity = [provider ? null : "channel", senderId ? null : "sender"]
+          .filter(Boolean)
+          .join(" and ");
         throw new Error(
           `authenticated ${missingIdentity} identity is unavailable for this turn; retry from an authenticated channel conversation`,
         );
@@ -171,13 +152,9 @@ export function createStandingIntentExecutor(options: {
               }),
         creatorSender: senderId,
         expiresAt: parseExpiry(params.expiresAt, nowMs),
-        maxFires: integerOption(params.maxFires, "maxFires", DEFAULT_INTENT_MAX_FIRES, 1),
-        cooldownSeconds: integerOption(
-          params.cooldownSeconds,
-          "cooldownSeconds",
-          DEFAULT_INTENT_COOLDOWN_SECONDS,
-          0,
-        ),
+        maxFires: readPositiveIntegerParam(params, "maxFires") ?? DEFAULT_INTENT_MAX_FIRES,
+        cooldownSeconds:
+          readNonNegativeIntegerParam(params, "cooldownSeconds") ?? DEFAULT_INTENT_COOLDOWN_SECONDS,
         sourceSessionId: options.sourceSessionId,
         nowMs,
       });
@@ -188,7 +165,12 @@ export function createStandingIntentExecutor(options: {
         intents: await listStandingIntents({
           agentId: options.agentId,
           assertCurrent: options.assertCurrent,
-          status: parseStatus(params.status),
+          status: parseChoice<StandingIntentStatus | undefined>(
+            params.status,
+            "status",
+            ["pending", "armed", "fired", "done", "cancelled", "expired"],
+            undefined,
+          ),
         }),
       });
     }

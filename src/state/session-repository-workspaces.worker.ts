@@ -8,15 +8,20 @@ import {
 import {
   acceptSessionRepositoryWorkspaceCheckpointInDatabase,
   bindSessionRepositoryWorkspaceBaseInDatabase,
+  bindSessionRepositoryWorkspaceDiskInDatabase,
   createSessionRepositoryWorkspaceInDatabase,
   deleteSessionRepositoryWorkspaceInDatabase,
   findSessionRepositoryWorkspaceInDatabase,
   readSessionRepositoryWorkspaceInDatabase,
+  retireSessionRepositoryWorkspaceDiskInDatabase,
 } from "./session-repository-workspaces.kernel.js";
+import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
+  RepositoryWorkspaceDiskBinding,
+  RepositoryWorkspaceDiskRetirement,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
 } from "./session-repository-workspaces.types.js";
@@ -48,6 +53,17 @@ export const repositoryWorkspaceOperations = {
     mutate(open(), "repositoryWorkspaces.acceptCheckpoint", (db) =>
       acceptSessionRepositoryWorkspaceCheckpointInDatabase(db, input, input.nowMs ?? Date.now()),
     ),
+  "repositoryWorkspaces.bindDisk": (
+    input: RepositoryWorkspaceDiskBinding & { nowMs?: number },
+    { open },
+  ) =>
+    mutate(open(), "repositoryWorkspaces.bindDisk", (db) =>
+      bindSessionRepositoryWorkspaceDiskInDatabase(db, input, input.nowMs ?? Date.now()),
+    ),
+  "repositoryWorkspaces.retireDisk": (input: RepositoryWorkspaceDiskRetirement, { open }) =>
+    mutate(open(), "repositoryWorkspaces.retireDisk", (db) =>
+      retireSessionRepositoryWorkspaceDiskInDatabase(db, input, Date.now()),
+    ),
   "repositoryWorkspaces.delete": (
     input: { workspaceId: string; sessionEntryCurrentSource?: SessionEntryCurrentSource },
     { open },
@@ -75,9 +91,12 @@ function mutate(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       admit("transaction", undefined);
-      const result = operation(db);
+      const { result, receipt } = repositoryWorkspacePublication.capture(db, () => operation(db));
       admit("commit", result);
-      deferSqliteWorkerCommitReceipt(db, result);
+      deferSqliteWorkerCommitReceipt(db, {
+        result,
+        receipt: repositoryWorkspacePublication.bound(receipt),
+      });
       return result;
     },
     { database },

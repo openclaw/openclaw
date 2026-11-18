@@ -24,6 +24,7 @@ extension ChatTranscriptRow {
             guard role == "user" || role == "assistant" else { return }
             if role == "assistant" {
                 guard first.workPhase != "commentary" || first.isForwardedTurnBoundary,
+                      !last.stoppedForToolUse,
                       group.contains(where: { ChatMessageVisibleText.hasVisibleText(in: $0) ||
                               $0.content.contains { $0.isInlineAttachment || $0.preview?.inlineWidgetPath != nil }
                       }),
@@ -53,7 +54,8 @@ extension ChatTranscriptRow {
         let role = first.role.lowercased()
         guard next.turnBoundary != true,
               role == next.role.lowercased(),
-              first.footerSourceIdentity == next.footerSourceIdentity
+              first.footerSourceIdentity == next.footerSourceIdentity,
+              first.isRealtimeVoiceTranscript == next.isRealtimeVoiceTranscript
         else { return false }
         if role == "user" {
             return (first.steerTargetRunID ?? first.workRunID) == (next.steerTargetRunID ?? next.workRunID)

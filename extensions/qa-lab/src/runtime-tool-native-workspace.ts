@@ -10,40 +10,14 @@ import {
   type QaNativeWorkspaceBehavior,
 } from "./native-workspace-behavior.js";
 import { isWorkspaceBoundaryFailureToolOutput } from "./runtime-tool-evidence.js";
+import { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type NativeToolOutput = { hardFailure?: boolean; text: string };
-type NativeToolEvidence = {
-  plannedRequest?: unknown;
-  executedRequest?: { args?: unknown };
-  outputRequest?: NativeToolOutput;
-  failureOutputRequest?: NativeToolOutput;
-};
-
-type NativeWorkspaceFixtureParams = {
-  env: QaSuiteRuntimeEnv;
-  behaviorId: unknown;
-  required: boolean;
-  happySessionKey: string;
-  failureSessionKey: string;
-  runAgentPrompt: (
-    env: Pick<QaSuiteRuntimeEnv, "gateway" | "transport">,
-    params: {
-      sessionKey: string;
-      message: string;
-      timeoutMs?: number;
-      transcriptToolName?: string;
-      requireSuccessfulTranscriptToolResult?: boolean;
-    },
-  ) => Promise<unknown>;
-  readEvidence: (sessionKey: string, toolName: string) => Promise<NativeToolEvidence>;
-  fixtureError: (error: unknown) => Error;
-  failFixture: (details: string) => never;
-};
-
-function canonicalWorkspacePath(workspaceDir: string, filePath: string): string {
+export function canonicalWorkspacePath(workspaceDir: string, filePath: string): string {
   const resolvedPath = path.resolve(workspaceDir, filePath);
   try {
+    // Native patch paths resolve platform aliases after the target leaf is removed.
     return path.join(realpathSync.native(path.dirname(resolvedPath)), path.basename(resolvedPath));
   } catch {
     return resolvedPath;
@@ -91,7 +65,7 @@ function matchesNativeWorkspaceArguments(params: {
   );
 }
 
-async function readOptionalUtf8(filePath: string) {
+export async function readOptionalUtf8(filePath: string) {
   return fs.readFile(filePath, "utf8").catch((error: unknown) => {
     if (isRecord(error) && error.code === "ENOENT") {
       return undefined;
@@ -110,42 +84,45 @@ function nativePrompt(behavior: QaNativeWorkspaceBehavior, phase: "happy" | "fai
   ].join(" ");
 }
 
-export async function runCodexNativeWorkspaceFixture(
-  params: NativeWorkspaceFixtureParams,
-): Promise<string | undefined> {
+export async function runCodexNativeWorkspaceFixture(params: {
+  env: QaSuiteRuntimeEnv;
+  behaviorId: unknown;
+  required: boolean;
+  happySessionKey: string;
+  failureSessionKey: string;
+  readEvidence: (
+    sessionKey: string,
+    toolName: string,
+  ) => Promise<{
+    plannedRequest?: unknown;
+    executedRequest?: { args?: unknown };
+    outputRequest?: NativeToolOutput;
+    failureOutputRequest?: NativeToolOutput;
+  }>;
+  failFixture: (details: string) => never;
+}): Promise<string | undefined> {
   const behaviorId = readQaNativeWorkspaceBehaviorId(params.behaviorId);
   if (!behaviorId) {
     return undefined;
   }
   const behavior = getQaNativeWorkspaceBehavior(behaviorId);
-  const runOperation = async <T>(operation: () => Promise<T>): Promise<T> => {
-    try {
-      return await operation();
-    } catch (error) {
-      throw params.fixtureError(error);
-    }
-  };
   if (!params.required) {
-    throw params.fixtureError(
-      new Error(`codex-native ${behavior.id} behavior must be required coverage`),
-    );
+    throw new Error(`codex-native ${behavior.id} behavior must be required coverage`);
   }
-  const workspaceRealPath = await runOperation(() => fs.realpath(params.env.gateway.workspaceDir));
+  const workspaceRealPath = await fs.realpath(params.env.gateway.workspaceDir);
   for (const seed of behavior.seedFiles ?? []) {
     const seedPath = path.resolve(params.env.gateway.workspaceDir, seed.path);
-    await runOperation(async () => {
-      const parentRealPath = await fs.realpath(path.dirname(seedPath));
-      const existing = await fs.lstat(seedPath).catch((error: unknown) => {
-        if (isRecord(error) && error.code === "ENOENT") {
-          return undefined;
-        }
-        throw error;
-      });
-      if (!isPathInside(workspaceRealPath, parentRealPath) || existing?.isSymbolicLink()) {
-        throw new Error(`refusing codex-native seed path outside the workspace: ${seed.path}`);
+    const parentRealPath = await fs.realpath(path.dirname(seedPath));
+    const existing = await fs.lstat(seedPath).catch((error: unknown) => {
+      if (isRecord(error) && error.code === "ENOENT") {
+        return undefined;
       }
-      await fs.writeFile(seedPath, seed.contents, "utf8");
+      throw error;
     });
+    if (!isPathInside(workspaceRealPath, parentRealPath) || existing?.isSymbolicLink()) {
+      throw new Error(`refusing codex-native seed path outside the workspace: ${seed.path}`);
+    }
+    await fs.writeFile(seedPath, seed.contents, "utf8");
   }
 
   const happyMutation = behavior.happyMutation;
@@ -153,30 +130,24 @@ export async function runCodexNativeWorkspaceFixture(
     happyMutation &&
     !(behavior.seedFiles ?? []).some((seed) => seed.path === happyMutation.path)
   ) {
-    await runOperation(() =>
-      fs.rm(path.resolve(params.env.gateway.workspaceDir, happyMutation.path), { force: true }),
-    );
+    await fs.rm(path.resolve(params.env.gateway.workspaceDir, happyMutation.path), { force: true });
   }
 
-  await runOperation(() =>
-    params.runAgentPrompt(params.env, {
-      sessionKey: params.happySessionKey,
-      message: nativePrompt(behavior, "happy"),
-      timeoutMs: liveTurnTimeoutMs(params.env, 45_000),
-      transcriptToolName: behavior.nativeToolName,
-      requireSuccessfulTranscriptToolResult: true,
-    }),
-  );
+  await runAgentPrompt(params.env, {
+    sessionKey: params.happySessionKey,
+    message: nativePrompt(behavior, "happy"),
+    timeoutMs: liveTurnTimeoutMs(params.env, 45_000),
+    transcriptToolName: behavior.nativeToolName,
+    requireSuccessfulTranscriptToolResult: true,
+  });
   if (behavior.happyMutation) {
     const mutation = behavior.happyMutation;
-    const contents = await runOperation(() =>
-      readOptionalUtf8(path.resolve(params.env.gateway.workspaceDir, mutation.path)),
+    const contents = await readOptionalUtf8(
+      path.resolve(params.env.gateway.workspaceDir, mutation.path),
     );
     if (contents !== mutation.contents) {
-      throw params.fixtureError(
-        new Error(
-          `expected codex-native ${behavior.id} to write ${mutation.path} with exact contents`,
-        ),
+      throw new Error(
+        `expected codex-native ${behavior.id} to write ${mutation.path} with exact contents`,
       );
     }
   }
@@ -186,26 +157,20 @@ export async function runCodexNativeWorkspaceFixture(
     ? path.resolve(params.env.gateway.workspaceDir, sentinel.path)
     : undefined;
   if (sentinelPath && sentinel) {
-    await runOperation(() =>
-      fs.writeFile(sentinelPath, sentinel.contents, { encoding: "utf8", flag: "wx" }),
-    );
+    await fs.writeFile(sentinelPath, sentinel.contents, { encoding: "utf8", flag: "wx" });
   }
   try {
-    await runOperation(() =>
-      params.runAgentPrompt(params.env, {
-        sessionKey: params.failureSessionKey,
-        message: nativePrompt(behavior, "failure"),
-        timeoutMs: liveTurnTimeoutMs(params.env, 45_000),
-        transcriptToolName: behavior.nativeToolName,
-      }),
-    );
+    await runAgentPrompt(params.env, {
+      sessionKey: params.failureSessionKey,
+      message: nativePrompt(behavior, "failure"),
+      timeoutMs: liveTurnTimeoutMs(params.env, 45_000),
+      transcriptToolName: behavior.nativeToolName,
+    });
     if (sentinelPath && sentinel) {
-      const contents = await runOperation(() => readOptionalUtf8(sentinelPath));
+      const contents = await readOptionalUtf8(sentinelPath);
       if (contents !== sentinel.contents) {
-        throw params.fixtureError(
-          new Error(
-            `codex-native ${behavior.id} modified or removed its outside-workspace sentinel`,
-          ),
+        throw new Error(
+          `codex-native ${behavior.id} modified or removed its outside-workspace sentinel`,
         );
       }
     }
@@ -216,11 +181,9 @@ export async function runCodexNativeWorkspaceFixture(
   }
 
   for (const phase of ["happy", "failure"] as const) {
-    const evidence = await runOperation(() =>
-      params.readEvidence(
-        phase === "happy" ? params.happySessionKey : params.failureSessionKey,
-        behavior.nativeToolName,
-      ),
+    const evidence = await params.readEvidence(
+      phase === "happy" ? params.happySessionKey : params.failureSessionKey,
+      behavior.nativeToolName,
     );
     const output = phase === "happy" ? evidence.outputRequest : evidence.failureOutputRequest;
     if (!output || (phase === "happy" && output.hardFailure)) {
@@ -238,31 +201,27 @@ export async function runCodexNativeWorkspaceFixture(
         workspaceDir: params.env.gateway.workspaceDir,
       })
     ) {
-      throw params.fixtureError(
-        new Error(`codex-native ${behavior.id} ${phase} receipt had unexpected arguments`),
-      );
+      throw new Error(`codex-native ${behavior.id} ${phase} receipt had unexpected arguments`);
     }
     const outputMarker =
       phase === "happy" ? behavior.happyOutputMarker : behavior.failureOutputMarker;
     if (outputMarker && !output.text.includes(outputMarker)) {
-      throw params.fixtureError(
-        new Error(`codex-native ${behavior.id} ${phase} result omitted its output marker`),
-      );
+      throw new Error(`codex-native ${behavior.id} ${phase} result omitted its output marker`);
     }
     if (
       phase === "failure" &&
       behavior.nativeToolName === "apply_patch" &&
       !isWorkspaceBoundaryFailureToolOutput(output.text)
     ) {
-      throw params.fixtureError(
-        new Error("expected codex-native edit failure to explicitly reject the workspace boundary"),
+      throw new Error(
+        "expected codex-native edit failure to explicitly reject the workspace boundary",
       );
     }
   }
   return `codex-native ${behavior.id} behavior passed`;
 }
 
-type DiagnosticRequest = { plannedToolArgs?: unknown };
+type DiagnosticRequest = { args?: unknown };
 
 export function formatCodexNativeWorkspaceDetails(params: {
   toolName: string;
@@ -271,7 +230,7 @@ export function formatCodexNativeWorkspaceDetails(params: {
   happyRequest?: DiagnosticRequest;
   failureRequest?: DiagnosticRequest;
 }) {
-  const plannedArgs = (request: DiagnosticRequest) => JSON.stringify(request.plannedToolArgs ?? {});
+  const plannedArgs = (request: DiagnosticRequest) => JSON.stringify(request.args ?? {});
   return [
     `codex-native-workspace ${params.toolName}: OpenClaw dynamic exposure is intentionally omitted because Codex owns this workspace operation natively`,
     params.reason ? `reason: ${params.reason}` : undefined,

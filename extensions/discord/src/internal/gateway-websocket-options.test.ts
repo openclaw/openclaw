@@ -8,7 +8,7 @@ const { webSocketCtorCalls, mockOwner } = vi.hoisted(() => {
   return { webSocketCtorCalls: calls, mockOwner: owner };
 });
 
-vi.mock("./ws-runtime.js", async () => {
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => {
   const { EventEmitter } = await import("node:events");
   class MockWebSocket extends EventEmitter {
     readyState = 1;
@@ -21,10 +21,13 @@ vi.mock("./ws-runtime.js", async () => {
     }
   }
   mockOwner.constructor = MockWebSocket;
-  return { WebSocket: MockWebSocket };
+  return {
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+    WebSocket: MockWebSocket,
+  };
 });
 
-import { WebSocket } from "./ws-runtime.js";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 
 describe("GatewayPlugin websocket options", () => {
   beforeEach(() => {
@@ -34,7 +37,6 @@ describe("GatewayPlugin websocket options", () => {
   it("bounds inbound gateway websocket payloads and the opening handshake", () => {
     expect(WebSocket).toBe(mockOwner.constructor);
     const gateway = new GatewayPlugin({
-      autoInteractions: false,
       url: "wss://gateway.example.test",
     });
 

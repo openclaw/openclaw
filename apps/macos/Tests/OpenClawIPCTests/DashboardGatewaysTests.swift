@@ -61,7 +61,8 @@ struct DashboardGatewayCatalogTests {
             profiles: hasProfiles ? [.init(
                 profile: .init(id: "studio", name: "Studio", url: url),
                 canPromote: true)] : [],
-            primaryHealth: .unknown)
+            primaryHealth: .unknown,
+            retainedProfileIDs: ["studio"])
 
         #expect(entries.map(\.id) == (hasProfiles ? ["profile:studio"] : []))
         #expect(!entries.contains { $0.isPrimary })
@@ -71,8 +72,11 @@ struct DashboardGatewayCatalogTests {
         }
     }
 
-    @Test(arguments: [false, true])
-    func `catalog keeps browser authority separate from the primary route`(usesBrowserIdentity: Bool) throws {
+    @Test(arguments: [false, true], [false, true])
+    func `catalog preserves browser authority and open saved targets matching primary`(
+        usesBrowserIdentity: Bool,
+        retained: Bool) throws
+    {
         let primaryURL = try #require(URL(string: "wss://studio.example/control"))
         let duplicate = MacGatewayCatalogProfile(
             profile: MacGatewayProfile(id: "studio", name: "My Studio", url: primaryURL),
@@ -91,16 +95,25 @@ struct DashboardGatewayCatalogTests {
             resolvedRemoteURL: nil,
             resolvedRemoteHostLabel: "studio.example:443",
             profiles: [duplicate, other],
-            primaryHealth: .ok)
+            primaryHealth: .ok,
+            retainedProfileIDs: retained ? ["studio", "backup"] : ["backup"])
 
-        #expect(entries.map(\.id) == (usesBrowserIdentity
+        #expect(entries.map(\.id) == (usesBrowserIdentity || retained
                 ? ["primary", "profile:studio", "profile:backup"] : ["primary", "profile:backup"]))
         #expect(entries[0].name == (usesBrowserIdentity ? "studio.example:443" : "My Studio"))
         #expect(entries[0].kind == "remote")
         #expect(entries[0].health == .ok)
         #expect(!entries[0].canPromote)
-        #expect(!entries[1].canPromote)
-        #expect(entries[1].health == .unknown)
+        #expect(entries.last?.canPromote == false)
+        #expect(entries.last?.health == .unknown)
+        let current = DashboardGatewayMenuModel.items(from: entries).first { $0.target == .profile("studio") }
+        if usesBrowserIdentity || retained {
+            #expect(current?.name == "My Studio")
+            #expect(current?.isPrimary == false)
+            #expect(current?.canPromote == !usesBrowserIdentity)
+        } else {
+            #expect(current == nil)
+        }
     }
 
     @Test func `catalog deduplicates profile matching resolved SSH endpoint`() throws {
@@ -159,7 +172,7 @@ struct DashboardGatewayCatalogTests {
             primaryHealth: .ok)
 
         #expect(entries.map(\.id) == ["primary", "profile:studio"])
-        #expect(entries[0].name == "Local Gateway")
+        #expect(entries[0].name == "This Mac")
     }
 }
 
@@ -204,7 +217,7 @@ struct DashboardGatewaysBridgeTests {
             storeKey: "profile:studio")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             tlsParams: params,
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",
@@ -270,7 +283,8 @@ struct DashboardManagerGatewayTargetTests {
         }
 
         #expect(catalogReads == 0)
-        #expect(manager._testGatewayRefreshObserverCount() == 0)
+        // Local window focus/close observers stay active without observing the profile registry.
+        #expect(manager._testGatewayRefreshObserverCount() == 2)
     }
 
     @Test func `interactive configuration retains the gateway profile refresh`() async {
@@ -321,7 +335,7 @@ struct DashboardManagerGatewayTargetTests {
         let url = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "current",
                 password: nil),
@@ -366,7 +380,7 @@ struct DashboardManagerGatewayTargetTests {
             let url = server.url("/#token=current")
             let controller = DashboardWindowController(
                 url: url,
-                auth: DashboardWindowAuth(
+                auth: DashboardWindowAuth.nativeDevice(
                     gatewayUrl: server.websocketURL("/").absoluteString,
                     token: "current",
                     password: nil),
@@ -475,7 +489,7 @@ struct DashboardManagerGatewayTargetTests {
         let sourceURL = server.url("/#token=current")
         let controller = DashboardWindowController(
             url: sourceURL,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "current",
                 password: nil),
@@ -849,8 +863,7 @@ struct DashboardManagerGatewayTargetTests {
             await manager._testOpenWindow(for: .profile("secondary"))
             let secondary = try #require(manager._testAuxiliaryWindows().first?.controller)
             for controller in [primary, secondary] {
-                // Profile preparation can precede WebKit's loading flag. Install
-                // listeners only after the fixture document replaces the blank page.
+                // Profile preparation can precede WebKit's loading flag; native readiness is asynchronous.
                 try await DashboardTestWait.document(controller, "gateway command document") {
                     controller.webView.url?.port == Int(server.port)
                 }
@@ -864,6 +877,7 @@ struct DashboardManagerGatewayTargetTests {
                   event.preventDefault(); window.commandEvents.push('palette');
                 });
                 """)
+                try await controller.waitForDocumentLoad()
             }
             secondary.show()
             #expect(manager.frontmostDashboardTarget == .profile("secondary"))
@@ -1014,7 +1028,7 @@ struct DashboardManagerGatewayTargetTests {
         let store = DashboardBrowserSessionStore(dataStore: .nonPersistent())
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: store.dataStore,
             browserSessionLease: store.lease(for: session),
             windowAutosaveName: "OpenClawDashboardWindow-Test-\(UUID().uuidString)",

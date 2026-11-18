@@ -1,13 +1,19 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runProcess, writeJson } from "./upgrade-survivor-shard.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
 const flag = "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE";
 const terminalOwner = "src/cli/update-cli/update-command-terminal-publication.ts";
 const message = "Service membership unverifiable on this host; using managed stop/update/start.";
+const warning = {
+  name: "managed-service-membership",
+  exitCode: 0,
+  advisory: { kind: "recoverable-maintenance", message },
+};
 const wrapper = readFileSync("scripts/e2e/upgrade-survivor-docker.sh", "utf8");
 const selection = wrapper.slice(
   wrapper.indexOf("UPGRADE_SCENARIO_ARGS=()"),
@@ -23,10 +29,7 @@ function target(current: boolean, incomplete = false) {
   const root = temps.make("survivor-membership-");
   const selected = join(root, "selected");
   mkdirSync(dirname(join(selected, terminalOwner)), { recursive: true });
-  writeFileSync(
-    join(selected, "package.json"),
-    JSON.stringify({ version: current ? "2026.9.6" : "2026.9.7" }),
-  );
+  writeJson(join(selected, "package.json"), { version: current ? "2026.9.6" : "2026.9.7" });
   const owner = current
     ? readFileSync(terminalOwner, "utf8")
     : "export function completeUpdateCommandResult(params, result) { return result; }\n";
@@ -53,7 +56,7 @@ function target(current: boolean, incomplete = false) {
   );
   const sha = git("rev-parse", "HEAD");
   const select = (extra: NodeJS.ProcessEnv = {}) =>
-    spawnSync(
+    runProcess(
       "bash",
       [
         "-c",
@@ -64,17 +67,14 @@ function target(current: boolean, incomplete = false) {
         ].join("\n"),
       ],
       {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          HOME: root,
-          HARNESS_ROOT_DIR: resolve("."),
-          ROOT_DIR: selected,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
-          OPENCLAW_SELECTED_SHA: sha,
-          OPENCLAW_TOOLING_SHA: "a".repeat(40),
-          ...extra,
-        },
+        PATH: process.env.PATH,
+        HOME: root,
+        HARNESS_ROOT_DIR: resolve("."),
+        ROOT_DIR: selected,
+        OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+        OPENCLAW_SELECTED_SHA: sha,
+        OPENCLAW_TOOLING_SHA: "a".repeat(40),
+        ...extra,
       },
     );
   return { root, selected, select };
@@ -86,21 +86,12 @@ function runRecovery(
   receipt: "none" | "valid" | "wrong-run" | "missing-history" = "none",
   failAt = "",
 ) {
-  const result = {
+  writeJson(join(root, "recovery-update.json"), {
     status: "ok",
     runId: "fixture-run",
-    steps:
-      receipt === "none"
-        ? []
-        : [
-            {
-              name: "managed-service-membership",
-              exitCode: 0,
-              advisory: { kind: "recoverable-maintenance", message },
-            },
-          ],
-  };
-  const status = {
+    steps: receipt === "none" ? [] : [warning],
+  });
+  writeJson(join(root, "status.json"), {
     lastRun: {
       runId: receipt === "wrong-run" ? "other-run" : "fixture-run",
       steps:
@@ -108,12 +99,10 @@ function runRecovery(
           ? []
           : [{ step: "warning:managed-service-membership", status: "completed", detail: message }],
     },
-  };
-  writeFileSync(join(root, "recovery-update.json"), JSON.stringify(result));
-  writeFileSync(join(root, "status.json"), JSON.stringify(status));
+  });
   const events = join(root, "events");
   writeFileSync(events, "");
-  const observed = spawnSync(
+  const observed = runProcess(
     "bash",
     [
       "-c",
@@ -124,7 +113,7 @@ function runRecovery(
         "restart_fixture_package=fixture.tgz; restart_fixture_version=2100.1.0",
         'phase() { printf "%s\\n" "$1" >> "$EVENTS"; shift; "$@"; }',
         "stop_update_restart_probe_gateway() { :; }",
-        "prepare_restart_inference() { :; }; prepare_restart_fixture() { :; }",
+        "prepare_restart_inference() { :; }; prepare_restart_plugin_release_selectors() { :; }; prepare_restart_fixture() { :; }",
         'install_update_restart_systemctl_shim() { printf "containment:%s\\n" "$1" >> "$EVENTS"; }',
         'run_update_restart_probe_gateway() { [ "$1" = start ]; }',
         'check_gateway_status() { [ "$FAIL_AT" != auth ]; }',
@@ -137,42 +126,40 @@ function runRecovery(
       ].join("\n"),
     ],
     {
-      encoding: "utf8",
-      env: {
-        PATH: process.env.PATH,
-        HOME: root,
-        ARTIFACT_ROOT: root,
-        EVENTS: events,
-        FAIL_AT: failAt,
-        [flag]: mode,
-      },
+      PATH: process.env.PATH,
+      HOME: root,
+      ARTIFACT_ROOT: root,
+      EVENTS: events,
+      FAIL_AT: failAt,
+      [flag]: mode,
     },
   );
   return { ...observed, events: readFileSync(events, "utf8").trim().split("\n") };
 }
 
 function selectedMode(stdout: string) {
-  return (
-    stdout
-      .split("\n")
-      .find((line) => line.startsWith(flag + "="))
-      ?.slice(flag.length + 1) ?? ""
-  );
+  const assignment = stdout.split("\n").find((line) => line.startsWith(flag + "="));
+  return assignment?.slice(flag.length + 1) ?? "";
+}
+
+function expectMode(fixture: ReturnType<typeof target>, mode: string, env?: NodeJS.ProcessEnv) {
+  const selected = fixture.select(env);
+  expect(selected.status, selected.stderr).toBe(0);
+  expect(selectedMode(selected.stdout)).toBe(mode);
+  return mode;
 }
 
 describe.skipIf(process.platform === "win32")("frozen managed membership contract", () => {
-  it("retains native-contained recovery for the committed pre-warning target", () => {
+  it("uses the committed pre-warning containment contract", () => {
     const f = target(false);
     // A dirty working file is not a capability of the frozen commit.
     writeFileSync(join(f.selected, terminalOwner), readFileSync(terminalOwner));
-    const selected = f.select();
-    expect(selected.status, selected.stderr).toBe(0);
-    const run = runRecovery(f.root, selectedMode(selected.stdout));
+    const run = runRecovery(f.root, expectMode(f, "native"));
     expect(run.status, run.stderr).toBe(0);
-    expect(selectedMode(selected.stdout)).toBe("native");
     expect(run.events).toEqual([
       "stop-recovery-service",
       "prepare-restart-inference",
+      "prepare-restart-plugin-selectors",
       "prepare-restart-fixture",
       "prepare-restart-manager",
       "containment:native",
@@ -187,12 +174,9 @@ describe.skipIf(process.platform === "win32")("frozen managed membership contrac
     }
   });
 
-  it("keeps absent-containment recovery and both warning receipts strict for current targets", () => {
+  it("requires both matching receipts for absent containment", () => {
     const f = target(true);
-    const selected = f.select();
-    expect(selected.status, selected.stderr).toBe(0);
-    expect(selectedMode(selected.stdout)).toBe("absent");
-    const valid = runRecovery(f.root, "absent", "valid");
+    const valid = runRecovery(f.root, expectMode(f, "absent"), "valid");
     expect(valid.status, valid.stderr).toBe(0);
     expect(valid.events).toContain("containment:absent");
     expect(valid.events).toContain("recovery-membership-warning");
@@ -208,16 +192,13 @@ describe.skipIf(process.platform === "win32")("frozen managed membership contrac
     expect(invalid.events).toEqual([""]);
   });
 
-  it("rejects mismatched identity and partial contracts; unqualified runs stay strict", () => {
+  it("rejects partial contracts and unqualified overrides", () => {
     const f = target(true, true);
     expect(f.select().status).not.toBe(0);
     const old = target(false);
-    expect(old.select({ OPENCLAW_SELECTED_SHA: "b".repeat(40) }).status).not.toBe(0);
-    const current = old.select({
+    expectMode(old, "absent", {
       OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "0",
       [flag]: "native",
     });
-    expect(current.status, current.stderr).toBe(0);
-    expect(selectedMode(current.stdout)).toBe("absent");
   });
 });

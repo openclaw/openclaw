@@ -3,9 +3,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 /** Detect an operator-supplied port before WHATWG URL normalization drops default ports. */
 function hasRawExplicitPort(raw: string): boolean {
   const authority = raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, "").split(/[/?#]/, 1)[0] ?? "";
-  const hostPort = authority.includes("@")
-    ? authority.slice(authority.lastIndexOf("@") + 1)
-    : authority;
+  const hostPort = authority.slice(authority.lastIndexOf("@") + 1);
 
   if (hostPort.startsWith("[")) {
     return /^\[[^\]]+\]:\d+$/.test(hostPort);

@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for typed tool parameter readers.
- */
 export {
   readFiniteNumberParam,
   readNonNegativeIntegerParam,

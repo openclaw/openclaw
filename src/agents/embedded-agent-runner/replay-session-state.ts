@@ -4,9 +4,15 @@ import type {
   ProviderReplaySessionEntry,
   ProviderReplaySessionStateV2,
 } from "../../plugins/provider-replay.types.js";
+import { rethrowIncognitoSessionError } from "../../state/incognito-session-error.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
 import { withSessionManagerWriteAssertion } from "../sessions/session-manager-write-admission.js";
 import type { SessionManager } from "../sessions/session-manager.js";
 import { warnSessionPersistenceDeprecation } from "../sessions/session-persistence-deprecation.js";
+import {
+  readModelSnapshotStateFromEntries,
+  type ModelSnapshotState,
+} from "./replay-model-snapshot.js";
 
 export function createProviderReplaySessionState(sessionManager: SessionManager): {
   state: ProviderReplaySessionStateV2;
@@ -34,7 +40,8 @@ export function createProviderReplaySessionState(sessionManager: SessionManager)
             const customType = entry.customType.trim();
             return customType ? [{ customType, data: entry.data }] : [];
           });
-        } catch {
+        } catch (error) {
+          rethrowIncognitoSessionError(error);
           return [];
         }
       },
@@ -47,19 +54,27 @@ export function createProviderReplaySessionState(sessionManager: SessionManager)
         );
         try {
           sessionManager.appendCustomEntry(customType, data);
-        } catch {
+        } catch (error) {
+          rethrowIncognitoSessionError(error);
           // Legacy providers ignored persistence failures; V2 propagates them.
         }
       },
       async appendCustomEntryAsync(customType: string, data: unknown) {
         assertCurrent();
         const append = () => sessionManager.appendCustomEntryAsync(customType, data);
-        const id = await withSessionManagerWriteAssertion(sessionManager, assertCurrent, () =>
+        return await withSessionManagerWriteAssertion(sessionManager, assertCurrent, () =>
           target ? withSessionTranscriptWriteAssertion(target, assertCurrent, append) : append(),
         );
-        assertCurrent();
-        return id;
       },
     },
   };
+}
+
+export function readModelSnapshotState(sessionManager: SessionManager): ModelSnapshotState {
+  try {
+    return readModelSnapshotStateFromEntries(sessionManager[sessionManagerReadTranscriptBranch]());
+  } catch (error) {
+    rethrowIncognitoSessionError(error);
+    return { lastSnapshot: null, latestSwitchTimestamp: null };
+  }
 }

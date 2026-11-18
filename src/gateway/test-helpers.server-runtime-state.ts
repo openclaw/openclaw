@@ -2,6 +2,10 @@
 // configurable plugin registry.
 import { randomUUID } from "node:crypto";
 import { onTestFinished } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -38,10 +42,12 @@ export async function createGatewayRuntimeStateForTest(
     logPlugins: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} } as never,
     ...overrides,
   };
+  setRuntimeConfigSnapshot(params.cfg, params.cfg);
   const connectionState = createGatewayConnectionState({ ...params, bootId: randomUUID() });
   onTestFinished(async () => {
     await connectionState.mentionInbox.dispose();
     await params.scheduler.stop();
+    clearRuntimeConfigSnapshot();
   });
   const httpTransport = await createGatewayHttpTransport({
     ...params,

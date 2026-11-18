@@ -4,6 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
+import type { GatewayRemoteConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isLoopbackHost, isSecureWebSocketUrl } from "./net.js";
 
@@ -32,6 +33,20 @@ export function resolveGatewaySshRemotePort(
     }
   }
   return resolveGatewayPort(config);
+}
+
+/** Keep a retained SSH route on the same service when its URL spelling changes. */
+export function preserveGatewaySshRemotePort(
+  config: OpenClawConfig,
+  nextUrl: string | undefined,
+  previousUrl = config.gateway?.remote?.url,
+): Pick<GatewayRemoteConfig, "remotePort"> {
+  const remote = config.gateway?.remote;
+  if (!normalizeOptionalString(remote?.sshTarget) || remote?.transport === "direct") {
+    return {};
+  }
+  const remotePort = resolveGatewaySshRemotePort(config, previousUrl);
+  return remotePort === resolveGatewaySshRemotePort(config, nextUrl) ? {} : { remotePort };
 }
 
 /** Select credential ownership independently of an SSH tunnel's reusable local port. */
@@ -119,12 +134,6 @@ export function projectGatewayUrlForDiagnostics(url: string): string {
   return redactSensitiveUrlLikeString(url);
 }
 
-type GatewayConnectionDetailResolvers = {
-  getRuntimeConfig?: () => OpenClawConfig;
-  resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
-  resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
-};
-
 /** Build gateway target details and reject unsafe remote plaintext websocket URLs. */
 export function buildGatewayConnectionDetailsWithResolvers(
   options: {
@@ -136,7 +145,11 @@ export function buildGatewayConnectionDetailsWithResolvers(
     localPortOverride?: number;
     serviceTargetUrl?: string;
   } = {},
-  resolvers: GatewayConnectionDetailResolvers = {},
+  resolvers: {
+    getRuntimeConfig?: () => OpenClawConfig;
+    resolveConfigPath?: (env: NodeJS.ProcessEnv) => string;
+    resolveGatewayPort?: (cfg?: OpenClawConfig, env?: NodeJS.ProcessEnv) => number;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? resolvers.getRuntimeConfig?.() ?? {};
   const configPath =

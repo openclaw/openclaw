@@ -5,7 +5,6 @@ import {
   resolveMainSessionAlias,
 } from "../../tools/sessions-helpers.js";
 
-/** Normalizes requester/completion owner aliases into internal and display session keys. */
 export function resolveSubagentSpawnOwnership(params: {
   cfg: OpenClawConfig;
   agentSessionKey?: string;

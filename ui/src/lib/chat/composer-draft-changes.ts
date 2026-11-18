@@ -1,3 +1,28 @@
+import { createChangeListeners, notifyListeners } from "../../../../src/shared/listeners.js";
+import type { ChatAttachment, ChatGoalDraftMode, HumanMention } from "./chat-types.ts";
+
+export type ComposerDraftSource = {
+  read(): {
+    draft: string;
+    mentions: readonly HumanMention[];
+    attachments: ChatAttachment[];
+    pendingAttachmentReads: number;
+    attachmentReadRevision?: number;
+    goalDraftMode?: ChatGoalDraftMode | null;
+  };
+  subscribe(listener: () => void): () => void;
+};
+
+/** Publishes completed owner mutations without keeping a second draft. */
+export function createComposerDraftSource(read: ComposerDraftSource["read"]) {
+  const listeners = createChangeListeners();
+  return {
+    read,
+    subscribe: listeners.subscribe,
+    publish: listeners.publish,
+  };
+}
+
 const durableComposerDraftChangeListeners = new Set<() => void>();
 
 export function subscribeDurableComposerDraftChanges(listener: () => void): () => void {
@@ -6,11 +31,7 @@ export function subscribeDurableComposerDraftChanges(listener: () => void): () =
 }
 
 export function notifyDurableComposerDraftChanges(): void {
-  for (const listener of durableComposerDraftChangeListeners) {
-    try {
-      listener();
-    } catch (error) {
-      console.error("[openclaw] durable composer draft listener failed", error);
-    }
-  }
+  notifyListeners(durableComposerDraftChangeListeners, undefined, (error) =>
+    console.error("[openclaw] durable composer draft listener failed", error),
+  );
 }

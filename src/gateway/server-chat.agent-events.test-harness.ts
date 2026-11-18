@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import {
   emitAgentEvent,
   emitAgentEvents,
@@ -17,7 +18,7 @@ export type AgentEventTestHarnessOptions = {
   now?: number;
   resolveSessionKeyForRun?: (runId: string, options?: { agentId?: string }) => string | undefined;
   lifecycleErrorRetryGraceMs?: number;
-  isChatSendRunActive?: (runId: string) => boolean;
+  delegateChatError?: (runId: string) => boolean;
   settleTrackedTerminal?: AgentEventHandlerOptions["settleTrackedTerminal"];
   trackTrackedRunTerminalPersistence?: AgentEventHandlerOptions["trackTrackedRunTerminalPersistence"];
   resolveActiveLifecycleGenerationForRun?: (runId: string) => string | undefined;
@@ -27,6 +28,39 @@ export type AgentEventTestHarnessOptions = {
   persistGatewaySessionLifecycleEventForEvent?: AgentEventHandlerOptions["persistGatewaySessionLifecycleEventForEvent"];
   getSessionRowProjection?: AgentEventHandlerOptions["getSessionRowProjection"];
 };
+
+export function answerCandidate(
+  itemId: string,
+  progressText: string,
+  status: "candidate" | "selected" | "superseded" = "candidate",
+  source = "codex-app-server",
+) {
+  return {
+    itemId,
+    kind: "answer_candidate",
+    title: "Answer candidate",
+    phase: "update",
+    status,
+    progressText,
+    source,
+    hideFromChannelProgress: true,
+  };
+}
+
+export function widgetResult(id: string, target = "assistant_message", title = id) {
+  return {
+    content: [
+      {
+        type: "text",
+        text: JSON.stringify({
+          kind: "canvas",
+          presentation: { target, title, sandbox: "scripts" },
+          view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
+        }),
+      },
+    ],
+  };
+}
 
 export function createAgentEventTestHarness(params?: AgentEventTestHarnessOptions) {
   const nowSpy =
@@ -61,7 +95,7 @@ export function createAgentEventTestHarness(params?: AgentEventTestHarnessOption
     persistGatewaySessionLifecycleEventForEvent:
       params?.persistGatewaySessionLifecycleEventForEvent ?? vi.fn(async () => undefined),
     lifecycleErrorRetryGraceMs: params?.lifecycleErrorRetryGraceMs,
-    isChatSendRunActive: params?.isChatSendRunActive,
+    delegateChatError: params?.delegateChatError,
     clearTrackedActiveRun,
     settleTrackedTerminal: params?.settleTrackedTerminal,
     trackTrackedRunTerminalPersistence: params?.trackTrackedRunTerminalPersistence,
@@ -81,6 +115,7 @@ export function createAgentEventTestHarness(params?: AgentEventTestHarnessOption
     agent: () => agentBroadcastCalls(broadcast),
     targetedChat: () => chatBroadcastCalls(broadcastToConnIds),
     targetedAgent: () => agentBroadcastCalls(broadcastToConnIds),
+    inFlight: (runId: string) => projectInFlightRunSnapshot({ chatRunState, runId }),
     deltas: () => chatDeltaTexts(broadcast),
     targetedDeltas: () => chatDeltaTexts(broadcastToConnIds),
     nodeChat: () => sessionChatCalls(nodeSendToSession),
@@ -130,5 +165,5 @@ function sessionAgentCalls(nodeSendToSession: ReturnType<typeof vi.fn>) {
 }
 
 function emitLifecycleEnd(handler: Parameters<typeof emitAgentEvent>[0], runId: string, seq = 2) {
-  emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
+  return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
 }

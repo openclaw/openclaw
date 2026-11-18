@@ -1,5 +1,6 @@
 import type { ApiClientOptions } from "grammy";
-import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import type { Dispatcher } from "undici";
 
 const requestAuthority = Symbol("telegram.requestAuthority");
@@ -9,12 +10,9 @@ type RequestInitWithDispatcher = RequestInit & { dispatcher?: Dispatcher };
 
 /** Distinguish a local rejection from a network error wrapped by grammY. */
 class TelegramRequestAuthorityError extends Error {
-  readonly originalError: unknown;
-
-  constructor(error: unknown) {
+  // Network classifiers must not treat the owner's rejection as a transport cause.
+  constructor(readonly originalError: unknown) {
     super("Telegram request authority rejected");
-    // Network classifiers must not treat the owner's rejection as a transport cause.
-    this.originalError = error;
   }
 }
 
@@ -43,6 +41,7 @@ export function bindTelegramTransportAuthority(
   init?: RequestInit,
   defaultDispatcher?: Dispatcher,
 ) => Promise<Response> {
+  const effect = captureEffectAuthority();
   return (input, init, defaultDispatcher) => {
     // SAFETY: Caller-provided transport dispatchers follow Undici's Dispatcher contract.
     const callerDispatcher = (init as RequestInitWithDispatcher | undefined)?.dispatcher;
@@ -50,21 +49,47 @@ export function bindTelegramTransportAuthority(
     if (!callerDispatcher && defaultDispatcher) {
       requestInit = { ...requestInit, dispatcher: defaultDispatcher };
     }
-    if (!assertCurrent) {
+    if (!assertCurrent && !effect.active) {
       return fetchImpl(input, requestInit);
     }
     assertTelegramRequestAuthority(assertCurrent);
     const dispatcher = callerDispatcher ?? defaultDispatcher;
     if (dispatcher) {
+      const controller = new AbortController();
+      const callerSignal =
+        init?.signal === undefined && input instanceof Request ? input.signal : init?.signal;
+      const signal = callerSignal
+        ? AbortSignal.any([callerSignal, controller.signal])
+        : controller.signal;
       requestInit = {
         ...requestInit,
+        signal,
         dispatcher: dispatcher.compose((dispatch) => (options, handler) => {
-          assertTelegramRequestAuthority(assertCurrent);
-          return dispatch(options, handler);
+          let initiated = false;
+          void effect
+            .initiate(() => {
+              signal.throwIfAborted();
+              assertTelegramRequestAuthority(assertCurrent);
+              initiated = true;
+              return dispatch(options, handler);
+            })
+            .catch((error: unknown) => {
+              const refusal = initiated
+                ? toErrorObject(error, "Telegram dispatch failed")
+                : (findTelegramRequestAuthorityError(error) ??
+                  new TelegramRequestAuthorityError(error));
+              // Fetch owns rejection and unread upload cleanup before dispatch starts.
+              controller.abort(refusal);
+            });
+          return true;
         }),
       };
     }
-    return fetchImpl(input, requestInit).catch((error: unknown) => {
+    const request = () => {
+      assertTelegramRequestAuthority(assertCurrent);
+      return fetchImpl(input, requestInit);
+    };
+    return (dispatcher ? effect.run(request) : effect.initiate(request)).catch((error: unknown) => {
       // Restore our rejection before transport or grammY classifies the fetch error.
       throw findTelegramRequestAuthorityError(error) ?? error;
     });
@@ -76,12 +101,13 @@ export function bindTelegramRequestAuthority(
   fetchImpl: TelegramClientFetch,
   assertCurrent: () => void,
 ): TelegramClientFetch {
+  const effect = captureEffectAuthority();
   const guardedFetch = (
     input: Parameters<TelegramClientFetch>[0],
     init?: Parameters<TelegramClientFetch>[1],
   ) => {
     const guardedInit = { ...init, [requestAuthority]: assertCurrent };
-    return fetchImpl(input, guardedInit);
+    return effect.run(() => fetchImpl(input, guardedInit));
   };
   return Object.assign(guardedFetch, fetchImpl);
 }

@@ -147,29 +147,27 @@ export async function emitSubagentEndedHookOnce(params: {
   params.inFlightOwners.add(owner);
   try {
     const hookRunner = getGlobalHookRunner();
-    if (!hookRunner) {
+    if (!hookRunner?.hasHooks("subagent_ended")) {
       return false;
     }
-    if (hookRunner.hasHooks("subagent_ended")) {
-      await hookRunner.runSubagentEnded(
-        {
-          targetSessionKey: params.entry.childSessionKey,
-          targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
-          reason: params.reason,
-          sendFarewell: params.sendFarewell,
-          accountId: params.accountId,
-          runId: params.entry.runId,
-          endedAt: params.entry.execution.endedAt,
-          outcome: params.outcome,
-          error: params.error,
-        },
-        {
-          runId: params.entry.runId,
-          childSessionKey: params.entry.childSessionKey,
-          requesterSessionKey: params.entry.requesterSessionKey,
-        },
-      );
-    }
+    await hookRunner.runSubagentEnded(
+      {
+        targetSessionKey: params.entry.childSessionKey,
+        targetKind: SUBAGENT_TARGET_KIND_SUBAGENT,
+        reason: params.reason,
+        sendFarewell: params.sendFarewell,
+        accountId: params.accountId,
+        runId: params.entry.runId,
+        endedAt: params.entry.execution.endedAt,
+        outcome: params.outcome,
+        error: params.error,
+      },
+      {
+        runId: params.entry.runId,
+        childSessionKey: params.entry.childSessionKey,
+        requesterSessionKey: params.entry.requesterSessionKey,
+      },
+    );
     await params.recordEmitted();
     return true;
   } catch (err) {

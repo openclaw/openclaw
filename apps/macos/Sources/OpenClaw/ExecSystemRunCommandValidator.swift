@@ -11,23 +11,6 @@ enum ExecSystemRunCommandValidator {
         case invalid(message: String)
     }
 
-    private static let shellWrapperNames = Set([
-        "ash",
-        "bash",
-        "cmd",
-        "dash",
-        "fish",
-        "ksh",
-        "powershell",
-        "pwsh",
-        "sh",
-        "zsh",
-    ])
-
-    private static let shellMultiplexerWrapperNames = Set(["busybox", "toybox"])
-    private static let posixInlineCommandFlags = Set(["-lc", "-c", "--command"])
-    private static let powershellInlineCommandFlags = Set(["-c", "-command", "--command"])
-
     static func resolve(command: [String], rawCommand: String?) -> ValidationResult {
         let normalizedRaw = rawCommand?.nonEmpty
         let shell = self.displayShell(command)
@@ -85,41 +68,6 @@ enum ExecSystemRunCommandValidator {
         return normalizedRaw == previewCommand ? normalizedRaw : nil
     }
 
-    private static func normalizeExecutableToken(_ token: String) -> String {
-        let base = ExecCommandToken.basenameLower(token)
-        if base.hasSuffix(".exe") {
-            return String(base.dropLast(4))
-        }
-        return base
-    }
-
-    private static func unwrapShellMultiplexerInvocation(_ argv: [String]) -> [String]? {
-        guard let token0 = argv.first?.nonEmpty else {
-            return nil
-        }
-        let wrapper = self.normalizeExecutableToken(token0)
-        guard self.shellMultiplexerWrapperNames.contains(wrapper) else {
-            return nil
-        }
-
-        var appletIndex = 1
-        if appletIndex < argv.count, argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "--" {
-            appletIndex += 1
-        }
-        guard appletIndex < argv.count else {
-            return nil
-        }
-        let applet = argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !applet.isEmpty else {
-            return nil
-        }
-        let normalizedApplet = self.normalizeExecutableToken(applet)
-        guard self.shellWrapperNames.contains(normalizedApplet) else {
-            return nil
-        }
-        return Array(argv[appletIndex...])
-    }
-
     static func hasEnvManipulationBeforeShellWrapper(
         _ argv: [String],
         depth: Int = 0,
@@ -132,7 +80,7 @@ enum ExecSystemRunCommandValidator {
             return false
         }
 
-        let normalized = self.normalizeExecutableToken(token0)
+        let normalized = ExecShellMultiplexer.normalizedExecutable(token0)
         if normalized == "env" {
             guard let envUnwrap = ExecEnvInvocationUnwrapper.unwrapWithMetadata(argv, skippingEmptyArguments: true)
             else {
@@ -144,14 +92,14 @@ enum ExecSystemRunCommandValidator {
                 envManipulationSeen: envManipulationSeen || envUnwrap.usesModifiers)
         }
 
-        if let shellMultiplexer = self.unwrapShellMultiplexerInvocation(argv) {
+        if let shellMultiplexer = ExecShellMultiplexer.unwrap(argv, policy: .validation) {
             return self.hasEnvManipulationBeforeShellWrapper(
                 shellMultiplexer,
                 depth: depth + 1,
                 envManipulationSeen: envManipulationSeen)
         }
 
-        guard self.shellWrapperNames.contains(normalized) else {
+        guard ExecShellMultiplexer.isValidationShell(normalized) else {
             return false
         }
         guard self.extractShellInlinePayload(argv, normalizedWrapper: normalized) != nil else {
@@ -165,26 +113,21 @@ enum ExecSystemRunCommandValidator {
         guard let token0 = wrapperArgv.first?.nonEmpty else {
             return false
         }
-        let wrapper = self.normalizeExecutableToken(token0)
-        guard wrapper != "cmd", self.shellWrapperNames.contains(wrapper) else {
+        let wrapper = ExecShellMultiplexer.normalizedExecutable(token0)
+        guard wrapper != "cmd", ExecShellMultiplexer.isValidationShell(wrapper) else {
             return false
         }
 
-        let inlineCommandIndex: Int? = if wrapper == "powershell" || wrapper == "pwsh" {
-            self.resolveInlineCommandTokenIndex(
-                wrapperArgv,
-                flags: self.powershellInlineCommandFlags,
-                allowCombinedC: false)
-        } else {
-            self.resolveInlineCommandTokenIndex(
-                wrapperArgv,
-                flags: self.posixInlineCommandFlags,
-                allowCombinedC: true)
-        }
-        guard let inlineCommandIndex else {
+        let isPowerShell = wrapper == "powershell" || wrapper == "pwsh"
+        let match = ExecInlineCommandParser.findMatch(
+            wrapperArgv,
+            flags: isPowerShell ? ExecShellWrapperParser.powershellInlineFlags : ExecShellWrapperParser
+                .posixInlineFlags,
+            allowCombinedC: !isPowerShell)
+        guard let match else {
             return false
         }
-        let start = inlineCommandIndex + 1
+        let start = match.valueTokenIndex + 1
         guard start < wrapperArgv.count else {
             return false
         }
@@ -197,7 +140,7 @@ enum ExecSystemRunCommandValidator {
             guard let token0 = current.first?.nonEmpty else {
                 break
             }
-            let normalized = self.normalizeExecutableToken(token0)
+            let normalized = ExecShellMultiplexer.normalizedExecutable(token0)
             if normalized == "env" {
                 guard let envUnwrap = ExecEnvInvocationUnwrapper.unwrapWithMetadata(
                     current,
@@ -210,7 +153,7 @@ enum ExecSystemRunCommandValidator {
                 current = envUnwrap.command
                 continue
             }
-            if let shellMultiplexer = self.unwrapShellMultiplexerInvocation(current) {
+            if let shellMultiplexer = ExecShellMultiplexer.unwrap(current, policy: .validation) {
                 current = shellMultiplexer
                 continue
             }
@@ -219,52 +162,18 @@ enum ExecSystemRunCommandValidator {
         return current
     }
 
-    private static func resolveInlineCommandTokenIndex(
-        _ argv: [String],
-        flags: Set<String>,
-        allowCombinedC: Bool) -> Int?
-    {
-        guard let match = ExecInlineCommandParser.findMatch(argv, flags: flags, allowCombinedC: allowCombinedC) else {
-            return nil
-        }
-        if match.inlineCommand != nil {
-            return match.tokenIndex
-        }
-        let nextIndex = match.tokenIndex + match.valueTokenOffset
-        return nextIndex < argv.count ? nextIndex : nil
-    }
-
     private static func extractShellInlinePayload(
         _ argv: [String],
         normalizedWrapper: String) -> String?
     {
         if normalizedWrapper == "cmd" {
-            return self.extractCmdInlineCommand(argv)
+            return ExecShellWrapperParser.extractCmdInlineCommand(argv, allowKeepAlive: true)
         }
-        if normalizedWrapper == "powershell" || normalizedWrapper == "pwsh" {
-            return ExecInlineCommandParser.extractInlineCommand(
-                argv,
-                flags: self.powershellInlineCommandFlags,
-                allowCombinedC: false)?.nonEmpty
-        }
+        let isPowerShell = normalizedWrapper == "powershell" || normalizedWrapper == "pwsh"
         return ExecInlineCommandParser.extractInlineCommand(
             argv,
-            flags: self.posixInlineCommandFlags,
-            allowCombinedC: true)?.nonEmpty
-    }
-
-    private static func extractCmdInlineCommand(_ argv: [String]) -> String? {
-        guard let idx = argv.firstIndex(where: {
-            let token = $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return token == "/c" || token == "/k"
-        }) else {
-            return nil
-        }
-        let tailIndex = idx + 1
-        guard tailIndex < argv.count else {
-            return nil
-        }
-        let payload = argv[tailIndex...].joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        return payload.isEmpty ? nil : payload
+            flags: isPowerShell ? ExecShellWrapperParser.powershellInlineFlags : ExecShellWrapperParser
+                .posixInlineFlags,
+            allowCombinedC: !isPowerShell)?.nonEmpty
     }
 }

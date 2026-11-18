@@ -131,49 +131,33 @@ export function resolveBundledPluginScanDir(params: {
   return fs.existsSync(builtDir) ? (fs.existsSync(runtimeDir) ? runtimeDir : builtDir) : undefined;
 }
 
-function listBundledPluginEntryBaseDirs(params: {
+function listBundledPluginEntryDirectories(params: {
   rootDir: string;
   pluginDirName?: string;
   scanDir?: string;
-}): string[] {
-  const scanPluginRoot = params.scanDir
-    ? path.resolve(params.scanDir, params.pluginDirName ?? "")
-    : undefined;
-  const baseDirs = [
-    ...(scanPluginRoot ? [path.resolve(scanPluginRoot, "dist")] : []),
-    ...(scanPluginRoot ? [scanPluginRoot] : []),
-    path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
-    path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
-    path.resolve(params.rootDir, "extensions", params.pluginDirName ?? "", "dist"),
-    path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
-  ];
-  return uniqueStrings(baseDirs);
-}
-
-function listBundledPluginEntryRoots(params: {
-  rootDir: string;
-  pluginDirName?: string;
-  scanDir?: string;
-}): string[] {
-  const roots = [
-    ...(params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : []),
-    path.resolve(params.rootDir, "extensions", params.pluginDirName ?? ""),
+}) {
+  const scan = params.scanDir ? [path.resolve(params.scanDir, params.pluginDirName ?? "")] : [];
+  const source = path.resolve(params.rootDir, "extensions", params.pluginDirName ?? "");
+  const built = [
     path.resolve(params.rootDir, "dist", "extensions", params.pluginDirName ?? ""),
     path.resolve(params.rootDir, "dist-runtime", "extensions", params.pluginDirName ?? ""),
   ];
-  return uniqueStrings(roots);
+  return {
+    roots: uniqueStrings([...scan, source, ...built]),
+    baseDirs: uniqueStrings([
+      ...scan.flatMap((root) => [path.resolve(root, "dist"), root]),
+      ...built,
+      path.resolve(source, "dist"),
+      source,
+    ]),
+  };
 }
 
 function listBundledPluginEntrySearchPaths(
   entry: BundledPluginPathPair,
-  params: {
-    rootDir: string;
-    pluginDirName?: string;
-    scanDir?: string;
-  },
+  roots: readonly string[],
 ): string[] {
   const paths: string[] = [];
-  const roots = listBundledPluginEntryRoots(params);
   for (const rawEntry of [entry.built, entry.source]) {
     if (typeof rawEntry !== "string" || rawEntry.length === 0) {
       continue;
@@ -208,16 +192,12 @@ export function resolveBundledPluginGeneratedPath(
   if (!entry) {
     return null;
   }
-  const entryOrder = listBundledPluginEntrySearchPaths(entry, {
+  const { roots, baseDirs } = listBundledPluginEntryDirectories({
     rootDir,
     pluginDirName,
-    ...(scanDir ? { scanDir } : {}),
+    scanDir,
   });
-  const baseDirs = listBundledPluginEntryBaseDirs({
-    rootDir,
-    pluginDirName,
-    ...(scanDir ? { scanDir } : {}),
-  });
+  const entryOrder = listBundledPluginEntrySearchPaths(entry, roots);
   for (const baseDir of baseDirs) {
     for (const entryPath of entryOrder) {
       const candidate = resolveBundledPluginEntryCandidate(baseDir, entryPath);

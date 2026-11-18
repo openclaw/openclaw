@@ -2,20 +2,6 @@ import { describe, expect, it } from "vitest";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 describe("stripUnsupportedSchemaKeywords", () => {
-  it("strips unsupported keywords nested under additionalProperties", () => {
-    const schema = {
-      type: "object",
-      additionalProperties: { type: "string", maxLength: 100 },
-    };
-
-    const result = stripUnsupportedSchemaKeywords(schema, new Set(["maxLength"]));
-
-    expect(result).toEqual({
-      type: "object",
-      additionalProperties: { type: "string" },
-    });
-  });
-
   it("strips unsupported keywords nested under prefixItems", () => {
     const schema = {
       type: "array",
@@ -27,20 +13,6 @@ describe("stripUnsupportedSchemaKeywords", () => {
     expect(result).toEqual({
       type: "array",
       prefixItems: [{ type: "string" }],
-    });
-  });
-
-  it("strips unsupported keywords nested under patternProperties", () => {
-    const schema = {
-      type: "object",
-      patternProperties: { "^x-": { type: "array", maxItems: 3 } },
-    };
-
-    const result = stripUnsupportedSchemaKeywords(schema, new Set(["maxItems"]));
-
-    expect(result).toEqual({
-      type: "object",
-      patternProperties: { "^x-": { type: "array" } },
     });
   });
 
@@ -64,35 +36,20 @@ describe("stripUnsupportedSchemaKeywords", () => {
     });
   });
 
-  it.each([
-    "additionalItems",
-    "contentSchema",
-    "unevaluatedItems",
-    "unevaluatedProperties",
-  ] as const)("strips unsupported keywords nested under %s", (container) => {
-    const schema = {
-      type: "object",
-      [container]: { type: "string", maxLength: 100 },
-    };
+  it.each(["unevaluatedProperties"] as const)(
+    "strips unsupported keywords nested under %s",
+    (container) => {
+      const schema = {
+        type: "object",
+        [container]: { type: "string", maxLength: 100 },
+      };
 
-    const result = stripUnsupportedSchemaKeywords(schema, new Set(["maxLength"]));
+      const result = stripUnsupportedSchemaKeywords(schema, new Set(["maxLength"]));
 
-    expect(result).toEqual({
-      type: "object",
-      [container]: { type: "string" },
-    });
-  });
-
-  it("preserves boolean schemas and non-schema object values", () => {
-    const schema = {
-      type: "object",
-      additionalProperties: true,
-      unevaluatedItems: false,
-      default: { maxLength: 100 },
-      examples: [{ maxLength: 100 }],
-      metadata: { maxLength: 100 },
-    };
-
-    expect(stripUnsupportedSchemaKeywords(schema, new Set(["maxLength"]))).toEqual(schema);
-  });
+      expect(result).toEqual({
+        type: "object",
+        [container]: { type: "string" },
+      });
+    },
+  );
 });

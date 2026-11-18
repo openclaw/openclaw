@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { withPluginServiceScheduler } from "./service-scheduler-binding.js";
 import type { PluginServiceSchedulerV1 } from "./service-scheduler.types.js";
 
@@ -11,8 +11,9 @@ export type PluginServiceSchedulerOwner = {
 
 export function createPluginServiceScheduler(
   scheduler: GatewayScheduler,
-  runOwned?: (run: () => void | Promise<unknown>) => void | Promise<unknown>,
+  initialRun?: (run: () => void | Promise<unknown>) => void | Promise<unknown>,
 ): PluginServiceSchedulerOwner {
+  let runOwned = initialRun;
   const createScope = (parent?: Set<PluginServiceSchedulerOwner>): PluginServiceSchedulerOwner => {
     const owner = scheduler.scope();
     const prefix = `plugin-service:${randomUUID()}:`;
@@ -34,11 +35,18 @@ export function createPluginServiceScheduler(
         (completion) => completion !== undefined,
       );
       if (pending.length === 0) {
+        if (!parent) {
+          runOwned = undefined;
+        }
         parent?.delete(control);
         return undefined;
       }
       stopping ??= Promise.all(pending)
-        .then(() => undefined)
+        .then(() => {
+          if (!parent) {
+            runOwned = undefined;
+          }
+        })
         .finally(() => parent?.delete(control));
       return stopping;
     };

@@ -1,18 +1,14 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMessagingAdapter } from "./plugins/types.core.js";
 
-export type ResolveNativeCommandSessionTargetsParams = {
+export function resolveNativeCommandSessionTargets(params: {
   agentId: string;
   sessionPrefix: string;
   userId: string;
   targetSessionKey: string;
   boundSessionKey?: string;
   sessionKeyCase?: NonNullable<ChannelMessagingAdapter["targetIdComparison"]>;
-};
-
-export function resolveNativeCommandSessionTargets(
-  params: ResolveNativeCommandSessionTargetsParams,
-) {
+}) {
   const rawSessionKey =
     params.boundSessionKey ?? `agent:${params.agentId}:${params.sessionPrefix}:${params.userId}`;
   return {

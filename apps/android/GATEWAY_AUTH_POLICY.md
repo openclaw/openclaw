@@ -7,7 +7,7 @@ the platform differences listed below are retained.
 
 ## Swift decision table
 
-The canonical selector is `selectConnectAuth` in
+The reference selector is `selectConnectAuth` in
 [`GatewayChannel.swift`](../shared/OpenClawKit/Sources/OpenClawKit/GatewayChannel.swift).
 Explicit credentials are trimmed; empty values count as absent. Evaluate these
 rows in order:
@@ -151,7 +151,7 @@ would change other Android authentication paths, outside this fix's scope:
 ## Required implementation proof
 
 Extend the existing wire-level auth tests without adding a selector-only test
-seam. Demonstrate fresh bootstrap winning over an old device token, continued
+interface. Demonstrate fresh bootstrap winning over an old device token, continued
 bootstrap use while pairing is pending, durable role-token handoff, reconnect
 and process relaunch, and unchanged explicit-token/password/retry behavior.
 The regression must fail on the old implementation for the credential actually

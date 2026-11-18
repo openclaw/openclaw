@@ -1,4 +1,5 @@
 import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { racePromiseWithAbortSignal } from "@openclaw/retry";
 import { generateUUID } from "./uuid.ts";
 
 // A slow resource gets a notice without throwing away its in-flight work. The
@@ -11,6 +12,7 @@ type WidgetSandboxHostOptions = {
   frame: HTMLIFrameElement;
   sandboxOrigin: string;
   sandboxUrl: string;
+  sandboxShellHtml?: string;
   documentKey: string;
   /** Restricts the untrusted inner document, not the trusted transport shell. */
   allowScripts?: boolean;
@@ -52,6 +54,10 @@ export class WidgetSandboxHost {
 
   get loaded(): boolean {
     return this.documentLoaded;
+  }
+
+  get rendered(): boolean {
+    return this.loaded && this.renderId === null;
   }
 
   update(options: WidgetSandboxHostOptions): void {
@@ -102,6 +108,21 @@ export class WidgetSandboxHost {
     if (event.source !== this.frame.contentWindow || event.origin !== this.options.sandboxOrigin) {
       return;
     }
+    if (
+      event.data?.method === "ui/notifications/sandbox-bootstrap-ready" &&
+      event.data?.params?.version === 1 &&
+      this.options.sandboxShellHtml !== undefined
+    ) {
+      this.frame.contentWindow?.postMessage(
+        {
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-bootstrap-shell",
+          params: { html: this.options.sandboxShellHtml },
+        },
+        this.options.sandboxOrigin,
+      );
+      return;
+    }
     if (event.data?.method === "ui/notifications/sandbox-resource-loaded") {
       if (this.renderId && event.data?.params?.renderId === this.renderId) {
         this.clearReadyTimeout();
@@ -141,13 +162,11 @@ export class WidgetSandboxHost {
   }
 
   private clearReadyTimeout(): void {
-    if (this.slowTimer !== null) {
-      window.clearTimeout(this.slowTimer);
-      this.slowTimer = null;
-    }
-    if (this.readyTimer !== null) {
-      window.clearTimeout(this.readyTimer);
-      this.readyTimer = null;
+    for (const key of ["slowTimer", "readyTimer"] as const) {
+      if (this[key] !== null) {
+        window.clearTimeout(this[key]);
+        this[key] = null;
+      }
     }
   }
 
@@ -222,12 +241,7 @@ export class WidgetSandboxHost {
 
   private async loadDocument(): Promise<void> {
     const { loadDocument } = this.options;
-    if (
-      this.loaded ||
-      this.pendingDocument !== null ||
-      this.activeLoad !== null ||
-      !this.frame.contentWindow
-    ) {
+    if (this.loaded || this.pendingDocument !== null || this.activeLoad !== null) {
       return;
     }
     const controller = new AbortController();
@@ -244,16 +258,13 @@ export class WidgetSandboxHost {
       ),
     };
     this.activeLoad = load;
-    let rejectAborted!: () => void;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      rejectAborted = () => {
-        const reason: unknown = controller.signal.reason;
-        reject(reason instanceof Error ? reason : new DOMException("Aborted", "AbortError"));
-      };
-      controller.signal.addEventListener("abort", rejectAborted, { once: true });
-    });
     try {
-      const html = await Promise.race([loadDocument(controller.signal), aborted]);
+      const html = await racePromiseWithAbortSignal(
+        () => loadDocument(controller.signal),
+        controller.signal,
+        ({ reason }) =>
+          reason instanceof Error ? reason : new DOMException("Aborted", "AbortError"),
+      );
       if (!this.active || this.activeLoad !== load || !this.frame.isConnected) {
         return;
       }
@@ -270,7 +281,6 @@ export class WidgetSandboxHost {
     } finally {
       window.clearTimeout(load.timeout);
       window.clearTimeout(load.notice);
-      controller.signal.removeEventListener("abort", rejectAborted);
       if (this.activeLoad === load) {
         this.activeLoad = null;
       }

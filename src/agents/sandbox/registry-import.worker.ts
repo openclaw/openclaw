@@ -3,6 +3,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
+import { withSandboxRegistryWorkerReceipt } from "./registry-publication.js";
 import {
   insertSandboxRegistryRowIfMissingInDatabase,
   type SandboxRegistryInsert,
@@ -12,9 +13,13 @@ export function importSandboxRegistryRow(
   row: SandboxRegistryInsert,
   options: OpenClawStateDatabaseOptions,
 ): void {
-  runOpenClawStateWriteTransaction(({ db }) => {
-    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-    insertSandboxRegistryRowIfMissingInDatabase(db, row);
-    requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-  }, options);
+  runOpenClawStateWriteTransaction(
+    ({ db }) =>
+      withSandboxRegistryWorkerReceipt(db, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        insertSandboxRegistryRowIfMissingInDatabase(db, row);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      }),
+    options,
+  );
 }

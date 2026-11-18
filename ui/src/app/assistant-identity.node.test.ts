@@ -17,11 +17,9 @@ it("preserves July 2026 browser avatar overrides for each agent", () => {
   storage.setItem(key, stored);
 
   expect(loadLocalAssistantIdentity({ agentId: "main" })).toEqual({
-    agentId: "main",
     avatar: "data:image/png;base64,bWFpbg==",
   });
   expect(loadLocalAssistantIdentity({ agentId: "research" })).toEqual({
-    agentId: "research",
     avatar: "data:image/png;base64,b3RoZXI=",
   });
   expect(storage.getItem(key)).toBe(stored);

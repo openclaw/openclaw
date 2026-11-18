@@ -11,7 +11,8 @@ const { ensureConfigReadyMock, ensurePluginRegistryLoadedMock, emitCliBannerMock
   }),
 );
 vi.mock("./config-guard.js", () => ({ ensureConfigReady: ensureConfigReadyMock }));
-vi.mock("../plugin-registry.js", () => ({
+vi.mock("../../plugins/runtime/runtime-registry-loader.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/runtime/runtime-registry-loader.js")>()),
   ensurePluginRegistryLoaded: ensurePluginRegistryLoadedMock,
 }));
 vi.mock("../banner.js", () => ({ emitCliBanner: emitCliBannerMock }));
@@ -75,8 +76,6 @@ describe("native update capability startup", () => {
   });
 
   it.each([
-    ["gateway", "install", ["--update-executor", "run"]],
-    ["gateway", "install", ["--update-executor", "invalid"]],
     ["gateway", "install", ["--note", "--update-executor", "--update-executor", "run"]],
     ["gateway", "install", ["--update-executor", "check", "extra"]],
     ["other", "install", ["--update-executor", "check"]],

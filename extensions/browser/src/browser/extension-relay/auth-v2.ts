@@ -154,13 +154,8 @@ export function parseRelayHttpCompleteRequest(
 }
 
 export function parseExtensionRelayResource(rawUrl: string, expectedPath: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
-  if (url.pathname !== expectedPath || url.hash) {
+  const url = URL.parse(rawUrl, "http://127.0.0.1");
+  if (!url || url.pathname !== expectedPath || url.hash) {
     return null;
   }
   const entries = [...url.searchParams.entries()];
@@ -174,34 +169,6 @@ export function parseExtensionRelayResource(rawUrl: string, expectedPath: string
   return profile === null ? expectedPath : `${expectedPath}?profile=${encodeURIComponent(profile)}`;
 }
 
-class BoundedReplayCache {
-  private readonly entries = new Map<string, { expiresAtMs: number; source: string }>();
-
-  reserve(key: string, expiresAtMs: number, nowMs: number, source: string): boolean {
-    let entriesForSource = 0;
-    for (const [candidate, entry] of this.entries) {
-      if (entry.expiresAtMs < nowMs) {
-        this.entries.delete(candidate);
-      } else {
-        entriesForSource += entry.source === source ? 1 : 0;
-      }
-    }
-    if (
-      this.entries.has(key) ||
-      entriesForSource >= MAX_REPLAY_ENTRIES_PER_SOURCE ||
-      this.entries.size >= MAX_REPLAY_ENTRIES
-    ) {
-      return false;
-    }
-    this.entries.set(key, { expiresAtMs, source });
-    return true;
-  }
-
-  clear(): void {
-    this.entries.clear();
-  }
-}
-
 export class BrowserRelayAuthV2Authority {
   readonly keyId: string;
   readonly instanceId = randomRelayId();
@@ -211,7 +178,7 @@ export class BrowserRelayAuthV2Authority {
     { onInvalidate: () => void; source: string }
   >();
   private readonly authenticatedConnections = new Map<object, () => void>();
-  private readonly replay = new BoundedReplayCache();
+  private readonly replay = new Map<string, { expiresAtMs: number; source: string }>();
   private disposed = false;
 
   constructor(private readonly keyHex: string) {
@@ -276,11 +243,23 @@ export class BrowserRelayAuthV2Authority {
       return null;
     }
     const expiresAtMs = nowMs + BROWSER_RELAY_CHALLENGE_TTL_MS;
+    let entriesForSource = 0;
+    for (const [candidate, entry] of this.replay) {
+      if (entry.expiresAtMs < nowMs) {
+        this.replay.delete(candidate);
+      } else {
+        entriesForSource += entry.source === pending.source ? 1 : 0;
+      }
+    }
+    const replayKey = `${this.keyId}:${hello.clientNonce}`;
     if (
-      !this.replay.reserve(`${this.keyId}:${hello.clientNonce}`, expiresAtMs, nowMs, pending.source)
+      this.replay.has(replayKey) ||
+      entriesForSource >= MAX_REPLAY_ENTRIES_PER_SOURCE ||
+      this.replay.size >= MAX_REPLAY_ENTRIES
     ) {
       return null;
     }
+    this.replay.set(replayKey, { expiresAtMs, source: pending.source });
     const fields: BrowserRelayProofFields = {
       keyId: this.keyId,
       instanceId: this.instanceId,

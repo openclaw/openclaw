@@ -1,13 +1,8 @@
+import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
-import {
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
-} from "./update-schedule-dto.ts";
 
 type UpdateScheduleProjection = {
   updateAvailable: UpdateAvailable | null;
@@ -45,21 +40,19 @@ export function projectConnectedUpdateSnapshot(
   hello: GatewayHelloOk | null,
 ): UpdateScheduleProjection {
   return {
-    updateAvailable: readUpdateAvailable(hello),
-    ...projectUpdateSchedule(current, readUpdateSchedule(hello)),
+    updateAvailable: hello?.snapshot?.updateAvailable ?? null,
+    ...projectUpdateSchedule(current, hello?.snapshot?.updateSchedule ?? null),
   };
 }
 
 export function projectUpdateAvailableEvent(
   current: UpdateScheduleProjection,
-  payload: { updateAvailable?: unknown; schedule?: unknown } | undefined,
+  payload: GatewayUpdateAvailableEventPayload | undefined,
 ): Partial<UpdateScheduleProjection> {
   const updateSchedule =
-    payload && Object.hasOwn(payload, "schedule")
-      ? readUpdateScheduleValue(payload.schedule)
-      : undefined;
+    payload && Object.hasOwn(payload, "schedule") ? (payload.schedule ?? null) : undefined;
   return {
-    updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
+    updateAvailable: payload?.updateAvailable ?? null,
     ...(updateSchedule !== undefined ? projectUpdateSchedule(current, updateSchedule) : {}),
   };
 }

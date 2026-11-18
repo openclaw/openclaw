@@ -14,6 +14,10 @@
     "../../src/logging/**/*.test.tsx",
     "../../src/shared/**/*.test.ts",
     "../../src/shared/**/*.test.tsx",
+    "../../src/infra/database-engine/*.postgres.test.ts",
+    "../../src/infra/database-engine/*.postgres.test.tsx",
+    "../../src/infra/postgres-sync/**/*.test.ts",
+    "../../src/infra/postgres-sync/**/*.test.tsx",
     "../../src/infra/sqlite-*.test.ts",
     "../../src/infra/state-migrations*.test.ts",
     "../../src/infra/state-migrations*.test.tsx"

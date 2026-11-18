@@ -1,7 +1,6 @@
 /** Shared sender identity helpers for authorization checks. */
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -12,10 +11,7 @@ import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/type
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 function isConversationLikeIdentity(value: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
+  const normalized = value.toLowerCase();
   if (normalized.startsWith("chat_id:")) {
     return true;
   }

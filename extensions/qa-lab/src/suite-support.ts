@@ -1,10 +1,5 @@
 import { parseBooleanValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { QaProviderMode } from "./model-selection.js";
-import type { QaTransportId } from "./qa-transport-registry.js";
-import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
-import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
-import { scenarioRequiresControlUi } from "./suite-planning.js";
-import type { QaSuiteRunParams, QaSuiteScenarioResult, QaSuiteStartLabFn } from "./suite-types.js";
+import type { QaSuiteScenarioResult } from "./suite-types.js";
 
 /**
  * One bounded retry for live-model flake: flow scenarios time out under model
@@ -30,56 +25,6 @@ export async function runQaScenarioWithFlakeRetry(
     details: [second.details, `passed on retry; first attempt: ${first.details ?? "failed"}`]
       .filter(Boolean)
       .join(" | "),
-  };
-}
-
-export function buildQaIsolatedScenarioWorkerParams(params: {
-  repoRoot: string;
-  outputDir: string;
-  providerMode: QaProviderMode;
-  transportId: QaTransportId;
-  channelDriver?: QaScorecardChannelDriver;
-  channelId?: string;
-  primaryModel: string;
-  alternateModel: string;
-  fastMode: boolean;
-  scenario: QaSeedScenarioWithSource;
-  input?: QaSuiteRunParams;
-  startLab: QaSuiteStartLabFn;
-}): QaSuiteRunParams {
-  return {
-    adapterFactories: params.input?.adapterFactories,
-    adapterOptions: params.input?.adapterOptions,
-    channelId: params.channelId ?? params.input?.channelId,
-    evidenceMode: params.input?.evidenceMode,
-    repoRoot: params.repoRoot,
-    sutOpenClawCommand: params.input?.sutOpenClawCommand,
-    mutateConfig: params.input?.mutateConfig,
-    outputDir: params.outputDir,
-    providerMode: params.providerMode,
-    transportId: params.transportId,
-    channelDriver: params.channelDriver,
-    primaryModel: params.primaryModel,
-    alternateModel: params.alternateModel,
-    fastMode: params.fastMode,
-    thinkingDefault: params.input?.thinkingDefault,
-    claudeCliAuthMode: params.input?.claudeCliAuthMode,
-    scenarioIds: [params.scenario.id],
-    ...(params.input?.scenarioDefinitions ? { scenarioDefinitions: [params.scenario] } : {}),
-    enabledPluginIds: params.input?.enabledPluginIds,
-    concurrency: 1,
-    startLab: params.startLab,
-    controlUiEnabled: params.input?.controlUiEnabled ?? scenarioRequiresControlUi(params.scenario),
-    transportReadyTimeoutMs: params.input?.transportReadyTimeoutMs,
-    workerStartStaggerMs: params.input?.workerStartStaggerMs,
-    forcedRuntime:
-      params.input?.forcedRuntime ??
-      (params.scenario.execution.kind === "flow" ? params.scenario.execution.runtime : undefined),
-    roundTripProbe:
-      params.input?.roundTripProbe?.scenarioId === params.scenario.id
-        ? params.input.roundTripProbe
-        : undefined,
-    writeEvidenceFile: params.input?.writeEvidenceFile,
   };
 }
 

@@ -1,3 +1,4 @@
+import "./session-authority.test-support.js";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawPluginApi, PluginRuntime } from "openclaw/plugin-sdk/core";
 import {
@@ -37,8 +38,10 @@ describe("ClickClack discussion registration lifecycle", () => {
         config: { current: () => config },
         state: {
           openSyncKeyedStore,
-          openKeyedStore: <T>(options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0]) =>
-            asyncDiscussionTestStore<T>(openSyncKeyedStore, options),
+          openKeyedStoreV2: <T>(
+            options: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[0],
+            authority?: Parameters<PluginRuntime["state"]["openKeyedStoreV2"]>[1],
+          ) => asyncDiscussionTestStore<T>(openSyncKeyedStore, options, authority),
         },
       });
       const registerService = vi.fn<OpenClawPluginApi["registerService"]>();
@@ -60,7 +63,7 @@ describe("ClickClack discussion registration lifecycle", () => {
       const provider = vi
         .mocked(registerSessionDiscussionProvider)
         .mock.calls.find(([entry]) => entry.id === "clickclack")?.[0];
-      if (!service || !cleanup || !provider) {
+      if (service?.apiVersion !== 2 || !cleanup || !provider) {
         throw new Error("Expected the registered ClickClack discussion lifecycle");
       }
       const context = {

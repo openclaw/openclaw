@@ -1,4 +1,6 @@
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { createDeferredCore } from "./deferred.js";
+import { runInDetachedAsyncContext } from "./detached-async-context.js";
 
 // The voice transcript queue also runs in the browser, which has no Node async context.
 const asyncLocalStorage =
@@ -99,7 +101,7 @@ export class BoundedSerialQueue {
       this.pendingWeight += weight;
     } else {
       this.active = true;
-      void this.runTask(task);
+      runInDetachedAsyncContext(() => void this.runTask(task));
     }
     return { accepted: true, completion };
   }
@@ -132,7 +134,10 @@ export class BoundedSerialQueue {
     try {
       task.resolve(await task.run());
     } catch (error) {
-      this.firstFailure ??= { sequence: task.sequence, error };
+      if (!this.firstFailure) {
+        materializeErrorStack(error);
+        this.firstFailure = { sequence: task.sequence, error };
+      }
       task.reject(error);
     } finally {
       const next = this.pending.shift();

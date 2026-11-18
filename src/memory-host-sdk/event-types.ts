@@ -1,4 +1,4 @@
-import type { MemoryDreamingPhaseName } from "./dreaming.js";
+import type { MemoryDreamingPhaseName } from "./dreaming-report-types.js";
 
 type MemoryHostEventStorageMetadata = {
   /** True when diagnostic detail was bounded before persistence. Aggregate counts stay exact. */

@@ -66,6 +66,8 @@ replay uncertain fixture/update mutations without reconciling the owned state.
 `--dm` targets the selected SUT directly.
 Select a forum explicitly with `--chat`; scenario sends use `forumTopicId` to
 choose a topic within it. The default group comes from the credential's `groupId`.
+For topics inside the bot's direct chat, use the [DM-topic recipe](dm-topics.md)
+and `--dm --create-dm-topic`; group forum readiness is not a DM-topic check.
 
 Prefer DMs for isolated turns. A shared group records unrelated traffic and all
 privacy-disabled pool bots can see its messages. Use a group only when its
@@ -120,6 +122,19 @@ an album), for reply-context and caption-command proof:
 ```
 
 Create the run-owned topic under the held lease and use its actual returned id.
+For a Test Server forum without a prepared fixture, pass `--create-forum` with
+`--scenario` instead of `--chat`: the runner creates a forum and topic, sends
+every scenario message there, deletes the forum before releasing the lease, and
+records `testForum` setup and cleanup in `summary.json`.
+If creation returns no chat ID, cleanup searches the leased account's server
+chats for the exact run-owned title, verifies creator ownership, and deletes the
+match with a group-state read-back. An inconclusive search or deletion retains an
+`uncertain-creation` record with the title, creation timestamp, and tester user
+ID in the summary. Cleanup failure retains the lease state for recovery; do not
+treat an absent ID or an empty search as proof that creation never happened.
+A successful deletion awaiting a fresh read-back is saved separately as
+`deletion-pending-verification`, including its deletion receipt. Retrying cleanup
+only verifies that recorded deletion; it does not delete the group again.
 The direct driver also accepts `send --forum-topic-id <id>`. TDLib 1.8.67 uses
 `topic_id: messageTopicForum` for forum topics; ordinary message threads use
 `messageTopicThread`. Inspect `topicType` and `topicId` on both the sent message
@@ -302,10 +317,11 @@ node "$TELEGRAM_E2E_SKILL_DIR/scripts/telegram-test-recover.mjs" \
   "$TELEGRAM_RETAINED_LEASE_DIR" status
 ```
 
-`status` leaves the lease held. `cleanup-group` removes a confirmed run-owned
-group and credential state before releasing it. `release` handles a retained
-broker receipt only after credential state is gone. A rejected revalidation is
-a real authority stop; never use the saved session directly after it.
+`status` leaves the lease held. `cleanup` deletes recorded DM topics, switches
+Threaded Mode off, and removes confirmed run-owned forums, groups, and credential
+state before releasing it. `release` handles a retained broker receipt only after
+credential state is gone. A rejected revalidation is a real authority stop; never
+use the saved session directly after it.
 
 These commands are conveniences, not the limit of agent recovery. Adapt the
 harness under the revalidated lease when more inspection is needed. For an

@@ -11,6 +11,7 @@ import { startOpenClawStateLeaseTimer } from "./openclaw-state-lease-heartbeat.j
 import {
   resolveLeaseDatabasePath,
   type OpenClawStateLeaseDatabase,
+  type OpenClawStateLeaseNativeSource,
 } from "./openclaw-state-lease-storage.js";
 import type {
   createOpenClawStateLeaseWorkerOwner,
@@ -33,6 +34,7 @@ export async function acquireLease(
   },
   assertCurrent: () => void,
   signal?: AbortSignal,
+  captureSource?: (source: OpenClawStateLeaseNativeSource) => void,
 ) {
   if (database.options?.readOnly) {
     throw new Error("State lease acquisition requires writable storage");
@@ -46,6 +48,7 @@ export async function acquireLease(
     ...database.options,
     path: opened?.path ?? resolveLeaseDatabasePath(database),
   });
+  const sourceIdentity = Object.freeze({ ...context.admission.identity });
   const assertAdmission = () => {
     context.admission.assertCurrent();
     assertCurrent();
@@ -69,6 +72,7 @@ export async function acquireLease(
         { signal },
       ),
     {
+      signal,
       existingOnly: database.schemaPolicy === "existing",
       assertCurrent: assertAdmission,
       createAdmission: createSqliteWorkerWriteAdmission(assertAdmission, [
@@ -78,6 +82,10 @@ export async function acquireLease(
   );
   if (!result) {
     throw new Error("State lease acquisition requires an existing database");
+  }
+  if (result.kind === "acquired") {
+    assertAdmission();
+    captureSource?.({ context, identity: sourceIdentity, database: opened });
   }
   return result;
 }
@@ -100,13 +108,18 @@ export async function prepareOpenClawStateLeaseStorageRuntime(): Promise<void> {
 function admittedWorkerOperation<T>(
   context: OpenClawStateWorkerContext,
   operation: LeaseWorkerOperation<T>,
+  signal?: AbortSignal,
 ) {
   return async (admission: WorkerLeaseScope): Promise<T> => {
     const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
     return runOpenClawStateWorkerOperation(
       context,
       (scope) => operation(scope, admission.identity),
-      { assertCurrent: admission.assertCurrent, createAdmission: admission.createAdmission },
+      {
+        signal,
+        assertCurrent: admission.assertCurrent,
+        createAdmission: admission.createAdmission,
+      },
     );
   };
 }
@@ -139,20 +152,23 @@ export function createOpenClawStateLeaseWorkerStorage(
     ): Promise<OpenClawStateLeaseAcquisition> {
       return owner.runLifecycle(
         "acquire",
-        admittedWorkerOperation(context, (scope, identity) =>
-          scope.execute(
-            {
-              type: "stateLease.acquire",
-              input: {
-                identity,
-                leaseMs,
-                operationLabel,
-                processBound,
-                ...(observeExpiry ? { observeExpiry: true as const } : {}),
+        admittedWorkerOperation(
+          context,
+          (scope, identity) =>
+            scope.execute(
+              {
+                type: "stateLease.acquire",
+                input: {
+                  identity,
+                  leaseMs,
+                  operationLabel,
+                  processBound,
+                  ...(observeExpiry ? { observeExpiry: true as const } : {}),
+                },
               },
-            },
-            { signal },
-          ),
+              { signal },
+            ),
+          signal,
         ),
       );
     },
@@ -186,6 +202,7 @@ export function createOpenClawStateLeaseWorkerStorage(
     startTimer(
       owner: LeaseWorkerOwner,
       params: {
+        identity: { scope: string; key: string };
         observation: BigInt64Array<SharedArrayBuffer>;
         leaseMs: number;
         heartbeatMs: number;
@@ -200,11 +217,11 @@ export function createOpenClawStateLeaseWorkerStorage(
       const renew = () =>
         storage.renew(owner, params.leaseMs, params.operationLabel, params.signal);
       const timer = startOpenClawStateLeaseTimer({
+        identity: params.identity,
         observation: params.observation,
+        leaseMs: params.leaseMs,
         heartbeatMs: params.heartbeatMs,
-        async renew() {
-          await renew();
-        },
+        renew,
         onRenewError(error) {
           try {
             owner.rethrowIfUncertain(error, undefined);
@@ -230,27 +247,23 @@ export function createOpenClawStateLeaseWorkerStorage(
     },
     release(owner: LeaseWorkerOwner, operationLabel: string): Promise<void> {
       return owner.runLifecycle("release", async (admission) => {
-        const { readDatabasePathIdentity } = await import("../infra/sqlite-worker-identity.js");
         const { runSqliteWorkerStoreOperation } = await import("../infra/sqlite-worker-store.js");
         const { openOpenClawStateWorkerCleanupStore } =
           await import("./openclaw-state-worker-store.js");
-        admission.assertCurrent();
-        const expectedIdentity = context.admission.identity.key;
-        const observed = await readDatabasePathIdentity(storage.path);
-        if (observed.key !== expectedIdentity) {
-          throw new Error("State lease cleanup cannot adopt a replacement shared database");
-        }
+        const expectedIdentity = context.admission.identity;
         admission.assertCurrent();
         const cleanupContext = {
           environment: context.environment,
           existingSchemaPath: context.existingSchemaPath,
+          stateIntegrity: context.stateIntegrity,
         };
         // Canonical close seals reads first; this owner retains only release authority.
         const store = await openOpenClawStateWorkerCleanupStore(
           storage.path,
           cleanupContext,
           admission.assertCurrent,
-          observed,
+          expectedIdentity,
+          context.maintenanceScope,
         );
         if (!store) {
           throw new Error("State lease cleanup lost its original database");
@@ -265,7 +278,7 @@ export function createOpenClawStateLeaseWorkerStorage(
                 input: {
                   identity: admission.identity,
                   operationLabel,
-                  databaseIdentity: expectedIdentity,
+                  databaseIdentity: expectedIdentity.key,
                 },
               }),
             cleanupContext,

@@ -12,10 +12,9 @@ export type DevUpdateTarget =
 
 export type TrackedDevUpdateTarget = Extract<DevUpdateTarget, { mode: "tracked" }>;
 
-type DevUpdateTargetEnvParseResult =
-  | { status: "absent" }
-  | { status: "valid"; target: DevUpdateTarget }
-  | { status: "invalid" };
+export function isFullGitObjectId(value: string): boolean {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(value);
+}
 
 function isValidTargetPart(value: unknown): value is string {
   return (
@@ -72,7 +71,9 @@ export function devUpdateTargetFromGitTarget(
   };
 }
 
-function parseDevUpdateTargetEnv(env: NodeJS.ProcessEnv): DevUpdateTargetEnvParseResult {
+function parseDevUpdateTargetEnv(
+  env: NodeJS.ProcessEnv,
+): { status: "absent" } | { status: "valid"; target: DevUpdateTarget } | { status: "invalid" } {
   const value = env[UPDATE_DEV_TARGET_REF_ENV]?.trim();
   if (!value) {
     return { status: "absent" };

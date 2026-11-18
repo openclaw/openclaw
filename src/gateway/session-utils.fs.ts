@@ -1,14 +1,13 @@
-// Transcript artifact usage, previews, and response bounds.
-import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
+import { canAccess } from "../infra/path-existence.js";
 import {
   createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
-import { resolveSessionTranscriptCandidates } from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptCandidatesAsync } from "./session-transcript-files.fs.js";
 import { MAX_TRANSCRIPT_PARSE_LINE_BYTES } from "./session-transcript-record-parser.js";
 
 export type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
@@ -38,23 +37,23 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile?: string,
-  agentId?: string,
 ): Promise<SessionTranscriptUsageSnapshot | null> {
-  const filePath = resolveSessionTranscriptCandidates(
+  let filePath: string | undefined;
+  for (const candidate of await resolveSessionTranscriptCandidatesAsync(
     sessionId,
     storePath,
     sessionFile,
-    agentId,
-  ).find((value) => fs.existsSync(value));
+  )) {
+    if (await canAccess(candidate)) {
+      filePath = candidate;
+      break;
+    }
+  }
   if (!filePath) {
     return null;
   }
 
   try {
-    const stat = await fs.promises.stat(filePath);
-    if (stat.size === 0) {
-      return null;
-    }
     const usageAccumulator = createSessionTranscriptUsageAccumulator("artifact");
     for await (const line of streamSessionTranscriptLines(filePath)) {
       if (Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES) {

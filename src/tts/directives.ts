@@ -5,14 +5,14 @@ import type { SpeechProviderPlugin } from "../plugins/types.js";
 import { extractTtsDirectiveFacts } from "./directive-facts.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import { listSpeechProviders } from "./provider-registry.js";
+import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import type {
   SpeechDirectiveTokenParseResult,
-  SpeechModelOverridePolicy,
   SpeechProviderConfig,
   SpeechProviderOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
-} from "./provider-types.js";
+} from "./tts-runtime-types.js";
 
 type ParseTtsDirectiveOptions = {
   cfg?: OpenClawConfig;
@@ -20,164 +20,6 @@ type ParseTtsDirectiveOptions = {
   providerConfigs?: Record<string, SpeechProviderConfig>;
   preferredProviderId?: string;
 };
-
-// TRANSITIONAL(marker-retirement): the [[tts ...]] text DSL is a transitional
-// adapter for automatic-mode replies; structured voiceText/voiceProvider/voiceId
-// fields are canonical. Delete the DSL parse forms and this streaming cleaner
-// when the visibleReplies default flips to "message_tool".
-/** Streaming cleaner used to strip TTS tags before final text parsing is available. */
-type TtsDirectiveTextStreamCleaner = {
-  push: (text: string) => string;
-  flush: () => string;
-  hasBufferedDirectiveText: () => boolean;
-};
-
-function resolveDirectiveProviders(options?: ParseTtsDirectiveOptions): SpeechProviderPlugin[] {
-  const providers = options?.providers ?? listSpeechProviders(options?.cfg);
-  return providers.toSorted(compareSpeechProviderOrder);
-}
-
-function prioritizeProvider(
-  providers: readonly SpeechProviderPlugin[],
-  providerId: string | undefined,
-): SpeechProviderPlugin[] {
-  if (!providerId) {
-    return [...providers];
-  }
-  const preferredProvider = resolveDirectiveProvider(providers, providerId);
-  if (!preferredProvider) {
-    return [...providers];
-  }
-  return [
-    preferredProvider,
-    ...providers.filter((provider) => provider.id !== preferredProvider.id),
-  ];
-}
-
-function resolveDirectiveProvider(
-  providers: readonly SpeechProviderPlugin[],
-  providerId: string,
-): SpeechProviderPlugin | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return providers.find(
-    (provider) =>
-      provider.id === normalized ||
-      provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
-  );
-}
-
-function parseGenericSpeakerDirective(params: {
-  key: string;
-  value: string;
-  policy: SpeechModelOverridePolicy;
-}): SpeechProviderOverrides | undefined {
-  if (!params.policy.allowVoice) {
-    return undefined;
-  }
-  switch (params.key) {
-    case "speakervoice":
-    case "speaker_voice":
-      return {
-        speakerVoice: params.value,
-        voice: params.value,
-        voiceName: params.value,
-      };
-    case "speakervoiceid":
-    case "speaker_voice_id":
-      return {
-        speakerVoiceId: params.value,
-        voiceId: params.value,
-      };
-    default:
-      return undefined;
-  }
-}
-
-function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | "other" {
-  const normalized = body.trim().replace(/\s+/g, "").toLowerCase();
-  if (normalized === "tts:text") {
-    return "hidden-open";
-  }
-  if (normalized === "/tts:text") {
-    return "hidden-close";
-  }
-  if (
-    normalized === "tts" ||
-    normalized.startsWith("tts:") ||
-    normalized === "/tts" ||
-    normalized.startsWith("/tts:")
-  ) {
-    return "tts";
-  }
-  return "other";
-}
-
-/** Create an incremental cleaner for hiding [[tts:*]] directive text while streaming. */
-export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
-  let pending = "";
-  let insideHiddenTextBlock = false;
-
-  return {
-    push(text: string): string {
-      const input = pending + text;
-      pending = "";
-      let output = "";
-      let index = 0;
-
-      while (index < input.length) {
-        const tagStart = input.indexOf("[[", index);
-        if (tagStart === -1) {
-          // A chunk can end on a single "["; hold it so the next chunk can
-          // complete "[[" instead of leaking markup or swallowing the rest.
-          const tail = input.endsWith("[") ? input.length - 1 : input.length;
-          if (!insideHiddenTextBlock) {
-            output += input.slice(index, tail);
-          }
-          pending = input.slice(tail);
-          break;
-        }
-
-        if (!insideHiddenTextBlock) {
-          output += input.slice(index, tagStart);
-        }
-
-        const tagEnd = input.indexOf("]]", tagStart + 2);
-        if (tagEnd === -1) {
-          // Directive delimiters can cross chunk boundaries; buffer from the
-          // opener so a partial tag never leaks to a streamed client.
-          pending = input.slice(tagStart);
-          break;
-        }
-
-        const rawTag = input.slice(tagStart, tagEnd + 2);
-        const tag = classifyTtsTag(input.slice(tagStart + 2, tagEnd));
-        if (tag === "hidden-open") {
-          insideHiddenTextBlock = true;
-        } else if (tag === "hidden-close") {
-          insideHiddenTextBlock = false;
-        } else if (tag === "other" && !insideHiddenTextBlock) {
-          output += rawTag;
-        }
-
-        index = tagEnd + 2;
-      }
-
-      return output;
-    },
-    flush(): string {
-      const tail = insideHiddenTextBlock ? "" : pending;
-      pending = "";
-      insideHiddenTextBlock = false;
-      return tail;
-    },
-    hasBufferedDirectiveText(): boolean {
-      return pending.length > 0 || insideHiddenTextBlock;
-    },
-  };
-}
 
 /** Resolve persisted TTS facts against the active model/provider policy. */
 export function resolveTtsDirectiveFacts(
@@ -190,10 +32,6 @@ export function resolveTtsDirectiveFacts(
   }
 
   let providers: SpeechProviderPlugin[] | undefined;
-  const getProviders = () => {
-    providers ??= resolveDirectiveProviders(options);
-    return providers;
-  };
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
   if (policy.allowText && facts.text != null) {
@@ -205,37 +43,48 @@ export function resolveTtsDirectiveFacts(
     if (declaredProviderId) {
       overrides.provider = declaredProviderId;
     }
-    let directiveProviders: SpeechProviderPlugin[] | undefined;
-    const getDirectiveProviders = () => {
-      if (directiveProviders) {
-        return directiveProviders;
-      }
-      if (declaredProviderId) {
-        const declaredProvider = resolveDirectiveProvider(getProviders(), declaredProviderId);
-        if (!declaredProvider) {
-          warnings.push(`unknown provider "${declaredProviderId}"`);
-          directiveProviders = [];
-          return directiveProviders;
-        }
-        directiveProviders = [declaredProvider];
-        return directiveProviders;
-      }
-      directiveProviders = prioritizeProvider(
-        getProviders(),
-        normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
-      );
-      return directiveProviders;
-    };
+    const values = Object.entries(directive.values);
+    if (values.length === 0) {
+      continue;
+    }
+    providers ??= (options?.providers ?? listSpeechProviders(options?.cfg)).toSorted(
+      compareSpeechProviderOrder,
+    );
+    const normalizedProviderId = normalizeLowercaseStringOrEmpty(
+      declaredProviderId || normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
+    );
+    const selectedProvider = normalizedProviderId
+      ? providers.find(
+          (provider) =>
+            provider.id === normalizedProviderId ||
+            provider.aliases?.some(
+              (alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedProviderId,
+            ),
+        )
+      : undefined;
+    if (declaredProviderId && !selectedProvider) {
+      warnings.push(`unknown provider "${declaredProviderId}"`);
+      continue;
+    }
+    const directiveProviders = selectedProvider
+      ? [
+          selectedProvider,
+          ...(declaredProviderId
+            ? []
+            : providers.filter((provider) => provider.id !== selectedProvider.id)),
+        ]
+      : providers;
 
-    for (const [key, value] of Object.entries(directive.values)) {
+    for (const [key, value] of values) {
+      const genericSpeakerOverrides: SpeechProviderOverrides | undefined = !policy.allowVoice
+        ? undefined
+        : key === "speakervoice" || key === "speaker_voice"
+          ? { speakerVoice: value, voice: value, voiceName: value }
+          : key === "speakervoiceid" || key === "speaker_voice_id"
+            ? { speakerVoiceId: value, voiceId: value }
+            : undefined;
       let handled = false;
-      const directiveProvidersLocal = getDirectiveProviders();
-      for (const provider of directiveProvidersLocal) {
-        const genericSpeakerOverrides = parseGenericSpeakerDirective({
-          key,
-          value,
-          policy,
-        });
+      for (const provider of directiveProviders) {
         const parsed: SpeechDirectiveTokenParseResult | undefined = genericSpeakerOverrides
           ? { handled: true, overrides: genericSpeakerOverrides }
           : provider.parseDirectiveToken?.({
@@ -264,7 +113,7 @@ export function resolveTtsDirectiveFacts(
         handled = true;
         break;
       }
-      if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
+      if (!handled && declaredProviderId && directiveProviders.length > 0) {
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }

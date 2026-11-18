@@ -1,5 +1,5 @@
 import { lookup as dnsLookupCb, type LookupAddress, type LookupOptions } from "node:dns";
-import { lookup as dnsLookup } from "node:dns/promises";
+import dns from "node:dns/promises";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCloudMetadataIpAddress,
@@ -17,8 +17,9 @@ import {
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { Dispatcher } from "undici";
-import { createDeferredCore } from "../../shared/deferred.js";
+import { racePromiseWithAbortSignal, raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { normalizeHostname } from "./hostname.js";
+import { hasTrustedHostPodmanGatewayLinkLocalExemption } from "./ssrf-trusted-host-linklocal-exemptions.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -103,17 +104,15 @@ export function mergeSsrFPolicies(
     if (!policy) {
       continue;
     }
-    if (policy.allowPrivateNetwork) {
-      merged.allowPrivateNetwork = true;
-    }
-    if (policy.dangerouslyAllowPrivateNetwork) {
-      merged.dangerouslyAllowPrivateNetwork = true;
-    }
-    if (policy.allowRfc2544BenchmarkRange) {
-      merged.allowRfc2544BenchmarkRange = true;
-    }
-    if (policy.allowIpv6UniqueLocalRange) {
-      merged.allowIpv6UniqueLocalRange = true;
+    for (const key of [
+      "allowPrivateNetwork",
+      "dangerouslyAllowPrivateNetwork",
+      "allowRfc2544BenchmarkRange",
+      "allowIpv6UniqueLocalRange",
+    ] as const) {
+      if (policy[key]) {
+        merged[key] = true;
+      }
     }
     for (const key of [
       "allowedHostnames",
@@ -190,11 +189,8 @@ export function ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(
     : undefined;
 }
 
-const BLOCKED_HOSTNAMES = new Set([
-  "localhost",
-  "localhost.localdomain",
-  "metadata.google.internal",
-]);
+const METADATA_HOSTNAME = "metadata.google.internal";
+const BLOCKED_HOSTNAMES = new Set(["localhost", "localhost.localdomain", METADATA_HOSTNAME]);
 
 function normalizeHostnameAllowlist(values?: string[]): string[] {
   return normalizePolicyHostnames(values).filter((value) => value !== "*" && value !== "*.");
@@ -297,6 +293,12 @@ export function isPrivateIpAddress(address: string, policy?: SsrFPolicy): boolea
     return true;
   }
   return looksLikeUnsupportedIpv4Literal(normalized);
+}
+
+/** True for the cloud-metadata hostname and metadata or link-local IP literals in any encoding. */
+export function isCloudMetadataHostnameOrIp(hostname: string): boolean {
+  const host = normalizeHostname(hostname);
+  return host === METADATA_HOSTNAME || isLinkLocalIpAddress(host) || isCloudMetadataIpAddress(host);
 }
 
 function isBlockedHostnameNormalized(normalized: string): boolean {
@@ -402,18 +404,32 @@ function isExplicitLoopbackHostname(hostname: string): boolean {
   );
 }
 
+// These link-local metadata services remain forbidden under the Podman grant.
+const PODMAN_GATEWAY_BLOCKED_LINK_LOCAL_ADDRESSES = new Set([
+  "169.254.0.23",
+  "169.254.42.42",
+  "169.254.169.254",
+  "169.254.170.2",
+  "169.254.170.23",
+]);
+
 function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
   hostname: string,
+  policy?: SsrFPolicy,
 ): void {
   const isLoopbackAllowed = isExplicitLoopbackHostname(hostname);
+  const isPodmanGatewayLinkLocalAllowed = hasTrustedHostPodmanGatewayLinkLocalExemption(policy);
 
   for (const entry of results) {
     if (
       isUnspecifiedIpAddress(entry.address) ||
       (!isLoopbackAllowed && isLoopbackIpAddressIncludingEmbeddedIpv4(entry.address)) ||
       isBlockedTrustedResolvedIpv6Address(entry.address) ||
-      isLinkLocalIpAddress(entry.address) ||
+      (isLinkLocalIpAddress(entry.address) &&
+        (!isPodmanGatewayLinkLocalAllowed ||
+          !isCanonicalDottedDecimalIPv4(entry.address) ||
+          PODMAN_GATEWAY_BLOCKED_LINK_LOCAL_ADDRESSES.has(entry.address))) ||
       isCloudMetadataIpAddress(entry.address)
     ) {
       throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
@@ -472,7 +488,9 @@ export function createPinnedLookup(params: {
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : automaticRecords;
+        : opts.all
+          ? records
+          : automaticRecords;
     const usable = candidates.length > 0 ? candidates : automaticRecords;
     // Match dns.lookup's asynchronous callback contract so connection errors
     // cannot fire before the socket owner attaches its error listener.
@@ -552,9 +570,13 @@ export async function resolvePinnedHostnameWithPolicy(
     params.policy,
   );
 
-  const lookupFn: LookupFn = params.lookupFn ?? dnsLookup;
+  const lookupFn: LookupFn = params.lookupFn ?? dns.lookup;
   const results = normalizeLookupResults(
-    await runAbortablePreflight(() => lookupFn(normalized, { all: true }), params.signal),
+    await racePromiseWithAbortSignal(
+      () => lookupFn(normalized, { all: true }),
+      params.signal,
+      (signal) => signal.reason,
+    ),
   );
   params.signal?.throwIfAborted();
   if (results.length === 0) {
@@ -567,7 +589,7 @@ export async function resolvePinnedHostnameWithPolicy(
   } else if (!isPrivateNetworkAllowedByPolicy(params.policy)) {
     // Exact-host trust may allow RFC1918/tailnet/private-DNS provider targets, but
     // it must not turn metadata/link-local DNS rebinding into an implicit allow.
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(results, normalized, params.policy);
   }
 
   // Prefer addresses returned as IPv4 by DNS family metadata before other
@@ -581,30 +603,13 @@ export async function resolvePinnedHostnameWithPolicy(
   };
 }
 
-async function runAbortablePreflight<T>(run: () => Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return await run();
-  }
-  signal.throwIfAborted();
-  const aborted = createDeferredCore<never>();
-  const onAbort = () => aborted.reject(signal.reason);
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    // Node lookup cannot cancel getaddrinfo. Stop waiting, observe late failures,
-    // and remove the listener whether DNS or cancellation settles first.
-    return await Promise.race([aborted.promise, run()]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
-}
-
 export function assertHostnameAllowedWithPolicy(hostname: string, policy?: SsrFPolicy): string {
   return resolveHostnamePolicyChecks(hostname, policy).normalized;
 }
 
 export async function resolvePinnedHostname(
   hostname: string,
-  lookupFn: LookupFn = dnsLookup,
+  lookupFn: LookupFn = dns.lookup,
 ): Promise<PinnedHostname> {
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
@@ -637,7 +642,7 @@ function resolvePinnedDispatcherLookup(
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   } else if (!isPrivateNetworkAllowedByPolicy(policy)) {
-    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname);
+    assertAllowedTrustedHostnameResolvedAddressesOrThrow(records, pinned.hostname, policy);
   }
   return createPinnedLookup({
     hostname: pinned.hostname,
@@ -651,16 +656,22 @@ export function createPinnedDispatcher(
   policy?: PinnedDispatcherPolicy,
   ssrfPolicy?: SsrFPolicy,
   timeoutMs?: number,
+  streamTimeoutMs?: number,
 ): Dispatcher {
   const lookup = resolvePinnedDispatcherLookup(pinned, policy?.pinnedHostname, ssrfPolicy);
+  const streamTimeouts = { bodyTimeout: streamTimeoutMs, headersTimeout: streamTimeoutMs };
 
   if (!policy || policy.mode === "direct") {
-    return createHttp1Agent({ connect: withPinnedLookup(lookup, policy?.connect) }, timeoutMs);
+    return createHttp1Agent(
+      { ...streamTimeouts, connect: withPinnedLookup(lookup, policy?.connect) },
+      timeoutMs,
+    );
   }
 
   if (policy.mode === "env-proxy") {
     return createHttp1EnvHttpProxyAgent(
       {
+        ...streamTimeouts,
         connect: withPinnedLookup(lookup, policy.connect),
         ...(policy.proxyTls ? { proxyTls: { ...policy.proxyTls } } : {}),
       },
@@ -672,6 +683,7 @@ export function createPinnedDispatcher(
   const requestTls = withPinnedLookup(lookup, policy.proxyTls);
   return createHttp1ProxyAgent(
     {
+      ...streamTimeouts,
       uri: proxyUrl,
       // `PinnedDispatcherPolicy.proxyTls` historically carried target-hop
       // transport hints for explicit proxies. Translate that to undici's
@@ -701,26 +713,16 @@ async function waitForDispatcherClose(candidate: ClosableDispatcher): Promise<vo
     destroyDispatcher(candidate);
     return;
   }
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
+    await raceWithTimeout(
       Promise.resolve(close.call(candidate)),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(() => {
-          timeout = undefined;
-          destroyDispatcher(candidate);
-          resolve();
-        }, DISPATCHER_CLOSE_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
+      DISPATCHER_CLOSE_TIMEOUT_MS,
+      () => destroyDispatcher(candidate),
+      { ref: false },
+    );
   } catch (err) {
     destroyDispatcher(candidate);
     throw err;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }
 

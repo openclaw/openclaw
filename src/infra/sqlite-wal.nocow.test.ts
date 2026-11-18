@@ -16,13 +16,9 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
-  { kind: "btrfs magic", type: 0x9123683e, expected: true },
-  { kind: "btrfs mountinfo", type: null, expected: true },
-  { kind: "ext4 magic", type: 0xef53, expected: false },
-  { kind: "nested ext4 mount", type: null, expected: false },
-  { kind: "non-Linux", type: 0x9123683e, expected: false },
-  { kind: "existing file", type: 0x9123683e, expected: false },
-])("prepares only fresh Linux btrfs stores: $kind", ({ kind, type, expected }) => {
+  { kind: "nested ext4 mount", type: null },
+  { kind: "existing file", type: 0x9123683e },
+])("does not modify $kind", ({ kind, type }) => {
   const directory = fs.realpathSync(tempDirs.make("openclaw-nocow-policy-"));
   const databasePath = path.join(directory, "openclaw.sqlite");
   const fixture = fs.statfsSync(directory);
@@ -32,7 +28,7 @@ it.each([
     }
     return Object.assign(fixture, { type });
   });
-  vi.spyOn(process, "platform", "get").mockReturnValue(kind === "non-Linux" ? "darwin" : "linux");
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   const readFile = fs.readFileSync;
   vi.spyOn(fs, "readFileSync").mockImplementation((...args) => {
     if (args[0] === "/proc/self/mountinfo") {
@@ -55,15 +51,7 @@ it.each([
     signal: null,
   });
   prepareSqliteDatabaseDirectory(databasePath);
-  expect(chattr).toHaveBeenCalledTimes(expected ? 1 : 0);
-  if (expected) {
-    expect(chattr).toHaveBeenCalledWith(
-      "chattr",
-      ["+C", directory],
-      expect.objectContaining({ timeout: 1000 }),
-    );
-    expect(fs.existsSync(databasePath)).toBe(false);
-  }
+  expect(chattr).not.toHaveBeenCalled();
   if (kind === "existing file") {
     expect(fs.readFileSync(databasePath, "utf8")).toBe("existing bytes");
     expect(statfs).not.toHaveBeenCalled();

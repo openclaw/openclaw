@@ -213,7 +213,7 @@ public final class OpenClawChatSidebarPeople {
     }
 
     private static func firstText(_ values: [String?]) -> String? {
-        values.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.min()
+        values.compactMap(ChatPayloadDecoding.trimmedNonEmptyString).min()
     }
 
     public func refreshCounts(load: () async throws -> [SessionOwnerSessionCount]?) async {

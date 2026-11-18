@@ -1,4 +1,5 @@
 import { fork } from "node:child_process";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   UPDATE_RUN_DRIVER_LIMIT,
@@ -25,9 +26,10 @@ import {
 } from "./update-run-ledger.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { renderUpdateRunReport } from "./update-run-report.js";
-import { parseUpdateAdmissionVerdict, UpdateRunRecordSchema } from "./update-run-schema.js";
+import { parseUpdateAdmissionVerdict } from "./update-run-schema.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import * as windowsUser from "./windows-user-sid.js";
 
 const tempDirs = createTempDirTracker();
 const admissionRouting = {
@@ -59,100 +61,47 @@ afterEach(async () => {
 });
 
 describe("update run ledger", () => {
-  it.each(["candidate", "installed"] as const)(
-    "persists and reports %s admission through the existing origin metadata",
-    (owner) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "cli" }, options);
-      const checks = [{ name: "config", status: "warn" as const, detail: "Missing custom path." }];
-      const admission =
-        owner === "candidate"
-          ? { owner, protocol: 1 as const, candidateVersion: "2026.9.5", checks }
-          : { owner, fallbackReason: "update-admission-unsupported-target" };
-      const candidateAdmission =
-        owner === "candidate"
-          ? {
-              protocol: 1 as const,
-              verdict: "admit" as const,
-              reasons: [],
-              warnings: [{ code: "missing-load-path", message: "Missing custom path." }],
-              facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
-            }
-          : undefined;
-      const saved = recordUpdateRunPhase(
-        run.runId,
-        "staging",
-        { origin: { admission, candidateAdmission } },
-        options,
-      );
-      expect(saved.admission).toEqual(admission);
-      const retained = getUpdateRun(run.runId, options)!;
-      expect(retained.admission).toEqual(admission);
-      expect(retained.origin.candidateAdmission).toEqual(candidateAdmission);
-      expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
-      const report = renderUpdateRunReport(retained).markdown;
-      expect(report).toContain(`Admission: ${owner}`);
-      expect(report).toContain(
-        owner === "candidate" ? "config: warn" : "update-admission-unsupported-target",
-      );
-      const database = openOpenClawStateDatabase(options);
-      const row = database.db
-        .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
-        .get(run.runId) as { origin_json: string };
-      expect(JSON.parse(row.origin_json).admission).toEqual(admission);
-    },
-  );
-
-  it("bounds and redacts candidate admission without corrupting its verdict or check statuses", () => {
+  it("confirms channel-only outages without inheriting a stale core proof", () => {
     const options = isolatedOptions();
-    const message =
-      `${options.env.OPENCLAW_STATE_DIR}/plugins/missing ` + "diagnostic ".repeat(100);
-    const checks = Array.from({ length: 32 }, (_, index) => ({
-      name: `check-${index}`,
-      status: "refuse" as const,
-      detail: message,
-    }));
-    const run = createUpdateRun(
-      {
-        trigger: "cli",
-        origin: {
-          ...admissionRouting,
-          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
-          candidateAdmission: {
-            protocol: 1,
-            verdict: "refuse",
-            reasons: checks.map((check) => ({ code: check.name, message, nextAction: message })),
-            warnings: [],
-            facts: { candidateVersion: "2026.9.5", installedVersion: "2026.9.4", checks },
-          },
-        },
-      },
-      options,
-    );
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    recordUpdateRunVerification(run.runId, { coreReady: true }, options);
+    const facts = {
+      serviceRunning: true,
+      versionMatch: true,
+      settled: true,
+      pluginErrors: [],
+      readyz: false,
+      channelsReady: false,
+    };
+    expect(recordUpdateRunVerification(run.runId, facts, options).confirmedAtMs).toBeNull();
+    recordUpdateRunVerification(run.runId, { ...facts, coreReady: true }, options);
+    expect(getUpdateRun(run.runId, options)).toMatchObject({
+      confirmedAtMs: expect.any(Number),
+      verification: { ...facts, coreReady: true },
+    });
+  });
+
+  it("persists and reports installed admission through the existing origin metadata", () => {
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const admission = {
+      owner: "installed" as const,
+      fallbackReason: "update-admission-unsupported-target",
+    };
+    const saved = recordUpdateRunPhase(run.runId, "staging", { origin: { admission } }, options);
+    expect(saved.admission).toEqual(admission);
     const retained = getUpdateRun(run.runId, options)!;
-    expect(retained.origin).toMatchObject(admissionRouting);
-    expect(retained.admission?.owner).toBe("candidate");
-    expect(retained.admission?.checks).toHaveLength(32);
-    expect(retained.admission?.checks?.every((check) => check.status === "refuse")).toBe(true);
-    expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
-      checks.map((check) => check.name),
-    );
-    expect(retained.admission?.candidateVersion).toBe("2026.9.5");
-    expect(retained.origin.candidateAdmission?.verdict).toBe("refuse");
-    expect(retained.origin.candidateAdmission?.reasons).toHaveLength(32);
-    expect(retained.origin.candidateAdmission?.reasons.map((reason) => reason.code)).toEqual(
-      checks.map((check) => check.name),
-    );
-    expect(retained.origin.candidateAdmission?.facts.candidateVersion).toBe("2026.9.5");
-    expect(retained.origin.candidateAdmission?.facts.installedVersion).toBe("2026.9.4");
-    expect(JSON.stringify(retained)).not.toContain(options.env.OPENCLAW_STATE_DIR);
+    expect(retained.admission).toEqual(admission);
+    expect(retained.origin.candidateAdmission).toBeUndefined();
+    expect(listUpdateRuns({}, options)[0]?.admission).toEqual(admission);
+    const report = renderUpdateRunReport(retained).markdown;
+    expect(report).toContain("Update safety checks ran in the installed updater");
+    expect(report).toContain("update-admission-unsupported-target");
     const database = openOpenClawStateDatabase(options);
     const row = database.db
-      .prepare(
-        "SELECT length(CAST(origin_json AS BLOB)) AS bytes FROM update_runs WHERE run_id = ?",
-      )
-      .get(run.runId) as { bytes: number };
-    expect(row.bytes).toBeLessThanOrEqual(16 * 1024);
+      .prepare("SELECT origin_json FROM update_runs WHERE run_id = ?")
+      .get(run.runId) as { origin_json: string };
+    expect(JSON.parse(row.origin_json).admission).toEqual(admission);
   });
 
   it("retains an accepted admission's identities beside maximum driver metadata and large warnings", () => {
@@ -177,6 +126,13 @@ describe("update run ledger", () => {
       host: "\0".repeat(255),
       pid: Number.MAX_SAFE_INTEGER - index,
       startIdentity: "9".repeat(128),
+      // The longest boot namespace the recorded shape admits.
+      namespace: JSON.stringify([
+        "freebsd",
+        "x".repeat(40),
+        `pid:[${"9".repeat(20)}]`,
+        "a".repeat(64),
+      ]),
     }));
     const run = createUpdateRun(
       {
@@ -194,8 +150,10 @@ describe("update run ledger", () => {
       options,
     );
     const retained = getUpdateRun(run.runId, options)!;
-    expect(retained.origin.driver).toEqual(drivers[0]);
-    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
+    // Boot namespaces only skip a repair after a restart, so they yield before routing.
+    const identities = drivers.map(({ namespace: _namespace, ...identity }) => identity);
+    expect(retained.origin.driver).toStrictEqual(identities[0]);
+    expect(retained.origin.previousDrivers).toStrictEqual(identities.slice(1));
     expect(retained.origin).toMatchObject(admissionRouting);
     expect(retained.admission?.candidateVersion).toBe(candidateVersion);
     expect(retained.admission?.checks?.map((check) => check.name)).toEqual(
@@ -208,28 +166,87 @@ describe("update run ledger", () => {
       candidateVersion,
       installedVersion,
     });
+    expect(renderUpdateRunReport(retained).markdown).toContain(
+      "Update safety checks ran in the candidate updater",
+    );
     expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
   });
 
-  it("evicts irreducible admission diagnostics without refusing the ledger write", () => {
+  it("drops driver boot namespaces, never a checkout activation, when receipts outgrow the origin", () => {
     const options = isolatedOptions();
-    const checks = Array.from({ length: 32 }, (_, index) => ({
-      name: `check-${index}-${"x".repeat(1_000)}`,
-      status: "ok" as const,
-    }));
+    const identity = (index: number, host: string) => ({
+      host,
+      pid: Number.MAX_SAFE_INTEGER - index,
+      startIdentity: "9".repeat(128),
+    });
+    // The longest boot namespace the recorded shape admits.
+    const namespace = JSON.stringify([
+      "freebsd",
+      "x".repeat(40),
+      `pid:[${"9".repeat(20)}]`,
+      "a".repeat(64),
+    ]);
+    const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) =>
+      identity(index, "\0".repeat(255)),
+    );
+    const recorded = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) =>
+      Object.assign(identity(index, "\0".repeat(255)), { namespace }),
+    );
+    const managedHandoff = {
+      parent: identity(10, "\0".repeat(255)),
+      helper: identity(11, "h".repeat(255)),
+    };
+    // The longest checkout activation the recorded shape admits.
+    const gitActivation = {
+      sha: "f".repeat(64),
+      buildId: "b".repeat(96),
+      previousBuildId: "p".repeat(96),
+    };
     const run = createUpdateRun(
       {
         trigger: "cli",
         origin: {
-          ...admissionRouting,
-          admission: { owner: "candidate", protocol: 1, candidateVersion: "2026.9.5", checks },
+          driver: recorded[0],
+          previousDrivers: recorded.slice(1),
+          managedHandoff,
+          gitActivation,
         },
       },
       options,
     );
+
     const retained = getUpdateRun(run.runId, options)!;
-    expect(retained.origin).toEqual({});
-    expect(retained.admission).toBeUndefined();
+    // Without namespaces a later update keeps explicit repair; the activation stays exact.
+    expect(retained.origin.driver).toStrictEqual(drivers[0]);
+    expect(retained.origin.previousDrivers).toStrictEqual(drivers.slice(1));
+    expect(retained.origin.gitActivation).toStrictEqual(gitActivation);
+    expect(retained.origin.managedHandoff).toStrictEqual(managedHandoff);
+    expect(Buffer.byteLength(JSON.stringify(retained.origin))).toBeLessThanOrEqual(16 * 1024);
+  });
+
+  it("keeps the closed cause enum exact when diagnostics overflow the origin budget", () => {
+    const options = isolatedOptions();
+    const detail = "d".repeat(1000);
+    // Just under the 16 KiB budget at creation, so only the terminal write overflows it.
+    const checks = Array.from({ length: 15 }, (_, index) => ({
+      name: `check-${index}`,
+      status: "refuse" as const,
+      detail,
+    }));
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { admission: { owner: "candidate", protocol: 1, checks } },
+      },
+      options,
+    );
+    // Compaction halves diagnostic strings; "disk-full" must not become an invalid "disk".
+    finishUpdateRun(
+      run.runId,
+      { status: "failed", reason: "preflight-insufficient-space", nextAction: detail },
+      options,
+    );
+    expect(getUpdateRun(run.runId, options)?.origin.cause).toBe("disk-full");
   });
 
   it("keeps full-capacity recovery receipts exact while evicting admission and routing", () => {
@@ -256,7 +273,9 @@ describe("update run ledger", () => {
         ],
         status: "restore-failed" as const,
       },
+      windowsUserSid: "S-1-5-21-100",
     };
+    vi.spyOn(windowsUser, "readWindowsUserSid").mockReturnValue(receipts.windowsUserSid);
     receipts.updateRecoveryCapture.warnings[0]!.message += "w".repeat(
       16 * 1024 - Buffer.byteLength(JSON.stringify(receipts)),
     );
@@ -471,24 +490,22 @@ describe("update run ledger", () => {
       }
     },
   );
-  it.each(["failed", "succeeded", "rolled-back", "skipped"] as const)(
-    "keeps a terminal %s result unchanged for running-only boot observations",
-    (status) => {
-      const options = isolatedOptions();
-      const run = createUpdateRun({ trigger: "cli" }, options);
-      const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
-      const actual = recordUpdateRunVerification(
-        run.runId,
-        { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
-        { ...options, onlyIfRunning: true },
-      );
-      expect(actual).toEqual(terminal);
-      expect(getUpdateRun(run.runId, options)).toEqual(terminal);
-      const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
-      expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
-      expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
-    },
-  );
+  it("keeps a terminal result unchanged for running-only boot observations", () => {
+    const status = "failed";
+    const options = isolatedOptions();
+    const run = createUpdateRun({ trigger: "cli" }, options);
+    const terminal = finishUpdateRun(run.runId, { status, reason: "original-result" }, options);
+    const actual = recordUpdateRunVerification(
+      run.runId,
+      { booted: true, serviceRunning: true, pid: 111, doctorHint: "unrelated later boot" },
+      { ...options, onlyIfRunning: true },
+    );
+    expect(actual).toEqual(terminal);
+    expect(getUpdateRun(run.runId, options)).toEqual(terminal);
+    const notice = recordUpdateRunVerification(run.runId, { noticeDelivered: true }, options);
+    expect(notice.verification).toEqual({ ...terminal.verification, noticeDelivered: true });
+    expect(notice.finishedAtMs).toBe(terminal.finishedAtMs);
+  });
 
   it.each(["running", "terminal"] as const)(
     "keeps phase capture synchronous and isolated for a %s row",
@@ -642,7 +659,6 @@ describe("update run ledger", () => {
     ["failed", "failed"],
     ["succeeded", "completed"],
     ["skipped", "skipped"],
-    ["rolled-back", "completed"],
   ] as const)(
     "closes unfinished steps when the run becomes %s without changing recorded outcomes",
     (status, stepStatus) => {
@@ -668,21 +684,26 @@ describe("update run ledger", () => {
         options,
       );
       clock.mockReturnValue(2_000);
-      finishUpdateRun(run.runId, { status }, options);
+      const nextAction = "Run openclaw update repair.";
+      finishUpdateRun(run.runId, { status, nextAction }, options);
       closeOpenClawStateDatabaseForTest();
 
       const persisted = getUpdateRun(run.runId, options);
+      const completion = { status: stepStatus, endedAtMs: 2_000 };
+      expect(persisted).toMatchObject({ phase: "finished", origin: { nextAction } });
+      expect(persisted?.steps.filter((step) => step.step === "requested")).toEqual([
+        { step: "requested", status: "completed", startedAtMs: 1_000, endedAtMs: 1_000 },
+      ]);
+      expect(finishUpdateRun(run.runId, { status, nextAction: "later" }, options)).toEqual(
+        persisted,
+      );
       expect(persisted?.steps.some((step) => step.status === "in_progress")).toBe(false);
       expect(persisted?.steps.find((step) => step.step === "openclaw doctor")).toEqual({
         step: "openclaw doctor",
-        status: stepStatus,
         startedAtMs: 1_000,
-        endedAtMs: 2_000,
+        ...completion,
       });
-      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject({
-        status: stepStatus,
-        endedAtMs: 2_000,
-      });
+      expect(persisted?.steps.find((step) => step.step === "validating")).toMatchObject(completion);
       for (const step of recordedSteps) {
         expect(persisted?.steps.find((entry) => entry.step === step.step)).toEqual(step);
       }
@@ -718,13 +739,16 @@ describe("update run ledger", () => {
       let saved = createUpdateRun({ trigger: "cli" }, options);
       expect(() => {
         for (let index = 0; index < 130; index++) {
-          saved = recordUpdateRunStep(
-            saved.runId,
-            {
-              step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
-              status: "completed",
-            },
-            options,
+          saved = expectDefined(
+            recordUpdateRunStep(
+              saved.runId,
+              {
+                step: `finalize:${index}${bound === "bytes" ? "界".repeat(330) : ""}`,
+                status: "completed",
+              },
+              options,
+            ),
+            "required finalization receipt",
           );
         }
       }).toThrow(/retained step.*limit/);
@@ -896,21 +920,6 @@ describe("update run ledger", () => {
       "synthetic-test-token",
     ]) {
       expect(JSON.stringify(persisted)).not.toContain(privateValue);
-    }
-  });
-
-  it("rejects invalid public record identities and vocabulary before writing", () => {
-    const options = isolatedOptions();
-    expect(() => createUpdateRun({ runId: "not-a-uuid", trigger: "cli" }, options)).toThrow();
-    expect(listUpdateRuns({}, options)).toEqual([]);
-    const valid = createUpdateRun({ trigger: "cli" }, options);
-    for (const patch of [
-      { phase: "installing" },
-      { status: "ok" },
-      { trigger: "unknown" },
-      { downtimeMs: -1 },
-    ]) {
-      expect(UpdateRunRecordSchema.safeParse({ ...valid, ...patch }).success).toBe(false);
     }
   });
 

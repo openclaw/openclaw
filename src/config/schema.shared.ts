@@ -10,6 +10,7 @@ export type ConfigJsonSchemaObject = Record<string, unknown> & {
   title?: string;
   description?: string;
   properties?: Record<string, ConfigJsonSchemaObject>;
+  patternProperties?: Record<string, ConfigJsonSchemaObject>;
   required?: string[];
   enum?: unknown[];
   default?: unknown;

@@ -1,27 +1,20 @@
 import { resolve } from "node:path";
-import type { SessionConfig, SessionEvent } from "@github/copilot-sdk";
+import type { CopilotSession, SessionConfig } from "@github/copilot-sdk";
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
+import { buildAssistantMessage } from "./event-bridge-transcript.js";
 import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
-import { buildCopilotAssistantUsage } from "./usage-bridge.js";
 
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
 type AgentHarnessIsolatedCompletionResult = Awaited<ReturnType<AgentHarnessIsolatedCompletion>>;
 
-type IsolatedSession = {
-  abort(): Promise<void>;
-  disconnect(): Promise<void>;
-  sendAndWait(
-    prompt: { prompt: string; requestHeaders?: Record<string, string> },
-    timeout?: number,
-  ): Promise<SessionEvent | undefined>;
-};
+type IsolatedSession = Pick<CopilotSession, "abort" | "disconnect" | "sendAndWait">;
 
 type CompletionBoundary = {
   abortSignal?: AbortSignal;
@@ -65,35 +58,19 @@ async function awaitWithinCompletionBoundary<T>(params: {
   if (signal?.aborted) {
     throw createCopilotAbortError(signal.reason);
   }
-  const remainingMs = params.boundary.deadlineMs - Date.now();
+  const remainingMs = params.boundary.deadlineMs - performance.now();
   if (remainingMs <= 0) {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
 
   let boundaryError: Error | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let onAbort: (() => void) | undefined;
-  const boundary = new Promise<never>((_resolve, reject) => {
-    const rejectBoundary = (error: Error) => {
-      if (boundaryError) {
-        return;
-      }
+  const rejectBoundary = (error: Error): never => {
+    if (!boundaryError) {
       boundaryError = error;
       params.onBoundary?.();
-      reject(error);
-    };
-    timer = setTimeout(
-      () => rejectBoundary(createTimeoutError(params.boundary.timeoutMs)),
-      remainingMs,
-    );
-    if (signal) {
-      onAbort = () => rejectBoundary(createCopilotAbortError(signal.reason));
-      signal.addEventListener("abort", onAbort, { once: true });
-      if (signal.aborted) {
-        onAbort();
-      }
     }
-  });
+    throw boundaryError;
+  };
   const assertCurrent = () => {
     if (boundaryError) {
       throw boundaryError;
@@ -102,33 +79,35 @@ async function awaitWithinCompletionBoundary<T>(params: {
   };
   // Start only after the abort listener exists. Pool/session factories may
   // synchronously trip cancellation before returning their promise.
-  const operation = Promise.resolve()
-    .then(() => {
-      assertCurrent();
-      return params.start(remainingMs);
-    })
-    .then((value) => {
-      try {
+  const operation = () =>
+    Promise.resolve()
+      .then(() => {
         assertCurrent();
-        return value;
-      } catch (error) {
-        // Retirement can reject an acquired resource before its caller owns cleanup.
-        startBestEffortCleanup(async () => await params.cleanupLate?.(value));
-        throw error;
-      }
-    });
+        return params.start(remainingMs);
+      })
+      .then((value) => {
+        try {
+          assertCurrent();
+          return value;
+        } catch (error) {
+          // Retirement can reject an acquired resource before its caller owns cleanup.
+          startBestEffortCleanup(async () => await params.cleanupLate?.(value));
+          throw error;
+        }
+      });
   try {
-    return await Promise.race([operation, boundary]);
+    return await raceWithTimeout(
+      operation,
+      remainingMs,
+      () => rejectBoundary(createTimeoutError(params.boundary.timeoutMs)),
+      {
+        signal,
+        onAbort: (aborted) => rejectBoundary(createCopilotAbortError(aborted.reason)),
+      },
+    );
   } catch (error) {
     params.boundary.assertCurrent?.();
     throw error;
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    if (signal && onAbort) {
-      signal.removeEventListener("abort", onAbort);
-    }
   }
 }
 
@@ -145,7 +124,7 @@ export async function runCopilotIsolatedCompletion(
   const boundary: CompletionBoundary = {
     abortSignal: params.abortSignal,
     assertCurrent: params.assertCurrent,
-    deadlineMs: Date.now() + params.timeoutMs,
+    deadlineMs: performance.now() + params.timeoutMs,
     timeoutMs: params.timeoutMs,
   };
   if (params.authorization.owner !== "host") {
@@ -184,7 +163,7 @@ export async function runCopilotIsolatedCompletion(
   });
   const byokProxy = await awaitWithinCompletionBoundary({
     boundary,
-    start: async () => await createCopilotByokProxy(resolvedProvider),
+    start: () => createCopilotByokProxy(resolvedProvider),
     cleanupLate: async (proxy) => await proxy?.close(),
   });
   const sessionProvider = byokProxy?.provider ?? resolvedProvider;
@@ -198,8 +177,8 @@ export async function runCopilotIsolatedCompletion(
   try {
     const acquiredHandle = await awaitWithinCompletionBoundary({
       boundary,
-      start: async () =>
-        await pool.acquire(
+      start: () =>
+        pool.acquire(
           {
             agentId: params.agentId,
             authMode: githubAuth ? "gitHubToken" : "byok",
@@ -215,7 +194,7 @@ export async function runCopilotIsolatedCompletion(
             ...(githubAuth ? { gitHubToken: apiKey } : {}),
           },
         ),
-      cleanupLate: async (lateHandle) => await pool.release(lateHandle),
+      cleanupLate: (lateHandle) => pool.release(lateHandle),
     });
     handle = acquiredHandle;
     const sessionConfig: SessionConfig = {
@@ -229,19 +208,18 @@ export async function runCopilotIsolatedCompletion(
     };
     const createdSession = await awaitWithinCompletionBoundary({
       boundary,
-      start: async () =>
-        (await acquiredHandle.client.createSession(sessionConfig)) as unknown as IsolatedSession,
+      start: () => acquiredHandle.client.createSession(sessionConfig),
       cleanupLate: async (lateSession) => {
-        startBestEffortCleanup(async () => await lateSession.abort());
-        startBestEffortCleanup(async () => await lateSession.disconnect());
+        startBestEffortCleanup(() => lateSession.abort());
+        startBestEffortCleanup(() => lateSession.disconnect());
       },
     });
     session = createdSession;
     const requestHeaders = sessionProvider.provider?.headers;
     const event = await awaitWithinCompletionBoundary({
       boundary,
-      start: async (remainingMs) =>
-        await createdSession.sendAndWait(
+      start: (remainingMs) =>
+        createdSession.sendAndWait(
           { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
           remainingMs,
         ),
@@ -252,46 +230,27 @@ export async function runCopilotIsolatedCompletion(
     if (event?.type !== "assistant.message" || event.agentId !== undefined) {
       throw new Error("[copilot] isolated completion did not return a root assistant message");
     }
-    const content: AgentHarnessIsolatedCompletionResult["assistant"]["content"] = [];
-    if (event.data.reasoningText) {
-      content.push({ type: "thinking", thinking: event.data.reasoningText });
-    }
-    if (event.data.content) {
-      content.push({ type: "text", text: event.data.content });
-    }
-    for (const toolRequest of event.data.toolRequests ?? []) {
-      content.push({
-        type: "toolCall",
-        id: toolRequest.toolCallId,
-        name: toolRequest.name,
-        arguments: { ...asNonArrayRecord(toolRequest.arguments) },
-      });
-    }
     return {
-      assistant: {
-        role: "assistant",
-        content,
-        api: model.api,
-        provider: model.provider,
-        model: event.data.model ?? model.id,
-        stopReason: event.data.toolRequests?.length ? "toolUse" : "stop",
-        timestamp: Date.now(),
-        usage: buildCopilotAssistantUsage({ fallbackOutputTokens: event.data.outputTokens }),
-      },
+      assistant: buildAssistantMessage({
+        assistantTexts: [],
+        event,
+        modelRef: model,
+        now: Date.now,
+      }),
     };
   } finally {
     // Teardown starts independently and remains strongly referenced, but never
     // extends the operation deadline when an SDK cleanup call wedges.
     if (session) {
       const sessionToClose = session;
-      startBestEffortCleanup(async () => await sessionToClose.disconnect());
+      startBestEffortCleanup(() => sessionToClose.disconnect());
     }
     if (byokProxy) {
-      startBestEffortCleanup(async () => await byokProxy.close());
+      startBestEffortCleanup(() => byokProxy.close());
     }
     if (handle) {
       const handleToRelease = handle;
-      startBestEffortCleanup(async () => await pool.release(handleToRelease));
+      startBestEffortCleanup(() => pool.release(handleToRelease));
     }
   }
 }

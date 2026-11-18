@@ -1,10 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../../auto-reply/reply-payload.js";
+import { resolveSourceReplyMediaUrls } from "../../embedded-agent-messaging-extraction.js";
 import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
@@ -15,7 +15,6 @@ import { resolveExplicitFinalSourceReplyDeliveryEvidence } from "../delivery-evi
 export function buildSourceReplyPayloadState(params: {
   payloads?: MessagingToolSourceReplyPayload[];
   sentTargets?: MessagingToolSend[];
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   didDeliverSourceReplyViaMessageTool?: boolean;
   runId?: string;
   sessionKey: string;
@@ -29,9 +28,7 @@ export function buildSourceReplyPayloadState(params: {
   const sourceReplyPayloads = params.payloads ?? [];
   const replyItems = sourceReplyPayloads.flatMap((payload, index): ReplyPayload[] => {
     const text = normalizeOptionalString(payload.text) ?? "";
-    const media = (
-      payload.mediaUrls?.length ? payload.mediaUrls : payload.mediaUrl ? [payload.mediaUrl] : []
-    ).filter((value) => value.trim().length > 0);
+    const media = resolveSourceReplyMediaUrls(payload);
     if (
       !text &&
       media.length === 0 &&
@@ -41,8 +38,11 @@ export function buildSourceReplyPayloadState(params: {
     ) {
       return [];
     }
-    // These replies were already sent by the tool. Mirror them into the
-    // transcript while marking channel delivery to suppress a duplicate send.
+    // Message-tool replies were already sent through the internal sink, and
+    // tool-authored replies (`canDeliverSourceReply`) are handed to the host to
+    // send. Both must reach the source even when automatic replies are suppressed,
+    // and both are mirrored into the transcript; delivery writes the row unless
+    // the message tool already owns it.
     const reply: ReplyPayload = markReplyPayloadForSourceSuppressionDelivery({
       text,
       ...(payload.mediaUrl || media[0] ? { mediaUrl: payload.mediaUrl || media[0] } : {}),
@@ -56,6 +56,7 @@ export function buildSourceReplyPayloadState(params: {
       ...(payload.interactive ? { interactive: payload.interactive } : {}),
       ...(payload.channelData ? { channelData: payload.channelData } : {}),
     });
+    setReplyPayloadMetadata(reply, { sourceReplyFinal: payload.sourceReplyFinal });
     if (params.sessionKey) {
       const idempotencyKey =
         payload.idempotencyKey ??
@@ -74,9 +75,7 @@ export function buildSourceReplyPayloadState(params: {
     return [reply];
   });
   const hasSourceReplyPayload = replyItems.length > 0;
-  const deliveredSourceReplyViaMessageTool =
-    params.sourceReplyDeliveryMode === "message_tool_only" &&
-    params.didDeliverSourceReplyViaMessageTool === true;
+  const deliveredSourceReplyViaMessageTool = params.didDeliverSourceReplyViaMessageTool === true;
   const explicitFinalSourceReply = resolveExplicitFinalSourceReplyDeliveryEvidence({
     messagingToolSentTargets: params.sentTargets,
     messagingToolSourceReplyPayloads: sourceReplyPayloads,

@@ -1,21 +1,60 @@
+import { hasGatewayToolRoutingContext, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
-import {
-  getRuntimeConfig,
-  hasGatewayToolRoutingContext,
-  listNodes,
-  resolveBrowserConfig,
-  resolveProfile,
-  getBrowserProfileCapabilities,
-} from "./browser-tool.runtime.js";
+import { resolveBrowserConfig } from "./browser/config.js";
 
-export async function resolveBrowserToolNodeTarget(params: {
-  requestedNode?: string;
-  profile?: string;
-  target?: "sandbox" | "host" | "node";
-  sandboxBridgeUrl?: string;
+/** Read-only candidates: discovery never attaches to a browser or selects its profile. */
+export async function discoverBrowserNodeRoutes(params: {
+  cfg: OpenClawConfig;
   allowHostControl?: boolean;
+  nodeSelected: boolean;
   signal?: AbortSignal;
 }) {
+  let nodeRoutes: Array<{ target: "node"; node: string; label: string }> = [];
+  let nodeRoutesUnavailable: string | undefined;
+  const nodePolicy = params.cfg.gateway?.nodes?.browser;
+  if (params.allowHostControl === false || nodePolicy?.mode === "off") {
+    nodeRoutesUnavailable = "Node browser discovery is disabled by policy.";
+  } else if (
+    !hasGatewayToolRoutingContext() &&
+    !params.nodeSelected &&
+    nodePolicy?.mode !== "auto" &&
+    params.cfg.gateway?.mode !== "remote" &&
+    !params.cfg.gateway?.remote?.url?.trim() &&
+    !process.env.OPENCLAW_GATEWAY_URL?.trim()
+  ) {
+    nodeRoutesUnavailable = "Node discovery requires a Gateway-connected run.";
+  } else {
+    try {
+      nodeRoutes = (await listNodes({ timeoutMs: 5_000 }, params.signal))
+        .filter((node) => node.connected && node.commands?.includes(BROWSER_PROXY_COMMAND))
+        .map((node) => ({
+          target: "node" as const,
+          node: node.nodeId,
+          label: node.displayName ?? node.nodeId,
+        }));
+    } catch {
+      params.signal?.throwIfAborted();
+      nodeRoutesUnavailable =
+        "Node discovery failed; alternate routes are unknown, not unavailable.";
+    }
+  }
+  return { nodeRoutes, ...(nodeRoutesUnavailable ? { nodeRoutesUnavailable } : {}) };
+}
+
+export async function resolveBrowserToolNodeTarget(
+  params: {
+    requestedNode?: string;
+    profile?: string;
+    target?: "sandbox" | "host" | "node";
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+    signal?: AbortSignal;
+  },
+  getConfig: () => OpenClawConfig = getRuntimeConfig,
+) {
   if (params.allowHostControl === false) {
     if (params.target === "node" || params.requestedNode) {
       throw new Error("Node browser control is disabled by sandbox policy.");
@@ -23,7 +62,7 @@ export async function resolveBrowserToolNodeTarget(params: {
     return null;
   }
 
-  const cfg = getRuntimeConfig();
+  const cfg = getConfig();
   const policy = cfg.gateway?.nodes?.browser;
   const explicitTarget = params.target === "node";
   const requestedNode = params.requestedNode?.trim();
@@ -71,12 +110,15 @@ export async function resolveBrowserToolNodeTarget(params: {
     : null;
 }
 
-export function resolveBrowserBaseUrl(params: {
-  target?: "sandbox" | "host";
-  sandboxBridgeUrl?: string;
-  allowHostControl?: boolean;
-}): string | undefined {
-  const cfg = getRuntimeConfig();
+export function resolveBrowserBaseUrl(
+  params: {
+    target?: "sandbox" | "host";
+    sandboxBridgeUrl?: string;
+    allowHostControl?: boolean;
+  },
+  getConfig: () => OpenClawConfig = getRuntimeConfig,
+): string | undefined {
+  const cfg = getConfig();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const normalizedSandbox = params.sandboxBridgeUrl?.trim() ?? "";
   const target = params.target ?? (normalizedSandbox ? "sandbox" : "host");
@@ -97,58 +139,6 @@ export function resolveBrowserBaseUrl(params: {
     throw new Error(
       "Browser control is disabled. Set browser.enabled=true in ~/.openclaw/openclaw.json.",
     );
-  }
-  return undefined;
-}
-
-const DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS = 45_000;
-const EXISTING_SESSION_MANAGE_ACTIONS = new Set([
-  "status",
-  "start",
-  "stop",
-  "profiles",
-  "tabs",
-  "open",
-  "focus",
-  "close",
-]);
-const PERSISTENT_TAB_ACTIONS = new Set(["profiles", "tabs", "open", "focus", "close"]);
-
-function hasExistingSessionProfile(resolved: ReturnType<typeof resolveBrowserConfig>) {
-  return Object.keys(resolved.profiles).some((name) => {
-    const candidate = resolveProfile(resolved, name);
-    return candidate ? getBrowserProfileCapabilities(candidate).usesChromeMcp : false;
-  });
-}
-
-export function resolveBrowserToolTimeoutMs({
-  requestedTimeoutMs,
-  action,
-  isUserBrowserProfile,
-  usesPersistentPlaywright,
-  isNodeProxy,
-  resolvedBrowser,
-}: {
-  requestedTimeoutMs?: number;
-  action: string;
-  isUserBrowserProfile: boolean;
-  usesPersistentPlaywright: boolean;
-  isNodeProxy: boolean;
-  resolvedBrowser: ReturnType<typeof resolveBrowserConfig>;
-}) {
-  if (requestedTimeoutMs !== undefined) {
-    return requestedTimeoutMs;
-  }
-  if (
-    EXISTING_SESSION_MANAGE_ACTIONS.has(action) &&
-    (isUserBrowserProfile || (action === "profiles" && hasExistingSessionProfile(resolvedBrowser)))
-  ) {
-    return DEFAULT_EXISTING_SESSION_MANAGE_TIMEOUT_MS;
-  }
-  // A node proxy resolves the profile on its execution host, so the Gateway
-  // must budget tab operations for the possible persistent Playwright path.
-  if (PERSISTENT_TAB_ACTIONS.has(action) && (usesPersistentPlaywright || isNodeProxy)) {
-    return resolvedBrowser.actionTimeoutMs;
   }
   return undefined;
 }

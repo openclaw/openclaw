@@ -1,6 +1,6 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 
 export function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
   const message = formatErrorMessage(error);

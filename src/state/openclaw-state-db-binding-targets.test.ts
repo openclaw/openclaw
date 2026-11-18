@@ -1,11 +1,13 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import type { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { afterEach, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { withinTest } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { VERSION } from "../version.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
@@ -17,6 +19,11 @@ import {
   repairOpenClawStateDatabaseSchema,
   prepareOpenClawStateDatabaseSchema,
 } from "./openclaw-state-db.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  restorePreTemplateStateIdentifiersForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
 const fixture = createFixtureLifetime();
@@ -30,11 +37,20 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 const migrationPaths = ["runtime open", "doctor repair"] as const;
 const pluginTarget = "plugin-binding:fixture:shared";
 
-function readBindings(database: DatabaseSync) {
+function expectVersion(db: EngineConnection, version = OPENCLAW_STATE_SCHEMA_VERSION) {
+  expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: version });
+}
+
+function expectReadOnlyAdmission(db: EngineConnection) {
+  expectVersion(db, 15);
+  expect(db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
+}
+
+function readBindings(database: EngineConnection) {
   return database.prepare("SELECT * FROM current_conversation_bindings ORDER BY binding_key").all();
 }
 
-function readMigrationSnapshot(database: DatabaseSync) {
+function readMigrationSnapshot(database: EngineConnection) {
   return {
     version: database.prepare("PRAGMA user_version").get(),
     metadata: database.prepare("SELECT * FROM schema_meta WHERE meta_key = 'primary'").get(),
@@ -53,26 +69,13 @@ function createVersion14Bindings() {
   const databasePath = openOpenClawStateDatabase(options).path;
   closeOpenClawStateDatabaseForTest();
 
-  const legacy = openNodeSqliteDatabase(databasePath);
-  try {
-    const columns = new Set(
-      legacy
-        .prepare("PRAGMA table_info(current_conversation_bindings)")
-        .all()
-        .map((row) => row.name),
-    );
-    for (const [column, declaration] of [
-      ["target_agent_id", "TEXT NOT NULL DEFAULT 'main'"],
-      ["target_session_id", "TEXT"],
-    ]) {
-      if (!columns.has(column)) {
-        legacy.exec(
-          `ALTER TABLE current_conversation_bindings ADD COLUMN ${column} ${declaration};`,
-        );
-      }
-    }
-    // A compatible future column must survive; copying only canonical columns loses its data.
-    legacy.exec(`
+  using legacy = openNodeSqliteDatabase(databasePath);
+  restorePreTemplateStateIdentifiersForTest(legacy);
+  addPreCutoverClientCredentialTablesForTest(legacy);
+  // A compatible future column must survive; copying only canonical columns loses its data.
+  legacy.exec(`
+      ALTER TABLE current_conversation_bindings ADD COLUMN target_agent_id TEXT NOT NULL DEFAULT 'main';
+      ALTER TABLE current_conversation_bindings ADD COLUMN target_session_id TEXT;
       ALTER TABLE current_conversation_bindings ADD COLUMN future_note TEXT;
       DROP INDEX idx_current_conversation_bindings_target;
       CREATE INDEX idx_current_conversation_bindings_target
@@ -80,7 +83,7 @@ function createVersion14Bindings() {
       PRAGMA user_version = 14;
       UPDATE schema_meta SET schema_version = 14, app_version = NULL WHERE meta_key = 'primary';
     `);
-    const insert = legacy.prepare(`
+  const insert = legacy.prepare(`
       INSERT INTO current_conversation_bindings (
         binding_key, binding_id, target_agent_id, target_session_id, target_session_key,
         channel, account_id, conversation_kind, parent_conversation_id, conversation_id,
@@ -88,113 +91,74 @@ function createVersion14Bindings() {
       ) VALUES (?, ?, ?, NULL, ?, 'fixture-channel', ?, 'current', ?, ?,
                 'session', 'active', 10, ?, ?, ?, 20, ?)
     `);
-    for (const [conversationId, accountId, target, agent, expiresAt] of [
-      ["first", "work", pluginTarget, "main", 1],
-      ["second", "work", pluginTarget, "main", null],
-      ["third", "personal", "agent:worker:session", "worker", 9_000_000_000_000],
-    ] as const) {
-      const bindingId = `generic:fixture-channel␟${accountId}␟parent␟${conversationId}`;
-      const metadata = { owner: "fixture", lastActivityAt: 15 };
-      const record = {
-        bindingId,
-        targetSessionKey: target,
-        targetKind: "session",
-        conversation: {
-          channel: "fixture-channel",
-          accountId,
-          parentConversationId: "parent",
-          conversationId,
-        },
-        status: "active",
-        boundAt: 10,
-        ...(expiresAt === null ? {} : { expiresAt }),
-        metadata,
-      };
-      insert.run(
-        bindingId.slice("generic:".length),
-        bindingId,
-        agent,
-        target,
-        accountId,
-        "parent",
-        conversationId,
-        expiresAt,
-        JSON.stringify(metadata, null, 2),
-        JSON.stringify(record, null, 2),
-        `keep:${conversationId}`,
-      );
-    }
-    return { options, databasePath, before: readMigrationSnapshot(legacy) };
-  } finally {
-    legacy.close();
+  for (const [conversationId, accountId, target, agent, expiresAt] of [
+    ["first", "work", pluginTarget, "main", 1],
+    ["second", "work", pluginTarget, "main", null],
+    ["third", "personal", "agent:worker:session", "worker", 9_000_000_000_000],
+  ] as const) {
+    const bindingId = `generic:fixture-channel␟${accountId}␟parent␟${conversationId}`;
+    const metadata = { owner: "fixture", lastActivityAt: 15 };
+    insert.run(
+      bindingId.slice("generic:".length),
+      bindingId,
+      agent,
+      target,
+      accountId,
+      "parent",
+      conversationId,
+      expiresAt,
+      JSON.stringify(metadata, null, 2),
+      JSON.stringify({ bindingId, targetSessionKey: target, metadata }, null, 2),
+      `keep:${conversationId}`,
+    );
   }
+  return { options, databasePath, before: readMigrationSnapshot(legacy) };
 }
 
-async function holdGatewayLifecycle(
-  databasePath: string,
-  signal: AbortSignal,
-): Promise<{
-  child: ChildProcess;
-  release: () => Promise<void>;
-}> {
+async function holdGatewayLifecycle(databasePath: string, signal: AbortSignal) {
   signal.throwIfAborted();
   const ownerUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.gatewayStateOwner);
   const source = `
     import { acquireGatewayStateOwner } from ${JSON.stringify(ownerUrl.href)};
     const owner = acquireGatewayStateOwner({
       databasePath: ${JSON.stringify(databasePath)},
-      payload: { pid: process.pid, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
+      payload: { pid: process.pid, processNamespace: ${JSON.stringify(readGatewayLockProcessNamespace())}, createdAt: new Date().toISOString(), configPath: "/fixture/config.json", role: "gateway" },
     });
-    process.stdout.write("ready\\n");
-    process.stdin.resume();
-    process.stdin.once("end", () => owner.release());
+    process.send("ready");
+    process.once("message", () => { owner.release(); process.disconnect(); });
   `;
   const child = spawn(
     process.execPath,
     [...resolveRuntimeWorkerArgv(ownerUrl).slice(0, -1), "--input-type=module", "--eval", source],
-    { stdio: ["pipe", "pipe", "pipe"] },
+    { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
-  let ready = false;
   try {
     await withinTest(
-      new Promise<void>((resolve, reject) => {
-        child.once("error", reject);
-        let stdout = "";
-        child.stdout?.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString("utf8");
-          if (!stdout.includes("ready\n")) {
-            return;
-          }
-          resolve();
-        });
-        child.once("exit", (code, exitSignal) => {
-          reject(
-            new Error(`Gateway lifecycle holder exited early: code=${code} signal=${exitSignal}`),
-          );
-        });
-      }),
+      awaitGateBeforeSettlement(
+        once(child, "message"),
+        closed,
+        "Gateway holder exited before readiness",
+      ),
       signal,
     );
-    ready = true;
-  } finally {
-    if (!ready) {
-      await fixture.verifyCleanup(async () => {
-        child.kill("SIGTERM");
-        await closed;
-      });
-    }
+  } catch (error) {
+    await fixture.verifyCleanup(async () => {
+      child.kill("SIGTERM");
+      await closed;
+    });
+    throw error;
   }
-  let releasing: Promise<void> | undefined;
   return {
-    child,
-    release: () =>
-      (releasing ??= fixture.verifyCleanup(async () => {
-        child.stdin?.end();
+    [Symbol.asyncDispose]: () =>
+      fixture.verifyCleanup(async () => {
+        if (child.connected) {
+          child.send("release");
+        }
         await closed;
-      })),
+      }),
   };
 }
 
@@ -218,33 +182,24 @@ describe("conversation binding target migration", () => {
           finished_at_ms = ? WHERE run_id = ?`)
         .run(Date.now() - 60_000, run.runId);
       closeOpenClawStateDatabaseForTest();
-      const holder = await holdGatewayLifecycle(initial.path, signal);
-      try {
+      {
+        await using _ = await holdGatewayLifecycle(initial.path, signal);
         expect(await prepareOpenClawStateDatabaseSchema(options)).toEqual({
           changes: [],
           warnings: [],
         });
         const reader = openOpenClawStateDatabase(options);
-        expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-        expect(reader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({ writes: 0 });
+        expectReadOnlyAdmission(reader.db);
         reader.db
           .prepare("UPDATE update_runs SET finished_at_ms = ? WHERE run_id = ?")
           .run(Date.now() - 5 * 60_000, run.runId);
         expect(() => reconcileOpenClawStateSchemaPublication(options)).not.toThrow();
         expect(openOpenClawStateDatabase(options).db).toBe(reader.db);
-        expect(reader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
+        expectVersion(reader.db, 15);
         closeOpenClawStateDatabaseForTest();
-        const agedReader = openOpenClawStateDatabase(options);
-        expect(agedReader.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-        expect(agedReader.db.prepare("SELECT total_changes() AS writes").get()).toEqual({
-          writes: 0,
-        });
-      } finally {
-        await holder.release();
+        expectReadOnlyAdmission(openOpenClawStateDatabase(options).db);
       }
-      expect(openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-      });
+      expectVersion(openOpenClawStateDatabase(options).db);
     }));
 
   it("refuses runtime and doctor schema mutation while another Gateway owns the state", ({
@@ -253,61 +208,44 @@ describe("conversation binding target migration", () => {
     fixture.run(async () => {
       signal.throwIfAborted();
       const { options, databasePath } = createVersion14Bindings();
-      const holder = await holdGatewayLifecycle(databasePath, signal);
-      try {
-        for (const migrate of [
-          () => openOpenClawStateDatabase(options),
-          () => repairOpenClawStateDatabaseSchema(options),
-        ]) {
-          expect(migrate).toThrow(
-            expect.objectContaining({
-              name: "StateSchemaMutationConflictError",
-              message: expect.stringContaining("another Gateway owns that state directory"),
-            }),
-          );
-        }
-        const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-        try {
-          expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
-        } finally {
-          preserved.close();
-        }
-      } finally {
-        await holder.release();
+      await using _ = await holdGatewayLifecycle(databasePath, signal);
+      for (const migrate of [
+        () => openOpenClawStateDatabase(options),
+        () => repairOpenClawStateDatabaseSchema(options),
+      ]) {
+        expect(migrate).toThrow(
+          expect.objectContaining({
+            name: "StateSchemaMutationConflictError",
+            message: expect.stringContaining("another Gateway owns that state directory"),
+          }),
+        );
       }
+      using preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      expectVersion(preserved, 14);
     }));
 
   it.for(migrationPaths)(
-    "preserves bindings and additive data through %s and cold reopen under a Gateway",
+    "preserves bindings and additive data through %s with backup custody and cold reopen under a Gateway",
     (migrationPath, { signal }) =>
       fixture.run(async () => {
         signal.throwIfAborted();
         const { options, databasePath, before } = createVersion14Bindings();
-        if (migrationPath === "doctor repair") {
-          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        }
+        await withStateMigrationBackupForTest(options, () => {
+          if (migrationPath === "doctor repair") {
+            expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+          } else {
+            openOpenClawStateDatabase(options);
+          }
+        });
         const migrated = openOpenClawStateDatabase(options);
-        const columns = migrated.db
-          .prepare("PRAGMA table_info(current_conversation_bindings)")
-          .all()
-          .map((row) => row.name);
-        expect(columns).not.toContain("target_agent_id");
-        expect(columns).not.toContain("target_session_id");
-        expect(readBindings(migrated.db)).toEqual(
+        const after = readMigrationSnapshot(migrated.db);
+        expect(after.rows).toEqual(
           before.rows.map(
             ({ target_agent_id: _agent, target_session_id: _session, ...row }) => row,
           ),
         );
-        expect(migrated.db.prepare("PRAGMA user_version").get()).toEqual({
-          user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        });
-        expect(
-          migrated.db
-            .prepare(
-              "SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'",
-            )
-            .get(),
-        ).toEqual({
+        expectVersion(migrated.db);
+        expect(after.metadata).toMatchObject({
           schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
           app_version: migrationPath === "runtime open" ? VERSION : null,
         });
@@ -336,23 +274,17 @@ describe("conversation binding target migration", () => {
         });
         expect(migrated.db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
 
-        const after = readMigrationSnapshot(migrated.db);
         closeOpenClawStateDatabaseForTest();
-        const holder = await holdGatewayLifecycle(databasePath, signal);
-        try {
+        {
+          await using _ = await holdGatewayLifecycle(databasePath, signal);
+          using cachedCleanup = new DisposableStack();
+          cachedCleanup.defer(closeOpenClawStateDatabaseForTest);
           expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-        } finally {
-          closeOpenClawStateDatabaseForTest();
-          await holder.release();
         }
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-        const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
-        try {
-          expect(readBindings(repaired)).toEqual(after.rows);
-          expect(readMigrationSnapshot(repaired).schema).toEqual(after.schema);
-        } finally {
-          repaired.close();
-        }
+        using repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
+        expect(readBindings(repaired)).toEqual(after.rows);
+        expect(readMigrationSnapshot(repaired).schema).toEqual(after.schema);
       }),
   );
 
@@ -365,11 +297,11 @@ describe("conversation binding target migration", () => {
     ),
   )(
     "preserves the complete old database after $failure through $migrationPath",
-    ({ migrationPath, failure }) => {
+    async ({ migrationPath, failure }) => {
       const { options, databasePath } = createVersion14Bindings();
-      const legacy = openNodeSqliteDatabase(databasePath);
       let before: ReturnType<typeof readMigrationSnapshot>;
-      try {
+      {
+        using legacy = openNodeSqliteDatabase(databasePath);
         if (failure === "dependent trigger") {
           // The second DROP must fail after the first column and target index were removed.
           legacy.exec(`CREATE TRIGGER fixture_binding_session_guard
@@ -379,24 +311,20 @@ describe("conversation binding target migration", () => {
           legacy.exec("UPDATE schema_meta SET role = 'agent' WHERE meta_key = 'primary';");
         }
         before = readMigrationSnapshot(legacy);
-      } finally {
-        legacy.close();
       }
       const reason = failure === "dependent trigger" ? /target_session_id/ : /expected global/;
-      if (migrationPath === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(reason);
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: [],
-          warnings: [expect.stringMatching(reason)],
-        });
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readMigrationSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
+      await withStateMigrationBackupForTest(options, () => {
+        if (migrationPath === "runtime open") {
+          expect(() => openOpenClawStateDatabase(options)).toThrow(reason);
+        } else {
+          expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
+            changes: [],
+            warnings: [expect.stringMatching(reason)],
+          });
+        }
+      });
+      using preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      expect(readMigrationSnapshot(preserved)).toEqual(before);
     },
   );
 });

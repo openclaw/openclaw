@@ -159,27 +159,6 @@ export function revokeRequesterFinalAttachment(
   return true;
 }
 
-function consumeRequesterFinalAttachment(
-  params: RequesterFinalAttachmentOwner &
-    RequesterFinalAttachmentBatch & {
-      requesterSessionId: string;
-      text: string;
-    },
-): "appended" | "rejected" | "missing" {
-  const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  const attachment = getCurrentAttachment(params);
-  if (!attachment) {
-    return "missing";
-  }
-  // Claim before invoking provider code so replay and callback failure cannot double-append.
-  state.byOwner.delete(key);
-  try {
-    return attachment.append(params.text) ? "appended" : "rejected";
-  } catch {
-    return "rejected";
-  }
-}
-
 /** A settled yield batch either attaches its visible final or releases the attachment. */
 export function finalizeRequesterFinalAttachment(params: {
   requesterAgentId?: string;
@@ -201,23 +180,30 @@ export function finalizeRequesterFinalAttachment(params: {
   ) {
     return;
   }
+  const owner = {
+    requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    batchRunIds: params.batchRunIds,
+    rearmGeneration,
+  };
   const text = params.finalAssistantVisibleText?.trim();
-  if (params.delivered && params.requesterSessionId && text) {
-    consumeRequesterFinalAttachment({
-      requesterAgentId,
-      requesterSessionKey: params.requesterSessionKey,
-      requesterSessionId: params.requesterSessionId,
-      batchRunIds: params.batchRunIds,
-      rearmGeneration,
-      text,
-    });
-  } else {
-    revokeRequesterFinalAttachment({
-      requesterAgentId,
-      requesterSessionKey: params.requesterSessionKey,
-      batchRunIds: params.batchRunIds,
-      rearmGeneration,
-    });
+  if (!params.delivered || !params.requesterSessionId || !text) {
+    revokeRequesterFinalAttachment(owner);
+    return;
+  }
+  const attachment = getCurrentAttachment({
+    ...owner,
+    requesterSessionId: params.requesterSessionId,
+  });
+  if (!attachment) {
+    return;
+  }
+  // Claim before invoking provider code so replay and callback failure cannot double-append.
+  state.byOwner.delete(ownerKey(requesterAgentId, params.requesterSessionKey));
+  try {
+    attachment.append(text);
+  } catch {
+    // A failed append still consumes this final attachment.
   }
 }
 

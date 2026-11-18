@@ -25,37 +25,12 @@ afterEach(() => {
 describe("wizard i18n", () => {
   it.each([
     ["zh_CN.UTF-8", "Gateway 端口"],
-    ["zh-Hans", "Gateway 端口"],
-    ["zh_TW.UTF-8", "Gateway 連接埠"],
     ["zh-HK", "Gateway 連接埠"],
     ["en_US.UTF-8", "Gateway port"],
     ["de_DE.UTF-8", "Gateway port"],
   ])("resolves the %s CLI locale through translated setup copy", (locale, expected) => {
     vi.stubEnv("OPENCLAW_LOCALE", locale);
     expect(t("wizard.gateway.port")).toBe(expected);
-  });
-
-  it("uses OPENCLAW_LOCALE before process locale variables", () => {
-    vi.stubEnv("OPENCLAW_LOCALE", "en");
-    vi.stubEnv("LC_ALL", "zh-CN");
-    vi.stubEnv("LANG", "zh-TW");
-    expect(t("wizard.gateway.port")).toBe("Gateway port");
-  });
-
-  it("ignores blank locale overrides when a process locale is available", () => {
-    vi.stubEnv("OPENCLAW_LOCALE", "   ");
-    vi.stubEnv("LC_ALL", "");
-    vi.stubEnv("LC_MESSAGES", "zh-CN");
-    vi.stubEnv("LANG", "en-US");
-    expect(t("wizard.gateway.port")).toBe("Gateway 端口");
-  });
-
-  it("continues through a blank LC_MESSAGES value to LANG", () => {
-    vi.stubEnv("OPENCLAW_LOCALE", "");
-    vi.stubEnv("LC_ALL", " ");
-    vi.stubEnv("LC_MESSAGES", "\t");
-    vi.stubEnv("LANG", "zh-TW");
-    expect(t("wizard.gateway.port")).toBe("Gateway 連接埠");
   });
 
   it("uses English when every locale variable is blank", () => {

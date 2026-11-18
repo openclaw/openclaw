@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { redactModelVisibleSecrets, redactSensitiveText } from "./redact.js";
+import { redactSecrets, redactSensitiveText } from "./redact.js";
 
-it("reuses matchers across distinct tool-result and diagnostic values", () => {
+it("reuses matchers across distinct structured and text diagnostic values", () => {
   const redact = (index: number) => {
     const secret = `fixtureonlyvalue${index.toString().padStart(4, "0")}`;
     return {
-      result: redactModelVisibleSecrets({ content: [{ type: "text", text: `ghp_${secret}` }] }),
+      structured: redactSecrets({ content: [{ type: "text", text: `ghp_${secret}` }] }),
       diagnostic: redactSensitiveText(`API_TOKEN=${secret}\npass: ${secret}`, { mode: "tools" }),
     };
   };
@@ -25,7 +25,7 @@ it("reuses matchers across distinct tool-result and diagnostic values", () => {
     for (let index = 0; index < 500; index++) {
       const suffix = index.toString().padStart(4, "0");
       expect(redact(index)).toEqual({
-        result: { content: [{ type: "text", text: `ghp_fi…${suffix}` }] },
+        structured: { content: [{ type: "text", text: `ghp_fi…${suffix}` }] },
         diagnostic: `API_TOKEN=fixtur…${suffix}\npass: fixtur…${suffix}`,
       });
     }

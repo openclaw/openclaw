@@ -7,6 +7,7 @@ import {
   type MemoryCallerContext,
   type MemoryReference,
 } from "openclaw/plugin-sdk/memory-host-search";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../api.js";
 
 type SharedMemoryCaller = {
@@ -16,7 +17,6 @@ type SharedMemoryCaller = {
   memoryContext?: MemoryCallerContext;
 };
 
-/** Resolves the agent whose configured memory provider owns a Wiki query. */
 export function resolveActiveMemoryAgentId(params: SharedMemoryCaller): string | null {
   if (!params.appConfig) {
     return null;
@@ -93,30 +93,23 @@ export async function withActiveMemoryProvider<T>(
 
 const MEMORY_REFERENCE_PREFIX = "memory-ref:";
 
-/** Encodes a provider-neutral memory reference as an opaque Wiki lookup token. */
 export function memoryReferenceLookup(reference: MemoryReference): string {
   return `${MEMORY_REFERENCE_PREFIX}${encodeURIComponent(JSON.stringify(reference))}`;
 }
 
-/** Reports whether a Wiki lookup is an opaque memory reference token. */
 export function isMemoryReferenceLookup(lookup: string): boolean {
   return lookup.startsWith(MEMORY_REFERENCE_PREFIX);
 }
 
-/** Decodes an opaque Wiki lookup token into its validated memory reference. */
 export function parseMemoryReferenceLookup(lookup: string): MemoryReference | null {
   if (!lookup.startsWith(MEMORY_REFERENCE_PREFIX)) {
     return null;
   }
-  const value: unknown = JSON.parse(
-    decodeURIComponent(lookup.slice(MEMORY_REFERENCE_PREFIX.length)),
+  const record = asNullableRecord(
+    JSON.parse(decodeURIComponent(lookup.slice(MEMORY_REFERENCE_PREFIX.length))),
   );
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Invalid memory reference.");
-  }
-  // SAFETY: The guards above establish a non-null, non-array object before field validation.
-  const record = value as Record<string, unknown>;
   if (
+    !record ||
     typeof record.providerId !== "string" ||
     !record.providerId ||
     typeof record.id !== "string" ||

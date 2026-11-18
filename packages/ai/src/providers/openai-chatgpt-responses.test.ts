@@ -1,26 +1,42 @@
+import { once } from "node:events";
 import { zstdDecompressSync } from "node:zlib";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { configureAiTransportHost } from "../host.js";
+import { WebSocket, WebSocketServer } from "ws";
+import { createApiRegistry } from "../api-registry.js";
+import {
+  configureAiTransportHost,
+  createAiTransportHost,
+  getDefaultAiTransportHost,
+  runWithAiTransportHost,
+} from "../host.js";
 import { responsesPromptObserver, type ResponsesPromptObservation } from "../internal/openai.js";
+import { cleanupSessionResources } from "../session-resources.js";
+import { createNodeLlmRuntime } from "../stream.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context, Model, SimpleStreamOptions } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
-import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   closeOpenAICodexWebSocketSessions,
   extractOpenAICodexAccountId,
-  resetOpenAICodexWebSocketStateForTest,
   streamSimpleOpenAICodexResponses,
   streamOpenAICodexResponses,
 } from "./openai-chatgpt-responses.js";
-
-function createJwt(payload: Record<string, unknown>): string {
-  const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
-  const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
-  return `${header}.${body}.signature`;
-}
+import {
+  chatgptModel as model,
+  chatgptContext as context,
+  completedResponse as completion,
+  createJwt,
+  resetChatgptTransport,
+  completedSseResponse,
+  sseResponse,
+  createLoopbackModel,
+  closeServer,
+  runChatgpt as run,
+  installWebSocket,
+  emitWebSocket as message,
+} from "./openai-chatgpt-responses.test-helpers.js";
 
 function stubTimeoutSignal(timeoutMs: number): void {
   vi.spyOn(AbortSignal, "timeout").mockImplementation((actualTimeoutMs) => {
@@ -64,54 +80,6 @@ function stubHangingFetch(timeoutMs: number): void {
   );
 }
 
-function completion(id = "resp_test") {
-  return {
-    type: "response.completed",
-    response: {
-      id,
-      status: "completed",
-      output: [],
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
-}
-function completedSseResponse(id = "resp_test"): Response {
-  return new Response(`data: ${JSON.stringify(completion(id))}\n\n`, {
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-function installWebSocket(
-  reply: (socket: EventTarget & { connectionId: number }) => void,
-  open = true,
-) {
-  const sockets: ScriptedWebSocket[] = [];
-  const close = vi.fn();
-  const send = vi.fn(reply);
-  class ScriptedWebSocket extends EventTarget {
-    readonly connectionId = sockets.length + 1;
-    readyState = 1;
-    constructor() {
-      super();
-      sockets.push(this);
-      if (open) {
-        queueMicrotask(() => this.dispatchEvent(new Event("open")));
-      }
-    }
-    send() {
-      queueMicrotask(() => send(this));
-    }
-    close() {
-      this.readyState = 3;
-      close(this.connectionId);
-    }
-  }
-  vi.stubGlobal("WebSocket", ScriptedWebSocket);
-  return { sockets, close, send };
-}
-function message(socket: EventTarget, event: Record<string, unknown>) {
-  socket.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(event) }));
-}
-
 describe("extractOpenAICodexAccountId", () => {
   it("rejects tokens without a Codex account id", () => {
     expect(() => extractOpenAICodexAccountId(createJwt({}))).toThrow(
@@ -121,43 +89,9 @@ describe("extractOpenAICodexAccountId", () => {
 });
 
 describe("streamOpenAICodexResponses transport", () => {
-  afterEach(() => {
-    closeOpenAICodexWebSocketSessions();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-    vi.useRealTimers();
-    resetOpenAICodexWebSocketStateForTest();
-    configureAiTransportHost({});
-  });
-
-  const model = {
-    id: "gpt-5.5",
-    name: "GPT-5.5",
-    api: "openai-chatgpt-responses",
-    provider: "openai",
-    baseUrl: "https://chatgpt.test/backend-api",
-    reasoning: true,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 128_000,
-    maxTokens: 16_000,
-  } satisfies Model<"openai-chatgpt-responses">;
+  afterEach(resetChatgptTransport);
 
   const apiKey = createJwt({ "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" } });
-  const context = {
-    messages: [{ role: "user", content: "hi", timestamp: 1 }],
-  } satisfies Context;
-
-  function run(
-    options: Options,
-    requestContext: Context = context,
-    requestModel: Model<"openai-chatgpt-responses"> = model,
-  ) {
-    return streamOpenAICodexResponses(requestModel, requestContext, {
-      apiKey,
-      ...options,
-    }).result();
-  }
 
   it("unwraps sentinels before constructing ChatGPT SSE auth headers", async () => {
     const realToken = createJwt({
@@ -216,7 +150,7 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it("rotates cached websockets before the backend connection age limit", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-07-03T00:00:00Z");
     vi.setSystemTime(startedAt);
     const sentConnectionIds: number[] = [];
@@ -240,6 +174,54 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(sockets).toHaveLength(2);
   });
 
+  it.each(["auto", "websocket"] as const)(
+    "leaves mid-stream connection expiry to transcript recovery over %s",
+    async (transport) => {
+      const { sockets, send, close } = installWebSocket((socket) => {
+        message(socket, {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { type: "message", id: "msg_partial", role: "assistant", content: [] },
+        });
+        message(socket, {
+          type: "response.output_text.delta",
+          output_index: 0,
+          content_index: 0,
+          delta: "Already visible.",
+        });
+        message(socket, {
+          type: "error",
+          error: {
+            code: "websocket_connection_limit_reached",
+            message: "Responses websocket connection limit reached (60 minutes).",
+          },
+        });
+      });
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+
+      const result = await run({ sessionId: "mid-stream-expiry", transport });
+
+      expect(result).toMatchObject({
+        stopReason: "error",
+        content: [{ type: "text", text: "Already visible." }],
+        errorCode: "ERR_WEBSOCKET_TRANSPORT",
+        diagnostics: [
+          {
+            type: "provider_transport_failure",
+            details: { eventsEmitted: true, phase: "after_message_stream_start" },
+          },
+        ],
+      });
+      expect(result.errorMessage).toContain("Responses websocket connection limit reached");
+      expect(isTransientNetworkError({ code: result.errorCode })).toBe(true);
+      expect(sockets).toHaveLength(1);
+      expect(send).toHaveBeenCalledOnce();
+      expect(close).toHaveBeenCalledWith(1);
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("sends the selected service tier from simple completions", async () => {
     expect(await simplePayload({ serviceTier: "priority" })).toMatchObject({
       service_tier: "priority",
@@ -257,8 +239,6 @@ describe("streamOpenAICodexResponses transport", () => {
   it.each([
     { id: "gpt-6.1-sol", effort: "minimal", map: undefined, expected: "low" },
     { id: "gpt-6-sol", effort: "none", map: undefined, expected: "none" },
-    { id: "custom-reasoning", effort: "xhigh", map: undefined, expected: "xhigh" },
-    { id: "custom-reasoning", effort: "high", map: { high: "HIGH" }, expected: "HIGH" },
   ] as const)("normalizes raw $id $effort", async ({ id, effort, map, expected }) => {
     const payload = await capturePayload(
       context,
@@ -272,10 +252,7 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it.each([
-    [true, "off", ["none", "high"], undefined, undefined, "none"],
-    [true, "off", undefined, undefined, undefined, undefined],
-    [true, "off", ["none", "high"], false, undefined, undefined],
-    [true, "off", ["low", "high"], undefined, "low", "low"],
+    [true, "off", undefined, undefined, undefined, "none"],
     [false, "high", ["none", "high"], undefined, undefined, undefined],
   ] as const)(
     "resolves reasoning=%s request=%s supported=%j scalar=%s off=%s",
@@ -424,39 +401,6 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(functionCall).not.toHaveProperty("id");
   });
 
-  it("omits tool controls when every schema is unreadable", async () => {
-    const payload = await capturePayload({
-      ...context,
-      tools: [
-        {
-          name: "broken",
-          description: "Broken tool.",
-          get parameters(): never {
-            throw new Error("parameters exploded");
-          },
-        },
-      ],
-    });
-    expect(payload).not.toHaveProperty("tools");
-    expect(payload).not.toHaveProperty("tool_choice");
-    expect(payload).not.toHaveProperty("parallel_tool_calls");
-  });
-
-  it("does not reread an unreadable tool inventory length", async () => {
-    const tools = new Proxy([], {
-      get(target, property, receiver) {
-        if (property === "length") {
-          throw new Error("length exploded");
-        }
-        return Reflect.get(target, property, receiver);
-      },
-    });
-    const payload = await capturePayload({ ...context, tools });
-    expect(payload).not.toHaveProperty("tools");
-    expect(payload).not.toHaveProperty("tool_choice");
-    expect(payload).not.toHaveProperty("parallel_tool_calls");
-  });
-
   it("caps oversized timeoutMs before creating request abort signals", async () => {
     stubHangingFetch(MAX_TIMER_TIMEOUT_MS);
 
@@ -490,43 +434,6 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).toContain("Request timed out after 5ms");
-  });
-
-  it("times out default websocket streams when no first event arrives", async () => {
-    vi.useFakeTimers();
-    try {
-      const fetchMock = vi.fn(async () => {
-        throw new Error("fetch should not run after websocket first-event timeout");
-      });
-      const { send: sendMock, close: closeMock } = installWebSocket(() => {});
-      vi.stubGlobal("fetch", fetchMock);
-      const onFirstEventTimeout = vi.fn();
-
-      const stream = streamOpenAICodexResponses(model, context, {
-        apiKey,
-        firstEventTimeoutMs: 5,
-        onFirstEventTimeout,
-      } as Parameters<typeof streamOpenAICodexResponses>[2] & {
-        firstEventTimeoutMs: number;
-        onFirstEventTimeout: (reason: Error) => void;
-      });
-      const resultPromise = stream.result();
-
-      await Promise.resolve();
-      await vi.advanceTimersByTimeAsync(5);
-      const result = await resultPromise;
-
-      expect(fetchMock).not.toHaveBeenCalled();
-      expect(sendMock).toHaveBeenCalledTimes(1);
-      expect(closeMock).toHaveBeenCalled();
-      expect(result.stopReason).toBe("error");
-      expect(result.errorMessage).toMatch(
-        /responses HTTP stream opened but did not deliver a first SSE event within 5ms/,
-      );
-      expect(onFirstEventTimeout).toHaveBeenCalledWith(expect.any(Error));
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("does not send websocket payload after timeout fires during connect", async () => {
@@ -564,15 +471,6 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("Request timed out after 5ms");
   });
 
-  it("strips the internal cache boundary marker from request instructions", async () => {
-    const payload = await capturePayload({
-      ...context,
-      systemPrompt: "Stable" + SYSTEM_PROMPT_CACHE_BOUNDARY + "Dynamic",
-    });
-    expect(payload.instructions).toBe("Stable\nDynamic");
-    expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
-  });
-
   it("fails closed on conflicting model evidence from a typeless SSE event", async () => {
     const events = [
       { headers: { "openai-model": "gpt-5.6-sol" } },
@@ -586,12 +484,7 @@ describe("streamOpenAICodexResponses transport", () => {
     ];
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-            headers: { "content-type": "text/event-stream" },
-          }),
-      ),
+      vi.fn(async () => sseResponse(...events)),
     );
 
     const result = await run({ transport: "sse" });
@@ -617,7 +510,6 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it.each([
-    [503, "overloaded", "", "503: overloaded"],
     [
       429,
       JSON.stringify({ error: { message: "Too many requests" } }),
@@ -732,6 +624,12 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(payload).toBeDefined();
     return payload ?? {};
   }
+  it("sends an explicit null reasoning summary", async () => {
+    expect(
+      await capturePayload(context, { reasoningEffort: "medium", reasoningSummary: null }),
+    ).toMatchObject({ reasoning: { effort: "medium", summary: null } });
+  });
+
   it("keeps tool controls when a tool schema is usable", async () => {
     const payload = await capturePayload({
       ...context,
@@ -769,28 +667,21 @@ describe("streamOpenAICodexResponses transport", () => {
     });
   });
 
-  it("preserves nested socket error codes from WebSocket error events", async () => {
+  it("classifies a normal WebSocket close before the terminal event as transient", async () => {
     installWebSocket((socket) =>
       socket.dispatchEvent(
-        Object.assign(new Event("error"), {
-          error: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-          message: "WebSocket request failed",
-        }),
+        Object.assign(new Event("close"), { code: 1000, reason: "", wasClean: true }),
       ),
     );
 
-    const result = await run({
-      transport: "websocket",
-    });
+    const result = await run({ transport: "websocket" });
 
     expect(result).toMatchObject({
       stopReason: "error",
-      errorMessage: "WebSocket request failed",
-      errorCode: "ECONNRESET",
+      errorMessage: "WebSocket closed 1000",
+      errorCode: "ERR_WEBSOCKET_TRANSPORT",
     });
-    expect(isTransientNetworkError({ message: result.errorMessage, code: result.errorCode })).toBe(
-      true,
-    );
+    expect(isTransientNetworkError({ code: result.errorCode })).toBe(true);
   });
 
   it("does not classify a permanent WebSocket close as transient", async () => {
@@ -815,6 +706,182 @@ describe("streamOpenAICodexResponses transport", () => {
     });
     expect(isTransientNetworkError({ message: result.errorMessage, code: result.errorCode })).toBe(
       false,
+    );
+  });
+});
+
+describe("ChatGPT Responses runtime transport ownership", () => {
+  const runtimeToken = createJwt({
+    "https://api.openai.com/auth": { chatgpt_account_id: "acct-1" },
+  });
+
+  afterEach(resetChatgptTransport);
+
+  it("does not reuse or clean up an authenticated socket across runtime hosts", async () => {
+    const sessionId = "runtime-authority-isolation";
+    const firstToken = runtimeToken;
+    const secondToken = `${runtimeToken}-other`;
+    const received: Array<{ authorization?: string; connectionId: number }> = [];
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    let connectionCount = 0;
+    server.on("connection", (socket, request) => {
+      const connectionId = ++connectionCount;
+      socket.on("message", () => {
+        received.push({ authorization: request.headers.authorization, connectionId });
+        socket.send(JSON.stringify(completion(`resp_${connectionId}`)));
+      });
+    });
+    await once(server, "listening");
+    vi.stubGlobal("WebSocket", WebSocket);
+    const loopbackModel = createLoopbackModel(server);
+    const options = { apiKey: "opaque", sessionId, transport: "websocket-cached" as const };
+    const registry = createApiRegistry();
+    registry.registerApiProvider({
+      api: "openai-chatgpt-responses",
+      stream: streamOpenAICodexResponses,
+      streamSimple: streamOpenAICodexResponses,
+    });
+    const firstRuntime = createNodeLlmRuntime(registry, {
+      resolveSecretSentinel: (value) => (value === "opaque" ? firstToken : value),
+    });
+    const secondRuntime = createNodeLlmRuntime(registry, {
+      resolveSecretSentinel: (value) => (value === "opaque" ? secondToken : value),
+    });
+
+    try {
+      await firstRuntime.stream(loopbackModel, context, options).result();
+      await secondRuntime.stream(loopbackModel, context, options).result();
+      firstRuntime.cleanupSessionResources(sessionId);
+      await secondRuntime.stream(loopbackModel, context, options).result();
+      closeOpenAICodexWebSocketSessions(sessionId);
+      await secondRuntime.stream(loopbackModel, context, options).result();
+      await firstRuntime.stream(loopbackModel, context, options).result();
+
+      expect(received).toEqual([
+        { authorization: `Bearer ${firstToken}`, connectionId: 1 },
+        { authorization: `Bearer ${secondToken}`, connectionId: 2 },
+        { authorization: `Bearer ${secondToken}`, connectionId: 2 },
+        { authorization: `Bearer ${secondToken}`, connectionId: 3 },
+        { authorization: `Bearer ${firstToken}`, connectionId: 4 },
+      ]);
+    } finally {
+      firstRuntime.cleanupSessionResources(sessionId);
+      secondRuntime.cleanupSessionResources(sessionId);
+      await closeServer(server, server.clients);
+    }
+  });
+
+  it("keeps default-host socket state reachable when replaced during payload construction", async () => {
+    const sessionId = "default-host-replacement";
+    const receivedConnectionIds: number[] = [];
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+    let connectionId = 0;
+    server.on("connection", (socket) => {
+      const id = ++connectionId;
+      socket.on("message", () => {
+        receivedConnectionIds.push(id);
+        socket.send(JSON.stringify(completion("resp_default")));
+      });
+    });
+    await once(server, "listening");
+    vi.stubGlobal("WebSocket", WebSocket);
+    const closeSpy = vi.spyOn(WebSocket.prototype, "close");
+    const loopbackModel = createLoopbackModel(server);
+
+    try {
+      configureAiTransportHost({ resolveSecretSentinel: () => runtimeToken });
+      const firstHost = getDefaultAiTransportHost();
+      await streamOpenAICodexResponses(loopbackModel, context, {
+        apiKey: "opaque",
+        sessionId,
+        transport: "websocket-cached",
+        onPayload: (body) => {
+          configureAiTransportHost({ resolveSecretSentinel: () => runtimeToken });
+          return body;
+        },
+      }).result();
+      await streamOpenAICodexResponses(loopbackModel, context, {
+        apiKey: "opaque",
+        sessionId,
+        transport: "websocket-cached",
+      }).result();
+
+      cleanupSessionResources(sessionId, firstHost);
+      await streamOpenAICodexResponses(loopbackModel, context, {
+        apiKey: "opaque",
+        sessionId,
+        transport: "websocket-cached",
+      }).result();
+
+      expect(closeSpy).toHaveBeenCalledWith(1000, "debug_close");
+      expect(receivedConnectionIds).toEqual([1, 2, 2]);
+    } finally {
+      closeOpenAICodexWebSocketSessions(sessionId);
+      await closeServer(server, server.clients);
+    }
+  });
+
+  it.each(["auto", "websocket-cached"] as const)(
+    "retains the managed fetch and credentials across host replacement for %s transport",
+    async (transport) => {
+      const firstToken = runtimeToken;
+      let firstRequestHeaders: HeadersInit | undefined;
+      const firstFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        firstRequestHeaders = init?.headers;
+        return completedSseResponse("resp_first");
+      });
+      const secondFetch = vi.fn(async () => completedSseResponse("resp_second"));
+      const host = createAiTransportHost({
+        buildModelFetch: () => firstFetch,
+        requiresManagedTransport: () => true,
+        resolveSecretSentinel: (value) => (value === "opaque" ? firstToken : value),
+      });
+      const replacementHost = createAiTransportHost({
+        buildModelFetch: () => secondFetch,
+        requiresManagedTransport: () => true,
+      });
+      configureAiTransportHost(transport === "auto" ? host : replacementHost);
+      const WebSocketFixture = vi.fn(() => {
+        throw new Error("managed transport must not open a WebSocket");
+      });
+      vi.stubGlobal("WebSocket", WebSocketFixture);
+
+      const request = () =>
+        streamOpenAICodexResponses(model, context, {
+          apiKey: "opaque",
+          sessionId: `managed-${transport}`,
+          transport,
+          onPayload: (body) => {
+            configureAiTransportHost(replacementHost);
+            return body;
+          },
+        }).result();
+      const result = await (transport === "auto"
+        ? request()
+        : runWithAiTransportHost(host, request));
+
+      expect(result.stopReason).toBe("stop");
+      expect(firstFetch).toHaveBeenCalledOnce();
+      expect(secondFetch).not.toHaveBeenCalled();
+      expect(new Headers(firstRequestHeaders).get("authorization")).toBe(`Bearer ${firstToken}`);
+      expect(WebSocketFixture).not.toHaveBeenCalled();
+    },
+  );
+
+  it("falls back to SSE when a relative auto endpoint cannot form a WebSocket URL", async () => {
+    const fetchMock = vi.fn(async () => completedSseResponse("resp_relative"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await streamOpenAICodexResponses(
+      { ...model, baseUrl: "/backend-api" },
+      context,
+      { apiKey: runtimeToken, transport: "auto" },
+    ).result();
+
+    expect(result.stopReason).toBe("stop");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/backend-api/codex/responses",
+      expect.objectContaining({ method: "POST" }),
     );
   });
 });

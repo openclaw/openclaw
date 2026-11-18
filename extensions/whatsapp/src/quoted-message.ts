@@ -10,6 +10,7 @@ import {
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { jidToE164 } from "./targets-runtime.js";
 
 // Outbound callers only have a message ID; retain the sender and preview needed for quotes.
@@ -21,7 +22,7 @@ type QuotedMeta = {
   media?: MediaPlaceholderTextFact;
   fromMe?: boolean;
 };
-type CacheEntry = QuotedMeta & { ts: number };
+type CacheEntry = { meta: QuotedMeta; ts: number };
 type QuotedMetaLookup = QuotedMeta & { remoteJid: string };
 
 export type WhatsAppQuotedMessageKey = {
@@ -37,7 +38,20 @@ export type WhatsAppQuotedMessageKey = {
 
 const CACHE_TTL_MS = 10 * 60 * 1000;
 const MAX_ENTRIES = 500;
-const cache = new Map<string, CacheEntry>();
+const cacheStore = createPluginRuntimeStore<Map<string, CacheEntry>>(
+  "WhatsApp quote cache not initialized",
+);
+
+function getCache(): Map<string, CacheEntry> {
+  let cache = cacheStore.tryGetRuntime();
+  if (!cache) {
+    cache = new Map();
+    cacheStore.setRuntime(cache);
+  }
+  // The instance releases its slot only after admitted work settles. A native
+  // ESM module can survive reload, so it must not own the cached message bodies.
+  return cache;
+}
 
 function makeCacheKey(accountId: string, remoteJid: string, messageId: string): string {
   return `${accountId}:${remoteJid}:${messageId}`;
@@ -52,8 +66,9 @@ export function cacheInboundMessageMeta(
   if (!accountId || !messageId || !remoteJid) {
     return;
   }
+  const cache = getCache();
   pruneMapToMaxSize(cache, MAX_ENTRIES - 1);
-  cache.set(makeCacheKey(accountId, remoteJid, messageId), { ...meta, ts: Date.now() });
+  cache.set(makeCacheKey(accountId, remoteJid, messageId), { meta, ts: Date.now() });
 }
 
 export function lookupInboundMessageMeta(
@@ -61,7 +76,11 @@ export function lookupInboundMessageMeta(
   remoteJid: string,
   messageId: string,
 ): QuotedMeta | undefined {
-  const cacheKey = makeCacheKey(accountId, remoteJid, messageId);
+  return readCachedMessageMeta(makeCacheKey(accountId, remoteJid, messageId));
+}
+
+function readCachedMessageMeta(cacheKey: string): QuotedMeta | undefined {
+  const cache = getCache();
   const entry = cache.get(cacheKey);
   if (!entry) {
     return undefined;
@@ -70,13 +89,7 @@ export function lookupInboundMessageMeta(
     cache.delete(cacheKey);
     return undefined;
   }
-  return {
-    participant: entry.participant,
-    participantE164: entry.participantE164,
-    body: entry.body,
-    media: entry.media,
-    fromMe: entry.fromMe,
-  };
+  return entry.meta;
 }
 
 function normalizeComparableJid(jid: string | undefined): string | undefined {
@@ -142,23 +155,16 @@ export function lookupInboundMessageMetaForTarget(
   const prefix = `${accountId}:`;
   const suffix = `:${messageId}`;
   let matched: QuotedMetaLookup | undefined;
-  for (const [cacheKey, entry] of cache.entries()) {
+  for (const cacheKey of getCache().keys()) {
     if (!cacheKey.startsWith(prefix) || !cacheKey.endsWith(suffix)) {
       continue;
     }
-    if (Date.now() - entry.ts > CACHE_TTL_MS) {
-      cache.delete(cacheKey);
+    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
+    const meta = readCachedMessageMeta(cacheKey);
+    if (!meta) {
       continue;
     }
-    const remoteJid = cacheKey.slice(prefix.length, cacheKey.length - suffix.length);
-    const candidate = {
-      remoteJid,
-      participant: entry.participant,
-      participantE164: entry.participantE164,
-      body: entry.body,
-      media: entry.media,
-      fromMe: entry.fromMe,
-    };
+    const candidate = { remoteJid, ...meta };
     if (!matchesQuotedConversationTarget(targetJid, candidate)) {
       continue;
     }
@@ -168,37 +174,6 @@ export function lookupInboundMessageMetaForTarget(
     matched = candidate;
   }
   return matched;
-}
-
-function resolveQuotedRemoteJid(params: {
-  destinationJid: string | undefined;
-  lookupTargetJid: string | undefined;
-  quotedRemoteJid: string;
-  requestedJid: string | undefined;
-}): string {
-  const destinationJid = params.destinationJid?.trim();
-  const requestedJid = params.requestedJid?.trim();
-  const lookupTargetJid = params.lookupTargetJid?.trim();
-  if (!destinationJid || !requestedJid) {
-    return params.quotedRemoteJid;
-  }
-
-  // Reconcile only a quote tied to this requested conversation. Other JIDs can
-  // intentionally represent status, group, or cross-conversation replies.
-  if (
-    params.quotedRemoteJid !== requestedJid &&
-    (!lookupTargetJid || lookupTargetJid !== requestedJid)
-  ) {
-    return params.quotedRemoteJid;
-  }
-
-  const destinationIsPn = isPnUser(destinationJid) || isHostedPnUser(destinationJid);
-  const destinationIsLid = isLidUser(destinationJid) || isHostedLidUser(destinationJid);
-  const quotedIsPn = isPnUser(params.quotedRemoteJid) || isHostedPnUser(params.quotedRemoteJid);
-  const quotedIsLid = isLidUser(params.quotedRemoteJid) || isHostedLidUser(params.quotedRemoteJid);
-  return (destinationIsPn && quotedIsLid) || (destinationIsLid && quotedIsPn)
-    ? destinationJid
-    : params.quotedRemoteJid;
 }
 
 export function buildQuotedMessageOptions(params: {
@@ -225,12 +200,25 @@ export function buildQuotedMessageOptions(params: {
   if (!id || !quotedRemoteJid || !previewText) {
     return undefined;
   }
-  const remoteJid = resolveQuotedRemoteJid({
-    destinationJid: params.destinationJid,
-    lookupTargetJid: params.lookupTargetJid,
-    quotedRemoteJid,
-    requestedJid: params.requestedJid,
-  });
+  let remoteJid = quotedRemoteJid;
+  const destinationJid = params.destinationJid?.trim();
+  const requestedJid = params.requestedJid?.trim();
+  const lookupTargetJid = params.lookupTargetJid?.trim();
+  // Reconcile only a quote tied to this requested conversation. Other JIDs can
+  // intentionally represent status, group, or cross-conversation replies.
+  if (
+    destinationJid &&
+    requestedJid &&
+    (quotedRemoteJid === requestedJid || lookupTargetJid === requestedJid)
+  ) {
+    const destinationIsPn = isPnUser(destinationJid) || isHostedPnUser(destinationJid);
+    const destinationIsLid = isLidUser(destinationJid) || isHostedLidUser(destinationJid);
+    const quotedIsPn = isPnUser(quotedRemoteJid) || isHostedPnUser(quotedRemoteJid);
+    const quotedIsLid = isLidUser(quotedRemoteJid) || isHostedLidUser(quotedRemoteJid);
+    if ((destinationIsPn && quotedIsLid) || (destinationIsLid && quotedIsPn)) {
+      remoteJid = destinationJid;
+    }
+  }
   return {
     quoted: {
       key: {

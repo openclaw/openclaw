@@ -8,7 +8,11 @@ import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { wrapPluginBlobError } from "./plugin-blob-store.sqlite.js";
-import type { PluginBlobEntry, PluginBlobEntryInfo } from "./plugin-blob-store.types.js";
+import type {
+  PluginBlobEntry,
+  PluginBlobEntryInfo,
+  PluginBlobRegistrationReceipt,
+} from "./plugin-blob-store.types.js";
 import type { PluginBlobWorkerOperations } from "./plugin-blob-store.worker.js";
 import {
   pluginBlobWorkerOperations,
@@ -84,7 +88,7 @@ export function registerPluginBlobInWorker(params: Input<"pluginBlob.register">)
 
 export function registerPluginBlobIfAbsentInWorker(
   params: Input<"pluginBlob.registerIfAbsent">,
-): Promise<boolean> {
+): Promise<PluginBlobRegistrationReceipt | undefined> {
   const { env, ...input } = params;
   return execute(env, { type: "pluginBlob.registerIfAbsent", input }, () =>
     captureRegistrationInput("pluginBlob.registerIfAbsent", input),

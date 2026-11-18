@@ -8,154 +8,308 @@ read_when:
   - Checking which packages and apps have been published
 ---
 
-OpenClaw offers stable releases for everyday use, beta releases for testing,
-and extended-stable releases for users who prefer an older Gateway maintenance
-line. This page explains those choices and what a release has been checked for.
-For switching channels, see [Release channels](/install/development-channels).
+Choose a channel below; see [Release channels](/install/development-channels)
+to switch. Maintainer procedures are linked at the end.
 
 ## Release channels
 
-| Channel         | What you get                                                                                              |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| Stable          | The regular release promoted to npm `latest`.                                                             |
-| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion.                |
-| Extended-stable | A Gateway maintenance release from either of the two trailing completed months, on npm `extended-stable`. |
-| Dev             | The moving head of `main`, for development.                                                               |
+| Channel         | Distribution                                                                  |
+| --------------- | ----------------------------------------------------------------------------- |
+| Stable          | Regular release on npm `latest`.                                              |
+| Beta            | Candidate on npm `beta`: prerelease or final awaiting promotion.              |
+| Extended-stable | Trailing completed month's Gateway maintenance line on npm `extended-stable`. |
+| Dev             | Moving `main` head.                                                           |
 
-Extended-stable includes the Gateway, official npm plugins, and Docker images.
-It does not include native apps or ClawHub publication, and it does not change
-the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when it falls outside the two supported completed months.
+Extended-stable includes Gateway, official npm plugins, and Docker—not native
+apps or ClawHub. It leaves regular stable unchanged; GitHub does not mark it
+Latest. Maintain only the trailing completed month relative to `main`'s version;
+when main advances a month, the previous line and older `.33+` lines retire.
+Retired-line publication requires an explicit maintainer decision recorded as
+`retired_line_publication_reason` in the human-approved `npm-release` receipt,
+bound to the exact tag, source, channel, and parent attempt. Empty/historical
+ordinary approvals do not qualify; never bypass guards or source, validation,
+and live-authority gates.
 
 ## Version naming
 
-| Release            | Version example                                                       |
-| ------------------ | --------------------------------------------------------------------- |
-| Regular final      | `2026.9.6`                                                            |
-| Beta prerelease    | `2026.9.6-beta.1`                                                     |
-| Regular correction | `2026.9.6-1`                                                          |
-| Extended-stable    | `2026.8.33`, followed by `2026.8.34` for its next maintenance release |
+| Release            | Example                       |
+| ------------------ | ----------------------------- |
+| Regular final      | `2026.9.6`                    |
+| Beta prerelease    | `2026.9.6-beta.1`             |
+| Regular correction | `2026.9.6-1`                  |
+| Extended-stable    | `2026.8.33`, then `2026.8.34` |
 
-Versions use `year.month.patch`, without zero-padding. The patch is a release
-number within the month, not a day of the month. Regular releases use patches
-below `33`; extended-stable starts at `33`. Git tags add `v`, as in `v2026.9.6`.
-Release tags are annotated and signed. The shared publication workflow verifies
-the tag signature before checkout or evidence downloads and refuses lightweight,
-unsigned, or unverified tags. This also applies to recovery and republishing:
-historical unsigned tags are not eligible for the shared publication workflow,
-and recovery must use a new signed release version rather than replacing a tag.
-
-Published npm versions and release tags are never replaced. A fix receives a
-new version. Historical alpha-only versions do not advance the regular release
-number; alpha releases are retired.
+- `year.month.patch` has no zero-padding; patch is a monthly release number,
+  not a day. Regular patches are below `33`; extended-stable starts at `33`.
+- Tags add `v` (for example `v2026.9.6`) and must be annotated and signed.
+  Shared publication verifies signatures before checkout/evidence download,
+  including recovery/republishing; lightweight, unsigned, and unverified tags
+  are ineligible. Recover historical unsigned releases with a new signed version.
+- Never replace published npm versions or tags; fixes get new versions.
+  Retired alpha-only versions do not advance regular numbering.
 
 ## Release cadence
 
-Releases normally go to beta first and move to stable after validation.
-For core and every published official npm plugin, `beta` must be at least as
-new as `latest`; an already newer beta stays unchanged. A prerelease is older
-than the final version with the same base number.
-
-A final version published to the beta channel still has to meet the stable
-validation requirements below. The npm channel alone does not determine which
-checks apply.
+Normally publish beta, validate, then promote stable. Core and every published
+official npm plugin must have `beta` at least as new as `latest`; preserve a newer
+beta. Prereleases precede their same-base final. Final versions require stable
+validation even when first published to beta.
 
 ## Release validation
 
-Stable publication requires stable or full validation, longer-running soak tests,
-and blocking performance checks. These requirements also apply to a final version
-first published on the beta channel. Beta-profile evidence cannot qualify stable.
+- Stable/final publication requires stable or full validation, longer soak,
+  and blocking performance checks; beta-profile evidence is insufficient.
+- The release lead classifies every failed test as blocker or flake. Retain the
+  failure, file a fix-in-parallel issue/PR on `main`, and rerun flakes on the
+  same Release SHA at most twice. Never re-cut, change tooling, or restart FRV
+  solely to clear a flake. An intentional
+  [release-tooling waiver](/reference/full-release-validation/evidence#release-tooling-waivers)
+  is reviewed policy requiring validation with new pinned tooling, unchanged candidate.
+- Blocking coverage: CI coverage gate, seal/evidence, Build Artifacts, install
+  smoke, survivor lanes, `update-first-hop-compat*`, pack/npm qualification,
+  package integrity, and all Linux/Windows/macOS Gateway checks, including
+  Windows packaged install/upgrade in Release Checks. All-group qualification
+  includes all nine Gateway install/upgrade combinations.
+- Selected `openclaw/ci-gate` must succeed unless checked-in exact-job grants
+  cover every failed cause. Missing, skipped, or cancelled required coverage
+  blocks. Exact failed live-provider/Telegram leaves and operator-accepted
+  `2026.11.5-beta.3`/candidate-bound `2026.11.4` jobs may use that policy;
+  candidate, job, version, and attempt restrictions still apply. **FRV must
+  conclude success; publishers cannot waive it.**
+- Coverage spans source CI, packages, plugins, Gateway installs/upgrades, and
+  selected app, UI, Telegram, QA, and live-provider checks. Inspect recorded
+  profile/OS coverage; skipped or deferred is not passed.
+- Blocking `live-cache`: stable/full by default; beta with repo/live coverage.
+  [Prompt-cache regression coverage](/help/testing/suites#prompt-cache-regression-coverage)
+  defines serialized-prefix/cache-reuse checks for Anthropic Messages, OpenAI
+  Responses, and credential-available OpenRouter. Live agents exercise instruction
+  refresh, activated hooks, and persisted projection rehydration with full-history
+  cold-transport requests—not Gateway process restart or retained HTTP continuation.
+  [Offline proof](/help/testing/suites#offline-regression-ci-safe) separately compares
+  authenticated chat, child completion, in-process server stop/start, and subsequent
+  same-session chat (not OS-process restart). Focus: `rerun_group=live-e2e`,
+  `live_suite_filter=live-cache`; `provider`/`mode` do not narrow it.
+- Selected official npm plugins qualify exact publishable tarballs with immutable
+  descriptors; publication uses those bytes. Unpacked fixtures participate only
+  if shipped in the tarball.
+- Dependency advisories never block CI, commits, or releases. Production audits
+  run only for `full-release-validation-`/`release-native-android-` dispatch IDs,
+  warning with exit 0; ordinary PR/push/scheduled CI skips them. The optional
+  pre-commit audit agrees. Daily Dependency Audit stays strict for triage, not
+  a required PR check. Record all severities; ship fixes through main after
+  publication. `pnpm deps:vuln:gate` still blocks known malware.
+- Red `main` CI does not gate, delay, or justify re-cutting: release-branch
+  validation/publication uses pinned tooling.
 
-Every failed test needs an explicit release-lead decision: blocker or flake.
-Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
-issue or PR on `main`, and retain the original failure. Do not re-cut, change
-tooling, or start another Full Release Validation solely to clear a flake; a
-selected job that remains red blocks publication.
+See [Full release validation](/reference/full-release-validation) for profiles
+and evidence interpretation.
 
-Blocking jobs include the CI coverage gate, seal/evidence,
-Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
-qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
-including Windows packaged install/upgrade checks in Release Checks. A cancelled
-run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
-skipped, or cancelled coverage blocks. Publication waivers cannot bypass failures
-or required coverage. Validation covers source CI, packages, plugins,
-Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
-live-provider checks. All-group qualification includes all nine Gateway
-install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
-varies by profile and selected operating systems. Check the release's recorded
-coverage: skipped or deferred checks are not passes.
+### Operator capabilities
 
-Dependency advisories never block or delay a release. Release dependency
-evidence records every advisory finding, at any severity, and CI dispatched by
-release validation or publication reports a failing dependency audit as a
-warning. The dependency fix ships through `main` after publication. Only a
-known-malware finding stops publication.
+Repository write, organization membership, branch-policy reads, CI bypass,
+environment approval, and production deployment are separate authorities.
+Unavailable [prior-CI exceptions](/reference/scripts/prior-ci) neither block all
+release work nor imply unavailable environment approval; MAINTAIN/CI bypass
+does not authorize approval/deployment.
 
-The health of `main` CI does not gate a release. Validation and publication run
-from the release branch with pinned release tooling, so a red `main` is not a
-reason to wait, re-cut, or pause.
+The checklist reports caller-specific pending approvals and prints an approval
+command only if GitHub says the caller may approve; otherwise use an eligible
+reviewer. Unreadable approval status is **unknown**, not none, and monitoring
+continues. Anonymous rate-limit fallback applies only to public evidence, not
+caller-specific approval reads.
 
-See [Full release validation](/reference/full-release-validation) for coverage
-by profile and how to interpret the results.
+### Resume activation while ClawHub recovery is independent
+
+For already-published core, recovery accepts `defer_clawhub=true`,
+`openclaw_npm_resume_run_id=<original-successful-run>`, and
+`wait_for_clawhub=false` only with direct `publish_openclaw_npm=true` and no
+`prepared_plugins`. It authenticates original registry bytes/provenance, retains
+npm/source/artifact/approval/finalization gates, and neither republishes core
+nor plans/dispatches ClawHub work.
+
+Normal ClawHub publication remains default. Deferral records `clawHubDeferred`
+in the authenticated dispatch receipt and incomplete ClawHub proof. GitHub,
+Docker, and platform activation may continue; full release remains incomplete
+until independent recovery verifies original artifacts. No repacking/replacement.
+
+### Explicit beta plugin authentication deferrals
+
+Only original all-package core beta publication with prepared qualification may
+supply operator-reviewed `corePluginDeferrals` in `prepared_plugins` JSON—not
+stable or selected-package publication. An array-only object preserves normal
+publication; retain existing `npm`/`clawhub` descriptors unchanged when present.
+Each entry supplies `packageName`, `version`, `sourceSha`, `reason`, and original
+Actions job URL `evidence`. Allowed reasons: `npm-eneedauth` or
+`npm-trusted-publisher-exchange-http-404` (verified token-exchange failure,
+not arbitrary registry 404). Human-approved parent receipts bind source/tooling run.
+
+Verify the complete original roster/artifacts, including deferrals; publish
+all nondeferred packages before core. Readback retains failures and deferred
+status, never invented success. Already-public deferred versions require normal
+integrity/selector checks; remaining recovery needs separate authorization and
+original qualified bytes.
+
+### Watch publication
+
+After stable dispatch, keep the read-only watcher in a separate shell:
+
+```bash
+pnpm release:stable YYYY.M.PATCH --watch
+```
+
+For any publish parent, including beta/resumes:
+
+```bash
+pnpm release:watch --run <publish-parent-run-id>
+```
+
+`release:stable --watch` authenticates retained orchestrator state; `release:watch`
+derives protected tooling tag/SHA from the parent. Both correlate npm/ClawHub
+children by exact parent run, attempt, and tooling identity. They stop for pending
+parent/child approvals or failed runs/jobs (including `continue-on-error` Windows
+notification); otherwise wait for tree success. GitHub reads only: no approval,
+rerun, cancel, dispatch, or publication. Rate limits trigger extended backoff.
+
+| Exit | Meaning                                                                  |
+| ---- | ------------------------------------------------------------------------ |
+| `0`  | Observed tree succeeded, or `--once` found nothing needing attention.    |
+| `1`  | Pending approval or failed publication run/job.                          |
+| `2`  | Usage, identity, transport, truncation, timeout, or observation failure. |
+
+`--once --json` returns `contractVersion: 1`, top-level `state` (`active`, `attention`,
+`success`), and exact parent/child/approval/failed-run/failed-job records.
+`--poll-seconds` overrides 60 seconds (`release:stable`) or 120
+(`release:watch`); `--timeout-seconds` overrides 12 hours. Neither persists
+watcher state nor creates a daemon.
+
+### Plugin SDK evidence transport
+
+SDK reports/evidence use `openclaw.plugin-sdk-api-encoded/v1` JSON:
+`encoding: "gzip+base64"` plus a `data` string. It preserves the full logical report,
+comparison digests, and channel acknowledgement; Markdown remains readable.
+Inspect with `decodePluginSdkApiArtifact` in
+`scripts/plugin-sdk-api-release-evidence.mjs`.
+
+Limits: 16 MiB serialized JSON; 64 MiB expansion per decode across concatenated
+gzip members—not process-wide memory. Buffers, text, objects, and concurrent
+consumers coexist. Archive/file/manifest limits, immutable hashes, producer
+identity, full diff validation, and acknowledgements still apply.
+
+Upgrade producer and trusted qualification/publication readers together in the
+selected tooling cut, then regenerate/qualify evidence. Frozen older readers
+reject envelopes; moving main does not upgrade them. New readers accept historical
+unencoded receipts. Never rewrite authenticated receipts or reuse digests for
+changed bytes. This change authorizes no dispatch/publication.
+
+### Shared qualification validation
+
+`release-ci-summary.mjs` authenticates qualification once for all consumers;
+`validate-full-release-validation-evidence.mjs` checks the release tag and
+publication selection, including plugin subsets, and rechecks live authority.
+Only authenticated direct admission qualifies evidence for publication.
+Unadmitted historical manifests, including v3, require new admitted
+qualification; ancestry alone is not admission. Receipt-backed aggregate recovery
+is retired for every profile, including beta. Normal authenticated qualification
+and reuse remain available, and C, Q, and P may remain independent. Existing
+waiver, profile, soak, and performance rules apply. Historical manifest parsing
+remains available for diagnostic summaries, not qualification or publication.
+
+### Frozen qualification identity
+
+| Identity                | Owns                                                                                                                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **C — candidate**       | Exact tested/published commit, package bytes, version, upgrade baselines.                                                                                                                                 |
+| **Q — qualification**   | Complete workflow/reusable-workflow/action/script/planner/contract/coverage closure; defaults to C. An independent Q requires review and verified main ancestry.                                          |
+| **P — trusted tooling** | Admission, aggregate validation, verification, publication, checked-in waivers, FRV verdict; independently trusted main revision or protected publication tag. May differ from C/Q; C need not precede P. |
+
+[Dispatch](/reference/full-release-validation/dispatch) defines P's immutable
+operator-attestation/input/coverage admission before Q's `release-ci/*` dispatch.
+`release-publish/*` belongs to P. Admission is not test success/publication approval.
+
+`pnpm release:candidate --workflow-sha <P>` pins helper/publication, not Q;
+`pnpm ci:full-release --trusted-workflow-ref candidate --workflow-sha <Q>`
+selects reviewed Q through P. Follow
+[qualification-tooling recovery](/reference/full-release-validation/dispatch#recover-qualification-tooling-without-changing-the-candidate):
+fresh request/admission/successful parent for changed Q, deliberate Q repair or
+backport for missing contracts, new bound evidence for changed C. P-only repairs
+may retain C/Q/artifacts. No moving-main fallback or relabeling old requests.
+Historical requests retain recovery semantics; new publication requires admitted
+C/Q/P, not diagnostic cross-revision evidence.
+
+Stable `npm-stable-v1`/admitted stable/full include reusable mock-provider
+Telegram proof for exact FRV-qualified bytes; `npm-beta-v1` is deferred, not passed.
+Historical separately packed/live-provider Telegram checks need their own C-byte
+proof. Supplemental checks require retained `release-ci/*` verified at Q and
+`harness_ref` pinned to Q; missing/moved refs require new candidate evidence.
+Keep run IDs in the candidate bundle, not optional publisher postpublish
+diagnostics. Local Parallels uses isolated Q harness/frozen dependencies against
+exact validated C tarballs when Q differs.
+
+Reuse preserves producer/consumer identities, inputs, coverage, and provenance.
+[Root-request recovery](/reference/full-release-validation/dispatch#retain-and-reconcile-the-root-request)
+owns read-only reconciliation and explicit pre-POST resume: intended Q, empty
+uncertain-ref inventory, revalidated admission/signer, final ref verification.
+Attempted/uncertain POSTs are observation-only, never redispatched. Publication,
+soak, performance, approval, and exact-byte gates remain.
+
+Local contracts prove binding/refusal/recovery—not hosted admission, environment
+access, OIDC, signing, or publication. Report hosted evidence and untested
+prerequisites separately; local green is not a hosted receipt.
 
 ## Packages and apps can become available at different times
 
-A published Gateway release does not mean every native app is ready. Signing and publishing the apps can
-finish separately from npm, Docker, and the GitHub release.
+Selected official npm plugins publish before core (except explicit beta deferrals
+above). ClawHub starts at its existing dispatch point, then runs independently;
+its planning/authorization/dispatch/publication/verification/recovery never block
+core npm, GitHub finalization, main closeout, or retrospective PR. Keep pending/
+failed ClawHub work visible with owner/follow-up; core success does not complete it.
 
-Check the release's assets and announcements for each platform. A pending app
-build or an accepted publication request is not a completed app release.
-Extended-stable is a Gateway distribution and does not publish native apps.
+Native signing/publication may finish separately from npm, Docker, and GitHub.
+Check platform assets/announcements: a published Gateway, pending app build,
+or accepted request does not prove app publication. Extended-stable excludes apps.
 
 ## Release notes and verification
 
-The [release notes](/releases) describe user-facing changes. GitHub releases
-also carry validation results, dependency reports, and checks of the published
-packages. These records identify the tested version and the files that shipped.
-Later documentation updates may improve the release notes without rebuilding
-or replacing packages.
+[Release notes](/releases) describe user changes; GitHub carries validation,
+dependency, and package checks identifying tested versions/shipped files.
+Documentation updates do not rebuild/replace packages.
 
-For dependency review, see [Dependency locking](/gateway/security/dependency-locking).
-Release dependency archives include npm-format locks separately from the
-package tarballs.
+Beta notes freeze each beta's changelog/contribution record against npm's
+prepublication `beta` selection—even stable when beta/latest coincide—not
+necessarily the last GitHub prerelease. Stable notes accumulate since previous stable.
+
+[Dependency locking](/gateway/security/dependency-locking) covers review;
+release archives carry npm-format locks separately from tarballs.
 
 ### Downstream packaging
 
-To consume a release lock:
-
-1. Download `openclaw-<version>-dependency-evidence.zip` from the GitHub release.
-   Open `dependency-evidence/npm-package-locks.json` (`schemaVersion: 1`) and
-   select the `packages` entry matching the exact package `name` and `version`.
-2. Reject entries with a nonempty `omittedWorkspaceDependencies` array. These
-   are partial locks: the generator omits sibling `workspace:` runtime dependencies
-   that publish in the same release. The report counts these entries in
+1. Download `openclaw-<version>-dependency-evidence.zip` from GitHub release assets;
+   select the exact `packages` entry by name/version in
+   `dependency-evidence/npm-package-locks.json` (`schemaVersion: 1`).
+2. Reject nonempty `omittedWorkspaceDependencies`: partial locks omit sibling
+   runtime `workspace:` dependencies published together; counted in
    `packagesWithOmittedWorkspaceDependencies`.
-3. Verify that `dependency-evidence/dependency-evidence-manifest.json`'s
-   `releaseSha`, the report's `sourceSha`, and the OpenClaw commit you pin all
-   match. The report also records the source `pnpm-lock.yaml` SHA-256.
-4. Serialize `entry.lock` as `package-lock.json` using two-space JSON indentation
-   and a trailing newline, then verify its SHA-256 against `entry.lockSha256`.
-5. Before `npm ci`, carry the source `pnpm-workspace.yaml` overrides into the
-   consuming `package.json`, or rewrite nested `dependencies` and
-   `optionalDependencies` specs to their locked versions. The generated locks
-   encode workspace overrides, so unmodified specs can fail npm's lock-sync check.
+3. Match `dependency-evidence/dependency-evidence-manifest.json`'s `releaseSha`,
+   report `sourceSha`, and pinned OpenClaw commit. Report also records source
+   `pnpm-lock.yaml` SHA-256.
+4. Serialize `entry.lock` as `package-lock.json` (two-space indentation,
+   trailing newline); verify SHA-256 against `entry.lockSha256`.
+5. Before `npm ci`, copy source `pnpm-workspace.yaml` overrides into consuming
+   `package.json` or rewrite nested `dependencies`/`optionalDependencies` to
+   locked versions; otherwise encoded overrides can fail npm lock-sync.
 
-The companion `npm-package-locks.md` includes counts and a package table. Each
-entry records `bundleRuntimeDependencies` and direct dependency counts so
-packagers can identify lockless packages that need an external lock.
-Each entry also records a path-sorted `bundledDependencies` array with `path`,
-`name`, `version`, and `parent`. These dependencies carry `inBundle: true` in the
-npm lock; `parent` identifies the nearest enclosing non-bundled package whose
-`resolved` and `integrity` verify the tarball carrying their bytes. The report
-rejects missing or unverifiable carriers and preserves the lock payload. The
-Markdown table counts bundled dependencies per package and includes their total.
+Companion `npm-package-locks.md` lists package/count tables.
+`bundleRuntimeDependencies`/direct counts identify lockless packages needing
+external locks. Path-sorted `bundledDependencies` records `path`, `name`, `version`,
+`parent` and lock `inBundle: true`. Parent is the nearest non-bundled carrier;
+its `resolved`/`integrity` verify the containing tarball. Reports reject missing/
+unverifiable carriers, preserve lock payloads, and count bundles per package/total.
 
 ## Maintainer procedures
 
-Release preparation, publishing commands, approvals, and recovery live in the
+Preparation, publishing, approvals, and recovery: the
 [release-maintainer skill](https://github.com/openclaw/openclaw/tree/main/.agents/skills/release-openclaw-maintainer).
-Credential handling and emergency procedures remain in the private maintainer
-runbook. Former section links below lead to their corresponding procedures.
+Credentials/emergencies: private maintainer runbook. Legacy anchors follow.
 
 <a id="linux-companion-publication" />
 
@@ -208,6 +362,13 @@ runbook. Former section links below lead to their corresponding procedures.
 <a id="stable-main-closeout" />
 
 [Stable main closeout](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-maintainer/references/stable-main-closeout.md).
+
+After every stable release, regenerate the committed shipped Plugin SDK surface
+on `main` with `pnpm plugin-sdk:shipped-surface:gen -- --release <stable tag>`,
+then run `pnpm plugin-sdk:surface:check`. Commit the generated
+`scripts/lib/plugin-sdk-shipped-surface.json` as part of stable closeout; do not
+edit it by hand. The inventory records the stable tag's typed public declarations
+so later export-budget reductions cannot authorize their removal.
 
 <a id="post-release-documentation-publication" />
 

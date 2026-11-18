@@ -19,6 +19,7 @@ import {
 } from "./ensure-extension-memory-build.mts";
 import { requireOptionArgument, stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import {
   captureImportIdentity,
@@ -104,23 +105,15 @@ Examples:
 /**
  * Parses extension memory profiler options after pnpm's optional separator.
  */
-export function parseArgs(argv: string[]): {
-  extensions: string[];
-  concurrency: number;
-  timeoutMs: number;
-  combinedTimeoutMs: number;
-  top: number;
-  jsonPath: string | null;
-  skipCombined: boolean;
-} {
+export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
-  const options: ReturnType<typeof parseArgs> = {
-    extensions: [],
+  const options = {
+    extensions: [] as string[],
     concurrency: DEFAULT_CONCURRENCY,
     timeoutMs: DEFAULT_TIMEOUT_MS,
     combinedTimeoutMs: DEFAULT_COMBINED_TIMEOUT_MS,
     top: DEFAULT_TOP,
-    jsonPath: null,
+    jsonPath: null as string | null,
     skipCombined: false,
   };
 
@@ -625,12 +618,7 @@ async function main(): Promise<void> {
   );
 
   const env = {
-    ...process.env,
-    HOME: tmpHome,
-    USERPROFILE: tmpHome,
-    XDG_CONFIG_HOME: path.join(tmpHome, ".config"),
-    XDG_DATA_HOME: path.join(tmpHome, ".local", "share"),
-    XDG_CACHE_HOME: path.join(tmpHome, ".cache"),
+    ...createBuildSmokeEnv(tmpHome),
     NODE_DISABLE_COMPILE_CACHE: "1",
     OPENCLAW_NO_RESPAWN: "1",
     TERM: process.env.TERM ?? "dumb",

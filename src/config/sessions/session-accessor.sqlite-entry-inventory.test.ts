@@ -1,16 +1,19 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, expect, it } from "vitest";
+import { afterAll, expect, it, vi } from "vitest";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { upsertSessionEntryCore } from "./session-accessor.js";
 import { readSessionEntryCount } from "./session-accessor.sqlite-entry-inventory.js";
 
+afterAll(clearRuntimeConfigSnapshot);
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-count-");
 
 it("counts mixed validated and raw entries with the same archive filter", async () => {
+  setRuntimeConfigSnapshot({});
   const scope = {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: sessionDirs.make() },
@@ -39,10 +42,14 @@ it("counts mixed validated and raw entries with the same archive filter", async 
       "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
     )
     .run("agent:main:invalid", "invalid", "{");
-  expect(readSessionEntryCount(database)).toBe(4);
+  {
+    using transactionSql = vi.spyOn(database.db, "exec");
+    expect(readSessionEntryCount(database)).toBe(4);
+    expect(transactionSql).not.toHaveBeenCalled();
+  }
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(2);
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?")
     .run("{}", "agent:main:validated-false");
   expect(readSessionEntryCount(database)).toBe(3);
   expect(readSessionEntryCount(database, { includeArchived: false })).toBe(1);

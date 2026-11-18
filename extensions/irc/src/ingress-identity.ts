@@ -1,6 +1,9 @@
 import { defineStableChannelIngressIdentity } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeIrcAllowEntry } from "./normalize.js";
 import type { IrcInboundMessage } from "./types.js";
 
 const IRC_NICK_KIND = "plugin:irc-nick" as const;
@@ -70,7 +73,7 @@ function normalizeIrcNickHostEntry(value: string): string | null {
 
 function normalizeIrcNickUserEntry(value: string): string | null {
   const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !isHostlessNickUser(normalized)) {
+  if (!isHostlessNickUser(normalized)) {
     return null;
   }
   return normalized;
@@ -85,15 +88,21 @@ function normalizeIrcNickEntry(value: string): string | null {
 }
 
 export function createIrcIngressSubject(message: IrcInboundMessage) {
-  const candidates = buildIrcAllowlistCandidates(message, { allowNameMatching: true });
-  const stableCandidates = candidates.filter((candidate) => hasVerifiedHost(candidate));
   const nick = normalizeLowercaseStringOrEmpty(message.senderNick);
+  const user = normalizeOptionalLowercaseString(message.senderUser);
+  const host = normalizeOptionalLowercaseString(message.senderHost);
+  const candidates = [
+    nick,
+    nick && user ? `${nick}!${user}` : "",
+    nick && host ? `${nick}@${host}` : "",
+    nick && user && host ? `${nick}!${user}@${host}` : "",
+  ];
   return {
-    stableId: stableCandidates[stableCandidates.length - 1] ?? nick,
+    stableId: candidates.findLast(hasVerifiedHost) ?? nick,
     aliases: {
       "irc-id-nick-user": candidates.find((candidate) => isHostlessNickUser(candidate)),
-      "irc-id-nick-host": stableCandidates.find(
-        (candidate) => !candidate.includes("!") && candidate.includes("@"),
+      "irc-id-nick-host": candidates.find(
+        (candidate) => hasVerifiedHost(candidate) && !candidate.includes("!"),
       ),
       "irc-nick": nick,
     },

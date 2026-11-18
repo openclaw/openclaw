@@ -10,7 +10,7 @@ read_when:
 Contract tests verify that every registered plugin and channel conforms to
 its interface contract. They iterate over all discovered plugins and run a
 suite of shape and behavior assertions. The default `pnpm test` unit lane
-intentionally skips these shared seam and smoke files; run the contract
+intentionally skips these shared boundary and smoke files; run the contract
 commands explicitly when you touch shared channel or provider surfaces.
 
 ### Commands

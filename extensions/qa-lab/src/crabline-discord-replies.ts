@@ -34,7 +34,6 @@ export async function startCrablineDiscordReplies(params: {
   const lifecycle = new AbortController();
   const sockets = new Set<WebSocket>();
   const gatewayServer = new WebSocketServer({ noServer: true, maxPayload: 100 * 1024 * 1024 });
-  let generation = 0;
   let lastDelivery: { messageId: string; channelId: string } | undefined;
   const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
@@ -42,7 +41,6 @@ export async function startCrablineDiscordReplies(params: {
         req.method === "POST" && req.headers.authorization === `Bot ${manifest.botToken}`
           ? req.url?.match(/^\/api\/v10\/channels\/(\d+)\/messages(?:\?.*)?$/u)?.[1]
           : undefined;
-      const requestGeneration = generation;
       if (channelId) {
         lastDelivery = undefined;
       }
@@ -83,9 +81,7 @@ export async function startCrablineDiscordReplies(params: {
         if (!messageId || !/^\d+$/u.test(messageId)) {
           throw new Error("Discord delivery response omitted its message id");
         }
-        if (requestGeneration === generation) {
-          lastDelivery = { messageId, channelId };
-        }
+        lastDelivery = { messageId, channelId };
       }
       const pathname = new URL(req.url ?? "/", upstream).pathname;
       if (req.method === "GET" && /^\/api\/v10\/gateway(?:\/bot)?$/u.test(pathname)) {
@@ -248,7 +244,6 @@ export async function startCrablineDiscordReplies(params: {
     apiBaseUrl: `${origin}/api/v10`,
     waitForCompletedReply,
     reset() {
-      generation += 1;
       lastDelivery = undefined;
     },
     cleanup() {

@@ -1,6 +1,8 @@
 import type { SkillLibraryFile } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { Skill } from "./loading/skill-contract.js";
 
+export const SKILLS_DISCOVERY_KEY = Symbol.for("openclaw.skillsDiscovery");
+
 export type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -57,6 +59,8 @@ export type SkillUsagePath = {
   readPath: string;
   /** Host-bound prompt reference before runtime materialization. */
   sourceReadPath?: string;
+  /** Selected installation path before canonicalization or runtime remapping. */
+  sourceFilePath?: string;
   /** Canonical source SKILL.md path used as the lifecycle identity. */
   skillFile: string;
   skillName: string;
@@ -135,6 +139,7 @@ export type SkillSnapshot = {
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{
     name: string;
+    source?: Pick<Skill, "filePath" | "fileHost">;
     /** Gateway-admitted path for explicit reads of hidden, Gateway-owned skills. */
     gatewayFilePath?: string;
     /** Config key can differ from the prompt-facing skill name. */

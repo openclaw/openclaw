@@ -1,9 +1,15 @@
-// OpenAI-compatible error helpers.
-// Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { TLS_CERTIFICATE_ERROR_USER_TEXT } from "../agents/failover/user-copy.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
+import { SessionWorkStartError } from "../config/sessions/session-work-start.js";
+import {
+  SESSION_WORK_START_CHANGED_ERROR_CODE,
+  type SessionWorkStartChangedError,
+} from "../config/sessions/work-start-error.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 
 export type OpenAiCompatError = {
@@ -23,6 +29,7 @@ const ERROR_TYPE_BY_REASON = {
   overloaded: "api_error",
   billing: "insufficient_quota",
   server_error: "api_error",
+  route_unavailable: "api_error",
   timeout: "api_error",
   tls_certificate: "api_error",
   context_overflow: "invalid_request_error",
@@ -34,37 +41,34 @@ const ERROR_TYPE_BY_REASON = {
   unknown: undefined,
 } satisfies Record<FailoverReason, string | undefined>;
 
-function statusForReason(reason: FailoverReason, status: number | undefined): number {
-  if (reason === "server_error") {
-    return status && status >= 400 && status < 500 ? status : 502;
-  }
-  if (reason === "timeout") {
-    return status && status >= 400 && status < 500 ? status : 504;
-  }
-  return status ?? resolveFailoverStatus(reason) ?? 500;
-}
-
-function messageForReason(params: {
-  reason: FailoverReason;
-  message: string;
-  rawError?: string;
-}): string {
-  if (params.reason === "server_error") {
-    return "upstream provider error";
-  }
-  if (params.reason === "timeout") {
-    return "upstream provider timeout";
-  }
-  if (params.reason === "overloaded") {
-    return "upstream provider overloaded";
-  }
-  return params.rawError?.trim() || params.message.trim() || "request failed";
-}
-
-/** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
+  if (err instanceof SessionWorkStartError && err.reason === "archived") {
+    return {
+      status: 409,
+      error: {
+        message: "Session is archived. Restore it in the Control UI before retrying.",
+        type: "invalid_request_error",
+      },
+    };
+  }
   if (err instanceof ToolAuthorizationError) {
     return { status: 403, error: { message: err.message, type: "permission_error" } };
+  }
+  const conflict = collectNestedErrorCandidates(err).find(
+    (error): error is Pick<SessionWorkStartChangedError, "code" | "message"> =>
+      isRecord(error) &&
+      error.code === SESSION_WORK_START_CHANGED_ERROR_CODE &&
+      typeof error.message === "string",
+  );
+  if (conflict) {
+    return {
+      status: 409,
+      error: {
+        message: conflict.message,
+        type: "invalid_request_error",
+        code: conflict.code,
+      },
+    };
   }
   const described = describeFailoverError(err);
   const reason = described.reason;
@@ -75,12 +79,24 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   if (!type) {
     return undefined;
   }
-  const status = statusForReason(reason, described.status);
-  const message = messageForReason({
-    reason,
-    message: described.message,
-    rawError: described.rawError,
-  });
+  let status = described.status ?? resolveFailoverStatus(reason) ?? 500;
+  let message: string;
+  if (reason === "tls_certificate") {
+    message = TLS_CERTIFICATE_ERROR_USER_TEXT;
+  } else if (reason === "server_error" || reason === "timeout") {
+    status =
+      described.status && described.status >= 400 && described.status < 500
+        ? described.status
+        : reason === "timeout"
+          ? 504
+          : 502;
+    message = reason === "timeout" ? "upstream provider timeout" : "upstream provider error";
+  } else {
+    message =
+      reason === "overloaded"
+        ? "upstream provider overloaded"
+        : described.rawError?.trim() || described.message.trim() || "request failed";
+  }
   return {
     status,
     error: {
@@ -121,6 +137,13 @@ export function validateOpenAiSamplingParams(params: {
     return "`seed` must be an integer.";
   }
   return undefined;
+}
+
+export function resolveOpenAiStreamParams(
+  params: AgentStreamParams,
+): AgentStreamParams | undefined {
+  const entries = Object.entries(params).filter(([, value]) => value !== undefined);
+  return entries.length ? Object.fromEntries(entries) : undefined;
 }
 
 export function resolveResponseFormat(value: unknown): Record<string, unknown> | undefined {

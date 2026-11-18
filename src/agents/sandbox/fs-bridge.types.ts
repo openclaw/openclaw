@@ -1,26 +1,37 @@
-/**
- * Public sandbox filesystem bridge contracts.
- *
- * Tool and backend code use this interface to access files through the sandbox
- * boundary instead of reaching directly into host paths.
- */
 import type { DirectoryEntry } from "../../infra/directory-entries.js";
 
-/** Resolved sandbox path with host, relative, and container views. */
+/** Managed skill directory projected read-only into the sandbox workspace. */
+export type ReadOnlyWorkspaceSkillMount = {
+  hostPath: string;
+  containerPath: string;
+};
+
+export type SandboxFsMount = {
+  hostRoot: string;
+  canonicalHostRoot?: string;
+  containerRoot: string;
+  writable: boolean;
+  source: "workspace" | "agent" | "bind" | "protectedSkill";
+};
+
+export type SandboxFsPreparation = {
+  mounts: SandboxFsMount[];
+  readOnlyWorkspaceSkillMounts: ReadOnlyWorkspaceSkillMount[];
+  protectedSkills: Array<{ name: string; sourceFile: string; containerRoot: string }>;
+};
+
 export type SandboxResolvedPath = {
   hostPath?: string;
   relativePath: string;
   containerPath: string;
 };
 
-/** Minimal file stat shape returned by sandbox fs bridge implementations. */
 export type SandboxFsStat = {
   type: "file" | "directory" | "other";
   size: number;
   mtimeMs: number;
 };
 
-/** Filesystem operations exposed across the sandbox boundary. */
 export type SandboxFsBridge = {
   /**
    * Backend-owned runtime roots and their local policy projections, in mount

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isEmbeddedStandaloneModule } from "../../cli-invocation.mjs";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ManualExecSecretProviderConfig,
@@ -18,7 +19,7 @@ import type { PluginManifestSecretProviderIntegration } from "../plugins/manifes
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 
 /** Secret provider preset exposed by an active trusted plugin integration. */
-export type SecretProviderIntegrationPreset = {
+type SecretProviderIntegrationPreset = {
   id: string;
   pluginId: string;
   providerAlias: string;
@@ -27,7 +28,6 @@ export type SecretProviderIntegrationPreset = {
   providerConfig: PluginIntegrationSecretProviderConfig;
 };
 
-/** Result of materializing a plugin integration into a manual exec provider config. */
 type SecretProviderIntegrationResolution =
   | {
       ok: true;
@@ -57,7 +57,9 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
   if (process.platform === "win32") {
     return true;
   }
-  if ((stat.mode & 0o022) !== 0) {
+  // Match plugin discovery, which already loads this plugin's code at the same modes:
+  // group write is the default under user-private-group umasks (002), world write is not.
+  if ((stat.mode & 0o002) !== 0) {
     return false;
   }
   if (typeof process.getuid !== "function" || typeof stat.uid !== "number") {
@@ -68,17 +70,20 @@ function isSecurePosixPathStat(stat: fs.Stats): boolean {
 }
 
 function resolveNodeEntrypointArg(params: {
-  integration: PluginManifestSecretProviderIntegration;
+  args: readonly string[];
   pluginRoot: string;
   rejectHardlinks: boolean;
 }): string | undefined {
-  const entrypoint = params.integration.args?.[0];
+  const entrypoint = params.args[0];
   if (!entrypoint?.startsWith("./")) {
     return undefined;
   }
   const resolved = resolvePluginRelativePath(entrypoint, params.pluginRoot);
   if (!resolved) {
     return undefined;
+  }
+  if (isEmbeddedStandaloneModule(resolved)) {
+    return resolved;
   }
   try {
     const opened = openRootFileSync({
@@ -122,7 +127,7 @@ function materializeExecProviderConfig(
   env: NodeJS.ProcessEnv,
 ): ManualExecSecretProviderConfig | undefined {
   const pluginRoot = record.rootDir;
-  if (integration.command !== NODE_COMMAND_PLACEHOLDER) {
+  if (integration.command !== NODE_COMMAND_PLACEHOLDER || !integration.args) {
     return undefined;
   }
   const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
@@ -131,23 +136,24 @@ function materializeExecProviderConfig(
     env,
   });
   const nodeEntrypoint = resolveNodeEntrypointArg({
-    integration,
+    args: integration.args,
     pluginRoot,
     rejectHardlinks,
   });
   if (!nodeEntrypoint) {
     return undefined;
   }
-  const args = integration.args
-    ?.map((arg, index) => (index === 0 ? nodeEntrypoint : resolveArg(arg, pluginRoot)))
+  const tailArgs = integration.args
+    .slice(1)
+    .map((arg) => resolveArg(arg, pluginRoot))
     .filter((arg): arg is string => arg !== undefined);
-  if (integration.args && args?.length !== integration.args.length) {
+  if (tailArgs.length !== integration.args.length - 1) {
     return undefined;
   }
   return {
     source: "exec",
     command: process.execPath,
-    ...(args ? { args: [...resolveRuntimeArgs(), ...args] } : {}),
+    args: [...resolveRuntimeArgs(), nodeEntrypoint, ...tailArgs],
     ...(integration.timeoutMs !== undefined ? { timeoutMs: integration.timeoutMs } : {}),
     ...(integration.noOutputTimeoutMs !== undefined
       ? { noOutputTimeoutMs: integration.noOutputTimeoutMs }
@@ -194,7 +200,6 @@ function isValidPluginIntegrationProviderId(value: string): boolean {
   return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
 }
 
-/** Narrows a secret provider config to the plugin-integration exec shape. */
 export function isPluginIntegrationSecretProviderConfig(
   value: unknown,
 ): value is PluginIntegrationSecretProviderConfig {

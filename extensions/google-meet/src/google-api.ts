@@ -4,25 +4,8 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 const REAUTH_HINT = "Re-run `openclaw googlemeet auth login` and store the refreshed oauth block.";
 const GOOGLE_API_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
-function scopeText(scopes: readonly string[]): string {
-  return scopes.map((scope) => `\`${scope}\``).join(", ");
-}
-
 export async function readGoogleApiErrorDetail(response: Response): Promise<string> {
   return await readResponseTextLimited(response, GOOGLE_API_ERROR_BODY_LIMIT_BYTES);
-}
-
-async function googleApiError(params: {
-  response: Response;
-  prefix: string;
-  scopes?: readonly string[];
-}): Promise<Error> {
-  const detail = await readGoogleApiErrorDetail(params.response);
-  const scopeHint =
-    params.scopes && params.scopes.length > 0
-      ? ` Required OAuth scope: ${scopeText(params.scopes)}. ${REAUTH_HINT}`
-      : "";
-  return new Error(`${params.prefix} failed (${params.response.status}): ${detail}${scopeHint}`);
 }
 
 type GoogleApiQuery = Record<string, string | number | boolean | undefined>;
@@ -70,7 +53,12 @@ export async function requestGoogleApi<T>(
   });
   try {
     if (!response.ok) {
-      throw await googleApiError({ response, prefix: params.prefix, scopes: params.scopes });
+      const detail = await readGoogleApiErrorDetail(response);
+      const scopeHint =
+        params.scopes && params.scopes.length > 0
+          ? ` Required OAuth scope: ${params.scopes.map((scope) => `\`${scope}\``).join(", ")}. ${REAUTH_HINT}`
+          : "";
+      throw new Error(`${params.prefix} failed (${response.status}): ${detail}${scopeHint}`);
     }
     return await read(response);
   } finally {

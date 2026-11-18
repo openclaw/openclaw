@@ -30,7 +30,10 @@ import { startGatewayServer } from "./server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
-import type { WorkerEnvironmentServiceRecord } from "./worker-environments/service-contract.js";
+import type {
+  WorkerEnvironmentServiceContract,
+  WorkerEnvironmentServiceRecord,
+} from "./worker-environments/service-contract.js";
 
 const injectedWorkerService = vi.hoisted(() => {
   const records = new Map<string, WorkerEnvironmentServiceRecord>();
@@ -42,11 +45,16 @@ const injectedWorkerService = vi.hoisted(() => {
     get: (environmentId: string) => records.get(environmentId),
     readPreparedPoolSummary: () => ({ maxTotal: 4, reservedEnvironmentIds: [] }),
     readReadyWorkerTarget: () => 1,
-    create: async (profileId: string, idempotencyKey: string) => {
+    createWithRequest: async ({
+      profileId,
+      idempotencyKey,
+      beforeProvision,
+    }: Parameters<WorkerEnvironmentServiceContract["createWithRequest"]>[0]) => {
       const existingId = idempotency.get(idempotencyKey);
       if (existingId) {
         return records.get(existingId)!;
       }
+      beforeProvision?.();
       createCount += 1;
       const environmentId = `worker-qa-${createCount}`;
       const record: WorkerEnvironmentServiceRecord = {
@@ -54,6 +62,8 @@ const injectedWorkerService = vi.hoisted(() => {
         providerId: profileId,
         profileId,
         leaseId: `lease-${createCount}`,
+        resourceReceipt: null,
+        retention: null,
         sharedHost: null,
         state: "ready",
         ownerEpoch: 1,
@@ -203,11 +213,15 @@ describe("Gateway agent and artifact APIs", () => {
       await server?.close();
       await releaseClaim?.();
     });
+    const recoveryRestart = vi.fn(() => {
+      throw new Error("Agent mutations must hot-apply without a recovery restart");
+    });
     const startServer = () =>
       startGatewayServer(claim.port, {
         bind: "loopback",
         auth: { mode: "token", token },
         controlUiEnabled: false,
+        hotReloadRecovery: recoveryRestart,
       }).catch((error: unknown) => {
         // Incomplete startup rollback can leave the listener bound; keep the port claimed.
         if (
@@ -512,5 +526,6 @@ describe("Gateway agent and artifact APIs", () => {
     await restartGateway("gateway agent artifact APIs after delete");
     const finalAgents = await client.request<{ agents: Array<{ id: string }> }>("agents.list", {});
     expect(finalAgents.agents.map((entry) => entry.id)).not.toContain(createdAgent.agentId);
+    expect(recoveryRestart).not.toHaveBeenCalled();
   }, 120_000);
 });

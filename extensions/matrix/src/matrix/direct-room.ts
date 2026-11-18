@@ -50,19 +50,12 @@ export async function hasDirectMatrixMemberFlag(
   }
 }
 
-type MatrixDirectRoomEvidence = {
-  joinedMembers: string[] | null;
-  strict: boolean;
-  viaMemberState: boolean;
-  memberStateFlag: boolean | null;
-};
-
 export async function inspectMatrixDirectRoomEvidence(params: {
   client: MatrixClient;
   roomId: string;
   remoteUserId: string;
   selfUserId?: string | null;
-}): Promise<MatrixDirectRoomEvidence> {
+}) {
   const selfUserId =
     params.selfUserId !== undefined
       ? normalizeNullableString(params.selfUserId)

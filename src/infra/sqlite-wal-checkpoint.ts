@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
@@ -49,10 +50,7 @@ const checkpointListeners = resolveGlobalSingleton(
 export function onSqliteWalCheckpoint(
   listener: (observation: SqliteWalCheckpointObservation) => void,
 ): () => void {
-  checkpointListeners.add(listener);
-  return () => {
-    checkpointListeners.delete(listener);
-  };
+  return registerListener(checkpointListeners, listener);
 }
 
 /** A relayed worker result adds host observations without claiming visibility into other threads. */
@@ -253,9 +251,10 @@ export function createSqliteWalCheckpoint(
     if (observation.error !== undefined) {
       options.onCheckpointError?.(sizeError);
     }
-    // Frequent checkpoint ticks expect readers to block some passes; only the
-    // reclaim cadence reports them, the health snapshot still records every one.
-    if ((busy || observation.warning) && !quiet) {
+    // Frequent checkpoint ticks expect readers to block some passes; only an
+    // observation that reaches the warning policy reports them, while the
+    // health snapshot still records every blocked pass.
+    if (observation.warning && !quiet) {
       const label = options.databaseLabel ?? "sqlite database";
       options.onCheckpointError?.(
         new Error(

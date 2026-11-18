@@ -1,5 +1,6 @@
 // Private runtime helpers for active registered session catalogs.
-export { buildControlUiCatalogSessionUrl } from "../../packages/session-url-contract/src/index.js";
+export { createAcpSessionCatalogAdoption } from "../plugins/session-catalog-acp-adoption.js";
+export { readSessionCatalogJsonlActivity } from "../plugins/session-catalog-jsonl-activity.js";
 export {
   buildControlUiCatalogSharePath,
   isControlUiCatalogShareId,

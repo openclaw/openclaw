@@ -12,7 +12,7 @@ Files:
 Key workflow:
 
 - `qa suite` is the executable frontier subset / regression loop.
-- `qa manual` is the scoped personality and style probe after the executable subset is green.
+- `qa manual` is the scoped personality and style check after the executable subset is green.
 - `qa coverage` prints the scenario coverage inventory from scenario YAML.
 
 Operator workflows:
@@ -42,14 +42,18 @@ Adapters without a completion boundary fail explicitly rather than falling back
 to the first matching outbound observation.
 
 Generated-media scenarios count attachment deliveries separately from text
-progress and check the saved bytes plus the persisted completion reply.
+progress and check the saved bytes plus the persisted completion reply. Compare
+that reply through the production tool-media selection and outbound payload plan:
+persisted assistant text can retain generated-attachment Markdown that delivery
+consumes. The private `qa-runtime` facade exposes the production media owner for
+this comparison; transcript collection preserves the stored text.
 
 ## Confined repository checkpoint commands
 
 `scripts/qa/repository-checkpoint-admission.ts` adapts the product-owned checkpoint
 and publication command planners to the final campaign Git launch boundary. It executes only the
 canonical bare checkpoint initialization, checkpoint Git-directory query, and
-read-only publication config probes. All other commands exit 126 before spawning Git.
+read-only publication config checks. All other commands exit 126 before spawning Git.
 
 The launcher supplies freshly validated `checkpointRoot` (from the repository
 workspace store), `nodeRoot` (from the current placement), `campaignRoot`, `cwd`,

@@ -12,19 +12,9 @@ const WhatsAppGroupEntrySchema = buildGroupEntrySchema(undefined, {
   omit: ["skills", "enabled", "allowFrom"],
 }).optional();
 
-const WhatsAppGroupsSchema = z.record(z.string(), WhatsAppGroupEntrySchema).optional();
-
 const WhatsAppDirectEntrySchema = z
   .strictObject({
     systemPrompt: z.string().optional(),
-  })
-  .optional();
-
-const WhatsAppDirectSchema = z.record(z.string(), WhatsAppDirectEntrySchema).optional();
-
-const WhatsAppPluginHooksSchema = z
-  .strictObject({
-    messageReceived: z.boolean().optional(),
   })
   .optional();
 
@@ -40,12 +30,16 @@ const WhatsAppCommonShape = {
   ...accountShape,
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
-  groups: WhatsAppGroupsSchema,
-  direct: WhatsAppDirectSchema,
+  groups: z.record(z.string(), WhatsAppGroupEntrySchema).optional(),
+  direct: z.record(z.string(), WhatsAppDirectEntrySchema).optional(),
   ...buildChannelReactionShape({
     reactionLevels: ["off", "ack", "minimal", "extensive"],
   }),
-  pluginHooks: WhatsAppPluginHooksSchema,
+  pluginHooks: z
+    .strictObject({
+      messageReceived: z.boolean().optional(),
+    })
+    .optional(),
 };
 
 const WhatsAppAccountSchema = z.strictObject({
@@ -53,7 +47,6 @@ const WhatsAppAccountSchema = z.strictObject({
   name: z.string().optional(),
   /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
   authDir: z.string().optional(),
-  mediaMaxMb: z.number().int().positive().optional(),
 });
 
 export const WhatsAppConfigSchema = z

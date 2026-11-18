@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js";
 import {
   createCronScheduledToolProjection,
@@ -11,6 +12,7 @@ import { resolveAgentHarnessScheduledToolProjectionCapability } from "./host-pri
 
 const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
 async function createHost(runId: string) {
+  setRuntimeConfigSnapshot({});
   const host = await createAdmittedHostCapabilityTestFixture({
     runId,
     agentId: "main",
@@ -30,12 +32,19 @@ afterEach(() => {
     host.closeAdmission();
   }
   resetAgentRunRegistryForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("agent harness scheduled tool projection", () => {
   it("issues scheduled shell projections only from this host-created tool surface", async () => {
     const host = await createHost("run-scheduled-tool-projection");
-    const sourceTools = host.hostCapabilities.createToolSurface?.({}) ?? [];
+    expect(
+      resolveAgentHarnessScheduledToolProjectionCapability({
+        hostCapabilities: host.hostCapabilities,
+        ownerPluginId: "other-harness",
+      }),
+    ).toBeUndefined();
+    const sourceTools = (await host.hostCapabilities.createToolSurfaceAsync?.({})) ?? [];
     const execTool = sourceTools.find((tool) => tool.name === "exec");
     const createProjection = resolveAgentHarnessScheduledToolProjectionCapability({
       hostCapabilities: host.hostCapabilities,
@@ -97,18 +106,6 @@ describe("agent harness scheduled tool projection", () => {
     expect(() => readCronScheduledToolProjection(alias)).toThrow();
   });
 
-  it("keeps scheduled shell issuance private to the registered owner plugin", async () => {
-    const host = await createHost("run-projection-owner");
-
-    expect(
-      resolveAgentHarnessScheduledToolProjectionCapability({
-        hostCapabilities: host.hostCapabilities,
-        ownerPluginId: "other-harness",
-      }),
-    ).toBeUndefined();
-    host.closeHost();
-  });
-
   it("constructs scheduled exec projections with host-owned policy", async () => {
     const execute = vi.fn(async () => ({
       content: [
@@ -136,8 +133,6 @@ describe("agent harness scheduled tool projection", () => {
 
     const result = await alias.execute("call-1", {
       command: "echo safe",
-      host: "node",
-      node: "remote",
       security: "full",
       ask: "off",
     });

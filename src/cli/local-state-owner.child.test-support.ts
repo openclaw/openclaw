@@ -13,36 +13,103 @@ const control = path.join(root, "control");
 fs.mkdirSync(control, { recursive: true });
 registerSealedRuntime({ json5, resolveSecureTempRoot: () => control });
 installCliSignalExitHandlers();
+const writeJson = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+const writeJsonFile = (file: string, value: unknown) =>
+  fs.writeFileSync(file, JSON.stringify(value));
+const registrations: Record<string, () => Promise<(program: Command) => void>> = {
+  sandbox: async () => (await import("./sandbox-cli.js")).registerSandboxCli,
+  agents: async () => (await import("./program/register.agent.js")).registerAgentsCommands,
+  setup: async () => (await import("./program/register.setup.js")).registerSetupCommand,
+  onboard: async () => (await import("./program/register.onboard.js")).registerOnboardCommand,
+  config: async () => (await import("./config-cli.js")).registerConfigCli,
+  migrate: async () => (await import("./program/register.migrate.js")).registerMigrateCommand,
+  mcp: async () => (await import("./mcp-cli.js")).registerMcpCli,
+  models: async () => (await import("./models-cli.js")).registerModelsCli,
+  "exec-policy": async () => (await import("./exec-policy-cli.js")).registerExecPolicyCli,
+  database: async () => (await import("./program/register.database.js")).registerDatabaseCommand,
+};
 try {
-  if (process.argv[2] === "settlement") {
-    const [
-      { ManagedWorktreeService },
-      { getOpenClawDatabaseMaintenanceScope },
-      { openOpenClawStateDatabase },
-    ] = await Promise.all([
-      import("../agents/worktrees/service.js"),
-      import("../state/openclaw-state-db-async-lifecycle.js"),
-      import("../state/openclaw-state-db.js"),
-    ]);
+  if (process.argv[2] === "migrate-uncertain") {
+    const { runMigrationApply } = await import("../commands/migrate/apply.js");
+    const { hasCommandProcessCleanupError } = await import("../process/exec-result.js");
+    const { retainCommandProcessCleanup } = await import("../process/exec-spawn.js");
+    const { resolveGatewayLockPaths, readLockPayloadSync } =
+      await import("../infra/gateway-lock.js");
+    const { summarizeMigrationItems } = await import("../plugin-sdk/migration.js");
+    const plan = {
+      providerId: "fixture",
+      source: "synthetic-source",
+      summary: summarizeMigrationItems([]),
+      items: [],
+    };
+    let applyCompleted = false;
+    const failure = await runMigrationApply({
+      runtime: {
+        log() {},
+        error() {},
+        exit(code) {
+          throw new Error(`unexpected exit ${code}`);
+        },
+      },
+      opts: { json: true, noBackup: true, configOverride: {} },
+      providerId: "fixture",
+      provider: {
+        id: "fixture",
+        label: "Fixture",
+        plan: async () => plan,
+        apply: async () => {
+          retainCommandProcessCleanup(Promise.resolve("uncertain"));
+          return plan;
+        },
+      },
+      onApplyCompleted: () => {
+        applyCompleted = true;
+      },
+    }).catch((error: unknown) => error);
+    let laterMutationRan = false;
+    const laterRefused = await runWithLocalStateOwner({
+      method: "migrate.apply",
+      params: {},
+      target: "later mutation",
+      onForeignOwner: "refuse",
+      runLocal: async () => {
+        laterMutationRan = true;
+      },
+    }).then(
+      () => false,
+      () => true,
+    );
+    const owner = readLockPayloadSync(resolveGatewayLockPaths(process.env).ownerLockPath);
+    writeJson({
+      applyCompleted,
+      uncertain: hasCommandProcessCleanupError(failure),
+      ownsState: owner?.pid === process.pid,
+      laterMutationRan,
+      laterRefused,
+    });
+  } else if (process.argv[2] === "settlement") {
+    const { ManagedWorktreeService } = await import("../agents/worktrees/service.js");
+    const { getOpenClawDatabaseMaintenanceScope } =
+      await import("../state/openclaw-state-db-async-lifecycle.js");
+    const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
     const repoRoot = process.argv[3]!;
     let database: ReturnType<typeof openOpenClawStateDatabase> | undefined;
     await runWithLocalStateOwner({
       method: "worktrees.create",
       params: { repoRoot, name: "settled" },
       target: repoRoot,
-      runLocal: async ({ env, signal, assertCurrent }) => {
+      runLocal: async ({ env, config, signal, assertCurrent }) => {
         const scope = getOpenClawDatabaseMaintenanceScope();
         if (!scope) {
           throw new Error("Offline operation has no retained resource scope");
         }
         signal.addEventListener("abort", () => process.stdout.write("interrupted\n"));
         database = openOpenClawStateDatabase({ env });
-        // This accepted continuation performs real Git/worker-backed registry work
-        // after the command returns; root custody must cover it and native close.
+        // Accepted work outlives the command; custody must cover it and native close.
         void scope.run(async () => {
           process.stdout.write(`pending:${scope.ownsSchemaMaintenance}\n`);
           await once(process.stdin, "data");
-          await new ManagedWorktreeService({ env }).create({
+          await new ManagedWorktreeService({ env, getConfig: () => config }).create({
             repoRoot,
             name: "settled",
             ownerKind: "manual",
@@ -52,32 +119,38 @@ try {
         assertCurrent();
       },
     });
-    fs.writeFileSync(
-      path.join(root, "settlement.json"),
-      JSON.stringify({
-        databaseOpen: database?.db.isOpen,
-      }),
-    );
+    writeJsonFile(path.join(root, "settlement.json"), { databaseOpen: database?.db.isOpen });
   } else {
-    const [{ requireNodeSqlite }, { resolveGatewayLockPaths }] = await Promise.all([
-      import("../infra/node-sqlite.js"),
-      import("../infra/gateway-lock.js"),
-    ]);
+    const { requireNodeSqlite } = await import("../infra/node-sqlite.js");
+    const { resolveGatewayLockPaths } = await import("../infra/gateway-lock.js");
     const native = requireNodeSqlite();
     const ownerPath = resolveGatewayLockPaths(process.env).ownerLockPath;
     let worktreeSql = 0;
     let missingCustody = 0;
     const ownerPids = new Set<number>();
-    const observe = (sql: string) => {
-      if (!/\bworktrees?\b|\bworktree_/iu.test(sql)) {
+    const ownershipWrites: Array<{ pid?: number; role?: string }> = [];
+    const observe = (sql: string, executing = true) => {
+      const worktree = /\bworktrees?\b|\bworktree_/iu.test(sql);
+      const ownershipWrite =
+        executing && /\binsert\s+into\b/iu.test(sql) && /\bconfig_machine_state\b/iu.test(sql);
+      if (!worktree && !ownershipWrite) {
         return;
       }
-      worktreeSql += 1;
+      worktreeSql += Number(worktree);
+      let identity: { pid?: number; role?: string } = {};
       try {
-        const owner: { pid: number } = JSON.parse(fs.readFileSync(ownerPath, "utf8"));
-        ownerPids.add(owner.pid);
+        const owner: { pid: number; role?: string } = JSON.parse(
+          fs.readFileSync(ownerPath, "utf8"),
+        );
+        if (worktree) {
+          ownerPids.add(owner.pid);
+        }
+        identity = { pid: owner.pid, role: owner.role };
       } catch {
-        missingCustody += 1;
+        missingCustody += Number(worktree);
+      }
+      if (ownershipWrite) {
+        ownershipWrites.push(identity);
       }
     };
     for (const method of ["prepare", "exec"] as const) {
@@ -85,7 +158,7 @@ try {
         ...Object.getOwnPropertyDescriptor(native.DatabaseSync.prototype, method),
         value: new Proxy(native.DatabaseSync.prototype[method], {
           apply(target, receiver, args: [string]) {
-            observe(args[0]);
+            observe(args[0], method === "exec");
             return Reflect.apply(target, receiver, args);
           },
         }),
@@ -103,43 +176,85 @@ try {
       });
     }
     process.on("exit", () => {
-      fs.writeFileSync(
-        path.join(control, "sql-observation.json"),
-        JSON.stringify({
-          pid: process.pid,
-          worktreeSql,
-          missingCustody,
-          ownerPids: [...ownerPids],
-        }),
-      );
+      writeJsonFile(path.join(control, "sql-observation.json"), {
+        pid: process.pid,
+        worktreeSql,
+        missingCustody,
+        ownerPids: [...ownerPids],
+        ownershipWrites,
+      });
     });
-    const [{ withConsoleLogsRoutedToStderrForJson }, { runCliWithExitFinalization }] =
-      await Promise.all([import("./json-output-mode.js"), import("./one-shot-exit.js")]);
+    const { withConsoleLogsRoutedToStderrForJson } = await import("./json-output-mode.js");
+    const { runCliWithExitFinalization } = await import("./one-shot-exit.js");
+    const runCommand = async () => {
+      if (process.argv[2] === "config-only-denial") {
+        const { openOpenClawStateDatabase } = await import("../state/openclaw-state-db.js");
+        await runWithLocalStateOwner({
+          method: "config set",
+          params: {},
+          target: "database",
+          databaseAccess: "none",
+          runLocal: async ({ env }) => {
+            openOpenClawStateDatabase({ env });
+          },
+        });
+        return;
+      }
+      if (process.argv[2] === "config-validation-only") {
+        const [{ ensureConfigReady }, { defaultRuntime }] = await Promise.all([
+          import("./program/config-guard.js"),
+          import("../runtime.js"),
+        ]);
+        await ensureConfigReady({
+          runtime: defaultRuntime,
+          commandPath: ["config", "validate"],
+          validateConfigOnly: true,
+        });
+        return;
+      }
+      if (process.argv[2] === "config-unset-route") {
+        const { tryRouteCli } = await import("./route.js");
+        const routed = await tryRouteCli([
+          ...process.argv.slice(0, 2),
+          "config",
+          "unset",
+          ...process.argv.slice(3),
+        ]);
+        if (!routed) {
+          throw new Error("Config unset route was not selected");
+        }
+      } else if (process.argv[2] === "ownership-claim-direct") {
+        const { claimOpenClawStateOwnership } =
+          await import("../state/openclaw-state-ownership-operations.js");
+        writeJson({ ownership: claimOpenClawStateOwnership("supervisor") });
+      } else {
+        const program = new Command().name("openclaw").exitOverride();
+        registerWorktreesCli(program);
+        const command = process.argv[2]!;
+        const register = await registrations[command]?.();
+        if (["agents", "setup", "onboard", "config"].includes(command)) {
+          const { registerPreActionHooks } = await import("./program/preaction.js");
+          registerPreActionHooks(program, "test");
+        }
+        register?.(program);
+        await program.parseAsync(process.argv.slice(2), { from: "user" });
+      }
+    };
     await runCliWithExitFinalization({
       run: () =>
-        withConsoleLogsRoutedToStderrForJson(
-          process.argv,
-          async () => {
-            const program = new Command().name("openclaw").exitOverride();
-            registerWorktreesCli(program);
-            if (process.argv[2] === "sandbox") {
-              const { registerSandboxCli } = await import("./sandbox-cli.js");
-              registerSandboxCli(program);
-            }
-            await program.parseAsync(process.argv.slice(2), { from: "user" });
-          },
-          { retainRoutingUntilProcessExit: true },
-        ),
+        withConsoleLogsRoutedToStderrForJson(process.argv, runCommand, {
+          retainRoutingUntilProcessExit: true,
+        }),
       onError: (error) => {
         throw error;
       },
     });
   }
 } catch (error) {
-  const [{ formatCliFailureLines, formatCliJsonFailure }, { isJsonOutputModeActive }] =
-    await Promise.all([import("./failure-output.js"), import("./json-output-mode.js")]);
+  const { formatCliFailureLines, formatCliJsonFailure } = await import("./failure-output.js");
+  const { isJsonOutputModeActive } = await import("./json-output-mode.js");
   if (isJsonOutputModeActive(process.argv)) {
-    process.stdout.write(`${JSON.stringify(formatCliJsonFailure(error))}\n`);
+    writeJson(formatCliJsonFailure(error));
   }
   for (const line of formatCliFailureLines({
     title: "The CLI command failed.",

@@ -17,9 +17,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { z } from "zod";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
-import { getCodexAppServerClientInstanceId, type CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient } from "./client.js";
+import { jsonObjectSchema, jsonValueSchema } from "./json-schema.js";
+import { listCodexMcpServerStatuses } from "./mcp-server-status.js";
 import {
   projectCodexMcpServerMetadata,
   projectCodexMcpToolMetadata,
@@ -36,15 +37,6 @@ import {
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_APPS_MCP_SERVER = "codex_apps";
-const toolCallMetadataSchema = z.record(z.string(), z.json());
-
-function readMcpAppResourceUri(item: CodexThreadItem): string | undefined {
-  const appContext = asOptionalRecord(item.appContext);
-  const uri =
-    normalizeOptionalString(appContext?.resourceUri) ??
-    normalizeOptionalString(item.mcpAppResourceUri);
-  return uri?.startsWith("ui://") ? uri : undefined;
-}
 
 function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
@@ -100,33 +92,26 @@ export function createNativeMcpRuntime(params: {
     if (statuses) {
       return statuses;
     }
-    const loaded: CodexMcpServerStatus[] = [];
-    const cursors = new Set<string>();
-    let cursor: string | undefined;
-    for (let page = 0; page < 100; page += 1) {
-      params.assertCurrent?.();
-      const response = await params.client.request(
-        "mcpServerStatus/list",
-        {
-          threadId: params.threadId,
-          detail: "full",
-          ...(cursor ? { cursor } : {}),
-        },
-        { assertCurrent: params.assertCurrent },
-      );
-      params.assertCurrent?.();
-      loaded.push(...response.data);
-      if (!response.nextCursor) {
-        statuses = loaded;
-        return statuses;
-      }
-      if (cursors.has(response.nextCursor)) {
-        throw new Error("Native MCP status cursor repeated");
-      }
-      cursor = response.nextCursor;
-      cursors.add(cursor);
-    }
-    throw new Error("Native MCP status exceeded the page limit");
+    statuses = await listCodexMcpServerStatuses(
+      async (cursor) => {
+        const response = await params.client.request(
+          "mcpServerStatus/list",
+          {
+            threadId: params.threadId,
+            detail: "full",
+            ...(cursor ? { cursor } : {}),
+          },
+          { assertCurrent: params.assertCurrent },
+        );
+        params.assertCurrent?.();
+        return response;
+      },
+      {
+        repeatedCursor: "Native MCP status cursor repeated",
+        pageLimit: "Native MCP status exceeded the page limit",
+      },
+    );
+    return statuses;
   };
   const getCatalog = async (): Promise<McpToolCatalog> => {
     if (catalog) {
@@ -179,7 +164,7 @@ export function createNativeMcpRuntime(params: {
     sessionId: params.attempt.sessionId,
     sessionKey: params.attempt.sessionKey,
     workspaceDir: params.attempt.workspaceDir,
-    configFingerprint: `${getCodexAppServerClientInstanceId(params.client)}:${params.threadId}`,
+    configFingerprint: `${params.client.getInstanceId()}:${params.threadId}`,
     mcpAppsEnabled: true,
     ...(params.appRequester ? { appRequester: params.appRequester } : {}),
     assertOwnerCurrent: params.assertCurrent,
@@ -227,7 +212,7 @@ export function createNativeMcpRuntime(params: {
             server: serverName,
             tool: toolName,
             arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
-            ...(options?._meta ? { _meta: toolCallMetadataSchema.parse(options._meta) } : {}),
+            ...(options?._meta ? { _meta: jsonObjectSchema.parse(options._meta) } : {}),
           },
           // The client also checks authority after overload backoff, before
           // each retry write; cancellation alone cannot detect policy changes.
@@ -256,7 +241,7 @@ export function createNativeMcpRuntime(params: {
               signal,
             });
             assertCurrent();
-            return z.json().parse(result);
+            return jsonValueSchema.parse(result);
           },
         },
         call,
@@ -321,10 +306,13 @@ export function createCodexNativeMcpAppResultDetailsPreparer(params: {
   return async (item) => {
     const serverName = normalizeOptionalString(item.server);
     const toolName = normalizeOptionalString(item.tool);
-    const uiResourceUri = readMcpAppResourceUri(item);
-    const connectorId = normalizeOptionalString(asOptionalRecord(item.appContext)?.connectorId);
+    const appContext = asOptionalRecord(item.appContext);
+    const uiResourceUri =
+      normalizeOptionalString(appContext?.resourceUri) ??
+      normalizeOptionalString(item.mcpAppResourceUri);
+    const connectorId = normalizeOptionalString(appContext?.connectorId);
     const toolResult = readMcpToolResult(item);
-    if (!serverName || !toolName || !uiResourceUri || !toolResult) {
+    if (!serverName || !toolName || !uiResourceUri?.startsWith("ui://") || !toolResult) {
       return undefined;
     }
     if (serverName === CODEX_APPS_MCP_SERVER && !connectorId) {
@@ -373,44 +361,50 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
   threadId: string;
   attempt: EmbeddedRunAttemptParams;
   request: { requestId: string | number; snapshot: Record<string, unknown>; signal: AbortSignal };
-  origin: { id: string; server: string; tool: string };
-  assertCurrent: () => void;
+  readOrigin: (serverName: string) => { id: string; server: string; tool: string } | undefined;
 }) {
+  const serverName =
+    typeof params.request.snapshot.serverName === "string"
+      ? params.request.snapshot.serverName
+      : "";
+  const origin = params.readOrigin(serverName);
+  const { agentId, sessionKey } = params.attempt;
+  if (!origin || !sessionKey || !agentId) {
+    throw new Error("Native MCP form has no unambiguous live origin");
+  }
   const assertCurrent = () => {
-    params.assertCurrent();
-    params.request.signal.throwIfAborted();
     params.attempt.hostCapabilities.assertActive();
+    if (params.readOrigin(serverName)?.id !== origin.id) {
+      throw new Error("Native MCP form origin expired");
+    }
+    params.request.signal.throwIfAborted();
   };
   assertCurrent();
   const initial = createNativeMcpRuntime({
     client: params.client,
     threadId: params.threadId,
     attempt: params.attempt,
-    originCallId: params.origin.id,
+    originCallId: origin.id,
     assertCurrent,
   });
-  const tools = (await initial.listTools?.(params.origin.server))?.tools ?? [];
+  const tools = (await initial.listTools?.(origin.server))?.tools ?? [];
   assertCurrent();
-  const source = tools.find((tool) => tool.name === params.origin.tool);
+  const source = tools.find((tool) => tool.name === origin.tool);
   if (!source) {
     throw new Error("Native MCP form origin is no longer listed");
   }
   const connectorId = readCodexMcpToolConnectorId(source);
-  if (params.origin.server === CODEX_APPS_MCP_SERVER && !connectorId) {
+  if (origin.server === CODEX_APPS_MCP_SERVER && !connectorId) {
     throw new Error("Native MCP form connector is unavailable");
   }
   const runtime = createNativeMcpRuntime({
     client: params.client,
     threadId: params.threadId,
     attempt: params.attempt,
-    originCallId: params.origin.id,
+    originCallId: origin.id,
     connectorId,
     assertCurrent,
   });
-  const { agentId, sessionKey } = params.attempt;
-  if (!agentId || !sessionKey) {
-    throw new Error("Native MCP form origin has no session owner");
-  }
   await runtime.getCatalog();
   assertCurrent();
   return await createHarnessMcpFormResourceContext({
@@ -420,7 +414,7 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
     signal: params.request.signal,
     origin: {
       runtime,
-      serverName: params.origin.server,
+      serverName: origin.server,
       agentId,
       sessionKey,
       requesterId: runtime.appRequester?.profileId,
@@ -431,28 +425,26 @@ export async function prepareCodexNativeMcpFormResourceContext(params: {
         const target = tools.find((tool) => tool.name === request.toolName);
         if (
           !target ||
-          params.attempt.toolOverrides?.mcpServers?.[params.origin.server] === false ||
-          params.attempt.toolOverrides?.mcpToolsDeny?.[params.origin.server]?.includes(
-            request.toolName,
-          ) ||
+          params.attempt.toolOverrides?.mcpServers?.[origin.server] === false ||
+          params.attempt.toolOverrides?.mcpToolsDeny?.[origin.server]?.includes(request.toolName) ||
           readCodexMcpToolUiVisibility(target)?.includes("app") === false ||
-          (params.origin.server === CODEX_APPS_MCP_SERVER &&
+          (origin.server === CODEX_APPS_MCP_SERVER &&
             readCodexMcpToolConnectorId(target) !== connectorId)
         ) {
           throw new Error("Native form preview tool is not authorized");
         }
-        const server = params.attempt.config?.mcp?.servers?.[params.origin.server];
+        const server = params.attempt.config?.mcp?.servers?.[origin.server];
         if (
           requiresMcpCodexToolApproval({
             mode: server
-              ? resolveProjectedMcpCodexToolApprovalMode(params.origin.server, server)
+              ? resolveProjectedMcpCodexToolApprovalMode(origin.server, server)
               : "prompt",
             fullPermission: params.attempt.permissionMode === "full",
             annotations: normalizeMcpCodexToolAnnotations(target.annotations),
           })
         ) {
           const description = JSON.stringify({
-            server: params.origin.server,
+            server: origin.server,
             tool: request.toolName,
             arguments: request.input,
           });

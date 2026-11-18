@@ -12,14 +12,14 @@ import {
 } from "./package-update-filesystem.js";
 import type { PackageRootIntegrityFingerprint } from "./package-update-integrity.js";
 import type { createNpmPackageRootLinkLifecycle } from "./package-update-npm-root.js";
+import type { createPublicationOwner } from "./package-update-publication-owner.js";
 import { PackageUpdateActivationError } from "./package-update-swap-contract.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-  PKG_INSPECTION_TIMEOUT_MS,
-} from "./update-freebsd-pkg-ownership.js";
 import { UPDATE_CLEANUP_BUDGET_MS } from "./update-maintenance.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import {
+  createSystemPackageOwnershipInspection,
+  PKG_INSPECTION_TIMEOUT_MS,
+} from "./update-system-package-ownership.js";
 
 type RetireLegacyPackageBackups = (
   assertCurrent: () => void,
@@ -72,20 +72,18 @@ export async function captureLegacyPackageBackupRetirement(
     for (const entry of entries) {
       try {
         assertOwner();
-        if (process.platform === "freebsd") {
-          const remainingMs = Math.floor(inspectionDeadlineAtMs - performance.now());
-          if (remainingMs <= 0) {
-            messages.push(
-              `Historical package backups retained in ${root}: FreeBSD pkg inspection budget expired`,
-            );
-            break;
-          }
-          const inspection = createFreeBsdPkgOwnershipInspection(remainingMs);
-          if (entry.identity.isSymbolicLink()) {
-            await inspection.assertEntryUnowned(entry.path);
-          } else {
-            await inspection.assertUnowned(entry.path);
-          }
+        const remainingMs = Math.floor(inspectionDeadlineAtMs - performance.now());
+        if (remainingMs <= 0) {
+          messages.push(
+            `Historical package backups retained in ${root}: system package inspection budget expired`,
+          );
+          break;
+        }
+        const inspection = createSystemPackageOwnershipInspection(remainingMs);
+        if (entry.identity.isSymbolicLink()) {
+          await inspection.assertEntryUnowned(entry.path);
+        } else {
+          await inspection.assertUnowned(entry.path);
         }
         const message = await discardPackageUpdateBackup(
           entry.path,
@@ -112,12 +110,6 @@ export async function captureLegacyPackageBackupRetirement(
         messages.push(
           `Historical package backup retained at ${entry.path}: ${formatErrorMessage(error)}`,
         );
-        if (
-          error instanceof FreeBsdPkgOwnershipError &&
-          error.reason === "pkg-ownership-unavailable"
-        ) {
-          break;
-        }
       }
     }
     assertOwner();
@@ -127,14 +119,15 @@ export async function captureLegacyPackageBackupRetirement(
 
 /** Refusal occurred before transaction handoff or any live package mutation. */
 export async function retireRefusedPackageSwap(
-  activation: { disarmRollback: () => Promise<boolean>; retire: () => Promise<unknown> },
+  activation: Pick<ReturnType<typeof createPublicationOwner>, "disarmRollback" | "retireVerified">,
   refusal: unknown,
+  onWarning: (message: string | undefined) => void,
 ): Promise<void> {
   try {
     // The publication owner verifies the original live generation and launchers
     // before disarming forward recovery and removing its prepared candidate.
     await activation.disarmRollback();
-    await activation.retire();
+    onWarning(await activation.retireVerified());
   } catch (retirementError) {
     throw new PackageUpdateActivationError(
       new AggregateError(
@@ -148,12 +141,13 @@ export async function retireRefusedPackageSwap(
 
 /** Called only by the verified, cached transaction completion path. */
 export async function retireVerifiedPackageSwap(params: {
-  activation: { retire: () => Promise<unknown> } | undefined;
+  activation: { retireVerified: () => Promise<string | undefined> } | undefined;
   rootLink: Awaited<ReturnType<typeof createNpmPackageRootLinkLifecycle>> | undefined;
   hadPackage: boolean;
   previousRoot: PackageRootIntegrityFingerprint | undefined;
   backupRoot: string;
   databaseBackupRoot: string | undefined;
+  discardDatabaseCaptures?: () => Promise<void>;
   retireLegacyBackups?: RetireLegacyPackageBackups;
   launchers: PackageLauncherBackup;
   packageBackedUp: boolean;
@@ -182,16 +176,44 @@ export async function retireVerifiedPackageSwap(params: {
   const assertRetirementCurrent = retainMutationAuthority(assertCurrent);
   const cleanupStartedAt = performance.now();
   const cleanupDeadlineAtMs = cleanupStartedAt + UPDATE_CLEANUP_BUDGET_MS;
+  const pendingCleanup = (retained: string[]): UpdateStepResult => ({
+    ...step(1, null, retained.join("\n")),
+    name: "package-backup-retention",
+    durationMs: Math.round(performance.now() - cleanupStartedAt),
+    // Only verified obsolete resources qualify the warning.
+    // Recovery refusal and unclassified link outcomes remain hard.
+    advisory: {
+      kind: "recoverable-maintenance" as const,
+      message: `Installation verification succeeded; backup cleanup remains pending. ${retained.join("\n")}. Inspect retained paths before removing obsolete backups manually.`,
+    },
+  });
   if (activation) {
-    await activation.retire();
-    // The anchor and helper are retired; only the executor fence remains.
+    const retained = await activation.retireVerified();
+    if (retained) {
+      messages.push(retained);
+    }
+    // Verified completion relinquishes recovery custody, including retained evidence.
     assertRetirementCurrent();
   } else {
     const linkRetention =
       rootLink && packageBackedUp ? await rootLink.retire(assertRetirementCurrent) : null;
     assertRetirementCurrent();
+    if (linkRetention?.obsolete) {
+      // Retirement stops at the link, as it does for an unclassified one, so the
+      // launcher backups and database snapshots behind it stay. Name them too.
+      const alsoRetained = (label: string, target: string | undefined) =>
+        target && fsSync.existsSync(target) ? [`${label} also retained at ${target}`] : [];
+      return pendingCleanup([
+        `${linkRetention.message} (a link to a checkout: remove the link itself, never recursively)`,
+        ...alsoRetained("shim backup", launchers.backupDir),
+        ...alsoRetained(
+          "pre-migration database snapshots",
+          params.databaseBackupRoot && `${params.databaseBackupRoot}.databases`,
+        ),
+      ]);
+    }
     if (linkRetention) {
-      return { ...step(1, null, linkRetention), name: "package-backup-retention" };
+      return { ...step(1, null, linkRetention.message), name: "package-backup-retention" };
     }
     if (hadPackage && previousRoot?.kind !== "link") {
       const message = await discardPackageUpdateBackup(
@@ -218,13 +240,23 @@ export async function retireVerifiedPackageSwap(params: {
   // Verified activation ends automatic database restoration, so the snapshots
   // share the retired package backup's lifetime.
   if (params.databaseBackupRoot) {
-    const message = await discardPackageUpdateBackup(
-      `${params.databaseBackupRoot}.databases`,
-      "pre-migration database snapshots",
-      params.globalRoot,
-      assertRetirementCurrent,
-      cleanupDeadlineAtMs,
+    const snapshots = `${params.databaseBackupRoot}.databases`;
+    // Server-side captures go first; their manifests stay until the drop succeeds.
+    const pending = await params.discardDatabaseCaptures?.().then(
+      () => undefined,
+      (error: unknown) =>
+        `PostgreSQL capture cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
     );
+    assertRetirementCurrent();
+    const message =
+      pending ??
+      (await discardPackageUpdateBackup(
+        snapshots,
+        "pre-migration database snapshots",
+        params.globalRoot,
+        assertRetirementCurrent,
+        cleanupDeadlineAtMs,
+      ));
     if (message) {
       messages.push(message);
     }
@@ -237,18 +269,5 @@ export async function retireVerifiedPackageSwap(params: {
   // Capture authority loss during the final filesystem await in the
   // retirement outcome, not only in the caller's later publication check.
   assertRetirementCurrent();
-  if (messages.length) {
-    return {
-      ...step(1, null, messages.join("\n")),
-      name: "package-backup-retention",
-      durationMs: Math.round(performance.now() - cleanupStartedAt),
-      // Only this verified obsolete-resource path qualifies the warning.
-      // Recovery refusal and unclassified link outcomes remain hard.
-      advisory: {
-        kind: "recoverable-maintenance" as const,
-        message: `Installation verification succeeded; backup cleanup remains pending. ${messages.join("\n")}. Inspect retained paths before removing obsolete backups manually.`,
-      },
-    };
-  }
-  return undefined;
+  return messages.length ? pendingCleanup(messages) : undefined;
 }

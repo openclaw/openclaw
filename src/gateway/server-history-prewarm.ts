@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import { resolveSessionStoreCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { prepareSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import {
-  isSessionHistoryWorkerCold,
-  prewarmSessionHistoryWorker,
-} from "../config/sessions/session-transcript-worker-runtime.js";
+import { prewarmSessionHistoryWorker } from "../config/sessions/session-transcript-worker-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -15,12 +12,11 @@ const log = createSubsystemLogger("gateway");
 
 export async function prewarmGatewaySessionHistory(
   config: OpenClawConfig,
-  options: { onlyIfCold?: boolean; isCancelled?: () => boolean } = {},
+  options: {
+    isCancelled?: () => boolean;
+  } = {},
 ): Promise<void> {
   try {
-    if (options.onlyIfCold && !isSessionHistoryWorkerCold()) {
-      return;
-    }
     for (const agentId of listConfiguredSessionStoreAgentIds(config)) {
       if (options.isCancelled?.()) {
         return;

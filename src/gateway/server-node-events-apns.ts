@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import {
   ApnsRegistrationPairingChangedError,
   registerApnsRegistration,
@@ -32,7 +32,7 @@ export async function registerNodeApnsEvent(
     }
     if (transport === "relay") {
       const gatewayDeviceId = normalizeOptionalString(obj.gatewayDeviceId) ?? "";
-      const currentGatewayDeviceId = loadOrCreateProcessDeviceIdentity().deviceId;
+      const currentGatewayDeviceId = (await loadOrCreateProcessDeviceIdentityAsync()).deviceId;
       if (!gatewayDeviceId || gatewayDeviceId !== currentGatewayDeviceId) {
         ctx.logGateway.warn(
           `push relay register rejected node=${nodeId}: gateway identity mismatch`,
@@ -40,6 +40,7 @@ export async function registerNodeApnsEvent(
         return undefined;
       }
     }
+    authority?.assertApnsRegistrationCurrent?.();
     await registerApnsRegistration({
       nodeId,
       ...(transport === "relay"

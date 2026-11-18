@@ -2,9 +2,7 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   applyOpenClawManifestInstallCommonFields,
-  getFrontmatterString,
   parseOpenClawManifestInstallBase,
-  parseFrontmatterBool,
   resolveOpenClawManifestBlock,
   resolveOpenClawManifestInstall,
   resolveOpenClawManifestOs,
@@ -14,7 +12,6 @@ import type {
   OpenClawHookMetadata,
   HookEntry,
   HookInstallSpec,
-  HookInvocationPolicy,
   ParsedHookFrontmatter,
 } from "./types.js";
 
@@ -42,7 +39,6 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
   return spec;
 }
 
-/** Resolve OpenClaw hook metadata from the manifest block in HOOK.md frontmatter. */
 export function resolveHookManifestMetadata(
   frontmatter: ParsedHookFrontmatter,
 ): OpenClawHookMetadata | undefined {
@@ -66,16 +62,6 @@ export function resolveHookManifestMetadata(
   };
 }
 
-/** Resolve invocation policy from top-level hook frontmatter flags. */
-export function resolveHookInvocationPolicy(
-  frontmatter: ParsedHookFrontmatter,
-): HookInvocationPolicy {
-  return {
-    enabled: parseFrontmatterBool(getFrontmatterString(frontmatter, "enabled"), true),
-  };
-}
-
-/** Resolve the config key for a hook, honoring metadata hookKey overrides. */
 export function resolveHookKey(hookName: string, entry?: Pick<HookEntry, "metadata">): string {
   return entry?.metadata?.hookKey ?? hookName;
 }

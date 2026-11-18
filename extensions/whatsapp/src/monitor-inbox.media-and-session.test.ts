@@ -1,4 +1,3 @@
-// WhatsApp monitor inbox media and session behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   getSock,
@@ -9,9 +8,9 @@ import {
 describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
-  async function openMonitor(onMessage = vi.fn()) {
-    const { listener } = await startInboxMonitor(onMessage);
-    return listener;
+  function groupUpsert(id: string, remoteJid: string, participant: string, message: unknown) {
+    const key = { id, fromMe: false, remoteJid, participant };
+    return { type: "notify", messages: [{ key, message }] };
   }
 
   async function runSingleUpsertAndCapture(upsert: unknown) {
@@ -23,22 +22,8 @@ describe("web monitor inbox", () => {
     return { onMessage, listener, sock };
   }
 
-  function expectSingleGroupMessage(
-    onMessage: ReturnType<typeof vi.fn>,
-    expected: Record<string, unknown>,
-  ) {
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    const message = onMessage.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    if (!message) {
-      throw new Error("expected inbound group message");
-    }
-    for (const [key, value] of Object.entries(expected)) {
-      expect(message[key]).toEqual(value);
-    }
-  }
-
   it("socket session resolves onClose when the socket closes", async () => {
-    const listener = await openMonitor(vi.fn());
+    const { listener } = await startInboxMonitor(vi.fn());
     const sock = getSock();
     const reasonPromise = listener.onClose;
     sock.ev.emit("connection.update", {
@@ -54,7 +39,7 @@ describe("web monitor inbox", () => {
   });
 
   it("socket session detaches inbound listeners and ends the socket on close()", async () => {
-    const listener = await openMonitor(vi.fn());
+    const { listener } = await startInboxMonitor(vi.fn());
     const sock = getSock();
 
     expect(sock.ev.listenerCount("messages.upsert")).toBeGreaterThan(0);
@@ -72,20 +57,9 @@ describe("web monitor inbox", () => {
   });
 
   it("includes participant when marking group messages read", async () => {
-    const { listener, sock } = await runSingleUpsertAndCapture({
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "grp1",
-            fromMe: false,
-            remoteJid: "12345-67890@g.us",
-            participant: "111@s.whatsapp.net",
-          },
-          message: { conversation: "group ping" },
-        },
-      ],
-    });
+    const { listener, sock } = await runSingleUpsertAndCapture(
+      groupUpsert("grp1", "12345-67890@g.us", "111@s.whatsapp.net", { conversation: "group ping" }),
+    );
 
     expect(sock.readMessages).toHaveBeenCalledWith([
       {
@@ -99,48 +73,33 @@ describe("web monitor inbox", () => {
   });
 
   it("unwraps ephemeral messages, preserves mentions, and still delivers group pings", async () => {
-    const { onMessage, listener } = await runSingleUpsertAndCapture({
-      type: "notify",
-      messages: [
-        {
-          key: {
-            id: "grp-ephem",
-            fromMe: false,
-            remoteJid: "424242@g.us",
-            participant: "888@s.whatsapp.net",
-          },
+    const { onMessage, listener } = await runSingleUpsertAndCapture(
+      groupUpsert("grp-ephem", "424242@g.us", "888@s.whatsapp.net", {
+        ephemeralMessage: {
           message: {
-            ephemeralMessage: {
-              message: {
-                extendedTextMessage: {
-                  text: "oh hey @Clawd UK !",
-                  contextInfo: { mentionedJid: ["123@s.whatsapp.net"] },
-                },
-              },
+            extendedTextMessage: {
+              text: "oh hey @Clawd UK !",
+              contextInfo: { mentionedJid: ["123@s.whatsapp.net"] },
             },
           },
         },
-      ],
-    });
-    expectSingleGroupMessage(onMessage, {
-      admission: expect.objectContaining({
-        conversation: expect.objectContaining({
-          kind: "group",
-          id: "424242@g.us",
+      }),
+    );
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        admission: expect.objectContaining({
+          conversation: expect.objectContaining({ kind: "group", id: "424242@g.us" }),
         }),
-      }),
-      group: expect.objectContaining({
-        mentions: expect.objectContaining({
-          jids: ["123@s.whatsapp.net"],
+        group: expect.objectContaining({
+          mentions: expect.objectContaining({
+            jids: ["123@s.whatsapp.net"],
+          }),
         }),
+        payload: expect.objectContaining({ body: "oh hey @Clawd UK !" }),
+        platform: expect.objectContaining({ senderE164: "+888" }),
       }),
-      payload: expect.objectContaining({
-        body: "oh hey @Clawd UK !",
-      }),
-      platform: expect.objectContaining({
-        senderE164: "+888",
-      }),
-    });
+    );
     await listener.close();
   });
 });

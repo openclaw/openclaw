@@ -1,12 +1,12 @@
-// Twitch plugin owns raw chat-envelope durable admission and replay draining.
 import { HttpStatusCodeError } from "@twurple/api-call";
 import {
+  bindIngressLifecycleToReplyOptions,
   createChannelIngressError,
   createChannelIngressMonitor,
   type ChannelIngressQueue,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { collectErrorGraphCandidates, formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getTwitchRuntime } from "./runtime.js";
 import type { TwitchChatMessage } from "./types.js";
@@ -21,12 +21,6 @@ type TwitchIngressPayload = {
 };
 
 type TwitchIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "onAdoptionFinalizing">;
-
-type TwitchIngress = {
-  accept: (message: TwitchChatMessage) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-};
 
 const TwitchIngressPermanentError = createChannelIngressError("TwitchIngressPermanentError");
 
@@ -74,15 +68,13 @@ function normalizeClaimedTwitchMessage(event: unknown, claimedId: string): Twitc
 }
 
 function isTwitchAuthenticationFailure(error: unknown): boolean {
-  let current: unknown = error;
-  for (let depth = 0; depth < 8 && current && typeof current === "object"; depth += 1) {
+  for (const candidate of collectErrorGraphCandidates(error, (current) => [current.cause])) {
     if (
-      current instanceof HttpStatusCodeError &&
-      (current.statusCode === 401 || current.statusCode === 403)
+      candidate instanceof HttpStatusCodeError &&
+      (candidate.statusCode === 401 || candidate.statusCode === 403)
     ) {
       return true;
     }
-    current = (current as { cause?: unknown }).cause;
   }
   return false;
 }
@@ -96,8 +88,7 @@ export function createTwitchIngress(options: {
   runtime: { error?: (message: string) => void };
   deliver: (message: TwitchChatMessage, lifecycle: TwitchIngressLifecycle) => Promise<void>;
   queue?: ChannelIngressQueue<TwitchIngressPayload>;
-  pollIntervalMs?: number;
-}): TwitchIngress {
+}) {
   const queue =
     options.queue ??
     getTwitchRuntime().state.openChannelIngressQueue<TwitchIngressPayload>({
@@ -120,42 +111,13 @@ export function createTwitchIngress(options: {
             : "Twitch ingress event identity changed after durable admission.",
         ),
     },
-    deliver: async (rawEvent, lifecycle, claim) => {
-      const message = normalizeClaimedTwitchMessage(rawEvent, claim.id);
-      let handedOff = false;
-      const deliveryAbortSignal = AbortSignal.any([lifecycle.abortSignal, shutdown.signal]);
-      try {
-        await options.deliver(message, {
-          admission: lifecycle.admission,
-          abortSignal: deliveryAbortSignal,
-          onAdopted: async () => {
-            handedOff = true;
-            await lifecycle.onAdopted();
-          },
-          onDeferred: () => {
-            handedOff = true;
-            lifecycle.onDeferred();
-          },
-          onDeferredHeartbeat: () => lifecycle.onDeferredHeartbeat?.(),
-          deferredHeartbeatIntervalMs: lifecycle.deferredHeartbeatIntervalMs,
-          onAbandoned: async () => {
-            handedOff = true;
-            await lifecycle.onAbandoned();
-          },
-        });
-      } catch (error) {
-        if (stopped || deliveryAbortSignal.aborted) {
-          return { kind: "failed-retryable", error };
-        }
-        throw error;
-      }
-      if (!handedOff && (stopped || deliveryAbortSignal.aborted)) {
-        return { kind: "failed-retryable", error: stoppedError() };
-      }
-      return undefined;
-    },
+    deliver: (rawEvent, lifecycle, claim) =>
+      options.deliver(
+        normalizeClaimedTwitchMessage(rawEvent, claim.id),
+        bindIngressLifecycleToReplyOptions(lifecycle).turnAdoptionLifecycle,
+      ),
     deferredClaims: "manual",
-    pollIntervalMs: options.pollIntervalMs ?? TWITCH_INGRESS_DRAIN_INTERVAL_MS,
+    pollIntervalMs: TWITCH_INGRESS_DRAIN_INTERVAL_MS,
     // Twitch IRC does not replay PRIVMSG lines; these 1k tombstones only guard local crashes.
     retention: {
       completedMaxEntries: 1_000,
@@ -181,7 +143,7 @@ export function createTwitchIngress(options: {
   let stopTask: Promise<void> | undefined;
 
   return {
-    accept: (message) => {
+    accept: (message: TwitchChatMessage) => {
       if (stopped) {
         return Promise.reject(stoppedError());
       }

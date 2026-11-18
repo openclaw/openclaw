@@ -3,7 +3,6 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 // interpreter eval paths used by approval policy and command explanations.
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
-  COMMAND_CARRIER_EXECUTABLES,
   isEnvAssignmentToken,
   parseEnvInvocationPrelude,
   resolveCarrierCommandArgv,
@@ -24,7 +23,6 @@ import {
 } from "../shell-wrapper-resolution.js";
 import { detectInterpreterInlineEvalArgv, type InterpreterInlineEvalHit } from "./inline-eval.js";
 
-/** Command and flag pair that can carry nested command text. */
 type CommandCarrierHit = {
   command: string;
   flag?: string;
@@ -37,11 +35,6 @@ function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
 }
 
-function isCommandCarrierExecutable(executable: string) {
-  return COMMAND_CARRIER_EXECUTABLES.has(executable) || executable === "exec";
-}
-
-/** Builds candidate command argv arrays from nested carriers and shell wrappers. */
 export function buildCommandPayloadArgvCandidates(
   argv: string[],
   seenArgv = new Set<string>(),
@@ -52,9 +45,7 @@ export function buildCommandPayloadArgvCandidates(
   }
   seenArgv.add(key);
   const assignmentStrippedArgv = stripLeadingEnvAssignments(argv);
-  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv, 0, {
-    includeExec: true,
-  });
+  const carriedArgv = resolveCarrierCommandArgv(assignmentStrippedArgv);
   const executableArgv = carriedArgv ?? assignmentStrippedArgv;
   const carriedCandidates = carriedArgv
     ? buildCommandPayloadArgvCandidates(carriedArgv, seenArgv)
@@ -68,11 +59,22 @@ export function buildCommandPayloadArgvCandidates(
           : [[shellWrapperPayload]];
       })()
     : [];
-  return uniqueCommandPayloadArgvCandidates([
+  const seenCandidates = new Set<string>();
+  return [
     ...(executableArgv.length > 0 ? [executableArgv] : []),
     ...carriedCandidates,
     ...shellWrapperCandidates,
-  ]);
+  ].filter((candidate) => {
+    if (candidate.length === 0) {
+      return false;
+    }
+    const candidateKey = commandArgvKey(candidate);
+    if (seenCandidates.has(candidateKey)) {
+      return false;
+    }
+    seenCandidates.add(candidateKey);
+    return true;
+  });
 }
 
 function stripLeadingEnvAssignments(argv: string[]): string[] {
@@ -81,21 +83,6 @@ function stripLeadingEnvAssignments(argv: string[]): string[] {
     index += 1;
   }
   return index > 0 ? argv.slice(index) : argv;
-}
-
-function uniqueCommandPayloadArgvCandidates(candidates: string[][]): string[][] {
-  const seen = new Set<string>();
-  return candidates.filter((candidate) => {
-    if (candidate.length === 0) {
-      return false;
-    }
-    const key = commandArgvKey(candidate);
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
 }
 
 type ShellPositionalCarrierPlan = { kind: "all" } | { kind: "indexes"; indexes: number[] };
@@ -159,19 +146,6 @@ function resolveShellPositionalCarrierPlan(command: string): ShellPositionalCarr
   return { kind: "indexes", indexes };
 }
 
-function resolveShellPositionalCarrierArgv(params: {
-  executableArgv: string[];
-  valueTokenIndex: number;
-  plan: ShellPositionalCarrierPlan;
-}): string[] {
-  const positionalArgv = params.executableArgv.slice(params.valueTokenIndex + 1);
-  const carriedArgv =
-    params.plan.kind === "all"
-      ? positionalArgv
-      : params.plan.indexes.map((index) => positionalArgv[index] ?? "");
-  return carriedArgv.map((token) => token.trim()).filter((token) => token.length > 0);
-}
-
 function detectShellPositionalCarrierInlineEvalArgvInternal(
   argv: string[],
   seenArgv: Set<string>,
@@ -201,11 +175,14 @@ function detectShellPositionalCarrierInlineEvalArgvInternal(
     return null;
   }
 
-  const carriedArgv = resolveShellPositionalCarrierArgv({
-    executableArgv,
-    valueTokenIndex: inlineMatch.valueTokenIndex,
-    plan: carrierPlan,
-  });
+  const positionalArgv = executableArgv.slice(inlineMatch.valueTokenIndex + 1);
+  const carriedArgv = (
+    carrierPlan.kind === "all"
+      ? positionalArgv
+      : carrierPlan.indexes.map((index) => positionalArgv[index] ?? "")
+  )
+    .map((token) => token.trim())
+    .filter((token) => token.length > 0);
   if (carriedArgv.length === 0) {
     return null;
   }
@@ -229,11 +206,7 @@ function detectCarrierInlineEvalArgvInternal(
     return detectInlineEvalArgvInternal(dispatchUnwrap.argv, seenArgv);
   }
 
-  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable)) {
-    return null;
-  }
-  const carriedArgv = resolveCarrierCommandArgv(executableArgv, 0, { includeExec: true });
+  const carriedArgv = resolveCarrierCommandArgv(executableArgv);
   if (!carriedArgv) {
     return null;
   }
@@ -277,6 +250,50 @@ export function detectInlineEvalInSegments(
     }
   }
   return null;
+}
+
+/** What the command text shows about the programs that a script interpreter runs. */
+export type ExecProgramVisibility = { opaque: boolean };
+
+const PYTHON_EXECUTABLE = /^(?:python|pypy)(?:\d+(?:\.\d+)*)?$/u;
+const PYTHON_NON_PROGRAM_FLAGS = new Set(["-V", "--version", "-h", "--help"]);
+const NODE_NON_PROGRAM_FLAGS = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
+
+// The program comes from a file or stdin, not from the argv (inline eval) or an installed module.
+function runsProgramOutsideArgv(argv: string[]): boolean {
+  const executable = normalizeExecutableToken(argv[0] ?? "");
+  const args = argv.slice(1);
+  if (PYTHON_EXECUTABLE.test(executable)) {
+    if (args.some((arg) => PYTHON_NON_PROGRAM_FLAGS.has(arg) || arg.startsWith("-m"))) {
+      return false;
+    }
+  } else if (executable !== "node" || args.some((arg) => NODE_NON_PROGRAM_FLAGS.has(arg))) {
+    return false;
+  }
+  return detectInterpreterInlineEvalArgv(argv) === null;
+}
+
+/**
+ * A Python or Node program from a file or stdin is opaque when a shell chain, pipeline or
+ * wrapper starts it: the command text does not identify the program that runs. Approval
+ * policy treats an opaque command as an allowlist miss. This is a fact, never a refusal.
+ */
+export function detectOpaqueInterpreterProgram(
+  command: string,
+  segments: readonly ExecCommandSegment[],
+): ExecProgramVisibility {
+  const opaque = segments.some((segment) => {
+    const candidates = buildCommandPayloadArgvCandidates(segment.argv);
+    if (!candidates.some(runsProgramOutsideArgv)) {
+      return false;
+    }
+    return (
+      segments.length > 1 ||
+      segment.raw.trim() !== command.trim() ||
+      candidates.some((argv) => isShellWrapperExecutable(normalizeExecutableToken(argv[0] ?? "")))
+    );
+  });
+  return { opaque };
 }
 
 export function detectCommandCarrierArgv(argv: string[]): CommandCarrierHit[] {
@@ -344,10 +361,7 @@ export function detectShellWrapperThroughCarrierArgv(
   shellCommandFlag: (argv: string[], startIndex: number) => unknown,
 ): string | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable)) {
-    return null;
-  }
-  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  const carriedArgv = resolveCarrierCommandArgv(argv);
   if (!carriedArgv) {
     return null;
   }
@@ -358,11 +372,7 @@ export function detectShellWrapperThroughCarrierArgv(
 }
 
 export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuiltinHit | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable)) {
-    return null;
-  }
-  const carriedArgv = resolveCarrierCommandArgv(argv, 0, { includeExec: true });
+  const carriedArgv = resolveCarrierCommandArgv(argv);
   if (!carriedArgv) {
     return null;
   }

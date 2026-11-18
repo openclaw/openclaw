@@ -1,7 +1,10 @@
 import {
   asMeetingBrowserTabs,
+  callMeetingBrowserProxyOnNode,
   readMeetingBrowserTab,
+  resolveMeetingBrowserNode,
   type MeetingBrowserCandidateTab,
+  type MeetingBrowserRequestParams,
 } from "openclaw/plugin-sdk/meeting-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -14,7 +17,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { GoogleMeetBrowserManualActionError } from "../browser-manual-action-error.js";
 import type { GoogleMeetConfig } from "../config.js";
-import { callBrowserProxyOnNode, resolveChromeNode } from "./chrome-browser-proxy.js";
+import { GOOGLE_MEET_BROWSER_NODE_ADAPTER } from "./google-meet-platform-constants.js";
 import { forceMeetEnglishUi } from "./google-meet-urls.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
 
@@ -25,15 +28,6 @@ const GOOGLE_MEET_BROWSER_NAVIGATION_RETRY_MS = 1_000;
 const GOOGLE_MEET_BROWSER_POLL_MS = 500;
 
 type GoogleMeetBrowserManualActionState = NonNullable<GoogleMeetChromeHealth["manualAction"]>;
-
-type BrowserCreateStepResult = {
-  meetingUri?: string;
-  browserUrl?: string;
-  browserTitle?: string;
-  manualAction?: GoogleMeetBrowserManualActionState;
-  notes?: string[];
-  retryAfterMs?: number;
-};
 
 type GoogleMeetBrowserCreateResult = {
   meetingUri: string;
@@ -84,7 +78,7 @@ function readBrowserManualAction(value: unknown): GoogleMeetBrowserManualActionS
     : undefined;
 }
 
-function readBrowserCreateResult(result: unknown): BrowserCreateStepResult {
+function readBrowserCreateResult(result: unknown) {
   const record = asRecord(result);
   const nested = asOptionalObjectRecord(record.result) ?? record;
   return {
@@ -171,33 +165,36 @@ export async function createMeetWithBrowserProxyOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
 }): Promise<GoogleMeetBrowserCreateResult> {
-  const nodeId = await resolveChromeNode({
+  const nodeId = await resolveMeetingBrowserNode({
     runtime: params.runtime,
     requestedNode: params.config.chromeNode.node,
+    adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
   });
   const timeoutMs = Math.max(
     GOOGLE_MEET_BROWSER_CREATE_TIMEOUT_MS,
     params.config.chrome.joinTimeoutMs,
   );
   const stepTimeoutMs = Math.min(timeoutMs, GOOGLE_MEET_BROWSER_STEP_TIMEOUT_MS);
-  let openedByPlugin = false;
-  let tab = asMeetingBrowserTabs(
-    await callBrowserProxyOnNode({
+  const callBrowser = (request: Omit<MeetingBrowserRequestParams, "timeoutMs">) =>
+    callMeetingBrowserProxyOnNode({
+      ...request,
       runtime: params.runtime,
       nodeId,
+      timeoutMs: stepTimeoutMs,
+      adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
+    });
+  let openedByPlugin = false;
+  let tab = asMeetingBrowserTabs(
+    await callBrowser({
       method: "GET",
       path: "/tabs",
-      timeoutMs: stepTimeoutMs,
     }),
   ).find(isGoogleMeetCreateTab);
   if (tab?.targetId) {
-    await callBrowserProxyOnNode({
-      runtime: params.runtime,
-      nodeId,
+    await callBrowser({
       method: "POST",
       path: "/tabs/focus",
       body: { targetId: tab.targetId },
-      timeoutMs: stepTimeoutMs,
     });
     // Meet automation scripts match English UI labels; a reused tab may have
     // been opened by the browser/profile in a non-English locale. Only force
@@ -212,25 +209,19 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     if (englishUrl && englishUrl !== reusedUrl) {
       tab =
         readMeetingBrowserTab(
-          await callBrowserProxyOnNode({
-            runtime: params.runtime,
-            nodeId,
+          await callBrowser({
             method: "POST",
             path: "/navigate",
             body: { targetId: tab.targetId, url: englishUrl },
-            timeoutMs: stepTimeoutMs,
           }),
         ) ?? tab;
     }
   } else {
     tab = readMeetingBrowserTab(
-      await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId,
+      await callBrowser({
         method: "POST",
         path: "/tabs/open",
         body: { url: forceMeetEnglishUi(GOOGLE_MEET_NEW_URL) },
-        timeoutMs: stepTimeoutMs,
       }),
     );
     openedByPlugin = Boolean(tab?.targetId);
@@ -240,14 +231,11 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     throw new Error("Browser fallback opened Google Meet but did not return a targetId.");
   }
   const notes = new Set<string>();
-  let lastResult: BrowserCreateStepResult | undefined;
   let lastError: unknown;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() <= deadline) {
     try {
-      const evaluated = await callBrowserProxyOnNode({
-        runtime: params.runtime,
-        nodeId,
+      const evaluated = await callBrowser({
         method: "POST",
         path: "/act",
         body: {
@@ -255,10 +243,8 @@ export async function createMeetWithBrowserProxyOnNode(params: {
           targetId,
           fn: CREATE_MEET_FROM_BROWSER_SCRIPT,
         },
-        timeoutMs: stepTimeoutMs,
       });
       const result = readBrowserCreateResult(evaluated);
-      lastResult = result;
       for (const note of result.notes ?? []) {
         notes.add(note);
       }
@@ -296,11 +282,8 @@ export async function createMeetWithBrowserProxyOnNode(params: {
     }
   }
   throw new Error(
-    lastResult?.manualAction?.message ??
-      `Google Meet did not return a meeting URL from the browser create flow before timeout.${
-        lastError
-          ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}`
-          : ""
-      }`,
+    `Google Meet did not return a meeting URL from the browser create flow before timeout.${
+      lastError ? ` Last browser automation error: ${formatBrowserAutomationError(lastError)}` : ""
+    }`,
   );
 }

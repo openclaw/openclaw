@@ -14,7 +14,6 @@ type TimeConfigLike = {
   agents?: {
     defaults?: {
       userTimezone?: string;
-      timeFormat?: "auto" | "12" | "24";
     };
   };
 };

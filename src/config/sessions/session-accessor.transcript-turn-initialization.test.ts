@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
@@ -7,14 +7,15 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
+import { readSessionGoalOperationInDatabase } from "./goals-operation-receipts.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntrySync,
-  type SessionTranscriptTurnPersistOptions,
+  type SessionTranscriptTurnPersistOptions as TurnOptions,
 } from "./session-accessor.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
@@ -48,6 +49,14 @@ describe("first transcript turn initialization", () => {
     createdActor: { type: "human", source: "profile", id: "operator-profile" },
     sandbox: "required",
   };
+  const userMessage = () => ({ role: "user" as const, content: operation.objective });
+  const goalMutation = { kind: "goal" as const, operation, runId: operation.operationId };
+  type ShouldAppend = NonNullable<TurnOptions["messages"]>[number]["shouldAppend"];
+  const preparingMessage = (shouldAppend: ShouldAppend) => [
+    { message: userMessage(), shouldAppend },
+  ];
+  const receiptRows = () =>
+    database().db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id").all();
   const database = () => openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope())));
   const counts = () =>
     database()
@@ -59,34 +68,28 @@ describe("first transcript turn initialization", () => {
           (SELECT count(*) FROM session_goal_operations) AS receipts`,
       )
       .get();
-  const admit = (options: Partial<SessionTranscriptTurnPersistOptions> = {}) =>
+  const admit = (options: Partial<TurnOptions> = {}) =>
     persistSessionTranscriptTurn(scope(), {
+      config: {},
       expectedSessionId: sessionId,
       initialSessionEntry,
       messages: [
-        {
-          message: {
-            role: "user",
-            content: operation.objective,
-            idempotencyKey: `${operation.operationId}:user`,
-          },
-        },
+        { message: { ...userMessage(), idempotencyKey: `${operation.operationId}:user` } },
       ],
-      sessionTurnMutation: { kind: "goal", operation, runId: operation.operationId },
+      sessionTurnMutation: goalMutation,
       sessionLifecyclePatch: {
-        status: "running",
+        status: undefined,
         lifecycleRunId: operation.operationId,
-        restartRecoveryDeliveryRunId: operation.operationId,
-        restartRecoveryDeliverySourceRunId: operation.operationId,
-        restartRecoveryDeliveryRequestFingerprint: operation.requestFingerprint,
       },
       updateMode: "none",
       ...options,
     });
 
+  beforeEach(() => setRuntimeConfigSnapshot({ session: { store: fixture.storePath() } }));
   afterEach(() => {
     vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
+    clearRuntimeConfigSnapshot();
   });
 
   it("creates the first session, Goal, input and run receipt atomically and replays after reopen", async () => {
@@ -100,13 +103,13 @@ describe("first transcript turn initialization", () => {
       );
     });
     const turn = await admit({ onMessageCommitted });
+    expect(turn.sessionEntry?.status).toBeUndefined();
     expect(turn).toMatchObject({
-      appendedCount: 1,
+      messages: [{ appended: true }],
       sessionEntry: {
         ...initialSessionEntry,
         updatedAt: expect.any(Number),
-        status: "running",
-        restartRecoveryDeliveryRunId: operation.operationId,
+        lifecycleRunId: operation.operationId,
         goal: { objective: operation.objective, status: "active" },
       },
       sessionTurnMutationResult: {
@@ -131,7 +134,7 @@ describe("first transcript turn initialization", () => {
     const replay = await admit({ onMessageCommitted });
     expect(onMessageCommitted).toHaveBeenCalledTimes(1);
     expect(replay).toMatchObject({
-      appendedCount: 0,
+      messages: [],
       sessionTurnMutationResult: { replayed: true, result: turn.sessionTurnMutationResult?.result },
     });
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
@@ -153,7 +156,7 @@ describe("first transcript turn initialization", () => {
       const append = admit({
         updateMode: "inline",
         messages: [
-          { message: { role: "user", content: operation.objective } },
+          { message: userMessage() },
           { message: { role: "assistant", content: "Committed reply" } },
         ],
         onMessageCommitted: (_receipt, acceptCompletion) => {
@@ -180,30 +183,26 @@ describe("first transcript turn initialization", () => {
       );
       try {
         await racePromiseWithAbortSignal(
-          Promise.race([
+          awaitGateBeforeSettlement(
             accepted.promise,
-            outcome.then(() => {
-              throw new Error("Commit settled before both callbacks accepted work");
-            }),
-          ]),
+            outcome,
+            "Commit settled before both callbacks accepted work",
+          ),
           test.signal,
         );
-        expect(order).toEqual(["accepted:1", "accepted:2"]);
+        const acceptedOrder = ["accepted:1", "accepted:2"];
+        const completedOrder = [...acceptedOrder, "completed:1", "completed:2"];
+        expect(order).toEqual(acceptedOrder);
         release.resolve();
         const result = await outcome;
         if (mode === "success") {
-          expect(result).toMatchObject({ value: { appendedCount: 2 } });
-          expect(order).toEqual([
-            "accepted:1",
-            "accepted:2",
-            "completed:1",
-            "completed:2",
-            "published",
-            "published",
-          ]);
+          expect(result).toMatchObject({
+            value: { messages: [{ appended: true }, { appended: true }] },
+          });
+          expect(order).toEqual([...completedOrder, "published", "published"]);
         } else {
           expect(result).toEqual({ error: failure });
-          expect(order).toEqual(["accepted:1", "accepted:2", "completed:1", "completed:2"]);
+          expect(order).toEqual(completedOrder);
         }
         expect(counts()).toEqual({ nodes: 1, windows: 1, events: 3, receipts: 1 });
       } finally {
@@ -219,18 +218,13 @@ describe("first transcript turn initialization", () => {
     async (competingSessionId) => {
       const competing = { sessionId: competingSessionId, updatedAt: now };
       const turn = await admit({
-        messages: [
-          {
-            message: { role: "user", content: operation.objective },
-            shouldAppend: () => {
-              // Direct/cross-process writers bypass the process-local queue.
-              replaceSessionEntrySync(scope(), competing);
-              return true;
-            },
-          },
-        ],
+        messages: preparingMessage(() => {
+          // Direct/cross-process writers bypass the process-local queue.
+          replaceSessionEntrySync(scope(), competing);
+          return true;
+        }),
       });
-      expect(turn).toMatchObject({ rejectedReason: "session-rebound", appendedCount: 0 });
+      expect(turn).toMatchObject({ rejectedReason: "session-rebound", messages: [] });
       expect(loadSessionEntry(scope())).toMatchObject(competing);
       expect(loadSessionEntry(scope())?.goal).toBeUndefined();
       expect(await loadTranscriptEvents(scope())).toEqual([]);
@@ -246,17 +240,13 @@ describe("first transcript turn initialization", () => {
       ) INSERT INTO session_goal_operations
         SELECT ?, 'retained-' || i, ?, 'fingerprint', '{}', ? FROM receipts`,
     ).run(scope().sessionKey, sessionId, Number.MAX_SAFE_INTEGER);
-    const retained = db
-      .prepare("SELECT * FROM session_goal_operations ORDER BY operation_id")
-      .all();
+    const retained = receiptRows();
     await expect(admit()).rejects.toMatchObject({ code: "capacity" });
     expect(loadSessionEntry(scope())).toBeUndefined();
     expect(counts()).toEqual({ nodes: 0, windows: 0, events: 0, receipts: 4096 });
-    expect(db.prepare("SELECT * FROM session_goal_operations ORDER BY operation_id").all()).toEqual(
-      retained,
-    );
+    expect(receiptRows()).toEqual(retained);
     db.exec("DELETE FROM session_goal_operations");
-    await expect(admit()).resolves.toMatchObject({ appendedCount: 1 });
+    await expect(admit()).resolves.toMatchObject({ messages: [{ appended: true }] });
   });
 
   it("does not recreate a deleted session from its retained Goal receipt", async () => {
@@ -272,7 +262,7 @@ describe("first transcript turn initialization", () => {
     expect(before).toMatchObject({ receipts: 1 });
     await expect(admit()).resolves.toMatchObject({
       rejectedReason: "session-rebound",
-      appendedCount: 0,
+      messages: [],
     });
     expect(loadSessionEntry(scope())).toBeUndefined();
     expect(counts()).toEqual(before);
@@ -283,24 +273,17 @@ describe("first transcript turn initialization", () => {
     await expect(
       admit({
         sessionTurnMutation: {
-          kind: "goal",
-          operation,
-          runId: operation.operationId,
+          ...goalMutation,
           assertCurrent: () => {
             if (!current) {
               throw new Error("admission closed");
             }
           },
         },
-        messages: [
-          {
-            message: { role: "user", content: operation.objective },
-            shouldAppend: async () => {
-              current = false;
-              return true;
-            },
-          },
-        ],
+        messages: preparingMessage(async () => {
+          current = false;
+          return true;
+        }),
       }),
     ).rejects.toThrow("admission closed");
     expect(counts()).toEqual({ nodes: 0, windows: 0, events: 0, receipts: 0 });

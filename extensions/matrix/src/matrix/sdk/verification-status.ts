@@ -10,28 +10,23 @@ export function isMatrixDeviceVerifiedInCurrentClient(
   status: MatrixDeviceVerificationStatusLike | null | undefined,
 ): boolean {
   return (
-    status?.isVerified?.() === true ||
+    status?.isVerified() === true ||
     status?.localVerified === true ||
     isMatrixDeviceOwnerVerified(status)
   );
 }
 
 export async function trustMatrixOwnIdentity(crypto: MatrixCryptoBootstrapApi): Promise<void> {
-  const ownIdentity =
-    typeof crypto.getOwnIdentity === "function"
-      ? await crypto.getOwnIdentity().catch(() => undefined)
-      : undefined;
+  const ownIdentity = await crypto.getOwnIdentity().catch(() => undefined);
   if (!ownIdentity) {
     return;
   }
   try {
-    if (typeof ownIdentity.isVerified === "function" && ownIdentity.isVerified()) {
+    if (ownIdentity.isVerified()) {
       return;
     }
-    if (typeof ownIdentity.verify === "function") {
-      await ownIdentity.verify();
-    }
+    await ownIdentity.verify();
   } finally {
-    ownIdentity.free?.();
+    ownIdentity.free();
   }
 }

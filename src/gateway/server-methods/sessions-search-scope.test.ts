@@ -2,6 +2,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   persistSessionTranscriptTurn,
   upsertSessionEntryCore,
@@ -9,7 +10,13 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
+import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
+import * as sessionTargets from "../../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -116,11 +123,159 @@ const paletteScope = {
   excludeSystem: true,
 };
 
+test.each(["needle", "会"])(
+  "agent recall applies operator privacy before limiting %s",
+  async (query) => {
+    await withSearchState(async () => {
+      const viewer = ensureProfileForEmail("recall-viewer@example.test").id;
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        tools: { sessions: { visibility: "all" } },
+        gateway: {
+          roles: {
+            default: "reader",
+            definitions: {
+              reader: { sessions: { others: "none" }, agents: "*", scopes: ["operator.read"] },
+            },
+          },
+        },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const visible = await seed(
+        "main",
+        "allowed-recall",
+        viewer,
+        `needle 明天下午开会讨论 ${"context ".repeat(30)}`,
+      );
+      for (let index = 0; index < 27; index++) {
+        await seed("main", `hidden-recall-${index}`, "foreign", "needle 明天下午开会讨论");
+      }
+      const client = identifiedClient(viewer);
+      client.connect.scopes = ["operator.read"];
+      const result = await search(requestContext(cfg), client, {
+        query,
+        limit: 1,
+        recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([visible]);
+      expect(result.payload).not.toHaveProperty("truncated");
+    });
+  },
+);
+
+test("CJK recall finishes the text pass and retains timestamp-ordered top-N", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("recall-cjk@example.test").id;
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const sessionKey = await seed("main", "cjk-order", owner);
+    const timestamps = [800, 100, 700, 200, 300, 900].map((value) => Date.UTC(2026, 0, 1) + value);
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionKey, sessionId: "main-cjk-order" },
+      {
+        cwd: "/fixture",
+        updateMode: "none",
+        messages: timestamps.map((now) => ({
+          message: { role: "user", content: "明天下午开会讨论" },
+          now,
+        })),
+      },
+    );
+    const result = await search(requestContext(cfg), identifiedClient(owner), {
+      query: "会",
+      limit: 3,
+      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload?.results.map((hit) => hit.timestamp)).toEqual([
+      timestamps[5],
+      timestamps[0],
+      timestamps[2],
+    ]);
+    expect(result.payload?.truncated).toBe(true);
+  });
+});
+
+test.each([false, true])(
+  "agent recall retains child-only visibility (sandboxed: %s)",
+  async (sandboxed) => {
+    await withSearchState(async () => {
+      const owner = ensureProfileForEmail("recall-tree@example.test").id;
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: {} },
+          defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        },
+        tools: { sessions: { visibility: sandboxed ? "all" : "tree" } },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const requesterSessionKey = "agent:main:requester";
+      const child = await seed("main", "subagent:child", owner, "needle", {
+        spawnedBy: requesterSessionKey,
+        spawnDepth: 1,
+      });
+      await seed("main", "other", owner, "needle");
+      const result = await search(requestContext(cfg), identifiedClient(owner), {
+        query: "needle",
+        recall: {
+          requesterAgentId: "main",
+          requesterSessionKey,
+          sandboxed,
+          visibility: "all",
+          agentToAgent: { enabled: true },
+        },
+      });
+      expect(result.ok, result.error?.message).toBe(true);
+      expect(result.payload?.results.map((hit) => hit.sessionKey)).toEqual([child]);
+    });
+  },
+);
+
+test("agent recall searches only the requester's global transcript", async () => {
+  await withSearchState(async () => {
+    const owner = ensureProfileForEmail("recall-global@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {}, work: {} } },
+      tools: { sessions: { visibility: "all" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    for (const agentId of ["work", "main"]) {
+      const target = { agentId, sessionKey: "global", sessionId: `${agentId}-global` };
+      await upsertSessionEntryCore(target, {
+        sessionId: target.sessionId,
+        updatedAt: Date.now(),
+        createdActor: { type: "human", source: "profile", id: owner },
+      });
+      await persistSessionTranscriptTurn(target, {
+        cwd: "/fixture",
+        updateMode: "none",
+        messages: [{ message: { role: "user", content: "globalword" }, now: Date.now() }],
+      });
+    }
+    const result = await search(requestContext(cfg), identifiedClient(owner), {
+      query: "globalword",
+      recall: { requesterAgentId: "work", requesterSessionKey: "agent:work:requester" },
+    });
+    expect(result.ok, result.error?.message).toBe(true);
+    expect(result.payload?.results).toEqual([
+      expect.objectContaining({ sessionKey: "global", sessionId: "work-global" }),
+    ]);
+  });
+});
+
 test("scope search reaches beyond 200 sessions and four agents with bounded matched snapshots", async () => {
   await withSearchState(async () => {
     const owner = ensureProfileForEmail("search-owner@example.test").id;
     const agents = ["main", "second", "third", "fourth", "fifth"];
-    const cfg: OpenClawConfig = { agents: { list: agents.map((id) => ({ id })) } };
+    const cfg: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: Object.fromEntries(agents.map((id) => [id, {}])),
+        defaults: { sessionStore: { agentId: "main" } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     // These nonmatching roster rows exercise search scope, not asynchronous mutation admission.
     for (let index = 0; index < 205; index++) {
       const agentId = expectDefined(agents[index % agents.length], "fixture agent");
@@ -139,6 +294,11 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
     const key = await seed("fifth", "old-target", owner, "distant uniqueneedle", {
       updatedAt: 1,
     });
+    await Promise.all(
+      agents.map((agentId) =>
+        expect(readSessionTranscriptIndexStatus({ agentId })).resolves.toBe(false),
+      ),
+    );
     const result = await search(requestContext(cfg), identifiedClient(owner), {
       query: "uniqueneedle",
       limit: 1,
@@ -156,6 +316,8 @@ test("scope search reaches beyond 200 sessions and four agents with bounded matc
 test("scope authorizes and applies membership before the hit limit, and empty scope never widens", async () => {
   await withSearchState(async () => {
     const owner = ensureProfileForEmail("search-viewer@example.test").id;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const groupedSpawn = {
       spawnedBy: "agent:main:parent",
       category: "Research",
@@ -189,7 +351,6 @@ test("scope authorizes and applies membership before the hit limit, and empty sc
         createdActor: { type: "agent", id: "main" },
       },
     );
-    const context = requestContext({ agents: { list: [{ id: "main", default: true }] } });
     const client = identifiedClient(owner);
     const metadata = await listSessions({
       context,
@@ -254,9 +415,15 @@ test("scope search preserves physical shared-store ownership, agent filters, and
     const storePath = path.join(stateDir, "shared-search.sqlite");
     const owner = ensureProfileForEmail("shared-search@example.test").id;
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "work_team" }, { id: "workxteam" }] },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, work_team: {}, workxteam: {} },
+        defaults: { sessionStore: { agentId: "main" } },
+      },
       session: { store: storePath },
+      tools: { sessions: { visibility: "agent" } },
     };
+    setRuntimeConfigSnapshot(cfg);
     await seed("main", "physical-owner", owner, undefined, {}, storePath);
     for (let index = 0; index < 27; index++) {
       await seed("work_team", `match-${index}`, owner, "needle", {}, storePath);
@@ -280,6 +447,16 @@ test("scope search preserves physical shared-store ownership, agent filters, and
     );
     expect(result.payload).toHaveProperty("truncated", true);
     expect(result.payload).not.toHaveProperty("indexing");
+    const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreTargetsAsync");
+    const recall = await search(context, client, {
+      query: "needle",
+      limit: 25,
+      recall: { requesterAgentId: "work_team", requesterSessionKey: "agent:work_team:main" },
+    });
+    expect(recall.ok, recall.error?.message).toBe(true);
+    expect(recall.payload?.results).toEqual(result.payload?.results);
+    expect(recall.payload).toHaveProperty("truncated", true);
+    expect(discovery).not.toHaveBeenCalled();
     const key = "agent:work_team:match-0";
     expect(
       await search(context, client, { query: "needle", scope: { search: key } }),
@@ -294,6 +471,14 @@ test("scope reports only authorized cold transcripts without restoring them", as
   await withSearchState(async () => {
     const owner = ensureProfileForEmail("archive-search@example.test").id;
     const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      session: {
+        store: storePath,
+        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+      },
+    };
+    setRuntimeConfigSnapshot(cfg);
     for (const [name, creator] of [
       ["visible", owner],
       ["hidden", "foreign"],
@@ -329,13 +514,6 @@ test("scope reports only authorized cold transcripts without restoring them", as
       },
       { agentId: "main" },
     );
-    const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main" }] },
-      session: {
-        store: storePath,
-        maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-      },
-    };
     await expect(runSessionColdStorageMaintenance({ config: cfg })).resolves.toMatchObject({
       archivedTranscripts: 2,
     });
@@ -362,8 +540,9 @@ test("scope reports only authorized cold transcripts without restoring them", as
 test("scope rechecks sharing after readiness and reports FTS failure instead of empty results", async () => {
   await withSearchState(async () => {
     const viewer = ensureProfileForEmail("readiness-search@example.test").id;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const key = await seed("main", "revoked", "foreign", "needle");
-    const context = requestContext({ agents: { list: [{ id: "main", default: true }] } });
     const client = identifiedClient(viewer);
     await initializeSessionReadContext(context);
     const projection = expectDefined(getSessionRowProjection(context), "search projection");
@@ -399,55 +578,70 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
   });
 });
 
-test("search discards hits and page metadata when sharing is revoked during its worker read", async () => {
-  await withSearchState(async () => {
-    const viewer = ensureProfileForEmail("worker-search@example.test").id;
-    const context = requestContext({
-      agents: { list: [{ id: "main", default: true }] },
-      gateway: {
-        roles: {
-          default: "viewer",
-          definitions: {
-            viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+test.each(["view", "invited"] as const)(
+  "search discards hits and page metadata when %s sharing is revoked during its worker read",
+  async (others) => {
+    await withSearchState(async () => {
+      const viewer = ensureProfileForEmail("worker-search@example.test").id;
+      const context = requestContext({
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
+            },
           },
         },
-      },
-    });
-    const client = identifiedClient(viewer);
-    const read = transcriptSearch.searchSessionTranscripts;
-    for (const scoped of [true, false]) {
-      const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
-      const spy = vi
-        .spyOn(transcriptSearch, "searchSessionTranscripts")
-        .mockImplementationOnce(async (...args) => {
-          const result = await read(...args);
-          expect(result.hits).toHaveLength(1);
-          await upsertSessionEntryCore(
+      });
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
+      const client = identifiedClient(viewer);
+      const read = transcriptSearch.searchSessionTranscripts;
+      for (const scoped of [true, false]) {
+        const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+        if (others === "invited") {
+          await addSessionMember(
             { agentId: "main", sessionKey: key },
-            { visibility: "draft" },
+            { identityId: viewer, addedBy: "foreign" },
           );
-          return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
-        });
-      try {
-        const response = await search(context, client, {
-          query: "needle",
-          ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
-        });
-        expect(response.ok).toBe(true);
-        expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
-      } finally {
-        spy.mockRestore();
+        }
+        const spy = vi
+          .spyOn(transcriptSearch, "searchSessionTranscripts")
+          .mockImplementationOnce(async (...args) => {
+            const result = await read(...args);
+            expect(result.hits).toHaveLength(1);
+            if (others === "invited") {
+              await removeSessionMember({ agentId: "main", sessionKey: key }, viewer);
+            } else {
+              await upsertSessionEntryCore(
+                { agentId: "main", sessionKey: key },
+                { visibility: "draft" },
+              );
+            }
+            return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
+          });
+        try {
+          const response = await search(context, client, {
+            query: "needle",
+            ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
+          });
+          expect(response.ok).toBe(true);
+          expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
+        } finally {
+          spy.mockRestore();
+        }
       }
-    }
-  });
-});
+    });
+  },
+);
 
 test("search prepares the full scope and rechecks visibility while materializing archived hits", async () => {
   await withSearchState(async () => {
     const viewer = ensureProfileForEmail("archived-search@example.test").id;
+    const context = requestContext({ agents: { entries: { main: {} } } });
+    setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const key = await seed("main", "archived-hit", "foreign", "needle", { archivedAt: 1 });
     const sibling = await seed("main", "non-hit", viewer, "different text", { archivedAt: 1 });
-    const context = requestContext({ agents: { list: [{ id: "main", default: true }] } });
     const client = identifiedClient(viewer);
     const params = { query: "needle", scope: { archived: "all" } };
     expect(await search(context, client, params)).toMatchObject({

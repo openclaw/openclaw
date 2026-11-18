@@ -29,6 +29,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import { redactIdentifier } from "openclaw/plugin-sdk/logging-core";
@@ -39,14 +40,12 @@ import { resolveTextChunkLimit, type GetReplyOptions } from "openclaw/plugin-sdk
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   createRuntimeConfigReader,
-  getRuntimeConfig,
-  type OpenClawConfig,
+  captureRuntimeConfigAsyncReader,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   createNonExitingRuntime,
   danger,
   logVerbose,
-  shouldLogVerbose,
   sleepWithAbort,
   warn,
 } from "openclaw/plugin-sdk/runtime-env";
@@ -57,21 +56,18 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
-  getSessionEntry,
-  readSessionUpdatedAt,
+  getSessionEntryAsync,
+  readSessionUpdatedAtAsync,
   resolveSendPolicy,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sliceUtf16Safe, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
-import { iMessageApprovalControlBindings } from "../approval-control-binding-window.js";
 import type { IMessageApprovalGatewayRuntime } from "../approval-gateway-types.js";
 import { maybeResolveIMessageApprovalPollVote } from "../approval-polls.js";
 import { pollPendingIMessageApprovalReactions } from "../approval-reaction-poller.js";
-import { maybeResolveIMessageApprovalReaction } from "../approval-reactions.js";
-import { buildIMessageApprovalConversationKeyForInbound } from "../approval-target-keys.js";
+import { handleIMessageApprovalReaction } from "../approval-reactions.js";
 import { resolveIMessageDirectChatService } from "../chat-context.js";
 import { resolveIMessageStartupRowidWatermark } from "../chat-db.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -82,11 +78,8 @@ import {
   resolveIMessageAttachmentRoots,
   resolveIMessageRemoteAttachmentRoots,
 } from "../media-contract.js";
-import { imessageRpcSupportsMethod, probeIMessage, probeIMessagePrivateApi } from "../probe.js";
-import {
-  hasIMessageQuestionReactionTarget,
-  maybeResolveIMessageQuestionReaction,
-} from "../question-reactions.js";
+import { imessageRpcSupportsMethod } from "../private-api-status.js";
+import { probeIMessage, probeIMessagePrivateApi } from "../probe.js";
 import { resolveIMessageRemoteHost } from "../remote-host.js";
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
@@ -97,7 +90,6 @@ import { combineIMessagePayloads } from "./coalesce.js";
 import { repairIMessageConversationAnchor } from "./conversation-repair.js";
 import { createIMessageEchoCachingSend, deliverIMessageReply } from "./deliver.js";
 import { resolveIMessageDmHistoryContext, resolveIMessageDmHistoryLimit } from "./dm-history.js";
-import { createIMessageThrottledDropDiagnosticCache } from "./drop-diagnostic-cache.js";
 import { createSentMessageCache } from "./echo-cache.js";
 import {
   warnGroupAllowlistDropPerChatOnce,
@@ -113,7 +105,6 @@ import {
   buildIMessageInboundContext,
   mergeIMessageGroupAllowFromWithLegacyChatTargets,
   rememberIMessageSkippedFromMeForSelfChatDedupe,
-  resolveIMessageReactionContext,
   resolveIMessageInboundDecision,
 } from "./inbound-processing.js";
 import { createIMessageDurableIngress, type IMessageIngressLifecycle } from "./ingress.js";
@@ -121,14 +112,15 @@ import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { stageIMessageAttachments } from "./media-staging.js";
 import { createPollCommentFolder } from "./poll-comment.js";
 import { renderIMessagePollBody } from "./poll-render.js";
+import { resolveIMessageReactionContext } from "./reaction-context.js";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import {
   advanceIMessageRecoveryCursor,
   loadIMessageRecoveryCursor,
   resolveIMessageRecoveryCursorDbIdentity,
 } from "./recovery-cursor.js";
-import { createSelfChatCache } from "./self-chat-cache.js";
-import type { IMessageAttachment, IMessagePayload, MonitorIMessageOpts } from "./types.js";
+import { SelfChatCache } from "./self-chat-cache.js";
+import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
 import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
@@ -140,10 +132,6 @@ const APPROVAL_REACTION_DISCOVERY_INTERVAL_MS = 60_000;
 const IMESSAGE_TYPING_KEEPALIVE_INTERVAL_MS = 8_000;
 const IMESSAGE_TYPING_KEEPALIVE_MAX_DURATION_MS = 10 * 60_000;
 type IMessageTypingController = Parameters<NonNullable<GetReplyOptions["onTypingController"]>>[0];
-
-function resolveConfiguredIMessageTypingMode(cfg: OpenClawConfig, agentId: string) {
-  return resolveAgentConfig(cfg, agentId)?.typingMode ?? cfg.agents?.defaults?.typingMode;
-}
 
 function isIMessagePluginPayloadAttachment(attachment: {
   original_path?: string | null;
@@ -158,56 +146,6 @@ function isIMessagePluginPayloadAttachment(attachment: {
     transferName.endsWith(".pluginpayloadattachment") ||
     uti === "com.apple.messages.pluginpayloadattachment"
   );
-}
-
-function resolveIMessageInboundMediaInput(params: {
-  messageText: string;
-  attachments: IMessageAttachment[];
-  effectiveAttachmentRoots: readonly string[];
-  logVerbose?: (message: string) => void;
-}) {
-  // Apple rich-link previews are opaque plugin payloads; the useful URL stays
-  // in message text. Treating them as media creates phantom attachments and
-  // incorrectly bypasses text-only inbound debounce.
-  const mediaCandidates = params.attachments.filter(
-    (entry) => !isIMessagePluginPayloadAttachment(entry),
-  );
-  const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
-    const contentType = attachment.mime_type?.trim() || undefined;
-    return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
-  });
-  const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
-    const fact = mediaFacts[index] ?? { kind: "unknown" as const };
-    const attachmentPath = attachment.original_path?.trim();
-    if (!attachmentPath || attachment.missing) {
-      return fact;
-    }
-    if (
-      !isInboundPathAllowed({ filePath: attachmentPath, roots: params.effectiveAttachmentRoots })
-    ) {
-      params.logVerbose?.(
-        `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
-      );
-      return fact;
-    }
-    return { ...fact, path: attachmentPath };
-  });
-  return {
-    bodyText: params.messageText,
-    mediaFacts,
-    mediaCandidates,
-    rawMediaAttachments,
-  };
-}
-
-function formatIMessageInboundMediaBody(params: {
-  messageText: string;
-  unavailableCount: number;
-}): string {
-  return formatInboundMediaUnavailableText({
-    body: params.messageText,
-    notice: `[imessage ${params.unavailableCount > 1 ? `${params.unavailableCount} attachments` : "attachment"} unavailable]`,
-  });
 }
 
 const warnIfImsgUpgradeNeeded = (() => {
@@ -251,64 +189,10 @@ const IMESSAGE_DIAGNOSTIC_DROP_REASONS = new Set([
 ]);
 const IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS = new Set(["from me", "no mention"]);
 
-function describeIMessageInboundDropDiagnostic(params: {
-  accountId: string;
-  groupsConfigPath: string;
-  reason: string;
-  message: Pick<IMessagePayload, "chat_id" | "created_at" | "guid" | "id" | "is_group">;
-}): string | null {
-  if (!IMESSAGE_DIAGNOSTIC_DROP_REASONS.has(params.reason)) {
-    return null;
-  }
-  const messageId =
-    typeof params.message.id === "number" || typeof params.message.id === "string"
-      ? String(params.message.id)
-      : "unknown";
-  const mentionHint =
-    params.reason === "no mention"
-      ? ` Mention the agent (default patterns come from its identity name/emoji), or set ${params.groupsConfigPath}["${params.message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
-      : "";
-  return (
-    `imessage: dropped inbound message account=${params.accountId} reason=${JSON.stringify(
-      params.reason,
-    )} ` +
-    `chat_id=${params.message.chat_id ?? "unknown"} group=${params.message.is_group === true} ` +
-    `message_id=${messageId} guid=${params.message.guid ? "present" : "missing"} ` +
-    `created_at=${params.message.created_at ?? "unknown"}${mentionHint}`
-  );
-}
-
-function describeIMessageWatchSubscribeStartupFailure(params: {
-  accountId: string;
-  attempt: number;
-  maxAttempts: number;
-  cliPath: string;
-  dbPath?: string;
-  remoteHost?: string;
-  includeAttachments: boolean;
-  probeTimeoutMs: number;
-  watchSinceRowid: number | null;
-  error: unknown;
-  retryDelayMs?: number;
-}): string {
-  const retry = params.retryDelayMs !== undefined ? ` retry_in_ms=${params.retryDelayMs}` : "";
-  return (
-    `imessage: watch.subscribe startup failed attempt=${params.attempt}/${params.maxAttempts} ` +
-    `account=${params.accountId} cliPath=${params.cliPath} ` +
-    `dbPath=${params.dbPath ? "configured" : "default"} remoteHost=${
-      params.remoteHost ? "configured" : "none"
-    } ` +
-    `timeoutMs=${params.probeTimeoutMs} since_rowid=${params.watchSinceRowid ?? "none"} ` +
-    `attachments=${params.includeAttachments} include_reactions=true${retry}: ${String(
-      params.error,
-    )}`
-  );
-}
-
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promise<void> {
   const { scheduler } = opts;
   const runtime = opts.runtime ?? createNonExitingRuntime();
-  const cfg = opts.config ?? getRuntimeConfig();
+  const cfg = opts.config ?? (await captureRuntimeConfigAsyncReader()());
   const readConfig = createRuntimeConfigReader(cfg);
   const accountInfo = resolveIMessageAccount({
     cfg,
@@ -332,11 +216,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
   const sentMessageCache = createSentMessageCache();
-  const selfChatCache = createSelfChatCache();
+  const selfChatCache = new SelfChatCache();
   const loopRateLimiter = createLoopRateLimiter();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
-  const allowFrom = normalizeStringEntries(opts.allowFrom ?? imessageCfg.allowFrom);
-  const configuredGroupAllowFrom = opts.groupAllowFrom ?? imessageCfg.groupAllowFrom;
+  const allowFrom = normalizeStringEntries(imessageCfg.allowFrom);
+  const configuredGroupAllowFrom = imessageCfg.groupAllowFrom;
   const groupAllowFrom = normalizeStringEntries(
     configuredGroupAllowFrom ??
       (imessageCfg.allowFrom && imessageCfg.allowFrom.length > 0 ? imessageCfg.allowFrom : []),
@@ -369,10 +253,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   });
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
-  const includeAttachments = opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
-  const mediaMaxBytes = (opts.mediaMaxMb ?? imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
-  const cliPath = opts.cliPath ?? imessageCfg.cliPath ?? "imsg";
-  const dbPath = opts.dbPath ?? imessageCfg.dbPath;
+  const includeAttachments = imessageCfg.includeAttachments ?? false;
+  const mediaMaxBytes = (imessageCfg.mediaMaxMb ?? 16) * 1024 * 1024;
+  const cliPath = imessageCfg.cliPath ?? "imsg";
+  const dbPath = imessageCfg.dbPath;
   const probeTimeoutMs = imessageCfg.probeTimeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
   const attachmentRoots = resolveIMessageAttachmentRoots({
     cfg,
@@ -399,7 +283,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
   const logTypingError = (action: "start" | "stop", target: string, error: unknown) =>
     logTypingFailure({ log: logVerbose, channel: "imessage", action, target, error });
   let staleBacklogSuppressed = 0;
-  const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
+  // Bound monitor-lifetime warn-once state; evicted conversations may log again.
+  const loggedThrottledDropDiagnostics = createDedupeCache({ maxSize: 512, ttlMs: 0 });
 
   // Capture local MAX(ROWID) before probing: it caps replay and separates recovery
   // from fresh-rowid Push backlog. Remote bridges lack this boundary and use the live age fence.
@@ -414,11 +299,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     dbPath,
     remoteHost,
   });
-  const recoveryCursorRowid = await loadIMessageRecoveryCursor(
-    accountInfo.accountId,
-    recoveryCursorDbIdentity,
-    { migrateLegacyCatchup: !catchupCfg.enabled, watermarkRowid: recoveryBoundaryRowid },
-  );
+  const recoveryCursorRowid = catchupCfg.enabled
+    ? null
+    : await loadIMessageRecoveryCursor(accountInfo.accountId, recoveryCursorDbIdentity, {
+        watermarkRowid: recoveryBoundaryRowid,
+      });
   const reconciledWatchSinceRowid = catchupCfg.enabled
     ? null
     : recoveryCursorRowid !== null
@@ -534,14 +419,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
               entries.length === 1
                 ? expectDefined(entries[0], "single iMessage dispatch entry").message
                 : combineIMessagePayloads(entries.map((entry) => entry.message));
-            if (entries.length > 1 && shouldLogVerbose()) {
-              const text = combined.text ?? "";
-              const preview = sliceUtf16Safe(text, 0, 50);
-              const ellipsis = text.length > 50 ? "..." : "";
-              logVerbose(
-                `[imessage] merged ${entries.length} debounced messages: "${preview}${ellipsis}"`,
-              );
-            }
             await handleMessageNow(combined, admissionLifecycle);
             await settle();
           } catch (err) {
@@ -634,15 +511,36 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     const messageText = (pollBody ?? message.text ?? "").trim();
     const attachments = includeAttachments ? (message.attachments ?? []) : [];
     const effectiveAttachmentRoots = remoteHost ? remoteAttachmentRoots : attachmentRoots;
-    const mediaInput = resolveIMessageInboundMediaInput({
-      messageText,
-      attachments,
-      effectiveAttachmentRoots,
-      logVerbose,
+    // Apple rich-link previews are opaque plugin payloads; the useful URL stays
+    // in message text. Treating them as media creates phantom attachments and
+    // incorrectly bypasses text-only inbound debounce.
+    const mediaCandidates = attachments.filter(
+      (entry) => !isIMessagePluginPayloadAttachment(entry),
+    );
+    const mediaFacts = mediaCandidates.map((attachment): ChannelInboundMediaInput => {
+      const contentType = attachment.mime_type?.trim() || undefined;
+      return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
+    });
+    const rawMediaAttachments = mediaCandidates.map((attachment, index) => {
+      const fact = mediaFacts[index] ?? { kind: "unknown" as const };
+      const attachmentPath = attachment.original_path?.trim();
+      if (!attachmentPath || attachment.missing) {
+        return fact;
+      }
+      if (!isInboundPathAllowed({ filePath: attachmentPath, roots: effectiveAttachmentRoots })) {
+        logVerbose(
+          `imessage: dropping inbound attachment outside allowed roots: ${attachmentPath}`,
+        );
+        return fact;
+      }
+      return { ...fact, path: attachmentPath };
     });
     return {
       messageText,
-      ...mediaInput,
+      bodyText: messageText,
+      mediaFacts,
+      mediaCandidates,
+      rawMediaAttachments,
       effectiveAttachmentRoots,
     };
   }
@@ -679,16 +577,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       effectiveAttachmentRoots,
     } = resolveIMessageInboundBodyText(message);
 
-    const storeAllowFrom = await readChannelAllowFromStore(
-      "imessage",
-      process.env,
-      accountInfo.accountId,
-    ).catch(() => []);
-    const isQuestionReaction = hasIMessageQuestionReactionTarget({
-      accountId: accountInfo.accountId,
-      message,
-      bodyText,
-    });
     const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
@@ -702,13 +590,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowLegacyConversationAllowFromForGroup,
       groupPolicy,
       dmPolicy,
-      storeAllowFrom,
+      readStoreAllowFrom: () =>
+        readChannelAllowFromStore("imessage", process.env, accountInfo.accountId),
       historyLimit,
       groupHistories,
       echoCache: sentMessageCache,
       selfChatCache,
-      reactionNotifications: isQuestionReaction ? "all" : imessageCfg.reactionNotifications,
-      logVerbose,
+      reactionNotifications: imessageCfg.reactionNotifications,
     });
 
     const chatId = message.chat_id ?? undefined;
@@ -724,13 +612,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
-      const diagnostic = describeIMessageInboundDropDiagnostic({
-        accountId: accountInfo.accountId,
-        groupsConfigPath,
-        reason: decision.reason,
-        message,
-      });
-      if (diagnostic) {
+      if (IMESSAGE_DIAGNOSTIC_DROP_REASONS.has(decision.reason)) {
+        const messageId =
+          typeof message.id === "number" || typeof message.id === "string"
+            ? String(message.id)
+            : "unknown";
+        const mentionHint =
+          decision.reason === "no mention"
+            ? ` Mention the agent (default patterns come from its identity name/emoji), or set ${groupsConfigPath}["${message.chat_id}"].requireMention=false. Preserve existing groups entries; when adding the first groups map, include "*": {} to keep other chats admitted.`
+            : "";
+        const diagnostic =
+          `imessage: dropped inbound message account=${accountInfo.accountId} reason=${JSON.stringify(decision.reason)} ` +
+          `chat_id=${message.chat_id ?? "unknown"} group=${message.is_group === true} ` +
+          `message_id=${messageId} guid=${message.guid ? "present" : "missing"} ` +
+          `created_at=${message.created_at ?? "unknown"}${mentionHint}`;
         const throttleKey = `${rateLimitKey}:${decision.reason}`;
         const shouldThrottleDiagnostic = IMESSAGE_THROTTLED_DIAGNOSTIC_DROP_REASONS.has(
           decision.reason,
@@ -805,19 +700,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     }
 
     if (decision.kind === "reaction") {
-      if (
-        await maybeResolveIMessageQuestionReaction({
-          cfg,
-          accountId: accountInfo.accountId,
-          message,
-          bodyText,
-          senderId: decision.senderNormalized,
-          logDebug: logVerbose,
-        })
-      ) {
-        return;
-      }
-      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
+      enqueueIMessageReactionSystemEvent({ decision, runtime });
       return;
     }
 
@@ -846,10 +729,12 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
       }
     }
-    const configuredTypingMode = resolveConfiguredIMessageTypingMode(cfg, decision.route.agentId);
+    const configuredTypingMode =
+      resolveAgentConfig(cfg, decision.route.agentId)?.typingMode ??
+      cfg.agents?.defaults?.typingMode;
     const sendPolicy = resolveSendPolicy({
       cfg,
-      entry: getSessionEntry({ storePath, sessionKey: decision.route.sessionKey }),
+      entry: await getSessionEntryAsync({ storePath, sessionKey: decision.route.sessionKey }),
       sessionKey: decision.route.sessionKey,
       channel: "imessage",
       chatType: decision.isGroup ? "group" : "direct",
@@ -903,7 +788,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       : await stageIMessageAttachments(mediaCandidates, {
           maxBytes: mediaMaxBytes,
           allowedRoots: effectiveAttachmentRoots,
-          deps: { logVerbose },
         });
     const mediaAttachments = staged.attachments;
     const unavailableCount = staged.unavailableCount;
@@ -911,13 +795,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       unavailableCount > 0
         ? {
             ...decision,
-            agentBodyText: formatIMessageInboundMediaBody({
-              messageText,
-              unavailableCount,
+            agentBodyText: formatInboundMediaUnavailableText({
+              body: messageText,
+              notice: `[imessage ${unavailableCount > 1 ? `${unavailableCount} attachments` : "attachment"} unavailable]`,
             }),
           }
         : decision;
-    const previousTimestamp = readSessionUpdatedAt({
+    const previousTimestamp = await readSessionUpdatedAtAsync({
       storePath,
       sessionKey: decision.route.sessionKey,
     });
@@ -936,7 +820,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
             senderNormalized: decision.senderNormalized,
             limit: dmHistoryLimit,
             envelopeOptions: resolveEnvelopeFormatOptions(cfg),
-            logVerbose,
           })
         : undefined;
     // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
@@ -963,14 +846,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       allowFrom,
       normalizeEntry: normalizeIMessageHandle,
     });
-    if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(ctxPayload.Body ?? "", 200).replace(/\n/g, "\\n");
-      logVerbose(
-        `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${
-          (ctxPayload.Body ?? "").length
-        } preview="${preview}"`,
-      );
-    }
 
     const sendReadReceipts = imessageCfg.sendReadReceipts !== false;
     const typingTarget = ctxPayload.To;
@@ -1199,39 +1074,20 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     ) {
       return true;
     }
-    return await maybeResolveIMessageApprovalReaction({
+    const result = await handleIMessageApprovalReaction({
       cfg,
       accountId: accountInfo.accountId,
       message,
       bodyText: resolveIMessageInboundBodyText(message).bodyText,
       gatewayRuntime: approvalGatewayRuntime,
-      logVerboseMessage: logVerbose,
     });
-  };
-
-  const resolveApprovalControlConversation = (message: IMessagePayload) => {
-    const sender = normalizeIMessageHandle((message.sender ?? "").trim());
-    const destination = normalizeIMessageHandle((message.destination_caller_id ?? "").trim());
-    const receivedSenderIsLocalFallback =
-      message.is_from_me !== true && Boolean(sender) && sender === destination;
-    const actorHandle =
-      (receivedSenderIsLocalFallback ? "" : sender) ||
-      (message.is_from_me === true ? destination : "");
-    return actorHandle
-      ? buildIMessageApprovalConversationKeyForInbound({
-          chatGuid: message.chat_guid,
-          chatIdentifier: message.chat_identifier,
-          chatId: message.chat_id,
-          isGroup: message.is_group,
-          actorHandle,
-        })
-      : null;
+    return result.handled;
   };
 
   const ingress = createIMessageDurableIngress({
     accountId: accountInfo.accountId,
     runtime,
-    dispatchPriority: async (message, lifecycle, receivedAt, provenance) => {
+    dispatchPriority: async (message, _lifecycle, receivedAt, provenance) => {
       const bodyText = (message.text ?? "").trim();
       const isApprovalCommand = /^\/approve(?:@[^\s]+)?(?:\s|$)/i.test(bodyText);
       const isCandidate =
@@ -1254,27 +1110,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         await handleMessageNow(repairedMessage);
         return { kind: "completed" };
       }
-      const conversation = resolveApprovalControlConversation(repairedMessage);
-      while (true) {
-        if (await maybeHandleApprovalControl(repairedMessage)) {
-          return { kind: "completed" };
-        }
-        if (!conversation) {
-          return undefined;
-        }
-        const waited = await iMessageApprovalControlBindings.wait({
-          accountId: accountInfo.accountId,
-          conversation,
-          abortSignal: lifecycle.abortSignal,
-        });
-        if (!waited) {
-          // The binding may have completed between the ownership check and
-          // window lookup. Close that check-then-wait race before queueing.
-          return (await maybeHandleApprovalControl(repairedMessage))
-            ? { kind: "completed" }
-            : undefined;
-        }
-      }
+      return (await maybeHandleApprovalControl(repairedMessage))
+        ? { kind: "completed" }
+        : undefined;
     },
     dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
       // Recovery rows get the wider age fence; explicit catchup uses its own age window.
@@ -1337,24 +1175,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     return;
   }
   const abort = opts.abortSignal;
-  const createWatchClient = async () =>
-    await createIMessageRpcClient({
-      cliPath,
-      dbPath,
-      remoteHost,
-      runtime,
-      onNotification: (msg) => {
-        if (msg.method === "message") {
-          void ingress.receive(msg.params).catch((err: unknown) => {
-            runtime.error?.(`imessage: durable admission failed: ${String(err)}`);
-          });
-        } else if (msg.method === "error") {
-          runtime.error?.(
-            `imessage: watch error ${JSON.stringify(sanitizeIMessageWatchErrorPayload(msg.params))}`,
-          );
-        }
-      },
-    });
 
   for (let attempt = 1; attempt <= WATCH_SUBSCRIBE_MAX_ATTEMPTS; attempt++) {
     if (abort?.aborted) {
@@ -1364,7 +1184,23 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
     let attemptDetachAbortHandler = () => {};
     let keepAttemptClient = false;
     try {
-      attemptClient = await createWatchClient();
+      attemptClient = await createIMessageRpcClient({
+        cliPath,
+        dbPath,
+        remoteHost,
+        runtime,
+        onNotification: (msg) => {
+          if (msg.method === "message") {
+            void ingress.receive(msg.params).catch((err: unknown) => {
+              runtime.error?.(`imessage: durable admission failed: ${String(err)}`);
+            });
+          } else if (msg.method === "error") {
+            runtime.error?.(
+              `imessage: watch error ${JSON.stringify(sanitizeIMessageWatchErrorPayload(msg.params))}`,
+            );
+          }
+        },
+      });
       let attemptSubscriptionId: number | null = null;
       attemptDetachAbortHandler = attachIMessageMonitorAbortHandler({
         abortSignal: abort,
@@ -1394,18 +1230,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
       }
       const retriable = isRetriableWatchSubscribeStartupError(err);
       const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
-      const failureParams = {
-        accountId: accountInfo.accountId,
-        attempt,
-        maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-        cliPath,
-        dbPath,
-        remoteHost,
-        includeAttachments,
-        probeTimeoutMs,
-        watchSinceRowid,
-        error: err,
-      };
+      const retry = shouldRetry ? ` retry_in_ms=${WATCH_SUBSCRIBE_RETRY_DELAY_MS}` : "";
+      const failure =
+        `imessage: watch.subscribe startup failed attempt=${attempt}/${WATCH_SUBSCRIBE_MAX_ATTEMPTS} ` +
+        `account=${accountInfo.accountId} cliPath=${cliPath} ` +
+        `dbPath=${dbPath ? "configured" : "default"} remoteHost=${remoteHost ? "configured" : "none"} ` +
+        `timeoutMs=${probeTimeoutMs} since_rowid=${watchSinceRowid ?? "none"} ` +
+        `attachments=${includeAttachments} include_reactions=true${retry}: ${String(err)}`;
       if (!shouldRetry) {
         opts.statusSink?.({
           connected: false,
@@ -1413,11 +1244,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
           terminalDisconnect: retriable ? undefined : true,
           lastError: String(err),
         });
-        runtime.error?.(
-          danger(
-            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure(failureParams)}`,
-          ),
-        );
+        runtime.error?.(danger(`imessage: monitor failed: ${failure}`));
         throw err;
       }
       opts.statusSink?.({
@@ -1425,14 +1252,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         lifecycle: "recovering",
         lastError: String(err),
       });
-      runtime.log?.(
-        warn(
-          describeIMessageWatchSubscribeStartupFailure({
-            ...failureParams,
-            retryDelayMs: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
-          }),
-        ),
-      );
+      runtime.log?.(warn(failure));
       // Tear down the failed client before waiting so a slow subscribe attempt
       // cannot keep emitting notifications into the next retry window.
       attemptDetachAbortHandler();
@@ -1493,7 +1313,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promis
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
         gatewayRuntime: approvalGatewayRuntime,
-        logVerboseMessage: logVerbose,
       }).catch((err: unknown) => {
         logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
       });

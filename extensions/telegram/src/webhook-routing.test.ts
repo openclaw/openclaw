@@ -17,7 +17,7 @@ describe("Telegram webhook routes", () => {
       .map((path) => ({
         path,
         legacyWebhook: false as const,
-        error: /webhook path.*reserved.*Gateway probes/i,
+        error: /webhook path.*reserved.*Gateway checks/i,
       })),
     ...["/api/channels/telegram", "/%61pi/channels/telegram"].map((path) => ({
       path,

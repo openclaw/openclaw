@@ -1,14 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import { resolveAuthProfileSecretOwnerId } from "../secrets/runtime-auth-profile-owner.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
-import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type {
   ProviderApiKeyResolver,
@@ -53,7 +52,7 @@ export async function prepareProviderDiscoveryAuth(
   const profiles = new Map<string, () => string>();
   for (const [profileId, credential] of Object.entries(authStore.profiles)) {
     const field = credential.type === "api_key" ? "key" : "token";
-    const ref = coerceSecretRef(
+    const ref = parseSecretRef(
       credential.type === "api_key"
         ? credential.keyRef
         : credential.type === "token"
@@ -70,6 +69,7 @@ export async function prepareProviderDiscoveryAuth(
       profiles.set(profileId, () => envValue);
       continue;
     }
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
     try {
       // Only the canonical owner may redeem this exact profile's published ref.
       const resolved = await resolveApiKeyForProfile({
@@ -150,6 +150,10 @@ export async function prepareProviderCatalogOAuthAuth(
       credential.oauthRef ||
       hasUsableOAuthCredential(credential)
     ) {
+      break;
+    }
+    const { resolveApiKeyForProfile } = await import("./auth-profiles/oauth.js");
+    if (!isActive()) {
       break;
     }
     let message = "No OAuth credential was returned";

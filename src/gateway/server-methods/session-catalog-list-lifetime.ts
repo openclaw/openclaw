@@ -2,12 +2,16 @@ import type {
   SessionCatalog,
   SessionCatalogHost,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { SessionCatalogListProviderParams } from "../../plugins/session-catalog.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
+import { retainGatewayDeviceRevocation } from "../device-revocation.js";
 import type { SessionCatalogInstances } from "./session-catalog-entry-snapshot.js";
 
 export const SESSION_CATALOG_LIST_LIFETIME_MS = 60_000;
+const catalogLog = createSubsystemLogger("gateway/session-catalog");
 
 export type CatalogListProgressSubscriber = (
   catalog: SessionCatalog,
@@ -23,7 +27,7 @@ type CatalogSubscriber = {
     signal?: AbortSignal;
     trackWork: ReturnType<typeof captureAsyncWorkTracker>;
   };
-  queued: Map<string, Map<string, CatalogPublication>>;
+  queued: Map<string, CatalogPublication>;
   preparing: boolean;
   remove: () => void;
 };
@@ -31,28 +35,33 @@ type CatalogSubscriber = {
 // Native work still owns its admitted resources after delivery expires.
 class CatalogListWork {
   private pending = 0;
-  private listing = true;
+  private nativePending = 0;
   private releaseRoot: (() => void) | undefined;
+  private releaseCaller: (() => void) | undefined;
 
-  begin(retainRoot = false): void {
-    this.pending++;
-    if (retainRoot) {
+  begin(kind: "provider" | "completion" | "delivery" = "delivery"): void {
+    if (kind === "provider") {
+      this.releaseCaller ??= retainGatewayDeviceRevocation(
+        getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority,
+      );
       this.releaseRoot ??= retainGatewayRootWorkAdmissionContinuation() ?? undefined;
+    }
+    this.pending++;
+    if (kind !== "delivery") {
+      this.nativePending++;
     }
   }
 
-  end(): void {
+  end(kind: "provider" | "completion" | "delivery" = "delivery"): void {
     this.pending--;
-    this.finish();
-  }
-
-  finishListing(): void {
-    this.listing = false;
-    this.finish();
-  }
-
-  private finish(): void {
-    if (!this.listing && this.pending === 0) {
+    if (kind !== "delivery") {
+      this.nativePending--;
+    }
+    if (this.nativePending === 0) {
+      this.releaseCaller?.();
+      this.releaseCaller = undefined;
+    }
+    if (this.pending === 0) {
       this.releaseRoot?.();
       this.releaseRoot = undefined;
     }
@@ -68,7 +77,7 @@ function trackCatalogCompletion(
   signal: AbortSignal,
   settled: () => void,
 ): void {
-  work.begin();
+  work.begin("completion");
   let delivery: { signal: AbortSignal; settled: () => void } | undefined = { signal, settled };
   const close = () => {
     const current = delivery;
@@ -82,7 +91,7 @@ function trackCatalogCompletion(
     close();
   }
   const finish = () => {
-    work.end();
+    work.end("completion");
     close();
   };
   void trackWork(() => completion.then(finish, finish));
@@ -114,24 +123,16 @@ function createProviderCallbacks(
 /** The aggregate response can finish before the native host publications it owns. */
 export class SessionCatalogListLifetime {
   private readonly controller = new AbortController();
-  private readonly catalogIds: ReadonlySet<string>;
   private readonly subscribers = new Map<string, CatalogSubscriber>();
   private readonly publishers = new Set<() => void>();
   private removeAbortListener: (() => void) | undefined;
-  private isCurrent: (() => boolean) | undefined;
   private listing = true;
   private pending = 0;
   private readonly work = new CatalogListWork();
   private readonly deadline: ReturnType<typeof setTimeout>;
   private readonly sourceSignal: AbortSignal;
 
-  constructor(
-    isCurrent: () => boolean,
-    signals: readonly AbortSignal[],
-    catalogIds: readonly string[],
-  ) {
-    this.catalogIds = new Set(catalogIds);
-    this.isCurrent = isCurrent;
+  constructor(signals: readonly AbortSignal[]) {
     // This bounds delivery captures, not custody of native work that ignores abort.
     this.deadline = setTimeout(
       () => this.retire(new Error("Session catalog list expired")),
@@ -152,15 +153,7 @@ export class SessionCatalogListLifetime {
       this.retire(this.sourceSignal.reason);
       return false;
     }
-    try {
-      if (this.isCurrent?.()) {
-        return true;
-      }
-    } catch {
-      // A lost context is retirement, never permission to use a successor.
-    }
-    this.retire();
-    return false;
+    return !this.controller.signal.aborted;
   }
 
   readonly assertCurrent = (): void => {
@@ -196,38 +189,33 @@ export class SessionCatalogListLifetime {
   }
 
   publish(catalog: SessionCatalog, instances: SessionCatalogInstances): void {
-    if (!this.active() || !this.catalogIds.has(catalog.id)) {
+    if (!this.active()) {
       return;
     }
-    for (const [key, subscriber] of this.subscribers) {
-      if (!this.currentSubscriber(key, subscriber)) {
+    for (const subscriber of this.subscribers.values()) {
+      if (!this.currentSubscriber(subscriber)) {
         subscriber.remove();
         continue;
       }
       // Retain one frame per selected catalog/observed host, independent of update churn.
-      const hosts = subscriber.queued.get(catalog.id) ?? new Map<string, CatalogPublication>();
       for (const host of catalog.hosts) {
-        hosts.set(host.hostId, { catalog: { ...catalog, hosts: [host] }, instances });
-      }
-      if (hosts.size) {
-        subscriber.queued.set(catalog.id, hosts);
+        subscriber.queued.set(JSON.stringify([catalog.id, host.hostId]), {
+          catalog: { ...catalog, hosts: [host] },
+          instances,
+        });
       }
       if (!subscriber.preparing) {
-        this.deliverSubscriber(key, subscriber);
+        this.deliverSubscriber(subscriber);
       }
     }
   }
 
-  private currentSubscriber(key: string, subscriber: CatalogSubscriber): boolean {
-    return (
-      this.subscribers.get(key) === subscriber &&
-      this.active() &&
-      subscriber.current?.isCurrent() === true
-    );
+  private currentSubscriber(subscriber: CatalogSubscriber): boolean {
+    return this.active() && subscriber.current?.isCurrent() === true;
   }
 
-  private deliverSubscriber(key: string, subscriber: CatalogSubscriber): void {
-    while (!subscriber.preparing && this.currentSubscriber(key, subscriber)) {
+  private deliverSubscriber(subscriber: CatalogSubscriber): void {
+    while (!subscriber.preparing && this.currentSubscriber(subscriber)) {
       const current = subscriber.current;
       if (!current) {
         return;
@@ -237,9 +225,7 @@ export class SessionCatalogListLifetime {
         subscriber.preparing = true;
         this.pending++;
         this.work.begin();
-        void current.trackWork(() =>
-          this.deliverPreparedSubscriber(key, subscriber, preparation).catch(() => undefined),
-        );
+        void current.trackWork(() => this.deliverPreparedSubscriber(subscriber, preparation));
         return;
       }
       const publication = this.takeQueuedPublication(subscriber);
@@ -251,39 +237,31 @@ export class SessionCatalogListLifetime {
   }
 
   private takeQueuedPublication(subscriber: CatalogSubscriber): CatalogPublication | undefined {
-    for (const [catalogId, hosts] of subscriber.queued) {
-      const next = hosts.entries().next().value;
-      if (next) {
-        hosts.delete(next[0]);
-      }
-      if (!hosts.size) {
-        subscriber.queued.delete(catalogId);
-      }
-      if (next) {
-        return next[1];
-      }
+    const next = subscriber.queued.entries().next().value;
+    if (next) {
+      subscriber.queued.delete(next[0]);
+      return next[1];
     }
     return undefined;
   }
 
   private async deliverPreparedSubscriber(
-    key: string,
     subscriber: CatalogSubscriber,
     preparation: Promise<void>,
   ): Promise<void> {
     try {
       await preparation;
-      while (this.currentSubscriber(key, subscriber)) {
-        const next = subscriber.current?.prepare?.();
-        if (next) {
-          await next;
-          continue;
-        }
+      while (this.currentSubscriber(subscriber)) {
         const publication = this.takeQueuedPublication(subscriber);
         if (!publication) {
           return;
         }
         subscriber.current?.publish(publication.catalog, publication.instances);
+      }
+    } catch {
+      // Retirement intentionally ends delivery; an active subscriber needs a visible failure.
+      if (this.currentSubscriber(subscriber)) {
+        catalogLog.warn("Session catalog progress update failed; refresh the catalog to retry.");
       }
     } finally {
       subscriber.queued.clear();
@@ -309,9 +287,9 @@ export class SessionCatalogListLifetime {
       callbacks.releasePublisher();
       this.publishers.delete(releasePublisher);
     };
+    this.work.begin("provider");
     this.publishers.add(releasePublisher);
     this.pending += 1;
-    this.work.begin(true);
     const settle = () => {
       pending -= 1;
       this.pending -= 1;
@@ -345,7 +323,7 @@ export class SessionCatalogListLifetime {
       listing = false;
       callbacks.closeRegistration();
       this.pending -= 1;
-      this.work.end();
+      this.work.end("provider");
       if (pending === 0) {
         releasePublisher();
       }
@@ -359,14 +337,13 @@ export class SessionCatalogListLifetime {
     // source signal directly so response cleanup does not cancel their work.
     this.removeAbortListener?.();
     this.removeAbortListener = undefined;
-    this.work.finishListing();
     this.releaseUnusedPublishers();
     this.finish();
   }
 
   private releaseUnusedPublishers(): void {
     // Active lists can gain followers; settled lists cannot. Retirement clears every capture.
-    if (this.isCurrent && (this.listing || this.subscribers.size > 0)) {
+    if (!this.controller.signal.aborted && (this.listing || this.subscribers.size > 0)) {
       return;
     }
     for (const release of this.publishers) {
@@ -384,13 +361,12 @@ export class SessionCatalogListLifetime {
   retire(reason?: unknown): void {
     clearTimeout(this.deadline);
     // Clear captured clients and snapshots immediately, even when a producer ignores abort.
-    this.isCurrent = undefined;
+    this.controller.abort(reason);
     for (const subscriber of this.subscribers.values()) {
       subscriber.remove();
     }
     this.releaseUnusedPublishers();
     this.removeAbortListener?.();
     this.removeAbortListener = undefined;
-    this.controller.abort(reason);
   }
 }

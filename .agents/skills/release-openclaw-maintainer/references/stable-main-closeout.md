@@ -2,28 +2,35 @@
 
 This gate starts only after stable publication. It is a narrow shipped-state
 closeout, not permission to heal broader `main`. Stable publication is not
-complete until `main` carries the actual shipped release state.
+complete until `main` carries the actual shipped release state and the handoff
+records the exact merged closeout commit. Publication from the release branch
+and closeout on `main` are separate state transitions; never imply that
+publishing stable also advanced `main`.
 
-Closeout requires the original strict stable/full publication evidence with
-soak, blocking performance, and successful selected validation lanes. Historical
-waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+Closeout requires the original successful stable/full FRV with soak and blocking
+performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
+skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
-new evidence. Invalid or mismatched assets remain blocking.
+new evidence. Invalid or mismatched required assets remain blocking. ClawHub
+publication and verification are independent: do not wait for them to open or
+complete the main closeout or retrospective PR. Record pending or failed
+ClawHub work and its owner/run/attempt as a separate follow-up.
 
 1. Start from fresh latest `main`. Use a same-repository PR targeting `main`,
    with branch `release/<version>-main-closeout` and exact title
    `chore(release): close out <version> on main`. `<version>` is the published
    stable `YYYY.M.PATCH` (or `YYYY.M.PATCH-N` correction), without the `v` prefix.
-   Audit `release/YYYY.M.PATCH` against it and
+   [Audit `release/YYYY.M.PATCH` against it](#audit-without-per-commit-fetches) and
    forward-port real fixes that are absent from `main`. Do not blindly merge
    release-only compatibility, test, or validation adapters into newer `main`.
 2. Normally set `main` to the shipped stable version, not a speculative next
    train. For late closeout, do not downgrade an already-started later stable
    train; retain the validator's exact shipped-note and version checks. Run
    `pnpm release:prep` after any root version change, then
-   `pnpm deps:npm-lock:check`. `release:prep` requires npm `latest` and `beta`
-   in `scripts/lib/update-compat-inventory.json`. Record the shipped tarball
-   first, following [older updater checks](validation.md#older-updater-checks)
+   `pnpm deps:npm-lock:check`. Record the shipped tarball in
+   `scripts/lib/update-compat-inventory.json` so first-hop update lanes cover
+   it, following [older updater checks](validation.md#older-updater-checks)
    (integrity-verified download, `pnpm update:compat:gen`). Expect recorder or
    bridge-writer failures when the release added post-swap updater imports or a
    nested bundle directory. Reproduce them with `pnpm build` before pushing.
@@ -52,9 +59,21 @@ new evidence. Invalid or mismatched assets remain blocking.
 4. Do not add `YYYY.M.PATCH+1`, a beta version, or an empty future changelog
    section to `main` until the operator explicitly starts that release train.
 5. Run `pnpm release:generated:check`, `pnpm deps:npm-lock:check`, and
-   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, then verify `origin/main`
-   contains the exact shipped notes and the validator-accepted shipped-or-later
-   stable version before calling the stable release done.
+   `OPENCLAW_TESTBOX=1 pnpm check:changed`. Push, resolve the closeout PR's exact
+   merged commit as `mainCloseoutSha`, fetch `origin/main` once, and require
+   `git merge-base --is-ancestor "$mainCloseoutSha" origin/main` to succeed. Do
+   not require equality with the branch tip or wait for a quiet `main`; later
+   commits are expected and do not invalidate the merged closeout commit. Read
+   the changelog and `package.json` from `mainCloseoutSha` itself; require the
+   exact shipped notes and the validator-accepted shipped-or-later stable
+   version, then record that version as `mainCloseoutVersion`. Use
+   `mainCloseoutSha`, not the moving branch name or tip, for the release's
+   main-source handoff. A deployment that intentionally wants newer `main`
+   resolves the branch once to `deploymentSha`, then binds its version checks,
+   configured-plugin checks, build, and launch to that same commit. It never
+   expects `origin/main` to remain equal to either recorded SHA and never
+   resamples merely because the branch advanced. Do not call the stable release
+   done until the exact closeout SHA and version are recorded.
 6. Keep repository variables `RELEASE_ROLLBACK_DRILL_ID` and
    `RELEASE_ROLLBACK_DRILL_DATE` current after each private rollback drill.
    `openclaw-stable-main-closeout.yml` starts from the `main` push carrying the
@@ -81,13 +100,22 @@ new evidence. Invalid or mismatched assets remain blocking.
    when repository drill variables are configured. Replay requires successful
    stable/full evidence with soak and blocking performance. Complete
    manifest/checksum pairs remain recorded without rewriting. Historical
-   waiver-bearing receipt replay and repair are unsupported: the original
+   candidate-side skip-waiver receipt replay and repair remain unsupported: the original
    postpublish evidence binds its validation run, which a fresh run cannot
    replace. Preserve those artifacts and stop instead of overwriting them or
    publishing again to repair a receipt.
    Push runs are never cancelled by later `main` pushes; verification serializes
    per resolved stable tag.
-7. A macOS build pulled from Sparkle on purpose (for example a crashing
+7. Follow the [website publication owner](platform-publication.md#website) to
+   verify public downloads. Its workflow can request a production rebuild and
+   requires release/deployment authority; it is not a read-only check. Require
+   success for that exact run and follow the owner's outcome reconciliation
+   before retrying an uncertain dispatch.
+   The orchestrator performs this gate even when immutable closeout assets
+   already exist; those assets are not evidence of current website downloads.
+   Record failed runs and permit a fresh verification on resume. Permit
+   cross-repository Actions dispatch/read with `OPENCLAW_GH_TOKEN` in core.
+8. A macOS build pulled from Sparkle on purpose (for example a crashing
    in-app update) is a third appcast state, not a contract failure. Withdraw
    it with a `main` commit whose subject is exactly
    `chore(release): withdraw the <version> macOS build from the Sparkle feed`
@@ -100,6 +128,19 @@ new evidence. Invalid or mismatched assets remain blocking.
    replay preserves those fields byte-for-byte. Any other feed mismatch still
    fails. The later hotfix release (for example `2026.9.7`) verifies its own
    appcast at its own closeout; the withdrawn record is never rewritten.
+9. Finish with the [release retrospective](retrospective.md): once core publication,
+   platform assets, and this closeout are terminal, write the report and open
+   its `openclaw/tideclaw` PR with the shared issue-ledger update. The stable
+   release is not done until that PR is open and its ledger check passes.
+
+## Audit without per-commit fetches
+
+Pin main and release SHAs, then explicitly fetch missing audit blobs in batches of
+at most 1,024 through the existing source-acquisition owner
+([RRI691](https://github.com/openclaw/tideclaw/blob/main/release/retrospectives/2026.11.1.md#L875-L882)).
+Semantically compare release changes—including intermediate changes and merge
+resolutions—against pinned main with `git --no-lazy-fetch`; report missing content
+as an incomplete audit.
 
 ## Recover a failed publication parent
 

@@ -1,12 +1,36 @@
-// Gateway node inventory and explicit/default target resolution.
 import crypto from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { getAgentToolAssistantTurnId } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { parseNodeList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
 export type { NodeListNode };
+
+export function nodeToolIdempotencyKey(params: {
+  command: "computer.act" | "mobile.ui.act";
+  scope?: string;
+  toolCallId: string;
+  purpose?: "follow-up-observation";
+}): string {
+  const stableScope = params.scope?.trim();
+  const stableCallId = params.toolCallId.trim();
+  // Runner-normalized call ids are unique within an attempt, not across all runs.
+  if (!stableScope || !stableCallId) {
+    return crypto.randomUUID();
+  }
+  const parts = [stableScope, getAgentToolAssistantTurnId() ?? "", stableCallId, params.command];
+  if (params.purpose) {
+    parts.push(params.purpose);
+  }
+  // The automatic read shares a call id with input, but must never replay its result.
+  const prefix = params.purpose ? "computer.observation" : params.command;
+  // v2 versions scope + assistant turn + call id + command, not the wire contract.
+  return `${prefix}:v2:${sha256Hex(JSON.stringify(parts))}`;
+}
 
 type DefaultNodeFallback = "none" | "first";
 
@@ -30,17 +54,6 @@ function compareNewestTimestamp(a?: number, b?: number): number {
   return bValue - aValue;
 }
 
-function compareDefaultNodeOrder(
-  a: NodeListNode,
-  b: NodeListNode,
-  recencyField: "connectedAtMs" | "lastSeenAtMs",
-): number {
-  return (
-    compareNewestTimestamp(a[recencyField], b[recencyField]) || a.nodeId.localeCompare(b.nodeId)
-  );
-}
-
-/** Selects the implicit node target when a tool call omits an explicit node query. */
 export function selectDefaultNodeFromList(
   nodes: NodeListNode[],
   options: DefaultNodeSelectionOptions = {},
@@ -75,11 +88,13 @@ export function selectDefaultNodeFromList(
   // Once the pool is known to be offline, stale connection timestamps must not
   // outrank the durable last-seen signal used to choose the wake target.
   const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
-  return candidates.reduce<NodeListNode | null>(
-    (best, node) =>
-      best === null || compareDefaultNodeOrder(node, best, recencyField) < 0 ? node : best,
-    null,
-  );
+  return candidates.reduce<NodeListNode | null>((best, node) => {
+    const order = best
+      ? compareNewestTimestamp(node[recencyField], best[recencyField]) ||
+        node.nodeId.localeCompare(best.nodeId)
+      : -1;
+    return order < 0 ? node : best;
+  }, null);
 }
 
 function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
@@ -90,16 +105,35 @@ function pickDefaultNode(nodes: NodeListNode[]): NodeListNode | null {
   });
 }
 
-/** Lists the Gateway node inventory. */
 export async function listNodes(
   opts: GatewayCallOptions,
   signal?: AbortSignal,
 ): Promise<NodeListNode[]> {
-  const res = await callGatewayTool("node.list", opts, {}, { signal });
-  return parseNodeList(res);
+  // In-process calls share this build; every transported call replaces this from hello.
+  let supportsContext = true;
+  const res = await callGatewayTool(
+    "node.list",
+    opts,
+    {},
+    {
+      signal,
+      onHelloOk: (hello) => {
+        supportsContext =
+          hello.features.capabilities?.includes(SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY) === true;
+      },
+    },
+  );
+  // Older Gateways expose unknown node caps but strip the new field from system.run.
+  const nodes = parseNodeList(res);
+  if (!supportsContext) {
+    // Only transport can lack support; these records were decoded for this RPC.
+    for (const node of nodes) {
+      node.caps = node.caps?.filter((cap) => cap !== SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY);
+    }
+  }
+  return nodes;
 }
 
-/** Resolves a node id from an already-loaded node list using shared node matching rules. */
 export function resolveNodeIdFromList(
   nodes: NodeListNode[],
   query?: string,
@@ -113,12 +147,10 @@ export function resolveNodeIdFromList(
   });
 }
 
-/** Loads nodes from the Gateway and resolves the requested node id. */
 export async function resolveAgentNodeId(opts: GatewayCallOptions, query: string) {
   return (await resolveAgentNode(opts, query)).nodeId;
 }
 
-/** Loads nodes from the Gateway and returns the requested node record. */
 export async function resolveAgentNode(
   opts: GatewayCallOptions,
   query: string,

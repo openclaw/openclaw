@@ -8,7 +8,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { captureGatewayDeviceRevocation } from "../device-revocation.js";
-import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.js";
+import type { ExecApprovalRecord } from "../exec-approval-manager.js";
+import { getOperatorApprovalDetailedInDatabase } from "../operator-approval-store.kernel.worker.js";
 import type { OperatorApprovalDatabase } from "../operator-approval-store.types.js";
 import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
@@ -33,10 +34,10 @@ export function deleteDurableApproval(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
 ): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const { db } = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
   executeSqliteQuerySync(
-    database.db,
+    db,
     stateDb.deleteFrom("operator_approvals").where("approval_id", "=", id),
   );
 }
@@ -45,10 +46,10 @@ export function corruptDurableApprovalPresentation(
   databaseOptions: OpenClawStateDatabaseOptions,
   id: string,
 ): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
+  const { db } = openOpenClawStateDatabase(databaseOptions);
+  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(db);
   executeSqliteQuerySync(
-    database.db,
+    db,
     stateDb
       .updateTable("operator_approvals")
       .set({ presentation_json: "{}" })
@@ -106,17 +107,9 @@ export function createContext(
 type ApprovalInvocationParams = {
   handlers: ReturnType<typeof createApprovalHandlers>;
   method:
-    | "approval.get"
-    | "approval.history"
-    | "approval.resolve"
-    | "exec.approval.get"
-    | "exec.approval.list"
-    | "exec.approval.grants.list"
-    | "exec.approval.grants.revoke"
-    | "exec.approval.resolve"
-    | "exec.approval.waitDecision"
-    | "plugin.approval.list"
-    | "plugin.approval.resolve";
+    | `approval.${"get" | "history" | "resolve"}`
+    | `exec.approval.${"get" | "list" | "grants.list" | "grants.revoke" | "resolve" | "waitDecision"}`
+    | `plugin.approval.${"list" | "resolve"}`;
   body: Record<string, unknown>;
   client: GatewayWsClient | null;
   context?: GatewayRequestHandlerOptions["context"];
@@ -162,15 +155,12 @@ export function createApprovalInvocation(params: ApprovalInvocationParams) {
     respond,
     invoke: async () => {
       try {
-        await expectDefined(
-          params.handlers[params.method],
-          "params.handlers[params.method] test invariant",
-        )(options);
-        const response = respond.mock.calls[0];
-        if (!response) {
-          throw new Error("approval handler did not respond");
-        }
-        return { ok: response[0], result: response[1], error: response[2], context };
+        await expectDefined(params.handlers[params.method], "approval handler")(options);
+        const [ok, result, error] = expectDefined(
+          respond.mock.calls[0],
+          "approval handler did not respond",
+        );
+        return { ok, result, error, context };
       } finally {
         capture.release();
       }
@@ -188,11 +178,7 @@ export async function handleApprovalResolve<
     getApprovalClientConnIds: params.context.getApprovalClientConnIds,
   };
   const options: GatewayRequestHandlerOptions = {
-    req: {
-      id: "shared-approval-test",
-      type: "req",
-      method: `${params.approvalKind}.approval.resolve`,
-    },
+    req: { id: "req", type: "req", method: `${params.approvalKind}.approval.resolve` },
     params: { id: params.inputId, decision: params.decision },
     context,
     client: params.client,
@@ -201,4 +187,13 @@ export async function handleApprovalResolve<
   };
   using authority = createApprovalRequestAuthority(options);
   return await handleOwnedApprovalResolve({ ...params, context, authority });
+}
+
+export function requestedEvent<TPayload>(record: ExecApprovalRecord<TPayload>) {
+  return {
+    id: record.id,
+    request: record.request,
+    createdAtMs: record.createdAtMs,
+    expiresAtMs: record.expiresAtMs,
+  };
 }

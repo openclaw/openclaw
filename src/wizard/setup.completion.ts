@@ -1,7 +1,7 @@
-// Setup completion helpers render completion instructions after onboarding.
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { CLI_NAME } from "../cli/cli-name.js";
 import {
-  findCompletionProfileWriteError,
+  findOptionalCompletionInstallFailure,
   formatCompletionReloadCommand,
   installCompletion,
   resolveCompletionProfileHint,
@@ -15,58 +15,53 @@ import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import type { WizardFlow } from "./setup.types.js";
 
-type CompletionDeps = {
-  resolveCliName: () => string;
-  checkShellCompletionStatus: (binName: string) => ReturnType<typeof checkShellCompletionStatus>;
-  ensureCompletionCacheExists: typeof ensureCompletionCacheExists;
-  installCompletion: typeof installCompletion;
-};
-
 export async function setupWizardShellCompletion(params: {
   flow: WizardFlow;
   prompter: Pick<WizardPrompter, "confirm" | "note">;
-  deps?: Partial<CompletionDeps>;
 }): Promise<void> {
-  const deps: CompletionDeps = {
-    resolveCliName: () => CLI_NAME,
-    checkShellCompletionStatus,
-    ensureCompletionCacheExists,
-    installCompletion,
-    ...params.deps,
-  };
-
-  const cliName = deps.resolveCliName();
-  const completionStatus = await deps.checkShellCompletionStatus(cliName);
+  const completionStatus = await checkShellCompletionStatus(CLI_NAME);
   const installCompletionForSetup = async (): Promise<boolean> => {
     try {
-      await deps.installCompletion(completionStatus.shell, true, cliName);
+      await installCompletion(completionStatus.shell, true, CLI_NAME);
       return true;
     } catch (error) {
-      const writeError = findCompletionProfileWriteError(error);
-      if (!writeError) {
+      const failure = findOptionalCompletionInstallFailure(error);
+      if (!failure) {
         throw error;
       }
-      await params.prompter.note(
-        t("wizard.completion.profileNotWritable", {
-          profile: writeError.path ?? resolveCompletionProfilePath(completionStatus.shell),
-          shell: completionStatus.shell,
-          command: formatCompletionReloadCommand(
-            completionStatus.shell,
-            completionStatus.cachePath,
-          ),
-        }),
-        t("wizard.completion.title"),
-      );
+      const command = terminalText`${formatCompletionReloadCommand(
+        completionStatus.shell,
+        completionStatus.cachePath,
+      )}`;
+      if (failure.kind === "write") {
+        await params.prompter.note(
+          t("wizard.completion.profileNotWritable", {
+            profile: terminalText`${failure.error.path ?? resolveCompletionProfilePath(completionStatus.shell)}`,
+            shell: completionStatus.shell,
+            command,
+          }),
+          t("wizard.completion.title"),
+        );
+      } else {
+        await params.prompter.note(
+          [
+            terminalText`Automatic shell completion installation failed (profile is not valid UTF-8 at ${failure.profilePath}).`,
+            "The file was left untouched.",
+            `For this ${completionStatus.shell} session only, run:`,
+            command,
+          ].join(" "),
+          t("wizard.completion.title"),
+        );
+      }
       return false;
     }
   };
-  const generationOptions = { generationMode: "full" } as const;
   const ensureCompletionCache = async (): Promise<boolean> => {
-    const cacheGenerated = await deps.ensureCompletionCacheExists(cliName, generationOptions);
+    const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME, { generationMode: "full" });
     if (!cacheGenerated) {
       await params.prompter.note(
         t("wizard.completion.cacheFailed", {
-          command: `${cliName} completion --write-state --install`,
+          command: `${CLI_NAME} completion --write-state --install`,
         }),
         t("wizard.completion.title"),
       );
@@ -93,7 +88,7 @@ export async function setupWizardShellCompletion(params: {
         : await params.prompter.confirm({
             message: t("wizard.completion.enable", {
               shell: completionStatus.shell,
-              cli: cliName,
+              cli: CLI_NAME,
             }),
             initialValue: true,
           });
@@ -107,7 +102,7 @@ export async function setupWizardShellCompletion(params: {
     }
 
     const shell = completionStatus.shell;
-    const command = formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell));
+    const command = terminalText`${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`;
     const reloadHint =
       shell === "powershell"
         ? t("wizard.completion.reloadPowerShell", { command })

@@ -1,20 +1,13 @@
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
-import {
-  captureRuntimeConfigWithSource,
-  type CapturedRuntimeConfigRead,
-} from "../../config/runtime-config-capture-state.js";
+import type { CapturedRuntimeConfigRead } from "../../config/runtime-config-capture-state.js";
+import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import { resolveStateDir } from "../../config/state-dir.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import type { AcpSessionReadContextInput } from "./session-meta-read.types.js";
 
-export type AcpSessionReadContextInput = {
-  cfg?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  databasePath?: string;
-  assertCurrent?: () => void;
-};
+export type { AcpSessionReadContextInput } from "./session-meta-read.types.js";
 
 /** Capture routing inputs before a read yields, retaining the caller's live assertion. */
 export async function captureAcpSessionReadContext(params: AcpSessionReadContextInput) {
@@ -33,7 +26,7 @@ export async function captureAcpSessionReadContext(params: AcpSessionReadContext
   let captured: CapturedRuntimeConfigRead;
   if (params.cfg) {
     captured = {
-      config: captureRuntimeConfigWithSource(params.cfg, params.cfg),
+      config: captureRuntimeConfig(params.cfg),
       env: cloneEnvWithPlatformSemantics(process.env),
     };
   } else {

@@ -45,11 +45,8 @@ export function createCodexManagedThreadStore(
       return key;
     }
     memberships.set(key, { sourceHomeId, threadId });
-    let ids = byHome.get(sourceHomeId);
-    if (!ids) {
-      ids = new Set();
-      byHome.set(sourceHomeId, ids);
-    }
+    const ids = byHome.get(sourceHomeId) ?? new Set<string>();
+    byHome.set(sourceHomeId, ids);
     ids.add(threadId);
     if (memberships.size > CODEX_MANAGED_THREAD_MAX_ENTRIES) {
       const oldest = memberships.entries().next().value;

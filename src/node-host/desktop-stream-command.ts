@@ -34,12 +34,7 @@ export function resolveNodeDesktopHostConfig(params: {
   };
 }
 
-type NodeDesktopStreamCommandParams = {
-  ticket: string;
-  attachPath: string;
-};
-
-function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamCommandParams {
+function decodeDesktopStreamParams(raw?: string | null) {
   let value: unknown;
   try {
     value = raw ? JSON.parse(raw) : undefined;
@@ -104,7 +99,7 @@ async function readVncPassword(
 
 /** Splices a node-local loopback RFB socket to a ticket-authenticated Gateway WebSocket. */
 async function runNodeDesktopStreamCommand(params: {
-  command: NodeDesktopStreamCommandParams;
+  command: ReturnType<typeof decodeDesktopStreamParams>;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
@@ -117,7 +112,7 @@ async function runNodeDesktopStreamCommand(params: {
   if (!Number.isInteger(params.port) || params.port < 1 || params.port > 65535) {
     throw new Error("desktop stream target port is invalid");
   }
-  void params.emitStatus?.("probing local RFB server\n").catch(() => undefined);
+  void params.emitStatus?.("checking local RFB server\n").catch(() => undefined);
   const probe = await connectRfbServer({
     host: "127.0.0.1",
     port: params.port,

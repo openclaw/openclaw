@@ -1,4 +1,4 @@
-import { resolveTimestampMs } from "./format.js";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import {
   createDiscordHistorySenderProvenance,
   resolveDiscordHistoryMediaIds,
@@ -23,13 +23,10 @@ export function buildDiscordPreflightHistoryEntry(params: {
     ? {
         sender: params.senderLabel,
         body: textForHistory,
-        timestamp: resolveTimestampMs(params.message.timestamp),
+        timestamp: parseDateStringTimestampMs(params.message.timestamp),
         messageId: params.message.id,
         mediaIds: resolveDiscordHistoryMediaIds(params.message),
-        senderProvenance: createDiscordHistorySenderProvenance({
-          sender: params.sender,
-          memberRoleIds: params.memberRoleIds,
-        }),
+        senderProvenance: createDiscordHistorySenderProvenance(params),
       }
     : undefined;
 }

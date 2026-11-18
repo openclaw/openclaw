@@ -33,17 +33,12 @@ function requireString(value, field) {
 }
 
 function parseReleaseTag(tag) {
-  const beta = BETA_TAG_PATTERN.exec(tag);
-  if (beta) {
-    const stableTrain = `v${beta[1]}.${beta[2]}.${beta[3]}`;
-    return { kind: "beta", stableTrain, displayVersion: stableTrain.slice(1) };
+  const match = BETA_TAG_PATTERN.exec(tag) ?? STABLE_TAG_PATTERN.exec(tag);
+  if (!match) {
+    throw new Error(`Unsupported release-validation campaign tag: ${tag}`);
   }
-  const stable = STABLE_TAG_PATTERN.exec(tag);
-  if (stable) {
-    const stableTrain = `v${stable[1]}.${stable[2]}.${stable[3]}`;
-    return { kind: "stable", stableTrain, displayVersion: stableTrain.slice(1) };
-  }
-  throw new Error(`Unsupported release-validation campaign tag: ${tag}`);
+  const stableTrain = `v${match[1]}.${match[2]}.${match[3]}`;
+  return { kind: match[4] ? "beta" : "stable", stableTrain, displayVersion: stableTrain.slice(1) };
 }
 
 function validateBetaBody(body, { tag, stableTrain, releaseUrl, releaseCommit, guidanceMainSha }) {

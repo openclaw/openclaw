@@ -114,7 +114,7 @@ struct DashboardWindowSmokeTests {
         defer { NSWindow.removeFrame(usingName: windowAutosaveName) }
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/control/").absoluteString,
                 token: "device-token",
                 password: nil),
@@ -122,24 +122,56 @@ struct DashboardWindowSmokeTests {
             windowAutosaveName: windowAutosaveName,
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.show()
+        controller.show(url: url, auth: controller.auth)
         #expect(controller.window?.styleMask.contains(.titled) == true)
         #expect(controller.window?.styleMask.contains(.closable) == true)
         #expect(controller.window?.isRestorable == false)
         #expect(controller.window?.contentViewController != nil)
         #expect(controller.window?.standardWindowButton(.closeButton) != nil)
-        // The empty unified toolbar is what grows the titlebar to 52pt so the
-        // traffic lights center against the web titlebar row; without it they
-        // hug the top edge and misalign with the hosted web buttons.
+        // The compact toolbar aligns the traffic lights with the hosted web row.
         #expect(controller.window?.toolbar != nil)
-        #expect(controller.window?.toolbarStyle == .unified)
+        #expect(controller.window?.toolbarStyle == .unifiedCompact)
         // The toolbar only exists to size the titlebar, so View > Hide Toolbar
-        // (⌥⌘T) must be refused; otherwise hiding it desyncs the 52pt web inset.
+        // (⌥⌘T) must be refused; otherwise hiding it desyncs the compact web inset.
         controller.window?.toggleToolbarShown(nil)
         #expect(controller.window?.toolbar?.isVisible == true)
         #expect((controller.window?.frame.width ?? 0) >= DashboardWindowLayout.windowMinSize.width)
         #expect((controller.window?.frame.height ?? 0) >= DashboardWindowLayout.windowMinSize.height)
         #expect(controller.window?.frameAutosaveName == windowAutosaveName)
+        try await DashboardTestWait.document(controller)
+        let window = try #require(controller.window)
+        let greenButton = try #require(window.standardWindowButton(.zoomButton))
+        let readInset = """
+        parseFloat(document.documentElement.style.getPropertyValue('--openclaw-native-controls-inset')) || 0
+        """
+        try await TestWait.state("native titlebar clearance") {
+            try await (controller.webView.evaluateJavaScript(readInset) as? Double ?? 0) > 0
+        }
+        let compactInset = try #require(try await controller.webView.evaluateJavaScript(readInset) as? Double)
+        let compactEdge = controller.webView.convert(greenButton.bounds, from: greenButton).maxX
+        #expect(compactInset > compactEdge)
+
+        // AppKit's regular toolbar places the controls farther right. The live
+        // document must follow its geometry without changing the content gap.
+        window.toolbarStyle = .unified
+        window.contentView?.superview?.layoutSubtreeIfNeeded()
+        window.update()
+        let regularEdge = controller.webView.convert(greenButton.bounds, from: greenButton).maxX
+        #expect(regularEdge > compactEdge)
+        try await TestWait.state("updated native titlebar clearance") {
+            guard let inset = try await controller.webView.evaluateJavaScript(readInset) as? Double
+            else { return false }
+            return abs((inset - compactInset) - (regularEdge - compactEdge)) < 0.1
+        }
+        // A replacement document needs the same inset even when native geometry
+        // has not changed since the previous publication.
+        controller.reloadDashboard()
+        try await DashboardTestWait.document(controller)
+        try await TestWait.state("reloaded native titlebar clearance") {
+            guard let inset = try await controller.webView.evaluateJavaScript(readInset) as? Double
+            else { return false }
+            return abs((inset - compactInset) - (regularEdge - compactEdge)) < 0.1
+        }
         controller.closeDashboard()
     }
 
@@ -188,20 +220,25 @@ struct DashboardWindowSmokeTests {
     @Test func `dashboard reload decision preserves live same URL content`() throws {
         let current = try #require(URL(string: "http://127.0.0.1:18789/control/"))
         let replacement = try #require(URL(string: "http://127.0.0.1:18790/control/"))
-        let auth = DashboardWindowAuth(
+        let auth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: "ws://127.0.0.1:18789/control/",
             token: nil,
             password: "secret")
-        let rotatedAuth = DashboardWindowAuth(
+        let rotatedAuth = DashboardWindowAuth.nativeDevice(
             gatewayUrl: "ws://127.0.0.1:18789/control/",
             token: nil,
             password: "rotated")
 
+        let reacceptedAuth = DashboardWindowAuth.nativeDevice(
+            gatewayUrl: "ws://127.0.0.1:18789/control/", token: nil, password: "secret",
+            legacyCredentials: ["password": "secret"])
+        // A fresh accepted socket changes authority, not the owner of live page state.
+        #expect(auth != reacceptedAuth)
         #expect(!DashboardWindowController.shouldReloadDashboard(
             currentURL: current,
             newURL: current,
             currentAuth: auth,
-            newAuth: auth,
+            newAuth: reacceptedAuth,
             hasUsableDocument: true,
             isShowingFailurePage: false))
         #expect(DashboardWindowController.shouldReloadDashboard(
@@ -218,14 +255,24 @@ struct DashboardWindowSmokeTests {
             newAuth: auth,
             hasUsableDocument: true,
             isShowingFailurePage: false))
-        // Password-only auth keeps the URL identical; rotation must reload.
-        #expect(DashboardWindowController.shouldReloadDashboard(
-            currentURL: current,
-            newURL: current,
-            currentAuth: auth,
-            newAuth: rotatedAuth,
-            hasUsableDocument: true,
-            isShowingFailurePage: false))
+        // Configured credentials and auth-kind changes still replace the document.
+        for changedAuth in [
+            rotatedAuth,
+            .nativeDevice(
+                gatewayUrl: "ws://127.0.0.1:18789/control/",
+                token: "new-token",
+                password: "secret"),
+            .browserIdentity(gatewayUrl: "ws://127.0.0.1:18789/control/"),
+            .unauthenticated,
+        ] {
+            #expect(DashboardWindowController.shouldReloadDashboard(
+                currentURL: current,
+                newURL: current,
+                currentAuth: auth,
+                newAuth: changedAuth,
+                hasUsableDocument: true,
+                isShowingFailurePage: false))
+        }
         // An in-flight failure page is never a usable document to keep.
         #expect(DashboardWindowController.shouldReloadDashboard(
             currentURL: current,
@@ -242,7 +289,7 @@ struct DashboardWindowSmokeTests {
         let url = server.url("/control/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -256,7 +303,7 @@ struct DashboardWindowSmokeTests {
 
         // A terminal failure drops moment-bound intent instead of replaying it
         // after a later recovery reload.
-        controller.showFailure(title: "Dashboard unavailable", message: "offline")
+        controller.showFailure(title: "OpenClaw unavailable", message: "offline")
         #expect(controller._testPendingNativeCommands.isEmpty)
     }
 
@@ -341,7 +388,7 @@ struct DashboardWindowSmokeTests {
         let dashboard = server.url("/control/")
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -371,7 +418,7 @@ struct DashboardWindowSmokeTests {
         var firstRequestContinuation: CheckedContinuation<Bool, Never>?
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in
@@ -399,7 +446,7 @@ struct DashboardWindowSmokeTests {
 
         controller.update(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+            auth: DashboardWindowAuth.unauthenticated)
         firstRequestContinuation?.resume(returning: false)
         firstRequestContinuation = nil
         #expect(try await nextDashboardImportRequest(requests.stream) == 2)
@@ -419,7 +466,7 @@ struct DashboardWindowSmokeTests {
         let gate = DashboardBrowserImportGate()
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in gate.request() })
@@ -455,7 +502,7 @@ struct DashboardWindowSmokeTests {
         var firstRequestApplied: Bool?
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { shouldApply in
@@ -501,13 +548,13 @@ struct DashboardWindowSmokeTests {
         let dataStore = WKWebsiteDataStore.nonPersistent()
         let controller = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: dataStore, windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         let other = DashboardWindowController(
             url: dashboard,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: dataStore, windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { other.closeDashboard() }
@@ -692,7 +739,7 @@ extension DashboardWindowSmokeTests {
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -702,7 +749,7 @@ extension DashboardWindowSmokeTests {
         Array.from(document.querySelectorAll('.sidebar-shell, .settings-sidebar__header'))
           .map(element => getComputedStyle(element).paddingTop)
         """) as? [String]
-        #expect(padding == ["52px", "52px"])
+        #expect(padding == ["40px", "40px"])
         #expect(try await controller.webView.evaluateJavaScript(
             "document.documentElement.classList.contains('openclaw-native-web-chrome')") as? Bool == true)
     }
@@ -722,7 +769,7 @@ extension DashboardWindowSmokeTests {
             html: html,
             contentSecurityPolicy: "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'")
         defer { replacement.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url("/control/"), auth: auth, websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
@@ -743,7 +790,7 @@ extension DashboardWindowSmokeTests {
         defer { server.stop() }
         let controller = DashboardWindowController(
             url: server.url("/control/"),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(), windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
@@ -759,7 +806,7 @@ extension DashboardWindowSmokeTests {
             message: "Delete 1 session?",
             host: "127.0.0.1")
 
-        #expect(alert.messageText == "OpenClaw Dashboard")
+        #expect(alert.messageText == "OpenClaw")
         #expect(alert.informativeText.contains("127.0.0.1 is asking:"))
         #expect(alert.informativeText.contains("Delete 1 session?"))
         #expect(alert.buttons.map(\.title) == ["OK", "Cancel"])
@@ -776,13 +823,13 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/control/")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
         controller.showFailure(
-            title: "Dashboard unavailable",
+            title: "OpenClaw unavailable",
             message: "Remote control tunnel failed",
             detail: "Reset the remote tunnel and try again.")
         #expect(controller.window?.isVisible == true)
@@ -795,7 +842,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "device-token",
                 password: nil),
@@ -866,7 +913,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -921,7 +968,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=route-a-device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "route-a-device-token",
                 password: nil),
@@ -959,7 +1006,7 @@ extension DashboardWindowSmokeTests {
         let url = server.url("/#token=device-token")
         let controller = DashboardWindowController(
             url: url,
-            auth: DashboardWindowAuth(
+            auth: DashboardWindowAuth.nativeDevice(
                 gatewayUrl: server.websocketURL("/").absoluteString,
                 token: "device-token",
                 password: nil),

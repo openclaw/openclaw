@@ -4,32 +4,30 @@ import {
   type ArtifactsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ArtifactLookup } from "../artifacts-content.js";
 import { resolveSessionForRun } from "../server-session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
+import { SessionMutationFactsUnavailableError } from "../session-sharing-preparation.js";
 import {
-  prepareSessionMutationFacts,
-  SessionMutationFactsUnavailableError,
-} from "../session-sharing-preparation.js";
+  prepareSessionSharingRead,
+  type SessionSharingReadProjection,
+} from "../session-sharing-target-read.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
 } from "../session-sharing.js";
 import { resolveSessionStoreIdentity } from "../session-store-key.js";
-import type { ArtifactLookup } from "./artifacts-content.js";
 import type { GatewayClient, RespondFn } from "./types.js";
 
 export type ArtifactQuery = ArtifactsListParams;
 
-type ResolvedArtifactSession = {
-  sessionKey: string;
-  agentId: string;
-};
-
 type ArtifactSessionProjection = Pick<
   SessionRowProjection,
   "ensureMaterialized" | "findBySessionId" | "sharingRevision"
->;
+> &
+  SessionSharingReadProjection;
 
 export type ArtifactSessionAccess = {
   getRuntimeConfig: () => OpenClawConfig;
@@ -62,7 +60,7 @@ function resolveQuerySession(
   query: ArtifactQuery,
   cfg: OpenClawConfig,
   projection?: ArtifactSessionProjection,
-): ResolvedArtifactSession | undefined {
+) {
   const selected =
     !query.sessionKey && query.runId
       ? resolveSessionForRun(query.runId, {
@@ -92,20 +90,20 @@ function resolveQuerySession(
 }
 
 export class ArtifactSessionResolutionError extends Error {
-  constructor(readonly shape: ReturnType<typeof errorShape>) {
+  constructor(
+    readonly shape: ReturnType<typeof errorShape> = errorShape(
+      ErrorCodes.UNAVAILABLE,
+      "session changed while reading artifact; reload the conversation",
+      { retryable: true },
+    ),
+  ) {
     super(shape.message);
   }
 }
 
 function throwArtifactSessionReadError(error: unknown): never {
   if (error instanceof SessionMutationFactsUnavailableError) {
-    throw new ArtifactSessionResolutionError(
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "session changed while reading artifact; reload the conversation",
-        { retryable: true },
-      ),
-    );
+    throw new ArtifactSessionResolutionError();
   }
   throw error;
 }
@@ -132,62 +130,78 @@ export async function prepareArtifactSessionResolution(
     await projection?.ensureMaterialized();
   }
   return async (access: ArtifactSessionAccess) => {
-    const { client } = access;
-    const resolveSession = (cfg: OpenClawConfig) => resolveQuerySession(query, cfg, projection);
-    const cfg = access.getRuntimeConfig();
-    const resolved = resolveSession(cfg);
-    if (!resolved) {
-      return undefined;
-    }
-    const facts = await prepareSessionMutationFacts({
-      cfg,
-      sessionKey: resolved.sessionKey,
-      agentId: resolved.agentId,
-      preserveQualifiedAddress: !query.sessionKey,
-      allowMissing: true,
-    }).catch(throwArtifactSessionReadError);
-    access.retain(facts.release);
-    const readCurrent = () => {
-      try {
-        const currentConfig = access.getRuntimeConfig();
-        const selected = resolveSession(currentConfig);
-        if (selected?.sessionKey !== resolved.sessionKey || selected.agentId !== resolved.agentId) {
-          throw new SessionMutationFactsUnavailableError();
-        }
-        const current = facts.readCurrent(currentConfig);
-        const { target } = current;
-        const error = authorizeIncognitoSessionTarget({
-          client,
-          sessionKey: query.sessionKey ?? resolved.sessionKey,
-          target,
-        });
-        const visibilityDenied = Boolean(
-          target &&
-          createSessionListEntryFilter({ client, cfg: currentConfig })?.(
-            target.storeKey,
-            target.entry,
-          ) === false,
-        );
-        if (!error && !visibilityDenied) {
-          return current;
-        }
-        throw new ArtifactSessionResolutionError(
-          query.sessionKey && error
-            ? error
-            : errorShape(ErrorCodes.INVALID_REQUEST, "no session found for artifact query", {
-                details: { type: "artifact_scope_not_found" },
-              }),
-        );
-      } catch (error) {
-        return throwArtifactSessionReadError(error);
+    try {
+      const { client } = access;
+      const resolveSession = (cfg: OpenClawConfig) => resolveQuerySession(query, cfg, projection);
+      const cfg = access.getRuntimeConfig();
+      const resolved = resolveSession(cfg);
+      if (!resolved) {
+        return undefined;
       }
-    };
-    return {
-      sessionKey: facts.storageTarget.canonicalKey,
-      agentId: facts.storageTarget.agentId,
-      ...readCurrent(),
-      readCurrent,
-      release: facts.release,
-    };
+      const facts = await prepareSessionSharingRead({
+        cfg,
+        sessionKey: resolved.sessionKey,
+        agentId: resolved.agentId,
+        preserveQualifiedAddress: !query.sessionKey,
+        projection,
+      });
+      access.retain(facts.release);
+      const initialTarget = facts.readCurrent(cfg).target;
+      const original = initialTarget?.readSource && structuredClone(initialTarget.entry);
+      const readCurrent = () => {
+        try {
+          const currentConfig = access.getRuntimeConfig();
+          const selected = resolveSession(currentConfig);
+          if (
+            selected?.sessionKey !== resolved.sessionKey ||
+            selected.agentId !== resolved.agentId
+          ) {
+            throw new SessionMutationFactsUnavailableError();
+          }
+          const current = facts.readCurrent(currentConfig);
+          if (
+            original &&
+            (!current.target || hasSessionReadAccessChanged(original, current.target.entry))
+          ) {
+            throw new SessionMutationFactsUnavailableError();
+          }
+          const { target } = current;
+          const error = authorizeIncognitoSessionTarget({
+            client,
+            sessionKey: query.sessionKey ?? resolved.sessionKey,
+            target,
+          });
+          const visibilityDenied = Boolean(
+            target &&
+            createSessionListEntryFilter({
+              client,
+              cfg: currentConfig,
+              membership: current.membership,
+            })?.(target.storeKey, target.entry) === false,
+          );
+          if (!error && !visibilityDenied) {
+            return current;
+          }
+          throw new ArtifactSessionResolutionError(
+            query.sessionKey && error
+              ? error
+              : errorShape(ErrorCodes.INVALID_REQUEST, "no session found for artifact query", {
+                  details: { type: "artifact_scope_not_found" },
+                }),
+          );
+        } catch (error) {
+          return throwArtifactSessionReadError(error);
+        }
+      };
+      return {
+        sessionKey: facts.storageTarget.canonicalKey,
+        agentId: facts.storageTarget.agentId,
+        ...readCurrent(),
+        readCurrent,
+        release: facts.release,
+      };
+    } catch (error) {
+      return throwArtifactSessionReadError(error);
+    }
   };
 }

@@ -3,14 +3,12 @@
 if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 || (BASH_VERSINFO[0] == 5 && BASH_VERSINFO[1] >= 3))); then
   exec /bin/bash "$0" "$@"
 fi
-# Starts a packaged Gateway in Docker and verifies public cron CLI CRUD/run flows.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-cron-cli-e2e" OPENCLAW_IMAGE)"
-PORT="18789"
 TOKEN="cron-cli-e2e-$(date +%s)-$$"
 CONTAINER_NAME="openclaw-cron-cli-e2e-$$"
 CLIENT_LOG="$(mktemp -t openclaw-cron-cli-log.XXXXXX)"

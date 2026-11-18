@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import {
-  appendTranscriptTurn,
-  appendTranscriptTurnAsync,
-  readTranscriptTailAsync,
-} from "./transcript-store.js";
+import { createSystemAgentTranscriptStore, readTranscriptTailAsync } from "./transcript-store.js";
 
 // Mirrors the store's internal retention bound (kept module-local there).
 const SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES = 1_000;
@@ -18,9 +14,10 @@ describe("system-agent transcript store", () => {
   it("appends turns and returns a bounded tail oldest-first", async () => {
     await withTestDir({ prefix: "openclaw-system-agent-transcript-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      await appendTranscriptTurnAsync({ role: "assistant", text: "welcome", at: 1 }, { env });
-      await appendTranscriptTurnAsync({ role: "user", text: "status", at: 2 }, { env });
-      await appendTranscriptTurnAsync({ role: "assistant", text: "healthy", at: 2 }, { env });
+      const { appendTurn } = createSystemAgentTranscriptStore({ env });
+      await appendTurn({ role: "assistant", text: "welcome", at: 1 });
+      await appendTurn({ role: "user", text: "status", at: 2 });
+      await appendTurn({ role: "assistant", text: "healthy", at: 2 });
       await closeOpenClawStateDatabaseAsync();
 
       expect(await readTranscriptTailAsync(2, { env })).toEqual([
@@ -34,8 +31,9 @@ describe("system-agent transcript store", () => {
   it("prunes the oldest rows beyond the rolling retention limit", async () => {
     await withTestDir({ prefix: "openclaw-system-agent-transcript-prune-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      const { appendTurn } = createSystemAgentTranscriptStore({ env });
       for (let index = 0; index <= SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES; index += 1) {
-        appendTranscriptTurn({ role: "user", text: `turn-${index}`, at: index }, { env });
+        await appendTurn({ role: "user", text: `turn-${index}`, at: index });
       }
 
       const turns = await readTranscriptTailAsync(SYSTEM_AGENT_TRANSCRIPT_MAX_ENTRIES + 1, { env });
@@ -48,11 +46,12 @@ describe("system-agent transcript store", () => {
   it("hides reset markers and seeds only turns after a marker within the tail window", async () => {
     await withTestDir({ prefix: "openclaw-system-agent-transcript-reset-" }, async (stateDir) => {
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-      appendTranscriptTurn({ role: "user", text: "before reset", at: 1 }, { env });
-      appendTranscriptTurn({ role: "assistant", text: "old answer", at: 2 }, { env });
-      appendTranscriptTurn({ role: "reset", text: "", at: 3 }, { env });
-      appendTranscriptTurn({ role: "user", text: "after reset", at: 4 }, { env });
-      appendTranscriptTurn({ role: "assistant", text: "new answer", at: 5 }, { env });
+      const { appendTurn } = createSystemAgentTranscriptStore({ env });
+      await appendTurn({ role: "user", text: "before reset", at: 1 });
+      await appendTurn({ role: "assistant", text: "old answer", at: 2 });
+      await appendTurn({ role: "reset", text: "", at: 3 });
+      await appendTurn({ role: "user", text: "after reset", at: 4 });
+      await appendTurn({ role: "assistant", text: "new answer", at: 5 });
       await closeOpenClawStateDatabaseAsync();
 
       expect(await readTranscriptTailAsync(10, { env })).toEqual([
@@ -73,11 +72,12 @@ describe("system-agent transcript store", () => {
       { prefix: "openclaw-system-agent-transcript-old-reset-" },
       async (stateDir) => {
         const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-        appendTranscriptTurn({ role: "user", text: "before reset", at: 1 }, { env });
-        appendTranscriptTurn({ role: "reset", text: "", at: 2 }, { env });
-        appendTranscriptTurn({ role: "user", text: "newer one", at: 3 }, { env });
-        appendTranscriptTurn({ role: "assistant", text: "newer two", at: 4 }, { env });
-        appendTranscriptTurn({ role: "user", text: "newer three", at: 5 }, { env });
+        const { appendTurn } = createSystemAgentTranscriptStore({ env });
+        await appendTurn({ role: "user", text: "before reset", at: 1 });
+        await appendTurn({ role: "reset", text: "", at: 2 });
+        await appendTurn({ role: "user", text: "newer one", at: 3 });
+        await appendTurn({ role: "assistant", text: "newer two", at: 4 });
+        await appendTurn({ role: "user", text: "newer three", at: 5 });
         await closeOpenClawStateDatabaseAsync();
 
         expect(await readTranscriptTailAsync(2, { afterLastReset: true, env })).toEqual([

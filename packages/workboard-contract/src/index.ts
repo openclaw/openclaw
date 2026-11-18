@@ -1,5 +1,16 @@
 import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
 
+export type WorkboardDatabasePortApi<Database, Input> = {
+  postgres: string;
+  inspectWorkboardPortSource(db: Database): {
+    version: number;
+    migrationRequired: boolean;
+    pendingColumns: Record<string, string[]>;
+  };
+  admitWorkboardPort(dbPath: string, input?: Input): void;
+  WorkboardPortSchemaError: new (message?: string) => Error;
+};
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -64,6 +75,8 @@ export const WORKBOARD_LINK_TYPES = [
   "relates_to",
 ] as const;
 export const WORKBOARD_PROOF_STATUSES = ["passed", "failed", "skipped", "unknown"] as const;
+export const WORKBOARD_OBSERVATION_OUTCOMES = ["succeeded", "failed"] as const;
+export const WORKBOARD_VERIFICATION_OUTCOMES = ["confirmed", "disputed", "inconclusive"] as const;
 export const WORKBOARD_TEMPLATE_IDS = ["bugfix", "docs", "release", "pr_review", "plugin"] as const;
 export const WORKBOARD_DIAGNOSTIC_KINDS = [
   "stranded_ready",
@@ -96,6 +109,8 @@ export type WorkboardEventKind = (typeof WORKBOARD_EVENT_KINDS)[number];
 export type WorkboardAttemptStatus = (typeof WORKBOARD_ATTEMPT_STATUSES)[number];
 export type WorkboardLinkType = (typeof WORKBOARD_LINK_TYPES)[number];
 export type WorkboardProofStatus = (typeof WORKBOARD_PROOF_STATUSES)[number];
+export type WorkboardObservationOutcome = (typeof WORKBOARD_OBSERVATION_OUTCOMES)[number];
+export type WorkboardVerificationOutcome = (typeof WORKBOARD_VERIFICATION_OUTCOMES)[number];
 export type WorkboardTemplateId = (typeof WORKBOARD_TEMPLATE_IDS)[number];
 export type WorkboardDiagnosticKind = (typeof WORKBOARD_DIAGNOSTIC_KINDS)[number];
 export type WorkboardDiagnosticSeverity = (typeof WORKBOARD_DIAGNOSTIC_SEVERITIES)[number];
@@ -163,6 +178,61 @@ export type WorkboardProof = {
   note?: string;
 };
 
+/**
+ * Optional result evidence, kept apart by who produced it. None of these records gate
+ * completion, change proof statuses, or affect dependency scheduling.
+ */
+export type WorkboardResultClaim = {
+  kind: "claim";
+  id: string;
+  recordedAt: number;
+  /** Caller identity Workboard stamped when the worker completed the card. */
+  claimedBy: string;
+  statement: string;
+  proofId?: string;
+  runId?: string;
+};
+
+/** What the execution owner observed. Only Workboard's session lifecycle sync writes these. */
+export type WorkboardResultObservation = {
+  kind: "observation";
+  id: string;
+  recordedAt: number;
+  observedAt: number;
+  source: "session-lifecycle";
+  outcome: WorkboardObservationOutcome;
+  sessionKey: string;
+  runId?: string;
+};
+
+export type WorkboardResultVerification = {
+  kind: "verification";
+  id: string;
+  recordedAt: number;
+  /** Caller identity Workboard stamped; never taken from the request. */
+  checkerId: string;
+  /**
+   * True when the checker matches the card's assignee, claim owner, or a claim author.
+   * False only means no match was found; it does not establish independence.
+   */
+  checkedOwnWork: boolean;
+  /** What was checked, in the checker's words. */
+  scope: string;
+  outcome: WorkboardVerificationOutcome;
+  /** The claim, proof, artifact, or run this check covered, when it named one. */
+  claimId?: string;
+  proofId?: string;
+  artifactId?: string;
+  runId?: string;
+  note?: string;
+  url?: string;
+};
+
+export type WorkboardResultEvidence =
+  | WorkboardResultClaim
+  | WorkboardResultObservation
+  | WorkboardResultVerification;
+
 export type WorkboardArtifact = {
   id: string;
   createdAt: number;
@@ -191,8 +261,15 @@ export type WorkboardWorkerLog = {
   runId?: string;
 };
 
+export const WORKBOARD_WORKER_STATES = [
+  "idle",
+  "running",
+  "completed",
+  "blocked",
+  "violated",
+] as const;
 export type WorkboardWorkerProtocol = {
-  state: "idle" | "running" | "completed" | "blocked" | "violated";
+  state: (typeof WORKBOARD_WORKER_STATES)[number];
   updatedAt: number;
   detail?: string;
 };
@@ -211,8 +288,17 @@ export type WorkboardClaim = {
   expiresAt?: number;
 };
 
+export const WORKBOARD_DIAGNOSTIC_ACTION_KINDS = [
+  "claim",
+  "unblock",
+  "promote",
+  "reclaim",
+  "reassign",
+  "add_proof",
+  "open_session",
+] as const;
 export type WorkboardDiagnosticAction = {
-  kind: "claim" | "unblock" | "promote" | "reclaim" | "reassign" | "add_proof" | "open_session";
+  kind: (typeof WORKBOARD_DIAGNOSTIC_ACTION_KINDS)[number];
   label: string;
 };
 
@@ -242,6 +328,8 @@ export const WORKBOARD_CHANGED_EVENT = "plugin.workboard.changed";
 export type WorkboardChange = {
   epoch: string;
   revision: number;
+  cardsRevision?: number;
+  sessionsRevision?: number;
 };
 
 export type WorkboardWorkspace = {
@@ -288,6 +376,8 @@ export type WorkboardAutomation = {
   maxRetries?: number;
   scheduledAt?: number;
   summary?: string;
+  /** Owned by Workboard's evidence writers; raw metadata patches cannot add entries. */
+  evidence?: WorkboardResultEvidence[];
   createdCardIds?: string[];
   dispatchCount?: number;
   lastDispatchAt?: number;
@@ -321,6 +411,8 @@ export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "
 export type WorkboardOrchestrationSettings = {
   autoDecompose?: boolean;
   autoDecomposePerDispatch?: number;
+  /** Running or claimed cards one owner may hold while starting a card on this board. Default 1. */
+  maxActivePerOwner?: number;
   defaultAssignee?: string;
   orchestratorProfile?: string;
 };
@@ -382,9 +474,16 @@ export type WorkboardCard = {
   metadata?: WorkboardMetadata;
 };
 
+export type WorkboardCardCursor = {
+  position: number;
+  createdAt: number;
+  id: string;
+};
+
 export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
+  nextCursor?: WorkboardCardCursor;
 };
 export {
   createDefaultWorkboardSessionsBoardSpec,
@@ -396,6 +495,7 @@ export type {
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardSpec,
   WorkboardSessionsBoardView,
   WorkboardSessionsColumn,

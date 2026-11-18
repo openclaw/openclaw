@@ -1,7 +1,13 @@
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { Mock } from "vitest";
+import { type Mock, vi } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sessionManagerReleaseTranscript } from "../../sessions/session-manager-core.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
+import {
+  sessionManagerReadToolResultProjectionEntries,
+  sessionManagerReadTranscriptBranch,
+} from "../../sessions/session-manager-view-types.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
@@ -12,9 +18,11 @@ export type SessionManagerMocks = {
   getHeader: UnknownMock;
   getLeafId: Mock<() => string | null>;
   getLeafEntry: UnknownMock;
+  hasLoadedTranscriptTail: () => boolean;
   getEntry: UnknownMock;
   getEntries: UnknownMock;
   getBranch: UnknownMock;
+  getToolResultProjectionEntries: UnknownMock;
   getBoundaryCount: UnknownMock;
   branchAsync: UnknownMock;
   resetLeafAsync: UnknownMock;
@@ -29,7 +37,7 @@ export type SessionManagerMocks = {
   flushPendingToolResultsAsync: UnknownMock;
   clearPendingToolResults: UnknownMock;
   reloadPersistedTranscriptAsync: UnknownMock;
-  clearNextUserMessagePersistenceSuppression: UnknownMock;
+  setNextUserMessagePersistence: UnknownMock;
   removeTrailingEntriesAsync: UnknownMock;
 };
 
@@ -82,8 +90,16 @@ export function resetSessionManagerMocks(
   sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
   sessionManager.branchAsync.mockReset();
   sessionManager.resetLeafAsync.mockReset();
-  sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
+  sessionManager.setNextUserMessagePersistence.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
+  // Orphan repair reads the model window; it follows per-test buildSessionContext overrides.
+  Object.assign(sessionManager, {
+    [sessionManagerReleaseTranscript]: vi.fn(),
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+    [sessionManagerReadTranscriptBranch]: () => sessionManager.getBranch(),
+    [sessionManagerReadToolResultProjectionEntries]: () =>
+      sessionManager.getToolResultProjectionEntries(),
+  });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();
   sessionManager.appendCustomEntryAsync.mockReset();

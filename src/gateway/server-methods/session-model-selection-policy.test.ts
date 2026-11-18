@@ -6,10 +6,10 @@ import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-po
 const cfg = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: [
-      { id: "main", default: true },
-      { id: "work", model: "anthropic/claude-sonnet-4-6" },
-    ],
+    entries: {
+      main: {},
+      work: { model: "anthropic/claude-sonnet-4-6" },
+    },
   },
 } satisfies OpenClawConfig;
 
@@ -23,12 +23,11 @@ describe("resolveGatewayModelSelectionPolicy", () => {
     ).toBe("session");
   });
 
-  it("discloses an explicitly requested agent target to an admin", () => {
+  it("discloses the configured agent target to an admin", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
         callerScopes: ["operator.admin"],
-        cfg,
-        scope: "agent",
+        cfg: { agents: { defaults: { modelSelectionScope: "agent" } } },
       }).target,
     ).toBe("agent");
   });
@@ -37,8 +36,7 @@ describe("resolveGatewayModelSelectionPolicy", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
         callerScopes: ["operator.write"],
-        cfg,
-        scope: "global",
+        cfg: { agents: { defaults: { modelSelectionScope: "global" } } },
       }).target,
     ).toBe("session");
   });
@@ -50,8 +48,7 @@ describe("resolveGatewayModelSelectionPolicy", () => {
         withEnv({ [mode]: "1" }, () =>
           resolveGatewayModelSelectionPolicy({
             callerScopes: ["operator.admin"],
-            cfg,
-            scope: "global",
+            cfg: { agents: { defaults: { modelSelectionScope: "global" } } },
           }),
         ).target,
       ).toBe("session");

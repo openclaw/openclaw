@@ -10,11 +10,8 @@ import {
  * only accepted query shapes; fuzzy ordering lives here so callers agree.
  */
 
-/** Node fields accepted by shared CLI/API node selection helpers. */
 export type NodeMatchCandidate = {
-  /** Stable node id used for RPC/session routing. */
   nodeId: string;
-  /** Human-facing node name used for fuzzy operator input. */
   displayName?: string;
   /** Tailscale or network address accepted as an exact match. */
   remoteIp?: string;
@@ -24,7 +21,6 @@ export type NodeMatchCandidate = {
   clientId?: string;
 };
 
-/** Normalizes human node names into stable lookup keys for fuzzy CLI/API matching. */
 function normalizeNodeKey(value: string) {
   // Emoji components can also be marks (variation selectors and keycaps); drop
   // them so decorated and plain display-name selectors stay equivalent.
@@ -39,13 +35,6 @@ function normalizeNodeKey(value: string) {
     .replace(/-+$/, "");
 }
 
-function listKnownNodes(nodes: NodeMatchCandidate[]): string {
-  return nodes
-    .map((n) => n.displayName || n.remoteIp || n.nodeId)
-    .filter(Boolean)
-    .join(", ");
-}
-
 function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   const label = node.displayName || node.remoteIp || node.nodeId;
   const details = [`node=${node.nodeId}`];
@@ -56,31 +45,6 @@ function formatNodeCandidateLabel(node: NodeMatchCandidate): string {
   return `${label} [${details.join(", ")}]`;
 }
 
-function resolveMatchScore(
-  node: NodeMatchCandidate,
-  query: string,
-  queryNormalized: string,
-  queryCompact: string | undefined,
-): number {
-  const name = typeof node.displayName === "string" ? node.displayName : "";
-  const nameNormalized = name ? normalizeNodeKey(name) : "";
-  if (nameNormalized && nameNormalized === queryNormalized) {
-    return 2_000;
-  }
-  if (
-    queryCompact !== undefined &&
-    nameNormalized &&
-    nameNormalized.replace(/-/g, "") === queryCompact
-  ) {
-    return 1_900;
-  }
-  if (query.length >= 6 && node.nodeId.startsWith(query)) {
-    return 1_000;
-  }
-  return 0;
-}
-
-/** Resolves a single node id or throws an operator-readable unknown/ambiguous-node error. */
 export function resolveNodeIdFromCandidates(
   nodes: NodeMatchCandidate[],
   query: string,
@@ -101,7 +65,20 @@ export function resolveNodeIdFromCandidates(
     const compact = allowCompactDisplayName ? normalized.replace(/-/g, "") : undefined;
     let topMatchScore = 0;
     nodes.forEach((node) => {
-      const score = resolveMatchScore(node, q, normalized, compact);
+      const name = node.displayName ?? "";
+      const nameNormalized = name ? normalizeNodeKey(name) : "";
+      let score = 0;
+      if (nameNormalized && nameNormalized === normalized) {
+        score = 2_000;
+      } else if (
+        compact !== undefined &&
+        nameNormalized &&
+        nameNormalized.replace(/-/g, "") === compact
+      ) {
+        score = 1_900;
+      } else if (q.length >= 6 && node.nodeId.startsWith(q)) {
+        score = 1_000;
+      }
       if (score > topMatchScore) {
         topMatchScore = score;
         strongestMatches.length = 0;
@@ -112,7 +89,10 @@ export function resolveNodeIdFromCandidates(
     });
   }
   if (strongestMatches.length === 0) {
-    const known = listKnownNodes(nodes);
+    const known = nodes
+      .map((node) => node.displayName || node.remoteIp || node.nodeId)
+      .filter(Boolean)
+      .join(", ");
     throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
   }
 

@@ -1,4 +1,3 @@
-// Shared PR context and evidence policy for GitHub checks and label decisions.
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
@@ -108,10 +107,6 @@ export async function readBoundedGitHubApiJson(
   return JSON.parse(text);
 }
 
-function normalizeLineEndings(text = "") {
-  return text.replace(/\r\n?/g, "\n");
-}
-
 function maskHtmlComments(text) {
   let commentOpen = false;
   let fenceMarker = "";
@@ -133,8 +128,8 @@ function maskHtmlComments(text) {
         commentOpen = false;
       }
 
-      if (nextFenceMarker(maskedLine, "")) {
-        fenceMarker = nextFenceMarker(maskedLine, "");
+      fenceMarker = nextFenceMarker(maskedLine, "");
+      if (fenceMarker) {
         return maskedLine;
       }
 
@@ -267,7 +262,7 @@ function markdownHeadingLevel(line) {
 function extractMarkdownSections(headingRegex, body = "") {
   // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
   // bodies the same way as locally-authored Markdown.
-  const normalizedBody = normalizeLineEndings(body);
+  const normalizedBody = body.replace(/\r\n?/g, "\n");
   const headingBody = maskHtmlComments(normalizedBody);
   const sections = [];
   const matcher = new RegExp(headingRegex.source, headingRegex.flags.replaceAll("g", ""));
@@ -305,10 +300,6 @@ export function hasAuthoredPullRequestSection(heading, body = "") {
   return !isMissingValue(extractMarkdownSections(headingPattern, body).at(-1) ?? "");
 }
 
-function extractLegacyProofSections(body = "") {
-  return extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body);
-}
-
 function fieldLineRegex(name) {
   return new RegExp(
     `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegExp(name)}(?:\\s*\\([^)]*\\))?(?:\\*\\*)?\\s*:\\s*(.*)$`,
@@ -323,7 +314,7 @@ function legacyProofFieldLineValue(line) {
 }
 
 function extractFieldValue(section, field) {
-  const lines = maskHtmlComments(normalizeLineEndings(section)).split("\n");
+  const lines = maskHtmlComments(section).split("\n");
   let fenceMarker = "";
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -356,7 +347,7 @@ function extractFieldValue(section, field) {
 }
 
 function stripMarkdownFenceMarkers(value) {
-  return maskHtmlComments(normalizeLineEndings(value))
+  return maskHtmlComments(value)
     .split("\n")
     .filter((line) => !/^ {0,3}(?:`{3,}|~{3,})(?:.*)?$/.test(line))
     .join("\n")
@@ -365,10 +356,7 @@ function stripMarkdownFenceMarkers(value) {
 
 function isMissingValue(value) {
   const trimmed = stripMarkdownFenceMarkers(value).replace(/^\s*[-*]\s+/, "");
-  if (!trimmed) {
-    return true;
-  }
-  return missingValueRegex.test(trimmed);
+  return !trimmed || missingValueRegex.test(trimmed);
 }
 
 /**
@@ -397,7 +385,8 @@ export function evaluatePullRequestContext({ pullRequest } = {}) {
   }
 
   const body = pullRequest?.body ?? "";
-  const latestLegacyProof = extractLegacyProofSections(body).at(-1) ?? "";
+  const latestLegacyProof =
+    extractMarkdownSections(/^#{2,6}\s+real behavior proof\b[^\n]*$/im, body).at(-1) ?? "";
   const hasAuthoredProblem = hasAuthoredPullRequestSection("What Problem This Solves", body);
   const hasLegacyProblem = !isMissingValue(
     extractFieldValue(latestLegacyProof, legacyProofFields.problem),

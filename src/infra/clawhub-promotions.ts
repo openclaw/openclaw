@@ -8,7 +8,6 @@ import {
   readRequiredClawHubBooleanField,
   readRequiredClawHubNumberField,
   readRequiredClawHubStringField,
-  type ClawHubFetch,
 } from "./clawhub-client.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 
@@ -134,18 +133,9 @@ function parseClawHubPromotion(value: unknown): ClawHubPromotion {
   };
 }
 
-export async function fetchClawHubPromotions(
-  params: {
-    baseUrl?: string;
-    timeoutMs?: number;
-    fetchImpl?: ClawHubFetch;
-  } = {},
-): Promise<ClawHubPromotion[]> {
+export async function fetchClawHubPromotions(): Promise<ClawHubPromotion[]> {
   const response = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
     path: "/api/v1/promotions",
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   if (!isJsonObject(response) || !Array.isArray(response.promotions)) {
     throw new Error("Malformed ClawHub promotions response: expected a promotions array.");
@@ -153,17 +143,9 @@ export async function fetchClawHubPromotions(
   return response.promotions.map((entry) => parseClawHubPromotion(entry));
 }
 
-export async function fetchClawHubPromotion(params: {
-  slug: string;
-  baseUrl?: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
-}): Promise<ClawHubPromotion> {
+export async function fetchClawHubPromotion(params: { slug: string }): Promise<ClawHubPromotion> {
   const response = await fetchClawHubJson<unknown>({
-    baseUrl: params.baseUrl,
     path: `/api/v1/promotions/${encodeURIComponent(params.slug)}`,
-    timeoutMs: params.timeoutMs,
-    fetchImpl: params.fetchImpl,
   });
   return parseClawHubPromotion(response);
 }

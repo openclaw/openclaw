@@ -13,25 +13,24 @@ export function resolveRunEntryCliRuntime(params: {
   pinnedHarnessId?: string;
 }) {
   const runtime = params.sessionRuntimeOverride;
-  const pinnedCliRuntime =
-    runtime && runtime !== params.pinnedHarnessId && isCliProvider(runtime, params.config)
-      ? runtime
-      : undefined;
+  if (runtime) {
+    const useCliExecution =
+      runtime !== params.pinnedHarnessId && isCliProvider(runtime, params.config);
+    return {
+      cliExecutionProvider: useCliExecution ? runtime : params.provider,
+      useCliExecution,
+    };
+  }
   const cliExecutionProvider =
-    pinnedCliRuntime ??
-    (runtime
-      ? params.provider
-      : (resolveCliRuntimeExecutionProvider({
-          provider: params.provider,
-          cfg: params.config,
-          agentId: params.agentId,
-          modelId: params.model,
-          authProfileId: params.authProfileId,
-        }) ?? params.provider));
+    resolveCliRuntimeExecutionProvider({
+      provider: params.provider,
+      cfg: params.config,
+      agentId: params.agentId,
+      modelId: params.model,
+      authProfileId: params.authProfileId,
+    }) ?? params.provider;
   return {
     cliExecutionProvider,
-    useCliExecution: runtime
-      ? pinnedCliRuntime !== undefined
-      : isCliProvider(cliExecutionProvider, params.config),
+    useCliExecution: isCliProvider(cliExecutionProvider, params.config),
   };
 }

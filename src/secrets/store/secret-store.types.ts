@@ -10,8 +10,29 @@ export type SecretStoreListInput = {
   redactedOnly?: boolean;
 };
 export type SecretStoreReadOperations = {
+  "secrets.selected": {
+    input: { names: readonly string[] };
+    output: {
+      type: "secrets.selected";
+      rows: Pick<SecretStoreRow, "name" | "value" | "allowed_hosts">[];
+    };
+  };
   "secrets.metadata": {
     input: SecretStoreListInput;
     output: { type: "secrets.metadata"; rows: SecretStoreRow[] };
+  };
+  "secrets.execEnvironment": {
+    input: { excludeNames: readonly string[] };
+    output: {
+      type: "secrets.execEnvironment";
+      rows: Pick<SecretStoreRow, "name" | "value" | "kind" | "allowed_hosts">[];
+    };
+  };
+  "secrets.value": {
+    input: { name: string };
+    output: {
+      type: "secrets.value";
+      row: Pick<SecretStoreRow, "value" | "kind"> | undefined;
+    };
   };
 };

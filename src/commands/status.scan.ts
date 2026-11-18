@@ -1,4 +1,3 @@
-// Top-level text status scan entrypoint.
 // Human `status --all` and JSON status use their dedicated command paths.
 
 import { withProgress } from "../cli/progress.js";
@@ -7,7 +6,6 @@ import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 
-/** Runs the text status scan. */
 export async function scanStatus(
   opts: StatusGatewayProbeBudget & {
     deep?: boolean;
@@ -37,7 +35,7 @@ export async function scanStatus(
           checkingTailscale: "Checking Tailscale…",
           checkingForUpdates: "Checking for updates…",
           resolvingAgents: "Resolving agents…",
-          probingGateway: "Probing gateway…",
+          probingGateway: "Checking gateway…",
           queryingChannelStatus: "Querying channel status…",
           summarizingChannels: "Summarizing channels…",
         },
@@ -46,7 +44,6 @@ export async function scanStatus(
       progress.setLabel("Checking memory and sessions…");
       const result = await executeStatusScanFromOverview({
         overview,
-        resolveMemory: async () => null,
         pluginCompatibility: [],
       });
       progress.tick();

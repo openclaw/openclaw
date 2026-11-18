@@ -138,12 +138,12 @@ vi.mock("../commands/agents.commands.add.js", () => {
   return { agentsAddCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/agents.commands.bind.js", () => {
+vi.mock("../commands/agents.commands.bind.js", async (importOriginal) => {
   loaded.mark("agents-bind-command");
   return {
+    ...(await importOriginal<typeof import("../commands/agents.commands.bind.js")>()),
     agentsBindingsCommand: vi.fn(async () => {}),
-    agentsBindCommand: vi.fn(async () => {}),
-    agentsUnbindCommand: vi.fn(async () => {}),
+    agentsUpdateBindingsCommand: vi.fn(async () => {}),
   };
 });
 
@@ -155,6 +155,12 @@ vi.mock("../commands/agents.commands.delete.js", () => {
 vi.mock("../commands/agents.commands.identity.js", () => {
   loaded.mark("agents-identity-command");
   return { agentsSetIdentityCommand: vi.fn(async () => {}) };
+});
+
+// mock-isolation: detect cold import without loading the action module.
+vi.mock("../commands/agents.commands.blobster.js", () => {
+  loaded.mark("agents-blobster-command");
+  return { agentsRenderBlobsterCommand: vi.fn(async () => {}) };
 });
 
 vi.mock("../commands/agents.commands.list.js", () => {
@@ -294,7 +300,7 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("default-runtime");
   });
 
-  it.each(["agent", "agent exec", "agents"])(
+  it.each(["agent", "agent exec", "agents", "agents render-blobster"])(
     "keeps %s help out of agent action modules",
     async (command) => {
       const { registerAgentsCommands } = await import("./program/register.agent.js");
@@ -311,6 +317,7 @@ describe("subcommand help cold imports", () => {
       expect(loaded.modules).not.toContain("agents-bind-command");
       expect(loaded.modules).not.toContain("agents-delete-command");
       expect(loaded.modules).not.toContain("agents-identity-command");
+      expect(loaded.modules).not.toContain("agents-blobster-command");
       expect(loaded.modules).not.toContain("agents-list-command");
       expect(loaded.modules).not.toContain("default-runtime");
     },

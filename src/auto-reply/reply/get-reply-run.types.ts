@@ -7,7 +7,7 @@ import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import type { buildCommandContext } from "./commands.js";
-import type { InlineDirectives } from "./directive-handling.js";
+import type { InlineDirectives } from "./directive-handling.parse.js";
 import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { createModelSelectionState } from "./model-selection.js";
@@ -33,6 +33,7 @@ export type RunPreparedReplyParams = {
   directives: InlineDirectives;
   defaultActivation: "always" | "mention";
   resolvedThinkLevel: ThinkLevel | undefined;
+  thinkingExplicit?: boolean;
   resolvedFastMode?: FastMode;
   resolvedFastModeAutoOnSeconds?: number;
   resolvedFastModeOverride?: boolean;
@@ -51,9 +52,7 @@ export type RunPreparedReplyParams = {
   model: string;
   /** Turn-local account pin from the selected model reference. */
   configuredProfileId?: string;
-  requestedRouteResolution?: Awaited<
-    ReturnType<typeof createModelSelectionState>
-  >["requestedRouteResolution"];
+  requestedRouteResolution?: RunPreparedReplyParams["modelState"]["requestedRouteResolution"];
   perMessageQueueMode?: InlineDirectives["queueMode"];
   perMessageQueueOptions?: Pick<InlineDirectives, "debounceMs" | "cap" | "dropPolicy">;
   typing: TypingController;

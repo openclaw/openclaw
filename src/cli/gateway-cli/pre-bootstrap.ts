@@ -7,7 +7,6 @@ import {
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import { GATEWAY_CONFIG_SELECTION_ENV_KEYS } from "../../config/gateway-env-selection.js";
 import { CONFIG_AUDIT_STORE_LABEL } from "../../config/io.audit.js";
-import type { ConfigReplaceResult } from "../../config/mutate.js";
 import { describeConfigSnapshotInputChange } from "../../config/snapshot-inputs.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import {
@@ -15,16 +14,24 @@ import {
   fsSafeEnvInput,
   normalizeFsSafeNativeEnv,
 } from "../../infra/fs-safe-env.js";
+import { applyProcessEnvKeys } from "../../infra/process-env.js";
 import { ExitError, type RuntimeEnv } from "../../runtime.js";
-import { withArtifactPreservingStateReads } from "../../state/openclaw-state-db-readonly.js";
+import {
+  withArtifactPreservingStateReads,
+  withLiveStateReads,
+} from "../../state/artifact-preserving-state-reads.js";
 import { formatCliCommand } from "../command-format.js";
+import { measureGatewayBootstrapStep, recordGatewayBootstrapStep } from "../startup-trace.js";
 import type { GatewayRunPreBootstrapOptions } from "./future-config-guard.js";
 import { enforceGatewayRunFutureConfigGuard } from "./future-config-guard.js";
+import { findGatewayRunFlagError, type GatewayRunFlagOpts } from "./run-flag-checks.js";
 import type { GatewayRunOpts } from "./run-options.js";
 import { getGatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 type GatewayRunGuardParams = {
-  opts: GatewayRunPreBootstrapOptions & Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
+  opts: GatewayRunPreBootstrapOptions &
+    GatewayRunFlagOpts &
+    Pick<GatewayRunOpts, "allowUnconfigured" | "dev">;
   runtime: RuntimeEnv;
 };
 
@@ -45,7 +52,6 @@ let lastGuardedGatewayRunSnapshot: ConfigFileSnapshot | undefined;
 let preparedGatewayRunBootstrap:
   | (Pick<GatewayRunOpts, "allowUnconfigured" | "dev"> & {
       snapshot: ConfigFileSnapshot;
-      currentSnapshot?: ConfigFileSnapshot;
     })
   | undefined;
 let preparedGatewayRunReset: PreparedGatewayRunReset | undefined;
@@ -103,19 +109,6 @@ function snapshotGatewayConfigSelectionEnvironment(
   env: NodeJS.ProcessEnv,
 ): Record<string, string | undefined> {
   return Object.fromEntries([...GATEWAY_CONFIG_SELECTION_ENV_KEYS].map((key) => [key, env[key]]));
-}
-
-function restoreGatewayConfigSelectionEnvironment(
-  snapshot: Record<string, string | undefined>,
-): void {
-  for (const key of GATEWAY_CONFIG_SELECTION_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
 }
 
 function resolveInvocationDestructiveOverride(): string | undefined {
@@ -195,35 +188,51 @@ function restoreAppliedGatewayRunConfigEnvironment(preserveSelection = true): vo
 async function readGuardedGatewayRunConfig(
   params: GatewayRunGuardParams,
 ): Promise<ConfigFileSnapshot | null> {
-  const { readConfigFileSnapshot } = await import("../../config/config.js");
-  const { createConfigIO } = await import("../../config/io.factory.js");
-  return await withArtifactPreservingStateReads(async () => {
-    const current = await readConfigFileSnapshot({
-      isolateEnv: true,
-      observe: false,
-      pluginValidation: "core-only",
-    });
-    const guard = (snapshot: ConfigFileSnapshot) =>
-      enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
-    if (!guard(current)) {
-      return null;
-    }
-    const recovery = await createConfigIO({
-      configPath: current.path,
-      env: cloneEnvWithPlatformSemantics(process.env),
-      observe: false,
-      pluginValidation: "core-only",
-    }).prepareConfigRecovery(current);
-    return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
-  });
+  const { createConfigIO } = await measureGatewayBootstrapStep(
+    "cli.environment.config-import",
+    () => import("../../config/io.factory.js"),
+  );
+  return await withLiveStateReads(() =>
+    withArtifactPreservingStateReads(async () => {
+      const current = await measureGatewayBootstrapStep("cli.environment.config-read", () =>
+        createConfigIO({
+          env: cloneEnvWithPlatformSemantics(process.env),
+          observe: false,
+          pluginValidation: "core-only",
+          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+        }).readConfigFileSnapshot(),
+      );
+      const guard = (snapshot: ConfigFileSnapshot) =>
+        enforceGatewayRunFutureConfigGuard({ ...params, snapshot });
+      if (!guard(current)) {
+        return null;
+      }
+      const recovery = await measureGatewayBootstrapStep("cli.environment.config-recovery", () =>
+        createConfigIO({
+          configPath: current.path,
+          env: cloneEnvWithPlatformSemantics(process.env),
+          observe: false,
+          pluginValidation: "core-only",
+          measure: (name, run) => measureGatewayBootstrapStep(`cli.environment.${name}`, run),
+        }).prepareConfigRecovery(current),
+      );
+      return recovery ? (guard(recovery.snapshot) ? recovery.snapshot : null) : current;
+    }),
+  );
 }
 
 function describeGatewayRunConfigChange(
   expected: ConfigFileSnapshot,
   current: ConfigFileSnapshot,
-  options: { allowPathChange?: boolean } = {},
+  {
+    currentValidatesPlugins,
+    ...options
+  }: { allowPathChange?: boolean; currentValidatesPlugins?: boolean } = {},
 ): string | undefined {
-  return current.valid !== expected.valid
+  // Selection checks only the core schema. When `current` also checked plugin schemas, the same
+  // authored config can fail them without changing; the config guard then names each issue.
+  const failsPluginSchemas = currentValidatesPlugins === true && expected.valid && !current.valid;
+  return current.valid !== expected.valid && !failsPluginSchemas
     ? "config validity changed"
     : describeConfigSnapshotInputChange(expected, current, {
         ...options,
@@ -256,14 +265,16 @@ async function guardGatewayRunSelectedConfig(
     { normalizeStateDirEnv },
     { collectEnvSecretRefIds },
     { clearMissingManagedServiceEnvKeys, readManagedSystemdServiceEnvKeysFromEnvironment },
-  ] = await Promise.all([
-    createTrustedGatewayEnvLoader(),
-    import("../../config/config-env-vars.js"),
-    import("../../infra/env.js"),
-    import("../../config/paths.js"),
-    import("../../config/resolution-facts.js"),
-    import("../../daemon/service-managed-env.js"),
-  ]);
+  ] = await measureGatewayBootstrapStep("cli.environment.imports", () =>
+    Promise.all([
+      createTrustedGatewayEnvLoader(),
+      import("../../config/config-env-vars.js"),
+      import("../../infra/env.js"),
+      import("../../config/paths.js"),
+      import("../../config/resolution-facts.js"),
+      import("../../daemon/service-managed-env.js"),
+    ]),
+  );
   const invocationDestructiveOverride = resolveInvocationDestructiveOverride();
   if (params.environmentSelection) {
     restoreAppliedGatewayRunConfigEnvironment();
@@ -290,7 +301,9 @@ async function guardGatewayRunSelectedConfig(
   for (;;) {
     const envBeforeTrustedApply = { ...fsSafeEnvInput(process.env) };
     const trustedSelectionSignature = resolveGatewayConfigSelectionSignature(process.env);
+    const dotenvStartedAt = performance.now();
     const trustedEnvLoad = applyTrustedGatewayEnv(invocationDestructiveOverride);
+    recordGatewayBootstrapStep("cli.environment.dotenv", dotenvStartedAt, performance.now());
     if (resolveGatewayConfigSelectionSignature(process.env) !== trustedSelectionSignature) {
       const stateEnvSelectedTarget = trustedEnvLoad.stateEnvAppliedKeys.some((key) =>
         GATEWAY_CONFIG_SELECTION_ENV_KEYS.has(key.toUpperCase()),
@@ -379,7 +392,7 @@ export async function recheckGatewayRunReset(params: GatewayRunGuardParams): Pro
   preparedGatewayRunReset = undefined;
   const rejectDrift = async () => {
     if (expected) {
-      restoreGatewayConfigSelectionEnvironment(expected.selectionEnvironment);
+      applyProcessEnvKeys(GATEWAY_CONFIG_SELECTION_ENV_KEYS, expected.selectionEnvironment);
       await pinGatewayRunRuntimePaths();
     }
     params.runtime.error(
@@ -526,7 +539,6 @@ async function createTrustedGatewayEnvLoader() {
     const loaded = loadGlobalRuntimeDotEnvFiles({
       ...(gatewayRunTargetSelectedByConfig ? { entryFilter: isConfigRuntimeEnvVarAllowed } : {}),
       overrideKeys: readManagedSystemdServiceEnvKeysFromEnvironment(process.env),
-      quiet: true,
       stateEnvPath,
       ...(path.resolve(stateEnvPath) === path.resolve(configEnvPath)
         ? {}
@@ -575,7 +587,9 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
   selectedGatewayRunEnvironment = undefined;
   let guarded: boolean;
   try {
-    guarded = await guardGatewayRunSelectedConfig(params);
+    guarded = await measureGatewayBootstrapStep("cli.environment.config-guard", () =>
+      guardGatewayRunSelectedConfig(params),
+    );
   } finally {
     if (params.opts.reset) {
       restoreAppliedGatewayRunConfigEnvironment(false);
@@ -590,15 +604,38 @@ export async function selectGatewayRunEnvironment(params: GatewayRunGuardParams)
     before: envBeforeGuard,
     after: { ...fsSafeEnvInput(process.env) },
   };
-  await pinGatewayRunRuntimePaths();
+  await measureGatewayBootstrapStep("cli.environment.pin-runtime-paths", pinGatewayRunRuntimePaths);
   return guarded;
 }
 
 export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams): Promise<boolean> {
+  // Startup preflight refuses missing config; report bad flags first, as run.ts would.
+  const flagError = findGatewayRunFlagError(params.opts);
+  if (flagError) {
+    params.runtime.error(flagError);
+    params.runtime.exit(1);
+    return false;
+  }
   preparedGatewayRunReset = undefined;
   // Stop the early proxy before selection can choose another config/state target. Its lifecycle
   // restores the underlying env snapshot so the selected target's trusted dotenv can replace it.
   await getGatewayRunRuntimeHooks().releaseManagedProxy?.();
+  if (!params.opts.reset) {
+    // Outdated state is upgraded by copy and swap before anything reads it. A start
+    // the config guard would refuse stays read-only: the previous package must still
+    // read its state.
+    const { upgradeStateOnGatewayStart } = await import("../../state/state-upgrade-startup.js");
+    await measureGatewayBootstrapStep("cli.bootstrap.state-upgrade", () =>
+      upgradeStateOnGatewayStart(
+        process.env,
+        (start) =>
+          getGatewayStartGuardErrors({
+            ...start,
+            allowUnconfigured: params.opts.allowUnconfigured === true,
+          }).length === 0,
+      ),
+    );
+  }
   const environmentSelection = selectedGatewayRunEnvironment;
   selectedGatewayRunEnvironment = undefined;
   if (!environmentSelection) {
@@ -637,7 +674,6 @@ export async function prepareGatewayRunBootstrap(params: GatewayRunGuardParams):
 export async function recheckGatewayRunBootstrap(
   params: GatewayRunGuardParams & {
     snapshot?: ConfigFileSnapshot;
-    committedWrite?: ConfigReplaceResult;
   },
 ): Promise<boolean> {
   // This callback can run while startup preflight owns the shared preparation lease.
@@ -667,31 +703,13 @@ export async function recheckGatewayRunBootstrap(
   if (!current) {
     return false;
   }
-  const expected = prepared.currentSnapshot ?? prepared.snapshot;
-  const committed = params.committedWrite;
   // Selection already admitted any current-config backup. Later authored drift
   // must be validated by a new startup attempt.
-  let change = describeGatewayRunConfigChange(expected, committed?.snapshot ?? current, {
+  const change = describeGatewayRunConfigChange(prepared.snapshot, current, {
     allowPathChange: params.snapshot !== undefined,
+    // Startup preflight passes its plugin-validated read; rereads here stay core-only.
+    currentValidatesPlugins: params.snapshot !== undefined,
   });
-  if (!change && committed) {
-    change = committed.persistedHash
-      ? describeGatewayRunConfigChange(
-          {
-            ...current,
-            path: committed.path,
-            hash: committed.persistedHash,
-            sourceConfig: committed.nextConfig,
-            valid: true,
-          },
-          current,
-        )
-      : "committed config revision is unavailable";
-    if (!change) {
-      // Keep the original selection baseline for the final environment guard.
-      prepared.currentSnapshot = current;
-    }
-  }
   if (!change) {
     return true;
   }

@@ -14,15 +14,11 @@ extension OpenClawChatViewModel {
     private static let maxImageSourceBytes = 64 * 1024 * 1024
 
     public func addAttachments(urls: [URL]) {
-        self.beginAttachmentStaging()
-        Task {
-            defer { self.endAttachmentStaging() }
-            await self.loadAttachments(urls: urls)
-        }
+        self.addAttachments(urls: urls, for: nil)
     }
 
-    func addAttachments(urls: [URL], for session: SessionSnapshot) {
-        guard self.isCurrentSession(session) else { return }
+    func addAttachments(urls: [URL], for session: SessionSnapshot?) {
+        guard self.ownsAttachmentSession(session) else { return }
         self.beginAttachmentStaging()
         Task {
             defer { self.endAttachmentStaging() }
@@ -116,11 +112,12 @@ extension OpenClawChatViewModel {
     }
 
     /// True while replacing this model could move an attachment across chats.
+    /// An attachment saved in its session's durable draft belongs to that draft instead.
     public var isAttachmentOwnerPinned: Bool {
         attachmentOwnerIsActive() ||
             isSendingAttachmentDraft ||
             attachmentStagingCount > 0 ||
-            !attachments.isEmpty
+            attachments.contains { composerDraftAttachmentPositions[$0.id] == nil }
     }
 
     func canCreateSessionForImmediateSwitch() -> Bool {

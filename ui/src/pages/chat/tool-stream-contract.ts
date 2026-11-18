@@ -7,11 +7,25 @@ import type {
   ChatGuardianNotice,
   ChatQueueItem,
   ChatStreamSegment,
+  LiveToolOutput,
 } from "../../lib/chat/chat-types.ts";
 import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatRunStartupState } from "./chat-run-startup.ts";
+
+export type ChatReasoning = {
+  runId: string;
+  items: ChatReasoningItem[];
+};
+
+type ChatReasoningItem = {
+  itemId: string;
+  text: string;
+  startedAt: number;
+  /** Durable IDs survive display reindexing; source ownership can differ from the client run. */
+  receipt?: { runId: string; messageId: string; persisted?: true };
+};
 
 export type AgentEventPayload = AgentEvent & {
   sessionKey?: string;
@@ -23,10 +37,10 @@ export type ToolStreamEntry = {
   toolCallId: string;
   parentToolCallId?: string;
   runId: string;
-  sessionKey?: string;
   name: string;
   args?: unknown;
   output?: string;
+  liveOutput?: LiveToolOutput;
   /** Structured result details (e.g. edit diff) captured from the result event. */
   details?: unknown;
   /** Monotonic edit counts received while the tool arguments stream. */
@@ -35,12 +49,17 @@ export type ToolStreamEntry = {
   exitCode?: number;
   /** True once a result event landed, even when the output text is empty. */
   resultReceived?: boolean;
+  resultTimestamp?: number;
   startedAt: number;
   receivedAt: number;
+  /** Live-only placement; durable invocation positions supersede this boundary. */
+  afterUserSendId?: string;
   message: Record<string, unknown>;
+  /** Accepted output changed since the existing immutable publication snapshot. */
+  messageDirty?: boolean;
 };
 
-export type RunOutputUsage = { outputTokens: number; seq: number };
+export type RunOutputUsage = { outputTokens: number | null; seq: number };
 
 export type ProviderPolicyNotice = {
   runId: string;
@@ -69,22 +88,24 @@ export type FallbackStatus = {
 };
 
 export type WaitingApprovalStatus = {
-  approvalId: string;
-  toolCallId: string | null;
   runId: string;
 };
 
 export type ToolStreamHost = {
   sessionKey: string;
+  /** The pane admits optional output only after its synchronous renderer is ready. */
+  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandDisclosurePolicy;
+  settings?: { chatInlineCommands?: boolean };
   assistantAgentId?: string | null;
   agentsList?: UiSessionDefaultsHost["agentsList"];
-  hello?: { snapshot?: unknown } | null;
+  hello?: UiSessionDefaultsHost["hello"];
   chatRunId: string | null;
   chatQueue?: readonly ChatQueueItem[];
   chatMessages?: unknown[];
   chatRunUsageById?: Map<string, RunOutputUsage>;
   chatStream: string | null;
   chatStreamStartedAt: number | null;
+  chatReasoning?: ChatReasoning | null;
   chatRunStartup?: ChatRunStartupState | null;
   chatStreamSegments: ChatStreamSegment[];
   toolStreamById: Map<string, ToolStreamEntry>;
@@ -98,13 +119,26 @@ export type ToolStreamHost = {
   fallbackStatus?: FallbackStatus | null;
   fallbackClearTimer?: number | null;
   toolStreamSyncTimer: number | null;
+  /** Monotonic time of the last publication; idle gaps count toward the next deadline. */
+  toolStreamPublishedAt?: number;
+  /** Pending publication includes membership or presentation beyond output text. */
+  toolStreamStructureChanged?: boolean;
   knownAgentRunIds?: Set<string>;
   waitingApprovalStatuses?: Map<string, WaitingApprovalStatus>;
   waitingApprovalResolvedIds?: Set<string>;
-  requestUpdate?: () => void;
   sessions: Pick<SessionCapability, "reconcileMutation">;
 };
 
-export type LiveToolStreamState = Partial<
-  Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">
->;
+export type LiveToolStreamState = Pick<ToolStreamHost, "toolStreamById" | "toolStreamOrder">;
+
+export type ToolStreamState = Pick<
+  ToolStreamHost,
+  | "toolStreamById"
+  | "toolStreamOrder"
+  | "chatToolMessages"
+  | "chatStreamSegments"
+  | "activityEventSeqById"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+  | "toolStreamPublishedAt"
+> & { toolStreamSyncTimer?: number | null; toolStreamStructureChanged?: boolean };

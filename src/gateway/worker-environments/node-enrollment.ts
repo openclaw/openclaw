@@ -16,6 +16,7 @@ import {
   resolvePairingGatewayUrl,
   resolvePairingSetupFromConfig,
 } from "../../pairing/setup-code.js";
+import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import type { WorkerNodeEnrollment, WorkerNodeRuntimePreparation } from "../../plugins/types.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../../shared/device-bootstrap-profile.js";
@@ -29,6 +30,10 @@ import {
 } from "./bootstrap-timeouts.js";
 import type { DeviceWorkerAvailability } from "./device-provider.js";
 import type { NodeBootstrapArtifact } from "./node-bootstrap-artifact-contract.js";
+import {
+  DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+  BUNDLE_NODE_TOOLCHAIN_SETUP_SH,
+} from "./node-toolchain.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
 import type { WorkerBootstrapArtifactTransferService } from "./worker-bootstrap-artifact-transfer-service.js";
 
@@ -52,7 +57,6 @@ type WorkerNodeEnrollmentManagerOptions = {
     signal?: AbortSignal,
   ) => Promise<NodeBootstrapArtifact>;
   transfer: WorkerBootstrapArtifactTransferService;
-  now?: () => number;
 };
 
 function isProvisioningOwner(
@@ -68,7 +72,6 @@ function isProvisioningOwner(
 }
 
 export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentManagerOptions) {
-  const now = options.now ?? Date.now;
   const controller = new AbortController();
   const { signal } = controller;
   const active = new Map<string, NodeEnrollmentBinding>();
@@ -194,13 +197,32 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     prepared: Awaited<ReturnType<typeof prepare>>,
     enrollmentSignal: AbortSignal,
     isAuthorized: () => boolean,
-    transferBytes = prepared.artifact.tarballBytes,
+    transferBytes = prepared.artifact.tarballBytes +
+      (prepared.artifact.installLock?.tarballBytes ?? 0),
   ) => ({
     bootstrapTimeoutMs: workerBootstrapOperationTimeoutMs({ tarballBytes: transferBytes }),
     nodeBootstrap: {
       ...grantArtifact(prepared, prepared.artifact, enrollmentSignal, isAuthorized, transferBytes),
       openclawVersion: prepared.artifact.openclawVersion,
+      install: prepared.artifact.install,
+      buildId: prepared.artifact.buildId,
+      manifestSha256: prepared.artifact.manifestSha256,
       enabledPluginIds: prepared.artifact.enabledPluginIds,
+      linuxToolchainSetup:
+        prepared.artifact.install === "bundle"
+          ? BUNDLE_NODE_TOOLCHAIN_SETUP_SH
+          : DEFAULT_NODE_TOOLCHAIN_SETUP_SH,
+      ...(prepared.artifact.installLock
+        ? {
+            installLock: grantArtifact(
+              prepared,
+              prepared.artifact.installLock,
+              enrollmentSignal,
+              isAuthorized,
+              transferBytes,
+            ),
+          }
+        : {}),
     },
     signal: enrollmentSignal,
   });
@@ -219,7 +241,10 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         const live = current();
         return live.nodeSetupId === owner.nodeSetupId && live.nodeDeviceId === owner.nodeDeviceId;
       };
-      const transferBytes = prepared.artifact.tarballBytes + bundle.tarballBytes;
+      const transferBytes =
+        prepared.artifact.tarballBytes +
+        bundle.tarballBytes +
+        (prepared.artifact.installLock?.tarballBytes ?? 0);
       const runtime: WorkerNodeRuntimePreparation = {
         ...grantRuntime(prepared, enrollmentSignal, isAuthorized, transferBytes),
         workerBundle: {
@@ -243,12 +268,17 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
     const { binding, enrollmentSignal, current: requireCurrent } = reserve(record, operationSignal);
     try {
       const prepared = await prepare(record, enrollmentSignal);
-      requireCurrent();
-      let current = await options.store.ensureNodeEnrollment(record.environmentId);
-      requireCurrent();
-      if (!isProvisioningOwner(current, record)) {
-        throw new Error("Worker node enrollment is no longer provisioning");
+      let workerCodex: WorkerNodeEnrollment["workerCodex"];
+      // Only the prepared runtime's plugin inventory may opt into private Codex inputs.
+      if (prepared.artifact.enabledPluginIds.includes("codex")) {
+        const { readCodexWorkerProvisioningBundle } = loadBundledPluginPublicArtifactModuleSync<{
+          readCodexWorkerProvisioningBundle: () => WorkerNodeEnrollment["workerCodex"];
+        }>({ dirName: "codex", artifactBasename: "worker-provisioning-api.js" });
+        workerCodex = readCodexWorkerProvisioningBundle();
       }
+      requireCurrent();
+      await options.store.ensureNodeEnrollment(record.environmentId);
+      let current = requireCurrent();
       let mode:
         | { mode: "connect"; setupCode: string; setupId: string }
         | { mode: "resume"; deviceId: string };
@@ -273,8 +303,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
           };
         }
         if (issued.status === "completed") {
-          current = await options.store.ensureNodeEnrollment(record.environmentId);
-          requireCurrent();
+          await options.store.ensureNodeEnrollment(record.environmentId);
+          current = requireCurrent();
           if (!current.nodeDeviceId || current.nodeDeviceId !== issued.deviceId) {
             throw new Error("Worker node enrollment completion did not bind its environment");
           }
@@ -320,6 +350,7 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
       };
       const enrollment: WorkerNodeEnrollment = {
         ...mode,
+        ...(workerCodex ? { workerCodex } : {}),
         ...grantRuntime(
           { ...prepared, url: gatewayUrl, tlsFingerprint },
           enrollmentSignal,
@@ -329,8 +360,8 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         displayName: truncateUtf16Safe(`Cloud worker ${owner.profileId}`, 64),
         signal: enrollmentSignal,
         waitForDeviceId: async () => {
-          const deadline = now() + NODE_ENROLLMENT_TIMEOUT_MS;
-          while (now() < deadline) {
+          const deadline = Date.now() + NODE_ENROLLMENT_TIMEOUT_MS;
+          while (Date.now() < deadline) {
             enrollmentSignal.throwIfAborted();
             const live = options.store.get(owner.environmentId);
             if (
@@ -343,15 +374,6 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
             if (live.nodeDeviceId) {
               const availability = await options.resolveAvailability(live.nodeDeviceId);
               enrollmentSignal.throwIfAborted();
-              const latest = options.store.get(owner.environmentId);
-              if (
-                !isProvisioningOwner(latest, owner) ||
-                latest.nodeSetupId !== owner.nodeSetupId ||
-                latest.nodeDeviceId !== live.nodeDeviceId ||
-                active.get(owner.environmentId) !== binding
-              ) {
-                throw new Error("Worker node enrollment is no longer current");
-              }
               if (availability.available) {
                 return live.nodeDeviceId;
               }
@@ -386,26 +408,16 @@ export function createWorkerNodeEnrollmentManager(options: WorkerNodeEnrollmentM
         `Worker node ${deviceId} is still owned by environment ${sharedOwner.environmentId}`,
       );
     }
-    await removePairedDeviceRole({ deviceId, role: "node" });
+    await removePairedDeviceRole({ deviceId });
   };
 
   return {
     prepare: async (record: WorkerEnvironmentRecord, operationSignal?: AbortSignal) => {
-      const preflight = new AbortController();
-      try {
-        const prepared = await prepare(
-          record,
-          AbortSignal.any([
-            signal,
-            preflight.signal,
-            ...(operationSignal ? [operationSignal] : []),
-          ]),
-        );
-        return prepared.artifact.tarballSha256;
-      } finally {
-        // Preflight creates no transfer grant; release its artifact pin even on success.
-        preflight.abort();
-      }
+      const prepared = await prepare(
+        record,
+        operationSignal ? AbortSignal.any([signal, operationSignal]) : signal,
+      );
+      return prepared.artifact.tarballSha256;
     },
     prepareRuntime,
     begin,

@@ -1,10 +1,9 @@
-// Defines shared legacy config rule contracts for detection and migration.
-import {
-  asNullableRecord as getRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNullableRecord as getRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { readObjectPath } from "../shared/dot-path.js";
+import type { LegacyConfigIssue } from "./types.js";
 
+export { ensureRecord } from "@openclaw/normalization-core/record-coerce";
 export { getRecord };
 export type LegacyConfigRule = {
   path: string[];
@@ -15,6 +14,49 @@ export type LegacyConfigRule = {
   requireSourceLiteral?: boolean;
 };
 
+/** Evaluate exactly the rules selected by the migration owner. */
+export function findLegacyConfigRuleIssues(
+  raw: unknown,
+  rules: readonly LegacyConfigRule[],
+  sourceRaw?: unknown,
+): LegacyConfigIssue[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  // SAFETY: the guard accepts any non-null object, including legacy array inputs.
+  const root = raw as Record<string, unknown>;
+  const sourceRoot =
+    // SAFETY: the same object check preserves source-literal reads without excluding arrays.
+    sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
+  const issues: LegacyConfigIssue[] = [];
+  for (const rule of rules) {
+    const cursor = readObjectPath(root, rule.path);
+    if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
+      if (rule.requireSourceLiteral) {
+        const sourceCursor = readObjectPath(sourceRoot, rule.path);
+        if (sourceCursor === undefined) {
+          continue;
+        }
+        if (rule.match && !rule.match(sourceCursor, sourceRoot)) {
+          continue;
+        }
+      }
+      issues.push({ path: rule.path.join("."), message: rule.message });
+    }
+  }
+  return issues;
+}
+
+export const createLegacyConfigRule = (
+  path: string[],
+  message: string,
+  match?: LegacyConfigRule["match"],
+): LegacyConfigRule => ({
+  path,
+  message: `${message} Run "openclaw doctor --fix".`,
+  ...(match ? { match } : {}),
+});
+
 export type LegacyConfigMigrationContext = {
   /** Parsed configuration exactly as authored in the root config file. */
   authoredRaw: unknown;
@@ -24,31 +66,14 @@ export type LegacyConfigMigrationContext = {
   homedir?: () => string;
 };
 
-type LegacyConfigMigration = {
+export type LegacyConfigMigrationSpec = {
   id: string;
-  describe: string;
+  legacyRules?: LegacyConfigRule[];
   apply: (
     raw: Record<string, unknown>,
     changes: string[],
     context?: LegacyConfigMigrationContext,
   ) => void;
-};
-
-export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
-  legacyRules?: LegacyConfigRule[];
-};
-
-export const ensureRecord = (
-  root: Record<string, unknown>,
-  key: string,
-): Record<string, unknown> => {
-  const existing = root[key];
-  if (isRecord(existing)) {
-    return existing;
-  }
-  const next: Record<string, unknown> = {};
-  root[key] = next;
-  return next;
 };
 
 export const mapLegacyAudioTranscription = (value: unknown): Record<string, unknown> | null => {
@@ -81,7 +106,3 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
   }
   return result;
 };
-
-export const defineLegacyConfigMigration = (
-  migration: LegacyConfigMigrationSpec,
-): LegacyConfigMigrationSpec => migration;

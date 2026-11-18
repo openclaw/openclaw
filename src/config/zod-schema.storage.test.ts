@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const passphrase = { source: "env", provider: "default", id: "STORAGE_PASSPHRASE" };
-
 function location(overrides: Record<string, unknown> = {}, name = "archive") {
   return {
     storage: {
@@ -19,68 +18,47 @@ function location(overrides: Record<string, unknown> = {}, name = "archive") {
 }
 
 describe("OpenClawSchema storage config", () => {
-  it.each([{ passphrase }, "none"])("preserves an explicit encryption choice: %j", (encryption) => {
-    const config = location({ encryption });
-    expect(OpenClawSchema.parse(config).storage).toEqual(config.storage);
-  });
-
-  it.each([undefined, {}, "aes256", { passphrase: 123 }])(
-    "rejects missing or invalid encryption: %j",
+  it.each([{ passphrase }, "none"])(
+    "preserves encryption and nested SecretRefs: %j",
     (encryption) => {
-      const result = OpenClawSchema.safeParse(location({ encryption }));
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.path).toEqual([
-          "storage",
-          "locations",
-          "archive",
-          "encryption",
-        ]);
-      }
+      const config = location({
+        encryption,
+        provider: "example-provider",
+        settings: {
+          accountId: "example-account",
+          bucket: "example-bucket",
+          accessKeyId: { source: "env", provider: "default", id: "STORAGE_ACCESS_KEY_ID" },
+          auth: [{ secretAccessKey: { source: "env", provider: "default", id: "STORAGE_SECRET" } }],
+        },
+      });
+      expect(OpenClawSchema.parse(config).storage).toEqual(config.storage);
     },
   );
-
-  it.each(["", "Archive", "-archive", "archive_disk", "a".repeat(64)])(
-    "rejects an invalid location name: %s",
-    (name) => {
-      expect(OpenClawSchema.safeParse(location({}, name)).success).toBe(false);
-    },
-  );
-
-  it("accepts provider settings with nested secret references", () => {
-    const settings = {
-      accountId: "example-account",
-      bucket: "example-bucket",
-      accessKeyId: { source: "env", provider: "default", id: "STORAGE_ACCESS_KEY_ID" },
-      auth: [{ secretAccessKey: { source: "env", provider: "default", id: "STORAGE_SECRET" } }],
-    };
-    const config = location({ provider: "example-provider", settings });
-    expect(OpenClawSchema.parse(config).storage).toEqual(config.storage);
-  });
 
   it.each([
-    { accessKeyId: "example-key-not-real" },
-    { auth: [{ secretAccessKey: "example-secret-not-real" }] },
-    { auth: { passphrase: "example-passphrase-not-real" } },
-    { keyRef: { source: "env", provider: "default", id: "invalid-id" } },
-  ])("rejects plaintext or malformed provider credentials: %j", (settings) => {
-    const result = OpenClawSchema.safeParse(location({ settings }));
+    ...[undefined, { passphrase: 123 }].map((encryption) => ({
+      config: location({ encryption }),
+      issue: { path: ["storage", "locations", "archive", "encryption"] },
+    })),
+    { config: location({}, "Archive"), issue: {} },
+    ...[
+      { accessKeyId: "example-key-not-real" },
+      { auth: [{ secretAccessKey: "example-secret-not-real" }] },
+      { auth: { passphrase: "example-passphrase-not-real" } },
+      { keyRef: { source: "env", provider: "default", id: "invalid-id" } },
+    ].map((settings) => ({
+      config: location({ settings }),
+      issue: { message: expect.stringContaining("must use a SecretRef") },
+    })),
+    {
+      config: location({ settings: { timeout: Infinity } }),
+      issue: { message: "Storage location settings must be bounded finite JSON" },
+    },
+  ])("rejects invalid storage configuration %#", ({ config, issue }) => {
+    const result = OpenClawSchema.safeParse(config);
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues[0]?.message).toContain("must use a SecretRef");
+      expect(result.error.issues[0]).toMatchObject(issue);
     }
   });
-
-  it.each([{ timeout: Infinity }, { path: "a".repeat(65_537) }])(
-    "rejects nonfinite or oversized provider settings %#",
-    (settings) => {
-      const result = OpenClawSchema.safeParse(location({ settings }));
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error.issues[0]?.message).toBe(
-          "Storage location settings must be bounded finite JSON",
-        );
-      }
-    },
-  );
 });

@@ -47,12 +47,10 @@ export function pluginFallbackGradient(id: string): readonly [string, string] {
 }
 
 export function pluginMonogram(name: string): string {
-  const words = name.trim().split(/\s+/u).filter(Boolean);
-  if (words.length === 0) {
+  const [first, second] = name.trim().split(/\s+/u).filter(Boolean);
+  if (!first) {
     return "";
   }
-  const first = expectDefined(words[0], "plugin monogram first word");
-  const second = words[1];
   const initials = second
     ? `${takeGraphemes(first, 1)}${takeGraphemes(second, 1)}`
     : takeGraphemes(first, 2);

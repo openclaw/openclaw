@@ -1,16 +1,28 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
+import { readSubagentRunAnnounceResult } from "../../agents/subagents/announce/subagent-announce-output.js";
+import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
-import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import {
+  getRpcSource,
+  requestRpcSourceCancellation,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { bindInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { bindParentSubagentResume } from "../session-subagent-resume.js";
 import {
@@ -46,6 +58,8 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         await seedPersistedSubagentRunForAgentTest({
           runId: previousRunId,
           childSessionKey,
+          childAgentId: "main",
+          childSessionIdentity: { sessionId: "spawned-child-session" },
           requesterSessionKey: "agent:main:main",
           requesterDisplayKey: "main",
           task: "Wait for the parent's answer",
@@ -70,13 +84,16 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         const failure = new Error("parent resume admission retired after commit");
         let adopted: SubagentRunRecord | undefined;
         const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-          const current = getSubagentRunByChildSessionKey(childSessionKey);
+          const current = subagentRuns.get(runId);
           if (adopted || current?.runId !== runId || current.execution.status !== "running") {
             return;
           }
           // Publication follows the native ACK; abort before the admission frame resumes.
           adopted = loadSubagentRegistryFromSqlite().get(runId);
-          context.chatAbortControllers.get(runId)?.controller.abort(failure);
+          const source = getRpcSource(runId);
+          if (source) {
+            requestRpcSourceCancellation(source, failure);
+          }
         });
         const respond = vi.fn();
         try {
@@ -104,7 +121,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
         expectRespondError(respond, { message: expect.stringContaining(failure.message) });
         expect(respond.mock.calls.some(([accepted]) => accepted === true)).toBe(false);
         expect(mocks.agentCommand).not.toHaveBeenCalled();
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(getRpcSource(runId)).toBeUndefined();
         const terminal = {
           runId,
           taskRunId: previousRunId,
@@ -115,7 +132,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
             suppressSessionEffects: true,
           },
         };
-        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject(terminal);
+        expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject(terminal);
         const stored = loadSubagentRegistryFromSqlite();
         expect(stored.has(previousRunId)).toBe(false);
         expect(stored.get(runId)).toMatchObject(terminal);
@@ -159,14 +176,25 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           const workerSessionKey = "agent:main:subagent:worker";
           const previousRunId = "orchestrator-before-yield";
           const runId = "orchestrator-completion-followup";
+          await replaceSessionEntry(
+            {
+              agentId: "main",
+              sessionKey: requesterSessionKey,
+              storePath: path.join(root, "agents", "main", "sessions", "sessions.json"),
+            },
+            { sessionId: "orchestrator-requester", updatedAt: Date.now() },
+          );
           using cleanup = observeAgentSubagentCleanup({ runId, childSessionKey });
-          const result = "All worker results are ready.";
+          const result = `${"Completed worker detail. ".repeat(200)}All worker results are ready.`;
+          const { terminalReply } = prepareAgentRunTerminalReply({ rawText: result });
           const completion = createDeferred<AgentWaitResult>();
           const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
           mocks.registryCallGateway.mockReturnValue(completion.promise);
           await seedPersistedSubagentRunForAgentTest({
             runId: previousRunId,
             childSessionKey,
+            childAgentId: "main",
+            childSessionIdentity: { sessionId: "spawned-child-session" },
             requesterSessionKey,
             requesterDisplayKey: requesterSessionKey,
             task: "Collect the worker's result",
@@ -176,14 +204,38 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
             expectsCompletionMessage: true,
           });
           mockSpawnedChildSessionEntry(childSessionKey, root);
+          await replaceSessionEntry(
+            { agentId: "main", sessionKey: childSessionKey, storePath: mocks.userTurnStorePath },
+            { sessionId: "spawned-child-session", updatedAt: Date.now() },
+          );
           mocks.agentCommand.mockImplementation(async () => {
+            await appendTranscriptMessage(
+              {
+                agentId: "main",
+                sessionKey: childSessionKey,
+                sessionId: "spawned-child-session",
+                storePath: mocks.userTurnStorePath!,
+              },
+              {
+                message: {
+                  role: "assistant",
+                  display: true,
+                  content: result,
+                  stopReason: "stop",
+                  __openclaw: { runId },
+                },
+              },
+            );
             completion.resolve({
               status: "ok",
               startedAt: Date.now(),
               endedAt: Date.now(),
-              terminalReply: { disposition: "visible", text: result },
+              terminalReply,
             });
-            return { payloads: [{ text: result }], meta: { durationMs: 1 } };
+            return {
+              payloads: [{ text: result }],
+              meta: { durationMs: 1, terminalReply },
+            };
           });
           const context = makeContext();
           const request = {
@@ -230,7 +282,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           if (inputFailure) {
             expectRespondError(respond, { message: "resume input admission failed" });
             expect(mocks.agentCommand).not.toHaveBeenCalled();
-            expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+            expect(await getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
               runId: previousRunId,
               pauseReason: "sessions_yield",
             });
@@ -247,7 +299,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           }
 
           const continued = requireValue(
-            getSubagentRunByChildSessionKey(childSessionKey),
+            await getSubagentRunByChildSessionKey(childSessionKey),
             "expected the orchestrator's continued run",
           );
           if (!continuesRun) {
@@ -272,7 +324,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
           expect(announce).toHaveBeenCalledTimes(1);
           const completed = requireValue(
-            getSubagentRunByChildSessionKey(childSessionKey),
+            await getSubagentRunByChildSessionKey(childSessionKey),
             "expected the orchestrator's completed run",
           );
           expectRecordFields(completed, { cleanupCompletedAt: expect.any(Number) });
@@ -282,10 +334,16 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
               childSessionKey,
               childRunId: runId,
               requesterSessionKey,
-              roundOneReply: result,
+              terminalReply,
               outcome: expect.objectContaining({ status: "ok" }),
             }),
           );
+          // Keep the live owner read independent of post-cleanup payload compaction.
+          const prepared = await readSubagentRunAnnounceResult(completed, (id) =>
+            subagentRuns.get(id),
+          );
+          expect(prepared.text).toBe(result);
+          expect(prepared.isCurrent()).toBe(true);
 
           const commandCallCount = mocks.agentCommand.mock.calls.length;
           await invokeAgent(request, {

@@ -18,10 +18,10 @@ export function resolveModelAuthAgentScope(
   cfg: OpenClawConfig,
   requestedAgentId: unknown,
 ): ModelAuthAgentScopeResult {
+  let agentId: string;
   if (requestedAgentId === undefined || requestedAgentId === "") {
-    let defaultAgentId: string;
     try {
-      defaultAgentId = resolveDefaultAgentId(cfg, {
+      agentId = resolveDefaultAgentId(cfg, {
         surface: "model auth",
         hint: "Pass agentId to select a configured agent.",
       });
@@ -34,26 +34,22 @@ export function resolveModelAuthAgentScope(
         error: errorShape(ErrorCodes.INVALID_REQUEST, error.message),
       };
     }
-    return {
-      ok: true,
-      agentId: defaultAgentId,
-      agentDir: resolveAgentDir(cfg, defaultAgentId),
-    };
+  } else {
+    if (typeof requestedAgentId !== "string") {
+      return unknownAgentScope(requestedAgentId === null ? "null" : typeof requestedAgentId);
+    }
+    const rawAgentId = requestedAgentId.trim();
+    // Only the literal empty string keeps the omitted-param default; a
+    // whitespace-only value is an explicit target and must not use default auth.
+    if (!rawAgentId) {
+      return unknownAgentScope(requestedAgentId);
+    }
+    const normalized = normalizeAgentIdStrict(rawAgentId);
+    if (!normalized.ok || !listAgentIds(cfg).includes(normalized.value)) {
+      return unknownAgentScope(rawAgentId);
+    }
+    agentId = normalized.value;
   }
-  if (typeof requestedAgentId !== "string") {
-    return unknownAgentScope(requestedAgentId === null ? "null" : typeof requestedAgentId);
-  }
-  const rawAgentId = requestedAgentId.trim();
-  // Only the literal empty string keeps the omitted-param default; a
-  // whitespace-only value is an explicit target and must not use default auth.
-  if (!rawAgentId) {
-    return unknownAgentScope(requestedAgentId);
-  }
-  const normalized = normalizeAgentIdStrict(rawAgentId);
-  if (!normalized.ok || !listAgentIds(cfg).includes(normalized.value)) {
-    return unknownAgentScope(rawAgentId);
-  }
-  const agentId = normalized.value;
   return { ok: true, agentId, agentDir: resolveAgentDir(cfg, agentId) };
 }
 

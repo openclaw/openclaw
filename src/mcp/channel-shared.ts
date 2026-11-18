@@ -162,28 +162,25 @@ export function summarizeResult(
   };
 }
 
-export function summarizeStructuredResult(
+export function summarizeStructuredResult<T extends Record<string, unknown>>(
   label: string,
   count: number,
-  payload: unknown,
-): { content: Array<{ type: "text"; text: string }> } {
+  payload: T,
+): { content: Array<{ type: "text"; text: string }>; structuredContent: T } {
   return {
     content: [{ type: "text", text: `${label}: ${count}\n\n${JSON.stringify(payload, null, 2)}` }],
+    structuredContent: payload,
   };
 }
 
-function resolveConversationChannel(row: SessionRow): string | undefined {
-  return normalizeOptionalLowercaseString(
+/** Convert a Gateway session row into a reply-capable conversation descriptor. */
+export function toConversation(row: SessionRow): ConversationDescriptor | null {
+  const channel = normalizeOptionalLowercaseString(
     toText(row.deliveryContext?.channel) ??
       toText(row.lastChannel) ??
       toText(row.channel) ??
       toText(row.origin?.provider),
   );
-}
-
-/** Convert a Gateway session row into a reply-capable conversation descriptor. */
-export function toConversation(row: SessionRow): ConversationDescriptor | null {
-  const channel = resolveConversationChannel(row);
   const to = toText(row.deliveryContext?.to) ?? toText(row.lastTo);
   if (!channel || !to) {
     return null;

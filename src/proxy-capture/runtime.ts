@@ -7,6 +7,7 @@ import {
   hasRegisteredSecretValuesForRedaction,
   redactRegisteredSecretValues,
 } from "../logging/secret-redaction-registry.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveEnabledDebugProxySettings, type DebugProxySettings } from "./env.js";
 import { redactedCaptureHeaders, REDACTED_CAPTURE_HEADER_VALUE } from "./header-redaction.js";
@@ -33,7 +34,7 @@ import {
   type HttpCaptureParams,
 } from "./runtime-response-body.js";
 import { safeJsonString } from "./store.sqlite.js";
-import type { AsyncDebugProxyCaptureStore } from "./store.types.js";
+import type { AsyncDebugProxyCaptureWriter } from "./store.types.js";
 import type {
   CaptureDirection,
   CaptureEventKind,
@@ -51,21 +52,16 @@ export {
 
 const REDACTED_CAPTURE_BINARY_PAYLOAD = Buffer.from("[REDACTED BINARY PAYLOAD]", "utf8");
 
-function protocolFromUrl(rawUrl: string): CaptureProtocol {
-  try {
-    const url = new URL(rawUrl);
-    switch (url.protocol) {
-      case "https:":
-        return "https";
-      case "wss:":
-        return "wss";
-      case "ws:":
-        return "ws";
-      default:
-        return "http";
-    }
-  } catch {
-    return "http";
+function protocolFromUrl(url: URL): CaptureProtocol {
+  switch (url.protocol) {
+    case "https:":
+      return "https";
+    case "wss:":
+      return "wss";
+    case "ws:":
+      return "ws";
+    default:
+      return "http";
   }
 }
 
@@ -76,8 +72,6 @@ function redactCaptureUrl(rawUrl: string): string {
   } catch {
     return "https://redacted.invalid/%5BREDACTED%5D";
   }
-  const redactComponent = (value: string) =>
-    redactRegisteredSecretValues(value, () => REDACTED_CAPTURE_HEADER_VALUE);
   const decodeComponent = (value: string) => {
     try {
       return decodeURIComponent(value);
@@ -85,12 +79,12 @@ function redactCaptureUrl(rawUrl: string): string {
       return value;
     }
   };
-  if (redactComponent(url.hostname) !== url.hostname) {
+  if (redactCaptureText(url.hostname) !== url.hostname) {
     url.hostname = "redacted.invalid";
   }
   for (const key of ["username", "password"] as const) {
     const decoded = decodeComponent(url[key]);
-    const redacted = redactComponent(decoded);
+    const redacted = redactCaptureText(decoded);
     if (redacted !== decoded) {
       url[key] = redacted;
     }
@@ -100,7 +94,7 @@ function redactCaptureUrl(rawUrl: string): string {
     .map((segment) => {
       try {
         const decoded = decodeURIComponent(segment);
-        const redacted = redactComponent(decoded);
+        const redacted = redactCaptureText(decoded);
         return redacted === decoded ? segment : encodeURIComponent(redacted);
       } catch {
         return segment;
@@ -110,8 +104,8 @@ function redactCaptureUrl(rawUrl: string): string {
   const searchParams = new URLSearchParams();
   let searchChanged = false;
   for (const [name, value] of url.searchParams.entries()) {
-    const redactedName = redactComponent(name);
-    const redactedValue = redactComponent(value);
+    const redactedName = redactCaptureText(name);
+    const redactedValue = redactCaptureText(value);
     searchParams.append(redactedName, redactedValue);
     if (redactedName !== name || redactedValue !== value) {
       searchChanged = true;
@@ -121,12 +115,12 @@ function redactCaptureUrl(rawUrl: string): string {
     url.search = searchParams.toString();
   }
   const decodedHash = decodeComponent(url.hash.slice(1));
-  const redactedHash = redactComponent(decodedHash);
+  const redactedHash = redactCaptureText(decodedHash);
   if (redactedHash !== decodedHash) {
     url.hash = redactedHash;
   }
   const serialized = url.toString();
-  return redactComponent(serialized) === serialized
+  return redactCaptureText(serialized) === serialized
     ? serialized
     : `${url.protocol}//redacted.invalid/%5BREDACTED%5D`;
 }
@@ -162,7 +156,6 @@ function redactedCaptureJson(
 
 function createHttpCaptureEventBase(params: {
   settings: DebugProxySettings;
-  rawUrl: string;
   url: URL;
   transport?: "http" | "sse";
   direction: CaptureDirection;
@@ -175,7 +168,7 @@ function createHttpCaptureEventBase(params: {
     ts: Date.now(),
     sourceScope: "openclaw",
     sourceProcess: params.settings.sourceProcess,
-    protocol: params.transport ?? protocolFromUrl(params.rawUrl),
+    protocol: params.transport ?? protocolFromUrl(params.url),
     direction: params.direction,
     kind: params.kind,
     flowId: params.flowId,
@@ -185,12 +178,17 @@ function createHttpCaptureEventBase(params: {
   };
 }
 
-/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. */
+/** @deprecated Use initializeDebugProxyCaptureAsync for worker-backed capture. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function initializeDebugProxyCapture(
   mode: string,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "initializeDebugProxyCapture",
+    replacement: "await initializeDebugProxyCaptureAsync()",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;
@@ -213,34 +211,28 @@ export function initializeDebugProxyCapture(
   installDebugProxyGlobalFetchPatch(owner, captureInstalledFetch, deps);
 }
 
-/** Internal fetch seams retain this admission before awaiting network work. */
-export function prepareHttpCapture(
-  resolved?: DebugProxySettings,
-  deps: DebugProxyCaptureRuntimeDeps = {},
-) {
-  const settings = resolveEnabledDebugProxySettings(resolved);
-  if (!settings) {
-    return undefined;
-  }
-  const admission = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
-    explicit: resolved !== undefined,
-  })?.admission;
-  return admission
-    ? (params: HttpCaptureParams | HttpCaptureErrorParams) => {
-        if (admission.current) {
-          void captureInstalledFetch(admission.current, params);
-        }
-      }
-    : undefined;
-}
-
-/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. */
+/** @deprecated Use captureHttpExchangeAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function captureHttpExchange(
   params: HttpCaptureParams,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
-  prepareHttpCapture(resolved, deps)?.(params);
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "captureHttpExchange",
+    replacement:
+      "await captureHttpExchangeAsync() and await finalizeDebugProxyCaptureAsync() at shutdown",
+  });
+  const settings = resolveEnabledDebugProxySettings(resolved);
+  if (!settings) {
+    return;
+  }
+  const owner = resolveCaptureOwner(settings, resolveRuntimeDeps(deps), {
+    explicit: resolved !== undefined,
+  });
+  if (owner) {
+    void captureInstalledFetch(owner, params);
+  }
 }
 
 function captureInstalledFetch(
@@ -256,7 +248,7 @@ function captureInstalledFetch(
 
 type CaptureExecution =
   | { asynchronous: false }
-  | { asynchronous: true; store: AsyncDebugProxyCaptureStore };
+  | { asynchronous: true; store: AsyncDebugProxyCaptureWriter };
 
 function runOwnedCapture(
   owner: CaptureOwner,
@@ -317,7 +309,6 @@ function captureOwnedHttpError(
       {
         ...createHttpCaptureEventBase({
           settings: owner.settings,
-          rawUrl: captureUrl,
           url: new URL(captureUrl),
           transport: params.transport,
           direction: "local",
@@ -389,7 +380,6 @@ function captureOwnedHttpExchange(
       {
         ...createHttpCaptureEventBase({
           settings,
-          rawUrl: captureUrl,
           url,
           transport,
           direction: "outbound",
@@ -431,7 +421,6 @@ function captureOwnedHttpExchange(
       const event: CaptureEventRecord = {
         ...createHttpCaptureEventBase({
           settings,
-          rawUrl: captureUrl,
           url,
           transport,
           direction: failed ? "local" : "inbound",
@@ -517,7 +506,7 @@ function captureOwnedWsEvent(
       ts: Date.now(),
       sourceScope: "openclaw",
       sourceProcess: settings.sourceProcess,
-      protocol: protocolFromUrl(captureUrl),
+      protocol: protocolFromUrl(url),
       direction: params.direction,
       kind: params.kind,
       flowId: params.flowId,
@@ -533,12 +522,18 @@ function captureOwnedWsEvent(
 }
 
 // Websocket seams call this directly because Node fetch patching cannot observe frame traffic.
-/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. */
+/** @deprecated Use captureWsEventAsync and await capture finalization at shutdown. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function captureWsEvent(
   params: WsCaptureParams,
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
 ): void {
+  warnPluginSdkDeprecation({
+    family: "proxy-capture-runtime",
+    method: "captureWsEvent",
+    replacement:
+      "await captureWsEventAsync() and await finalizeDebugProxyCaptureAsync() at shutdown",
+  });
   const settings = resolveEnabledDebugProxySettings(resolved);
   if (!settings) {
     return;
@@ -637,10 +632,9 @@ export async function initializeDebugProxyCaptureAsync(
 
 export function prepareHttpCaptureForTransport() {
   const owner = resolveCaptureOwnerForTransport(undefined, {}, { asynchronous: true });
-  return owner ? prepareOwnedHttpCapture(owner) : undefined;
-}
-
-function prepareOwnedHttpCapture(owner: CaptureOwner) {
+  if (!owner) {
+    return undefined;
+  }
   const admission = owner.admission;
   const ready = observeCaptureWrite(
     owner,
@@ -649,7 +643,7 @@ function prepareOwnedHttpCapture(owner: CaptureOwner) {
   // Reservation happens synchronously; a failed reservation must not be retried
   // by a later transport callback. Commands on an admitted lease await readiness.
   const reserved = owner.asyncLease !== undefined;
-  const capture = (params: HttpCaptureParams | HttpCaptureErrorParams): Promise<void> => {
+  return (params: HttpCaptureParams | HttpCaptureErrorParams): Promise<void> => {
     const current = admission.current;
     if (!current) {
       return Promise.resolve();
@@ -657,13 +651,6 @@ function prepareOwnedHttpCapture(owner: CaptureOwner) {
     if (!reserved) {
       return ready;
     }
-    return Promise.resolve(
-      runOwnedCapture(current, true, (execution) =>
-        "response" in params
-          ? captureOwnedHttpExchange(params, current, execution)
-          : captureOwnedHttpError(params, current, execution),
-      ),
-    );
+    return Promise.resolve(captureInstalledFetch(current, params));
   };
-  return capture;
 }

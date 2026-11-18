@@ -91,10 +91,7 @@ it.each([
     });
   }
   setRuntimeConfigSnapshot(cfg);
-  const baseConversation: Conversation = {
-    ...address,
-    conversationId: baseId,
-  };
+  const baseConversation: Conversation = { ...address, conversationId: baseId };
   const childConversation: Conversation = {
     ...baseConversation,
     conversationId: threadTs,
@@ -146,7 +143,7 @@ it.each([
   };
   registerSessionBindingAdapter(adapter);
 
-  const prepared = resolveSlackRoutingContext({
+  const { route, sessionKey, threadKeys } = await resolveSlackRoutingContext({
     ctx: { cfg, teamId: "T1", threadInheritParent: false, threadHistoryScope: "thread" },
     account: createSlackTestAccount({ replyToMode: "all" }),
     message: {
@@ -160,7 +157,6 @@ it.each([
     },
     chatType: direct ? "direct" : "channel",
   });
-  const route = prepared.route;
   expect(route.agentId).toBe(configured ? "work" : "main");
   if (configured) {
     expect(route.sessionKey).toContain("agent:work:acp:");
@@ -178,13 +174,13 @@ it.each([
     route: {
       ...route,
       routeSessionKey: route.sessionKey,
-      dispatchSessionKey: prepared.sessionKey,
-      parentSessionKey: prepared.threadKeys.parentSessionKey,
+      dispatchSessionKey: sessionKey,
+      parentSessionKey: threadKeys.parentSessionKey,
     },
     reply: { to: direct ? "user:U1" : `channel:${channelId}` },
     command: { kind: "text-slash", name: "help", authorized: true, body: "/help" },
     access: { commands: { authorized: true } },
-    message: { rawBody: "/help", commandBody: "/help" },
+    message: { rawBody: "/help" },
   });
   if (derived) {
     expect(ctx.SessionKey).not.toBe(route.sessionKey);
@@ -233,6 +229,5 @@ it.each([
     );
   }
   expect(adopted).not.toHaveBeenCalled();
-  expect(existsSync(mainWorkspace)).toBe(false);
-  expect(existsSync(workWorkspace)).toBe(false);
+  expect([mainWorkspace, workWorkspace].map(existsSync)).toEqual([false, false]);
 });

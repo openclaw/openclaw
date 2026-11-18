@@ -1,11 +1,10 @@
 import { GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT } from "@openclaw/gateway-protocol/gateway-error-details";
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
-import { readSessionProjectionString as readNonemptyString } from "./session-projection-message-identity.js";
+import { normalizeNullableString as readNonemptyString } from "@openclaw/normalization-core/string-coerce";
 
 export function readSessionMessageDisplayContent(message: unknown): {
   text: string;
   hasNonText: boolean;
-  usesFallbackText: boolean;
 } {
   const record = readRecord(message);
   const content = typeof message === "string" ? message : record?.content;
@@ -32,7 +31,7 @@ export function readSessionMessageDisplayContent(message: unknown): {
     }
   }
   const fallback = texts.length === 0 ? readNonemptyString(record?.text) : null;
-  return { text: fallback ?? texts.join("\n"), hasNonText, usesFallbackText: fallback !== null };
+  return { text: fallback ?? texts.join("\n"), hasNonText };
 }
 
 /** Status notices remain visible but do not define the terminal reply they accompany. */

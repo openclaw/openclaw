@@ -24,8 +24,7 @@ const owners = resolveGlobalMap<string, McpFormResourceOwner>(
   Symbol.for("openclaw.mcpFormResourceOwners"),
   (entries) => {
     // Disposal unregisters owners, so reset retires the set captured at admission.
-    const pendingOwners = Array.from(entries.values());
-    for (const owner of pendingOwners) {
+    for (const owner of Array.from(entries.values())) {
       owner.dispose();
     }
     entries.clear();
@@ -62,6 +61,13 @@ export function reserveMcpFormQuestion(params: {
     owner: McpFormResourceOwner;
     reservation: FormQuestionReservation;
   }> = [];
+  const release = () => {
+    for (const { owner, reservation } of claimed) {
+      if (owner.pending.get(params.questionId) === reservation) {
+        owner.pending.delete(params.questionId);
+      }
+    }
+  };
   try {
     const ids = new Set(
       params.questions.flatMap((question) =>
@@ -93,20 +99,10 @@ export function reserveMcpFormQuestion(params: {
       claimed.push({ owner, reservation });
     }
   } catch (error) {
-    for (const { owner, reservation } of claimed) {
-      if (owner.pending.get(params.questionId) === reservation) {
-        owner.pending.delete(params.questionId);
-      }
-    }
+    release();
     throw error;
   }
-  return () => {
-    for (const { owner, reservation } of claimed) {
-      if (owner.pending.get(params.questionId) === reservation) {
-        owner.pending.delete(params.questionId);
-      }
-    }
-  };
+  return release;
 }
 
 /** Select only a host-reserved live record and its unchanged, compiler-owned resource field. */

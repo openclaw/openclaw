@@ -1,84 +1,44 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { validateConfigObject } from "../../config/validation.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import * as stateOwner from "../../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
 const runner = vi.hoisted(() =>
-  vi.fn<
-    (params: {
-      agentDir: string;
-      abortSignal?: AbortSignal;
-    }) => Promise<{ payloads: Array<{ text: string }> }>
-  >(),
+  vi.fn<(params: { agentDir: string; abortSignal?: AbortSignal }) => Promise<{ text: string }>>(),
 );
-vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: runner }));
+// mock-isolation: Controlled completion tails exercise cleanup without starting inference.
+vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
 
-afterEach(() => {
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+const provider = { apiKey: "config-key", baseUrl: "https://probe.invalid", models: [] };
+async function expectOwnership(held: boolean) {
+  const owner = await readActiveGatewayLockIdentity({ env: state.env, includeEmbedded: true });
+  expect(owner?.pid).toBe(held ? process.pid : undefined);
+}
+beforeEach(async () => {
+  state = await createOpenClawTestState({
+    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+  });
+});
+afterEach(async () => {
   vi.restoreAllMocks();
   runner.mockReset();
+  await state.cleanup();
 });
 
-function createProbeConfig(workspaceDir: string): OpenClawConfig {
-  return {
-    agents: {
-      entries: { main: { workspace: workspaceDir } },
-      defaults: { workspace: workspaceDir },
-    },
-    models: {
-      providers: {
-        "probe-control": {
-          api: "openai-completions",
-          apiKey: "synthetic-config-credential",
-          baseUrl: "https://fixture.invalid/v1",
-          models: [
-            {
-              id: "probe-model",
-              name: "Probe model",
-              contextWindow: 8192,
-              maxTokens: 64,
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      },
-    },
-  };
-}
-
-function stateOwnership(state: OpenClawTestState, signals: EventEmitter) {
-  return {
-    mode: "exclusive" as const,
-    process: signals,
-    gatewayLockOptions: {
-      allowInTests: true,
-      env: state.env,
-      lockDir: state.path("locks"),
-      readProcessStartTime: () => 123456,
-      timeoutMs: 100,
-    },
-  };
-}
-
-function probeParams(
-  state: OpenClawTestState,
-  cfg: OpenClawConfig,
-  signals: EventEmitter,
-  concurrency: number,
-) {
+async function probeParams(concurrency: number) {
+  const cfg: OpenClawConfig = { models: { providers: { "probe-control": provider } } };
+  await state.writeConfig(cfg);
   return {
     cfg,
     agentId: "main",
@@ -93,43 +53,20 @@ function probeParams(
       concurrency,
       maxTokens: 8,
     },
-    stateOwnership: stateOwnership(state, signals),
+    stateOwnership: { mode: "exclusive" as const },
   };
 }
 
-it("holds state ownership for an in-flight sibling after progress rejects the probe batch", async () => {
-  const state = await createOpenClawTestState({
-    label: "probe-sibling-cleanup",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const cfg = createProbeConfig(state.workspaceDir);
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
-  await state.writeConfig(cfg);
-  await state.writeAuthProfiles({
-    version: 1,
-    profiles: {
-      "probe-control:stored": {
-        type: "api_key",
-        provider: "probe-control",
-        key: "synthetic-stored-credential",
-      },
-    },
-  });
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
-  const lockPath = path.join(lockDir, "gateway.state.lock");
-  const firstStarted = createDeferredCore();
+it("holds state ownership until an in-flight sibling settles after progress rejects the batch", async () => {
+  const params = await probeParams(2);
+  const profile = { type: "api_key", provider: "probe-control", key: "stored-key" };
+  await state.writeAuthProfiles({ version: 1, profiles: { "probe-control:stored": profile } });
+  const firstStarted = createDeferredCore<AbortSignal | undefined>();
   const finishFirst = createDeferredCore();
-  const firstFinished = createDeferredCore();
-  let firstSignal: AbortSignal | undefined;
-  let firstRan = false;
-  runner.mockImplementation(async (params) => {
-    firstRan = true;
-    firstSignal = params.abortSignal;
-    firstStarted.resolve();
+  runner.mockImplementation(async ({ abortSignal }) => {
+    firstStarted.resolve(abortSignal);
     await finishFirst.promise;
-    firstFinished.resolve();
-    return { payloads: [{ text: "OK" }] };
+    return { text: "OK" };
   });
   const parent = new AsyncWorkScope();
   const original = new Error("synthetic progress failure");
@@ -138,96 +75,99 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   try {
     operation = parent.track(() =>
       runAuthProbes({
-        ...probeParams(state, cfg, signals, 2),
+        ...params,
         onProgress(update) {
-          expect(update.total).toBe(2);
           if (update.label && ++starts === 2) {
             throw original;
           }
         },
       }),
     );
-    await expect(operation).rejects.toBe(original);
     await firstStarted.promise;
-    expect(fs.existsSync(lockPath)).toBe(true);
-    expect(signals.listenerCount("SIGTERM")).toBe(1);
-    signals.emit("SIGTERM");
-    expect(firstSignal?.aborted).toBe(true);
-    expect(fs.existsSync(lockPath)).toBe(true);
+    await expectOwnership(true);
     finishFirst.resolve();
-    await firstFinished.promise;
+    await expect(operation).rejects.toBe(original);
     await parent.drain();
-    expect(fs.existsSync(lockPath)).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    await expectOwnership(false);
   } finally {
     finishFirst.resolve();
     await operation?.catch(() => {});
-    if (firstRan) {
-      await firstFinished.promise;
-    }
     await parent.drain();
-    await state.cleanup();
   }
 });
 
-it("removes the staged directory and releases state ownership when database disposal reports failure", async () => {
-  const state = await createOpenClawTestState({
-    label: "probe-disposal-failure",
-    env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-  });
-  const cfg = createProbeConfig(state.workspaceDir);
-  expect(validateConfigObject(cfg)).toMatchObject({ ok: true });
-  await state.writeConfig(cfg);
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
+it("retains failed probe custody until disposal is explicitly settled", async () => {
+  const params = await probeParams(1);
   const original = new Error("synthetic database disposal failure");
   let stagedDir: string | undefined;
-  runner.mockImplementation(async (params) => {
-    stagedDir = params.agentDir;
-    return { payloads: [{ text: "OK" }] };
+  runner.mockImplementation(async ({ agentDir }) => {
+    stagedDir = agentDir;
+    return { text: "OK" };
   });
-  const dispose = agentDatabase.disposeOpenClawAgentDatabaseByPath;
+  const dispose = agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath;
   const close = vi
-    .spyOn(agentDatabase, "disposeOpenClawAgentDatabaseByPath")
-    .mockImplementation((pathname, options) => {
-      const closed = dispose(pathname, options);
+    .spyOn(agentDatabaseDisposal, "disposeOpenClawAgentDatabaseByPath")
+    .mockImplementation(async (pathname, options) => {
+      const closed = await dispose(pathname, options);
       if (stagedDir && pathname.startsWith(stagedDir + path.sep)) {
         throw original;
       }
       return closed;
     });
+  const borrow = stateOwner.tryBorrowGatewayStateOwner;
+  let retained: ReturnType<typeof borrow>;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((databasePath) => {
+    const lease = borrow(databasePath);
+    if (lease) {
+      retained = lease;
+    }
+    return lease;
+  });
   const cleanup = createAgentCleanupScope();
   try {
-    await expect(
-      cleanup.run(() => runAuthProbes(probeParams(state, cfg, signals, 1))),
-    ).rejects.toBe(original);
-    expect(stagedDir).toContain("openclaw-auth-probe-");
-    expect(fs.existsSync(stagedDir!)).toBe(false);
-    expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    await expect(cleanup.run(() => runAuthProbes(params))).rejects.toMatchObject({
+      cause: original,
+    });
+    expect(fs.existsSync(stagedDir!)).toBe(true);
+    await expectOwnership(true);
     expect(cleanup.outcome).toBe("uncertain");
+    expect(() => agentDatabase.listOpenClawRegisteredAgentDatabases({ env: state.env })).toThrow(
+      "maintenance ownership without an active schema lease or maintenance scope",
+    );
+    if (!retained) {
+      throw new Error("Failed probe cleanup did not retain its actual state lease");
+    }
+    expect(
+      retained.run(() =>
+        agentDatabase
+          .listOpenClawRegisteredAgentDatabases({ env: state.env })
+          .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
+      ),
+    ).toBe(false);
   } finally {
     close.mockRestore();
-    await state.cleanup();
+    const directory = stagedDir;
+    if (directory) {
+      const settle = async () => {
+        await dispose(path.join(directory, "openclaw-agent.sqlite"), { env: state.env });
+        await fs.promises.rm(directory, { recursive: true, force: true });
+      };
+      // The fixture observes the real retained lease; only settled disposal releases it.
+      await (retained ? retained.run(settle) : settle());
+    }
+    retained?.release();
   }
+  await expectOwnership(false);
 });
 
 it("does not acquire probe state from a closed caller scope", async () => {
-  const state = await createOpenClawTestState({ label: "probe-closed-caller" });
   const parent = new AsyncWorkScope();
   const inParent = parent.run(() => AsyncLocalStorage.snapshot());
   await parent.drain();
-  const signals = new EventEmitter();
-  const lockDir = state.path("locks");
   const run = vi.fn(async () => undefined);
-  try {
-    await expect(
-      inParent(() => withAuthProbeStateOwnership(stateOwnership(state, signals), run)),
-    ).rejects.toThrow("Async work scope is closed");
-    expect(run).not.toHaveBeenCalled();
-    expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);
-    expect(signals.listenerCount("SIGTERM")).toBe(0);
-  } finally {
-    await state.cleanup();
-  }
+  await expect(
+    inParent(() => withAuthProbeStateOwnership({ mode: "exclusive" }, run)),
+  ).rejects.toThrow("Async work scope is closed");
+  expect(run).not.toHaveBeenCalled();
+  await expectOwnership(false);
 });

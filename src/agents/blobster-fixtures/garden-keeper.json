@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "id": "garden-keeper",
+  "name": "Garden Keeper",
+  "description": "An original sage-green gardener with a cream apron, seedling pocket, and a sprout above the shell.",
+  "palette": {
+    "shell": "#87b891",
+    "claw": "#5b9471",
+    "glint": "#fff0b3"
+  },
+  "bounds": [-6, -8, 132, 120],
+  "layers": {
+    "shell_overlay": "<path d=\"M35 49 L46 49 L47 60 L73 60 L74 49 L85 49 L90 86 Q60 103 30 86 Z\" fill=\"#f1e4c4\"/>\n<path d=\"M49 69 H71 V83 Q60 88 49 83 Z\" fill=\"#638d69\"/>\n<path d=\"M60 80 V72 M60 76 Q52 69 53 76 Q56 80 60 78 M60 74 Q69 66 68 74 Q65 78 60 77\" fill=\"#d6e6b4\"/>\n<path d=\"M60 13 Q58 3 62 1\" fill=\"none\" stroke=\"#426e4a\" stroke-width=\"2.5\"/>\n<path d=\"M61 6 Q63 -2 73 2 Q70 10 61 6 Z M59 8 Q49 9 49 1 Q58 0 59 8 Z\" fill=\"#4c8556\"/>"
+  }
+}

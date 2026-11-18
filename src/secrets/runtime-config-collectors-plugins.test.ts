@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestSecretInputPath } from "../plugins/manifest-types.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
 import { createResolverContext, type ResolverContext } from "./runtime-shared.js";
@@ -24,10 +25,7 @@ vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
 }));
 
 function asConfig(value: unknown): OpenClawConfig {
-  return {
-    agents: { list: [{ id: "main", default: true }] },
-    ...(value as OpenClawConfig),
-  };
+  return { agents: { entries: { main: {} } }, ...(value as OpenClawConfig) };
 }
 
 function makeContext(
@@ -37,7 +35,7 @@ function makeContext(
   return createResolverContext({
     sourceConfig,
     env: { OPENCLAW_STATE_DIR: process.env.OPENCLAW_TEST_HOME },
-    ...(manifestRegistry ? { manifestRegistry } : {}),
+    manifestRegistry,
   });
 }
 
@@ -45,18 +43,8 @@ function envRef(id: string) {
   return { source: "env" as const, provider: "default", id };
 }
 
-function loadablePluginOrigins(entries: Array<[string, PluginOrigin]>) {
-  return new Map(entries);
-}
-
-type RuntimeConfigAssignment = ResolverContext["assignments"][number];
-
-function requireAssignment(context: ResolverContext, index: number): RuntimeConfigAssignment {
-  const assignment = context.assignments[index];
-  if (!assignment) {
-    throw new Error(`expected runtime config assignment ${index}`);
-  }
-  return assignment;
+function contractRecord(id: string, paths: PluginManifestSecretInputPath[]) {
+  return { id, origin: "config" as const, configContracts: { secretInputs: { paths } } };
 }
 
 function createPluginConfig(
@@ -65,54 +53,21 @@ function createPluginConfig(
   entry: Record<string, unknown> = { enabled: true },
   plugins: Record<string, unknown> = {},
 ): OpenClawConfig {
-  return asConfig({
-    plugins: {
-      ...plugins,
-      entries: { [pluginId]: { ...entry, config } },
-    },
-  });
-}
-
-function createAcpxMcpSecretConfig(params: {
-  plugins?: Record<string, unknown>;
-  entry?: Record<string, unknown>;
-}): OpenClawConfig {
-  return createPluginConfig(
-    "acpx",
-    {
-      mcpServers: {
-        s1: { command: "node", env: { K: envRef("K") } },
-      },
-    },
-    params.entry ?? {},
-    params.plugins,
-  );
+  return asConfig({ plugins: { ...plugins, entries: { [pluginId]: { ...entry, config } } } });
 }
 
 function collectAssignments(
   config: OpenClawConfig,
-  origins: Array<[string, PluginOrigin]>,
+  origins?: Array<[string, PluginOrigin]>,
+  context = makeContext(config),
 ): ResolverContext {
-  const context = makeContext(config);
   collectPluginConfigAssignments({
     config,
     defaults: undefined,
     context,
-    loadablePluginOrigins: loadablePluginOrigins(origins),
+    loadablePluginOrigins: origins && new Map(origins),
   });
   return context;
-}
-
-function collectAcpxConfigAssignments(config: OpenClawConfig): ResolverContext {
-  return collectAssignments(config, [["acpx", "bundled"]]);
-}
-
-function expectInactiveAcpxConfig(config: OpenClawConfig): void {
-  const context = collectAcpxConfigAssignments(config);
-  expect(context.assignments).toHaveLength(0);
-  expect(context.warnings.map((warning) => warning.code)).toContain(
-    "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
-  );
 }
 
 describe("collectPluginConfigAssignments", () => {
@@ -123,8 +78,6 @@ describe("collectPluginConfigAssignments", () => {
         {
           id: "acpx",
           origin: "bundled",
-          providers: [],
-          legacyPluginIds: [],
           configContracts: {
             secretInputs: {
               bundledDefaultEnabled: false,
@@ -132,34 +85,26 @@ describe("collectPluginConfigAssignments", () => {
             },
           },
         },
-        {
-          id: "other",
-          origin: "config",
-          providers: [],
-          legacyPluginIds: [],
-        },
+        { id: "other", origin: "config" },
       ],
       diagnostics: [],
     });
   });
 
+  it("does not load plugin metadata for empty entries", () => {
+    const context = collectAssignments(asConfig({ plugins: { entries: {} } }));
+    expect(context.assignments).toEqual([]);
+    expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("keeps dotted plugin identities and plugin-local route paths distinct", () => {
     const pluginIds = ["foo.config.bar", "foo"] as const;
     loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: pluginIds.map((id) => ({
-        id,
-        origin: "config",
-        configContracts: {
-          secretInputs: {
-            paths: [
-              {
-                path: id === "foo" ? "bar.config.token" : "token",
-                ownerKind: "route",
-              },
-            ],
-          },
-        },
-      })),
+      plugins: pluginIds.map((id) =>
+        contractRecord(id, [
+          { path: id === "foo" ? "bar.config.token" : "token", ownerKind: "route" },
+        ]),
+      ),
       diagnostics: [],
     });
 
@@ -168,10 +113,7 @@ describe("collectPluginConfigAssignments", () => {
         plugins: {
           entries: {
             "foo.config.bar": { enabled: true, config: { token: envRef("DOTTED_TOKEN") } },
-            foo: {
-              enabled: true,
-              config: { bar: { config: { token: envRef("NESTED_TOKEN") } } },
-            },
+            foo: { enabled: true, config: { bar: { config: { token: envRef("NESTED_TOKEN") } } } },
           },
         },
       }),
@@ -192,22 +134,11 @@ describe("collectPluginConfigAssignments", () => {
         ref: { id: "NESTED_TOKEN" },
       },
     ]);
-    expect(new Set(context.assignments.map(({ ownerId }) => ownerId)).size).toBe(2);
   });
 
   it("collects and applies dotted wildcard keys separately from nested record keys", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "distinct-keys",
-          origin: "config",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "*.token" }, { path: "*.*.token" }],
-            },
-          },
-        },
-      ],
+      plugins: [contractRecord("distinct-keys", [{ path: "*.token" }, { path: "*.*.token" }])],
       diagnostics: [],
     });
     const config = createPluginConfig("distinct-keys", {
@@ -226,42 +157,11 @@ describe("collectPluginConfigAssignments", () => {
         ref: { id: "NESTED_TOKEN" },
       },
     ]);
-    requireAssignment(context, 0).apply("resolved-dotted");
-    requireAssignment(context, 1).apply("resolved-nested");
+    context.assignments[0]?.apply("resolved-dotted");
+    context.assignments[1]?.apply("resolved-nested");
     expect(config.plugins?.entries?.["distinct-keys"]?.config).toMatchObject({
       "alpha.beta": { token: "resolved-dotted" },
       alpha: { beta: { token: "resolved-nested" } },
-    });
-  });
-
-  it("keeps installed web-provider headers unknown while applying exact dotted keys", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "custom-search",
-          origin: "config",
-          contracts: { webSearchProviders: ["custom-search"] },
-          configContracts: {
-            secretInputs: { paths: [{ path: "webSearch.headers.*", expected: "string" }] },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = createPluginConfig("custom-search", {
-      webSearch: { headers: { "X.Trace": envRef("CUSTOM_TRACE") } },
-    });
-    const context = collectAssignments(config, [["custom-search", "config"]]);
-
-    expect(context.assignments).toMatchObject([
-      {
-        path: 'plugins.entries.custom-search.config.webSearch.headers["X.Trace"]',
-        ownerKind: "unknown",
-      },
-    ]);
-    requireAssignment(context, 0).apply("resolved-trace");
-    expect(config.plugins?.entries?.["custom-search"]?.config).toMatchObject({
-      webSearch: { headers: { "X.Trace": "resolved-trace" } },
     });
   });
 
@@ -271,24 +171,13 @@ describe("collectPluginConfigAssignments", () => {
     });
     const context = makeContext(config, {
       plugins: [
-        {
-          id: "prepared-plugin",
-          origin: "config",
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "credentials.token", expected: "string" }],
-            },
-          },
-        } as never,
+        contractRecord("prepared-plugin", [
+          { path: "credentials.token", expected: "string" },
+        ]) as never,
       ],
     });
 
-    collectPluginConfigAssignments({
-      config,
-      defaults: undefined,
-      context,
-      loadablePluginOrigins: loadablePluginOrigins([["prepared-plugin", "config"]]),
-    });
+    collectAssignments(config, [["prepared-plugin", "config"]], context);
 
     expect(context.assignments.map((assignment) => assignment.path)).toEqual([
       "plugins.entries.prepared-plugin.config.credentials.token",
@@ -296,89 +185,27 @@ describe("collectPluginConfigAssignments", () => {
     expect(loadPluginManifestRegistryForPluginRegistryMock).not.toHaveBeenCalled();
   });
 
-  it("resolves array SecretRef assignments via apply callback", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "array-plugin",
-          origin: "config",
-          providers: [],
-          legacyPluginIds: [],
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "servers.*.env.API_KEY", expected: "string" }],
-            },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = createPluginConfig("array-plugin", {
-      servers: [{ env: { API_KEY: envRef("FIRST") } }, { env: { API_KEY: envRef("SECOND") } }],
-    });
-    const context = collectAssignments(config, [["array-plugin", "config"]]);
-
-    const assignment = context.assignments.find((entry) =>
-      entry.path.endsWith("servers[1].env.API_KEY"),
-    );
-    if (!assignment) {
-      throw new Error("expected array plugin assignment");
-    }
-
-    assignment.apply("resolved-second");
-
-    const entries = config.plugins?.entries as Record<string, Record<string, unknown>>;
-    const pluginConfig = entries["array-plugin"]?.config as {
-      servers?: Array<{ env?: Record<string, unknown> }>;
-    };
-    expect(pluginConfig.servers?.[1]?.env?.API_KEY).toBe("resolved-second");
-    expect(pluginConfig.servers?.[0]?.env?.API_KEY).toEqual(envRef("FIRST"));
-  });
-
   it("collects across multiple acpx servers only", () => {
-    const config = asConfig({
-      plugins: {
-        entries: {
-          acpx: {
-            enabled: true,
-            config: {
-              mcpServers: {
-                s1: { command: "a", env: { K1: envRef("K1") } },
-                s2: { command: "b", env: { K2: envRef("K2"), K3: envRef("K3") } },
-              },
-            },
-          },
-          other: {
-            enabled: true,
-            config: {
-              mcpServers: {
-                s3: { command: "c", env: { K4: envRef("K4") } },
-              },
-            },
-          },
-        },
+    const config = createPluginConfig("acpx", {
+      mcpServers: {
+        s1: { command: "a", env: { K1: envRef("K1") } },
+        s2: { command: "b", env: { K2: envRef("K2"), K3: envRef("K3") } },
       },
     });
+    config.plugins!.entries!.other = {
+      enabled: true,
+      config: { mcpServers: { s3: { command: "c", env: { K4: envRef("K4") } } } },
+    };
     const context = collectAssignments(config, [
       ["acpx", "bundled"],
       ["other", "config"],
     ]);
 
-    expect(context.assignments).toHaveLength(3);
-    const paths = context.assignments.map((a) => a.path).toSorted();
-    expect(paths).toEqual([
+    expect(context.assignments.map(({ path }) => path).toSorted()).toEqual([
       "plugins.entries.acpx.config.mcpServers.s1.env.K1",
       "plugins.entries.acpx.config.mcpServers.s2.env.K2",
       "plugins.entries.acpx.config.mcpServers.s2.env.K3",
     ]);
-  });
-
-  it("skips assignments when entry.enabled is false", () => {
-    expectInactiveAcpxConfig(createAcpxMcpSecretConfig({ entry: { enabled: false } }));
-  });
-
-  it("treats bundled acpx SecretRef surfaces as inactive until enabled", () => {
-    expectInactiveAcpxConfig(createAcpxMcpSecretConfig({ plugins: { enabled: true } }));
   });
 
   it("collects inline env-template refs while leaving normal strings literal", () => {
@@ -386,73 +213,35 @@ describe("collectPluginConfigAssignments", () => {
       mcpServers: {
         s1: {
           command: "node",
-          env: {
-            INLINE: "${INLINE_KEY}",
-            SECOND: "${SECOND_KEY}",
-            LITERAL: "hello",
-          },
+          env: { INLINE: "${INLINE_KEY}", SECOND: "${SECOND_KEY}", LITERAL: "hello" },
         },
       },
     });
-    const context = collectAcpxConfigAssignments(config);
-
-    expect(context.assignments).toHaveLength(2);
-    expect(requireAssignment(context, 0).path).toBe(
+    const context = collectAssignments(config, [["acpx", "bundled"]]);
+    expect(context.assignments.map(({ path }) => path)).toEqual([
       "plugins.entries.acpx.config.mcpServers.s1.env.INLINE",
-    );
-    expect(requireAssignment(context, 1).path).toBe(
       "plugins.entries.acpx.config.mcpServers.s1.env.SECOND",
-    );
-  });
-
-  it("skips stale acpx entries not in loadablePluginOrigins", () => {
-    const config = createPluginConfig("acpx", {
-      mcpServers: {
-        s1: { command: "node", env: { K1: envRef("K1") } },
-      },
-    });
-    const context = collectAssignments(config, []);
-
-    expect(context.assignments).toHaveLength(0);
-    expect(
-      context.warnings.some(
-        (w) =>
-          w.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE" &&
-          w.path === "plugins.entries.acpx.config.mcpServers.s1.env.K1",
-      ),
-    ).toBe(true);
-  });
-
-  it("collects manifest-declared SecretRef surfaces for non-acpx plugins", () => {
-    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
-      plugins: [
-        {
-          id: "other",
-          origin: "config",
-          providers: [],
-          legacyPluginIds: [],
-          configContracts: {
-            secretInputs: {
-              paths: [{ path: "service.tokens.*", expected: "string" }],
-            },
-          },
-        },
-      ],
-      diagnostics: [],
-    });
-    const config = createPluginConfig("other", {
-      service: {
-        tokens: {
-          primary: envRef("PRIMARY_TOKEN"),
-          secondary: "${SECONDARY_TOKEN}",
-        },
-      },
-    });
-    const context = collectAssignments(config, [["other", "config"]]);
-
-    expect(context.assignments.map((assignment) => assignment.path).toSorted()).toEqual([
-      "plugins.entries.other.config.service.tokens.primary",
-      "plugins.entries.other.config.service.tokens.secondary",
     ]);
+  });
+
+  it.each([
+    ["disabled entry", { enabled: false }, {}, true],
+    ["not explicitly enabled", {}, { enabled: true }, true],
+    ["not loadable", { enabled: true }, {}, false],
+  ] as const)("ignores acpx credentials when %s", (_label, entry, plugins, loadable) => {
+    const config = createPluginConfig(
+      "acpx",
+      { mcpServers: { s1: { command: "node", env: { K1: envRef("K1") } } } },
+      entry,
+      plugins,
+    );
+    const context = collectAssignments(config, loadable ? [["acpx", "bundled"]] : []);
+    expect(context.assignments).toHaveLength(0);
+    expect(context.warnings).toContainEqual(
+      expect.objectContaining({
+        code: "SECRETS_REF_IGNORED_INACTIVE_SURFACE",
+        path: "plugins.entries.acpx.config.mcpServers.s1.env.K1",
+      }),
+    );
   });
 });

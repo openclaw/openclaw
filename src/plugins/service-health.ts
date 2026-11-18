@@ -19,11 +19,10 @@ export function createPluginServiceHealthReporter(service: PluginServiceRegistra
   const state: { failure?: PluginServiceHealthFailure } = {};
   states.set(service, state);
   let active = true;
-  const canReport = () => active && states.get(service) === state;
   return {
     health: {
       reportFailure: (error) => {
-        if (canReport()) {
+        if (active) {
           state.failure = {
             pluginId: service.pluginId,
             serviceId: service.id,
@@ -33,7 +32,7 @@ export function createPluginServiceHealthReporter(service: PluginServiceRegistra
         }
       },
       clearFailure: () => {
-        if (canReport()) {
+        if (active) {
           delete state.failure;
         }
       },

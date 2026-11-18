@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 
 type StateLocation = Pick<
@@ -8,6 +8,15 @@ type StateLocation = Pick<
   "config" | "env" | "stateDir" | "serviceWorkspaceDir"
 >;
 type StateSource = string | { directory: string; prefix?: string; suffix: string };
+
+/** Candidate-packaged, read-only retirement checks bound to installed migration identities. */
+export type PluginStateRetentionContract = {
+  packageName: string;
+  stateMigrations: readonly Pick<
+    ReturnType<typeof defineRetiredPluginStateMigration>,
+    "id" | "assertSupportedState"
+  >[];
+};
 
 /** Refuses retired files without parsing, importing, or removing their contents. */
 export function defineRetiredPluginStateMigration(params: {
@@ -35,9 +44,7 @@ export function defineRetiredPluginStateMigration(params: {
           }
         }
       } catch (error) {
-        if (!hasErrnoCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
       }
     }
     return [...new Set(sources)].toSorted();

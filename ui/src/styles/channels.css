@@ -3,8 +3,13 @@
    shared settings design language. */
 
 /* Compact refresh actions should not retain the spacing reserved for settings
-   headers with full-size controls. */
-.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+   headers with full-size controls. Actions are direct children or have one tooltip/form
+   wrapper; bounded child paths avoid scanning large section lists. */
+.settings-section:has(
+  > * > .settings-section__actions > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .btn--xs.btn--icon,
+  > * > .settings-section__actions > * > .refresh-button
+) {
   gap: var(--space-2);
 }
 
@@ -23,7 +28,6 @@
   text-align: left;
 }
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
   width: var(--channels-art-size, 44px);
@@ -36,8 +40,7 @@
   background: var(--bg-elevated);
 }
 
-.channels-tile img,
-.channels-cover img {
+.channels-tile img {
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -53,81 +56,156 @@
   text-shadow: 0 1px 2px rgb(0 0 0 / 25%);
 }
 
-/* Wide cover art used by the detail overlay header. */
-.channels-cover {
-  display: grid;
-  width: 100%;
-  aspect-ratio: 32 / 9;
-  place-items: center;
-  overflow: hidden;
-  background: var(--bg-elevated);
+/* A status line, a flat form and one footer. The top stays put, so opening a
+   disclosure or showing a failure grows the dialog downward and nothing moves
+   under the pointer; a full form still sits centered. */
+.oc-modal-dialog:has(> .oc-modal-dialog__body > .channels-detail) {
+  margin-block: max(24px, calc((100dvh - 680px) / 2)) auto;
 }
 
-.channels-cover--icon img {
-  width: 96px;
-  height: 96px;
-  border-radius: var(--radius-lg);
+.oc-dialog.channels-detail {
+  max-height: min(680px, var(--openclaw-modal-height-limit));
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
 }
 
-.channels-cover--fallback {
-  background: linear-gradient(135deg, var(--channels-art-a), var(--channels-art-b));
-  color: rgb(255 255 255 / 92%);
-  font-family: var(--mono);
-  font-size: 22px;
-  font-weight: 700;
-  text-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+@media (max-width: 640px) {
+  .oc-modal-dialog:has(> .oc-modal-dialog__body > .channels-detail) {
+    margin-block: 24px auto;
+  }
+
+  .oc-dialog.channels-detail {
+    max-height: var(--openclaw-modal-height-limit);
+  }
 }
 
-.channels-detail,
-.channels-wizard {
+/* A rows-only body scrolls right up to the status line without this breathing room. */
+.channels-detail .oc-dialog__header {
+  align-items: start;
+  padding-block-end: var(--space-2);
+}
+
+.channels-detail .oc-dialog__body {
+  padding-block-start: var(--space-1);
+}
+
+/* A long name wraps beside the icon and the close button, both on its first line. */
+.channels-detail .oc-dialog__title {
+  align-items: flex-start;
+  padding-block: calc((var(--overlay-modal-close-size) - 24px) / 2);
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+
+.channels-detail .oc-dialog__title .channels-tile {
+  border-radius: var(--radius-sm);
+}
+
+.oc-dialog__description.channels-detail__status {
   display: flex;
-  flex-direction: column;
-  overflow-y: auto;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
-}
-
-.channels-detail {
-  width: min(680px, calc(100vw - 48px));
-  max-height: min(85dvh, 860px);
-}
-
-.channels-detail__header {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.channels-detail__header-actions {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-3);
-  z-index: 2;
-  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--space-3);
+}
+
+.channels-detail__state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  min-width: 0;
+}
+
+/* The dialog is the surface: what sits in it is rows, not a card in a card. */
+.channels-detail__body {
+  align-content: start;
+}
+
+.channels-detail__issue + .channels-detail__issue {
+  margin-block-start: var(--space-2);
+}
+
+.channels-detail__form {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.channels-detail .settings-group {
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.channels-detail .settings-row {
+  padding-inline: 0;
+}
+
+.channels-detail .settings-kv {
+  padding: var(--space-2) 0;
+}
+
+/* The hover surface reaches past the text; the text and chevron stay on the form's edges. */
+.channels-detail .settings-disclosure__summary {
+  width: calc(100% + 2 * var(--space-2));
+  margin-inline: calc(-1 * var(--space-2));
+  padding-inline: var(--space-2);
+  border-radius: var(--menu-item-radius);
+}
+
+.channels-detail .channels-pairing-help {
+  margin: 0;
+  padding: 0 0 var(--space-1);
+}
+
+/* On demand, these read as one short list rather than separate blocks. */
+.channels-detail__form:has(.settings-disclosure) + .settings-disclosure,
+.channels-detail .settings-disclosure + .settings-disclosure {
+  margin-block-start: calc(-1 * var(--space-3));
+}
+
+.channels-detail .qr-wrap {
+  display: grid;
+  justify-items: center;
+}
+
+.channels-detail .settings-row--stacked:has(> .qr-wrap) > .settings-row__control {
+  justify-content: center;
+}
+
+.channels-detail .qr-wrap img {
+  width: min(260px, 100%);
+  aspect-ratio: 1;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--qr-bg);
+}
+
+.channels-detail__footer .channels-detail__status {
+  flex: 1 1 0;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-detail__decide {
+  display: flex;
   gap: var(--space-2);
 }
 
-.channels-detail__header-actions .btn {
-  background: color-mix(in srgb, var(--bg) 55%, transparent);
-  backdrop-filter: blur(4px);
-}
-
-.channels-detail__close {
-  width: 32px;
-  height: 32px;
-  padding: 7px;
-}
-
-.channels-detail__close svg {
-  stroke-width: 2;
-}
-
-.channels-detail__body {
+.channels-detail__feedback {
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) var(--space-5);
+  flex: none;
+  gap: var(--space-2);
+  max-height: 30dvh;
+  overflow-y: auto;
+  padding: var(--space-2) var(--overlay-modal-padding) 0;
+  overflow-wrap: anywhere;
+}
+
+/* A conflict's choice drops under its message once the dialog is too narrow for both. */
+.channels-detail__feedback .settings-save-indicator {
+  flex-wrap: wrap;
 }
 
 .channels-pairing-filters {
@@ -192,17 +270,6 @@
   line-height: 1.5;
 }
 
-.channels-pairing-dialog {
-  display: grid;
-  width: min(520px, calc(100vw - 48px));
-  gap: var(--space-3);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-xl);
-  padding: var(--space-4);
-  background: var(--popover);
-  box-shadow: var(--shadow-xl);
-}
-
 .channels-pairing-dialog__option {
   display: flex;
   align-items: flex-start;
@@ -213,13 +280,6 @@
 
 .channels-pairing-dialog__option input {
   margin-top: 3px;
-}
-
-.channels-pairing-dialog__actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  flex-wrap: wrap;
 }
 
 @media (max-width: 640px) {
@@ -233,47 +293,15 @@
   }
 }
 
-.channels-wizard {
-  width: min(540px, calc(100vw - 48px));
-  max-height: min(85dvh, 760px);
-}
-
-.channels-wizard__header {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-4) var(--space-4) 0;
-}
-
-.channels-wizard__heading {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.channels-wizard__heading h2 {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 660;
-  letter-spacing: -0.015em;
-}
-
-.channels-wizard__heading .muted {
-  font-size: var(--control-ui-text-sm);
+.channels-wizard .oc-dialog__title .channels-tile {
+  border-radius: var(--radius-sm);
 }
 
 .channels-wizard__subtitle {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.channels-wizard__body {
-  display: grid;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 .channels-wizard__note,
@@ -285,14 +313,6 @@
   line-height: 1.5;
 }
 
-.channels-wizard__note {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-3);
-  background: var(--bg-elevated);
-}
-
-.channels-wizard__note--code,
 .channels-wizard__output--code {
   font-family: var(--mono);
   font-size: var(--control-ui-text-xs);
@@ -304,52 +324,49 @@
   line-height: 1.4;
 }
 
-.channels-wizard__text,
-.channels-wizard__secret {
-  width: 100%;
-  margin-top: 10px;
-}
-
-.channels-wizard__text {
-  display: flex;
-}
-
-.channels-wizard__text > .input {
-  min-height: 44px;
-}
-
 .channels-wizard__options {
   display: grid;
   gap: var(--space-2);
 }
 
 .channels-wizard__option {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  position: relative;
+  display: grid;
   gap: 2px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  background: var(--card);
-  text-align: left;
+  width: 100%;
+  border: 0;
+  border-radius: var(--menu-item-radius);
+  padding: var(--space-2) calc(var(--space-3) + 24px) var(--space-2) var(--space-3);
+  background: var(--bg-hover);
+  color: var(--text);
+  text-align: start;
   cursor: var(--cursor-action);
-  transition:
-    border-color var(--duration-fast) var(--ease-out),
-    background var(--duration-fast) var(--ease-out);
 }
 
-.channels-wizard__option:hover,
+.channels-wizard__option:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
 .channels-wizard__option:focus-visible {
-  border-color: var(--border-hover);
-  background: var(--bg-elevated);
+  outline: none;
+  box-shadow: var(--focus-ring);
 }
 
-.channels-wizard__option[aria-pressed="true"],
-.channels-wizard__option[checked],
-.channels-wizard__option:state(checked) {
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
-  background: var(--accent-subtle);
+.channels-wizard__option[aria-pressed="true"] {
+  background: var(--surface-selected);
+}
+
+.channels-wizard__option-check {
+  position: absolute;
+  inset-block-start: var(--space-2);
+  inset-inline-end: var(--space-3);
+  display: inline-flex;
+  color: var(--accent);
+}
+
+.channels-wizard__option-check svg {
+  width: 16px;
+  height: 16px;
 }
 
 .channels-wizard__option-label {
@@ -357,7 +374,8 @@
   font-weight: 620;
 }
 
-.channels-wizard__option-hint {
+.channels-wizard__option-hint,
+.channels-wizard__spinner {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -368,23 +386,6 @@
   gap: var(--space-2);
 }
 
-.channels-wizard__footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  flex-wrap: wrap;
-}
-
-.channels-wizard__error {
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: var(--radius-md);
-  padding: var(--space-2) var(--space-3);
-  background: var(--danger-subtle);
-  color: var(--danger);
-  font-size: var(--control-ui-text-sm);
-}
-
 .channels-wizard__qr {
   display: grid;
   gap: var(--space-2);
@@ -393,15 +394,12 @@
 }
 
 .channels-wizard__qr img {
-  width: min(260px, 70vw);
+  width: min(260px, 100%);
+  flex: none;
+  aspect-ratio: 1;
   border-radius: var(--radius-md);
-  background: var(--brand-logo-chip-bg);
+  background: var(--qr-bg);
   padding: var(--space-2);
-}
-
-.channels-wizard__spinner {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
 }
 
 /* Text/tile area of an available row doubles as the detail opener. */
@@ -411,17 +409,31 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
 }
 
-.channels-item__detail:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+@media (max-width: 640px) {
+  /* Refresh shares the section label's row instead of taking one of its own. */
+  .settings-section__header.settings-section__header:has(.channels-refresh) {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .settings-section__header:has(.channels-refresh) .settings-section__actions {
+    align-self: center;
+  }
+
+  .settings-section .settings-section__actions .refresh-button.channels-refresh {
+    width: 44px;
+    min-width: 44px;
+  }
+
+  /* Set up stays beside its channel, where connected rows keep their status. */
+  .settings-row.channels-item:has(> .channels-item__detail) {
+    flex-wrap: nowrap;
+  }
+
+  .channels-item:has(> .channels-item__detail) > .settings-row__control {
+    flex: none;
+    width: auto;
+  }
 }

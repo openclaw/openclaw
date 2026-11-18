@@ -2,6 +2,7 @@ import type {
   WorkboardAttachment,
   WorkboardBoardMetadata,
   WorkboardCard,
+  WorkboardCardCursor,
   WorkboardNotificationSubscription,
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
@@ -90,11 +91,22 @@ export type WorkboardCardStatsAggregate = {
   oldestReadyAt: number | undefined;
 };
 
+/** Claim succeeds only while `ownerId` holds fewer than `limit` running or claimed cards. */
+export type WorkboardOwnerSlot = { ownerId: string; now: number; limit: number };
+
 export type WorkboardOwnerClaimResult = "updated" | "conflict" | "owner_busy";
 
 export type WorkboardCardReadScope =
+  | {
+      kind: "page";
+      boardId?: string;
+      sessionKey?: string;
+      after?: WorkboardCardCursor;
+      limit: number;
+    }
   | { kind: "board"; boardId: string }
   | { kind: "session"; sessionKey: string }
+  | { kind: "session-links"; sessionKey: string; boardId?: string }
   | {
       kind: "worker-context";
       cardId: string;
@@ -118,11 +130,18 @@ export type WorkboardCardStore = Omit<WorkboardKeyedStore, "entries"> & {
     key: string,
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
-    ownerId: string,
-    now: number,
+    ownerSlot: WorkboardOwnerSlot,
   ): Promise<WorkboardOwnerClaimResult>;
   listCardStatuses(ids: readonly string[]): Promise<Array<{ id: string; status: string }>>;
   listBoardAggregates(): Promise<WorkboardBoardCardAggregate[]>;
   listStatsAggregates(boardId?: string): Promise<WorkboardCardStatsAggregate[]>;
   hasCards(boardId: string): Promise<boolean>;
+};
+
+export type WorkboardPersistence = {
+  cards: WorkboardCardStore;
+  boards: WorkboardKeyedStore<PersistedWorkboardBoard>;
+  sessionsBoard: WorkboardSessionsBoardStore;
+  subscriptions: WorkboardSubscriptionStore;
+  attachments: WorkboardKeyedStore<PersistedWorkboardAttachment>;
 };

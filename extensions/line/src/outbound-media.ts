@@ -16,10 +16,8 @@ const LINE_OUTBOUND_MEDIA_SSRF_POLICY: SsrFPolicy = {
 };
 
 async function validateLineMediaUrl(url: string): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
+  const parsed = URL.parse(url);
+  if (!parsed) {
     throw new Error("LINE outbound media URL must be a valid URL");
   }
   if (parsed.protocol !== "https:") {
@@ -64,7 +62,7 @@ function resolveLineMediaKind(
   if (opts.mediaKind !== undefined) {
     return { mediaKind: opts.mediaKind, kindSource: "declared" };
   }
-  if (typeof opts.durationMs === "number") {
+  if (opts.durationMs !== undefined) {
     return { mediaKind: "audio", kindSource: "metadata" };
   }
   if (opts.trackingId?.trim()) {
@@ -95,14 +93,8 @@ export async function buildLineMediaMessage(
 ): Promise<messagingApi.Message> {
   const trimmedUrl = mediaUrl.trim();
   if (!isHttpsUrl(trimmedUrl)) {
-    let parsed: URL | undefined;
-    try {
-      parsed = new URL(trimmedUrl);
-    } catch {
-      // Local paths reach the generic public-HTTPS error below.
-    }
     throw new Error(
-      parsed
+      URL.canParse(trimmedUrl)
         ? "LINE outbound media URL must use HTTPS"
         : "LINE outbound media currently requires a public HTTPS URL",
     );
@@ -137,7 +129,7 @@ export async function buildLineMediaMessage(
       return {
         type: "audio",
         originalContentUrl: trimmedUrl,
-        duration: typeof opts.durationMs === "number" ? opts.durationMs : 60000,
+        duration: opts.durationMs ?? 60000,
       };
     default:
       return {

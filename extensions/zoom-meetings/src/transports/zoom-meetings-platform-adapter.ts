@@ -15,10 +15,6 @@ import {
   normalizeZoomMeetingUrlForReuse,
 } from "./zoom-meetings-urls.js";
 
-function zoomMeetingOrigin(meetingUrl: string): string | undefined {
-  return normalizeZoomMeetingUrlForReuse(meetingUrl) ? "https://app.zoom.us" : undefined;
-}
-
 export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
   MeetingBrowserJoinSession<ZoomMeetingsMode>,
   ZoomMeetingsMode,
@@ -73,7 +69,8 @@ export const ZOOM_MEETINGS_PLATFORM_ADAPTER = MeetingPlatformAdapter.create<
     retryCaptions: true,
     unavailableMessage:
       "Open the OpenClaw browser profile, finish the Zoom sign-in, admission, or permission prompt, then retry.",
-    origin: zoomMeetingOrigin,
+    origin: (meetingUrl) =>
+      normalizeZoomMeetingUrlForReuse(meetingUrl) ? "https://app.zoom.us" : undefined,
     scripts: zoomMeetingPageScripts,
     statusFields: (parsed) => ({
       meetingEnded: typeof parsed.meetingEnded === "boolean" ? parsed.meetingEnded : undefined,

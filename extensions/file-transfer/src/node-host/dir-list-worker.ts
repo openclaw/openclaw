@@ -1,5 +1,4 @@
 import { runCommandBuffered } from "openclaw/plugin-sdk/process-runtime";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createCanonicalDirListCommand } from "./dir-list-worker-command.js";
 
 const CANONICAL_PATH_CHANGED_EXIT_CODE = 78;
@@ -17,14 +16,9 @@ type CanonicalDirListResult =
   | { ok: true; entries: CanonicalDirListEntry[]; total: number }
   | { ok: false; code: "CANONICAL_PATH_CHANGED" | "READ_ERROR" };
 
-export async function listCanonicalDirectory(input: {
-  directoryPath: string;
-  expectedCanonicalPath: string;
-  expectedDevice: string;
-  expectedInode: string;
-  maxEntries: number;
-  offset: number;
-}): Promise<CanonicalDirListResult> {
+export async function listCanonicalDirectory(
+  input: Parameters<typeof createCanonicalDirListCommand>[0],
+): Promise<CanonicalDirListResult> {
   // The worker binds cwd before validating it. Relative listing and metadata
   // reads therefore stay on that directory object if its path is replaced.
   const result = await runCommandBuffered(createCanonicalDirListCommand(input), {
@@ -39,32 +33,11 @@ export async function listCanonicalDirectory(input: {
     return { ok: false, code: "READ_ERROR" };
   }
   try {
-    const parsed = asNullableRecord(JSON.parse(result.stdout.toString("utf8")));
-    if (!parsed || !Array.isArray(parsed.entries) || typeof parsed.total !== "number") {
-      return { ok: false, code: "READ_ERROR" };
-    }
-    const entries: CanonicalDirListEntry[] = [];
-    for (const value of parsed.entries) {
-      const entry = asNullableRecord(value);
-      if (
-        !entry ||
-        typeof entry.name !== "string" ||
-        typeof entry.isDirectory !== "boolean" ||
-        typeof entry.isFile !== "boolean" ||
-        typeof entry.size !== "number" ||
-        typeof entry.mtimeMs !== "number"
-      ) {
-        return { ok: false, code: "READ_ERROR" };
-      }
-      entries.push({
-        name: entry.name,
-        isDirectory: entry.isDirectory,
-        isFile: entry.isFile,
-        size: entry.size,
-        mtimeMs: entry.mtimeMs,
-      });
-    }
-    return { ok: true, entries, total: parsed.total };
+    // Only our fixed worker writes stdout; filesystem names do not control its shape.
+    const listing: { entries: CanonicalDirListEntry[]; total: number } = JSON.parse(
+      result.stdout.toString("utf8"),
+    );
+    return { ok: true, ...listing };
   } catch {
     return { ok: false, code: "READ_ERROR" };
   }

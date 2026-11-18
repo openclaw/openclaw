@@ -7,7 +7,5 @@ export async function readCards(
   scope?: WorkboardCardReadScope,
 ): Promise<WorkboardCard[]> {
   const entries = await store.entries(scope);
-  return entries
-    .flatMap(({ value }) => (value?.version === 1 && value.card?.id ? [value.card] : []))
-    .toSorted(compareCards);
+  return entries.map(({ value }) => value.card).toSorted(compareCards);
 }

@@ -1,3 +1,8 @@
+import {
+  filterStringEntries,
+  normalizeTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
+
 /** Concatenates two optional text blocks, preserving the right block's explicit empty string. */
 export function concatOptionalTextSegments(params: {
   left?: string;
@@ -16,17 +21,8 @@ export function joinPresentTextSegments(
     trim?: boolean;
   },
 ): string | undefined {
-  const trim = options?.trim ?? false;
-  const values: string[] = [];
-  for (const segment of segments) {
-    if (typeof segment !== "string") {
-      continue;
-    }
-    const normalized = trim ? segment.trim() : segment;
-    if (!normalized) {
-      continue;
-    }
-    values.push(normalized);
-  }
-  return values.length > 0 ? values.join("\n\n") : undefined;
+  const values = options?.trim
+    ? normalizeTrimmedStringList(segments)
+    : filterStringEntries(segments).filter(Boolean);
+  return values.join("\n\n") || undefined;
 }

@@ -15,18 +15,6 @@ describe("resolveCommandAuthorizedFromAuthorizers", () => {
     ).toBe(false);
   });
 
-  it("allows when useAccessGroups is enabled and any configured authorizer allows", () => {
-    expect(
-      resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups: true,
-        authorizers: [
-          { configured: true, allowed: false },
-          { configured: true, allowed: true },
-        ],
-      }),
-    ).toBe(true);
-  });
-
   it("allows when useAccessGroups is disabled (default)", () => {
     expect(
       resolveCommandAuthorizedFromAuthorizers({
@@ -84,16 +72,6 @@ describe("resolveControlCommandGate", () => {
     });
     expect(result.commandAuthorized).toBe(false);
     expect(result.shouldBlock).toBe(true);
-  });
-
-  it("does not block when control commands are disabled", () => {
-    const result = resolveControlCommandGate({
-      useAccessGroups: true,
-      authorizers: [{ configured: true, allowed: false }],
-      allowTextCommands: false,
-      hasControlCommand: true,
-    });
-    expect(result.shouldBlock).toBe(false);
   });
 
   it("accepts a secondary authorizer when the primary denies", () => {

@@ -19,6 +19,7 @@ import {
 } from "./bot/helpers.js";
 import { getPreparedTelegramPollAnswer } from "./poll-answer-context.js";
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
+import { getPreparedTelegramWidgetQuery } from "./widgets/widget-query-context.js";
 
 const TELEGRAM_READ_ONLY_COMMAND_KEYS = new Set([
   "agents",
@@ -53,6 +54,8 @@ type TelegramSequentialKeyContext = {
     channel_post?: Message;
     edited_channel_post?: Message;
     callback_query?: { message?: Message; data?: string };
+    /** Bot API 10.4 widget tap; it routes like a callback on its widget's chat. */
+    widget_query?: { chat?: { id?: number } };
     message_reaction?: {
       chat?: { id?: number; type?: string; is_forum?: boolean; is_direct_messages?: boolean };
       message_id?: number;
@@ -84,7 +87,6 @@ function getTelegramMessageReactionSequentialKey(
     : undefined;
 }
 
-/** Registry key for a text command, or undefined when the text is not one. */
 function resolveTelegramCommandKeyForControlLane(params: {
   rawText?: string;
   botUsername?: string;
@@ -105,16 +107,6 @@ function resolveTelegramCommandKeyForControlLane(params: {
   return listChatCommands().find((entry) =>
     entry.textAliases.some((candidate) => candidate.trim().toLowerCase() === alias),
   )?.key;
-}
-
-export function isTelegramReadOnlyControlLaneText(params: {
-  rawText?: string;
-  botUsername?: string;
-}): boolean {
-  // Read-only commands must not supersede pending work when they enter the control lane.
-  // Diagnostics and export commands materialize state and remain on the ordinary lane.
-  const key = resolveTelegramCommandKeyForControlLane(params);
-  return key !== undefined && TELEGRAM_READ_ONLY_COMMAND_KEYS.has(key);
 }
 
 export function isTelegramControlLaneText(params: {
@@ -170,7 +162,7 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
     return `telegram:poll:${pollId}`;
   }
   const msg = getTelegramSequentialMessage(ctx) ?? ctx.update?.callback_query?.message;
-  const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const chatId = msg?.chat?.id ?? ctx.chat?.id ?? ctx.update?.widget_query?.chat?.id;
   const chatLane = typeof chatId === "number" ? `telegram:${chatId}` : "telegram";
   const rawText = msg?.text ?? msg?.caption;
   const botUsername = ctx.me?.username;
@@ -209,13 +201,20 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   const threadSpec = msg?.chat
     ? resolveTelegramMessageThreadSpec(msg, forumHint ?? cachedForumFlag)
     : undefined;
-  const threadId =
+  // widget_query omits its topic; the prepared sent-widget origin supplies it.
+  const dmThreadId =
     threadSpec?.scope === "dm"
+      ? threadSpec.id
+      : !msg && update?.widget_query
+        ? getPreparedTelegramWidgetQuery(update)?.messageThreadId
+        : undefined;
+  const threadId =
+    threadSpec?.scope === "dm" || dmThreadId !== undefined
       ? shouldUseTelegramDmThreadSession({
-          dmThreadId: threadSpec.id,
+          dmThreadId,
           botHasTopicsEnabled: resolveTelegramBotHasTopicsEnabled(ctx.me),
         })
-        ? threadSpec.id
+        ? dmThreadId
         : undefined
       : threadSpec?.id;
   if (typeof chatId === "number") {

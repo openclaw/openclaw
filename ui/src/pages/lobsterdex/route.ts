@@ -1,12 +1,5 @@
-import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
-import { routePageSpec } from "../../app-route-paths.ts";
+import { defineSolidPage } from "../../app-route-types.tsx";
 
-export const page = definePage({
-  ...routePageSpec("lobsterdex"),
-  component: () =>
-    import("./lobsterdex-page.ts").then(() => ({
-      header: true,
-      render: () => html`<openclaw-lobsterdex-page></openclaw-lobsterdex-page>`,
-    })),
-});
+export const page = defineSolidPage("lobsterdex", () =>
+  import("./lobsterdex-page.tsx").then((module) => module.LobsterdexPage),
+);

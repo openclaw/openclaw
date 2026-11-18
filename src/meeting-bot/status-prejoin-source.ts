@@ -1,46 +1,42 @@
 import { MEETING_AUDIO_BRIDGE_SOURCE } from "./audio-bridge-source.js";
 import { createMeetingStatusPreludeFragments } from "./status-prejoin-fragments.js";
 
-type MeetingStatusPreludeParams = {
-  allowMicrophone: boolean;
-  allowSessionAdoption: boolean;
-  autoJoin: boolean;
-  captureCaptions: boolean;
-  expectedIdentity?: string;
-  guestName: string;
-  meetingSessionId?: string;
-  pageIdentitySource: string;
-  readOnly?: boolean;
-  selectors: string;
-  toggleStateFunction: string;
-  waitForInCallMs: number;
-};
-
 type MeetingStatusPreludeFragment =
   | string
   | ((sources: ReturnType<typeof createMeetingStatusPreludeFragments>) => string);
 
-type MeetingStatusPreludeSourceOptions = {
-  controlLookupSource: string;
-  lifecycleSource: MeetingStatusPreludeFragment;
-  manualActionSource: MeetingStatusPreludeFragment;
-  platform: {
-    displayName: string;
-    globals: {
-      audioOutputs: string;
-      captionArchive: string;
-      captions: string;
-      meeting: string;
-    };
-    manualActionReasonPrefix: string;
-  };
-  setupSource?: string;
-  transcriptMaxLines?: number;
-};
-
 export function createMeetingStatusPreludeSource(
-  params: MeetingStatusPreludeParams,
-  options: MeetingStatusPreludeSourceOptions,
+  params: {
+    allowMicrophone: boolean;
+    allowSessionAdoption: boolean;
+    autoJoin: boolean;
+    captureCaptions: boolean;
+    expectedIdentity?: string;
+    guestName: string;
+    meetingSessionId?: string;
+    pageIdentitySource: string;
+    readOnly?: boolean;
+    selectors: string;
+    toggleStateFunction: string;
+    waitForInCallMs: number;
+  },
+  options: {
+    controlLookupSource: string;
+    lifecycleSource: MeetingStatusPreludeFragment;
+    manualActionSource: MeetingStatusPreludeFragment;
+    platform: {
+      displayName: string;
+      globals: {
+        audioOutputs: string;
+        captionArchive: string;
+        captions: string;
+        meeting: string;
+      };
+      manualActionReasonPrefix: string;
+    };
+    setupSource?: string;
+    transcriptMaxLines?: number;
+  },
 ): string {
   const audioOutputsGlobal = JSON.stringify(options.platform.globals.audioOutputs);
   const captionArchiveGlobal = JSON.stringify(options.platform.globals.captionArchive);
@@ -203,16 +199,6 @@ export function createMeetingStatusPreludeSource(
     else delete window[${audioOutputsGlobal}];
   };
   const adoptAudioBridgeSourcesForSession = () => suspendOwnedAudioBridges(true);
-  const retireOwnedCaptions = () => {
-    const active = window[${captionsGlobal}];
-    const owned = Boolean(
-      active && sessionId && (!active.sessionId || active.sessionId === sessionId)
-    );
-    if (!owned) return;
-    if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);
-    active.observer?.disconnect?.();
-    delete window[${captionsGlobal}];
-  };
   const finalizeCaptionState = (active) => {
     if (!active) return;
     if (active.settleTimer !== undefined) clearTimeout(active.settleTimer);

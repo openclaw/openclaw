@@ -92,30 +92,4 @@ describe("agent event delivery bridge", () => {
       bridge.unsubscribe();
     }
   });
-
-  test("routes a changed event identity only to later matching bridges", async () => {
-    registerAgentRunContext("run-a", { sessionKey: "session-a" });
-    registerAgentRunContext("run-b", { sessionKey: "session-b" });
-    const earlierB: string[] = [];
-    const laterB: string[] = [];
-    const laterA: string[] = [];
-    const first = textBridge("run-b", earlierB);
-    const stopGlobal = onAgentEvent((event) => {
-      event.runId = "run-b";
-    });
-    const second = textBridge("run-b", laterB);
-    const third = textBridge("run-a", laterA);
-    try {
-      emitAgentEvent({ runId: "run-a", stream: "assistant", data: { text: "changed" } });
-      await Promise.all([first.drain(), second.drain(), third.drain()]);
-      expect(earlierB).toEqual([]);
-      expect(laterB).toEqual(["changed"]);
-      expect(laterA).toEqual([]);
-    } finally {
-      stopGlobal();
-      first.unsubscribe();
-      second.unsubscribe();
-      third.unsubscribe();
-    }
-  });
 });

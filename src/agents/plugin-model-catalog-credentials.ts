@@ -1,39 +1,33 @@
 import { stat } from "node:fs/promises";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { ignoreMissingPath } from "../infra/errno.js";
+import { resolveIdentityPathViaExistingAncestor } from "../infra/path-existence.js";
+import { runOpenClawAgentWriteAdmissions } from "../state/openclaw-agent-write-admission.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
-import {
-  withPluginModelCatalogPublicationLocks,
-  withPluginModelCatalogWorker,
-} from "./plugin-model-catalog-execution.js";
+import { withPluginModelCatalogWorker } from "./plugin-model-catalog-execution.js";
 import type { PluginModelCatalogCredentialCandidate } from "./plugin-model-catalog-read.worker.js";
 
 /** Inspect candidates together; only changed catalogs need their canonical agent writer. */
 export async function removePersistedPluginModelCatalogCredentials(params: {
   candidates: readonly PluginModelCatalogCredentialCandidate[];
   credentials: ReadonlySet<string>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   if (params.candidates.length === 0 || params.credentials.size === 0) {
     return;
   }
   const credentials = [...params.credentials];
-  const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
-  const capturedCandidates = params.candidates.map(({ agentId, databasePath }) => ({
-    agentId,
-    databasePath: resolvePathViaExistingAncestorSync(databasePath),
-  }));
+  const env = cloneEnvWithPlatformSemantics(process.env);
+  const capturedCandidates = await Promise.all(
+    params.candidates.map(async ({ agentId, databasePath }) => ({
+      agentId,
+      databasePath: await resolveIdentityPathViaExistingAncestor(databasePath),
+    })),
+  );
   const candidates: PluginModelCatalogCredentialCandidate[] = [];
   for (const candidate of capturedCandidates) {
-    try {
-      await stat(candidate.databasePath);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
+    if (!(await stat(candidate.databasePath).catch(ignoreMissingPath))) {
+      continue;
     }
     candidates.push(candidate);
   }
@@ -41,12 +35,12 @@ export async function removePersistedPluginModelCatalogCredentials(params: {
     return;
   }
   const context = captureOpenClawStateReadWorkerContext({ env });
-  await withPluginModelCatalogPublicationLocks(
-    candidates.map(({ databasePath }) => databasePath),
+  const requiringCleanup = await runOpenClawAgentWriteAdmissions(
+    candidates.map(({ agentId, databasePath }) => ({ agentId, path: databasePath, env })),
     async () => {
       // Auth removal precedes this barrier. Earlier publications must commit before
       // the read; later publications revalidate the removed auth before writing.
-      const requiringCleanup = await runOpenClawStateWorkerOperation(
+      const result = await runOpenClawStateWorkerOperation(
         context,
         (scope) =>
           scope.execute({
@@ -56,16 +50,17 @@ export async function removePersistedPluginModelCatalogCredentials(params: {
         { existingOnly: true },
       );
       context.admission.assertCurrent();
-      // Without shared state, preserve the existing writer path without creating a read owner.
-      for (const candidate of requiringCleanup ?? candidates) {
-        await withPluginModelCatalogWorker(
-          { agentId: candidate.agentId, path: candidate.databasePath, env },
-          false,
-          async (scope) => {
-            await scope.execute({ type: "catalog.removeCredentials", input: { credentials } });
-          },
-        );
-      }
+      return result;
     },
   );
+  // Release the read barrier before entering each canonical writer.
+  for (const candidate of requiringCleanup ?? candidates) {
+    await withPluginModelCatalogWorker(
+      { agentId: candidate.agentId, path: candidate.databasePath, env },
+      false,
+      async (scope) => {
+        await scope.execute({ type: "catalog.removeCredentials", input: { credentials } });
+      },
+    );
+  }
 }

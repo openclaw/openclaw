@@ -118,8 +118,7 @@ struct ChatWorkingProgressTests {
             bodyRotation: CGFloat,
             xOffset: CGFloat,
             yOffset: CGFloat,
-            jawRotation: CGFloat
-        )] = [
+            jawRotation: CGFloat)] = [
             (.nodOff, 2.304, -3, 0, -0.5, -6),
             (.curious, 0.96, -14, 0, 0, -16),
             (.omNom, 0.864, 0, 2.5, 0, 8),
@@ -259,31 +258,6 @@ struct ChatWorkingProgressTests {
             row: self.doneRow(self.previousEndedAt - 5000)) == nil)
     }
 
-    @Test func `recap expires an unresolved watch`() {
-        var resolver = ChatTurnRecapResolver()
-        let start = Date(timeIntervalSince1970: 1000)
-        _ = resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: self.doneRow(self.previousEndedAt),
-            now: start)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt),
-            now: start) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt),
-            now: start.addingTimeInterval(31)) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt),
-            now: start.addingTimeInterval(60)) == nil)
-    }
-
     @Test func `recap consumes a fresh done row without runtime`() {
         var resolver = ChatTurnRecapResolver()
         _ = resolver.resolve(
@@ -321,58 +295,46 @@ struct ChatWorkingProgressTests {
             row: self.doneRow(self.runEndedAt)) == nil)
     }
 
-    @Test func `recap consumes a watch whose baseline was never observed`() {
+    @Test func `recap waits for all concurrent runs then uses the latest completion`() {
         var resolver = ChatTurnRecapResolver()
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: nil) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt)) == nil)
-        #expect(resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt)) == nil)
-    }
-
-    @Test func `recap adopts the first row observed mid-watch`() {
-        var resolver = ChatTurnRecapResolver()
-        _ = resolver.resolve(sessionKey: self.session, indicatorVisible: true, row: nil)
         _ = resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: true,
             row: self.doneRow(self.previousEndedAt))
         #expect(resolver.resolve(
             sessionKey: self.session,
-            indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt)) == nil)
+            indicatorVisible: true,
+            row: self.doneRow(self.runEndedAt, runtimeMs: 2000)) == nil)
         #expect(resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt, runtimeMs: 6000)) ==
-            ChatTurnRecap(runtimeMs: 6000, outputTokens: nil))
+            row: self.doneRow(self.runEndedAt + 1000, runtimeMs: 4000, outputTokens: 80)) ==
+            ChatTurnRecap(runtimeMs: 4000, outputTokens: 80))
     }
 
-    @Test func `recap forfeits when a terminal stamp changes mid-watch`() {
+    @Test func `recaps stay scoped to their watched sessions`() {
         var resolver = ChatTurnRecapResolver()
-        _ = resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: ChatTurnRecapSessionRow(status: "running"))
-        _ = resolver.resolve(
-            sessionKey: self.session,
-            indicatorVisible: true,
-            row: self.doneRow(self.previousEndedAt))
+        let otherSession = "agent:other:main"
+        for session in [self.session, otherSession] {
+            _ = resolver.resolve(
+                sessionKey: session,
+                indicatorVisible: true,
+                row: self.doneRow(self.previousEndedAt))
+        }
+        let first = ChatTurnRecap(runtimeMs: 2000, outputTokens: 40)
         #expect(resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: false,
-            row: self.doneRow(self.previousEndedAt)) == nil)
+            row: self.doneRow(self.runEndedAt, runtimeMs: 2000, outputTokens: 40)) == first)
+        #expect(resolver.resolve(
+            sessionKey: otherSession,
+            indicatorVisible: false,
+            row: self.doneRow(self.runEndedAt, runtimeMs: 4000, outputTokens: 80)) ==
+            ChatTurnRecap(runtimeMs: 4000, outputTokens: 80))
         #expect(resolver.resolve(
             sessionKey: self.session,
             indicatorVisible: false,
-            row: self.doneRow(self.runEndedAt, runtimeMs: 4000)) == nil)
+            row: self.doneRow(self.runEndedAt + 1000, runtimeMs: 9000)) == first)
     }
 
     @Test func `recap forfeits a failed turn that races the indicator`() {

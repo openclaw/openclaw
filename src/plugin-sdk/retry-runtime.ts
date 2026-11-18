@@ -1,5 +1,3 @@
-// Public retry helpers for plugins that need retry config or policy runners.
-
 /** Transient failures that prove the request did not reach the remote server. */
 const PRE_CONNECT_NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
   "EAI_AGAIN",
@@ -43,10 +41,12 @@ export { isTransientNetworkError } from "../infra/retryable-network-errors.js";
 export { sleepWithAbort } from "../infra/backoff.js";
 export {
   createChannelApiRetryRunner,
-  createRateLimitRetryRunner,
   /** @deprecated Use createChannelApiRetryRunner. */
   createChannelApiRetryRunner as createTelegramRetryRunner,
   CHANNEL_API_RETRY_DEFAULTS as TELEGRAM_RETRY_DEFAULTS,
   type RetryRunner,
 } from "../infra/retry-policy.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { createRateLimitRetryRunner } from "../infra/retry-policy.js";
 export { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
+export { isStateDatabaseAdmissionClosedError } from "../infra/sqlite-error-diagnostics.js";

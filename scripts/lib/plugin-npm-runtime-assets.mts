@@ -37,8 +37,13 @@ async function runPackageAssetBuild(plan: PluginRuntimeAssetPlan) {
 }
 
 /** Uses the selected manifest so private source packages need no Git discovery. */
-export async function preparePackageRuntimeAssets(plan: PluginRuntimeAssetPlan) {
-  const assetBuildCommand = await runPackageAssetBuild(plan);
+export async function preparePackageRuntimeAssets(
+  plan: PluginRuntimeAssetPlan,
+  options: { controlUiAssetsPrepared?: boolean } = {},
+) {
+  const assetBuildCommand = options.controlUiAssetsPrepared
+    ? null
+    : await runPackageAssetBuild(plan);
   const assets = resolvePackageStaticAssetEntries(plan.packageJson).map(({ source, output }) => ({
     source,
     output,

@@ -20,22 +20,18 @@ export function playLobsterPetChirp(
     }
     ctx ??= new Ctor();
     if (ctx.state === "suspended") {
-      void ctx.resume();
+      void ctx.resume().catch(() => {});
     }
     const at = ctx.currentTime;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
+    const poke = kind === "poke";
     osc.type = "sine";
-    if (kind === "poke") {
-      osc.frequency.setValueAtTime(330, at);
-      osc.frequency.exponentialRampToValueAtTime(165, at + 0.09);
-    } else {
-      osc.frequency.setValueAtTime(392, at);
-      osc.frequency.exponentialRampToValueAtTime(523, at + 0.18);
-    }
+    osc.frequency.setValueAtTime(poke ? 330 : 392, at);
+    osc.frequency.exponentialRampToValueAtTime(poke ? 165 : 523, at + (poke ? 0.09 : 0.18));
     gain.gain.setValueAtTime(0.0001, at);
     gain.gain.exponentialRampToValueAtTime(0.05, at + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.0001, at + (kind === "poke" ? 0.12 : 0.24));
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + (poke ? 0.12 : 0.24));
     osc.connect(gain).connect(ctx.destination);
     osc.start(at);
     osc.stop(at + 0.26);

@@ -134,21 +134,27 @@ if (invocation[2] !== `${rootObjectPath}/unit/${encodeUnitName(unitName)}`) {
 
 const content = readUnitContent(unitPath);
 const requestedProperties = invocation.slice(4).join(" ");
-if (
-  invocation[3] === `${manager}.Unit` &&
-  invocation.length === 11 &&
-  requestedProperties ===
-    "Id LoadState ActiveState SubState StartLimitBurst ActiveEnterTimestampMonotonic InactiveEnterTimestampMonotonic"
-) {
-  writeProperties([
-    { type: "s", data: unitName },
-    { type: "s", data: "loaded" },
-    { type: "s", data: "inactive" },
-    { type: "s", data: "dead" },
-    { type: "u", data: 5 },
-    { type: "t", data: 0 },
-    { type: "t", data: 1 },
-  ]);
+if (invocation[3] === `${manager}.Unit`) {
+  const properties = {
+    Id: { type: "s", data: unitName },
+    LoadState: { type: "s", data: "loaded" },
+    ActiveState: { type: "s", data: "inactive" },
+    SubState: { type: "s", data: "dead" },
+    StartLimitBurst: { type: "u", data: 5 },
+    ActiveEnterTimestampMonotonic: { type: "t", data: 0 },
+    InactiveEnterTimestampMonotonic: { type: "t", data: 1 },
+    UnitFileState: { type: "s", data: "enabled" },
+    RefuseManualStart: { type: "b", data: false },
+    CanStart: { type: "b", data: true },
+    FragmentPath: { type: "s", data: unitPath },
+    DropInPaths: { type: "as", data: [] },
+    NeedDaemonReload: { type: "b", data: false },
+  };
+  const names = invocation.slice(4);
+  if (!names.length || names.some((name) => !Object.hasOwn(properties, name))) {
+    fail();
+  }
+  writeProperties(names.map((name) => properties[name]));
   process.exit(0);
 }
 const runtimeProperties =
@@ -170,21 +176,6 @@ if (
     { type: "t", data: 0 },
     // This stopped fixture owns no native systemd cgroup.
     ...(includeControlGroup ? [{ type: "s", data: "" }] : []),
-  ]);
-  process.exit(0);
-}
-if (invocation[3] === `${manager}.Unit`) {
-  if (
-    invocation.length !== 8 ||
-    invocation.slice(4).join(" ") !== "FragmentPath DropInPaths NeedDaemonReload LoadState"
-  ) {
-    fail();
-  }
-  writeProperties([
-    { type: "s", data: unitPath },
-    { type: "as", data: [] },
-    { type: "b", data: false },
-    { type: "s", data: "loaded" },
   ]);
   process.exit(0);
 }

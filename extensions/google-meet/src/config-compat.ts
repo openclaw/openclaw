@@ -29,30 +29,18 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
+export function normalizeCompatibilityConfig({ cfg: config }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
   changes: string[];
-} | null {
+} {
   const rawEntry = asNullableRecord(config.plugins?.entries?.["google-meet"]);
   const rawPluginConfig = asNullableRecord(rawEntry?.config);
   const rawRealtime = asNullableRecord(rawPluginConfig?.realtime);
   if (!rawRealtime || !hasLegacyGoogleRealtimeProvider(rawRealtime)) {
-    return null;
+    return { config, changes: [] };
   }
 
-  const nextConfig = structuredClone(config);
-  const nextPlugins = asNullableRecord(nextConfig.plugins) ?? {};
-  nextConfig.plugins = nextPlugins;
-  const nextEntries = asNullableRecord(nextPlugins.entries) ?? {};
-  nextPlugins.entries = nextEntries;
-  const nextEntry = asNullableRecord(nextEntries["google-meet"]) ?? {};
-  nextEntries["google-meet"] = nextEntry;
-  const nextPluginConfig = asNullableRecord(nextEntry.config) ?? {};
-  nextEntry.config = nextPluginConfig;
-  const nextRealtime = asNullableRecord(nextPluginConfig.realtime) ?? {};
-  nextPluginConfig.realtime = nextRealtime;
-
-  nextRealtime.provider = "openai";
+  const nextRealtime: Record<string, unknown> = { ...rawRealtime, provider: "openai" };
   if (!Object.hasOwn(nextRealtime, "transcriptionProvider")) {
     nextRealtime.transcriptionProvider = "openai";
   }
@@ -61,16 +49,18 @@ function migrateGoogleMeetLegacyRealtimeProvider(config: OpenClawConfig): {
   }
 
   return {
-    config: nextConfig,
+    config: {
+      ...config,
+      plugins: {
+        ...config.plugins,
+        entries: {
+          ...config.plugins?.entries,
+          "google-meet": { ...rawEntry, config: { ...rawPluginConfig, realtime: nextRealtime } },
+        },
+      },
+    },
     changes: [
       'Moved Google Meet legacy realtime.provider="google" intent to realtime.voiceProvider="google" and realtime.transcriptionProvider="openai".',
     ],
   };
-}
-
-export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
-  config: OpenClawConfig;
-  changes: string[];
-} {
-  return migrateGoogleMeetLegacyRealtimeProvider(cfg) ?? { config: cfg, changes: [] };
 }

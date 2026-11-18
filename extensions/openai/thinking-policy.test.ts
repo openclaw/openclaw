@@ -2,18 +2,6 @@ import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
-function levelIds(params: {
-  api: "openai-responses" | "openai-chatgpt-responses";
-  efforts: string[];
-}) {
-  return resolveUnifiedOpenAIThinkingProfile(
-    "gpt-5.6-sol",
-    "codex",
-    { supportedReasoningEfforts: params.efforts },
-    params.api,
-  ).levels.map((level) => level.id);
-}
-
 describe("OpenAI thinking route provenance", () => {
   it.each(["gpt-daybreak-blue-latest", "gpt-daybreak-red-latest"])(
     "exposes the Daybreak Platform efforts for %s",
@@ -168,23 +156,5 @@ describe("OpenAI thinking route provenance", () => {
         supportedReasoningEfforts: efforts,
       }).levels.map((level) => level.id),
     ).toEqual(expected);
-  });
-
-  it("keeps native fallback capabilities for a direct OpenAI route", () => {
-    expect(
-      levelIds({
-        api: "openai-responses",
-        efforts: ["low", "medium", "high", "xhigh", "max"],
-      }),
-    ).toContain("ultra");
-  });
-
-  it("retains known native capabilities when ChatGPT metadata is incomplete", () => {
-    expect(
-      levelIds({
-        api: "openai-chatgpt-responses",
-        efforts: ["low", "high"],
-      }),
-    ).toEqual(["low", "medium", "high", "xhigh", "max", "ultra"]);
   });
 });

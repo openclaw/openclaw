@@ -41,8 +41,7 @@ internal fun AppDialog(
   properties: DialogProperties = DialogProperties(),
   content: @Composable () -> Unit,
 ) {
-  val density = LocalDensity.current
-  PlatformDialog(onDismissRequest, properties, windowContent(density, content))
+  PlatformDialog(onDismissRequest, properties, windowContent(LocalDensity.current, content))
 }
 
 @Composable
@@ -110,8 +109,7 @@ internal fun AppPopup(
   properties: PopupProperties,
   content: @Composable () -> Unit,
 ) {
-  val density = LocalDensity.current
-  PlatformPopup(alignment, offset, onDismissRequest, properties, windowContent(density, content))
+  PlatformPopup(alignment, offset, onDismissRequest, properties, windowContent(LocalDensity.current, content))
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

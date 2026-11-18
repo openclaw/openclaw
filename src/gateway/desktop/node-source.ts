@@ -10,15 +10,6 @@ import type { DesktopObserveRequester } from "./observe-requester.js";
 import type { RfbPreauthDescriptor } from "./rfb-preauth.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 
-type NodeDesktopObserveResult = {
-  transport: "rfb";
-  wsPath: string;
-  expiresAtMs: number;
-  control: boolean;
-  auth: "vnc-password" | "ard-account";
-  preauthenticated: true;
-};
-
 type ActiveNodeDesktopStream = ReturnType<DesktopSessionRegistry["createStream"]>;
 
 type NodeDesktopSession = {
@@ -117,7 +108,7 @@ export function createNodeDesktopService(params: {
       control: boolean;
       requester?: DesktopObserveRequester;
       credentials?: { username?: string; password?: string };
-    }): Promise<NodeDesktopObserveResult> {
+    }) {
       const node = params.nodeRegistry.get(request.nodeId);
       if (!node?.pairingGeneration) {
         throw new Error("node desktop is unavailable; reconnect and approve the node capability");
@@ -202,7 +193,6 @@ export function createNodeDesktopService(params: {
               "VNC password is required to observe this node",
             );
           }
-          registerSecretValueForRedaction(password);
           preauth = { auth: attached.auth, credentials: { password } };
         } else {
           const username = request.credentials?.username?.trim() ?? "";
@@ -213,10 +203,10 @@ export function createNodeDesktopService(params: {
               "macOS account credentials are required to observe this node",
             );
           }
-          registerSecretValueForRedaction(password);
           preauth = { auth: attached.auth, credentials: { username, password } };
         }
 
+        registerSecretValueForRedaction(preauth.credentials.password);
         const attachment = active.publish();
         if (!attachment) {
           throw new Error("node desktop session was superseded before publication");
@@ -232,12 +222,12 @@ export function createNodeDesktopService(params: {
         });
         active.expireAt(minted.expiresAtMs);
         return {
-          transport: "rfb",
+          transport: "rfb" as const,
           wsPath: `/desktop/observe?token=${minted.token}`,
           expiresAtMs: minted.expiresAtMs,
           control: request.control,
           auth: attached.auth,
-          preauthenticated: true,
+          preauthenticated: true as const,
         };
       } catch (error) {
         await active.stop();

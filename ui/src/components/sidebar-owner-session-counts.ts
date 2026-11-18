@@ -6,6 +6,7 @@ import type {
 } from "../lib/sessions/session-capability.ts";
 
 const QUERY = {
+  source: "sidebar",
   includeOwnerSessionCounts: true,
   limit: 1,
   includeDerivedTitles: false,
@@ -15,6 +16,7 @@ const QUERY = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 } as const satisfies SessionListScope;
 
 /** Presentation adapter for one complete, access-scoped managed-list facet. */
@@ -53,14 +55,28 @@ export class SidebarOwnerSessionCounts {
       if (!latest || !sessions.isConnectionScopeCurrent(scope)) {
         return;
       }
+      const previousCounts = this.counts;
+      const previousError = this.error;
       this.error = latest.error;
       if (ready && !latest.loading && !latest.error) {
         const counts = latest.result?.ownerSessionCounts;
-        this.counts = counts
-          ? new Map(counts.map(({ profileId, open, running }) => [profileId, { open, running }]))
-          : null;
+        if (!counts) {
+          this.counts = null;
+        } else if (
+          counts.length !== this.counts?.size ||
+          counts.some(({ profileId, open, running }) => {
+            const current = this.counts?.get(profileId);
+            return current?.open !== open || current.running !== running;
+          })
+        ) {
+          this.counts = new Map(
+            counts.map(({ profileId, open, running }) => [profileId, { open, running }]),
+          );
+        }
       }
-      this.changed();
+      if (this.counts !== previousCounts || this.error !== previousError) {
+        this.changed();
+      }
     };
     this.observation = sessions.observeList(QUERY, (snapshot) => {
       latest = snapshot;

@@ -42,13 +42,7 @@ export function isExecLikeToolName(toolName: string): boolean {
 const MAX_ABORT_SUMMARY_LENGTH = 160;
 
 export function hasTerminalControlCharacter(value: string): boolean {
-  for (const char of value) {
-    const code = char.charCodeAt(0);
-    if (code <= 0x1f || (code >= 0x7f && code <= 0x9f)) {
-      return true;
-    }
-  }
-  return false;
+  return /\p{Cc}/u.test(value);
 }
 
 /** Accepts only the compact single-line diagnostic produced below. */

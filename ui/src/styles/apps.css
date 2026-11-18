@@ -1,4 +1,10 @@
-/* Apps & extensions promo page — hero, card grid, and community pills. */
+/* The Apps page reads in the standard wide page column, under its header. */
+openclaw-apps-page:not(.mcp-app-workspace) > .settings-workspace > .settings-workspace__body {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
 
 .apps-hero {
   display: flex;
@@ -29,15 +35,10 @@
   margin-top: 26px;
 }
 
-/* Mirrors .settings-section__heading typography; cards intentionally do not
-   sit inside a .settings-group surface (one level of elevation only). */
-.apps-section__heading {
-  margin: 0 0 10px 2px;
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+/* Cards intentionally do not sit inside a .settings-group surface (one level
+   of elevation only), so the section gap is applied here. */
+.apps-section > .settings-section__heading {
+  margin: 0 0 var(--space-3);
 }
 
 .apps-grid {
@@ -202,27 +203,6 @@
   margin: 10px 2px 0;
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
-}
-
-.apps-pair-hint button {
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text);
-  font: inherit;
-  cursor: var(--cursor-action);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-
-.apps-pair-hint button:hover {
-  color: var(--text-strong);
-}
-
-.apps-pair-hint button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-  border-radius: 4px;
 }
 
 .apps-community {

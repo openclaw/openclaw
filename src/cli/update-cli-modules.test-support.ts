@@ -3,7 +3,7 @@ import { commandTransport } from "./update-cli-mocks.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-const { createUpdateStateProfileInitializer } =
+const { initializeExistingUpdateProfile } =
   await import("./update-cli-state-snapshot.test-support.js");
 const { updateGitCheckout } = await import("../infra/update-runner-git.js");
 const { createUpdateRun, getUpdateRun, listUpdateRuns } =
@@ -57,7 +57,6 @@ const {
   makeOkUpdateResult,
   mockGitUpdateAfterMutation,
   devTargetRefusalCases,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectUpdateFailureReport,
   expectDelegatedPluginDoctorInput,
@@ -75,7 +74,6 @@ const { updateFinalizeCommand } = await import("./update-cli/update-command-fina
 const { updateStatusCommand } = await import("./update-cli/status.js");
 const { updateWizardCommand } = await import("./update-cli/wizard.js");
 const updateCliShared = await import("./update-cli/shared.js");
-const { resolveGitInstallDir } = updateCliShared;
 const { clearRestartSentinelIfRevision, readRestartSentinel } =
   await import("../infra/restart-sentinel.js");
 
@@ -88,14 +86,13 @@ export {
   continuePostCoreUpdateInFreshProcess,
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   createUpdateRun,
-  createUpdateStateProfileInitializer,
+  initializeExistingUpdateProfile,
   defaultRuntime,
   devTargetRefusalCases,
   doctorChild,
   doctorCommand,
   ExitError,
   expectDelegatedPluginDoctorInput,
-  expectGitMetadataPreview,
   expectPluginCapabilityRetryNotice,
   expectSelectorTriageFailure,
   expectUpdateFailureReport,
@@ -114,7 +111,6 @@ export {
   replaceConfigFile,
   resolveExtendedStablePackage,
   resolveGatewayInstallEntrypoint,
-  resolveGitInstallDir,
   resolveNpmChannelTag,
   resolveOpenClawPackageRoot,
   resolveOpenClawPackageRootSync,

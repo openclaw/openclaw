@@ -2,6 +2,7 @@ import AppKit
 import ConcurrencyExtras
 import Foundation
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import Testing
 @testable import OpenClaw
@@ -151,6 +152,169 @@ struct StatusMenuSummariesTests {
         }
     }
 
+    @Test func `reopening a cancelled session submenu recovers both rendered previews`() async throws {
+        try await self.withFixture { fixture in
+            fixture.holdPreviews.setValue(true)
+            _ = try await fixture.control.request(method: "health")
+            await fixture.sessions.refresh()
+            let row = try #require(fixture.sessions.rows.first)
+            let item = NSMenuItem()
+            fixture.sessions.configureSessionItem(item, row: row)
+            let submenu = try #require(item.submenu)
+            let socket = try #require(fixture.session.latestTask())
+            try await fixture.previewResponsesChanged.wait("held prewarm and menu previews") {
+                fixture.pendingPreviewCount >= 2
+            }
+
+            try await self.withRenderedPreviews(in: submenu) { view in
+                try await self.expectPreviewText("Loading preview…", in: view)
+                fixture.sessions.cancelPreviewTasks()
+                fixture.releasePreviewResponses()
+                fixture.holdPreviews.setValue(false)
+                fixture.previewText.setValue("The museum visit is confirmed for 10:00.")
+                fixture.sessions.configureSessionItem(item, row: row)
+
+                #expect(item.submenu === submenu)
+                try await self.expectPreviewText("The museum visit is confirmed for 10:00.", in: view)
+                #expect(fixture.session.latestTask() === socket)
+            }
+        }
+    }
+
+    @Test func `reused preview views refresh expired content and reuse fresh cache`() async throws {
+        try await self.withFixture { fixture in
+            let now = LockIsolated(Date(timeIntervalSince1970: 1_800_000_000))
+            let cache = SessionPreviewCache(now: { now.value })
+            let sessions = StatusMenuSessions(control: fixture.control, previewCache: cache)
+            defer { sessions.cancelPreviewTasks() }
+            _ = try await fixture.control.request(method: "health")
+            await sessions.refresh()
+            let row = try #require(sessions.rows.first)
+            let item = NSMenuItem()
+            sessions.configureSessionItem(item, row: row)
+            let submenu = try #require(item.submenu)
+
+            try await self.withRenderedPreviews(in: submenu) { view in
+                try await self.expectPreviewText("Gateway A", in: view)
+                let freshRequests = fixture.requests.value.filter { $0.method == "sessions.preview" }.count
+                sessions.configureSessionItem(item, row: row)
+                _ = cache.cachedSnapshot(for: row.key, gateway: fixture.gateway)
+                try await self.expectPreviewText("Gateway A", in: view)
+                #expect(fixture.requests.value.filter { $0.method == "sessions.preview" }.count == freshRequests)
+
+                sessions.cancelPreviewTasks()
+                now.withValue { $0.addTimeInterval(31) }
+                fixture.holdPreviews.setValue(true)
+                fixture.previewText.setValue("The museum visit has moved to 11:30.")
+                sessions.configureSessionItem(item, row: row)
+                sessions.configureSessionItem(item, row: row)
+                try await self.expectPreviewText("Loading preview…", in: view)
+                try await fixture.previewResponsesChanged.wait("expired preview request") {
+                    fixture.pendingPreviewCount == 1
+                }
+                #expect(fixture.requests.value.filter { $0.method == "sessions.preview" }.count == freshRequests + 1)
+                fixture.releasePreviewResponses()
+                try await self.expectPreviewText("The museum visit has moved to 11:30.", in: view)
+                #expect(item.submenu === submenu)
+            }
+        }
+    }
+
+    @Test(arguments: ["cancellation", "replacement"])
+    func `late preview responses cannot replace current cached messages`(_ transition: String) async throws {
+        try await self.withFixture { fixture in
+            _ = try await fixture.control.request(method: "health")
+            let cache = SessionPreviewCache()
+            fixture.holdPreviews.setValue(true)
+            let first = Task {
+                await SessionMenuPreviewLoader.load(
+                    sessionKey: "main", maxItems: 10, gateway: fixture.gateway, cache: cache)
+            }
+            defer { first.cancel() }
+            try await fixture.previewResponsesChanged.wait("old preview response held") {
+                fixture.pendingPreviewCount == 1
+            }
+            if transition == "cancellation" {
+                first.cancel()
+            } else {
+                fixture.revision.setValue(2)
+                _ = try await fixture.control.request(method: "health")
+            }
+            fixture.previewText.setValue("Current itinerary: meet at the north entrance.")
+            let next = Task {
+                await SessionMenuPreviewLoader.load(
+                    sessionKey: "main", maxItems: 10, gateway: fixture.gateway, cache: cache)
+            }
+            defer { next.cancel() }
+            try await fixture.previewResponsesChanged.wait("replacement preview response held") {
+                fixture.pendingPreviewCount == 2
+            }
+            fixture.releasePreviewResponse(at: 1)
+            let current = try await TestWait.value(of: next, "current preview loaded")
+            #expect(current.items.map(\.text) == ["Current itinerary: meet at the north entrance."])
+            fixture.releasePreviewResponses()
+            _ = try await TestWait.value(of: first, "old preview settled")
+            let retained = cache.cachedSnapshot(for: "main", gateway: fixture.gateway)
+            #expect(retained?.snapshot.items.map(\.text) == ["Current itinerary: meet at the north entrance."])
+        }
+    }
+
+    @Test(arguments: ["unchanged", "reconnect", "before-action", "during-confirmation"], [false, true])
+    func `session actions retain the rendered Gateway through confirmation`(
+        transition: String,
+        nestedMenu: Bool) async throws
+    {
+        try await self.withFixture { fixture in
+            _ = try await fixture.control.request(method: "health")
+            await fixture.sessions.refresh()
+            let row = try #require(fixture.sessions.rows.first)
+            let item = NSMenuItem()
+            fixture.sessions.configureSessionItem(item, row: row)
+            func actionItem() throws -> NSMenuItem {
+                let menu = try #require(item.submenu)
+                if nestedMenu {
+                    let thinking = try #require(menu.items.first { $0.identifier?.rawValue == "session.thinking" })
+                    return try #require(thinking.submenu?.items.first)
+                }
+                return try #require(menu.items.first { $0.action == NSSelectorFromString("resetSession:") })
+            }
+            let request = nestedMenu
+                ? OpenClawChatGatewayRequests.patchSessionSettings(
+                    sessionKey: row.key, agentID: nil, thinkingLevel: .some("off"), verboseLevel: nil)
+                : OpenClawChatGatewayRequests.resetSession(sessionKey: row.key, agentID: nil)
+            if transition == "before-action" {
+                fixture.revision.setValue(2)
+                _ = try await fixture.control.request(method: "health")
+            } else if transition == "reconnect" {
+                try await fixture.reconnect()
+            }
+
+            var confirmations = 0
+            try await fixture.sessions.performSessionAction(
+                actionItem(), request: request, errorTitle: "Synthetic action failed")
+            {
+                confirmations += 1
+                if transition == "during-confirmation" {
+                    fixture.revision.setValue(2)
+                    _ = try? await fixture.control.request(method: "health")
+                }
+                return true
+            }
+
+            #expect(confirmations == (transition == "before-action" ? 0 : 1))
+            let replaced = transition == "before-action" || transition == "during-confirmation"
+            #expect(fixture.requests.value.filter { $0.method == request.method }.map(\.owner) ==
+                (replaced ? [] : ["A"]))
+            if replaced {
+                await fixture.sessions.refresh(force: true)
+                try fixture.sessions.configureSessionItem(item, row: #require(fixture.sessions.rows.first))
+                try await fixture.sessions.performSessionAction(
+                    actionItem(), request: request, errorTitle: "Synthetic action failed")
+                #expect(fixture.requests.value.filter { $0.method == request.method }.map(\.owner) == ["B"])
+            }
+        }
+    }
+
     @Test(arguments: [false, true])
     func `new Primary refreshes usage inside the previous Gateway cache window`(keepMenuOpen: Bool) async throws {
         try await self.withFixture { fixture in
@@ -222,6 +386,44 @@ struct StatusMenuSummariesTests {
         #expect(!fixture.summaries.isUsageStalled, "\(transition) Gateway")
     }
 
+    private func withRenderedPreviews(
+        in menu: NSMenu,
+        _ operation: (NSView) async throws -> Void) async throws
+    {
+        _ = AppKitTestSupport.application
+        let compact = try #require(menu.items.first?.view)
+        let expanded = try #require(menu.items.dropFirst().first?.submenu?.items.first?.view)
+        let stack = NSStackView(views: [compact, expanded])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: StatusMenuMetrics.width, height: 400),
+            styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = stack
+        defer {
+            window.orderOut(nil)
+            compact.removeFromSuperview()
+            expanded.removeFromSuperview()
+            window.contentView = nil
+            window.close()
+        }
+        window.orderFront(nil)
+        try await operation(stack)
+    }
+
+    private func expectPreviewText(_ text: String, in view: NSView) async throws {
+        try await TestWait.state("both rendered previews showing \(text)") {
+            view.layoutSubtreeIfNeeded()
+            let elements = try await AppKitTestSupport.accessibilityElements(in: view)
+            let texts = elements.filter { $0.accessibilityRole?() == .staticText }.compactMap {
+                let value: Any? = $0.accessibilityValue?()
+                return value as? String
+            }
+            return texts.filter { $0 == text }.count == 2
+        }
+    }
+
     private func withFixture(
         cronJobCount: Int = 0,
         _ operation: (UsageGatewayFixture) async throws -> Void) async throws
@@ -239,11 +441,11 @@ struct StatusMenuSummariesTests {
         try await TestIsolation.withIsolatedState {
             let state = AppStateStore.shared
             let previousMode = state.connectionMode
-            let previousAccent = state.profileAccentHex
+            let previousAccent = state.profileAccent
             state.connectionMode = .unconfigured
             defer {
                 state.connectionMode = previousMode
-                state.profileAccentHex = previousAccent
+                state.profileAccent = previousAccent
             }
             let fixtures = (0..<count).map { _ in UsageGatewayFixture(cronJobCount: cronJobCount) }
             do {
@@ -274,6 +476,10 @@ private final class UsageGatewayFixture {
     let requests = LockIsolated<[Request]>([])
     let coldUsage = LockIsolated(false)
     let previewFails = LockIsolated(false)
+    let holdPreviews = LockIsolated(false)
+    let previewText = LockIsolated<String?>(nil)
+    let previewResponsesChanged = AsyncTestSignal()
+    private let pendingPreviewResponses = LockIsolated<[@Sendable () -> Void]>([])
     private let pendingCostResponses = LockIsolated<[String: [@Sendable () -> Void]]>(["A": [], "B": []])
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
@@ -287,6 +493,10 @@ private final class UsageGatewayFixture {
         let requests = self.requests
         let coldUsage = self.coldUsage
         let previewFails = self.previewFails
+        let holdPreviews = self.holdPreviews
+        let previewText = self.previewText
+        let previewResponsesChanged = self.previewResponsesChanged
+        let pendingPreviewResponses = self.pendingPreviewResponses
         let pendingCostResponses = self.pendingCostResponses
         self.session = GatewayTestWebSocketSession(taskFactory: {
             let owner = revision.value == 1 ? "A" : "B"
@@ -343,9 +553,11 @@ private final class UsageGatewayFixture {
                         socket.emitReceiveSuccess(.data(Data(response.utf8)))
                         return
                     }
+                    let text = previewText.value ?? "Gateway \(owner)"
+                    let encodedText = String(decoding: try JSONEncoder().encode(text), as: UTF8.self)
                     payload = #"""
                     {"ts":1800000000000,"previews":[{"key":"main","status":"ok",
-                    "items":[{"role":"assistant","text":"Gateway \#(owner)"}]}]}
+                    "items":[{"role":"assistant","text":\#(encodedText)}]}]}
                     """#
                 case "node.list":
                     payload = #"{"nodes":[]}"#
@@ -374,6 +586,11 @@ private final class UsageGatewayFixture {
                 let response = #"{"type":"res","id":"\#(id)","ok":true,"payload":\#(payload)}"#
                 let sendResponse: @Sendable () -> Void = {
                     socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                }
+                if method == "sessions.preview", holdPreviews.value {
+                    pendingPreviewResponses.withValue { $0.append(sendResponse) }
+                    previewResponsesChanged.notify()
+                    return
                 }
                 if method == "usage.cost", coldUsage.value {
                     // The usage callback releases cost replies before their independent deadline.
@@ -423,6 +640,23 @@ private final class UsageGatewayFixture {
         #expect(self.hasCostChart)
     }
 
+    var pendingPreviewCount: Int {
+        self.pendingPreviewResponses.value.count
+    }
+
+    func releasePreviewResponse(at index: Int) {
+        let response = self.pendingPreviewResponses.withValue { $0.remove(at: index) }
+        response()
+    }
+
+    func releasePreviewResponses() {
+        let responses = self.pendingPreviewResponses.withValue { responses in
+            defer { responses.removeAll() }
+            return responses
+        }
+        responses.forEach { $0() }
+    }
+
     func releaseCostResponses(for owner: String) {
         let responses = self.pendingCostResponses.withValue { $0.removeValue(forKey: owner) ?? [] }
         responses.forEach { $0() }
@@ -445,6 +679,8 @@ private final class UsageGatewayFixture {
     func close() async {
         self.sessions.cancelPreviewTasks()
         self.summaries.menuDidClose()
+        self.holdPreviews.setValue(false)
+        self.releasePreviewResponses()
         await self.control.disconnect()
         self.releaseCostResponses(for: "A")
         self.releaseCostResponses(for: "B")

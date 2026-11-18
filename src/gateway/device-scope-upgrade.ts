@@ -1,4 +1,5 @@
 import type { ScopeUpgradeResult } from "../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { getPairedDevice, getPendingDevicePairing } from "../infra/device-pairing.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
@@ -40,9 +41,23 @@ export class ScopeUpgradeCoordinator {
   private readonly work = new AsyncWorkScope();
   private readonly scheduler: GatewaySchedulerScope;
   private lifetimeBound = false;
+  private closePromise?: Promise<void>;
 
   constructor(scheduler: GatewayScheduler) {
     this.scheduler = scheduler.scope();
+    // Observer reads end at the scheduler fence; received execution can retain
+    // its authority until restart recovery has been recorded.
+    if (this.scheduler.signal.aborted) {
+      this.beginClose();
+    } else {
+      this.scheduler.signal.addEventListener(
+        "abort",
+        () => {
+          this.beginClose();
+        },
+        { once: true },
+      );
+    }
   }
 
   private bindGatewayLifetime(): void {
@@ -57,7 +72,7 @@ export class ScopeUpgradeCoordinator {
       return;
     }
     if (gatewaySignal.aborted) {
-      void this.close();
+      this.beginClose();
       return;
     }
     const signal = AbortSignal.any([gatewaySignal, this.work.signal]);
@@ -77,14 +92,21 @@ export class ScopeUpgradeCoordinator {
     );
   }
 
-  async close(): Promise<void> {
+  beginClose(): void {
+    if (this.work.isClosing) {
+      return;
+    }
     this.work.beginClose();
     this.scheduler.beginClose();
     for (const entry of this.entries.values()) {
       entry.wake.resolve();
     }
     this.entries.clear();
-    await this.work.drain();
+  }
+
+  close(): Promise<void> {
+    this.beginClose();
+    return (this.closePromise ??= this.work.drain());
   }
 
   register(params: {
@@ -147,7 +169,11 @@ export class ScopeUpgradeCoordinator {
         }
       });
     }
-    return await racePromiseWithAbortSignal(entry.resultPromise, getAsyncWorkSignal());
+    const observerSignal = getAsyncWorkSignal();
+    return await racePromiseWithAbortSignal(
+      entry.resultPromise,
+      observerSignal ? AbortSignal.any([observerSignal, this.work.signal]) : this.work.signal,
+    );
   }
 
   private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeWaitResult | null> {
@@ -169,13 +195,9 @@ export class ScopeUpgradeCoordinator {
         DURABLE_RECONCILE_INTERVAL_MS,
         Math.max(0, entry.expiresAtMs - this.scheduler.now()),
       );
-      const timer = setTimeout(wake.resolve, delayMs);
-      timer.unref();
       try {
-        await wake.promise;
+        await raceWithTimeout(wake.promise, delayMs, wake.resolve, { ref: false });
       } finally {
-        // A durable notification or close also owns cancellation of the losing timer.
-        clearTimeout(timer);
         if (entry.wake === wake) {
           entry.wake = createDeferredCore();
         }

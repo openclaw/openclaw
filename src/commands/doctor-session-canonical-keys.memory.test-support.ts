@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.js";
+import { repairCanonicalSessionKeys } from "./doctor-session-canonical-keys.test-support.js";
 
 export const canonicalMemoryTestSupportModuleUrl = import.meta.url;
 
@@ -14,7 +14,7 @@ async function main(): Promise<void> {
   const result = await repairCanonicalSessionKeys({
     apply: mode === "apply",
     cfg: {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: { store: storeTemplate },
     },
     env,

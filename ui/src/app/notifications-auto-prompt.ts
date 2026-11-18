@@ -68,6 +68,7 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
   const snapshot = context.webPush.snapshot;
   if (
     !snapshot.supported ||
+    !snapshot.canManage ||
     snapshot.permission !== "default" ||
     snapshot.subscription === "registered" ||
     snapshot.subscription === "vapid-mismatch" ||
@@ -84,7 +85,7 @@ export function autoPromptNotificationsOnSend(context: NotificationsContext): vo
     void permission
       .then((next) => {
         if (next === "granted") {
-          void context.webPush.run({ kind: "enable" });
+          void context.webPush.run({ kind: "enable" }).catch(() => {});
         }
       })
       .catch(() => {});

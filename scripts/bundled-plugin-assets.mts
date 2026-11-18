@@ -99,14 +99,14 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
     options.deferIsolated ? listGeneratedExtensionAssetSources({ rootDir: repoRoot }) : [],
   );
   // Their package builders generate and validate assets after compiling the
-  // isolated graph. Manifest writers must finish before compilation and input
-  // capture; keep those hooks early, along with untracked source packages.
+  // isolated graph. Browser declarations fingerprint dependencies outside that
+  // graph; keep those hooks early, along with untracked source packages.
   const deferredPluginIds = new Set(
     options.deferIsolated
       ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
           .filter(
             ({ id, isolated }) =>
-              isolated && !generatedSources.has(`extensions/${id}/openclaw.plugin.json`),
+              isolated && !generatedSources.has(`extensions/${id}/dist/openclaw.plugin.json`),
           )
           .map(({ id }) => id)
       : [],
@@ -169,17 +169,35 @@ export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
     assertRealOutputRoot(path.join(options.rootDir ?? rootDir, "dist"));
   }
 
-  for (const hook of hooks) {
-    console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
-    const status = await runPluginAssetCommand({
-      command: hook.command,
-      cwd: hook.pluginDir,
-      pluginId: hook.pluginId,
-      phase: hook.phase,
-    });
-    if (status !== 0) {
-      process.exit(status);
+  // Build hooks write only their own package's assets; each is a short compiler
+  // process, so run a few at once. Copy hooks stage into dist/ and stay serial.
+  const queue = [...hooks];
+  let failure = 0;
+  const worker = async () => {
+    for (let hook = queue.shift(); hook && !failure; hook = queue.shift()) {
+      console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
+      const status = await runPluginAssetCommand({
+        command: hook.command,
+        cwd: hook.pluginDir,
+        pluginId: hook.pluginId,
+        phase: hook.phase,
+      }).catch((error: unknown) => {
+        failure ||= 1;
+        throw error;
+      });
+      failure ||= status;
     }
+  };
+  // Join every running hook before reporting, so no child outlives the step.
+  const settled = await Promise.allSettled(
+    Array.from({ length: phase === "build" ? 4 : 1 }, worker),
+  );
+  const rejected = settled.find((result) => result.status === "rejected");
+  if (rejected) {
+    throw rejected.reason;
+  }
+  if (failure !== 0) {
+    process.exit(failure);
   }
 }
 

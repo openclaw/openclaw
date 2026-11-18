@@ -9,6 +9,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+openclaw_resolve_frozen_update_channel_switch_contract "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
@@ -33,9 +35,8 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_CHANNELS=1 \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
-  -e OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT \
-  -e OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT \
   -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
+  -e "OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -101,10 +102,6 @@ done
 node scripts/docker/verify-fs-safe-native.mjs \
   --package-root /tmp/npm-prefix/lib/node_modules/openclaw \
   --mode fallback
-OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT:-0}"
-export OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT
-OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT="${OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT:-0}"
-export OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 # Channel switches install dependencies and swap the whole package inside the
@@ -155,6 +152,14 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
 
+echo "==> package refuses main target ($OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG)"
+if main_json="$(openclaw update --tag "$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" --yes --json --no-restart)"; then
+  echo "Unsupported package target unexpectedly succeeded." >&2
+  exit 1
+fi
+UPDATE_JSON="$main_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-main-refusal
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
+
 echo "==> package stable -> package beta channel"
 set +e
 beta_json="$(openclaw update --channel beta --yes --json --no-restart)"
@@ -185,7 +190,7 @@ assert_package_dry_run() {
     assert-dry-run "$expected_kind" "$expected_channel" "$selection"
   node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel dev
 }
-dev_channel_args=(--channel dev)
+dev_channel_args=()
 echo "==> package dry-run channel and one-off tag precedence"
 openclaw config set update.channel dev
 assert_package_dry_run git dev stored
@@ -193,25 +198,15 @@ assert_package_dry_run git dev explicit --channel dev
 assert_package_dry_run git dev explicit --channel dev --tag beta
 assert_package_dry_run package dev stored --tag beta
 assert_package_dry_run package stable explicit --channel stable
-# 7.33 reports a stored dev channel as a package update even though an
-# explicit --channel dev selects Git. Keep the explicit selector for the
-# destructive admission and actual switch probes on that frozen contract.
-if [ "$OPENCLAW_UPDATE_CHANNEL_DRY_RUN_PACKAGE_COMPAT" != "1" ]; then
-  dev_channel_args=()
-fi
-
 echo "==> ordinary untracked files still block Git admission"
 printf "retain user notes\n" >"$git_root/operator-update-notes.tmp"
 set +e
 dirty_json="$(openclaw update "${dev_channel_args[@]}" --yes --json --no-restart)"
 dirty_status=$?
 set -e
-# Historical update CLIs can report a blocked structured result with exit zero.
-# Admit only that exact legacy status; timeouts, signals, and other failures stay fatal.
 node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-dirty-exit \
-  "$dirty_status" \
-  "$OPENCLAW_UPDATE_CHANNEL_DIRTY_BLOCK_EXIT_ZERO_COMPAT"
+  "$dirty_status"
 # The payload assertion proves the update was rejected and no checkout state changed.
 UPDATE_JSON="$dirty_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs \
   assert-dirty-update "$git_root" "$fixture_sha"

@@ -304,8 +304,8 @@ struct ExecHostRequestEvaluatorTests {
         let context = Self.makeContext(security: .allowlist, ask: .onMiss, allowlistSatisfied: false)
         let decision = ExecHostRequestEvaluator.evaluate(context: context, approvalDecision: .allowOnce)
         switch decision {
-        case let .allow(approvedByAsk):
-            #expect(approvedByAsk)
+        case .allow:
+            break
         case .requiresPrompt:
             Issue.record("expected allow decision")
         case let .deny(error):
@@ -337,8 +337,8 @@ struct ExecHostRequestEvaluatorTests {
             approvalDecision: nil,
             approvalSource: .askFallback)
         switch decision {
-        case let .allow(approvedByAsk):
-            #expect(!approvedByAsk)
+        case .allow:
+            break
         case .requiresPrompt:
             Issue.record("fallback must not open another prompt")
         case let .deny(error):
@@ -357,8 +357,8 @@ struct ExecHostRequestEvaluatorTests {
             approvalSource: .autoReview)
 
         switch decision {
-        case let .allow(approvedByAsk):
-            #expect(approvedByAsk)
+        case .allow:
+            break
         case .requiresPrompt:
             Issue.record("auto review should not prompt")
         case let .deny(error):
@@ -504,7 +504,6 @@ struct ExecHostRequestEvaluatorTests {
             allowAlwaysPatterns: [],
             allowlistMatches: [entry],
             allowlistAuthorizationSatisfied: true,
-            allowlistSatisfied: false,
             allowlistMatch: nil,
             skillTrust: nil,
             policySnapshot: ExecApprovalPolicySnapshot(
@@ -545,7 +544,6 @@ struct ExecHostRequestEvaluatorTests {
             allowAlwaysPatterns: allowAlwaysPatterns,
             allowlistMatches: [],
             allowlistAuthorizationSatisfied: allowlistSatisfied,
-            allowlistSatisfied: allowlistSatisfied,
             allowlistMatch: nil,
             skillTrust: nil,
             policySnapshot: ExecApprovalPolicySnapshot(

@@ -10,7 +10,6 @@ type PreambleResult = {
   chdirPath?: string;
 };
 
-/** Removes matching outer single or double quotes from a display token. */
 export function stripOuterQuotes(value: string | undefined): string | undefined {
   if (!value) {
     return value;
@@ -152,7 +151,6 @@ export function parseShellWords(input: string | undefined, maxWords = 48): Shell
   return result;
 }
 
-/** Returns a normalized basename for a command token. */
 export function binaryName(token: string | undefined): string | undefined {
   if (!token) {
     return undefined;
@@ -216,7 +214,6 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
-/** Removes leading `env` wrappers and VAR=value assignments from parsed words. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {
     return words;
@@ -234,7 +231,6 @@ export function trimLeadingEnv(words: string[]): string[] {
   return words.slice(index);
 }
 
-/** Unwraps common `sh -c`/`bash -lc` command wrappers for display parsing. */
 export function unwrapShellWrapper(command: string): string {
   const { words } = parseShellWords(command, 10);
   if (words.length < 3) {
@@ -289,32 +285,23 @@ export function parseHeredocMarker(
   let value = "";
   let quote: '"' | "'" | undefined;
   for (; index < command.length; index += 1) {
-    const char = command[index] ?? "";
-    if (quote) {
-      if (char === quote) {
-        quote = undefined;
-        continue;
-      }
-      if (quote === '"' && char === "\\" && index + 1 < command.length) {
-        index += 1;
-        value += command[index] ?? "";
-        continue;
-      }
-      value += char;
+    let char = command[index] ?? "";
+    if (quote && char === quote) {
+      quote = undefined;
       continue;
     }
-
-    if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
-      break;
+    if (!quote) {
+      if (/[\r\n;&|<>]/u.test(char) || whitespace.test(char)) {
+        break;
+      }
+      if (char === "'" || char === '"') {
+        quote = char;
+        continue;
+      }
     }
-    if (char === "'" || char === '"') {
-      quote = char;
-      continue;
-    }
-    if (char === "\\" && index + 1 < command.length) {
+    if (quote !== "'" && char === "\\" && index + 1 < command.length) {
       index += 1;
-      value += command[index] ?? "";
-      continue;
+      char = command[index] ?? "";
     }
     value += char;
   }
@@ -567,7 +554,6 @@ const SHELL_COMPOUND_PATTERNS = [
   ].map((body) => new RegExp(`${start}${body}`, "u")),
 );
 
-/** Returns whether unquoted shell syntax contains a compound-command introducer. */
 export function hasShellCompoundCommand(command: string): boolean {
   // Keep quoted and escaped fragments token-occupying so `"x"select` cannot become `select`.
   const syntaxChars = Array.from({ length: command.length }, () => "\0");
@@ -622,12 +608,8 @@ export function stripShellPreamble(command: string): PreambleResult {
     // Only scan top-level separators so quoted strings and nested shell fragments stay intact in
     // the command fragment that display code will summarize.
     scanTopLevelChars(rest, (char, idx) => {
-      if (char === "&" && rest[idx + 1] === "&") {
-        first = { index: idx, length: 2 };
-        return false;
-      }
-      if (char === "|" && rest[idx + 1] === "|") {
-        first = { index: idx, length: 2, isOr: true };
+      if ((char === "&" || char === "|") && rest[idx + 1] === char) {
+        first = { index: idx, length: 2, isOr: char === "|" };
         return false;
       }
       if (char === ";" || char === "\n") {

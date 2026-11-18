@@ -1,31 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { isJsonObject, type JsonObject } from "./protocol.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
-import { sanitizeCodexToolArguments } from "./tool-progress-normalization.js";
 
 describe("Codex tool progress payloads", () => {
-  it("bounds cyclic and repeated references without mutating tool arguments", () => {
-    const shared = { token: "fixture-value", label: "kept" };
-    const input: JsonObject = { first: shared, repeated: shared, array: [] };
-    input.self = input;
-    input.array = [input, shared];
-
-    const result = sanitizeCodexToolArguments(input);
-
-    expect(result).toEqual({
-      first: { token: "***", label: "kept" },
-      repeated: "[Circular]",
-      array: ["[Circular]", "[Circular]"],
-      self: "[Circular]",
-    });
-    expect(input.first).toBe(shared);
-    expect(input.repeated).toBe(shared);
-    expect(input.self).toBe(input);
-    expect(input.array).toEqual([input, shared]);
-    expect(shared.token).toBe("fixture-value");
-  });
-
-  it("keeps redacted JSON details and native content when projecting a transcript result", () => {
+  it("keeps original JSON details and native content when projecting a transcript result", () => {
     const details: JsonObject = JSON.parse(
       '{"__proto__":{"label":"kept","token":"fixture-value"},"nested":{"__proto__":null}}',
     );
@@ -47,7 +25,7 @@ describe("Codex tool progress payloads", () => {
     }
 
     expect(JSON.stringify(result.details)).toBe(
-      '{"__proto__":{"label":"kept","token":"***"},"nested":{"__proto__":null}}',
+      '{"__proto__":{"label":"kept","token":"fixture-value"},"nested":{"__proto__":null}}',
     );
     expect(Object.getPrototypeOf(result.details)).toBe(Object.prototype);
     expect(Object.getPrototypeOf(result.details.nested)).toBe(Object.prototype);
@@ -58,7 +36,7 @@ describe("Codex tool progress payloads", () => {
       },
       { type: "image", url: imageUrl },
     ]);
-    expect(JSON.stringify(result)).not.toContain("abcdef0123456789QWERTY=");
+    expect(JSON.stringify(result)).toContain("abcdef0123456789QWERTY=");
     expect(JSON.stringify(response)).toBe(before);
   });
 });

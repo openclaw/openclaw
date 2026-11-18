@@ -18,8 +18,17 @@ export function readTrimmedStringAlias(
   record: Readonly<Record<string, unknown>>,
   keys: readonly string[],
 ): string | undefined {
-  for (const key of keys) {
-    const value = normalizeOptionalString(record[key]);
+  return readParsedField(record, keys, normalizeOptionalString);
+}
+
+/** Reads the first parsed field, preserving order and defined falsy values. */
+export function readParsedField<T>(
+  record: Readonly<Record<string, unknown>>,
+  keys: string | readonly string[],
+  parse: (value: unknown) => T | undefined,
+): T | undefined {
+  for (const key of typeof keys === "string" ? [keys] : keys) {
+    const value = parse(record[key]);
     if (value !== undefined) {
       return value;
     }

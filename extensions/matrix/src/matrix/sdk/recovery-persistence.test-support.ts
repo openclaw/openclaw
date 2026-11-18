@@ -39,7 +39,7 @@ export function holdRecoveryKeyPersistence() {
   const admitted = createDeferred<void>();
   const release = createDeferred<void>();
   const stateRuntime: MatrixSnapshotStateRuntime = {
-    openKeyedStore<T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> {
+    openKeyedStoreV2<T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T, 2> {
       const store = createPluginStateKeyedStoreForTests<T>("matrix", options);
       const compareAndApply = store.compareAndApply;
       if (!compareAndApply) {
