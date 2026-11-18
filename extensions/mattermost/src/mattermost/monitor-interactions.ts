@@ -141,6 +141,7 @@ export function registerMattermostInteractions(params: {
           channelId,
           senderId: userId,
           postId: post.id,
+          interactionPost: true,
           threadRootId: post.root_id,
           dropLabel: "interaction session event",
         });
@@ -159,6 +160,7 @@ export function registerMattermostInteractions(params: {
           channelId: button.channelId,
           senderId: button.userId,
           postId: sourcePostId,
+          interactionPost: true,
           threadRootId: button.post.root_id,
           dropLabel: "interaction dispatch",
         });

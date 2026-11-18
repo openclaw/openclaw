@@ -10,6 +10,13 @@ type MattermostEventPlanParams = {
   channelId: string;
   senderId: string;
   postId?: string | null;
+  /**
+   * Set when the event comes from a bot-authored interactive post (model picker,
+   * question card, button row). Such a post is a UI container inside the conversation
+   * it was opened from, so it must never seed a new thread session of its own: the
+   * thread root (if any) still applies, but `postId` is not used as a thread anchor.
+   */
+  interactionPost?: boolean;
   threadRootId?: string | null;
   channelInfo?: MattermostChannel | null;
   channelTypeFallback?: string | null;
@@ -52,7 +59,10 @@ export async function buildMattermostEventPlan(
   const thread = resolveMattermostThreadSessionContext({
     baseSessionKey: route.sessionKey,
     kind,
-    postId: params.postId,
+    // A user's top-level post may open a thread session (replyToMode first/all/batched).
+    // An interactive post is never a conversation root: a picker or question card posted
+    // at the DM/channel root belongs to the root session, not to a thread keyed by itself.
+    postId: params.interactionPost ? undefined : params.postId,
     replyToMode: resolveMattermostReplyToMode(monitor.account, kind),
     threadRootId: params.threadRootId,
   });

@@ -1,0 +1,4 @@
+# Regression coverage for Mattermost interactive posts (model picker, question card, button row)
+# seeding a thread session from their own post id when reply threading is on.
+# Exact net growth for issue #197367 (new monitor-event-plan.test.ts plus one call-site assertion).
+125

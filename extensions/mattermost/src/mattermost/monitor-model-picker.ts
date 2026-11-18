@@ -108,6 +108,7 @@ export function createMattermostModelPickerInteractionHandler(
       channelId: params.payload.channel_id,
       senderId: params.payload.user_id,
       postId: params.post.id || params.payload.post_id,
+      interactionPost: true,
       threadRootId: params.post.root_id,
       channelInfo: auth.channelInfo,
       teamId,
