@@ -9,11 +9,10 @@ import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
-import { toUpdateRunDriver } from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
 import { isUpdateOwedStepRow } from "./update-run-owed-step.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import { toUpdateRunDriver, type UpdateRunRecord } from "./update-run-record.js";
 import { UpdateRunRecordSchema } from "./update-run-schema.js";
 
 const JSON_BYTES = 16 * 1024;

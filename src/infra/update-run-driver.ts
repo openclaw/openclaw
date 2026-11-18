@@ -8,7 +8,8 @@ import {
   type UpdateRunDriverSchema,
 } from "./update-run-driver-schema.js";
 
-export { toUpdateRunDriver, type RecordedUpdateRunDriver } from "./update-run-driver-schema.js";
+export type { RecordedUpdateRunDriver } from "./update-run-driver-schema.js";
+export { toUpdateRunDriver } from "./update-run-record.js";
 export type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
 
 /**

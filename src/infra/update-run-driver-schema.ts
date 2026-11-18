@@ -22,10 +22,4 @@ export const RecordedUpdateRunDriverSchema = UpdateRunDriverSchema.extend({
     .optional(),
 });
 
-type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
 export type RecordedUpdateRunDriver = z.infer<typeof RecordedUpdateRunDriverSchema>;
-
-/** The process identity alone, as leases, recovery receipts and the public run carry it. */
-export function toUpdateRunDriver({ host, pid, startIdentity }: UpdateRunDriver): UpdateRunDriver {
-  return { host, pid, startIdentity };
-}
