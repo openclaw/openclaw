@@ -1,6 +1,5 @@
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
-import { base64ToBytes } from "../../../lib/bytes-base64.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -10,36 +9,13 @@ import {
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove } from "./chat-attachment-file.tsx";
+import { appendPastedTextToDraft, readPastedText } from "./chat-pasted-text.ts";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
-function readTextFromDataUrl(dataUrl: string): string | null {
-  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const metadata = match[1]!;
-  const payload = match[2]!;
-  try {
-    return metadata.toLowerCase().includes(";base64")
-      ? new TextDecoder().decode(base64ToBytes(payload))
-      : decodeURIComponent(payload.replace(/\+/g, "%20"));
-  } catch {
-    return null;
-  }
-}
-
-function appendPastedTextToDraft(draft: string, text: string): string {
-  if (!draft.trim()) {
-    return text;
-  }
-  return `${draft.replace(/\s+$/u, "")}\n\n${text}`;
-}
-
 function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentControlsProps): void {
-  const dataUrl = getChatAttachmentDataUrl(att);
-  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
+  const text = readPastedText(att);
   if (!text || !props.onDraftChange) {
     return;
   }

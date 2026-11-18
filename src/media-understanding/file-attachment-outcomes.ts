@@ -4,7 +4,7 @@ import type {
   DocumentExtractedImage,
   DocumentExtractionMetadata,
 } from "../plugins/document-extractor-types.js";
-import { sanitizeExternalContentText, wrapExternalContent } from "../security/external-content.js";
+import { wrapExternalContent } from "../security/external-content.js";
 
 // Reject inputs with trailing junk after the type/subtype to defend against
 // callers that compare the original string elsewhere; permit the standard
@@ -121,17 +121,13 @@ export function isSkippedFileOutcome(outcome: FileAttachmentOutcome): boolean {
 
 export function renderFileAttachmentOutcome(
   outcome: FileAttachmentOutcome,
-  options?: { selfServeLocalPath?: string | false; userPaste?: boolean },
+  options?: { selfServeLocalPath?: string | false },
 ): string | null {
   switch (outcome.kind) {
     case "extracted":
       return [
         renderDocumentTruncationNotice(outcome.metadata),
-        // Composer paste text has the authority of the same request's message;
-        // only its length made it a file. Still neutralize forged markers.
-        options?.userPaste
-          ? sanitizeExternalContentText(outcome.text)
-          : wrapUntrustedAttachmentContent(outcome.text),
+        wrapUntrustedAttachmentContent(outcome.text),
       ]
         .filter(Boolean)
         .join("\n");

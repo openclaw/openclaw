@@ -30,20 +30,6 @@ async function localDocument(text: string | Buffer, name: string, mime: string, 
   return { ctx, workspaceDir, cfg: {} };
 }
 
-it.each([
-  ["paste", false],
-  ["file", true],
-] as const)("applies the document cap to %s text: truncated=%s", async (origin, truncated) => {
-  const text = `${"x".repeat(70_000)} FINAL INSTRUCTION`;
-  const params = await localDocument(text, "pasted-text-1.txt", "text/plain");
-  params.ctx.media![0]!.origin = origin;
-
-  const context = await renderInboundDocumentContext(params);
-
-  expect(context.text.includes("FINAL INSTRUCTION")).toBe(!truncated);
-  expect(context.text.includes("[Partial document:")).toBe(truncated);
-});
-
 describe("remote document charset", () => {
   const cyrillic = Buffer.from([0xcf, 0xf0, 0xe8, 0xe2, 0xe5, 0xf2, 0x20, 0x88]);
   const transportCharset = "text/plain; charset=windows-1251";

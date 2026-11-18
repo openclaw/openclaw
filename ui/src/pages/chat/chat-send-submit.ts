@@ -59,7 +59,7 @@ import {
   isChatResetCommand,
   chatOfflineQueueStorageError,
   prependReplyQuote,
-  annotationMessageContext,
+  composeChatMessageBody,
 } from "./chat-send-support.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import {
@@ -68,6 +68,7 @@ import {
   type ChatSubmitGuard,
 } from "./chat-submit-guard.ts";
 import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
+import { isPastedTextAttachment } from "./components/chat-pasted-text.ts";
 import { recordNonTranscriptInputHistory } from "./input-history.ts";
 import {
   captureOutboxPayloadOwner,
@@ -161,9 +162,9 @@ export async function handleSendChat(
         )
       : {};
   const hasAttachments = attachmentsToSend.length > 0;
-  // Selection comments travel as message text, so only real files need uploads.
+  // Selection comments and pasted-text cards travel as message text, so only real files need uploads.
   if (
-    attachmentsToSend.some((item) => !item.selectionAnnotation) &&
+    attachmentsToSend.some((item) => !item.selectionAnnotation && !isPastedTextAttachment(item)) &&
     !uploadsEnabled(host.uploadConfig)
   ) {
     setChatError(host, uploadsDisabledMessage());
@@ -235,17 +236,15 @@ export async function handleSendChat(
     }
   }
 
-  // Commands own the raw composer text. Annotation context is model input and must not
-  // turn a recognized command into an ordinary message.
-  const message =
-    rawParsedCommand || intent
-      ? userMessage
-      : [...attachmentsToSend.map(annotationMessageContext), userMessage]
-          .filter(Boolean)
-          .join("\n\n");
+  const composed = composeChatMessageBody(
+    userMessage,
+    attachmentsToSend,
+    Boolean(rawParsedCommand || intent),
+  );
+  const message = composed.message;
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
-  // Selection comments are already message text and never upload as files.
-  const deliveredAttachments = attachmentsToSend.filter(
+  // Selection comments and pasted text are already message text and never upload as files.
+  const deliveredAttachments = composed.attachments.filter(
     (item) => !item.selectionAnnotation && !(rawParsedCommand && item.browserAnnotation),
   );
   const rejectOversizedAttachments = () => {
@@ -507,8 +506,8 @@ export async function handleSendChat(
       ? inlineEdit.source.appContext
       : captureMcpAppContext(host.client, submittedSessionKey, submitGuardOptions.scope.agentId)
     : undefined;
-  // Annotation and fallback-reply prefixes shift mentions; structured work context never does.
-  const mentionOffset = quotedMessage.length - userMessage.length;
+  // Annotation and fallback-reply prefixes shift mentions; appended pasted text and work context never do.
+  const mentionOffset = quotedMessage.length - composed.body.length;
   const effectiveMentions = submitted.mentions?.map((mention) => ({
     profileId: mention.profileId,
     start: mention.start + mentionOffset,

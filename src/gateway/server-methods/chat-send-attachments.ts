@@ -112,18 +112,12 @@ export async function prepareChatSendAttachments(params: {
           // owns the final workspace, cancellation, and visible staging failures.
           mediaPathOffloads = offloadedRefs
             .filter((ref) => !parsedSupportsImages || !ref.mimeType.startsWith("image/"))
-            .map((ref) => {
-              const fact: MediaFact = {
-                path: ref.path,
-                url: ref.mediaRef,
-                contentType: ref.mimeType,
-                fileName: ref.label,
-              };
-              if (ref.origin) {
-                fact.origin = ref.origin;
-              }
-              return fact;
-            });
+            .map((ref) => ({
+              path: ref.path,
+              url: ref.mediaRef,
+              contentType: ref.mimeType,
+              fileName: ref.label,
+            }));
         },
         {
           phase: "agent-turn",

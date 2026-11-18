@@ -242,7 +242,7 @@ describe("new session draft route ownership", () => {
       vi.stubGlobal("fetch", fetchMock);
       const paste = new Event("paste", { bubbles: true, cancelable: true });
       Object.defineProperty(paste, "clipboardData", {
-        value: { items: [], getData: () => original },
+        value: { items: [], files: [], getData: () => original },
       });
       page.querySelector("textarea")?.dispatchEvent(paste);
       expect(paste.defaultPrevented).toBe(true);
