@@ -427,7 +427,7 @@ it.each([false, true])(
 );
 
 it.each(["ocid", "paired device"])(
-  "native Template Add retains %s source until revocation",
+  "native Template Add retains admitted %s work but refuses fresh work after revocation",
   async (source) => {
     await withFixture(async (fixture) => {
       const owner = await ensureCanonicalGatewayOwnerProfile("Synthetic Template owner");
@@ -507,14 +507,21 @@ it.each(["ocid", "paired device"])(
               expect(
                 await revokeDeviceToken({ deviceId: device.deviceId, role: "operator" }),
               ).toMatchObject({ ok: true });
-              // Native device RPC also publishes revocation to the retained Gateway source.
+              // Publish the native device RPC's policy change for the next start.
               invalidateGatewayDeviceRevocation(context, device.deviceId, "operator");
             }
-            expect(() => restored.authority.assertCurrent()).toThrow();
+            expect(restored.authority.assertCurrent).not.toThrow();
+            expect(restored.authority.signal?.aborted).toBe(false);
+            expect(restored.authority.reauthorize).toThrow();
             await expect(restore()).rejects.toThrow();
+            expect(restored.authority.assertCurrent).not.toThrow();
+            expect(restored.authority.signal?.aborted).toBe(false);
           } finally {
             restored.release();
           }
+          expect(restored.authority.assertCurrent).toThrow(
+            "Restart recovery operator authority is no longer active.",
+          );
         });
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);

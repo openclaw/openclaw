@@ -40,6 +40,7 @@ import { admitScheduledOccurrence } from "../execution-context-admission.js";
 import {
   readScheduledMemoryParent,
   readScheduledToolTargets,
+  type ScheduledToolTargets,
 } from "../execution-context-registry.js";
 import type { CronEvent } from "../service.js";
 import { onTimer } from "../service/timer.test-support.js";
@@ -243,8 +244,7 @@ it.each([
 
   let entered = 0;
   let operatorAdmitted = false;
-  let revokedDuringRun: boolean | undefined;
-  let ownerGuarded = false;
+  let ownerTargets: ScheduledToolTargets | undefined;
   let runSenderIsOwner: boolean | undefined;
   let memoryParent: ReturnType<typeof readScheduledMemoryParent>;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
@@ -257,19 +257,17 @@ it.each([
     const operator = readAdmittedRunOperatorAuthority(admitted);
     operatorAdmitted = operator !== undefined;
     if (scenario === "device revoked during the run") {
-      // The Gateway's device-token revocation owner fences every capture of that device.
+      // This child has already crossed runtime admission, not merely joined a queue.
+      persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, stateDir, "both");
       invalidateGatewayDeviceRevocation(context, DEVICE.deviceId, "operator");
-      // The run's owner-only tools recheck the same operator source before each call.
-      const targets = readScheduledToolTargets(admitted);
-      ownerGuarded = typeof targets?.assertOwnerCurrent === "function";
-      revokedDuringRun = (() => {
-        try {
-          targets?.assertOwnerCurrent?.();
-          return false;
-        } catch {
-          return true;
-        }
-      })();
+      const targets = expectDefined(readScheduledToolTargets(admitted), "admitted child targets");
+      ownerTargets = targets;
+      const assertOwnerCurrent = expectDefined(targets.assertOwnerCurrent, "admitted owner guard");
+      expect(() => {
+        expectDefined(operator, "admitted child operator").assertCurrent();
+        targets.assertCurrent();
+        assertOwnerCurrent();
+      }).not.toThrow();
     }
     memoryParent = readScheduledMemoryParent(admitted.operationalRunInstance);
     return { payloads: [{ text: "Deploy checked" }], meta: { agentMeta: {} } };
@@ -297,13 +295,22 @@ it.each([
     clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "next occurrence"));
     await onTimer(state);
     await execution.waitForIdle();
-    const after = expectDefined(execution.getJob(job.id), "settled job");
+    let after = expectDefined(execution.getJob(job.id), "settled job");
     if (scenario === "device revoked during the run") {
+      expect(after.state.lastRunStatus, after.state.lastError).toBe("ok");
+      expect(after.enabled).toBe(true);
       expect(entered).toBe(1);
       expect(operatorAdmitted).toBe(true);
-      expect(ownerGuarded).toBe(true);
-      expect(revokedDuringRun).toBe(true);
-      return;
+      expect(finished).toHaveBeenLastCalledWith(expect.objectContaining({ status: "ok" }));
+      const targets = expectDefined(ownerTargets, "finished child targets");
+      expect(targets.assertCurrent).toThrow(/settled/);
+      expect(expectDefined(targets.assertOwnerCurrent, "finished owner guard")).toThrow(/settled/);
+
+      // The next occurrence is a new start and cannot reuse the admitted child's grant.
+      clock.setTime(expectDefined(after.state.nextRunAtMs, "next child occurrence"));
+      await onTimer(state);
+      await execution.waitForIdle();
+      after = expectDefined(execution.getJob(job.id), "refused fresh child occurrence");
     }
     if (scenario === "valid" || scenario === "no operator source" || scenario === "parent reset") {
       expect(after.state.lastRunStatus, after.state.lastError).toBe("ok");
@@ -331,7 +338,7 @@ it.each([
       }
       return;
     }
-    expect(entered).toBe(0);
+    expect(entered).toBe(scenario === "device revoked during the run" ? 1 : 0);
     expect(after.state.lastRunStatus).toBe("error");
     expect(after.state.lastError).toMatch(
       /operator authority that created this automation was refused/,
@@ -342,6 +349,7 @@ it.each([
     // The refused source cannot recover through retries, so the job stops.
     expect(after.enabled).toBe(false);
     expect(after.state.nextRunAtMs).toBeUndefined();
+    expect(finished).toHaveBeenLastCalledWith(expect.objectContaining({ status: "error" }));
   } finally {
     execution.stop();
     await execution.waitForIdle();

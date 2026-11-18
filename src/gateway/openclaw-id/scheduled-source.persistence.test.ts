@@ -303,12 +303,8 @@ function expectCurrent(authority: AdmittedRunOperatorAuthority) {
   expect(authority.signal?.aborted).toBe(false);
   expect(authority.assertCurrent).not.toThrow();
 }
-function expectRevoked(authority: AdmittedRunOperatorAuthority) {
-  expect(authority.assertCurrent).toThrow();
-  expect(authority.signal?.aborted).toBe(true);
-}
 it.each(["member", "owner"] as const)(
-  "recovers a serialized OCID %s source without replacing membership with profile authority",
+  "recovers a serialized OCID %s source, retaining admitted work but checking membership on fresh starts",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
       setRuntimeConfigSnapshot({
@@ -383,9 +379,10 @@ it.each(["member", "owner"] as const)(
             );
           }
           const original = structuredClone(current);
-          // The lookup's lifecycle event also cancels retained work before another tool call.
+          // Losing the lookup refuses fresh work without canceling this admitted run.
           setOpenClawIdTunnelPrincipalLookup(undefined);
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          expect(restored.authority.reauthorize).toThrow();
           await expect(fixture.restore()).rejects.toThrow();
           setOpenClawIdTunnelPrincipalLookup(() => current);
           for (const authority of [
@@ -395,13 +392,18 @@ it.each(["member", "owner"] as const)(
           ]) {
             current = { ...original, authority };
             await expect(fixture.restore()).rejects.toThrow();
+            expect(restored.authority.reauthorize).toThrow();
+            expectCurrent(restored.authority);
           }
           if (original.kind === "member") {
             current = { ...original, role: "viewer" };
             await expect(fixture.restore()).rejects.toThrow();
+            expect(restored.authority.reauthorize).toThrow();
+            expectCurrent(restored.authority);
           }
           current = original;
-          expectRevoked(restored.authority);
+          expectCurrent(restored.authority);
+          expect(restored.authority.reauthorize).not.toThrow();
           const reloaded = await fixture.restore();
           try {
             expectCurrent(reloaded.authority);
@@ -411,6 +413,9 @@ it.each(["member", "owner"] as const)(
         } finally {
           restored.release();
         }
+        expect(restored.authority.assertCurrent).toThrow(
+          "Restart recovery operator authority is no longer active.",
+        );
       } finally {
         setOpenClawIdTunnelPrincipalLookup(undefined);
       }

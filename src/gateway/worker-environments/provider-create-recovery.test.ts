@@ -385,7 +385,7 @@ describe("worker creation source recovery", () => {
     expect(service.get(intent.environmentId)?.state).toBe("failed");
   });
 
-  it("cleans a provider allocation when the live original source is revoked before its reply", async () => {
+  it("finishes an admitted allocation after source revocation and still allows explicit cleanup", async () => {
     const caller = await originalCaller();
     const held = await restoreGatewayQueuedOperatorRecovery({
       source: caller.source,
@@ -401,7 +401,7 @@ describe("worker creation source recovery", () => {
       leaseId: "lease-live-revoked",
       sharedHost: false,
     }));
-    const destroy = vi.fn(async () => {});
+    const destroy = vi.fn<WorkerProvider["destroy"]>(async () => {});
     const service = support.createService(
       support.createProvider({ provision, resolveAllocation, destroy }),
       { resolveGatewayContext: () => caller.context },
@@ -414,16 +414,28 @@ describe("worker creation source recovery", () => {
           provisionSource: caller.source,
           beforeProvision: held.authority.assertCurrent,
         }),
-      ).rejects.toThrow("Worker creation authority changed");
+      ).resolves.toMatchObject({ state: "ready", leaseId: "lease-live-revoked" });
+      await expect(
+        restoreGatewayQueuedOperatorRecovery({
+          source: caller.source,
+          context: caller.context,
+          assertCurrent: () => {},
+        }),
+      ).rejects.toThrow("Restart recovery operator authority changed; start a new user turn.");
     } finally {
       held.release();
     }
 
     expect(provision).toHaveBeenCalledOnce();
-    expect(resolveAllocation).toHaveBeenCalledOnce();
+    expect(resolveAllocation).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(support.testState.bootstrapWorker).toHaveBeenCalledOnce();
+    const environment = expectDefined(support.testState.store.list()[0], "admitted allocation");
+    // Explicit release remains authoritative after the original person grant is gone.
+    await service.destroy(environment.environmentId);
     expect(destroy).toHaveBeenCalledOnce();
-    expect(support.testState.store.list()[0]).toMatchObject({ state: "failed", leaseId: null });
-    expect(support.testState.bootstrapWorker).not.toHaveBeenCalled();
+    expect(destroy.mock.calls[0]?.[0]).toMatchObject({ leaseId: "lease-live-revoked" });
+    expect(service.get(environment.environmentId)?.state).toBe("destroyed");
   });
 
   it("recovers later maintenance independently of its original creator", async () => {

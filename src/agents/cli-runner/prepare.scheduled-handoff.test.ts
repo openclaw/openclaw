@@ -1,6 +1,6 @@
-// A scheduled run hands a turn to a busy Claude CLI session. The turn is admitted while the
-// occurrence is live and starts after it ended, so CLI preparation runs under the sender's
-// retired request scope. The admitted run owns the authority, not that scope.
+// A scheduled run hands a turn to a busy Claude CLI session. The continuation is
+// captured while the occurrence is live, but queued CLI admission starts after it
+// ended and rechecks the sender's policy independently of the retired request scope.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -73,8 +73,11 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
 
   it.each<{ revocation: string; rejection?: RegExp }>([
     { revocation: "none" },
-    { revocation: "sender device removed", rejection: /operator authority changed/i },
-    { revocation: "sender role changed", rejection: /operator authority changed/i },
+    {
+      revocation: "sender device removed",
+      rejection: /Restart recovery operator source policy changed/i,
+    },
+    { revocation: "sender role changed", rejection: /Restart recovery operator identity changed/i },
     { revocation: "explicit stop", rejection: /agent run aborted/i },
   ])(
     "prepares the queued CLI turn after the occurrence ended ($revocation)",
@@ -93,7 +96,7 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
           },
           { make: () => stateDir },
         );
-        // sessions_send admits the receiver with the sending run's in-process client.
+        // sessions_send captures the receiver's continuation before its queued run starts.
         const senderClient = createSyntheticPluginRuntimeClient({
           authenticatedUserProfile: occurrence.client.authenticatedUserProfile,
           operatorRoleActor: { kind: "operator", profileId: sender.authority.profileId },
@@ -143,7 +146,7 @@ describe("CLI preparation for a turn handed off by a scheduled run", () => {
               }),
           );
           if (rejection) {
-            // The retained continuation and the run's own Stop still end the turn.
+            // Fresh admission refuses changed sender policy; explicit Stop also prevents start.
             await expect(prepare).rejects.toThrow(rejection);
             return;
           }
