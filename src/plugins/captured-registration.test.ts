@@ -123,27 +123,49 @@ describe("captured plugin registration", () => {
     );
   });
 
-  it("preserves root machine-output metadata", () => {
+  it.each(["captured", "registry"] as const)("normalizes root CLI metadata (%s)", (mode) => {
     const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
-    const captured = capturePluginRegistration({
-      register(api) {
-        api.registerCli(() => {}, {
-          commands: [" captured-machine ", "captured-machine", "captured-extra"],
-          descriptors: [
-            {
-              name: "captured-machine",
-              description: "Captured machine output",
-              hasSubcommands: true,
-              machineOutput,
-            },
-          ],
-        });
-      },
+    const captured = createCapturedPluginRegistration();
+    const registry = createPluginRegistry({
+      logger: captured.api.logger,
+      runtime: captured.api.runtime,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: "cli-owner",
+      source: "/fixture/index.js",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+    });
+    const api = mode === "captured" ? captured.api : registry.createApi(record, { config: {} });
+    api.registerCli(() => {}, {
+      commands: [" captured-machine ", "captured-machine", "captured-extra", "invalid command"],
+      descriptors: [
+        {
+          name: " captured-machine ",
+          description: "\u001b[31mCaptured machine output\u001b[0m",
+          hasSubcommands: true,
+          machineOutput,
+        },
+        { name: "invalid descriptor", description: "Excluded", hasSubcommands: false },
+      ],
     });
 
-    expect(captured.cliRegistrars[0]?.commands).toEqual(["captured-machine", "captured-extra"]);
-    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
-    expect(descriptor?.machineOutput).toBe(machineOutput);
+    const registration = (mode === "captured" ? captured : registry.registry).cliRegistrars[0];
+    expect(registration?.commands).toEqual(["captured-machine", "captured-extra"]);
+    expect(registration?.descriptors).toEqual([
+      {
+        name: "captured-machine",
+        description: "Captured machine output",
+        hasSubcommands: true,
+        machineOutput: expect.any(Function),
+      },
+    ]);
+    const descriptor = registration?.descriptors[0];
+    if (mode === "captured") {
+      expect(descriptor?.machineOutput).toBe(machineOutput);
+    }
     expect(
       descriptor?.machineOutput?.({
         argv: ["node", "openclaw", "captured-machine"],

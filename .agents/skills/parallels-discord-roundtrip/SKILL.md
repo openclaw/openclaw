@@ -20,22 +20,21 @@ Cover:
 
 ## Inputs
 
-- host env var with Discord bot token
-- Discord guild ID
-- Discord channel ID
+- host env var with the token for a dedicated, operator-approved QA bot
+- operator-approved QA guild and channel IDs
 - `OPENAI_API_KEY`
 
 ## Preferred run
 
-```bash
-export OPENCLAW_PARALLELS_DISCORD_TOKEN="$(
-  ssh peters-mac-studio-1 'jq -r ".channels.discord.token" ~/.openclaw/openclaw.json' | tr -d '\n'
-)"
+Load `OPENCLAW_PARALLELS_DISCORD_TOKEN` through the approved secret source.
+Set `OPENCLAW_PARALLELS_DISCORD_GUILD_ID` and `OPENCLAW_PARALLELS_DISCORD_CHANNEL_ID`
+to the approved QA destination. The harness configures that bot inside the selected guest.
 
+```bash
 pnpm test:parallels:macos \
   --discord-token-env OPENCLAW_PARALLELS_DISCORD_TOKEN \
-  --discord-guild-id 1456350064065904867 \
-  --discord-channel-id 1456744319972282449 \
+  --discord-guild-id "$OPENCLAW_PARALLELS_DISCORD_GUILD_ID" \
+  --discord-channel-id "$OPENCLAW_PARALLELS_DISCORD_CHANNEL_ID" \
   --json
 ```
 
@@ -50,7 +49,7 @@ pnpm test:parallels:macos \
 - Avoid `prlctl enter` / expect for long Discord setup scripts; it line-wraps/corrupts long commands. Use `prlctl exec --current-user /bin/sh -lc ...` for the Discord config phase.
 - Full 3-OS sweeps: the shared build lock is safe in parallel, but snapshot restore is still a Parallels bottleneck. Prefer serialized Windows/Linux restore-heavy reruns if the host is already under load.
 - Harness cleanup deletes the temporary Discord smoke messages at exit.
-- After a successful Discord roundtrip, shut down the macOS guest before handoff (`prlctl stop "macOS Tahoe"`). The macOS smoke harness should do this automatically after successful Discord proof; still stop the VM manually after ad-hoc Discord checks. Do not leave the Discord-configured VM running; it can keep reading/posting in `#maintainer` and spam Discord after the proof is complete.
+- The harness attempts to stop its selected guest after successful Discord proof and warns if the stop fails. For ad-hoc Discord checks, stop only the task-owned guest before handoff. Do not leave the Discord-configured test guest running after proof.
 - Per-phase logs: `/tmp/openclaw-parallels-smoke.*`
 - Machine summary: pass `--json`
 - If roundtrip flakes, inspect `fresh.discord-roundtrip.log` and `discord-last-readback.json` in the run dir first.

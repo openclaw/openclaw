@@ -123,7 +123,7 @@ export function resolveProviderPolicySurface(
 }
 
 /** Loads the first usable policy surface from caller-selected admitted owners. */
-export function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
+function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
   for (const owner of owners) {
     const surface = resolveProviderPolicySurfaceForOwner(owner);
     if (surface) {

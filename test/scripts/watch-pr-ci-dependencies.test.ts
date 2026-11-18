@@ -8,8 +8,11 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createToolingDependencyFixture } from "./tooling-dependencies.test-support.mts";
 
 vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: vi.fn(actual.spawnSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

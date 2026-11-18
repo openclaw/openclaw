@@ -12,8 +12,9 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessSessionExecutionRestriction } from "../../agents/harness/execution-environment.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import {
   getModelRefStatus,
@@ -22,6 +23,7 @@ import {
   type ModelRef,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { resolveAgentHarnessOperatorPolicyError } from "../../agents/operator-access-program.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
@@ -317,6 +319,9 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   placement?: { context: SessionWorkerPlacementContext; sessionKey: string };
   catalog?: readonly ModelCatalogEntry[];
   callerCanConsent?: boolean;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Creation admits inherited defaults even when no selection fields were supplied. */
+  validateInheritedRuntime?: boolean;
   expectedEntry?: SessionEntry;
   hydrateThinkingCatalog?: boolean;
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
@@ -335,17 +340,24 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     return invalid(formatErrorMessage(error));
   }
   let validateRuntime: (() => string | undefined) | undefined;
+  let selectedHarness: AgentHarness | undefined;
+  let readSelectedHarness = () => selectedHarness;
   let validateEnvironment: (() => ErrorShape | undefined) | undefined;
   let releaseEnvironment: (() => void) | undefined;
   const grantingConsent = typeof params.patch.nativeRuntimeConsent === "string";
+  const preparesRuntimeSelection =
+    typeof params.patch.agentRuntime === "string" ||
+    typeof params.patch.model === "string" ||
+    grantingConsent;
   const modelError = params.validateModelSelection?.();
   if (modelError) {
     return { ok: false, error: modelError };
   }
   if (
-    typeof params.patch.agentRuntime === "string" ||
-    typeof params.patch.model === "string" ||
-    grantingConsent
+    preparesRuntimeSelection ||
+    params.patch.agentRuntime === null ||
+    params.patch.model === null ||
+    params.validateInheritedRuntime
   ) {
     const model = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
     const previousModel = params.expectedEntry
@@ -362,7 +374,20 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       previousModel?.provider === model.provider &&
       previousModel.model === model.model &&
       params.expectedEntry?.authProfileOverride === params.entry.authProfileOverride;
-    if (!preservesRuntimeSelection) {
+    if (!preparesRuntimeSelection || preservesRuntimeSelection) {
+      // Resets and inherited choices still admit a runtime; recheck its current registry at commit.
+      readSelectedHarness = () =>
+        getRegisteredAgentHarness(
+          resolveEffectiveAgentRuntime({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            provider: model.provider,
+            modelId: model.model,
+            sessionEntry: params.entry,
+            mode: "execution",
+          }),
+        )?.harness;
+    } else {
       const choice = await prepareModelSelectionRuntime({
         cfg: params.cfg,
         agentId: params.agentId,
@@ -380,6 +405,14 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       });
       if (choice.status === "rejected") {
         return invalid(choice.message);
+      }
+      selectedHarness = choice.harness;
+      const policyError = resolveAgentHarnessOperatorPolicyError(
+        selectedHarness,
+        params.operatorAuthority,
+      );
+      if (policyError) {
+        return invalid(policyError);
       }
       applyModelRuntimeDirective(params.entry, choice.runtime);
       validateRuntime = choice.validateRuntimeSelection;
@@ -453,7 +486,10 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     if (policyError) {
       return policyError;
     }
-    const message = validateRuntime?.() ?? placementValidation?.validate();
+    const message =
+      resolveAgentHarnessOperatorPolicyError(readSelectedHarness(), params.operatorAuthority) ??
+      validateRuntime?.() ??
+      placementValidation?.validate();
     return message ? errorShape(ErrorCodes.INVALID_REQUEST, message) : undefined;
   };
   try {
@@ -468,6 +504,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
     return {
       ok: true,
       ...(params.validateModelSelection ||
+      params.validateInheritedRuntime ||
       params.patch.agentRuntime !== undefined ||
       params.patch.model !== undefined ||
       grantingConsent

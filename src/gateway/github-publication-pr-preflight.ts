@@ -1,10 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionGitHubPullRequestInspectResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
-import {
-  githubPublicationApiArgs,
-  runPublicationCommand,
-} from "./github-publication-git-transport.js";
+import { createGitHubPublicationJsonReader } from "./github-publication-json-read.js";
 
 type PullRequest = Pick<
   SessionGitHubPullRequestInspectResult,
@@ -36,25 +33,13 @@ export async function assertExistingPullRequestWriteAccess(params: {
     new Error(
       "The original PR's write eligibility could not be verified. Check the head branch and the publisher's access, then retry preparation.",
     );
-  const read = async (endpoint: string): Promise<unknown> => {
-    assertCurrent();
-    const response = await runPublicationCommand(
-      githubPublicationApiArgs(endpoint, "GET", pr.host),
-      { env: identity.env, beforeRun: assertCurrent },
-    ).catch(() => {
-      assertCurrent();
-      throw unavailable();
-    });
-    assertCurrent();
-    if (response.code !== 0) {
-      throw unavailable();
-    }
-    try {
-      return JSON.parse(response.stdout.toString("utf8"));
-    } catch {
-      throw unavailable();
-    }
-  };
+  const read = createGitHubPublicationJsonReader({
+    host: pr.host,
+    env: identity.env,
+    assertCurrent,
+    unavailable,
+    requireSuccess: true,
+  });
   const repository = async (ref: NonNullable<PullRequest["head"]>) => {
     const value = await read(`repos/${ref.repository}`);
     if (

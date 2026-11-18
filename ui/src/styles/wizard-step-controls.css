@@ -39,11 +39,6 @@
   letter-spacing: 0.15em;
 }
 
-.wizard-step__options {
-  display: grid;
-  gap: 8px;
-}
-
 .wizard-step__option {
   display: flex;
   align-items: flex-start;
@@ -110,8 +105,7 @@
   width: 18px;
   height: 18px;
   flex: 0 0 18px;
-  border: 2px solid color-mix(in srgb, var(--accent) 24%, transparent);
-  border-top-color: var(--accent);
+  color: var(--accent);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }
@@ -119,6 +113,5 @@
 @media (prefers-reduced-motion: reduce) {
   .wizard-step__spinner {
     animation: none;
-    border-color: var(--accent);
   }
 }

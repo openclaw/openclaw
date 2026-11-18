@@ -101,6 +101,9 @@ export async function detectSetupMigrationSources(params: {
           `Migration discovery result retained, but plugin cleanup failed: ${formatErrorMessage(error)}`,
         );
       },
+      // Detection is advisory and only feeds the full import, which needs offline ownership.
+      // With a running Gateway, offer no detected sources; the memory step imports through it.
+      onForeignOwner: async () => ({ detections: [], providerDescriptors: [] }),
     },
     async (providers) => {
       const stateDir = resolveStateDir();

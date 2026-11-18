@@ -138,6 +138,7 @@ export function pollLocatorText(locator: Locator) {
 export function createNewSessionPageE2eSuite() {
   return createControlUiE2eSuite({
     name: "Control UI new-session page mocked Gateway E2E",
+    trackBrowserContexts: true,
     unavailableMessage: (executablePath) =>
       `Playwright Chromium is unavailable at ${executablePath}`,
   });
@@ -244,7 +245,7 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
   expect(page.url()).toContain(controlUiSessionPath(sessionKey));
   const startupStatus = page.locator('.chat-thread .chat-working-indicator[role="status"]');
   await pollCount(startupStatus).toBe(1);
-  await pollLocatorText(startupStatus).toContain("Provisioning environment…");
+  await pollLocatorText(startupStatus).toContain("Provisioning environment");
   expect(await page.locator(".chat-cloud-startup, .agent-chat__composer-status-band").count()).toBe(
     0,
   );

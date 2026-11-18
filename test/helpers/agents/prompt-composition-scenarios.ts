@@ -15,19 +15,6 @@ import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
 import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 
-/** One turn in a prompt composition scenario. */
-type PromptScenarioTurn = {
-  id: string;
-  systemPrompt: string;
-  bodyPrompt: string;
-};
-
-/** Multi-turn prompt composition scenario fixture. */
-export type PromptScenario = {
-  scenario: string;
-  turns: PromptScenarioTurn[];
-};
-
 function buildCommonSystemParams(workspaceDir: string) {
   const toolNames = [
     "bash",
@@ -107,7 +94,9 @@ function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: 
   });
 }
 
-async function createDiscordBoundaryScenario(workspaceDir: string): Promise<PromptScenario> {
+async function createDiscordBoundaryScenario(
+  workspaceDir: string,
+): Promise<{ systemPrompt: string; bodyPrompt: string }> {
   const body = "Please summarize the deploy log.";
   const baseCtx: TemplateContext = {
     Provider: "discord",
@@ -136,25 +125,19 @@ async function createDiscordBoundaryScenario(workspaceDir: string): Promise<Prom
     ],
   };
   return {
-    scenario: "auto-reply-discord-boundary",
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: buildAutoReplySystemPrompt({
-          workspaceDir,
-          sessionCtx: baseCtx,
-        }),
-        bodyPrompt: await buildAutoReplyModelPrompt({
-          ctx: baseCtx,
-          body,
-          workspaceDir,
-        }),
-      },
-    ],
+    systemPrompt: buildAutoReplySystemPrompt({
+      workspaceDir,
+      sessionCtx: baseCtx,
+    }),
+    bodyPrompt: await buildAutoReplyModelPrompt({
+      ctx: baseCtx,
+      body,
+      workspaceDir,
+    }),
   };
 }
 
-async function createBootstrapWarningScenario(workspaceDir: string): Promise<PromptScenario> {
+async function createBootstrapWarningScenario(workspaceDir: string): Promise<string> {
   const bootstrapConfig = {
     agents: {
       defaults: {
@@ -187,38 +170,11 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
   if (!truncationNotice) {
     throw new Error("bootstrap-warning scenario expected a truncation notice");
   }
-  return {
-    scenario: "bootstrap-warning",
-    turns: [
-      {
-        id: "t1",
-        systemPrompt: buildSystemPrompt({
-          workspaceDir,
-          contextFiles,
-          bootstrapTruncationNotice: truncationNotice,
-        }),
-        bodyPrompt: "hello",
-      },
-      {
-        id: "t2",
-        systemPrompt: buildSystemPrompt({
-          workspaceDir,
-          contextFiles,
-          bootstrapTruncationNotice: truncationNotice,
-        }),
-        bodyPrompt: "hello again",
-      },
-      {
-        id: "t3",
-        systemPrompt: buildSystemPrompt({
-          workspaceDir,
-          contextFiles,
-          bootstrapTruncationNotice: truncationNotice,
-        }),
-        bodyPrompt: "one more turn",
-      },
-    ],
-  };
+  return buildSystemPrompt({
+    workspaceDir,
+    contextFiles,
+    bootstrapTruncationNotice: truncationNotice,
+  });
 }
 
 /** Create a temp workspace with prompt composition context files. */
@@ -249,18 +205,12 @@ async function createWorkspaceWithPromptCompositionFiles(): Promise<string> {
 }
 
 /** Create all prompt composition scenarios plus cleanup handles. */
-export async function createPromptCompositionScenarios(): Promise<{
-  scenarios: PromptScenario[];
-  cleanup: () => Promise<void>;
-}> {
+export async function createPromptCompositionScenarios() {
   const workspaceDir = await createWorkspaceWithPromptCompositionFiles();
   const warningWorkspaceDir = await makeTempWorkspace("openclaw-prompt-cache-warning-");
-  const scenarios = [
-    await createDiscordBoundaryScenario(workspaceDir),
-    await createBootstrapWarningScenario(warningWorkspaceDir),
-  ];
   return {
-    scenarios,
+    discordBoundary: await createDiscordBoundaryScenario(workspaceDir),
+    bootstrapWarningSystemPrompt: await createBootstrapWarningScenario(warningWorkspaceDir),
     cleanup: async () => {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(warningWorkspaceDir, { recursive: true, force: true });

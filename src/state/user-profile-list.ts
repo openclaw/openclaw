@@ -141,6 +141,7 @@ export function captureResidentUserProfileAccess(
         profileId: profile.id,
         emails: [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted(),
         ...projectUserProfileGitHubFacts(profile),
+        ...(profile.hasOpenClawIdIdentity ? { hasOpenClawIdIdentity: true } : {}),
         assignedRole: profile.role ?? null,
         githubLogin: profile.githubLogin ?? null,
       };
@@ -189,13 +190,7 @@ export function listResidentUserProfileDisplayFacts(options: OpenClawStateDataba
   }
   return [...catalog.rows.values()].map((profile) => ({
     id: profile.id,
-    label:
-      profile.display_name?.trim() ||
-      profile.githubLogin ||
-      [...(bindings.emailsByProfile.get(profile.id) ?? [])].toSorted((left, right) =>
-        Buffer.compare(Buffer.from(left), Buffer.from(right)),
-      )[0] ||
-      profile.id,
+    label: projectUserProfileDisplay(profile).displayName || profile.id,
     hasAvatar: profile.has_avatar === 1,
     updatedAt: profile.updated_at,
   }));

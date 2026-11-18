@@ -4,10 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveOomScoreWrappedCommand } from "./linux-oom-score-spawn.js";
 import {
   prepareOomScoreAdjustedSpawn as prepareSpawn,
   prepareOomScoreAdjustedSpawnPreservingExecEnv as preparePreservingEnv,
-  resolveOomScoreWrappedCommand,
   spawnOomScoreAdjusted,
   type OomScoreAdjustedSpawn,
 } from "./linux-oom-score.js";

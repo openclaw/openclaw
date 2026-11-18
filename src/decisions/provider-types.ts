@@ -1,8 +1,9 @@
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import type { DecisionExecutionLifetime } from "./execution-types.js";
 import type { DecisionProviderContextV2 } from "./provider-context.js";
-import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionBatch, ProviderDecisionOutcome } from "./types.js";
+import type { ProviderDecisionOutcome, ProviderDecisionOutcomeV2 } from "./provider-outcomes.js";
+import type { DecisionBatchV2 } from "./types-v2.js";
+import type { DecisionBatch } from "./types.js";
 
 export interface DecisionProviderV1 {
   readonly id: string;
@@ -16,7 +17,7 @@ export interface DecisionProviderV1 {
       /** Explicit model selected by the host's decisionModel role. */
       readonly model: string;
       readonly agentId?: string;
-      /** Host-owned request admission. Check synchronously immediately before external I/O.
+      /** Host-owned request admission. Check synchronously when each external request starts.
        * False closes this evaluation; a thrown authority assertion remains terminal.
        * Omission preserves explicit evaluations and older hosts. */
       readonly isAdmissible?: () => boolean;

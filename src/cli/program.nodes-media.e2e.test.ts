@@ -1,7 +1,8 @@
-import * as fs from "node:fs/promises";
-import path from "node:path";
+import fs from "node:fs/promises";
 import type { Command } from "commander";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as tmpDirOwner from "../infra/tmp-openclaw-dir.js";
 import {
   createNodesProgram,
   gatewayRequests,
@@ -10,9 +11,11 @@ import {
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
 import { runtime } from "./program.test-mocks.js";
 
+let nodesCamera: typeof import("./nodes-camera.js");
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 const camera = { id: "front", name: "Front Camera", position: "front" };
+const snapPayload = { format: "jpg", base64: "aGk=", width: 1, height: 1 };
 const malformedDevices = [null, 7, "invalid", []];
 function cameraArgs(command: string, ...extra: string[]) {
   return ["nodes", "camera", command, "--node", "ios-node", ...extra];
@@ -30,17 +33,8 @@ async function expectMediaFile(mediaPath: string, pattern?: RegExp, content = "h
   if (pattern) {
     expect(mediaPath).toMatch(pattern);
   }
-  try {
-    expect((await fs.stat(mediaPath)).isFile()).toBe(true);
-    await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(content);
-  } finally {
-    await fs.unlink(mediaPath).catch(() => {});
-    // Snap batches publish inside an owned directory; remove it once its last photo is gone.
-    const batchDir = path.dirname(mediaPath);
-    if (path.basename(batchDir).startsWith(".openclaw-camera-batch-")) {
-      await fs.rmdir(batchDir).catch(() => {});
-    }
-  }
+  expect((await fs.stat(mediaPath)).isFile()).toBe(true);
+  await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe(content);
 }
 
 function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
@@ -61,10 +55,12 @@ function nodeInvokeCalls() {
 }
 
 describe("cli program (nodes media)", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let program: Command;
 
   beforeAll(async () => {
     ({ registerNodesCli } = await import("./nodes-cli.js"));
+    nodesCamera = await import("./nodes-camera.js");
     program = await createNodesProgram(registerNodesCli);
   });
 
@@ -75,6 +71,13 @@ describe("cli program (nodes media)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(tmpDirOwner, "resolvePreferredOpenClawTmpDir").mockReturnValue(
+      tempDirs.make("nodes-media-cli-"),
+    );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it.each([false, true])("filters malformed cameras from output (JSON: %s)", async (json) => {
@@ -94,6 +97,128 @@ describe("cli program (nodes media)", () => {
     await runNodesCommand(cameraArgs("list"));
 
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("No cameras reported."));
+  });
+
+  it.each([false, true])("lists legacy Windows cameras (JSON: %s)", async (json) => {
+    // Response captured in #181348, with a shortened device ID.
+    mockNodeGateway("camera.list", {
+      cameras: [{ DeviceId: "windows-camera", Name: "EasyCamera", IsDefault: true }],
+    });
+
+    await runNodesCommand(cameraArgs("list", ...(json ? ["--json"] : [])));
+
+    if (json) {
+      expect(runtime.writeJson).toHaveBeenCalledWith([
+        { id: "windows-camera", name: "EasyCamera", IsDefault: true },
+      ]);
+    } else {
+      const output = runtime.log.mock.calls.join("\n");
+      expect(output).toContain("EasyCamera");
+      expect(output).toContain("windows-camera");
+    }
+  });
+
+  it("strips node-reported control characters from the camera list table", async () => {
+    mockNodeGateway("camera.list", {
+      devices: [{ name: "front\u0007cam", position: "\u001b[2Jback", id: "dev\u001b]0;x\u0007-1" }],
+    });
+
+    await runNodesCommand(cameraArgs("list"));
+
+    const output = runtime.log.mock.calls.join("\n");
+    expect(output).not.toContain("\u001b");
+    expect(output).not.toContain("\u0007");
+    expect(output).toMatch(/frontcam\s.*back\s.*dev-1/u);
+  });
+
+  it.each([
+    ["--facing", "   ", "invalid facing:     (expected front|back|both)"],
+    ["--quality", "1.5", "--quality must be at most 1."],
+    ["--delay-ms", "-1", "--delay-ms must be a non-negative integer."],
+  ])("rejects invalid %s before node lookup", async (option, value, diagnostic) => {
+    mockNodeGateway();
+
+    await expect(runNodesCommand(cameraArgs("snap", option, value))).rejects.toThrow(/exit/i);
+
+    expect(runtime.error).toHaveBeenCalledWith("nodes camera snap failed: " + diagnostic);
+    expect(gatewayRequests()).toEqual([]);
+  });
+
+  it("forwards normalized --facing FRONT", async () => {
+    mockNodeGateway("camera.snap", snapPayload);
+
+    await runNodesCommand(cameraArgs("snap", "--facing", " FRONT "));
+
+    expect(nodeInvokeCalls()).toMatchObject([
+      { params: { command: "camera.snap" }, commandParams: { facing: "front" } },
+    ]);
+    await expectMediaFile(getFirstRuntimeLogLine().trim(), /openclaw-camera-snap-front-.*\.jpg$/);
+  });
+
+  it("makes one facing-less request and forwards deviceId when --facing is omitted", async () => {
+    mockNodeGateway("camera.snap", snapPayload);
+
+    await runNodesCommand(cameraArgs("snap", "--device-id", "camera-device"));
+
+    const invokes = nodeInvokeCalls();
+    expect(invokes).toMatchObject([
+      {
+        params: { nodeId: "ios-node", command: "camera.snap" },
+        commandParams: { deviceId: "camera-device", quality: undefined, delayMs: undefined },
+      },
+    ]);
+    expect(invokes[0]?.commandParams).not.toHaveProperty("facing");
+    await expectMediaFile(getFirstRuntimeLogLine().trim(), /openclaw-camera-snap-unknown-.*\.jpg$/);
+  });
+
+  it("forwards numeric --quality and --delay-ms values", async () => {
+    mockNodeGateway("camera.snap", snapPayload);
+
+    await runNodesCommand(cameraArgs("snap", "--quality", "0.7", "--delay-ms", "500"));
+
+    expect(nodeInvokeCalls()).toMatchObject([{ commandParams: { quality: 0.7, delayMs: 500 } }]);
+    await expectMediaFile(getFirstRuntimeLogLine().trim());
+  });
+
+  it.each([
+    ["malformed image data", "jpg", "not-base64!", "writeBase64ToFile: invalid base64 payload"],
+    ["an unsafe image extension", "../evil", "aGk=", "invalid media format"],
+  ])(
+    "does not publish the front camera when the back camera returns %s",
+    async (_name, format, base64, diagnostic) => {
+      mockGateway((request) => {
+        if (request.method === "node.list") {
+          return createIosNodeListResponse();
+        }
+        const params = request.params as { params: { facing: string } };
+        return {
+          payload:
+            params.params.facing === "front" ? snapPayload : { ...snapPayload, format, base64 },
+        };
+      });
+      using writer = vi.spyOn(nodesCamera, "writeCameraPayloadToFile");
+      using rename = vi.spyOn(fs, "rename");
+
+      await expect(runNodesCommand(cameraArgs("snap", "--facing", "both"))).rejects.toThrow(
+        /exit/i,
+      );
+
+      expect(runtime.error).toHaveBeenCalledWith("nodes camera snap failed: " + diagnostic);
+      expect(nodeInvokeCalls().map((call) => call.commandParams.facing)).toEqual(["front", "back"]);
+      expect(writer).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not activate the back camera after the front returns an unsafe extension", async () => {
+    mockNodeGateway("camera.snap", { ...snapPayload, format: "../evil" });
+    using writer = vi.spyOn(nodesCamera, "writeCameraPayloadToFile");
+
+    await expect(runNodesCommand(cameraArgs("snap", "--facing", "both"))).rejects.toThrow(/exit/i);
+
+    expect(runtime.error).toHaveBeenCalledWith("nodes camera snap failed: invalid media format");
+    expect(nodeInvokeCalls().map((call) => call.commandParams.facing)).toEqual(["front"]);
+    expect(writer).not.toHaveBeenCalled();
   });
 
   it("runs nodes camera clip with --no-audio", async () => {
@@ -129,12 +254,8 @@ describe("cli program (nodes media)", () => {
 
   it("fails nodes camera snap when --facing both and --device-id are combined", async () => {
     mockNodeGateway();
-    const parseProgram = await createNodesProgram(registerNodesCli);
-    runtime.error.mockClear();
     await expect(
-      parseProgram.parseAsync(cameraArgs("snap", "--facing", "both", "--device-id", "cam-123"), {
-        from: "user",
-      }),
+      runNodesCommand(cameraArgs("snap", "--facing", "both", "--device-id", "cam-123")),
     ).rejects.toThrow(/exit/i);
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringMatching(/facing=both is not allowed when --device-id is set/i),
@@ -163,8 +284,7 @@ describe("cli program (nodes media)", () => {
     expect(paths).toHaveLength(snap ? 2 : 1);
     if (snap) {
       const facings = nodeInvokeCalls().map((call) => call.commandParams.facing);
-      expect(facings).toHaveLength(2);
-      expect(facings).toEqual(expect.arrayContaining(["back", "front"]));
+      expect(facings).toEqual(["front", "back"]);
     }
     const pattern = snap
       ? /openclaw-camera-snap-(front|back)-.*\.jpg$/

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import {
@@ -97,11 +98,13 @@ async function proveQueuedLocalWorkspaceCheckpoint(
         run({
           ...store,
           manifest: async (...args) => {
-            void capture(...args);
             const result = await store.manifest(...args);
-            const afterScan = afterCapture;
-            afterCapture = undefined;
-            await afterScan?.();
+            if (result.kind === "scan" && !(args[1].kind === "scan" && args[1].prehash)) {
+              void capture(...args);
+              const afterScan = afterCapture;
+              afterCapture = undefined;
+              await afterScan?.();
+            }
             return result;
           },
         }),
@@ -199,7 +202,7 @@ export async function proveStoppedLocalWorkspaceCheckpoint(
 
 export async function proveStoppedSandboxAuthority(
   owner: LocalWorkspaceOwner,
-  revoke: "operator" | "gateway" | "guest-involvement",
+  revoke: "operator" | "gateway" | "guest-involvement" | "prepare-release" | "prepare-cancel",
   testSignal?: AbortSignal,
 ) {
   const [state, lease, paths, users, roles, auth, server, cfg, workspaces, backends] =
@@ -227,7 +230,10 @@ export async function proveStoppedSandboxAuthority(
       },
     });
     try {
-      const guestInvolvement = revoke === "guest-involvement";
+      const guestInvolvement =
+        revoke === "guest-involvement" ||
+        revoke === "prepare-release" ||
+        revoke === "prepare-cancel";
       const guestScopes: GatewayOperatorRoleDefinition["scopes"] = [
         "operator.sessions.read",
         "operator.sessions.write",
@@ -300,6 +306,30 @@ export async function proveStoppedSandboxAuthority(
       const provision = vi.spyOn(backends, "createSandboxBackend").mockResolvedValue(backend);
       try {
         const { scope } = await registerWorkspace(owner, guestInvolvement ? profile.id : undefined);
+        if (revoke === "prepare-release" || revoke === "prepare-cancel") {
+          assert(testSignal, "Expected preparation proof lifetime");
+          await proveAttemptPreparationWhileLeaseHeld(
+            owner,
+            revoke === "prepare-release" ? "release" : "cancel",
+            testSignal,
+            async (controller) => {
+              const prepared = await workspaces.resolveAttemptWorkspaceSandbox({
+                config,
+                agentId: owner.agentId,
+                sessionKey: owner.sessionKey,
+                sessionId: owner.sessionId,
+                workspaceDir: owner.worktree.path,
+                abortSignal: controller.signal,
+                admittedRunContext: await admission.admit("embedded"),
+              });
+              return {
+                workspaceDir: prepared.effectiveWorkspace,
+                [Symbol.dispose]: () => prepared[Symbol.dispose](),
+              };
+            },
+          );
+          return;
+        }
         const controller = new AbortController();
         using workspace = await workspaces.resolveAttemptWorkspaceSandbox({
           config,
@@ -495,4 +525,113 @@ export async function proveStoppedSandboxAuthority(
       gateway.release();
     }
   });
+}
+
+/** Observe workspace admission without replacing the lease or preparation owner. */
+async function proveAttemptPreparationWhileLeaseHeld(
+  owner: LocalWorkspaceOwner,
+  ending: "release" | "cancel",
+  testSignal: AbortSignal,
+  prepareAttempt: (
+    controller: AbortController,
+  ) => Promise<{ workspaceDir: string; [Symbol.dispose](): void }>,
+) {
+  const prepare = (controller: AbortController) =>
+    prepareLocalSandboxWorkspace({
+      cfg: { worktreeAcceleration: false },
+      agentId: owner.agentId,
+      sessionKey: owner.sessionKey,
+      workspaceDir: owner.worktree.path,
+      sandbox: resolveSandboxConfigForAgent({}, owner.agentId),
+      signal: controller.signal,
+      assertCurrent: () => controller.signal.throwIfAborted(),
+      assertHost: owner.assertCurrent,
+    });
+  const seed = await prepare(new AbortController());
+  assert(seed, "Registered fixture did not prepare its managed projection");
+  const projectionPath = seed.workspaceDir;
+  seed[Symbol.dispose]();
+  const controller = new AbortController();
+  const reason = createAgentRunDirectAbortError();
+  const entered = createDeferred();
+  const release = createDeferred();
+  const waited = createDeferred();
+  const withStore = workspaceStore.withLocalWorkspaceStore;
+  const admission = vi.spyOn(workspaceStore, "withLocalWorkspaceStore");
+  type PreparationOutcome =
+    | { kind: "returned"; value: Awaited<ReturnType<typeof prepareAttempt>> }
+    | { kind: "rejected"; error: unknown };
+  let holder: Promise<void> | undefined;
+  let preparation: Promise<PreparationOutcome> | undefined;
+  let holderOutcome:
+    | Promise<{ kind: "returned" } | { kind: "rejected"; error: unknown }>
+    | undefined;
+  let beforeRelease: PreparationOutcome | undefined;
+  let afterRelease: PreparationOutcome | undefined;
+  let afterHolder: Awaited<NonNullable<typeof holderOutcome>> | undefined;
+  try {
+    holder = withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+      entered.resolve();
+      await release.promise;
+      store.assertCurrent();
+    });
+    holderOutcome = holder.then(
+      () => ({ kind: "returned" as const }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(entered.promise, holder, "Holder settled before acquiring custody"),
+      testSignal,
+    );
+    admission.mockImplementation((params, run) => {
+      const pending = withStore(params, run);
+      if (params.worktreeId === owner.worktree.id) {
+        waited.resolve();
+      }
+      return pending;
+    });
+    preparation = prepareAttempt(controller).then(
+      (value) => ({ kind: "returned" as const, value }),
+      (error: unknown) => ({ kind: "rejected" as const, error }),
+    );
+    await withinTest(
+      awaitGateBeforeSettlement(
+        waited.promise,
+        preparation,
+        "Preparation settled before workspace admission",
+      ),
+      testSignal,
+    );
+    if (ending === "cancel") {
+      controller.abort(reason);
+      beforeRelease = await withinTest(preparation, testSignal);
+    }
+  } finally {
+    // Release first, then join both owners even when observation/test cancellation fails.
+    release.resolve();
+    try {
+      [afterHolder, afterRelease] = await Promise.all([holderOutcome, preparation]);
+      if (afterRelease?.kind === "returned") {
+        afterRelease.value?.[Symbol.dispose]();
+      }
+    } finally {
+      admission.mockRestore();
+    }
+  }
+  expect(afterHolder?.kind).toBe("returned");
+  await expectSource(owner.worktree.path, "original\n");
+  await expectSource(projectionPath, "original\n");
+  if (ending === "release") {
+    expect(afterRelease?.kind).toBe("returned");
+    if (afterRelease?.kind === "returned") {
+      expect(afterRelease.value?.workspaceDir).toBe(projectionPath);
+    }
+  } else {
+    expect(afterRelease?.kind).toBe("rejected");
+    if (afterRelease?.kind === "rejected") {
+      expect(afterRelease.error).toMatchObject({ code: "sandbox_provisioning" });
+      expect(collectNestedErrorCandidates(afterRelease.error)).toContain(reason);
+    }
+    expect(beforeRelease?.kind).toBe("rejected");
+  }
 }

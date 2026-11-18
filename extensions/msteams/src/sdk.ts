@@ -50,6 +50,12 @@ export type MSTeamsApp = {
       getById(teamId: string): Promise<{ aadGroupId?: string }>;
     };
     conversations: {
+      create(params: {
+        isGroup: boolean;
+        members: Array<{ id: string }>;
+        tenantId: string;
+        channelData: { tenant: { id: string } };
+      }): Promise<{ id: string }>;
       activities(conversationId: string): {
         create(activity: unknown): Promise<{ id?: string }>;
         createTargeted(activity: unknown): Promise<{ id?: string }>;

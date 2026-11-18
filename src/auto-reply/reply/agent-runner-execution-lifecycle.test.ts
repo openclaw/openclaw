@@ -137,53 +137,59 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     });
   });
 
-  it("releases a deferred owner and retains private compaction facts when direct abort escapes", async () => {
-    const onAgentRunTerminalOutcome = vi.fn();
-    const fact = compactionFact(1, 40, { ...compactionTarget, sessionId: "accepted-successor" });
-    const sessionId = "session";
-    const sessionKey = "main";
-    const handle: EmbeddedAgentQueueHandle = {
-      runId: "restart-after-adoption",
-      queueMessage: async () => undefined,
-      isStreaming: () => true,
-      isCompacting: () => false,
-      abort: vi.fn(),
-    };
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      // The native handle belongs to the turn already admitted by execution.
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      params.onDeferredLifecycleOwner?.({
-        beginRetryWait: () => undefined,
-        complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
-        discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+  it.each([0, 1])(
+    "retains private context facts after direct abort (compactions=%s)",
+    async (count) => {
+      const onAgentRunTerminalOutcome = vi.fn();
+      const fact = compactionFact(count, 40, {
+        ...compactionTarget,
+        sessionId: "accepted-successor",
       });
-      expect(params.onCompactionAccounting).toEqual(expect.any(Function));
-      params.onCompactionAccounting?.(fact);
-      throw createAgentRunDirectAbortError();
-    });
+      const sessionId = "session";
+      const sessionKey = "main";
+      const handle: EmbeddedAgentQueueHandle = {
+        runId: "restart-after-adoption",
+        queueMessage: async () => undefined,
+        isStreaming: () => true,
+        isCompacting: () => false,
+        abort: vi.fn(),
+      };
+      state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        // The native handle belongs to the turn already admitted by execution.
+        setActiveEmbeddedRun(sessionId, handle, sessionKey);
+        params.onDeferredLifecycleOwner?.({
+          beginRetryWait: () => undefined,
+          complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+          discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
+        });
+        expect(params.onCompactionAccounting).toEqual(expect.any(Function));
+        params.onCompactionAccounting?.(fact);
+        throw createAgentRunDirectAbortError();
+      });
 
-    try {
-      const result = await runRawTurn({ opts: { onAgentRunTerminalOutcome } });
+      try {
+        const result = await runRawTurn({ opts: { onAgentRunTerminalOutcome } });
 
-      expect(result.outcome).toEqual({
-        kind: "aborted",
-        reason: "user",
-        sessionWriter: fact.target,
-        compaction: { count: 1, durable: [fact] },
-      });
-      expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
-      expect(isSessionRunActive(sessionId)).toBe(false);
-      const terminals = terminalEvents(result.runId);
-      expect(terminals).toHaveLength(1);
-      expect(terminals[0]?.data).toMatchObject({
-        phase: "error",
-        aborted: true,
-        stopReason: "aborted",
-      });
-    } finally {
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-    }
-  });
+        expect(result.outcome).toEqual({
+          kind: "aborted",
+          reason: "user",
+          sessionWriter: fact.target,
+          compaction: { count, durable: [fact] },
+        });
+        expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+        expect(isSessionRunActive(sessionId)).toBe(false);
+        const terminals = terminalEvents(result.runId);
+        expect(terminals).toHaveLength(1);
+        expect(terminals[0]?.data).toMatchObject({
+          phase: "error",
+          aborted: true,
+          stopReason: "aborted",
+        });
+      } finally {
+        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+      }
+    },
+  );
 
   it("retains channel evidence across preflight failure, then attributes identity before admission", async () => {
     const order: string[] = [];

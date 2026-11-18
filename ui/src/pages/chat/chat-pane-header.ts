@@ -9,9 +9,11 @@ import { COMMAND_PALETTE_OPEN_EVENT } from "../../components/command-palette-con
 import { resolveChatPaneDesktopTarget } from "../../components/desktop/desktop-source.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../components/session-menu-data.ts";
+import { resolveWorkspaceIconSource } from "../../components/workspace-icon-source.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveGatewayStatus } from "../../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { resolveChatAgentIdentity } from "./chat-agent-id.ts";
 import {
@@ -20,15 +22,11 @@ import {
   getChatBranchesQueryState,
   loadChatBranches,
 } from "./chat-history-branches.ts";
-import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { createChatMobilePeopleMentions } from "./chat-mobile-people-mentions.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { readChatPaneHeaderAccess } from "./chat-pane-header-access.ts";
-import {
-  resolveChatPaneWorkspaceIcon,
-  resolveChatPaneWorkspace,
-} from "./chat-pane-header-identity.ts";
+import { resolveChatPaneWorkspace } from "./chat-pane-header-identity.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
 import { ChatPaneHeaderPeople } from "./chat-pane-header-people.ts";
 import { resolveChatPanePlacement } from "./chat-pane-placement.ts";
@@ -150,7 +148,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     this.headerAgentWorkspace = agentWorkspace;
     this.headerWorkspaceGit = workspaceGit;
     this.syncSelectedSessionSharing(row);
-    const workspace = resolveChatPaneWorkspace({
+    const cachedChrome = this.cachedSessionState()?.chrome;
+    const cachedPending = this.cachedSessionStatePending();
+    const liveWorkspace = resolveChatPaneWorkspace({
       session: row,
       agentWorkspace,
       worktreePaths: headerState.worktreePaths,
@@ -159,7 +159,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         isGatewayMethodAdvertised(this.context.gateway.snapshot, "sessions.files.reveal") === true,
       hasAdminAccess: hasOperatorAdminAccess(this.context.gateway.snapshot.hello?.auth ?? null),
     });
-    const branch = workspace.branch;
+    const workspace =
+      cachedPending && cachedChrome
+        ? { ...liveWorkspace, ...cachedChrome.workspace }
+        : liveWorkspace;
+    const branch = liveWorkspace.branch;
     const branchSwitchWorking = this.state
       ? this.state.chatSending ||
         isChatRunWorking({
@@ -220,7 +224,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         catalog,
         currentLayout,
         Boolean(panelControls),
-        ...panelDefinitions.flatMap(({ slot, label, available }) => [slot, label, available]),
+        ...panelDefinitions.flatMap(({ slot, label, icon, available }) => [
+          slot,
+          label,
+          icon,
+          available,
+        ]),
         i18n.getLocale(),
       ],
       () => {
@@ -309,7 +318,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             addPanelAction(slot, {
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
-              icon: subagents ? "bot" : "terminal",
+              icon: subagents ? "bot" : "listTree",
               active: subagents ? subagentsVisible : processesVisible,
               onActivate: () => this.requestBackgroundPanel(slot, "toggle"),
             });
@@ -443,6 +452,19 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       (catalog ? this.history.catalogSession?.name?.trim() : undefined) ||
       this.resolveHeaderSessionTitle(row);
     const branchQuery = this.state ? getChatBranchesQueryState(this.state) : undefined;
+    const hasVersions =
+      branchQuery?.status === "ready"
+        ? displayedChatSessionBranches(this.state!).length > 1
+        : cachedChrome?.hasVersions;
+    if (!catalog && row && !cachedPending && this.state?.client?.recoveryScopeReady) {
+      this.cacheSessionState({
+        chrome: {
+          workspace: { root: workspace.root, label: workspace.label },
+          color: row?.color,
+          hasVersions: hasVersions ?? false,
+        },
+      });
+    }
     const header: ChatPaneHeaderProps = {
       onHeaderRef: this.registerHeaderElement,
       paneId: this.paneId,
@@ -450,13 +472,16 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       narrow: this.narrow,
       mergedChrome: this.mergedChrome,
       navDrawerOpen: this.navDrawerOpen,
-      gatewayStatus: this.gatewayStatus,
+      // Mobile owns notice placement, including suppression while its drawer is open.
+      gatewayStatus: this.mergedChrome
+        ? this.gatewayStatus
+        : (this.gatewayStatus ?? {
+            kind: resolveGatewayStatus(sharingSnapshot),
+            lastError: sharingSnapshot.lastError,
+            onRetry: this.context.gateway.connect,
+          }),
       savedConversation: Boolean(
-        this.state &&
-        (!this.state.connected ||
-          this.routeResolutionPending ||
-          isInitialChatHistoryUnavailable(this.state)) &&
-        this.state.chatMessages.length,
+        this.state && !this.state.connected && this.state.chatMessages.length,
       ),
       title,
       titlePending: !catalog && !title ? true : undefined,
@@ -465,6 +490,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ? resolveChatAgentIdentity(this.state, this.context)
           : undefined,
       session: row,
+      sessionColor: cachedPending && cachedChrome ? cachedChrome.color : row?.color,
+      hasVersions,
       showOwnerChip,
       ownerViewing,
       personActivity,
@@ -474,8 +501,9 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameValue: headerState.renameValue,
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
-      workspaceIcon: resolveChatPaneWorkspaceIcon({
-        sessionKey:
+      workspaceIcon: resolveWorkspaceIconSource({
+        route: "workspaceIcon",
+        value:
           workspace.root && this.state?.connected && !this.routeResolutionPending
             ? row?.key
             : undefined,

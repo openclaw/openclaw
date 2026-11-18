@@ -69,9 +69,9 @@ describe("launchd process membership", () => {
       ),
       "inside",
     ),
-    ["neither PID has a coalition", pidRecord, uncontained(gatewayPid), "absent"],
-    ["only the caller has a coalition", jobRecord, uncontained(gatewayPid), "absent"],
-    jobCase("caller outside the known job", pidRecord, "outside"),
+    ["neither PID has a coalition", pidRecord, uncontained(gatewayPid), "unknown"],
+    ["only the caller has a coalition", jobRecord, uncontained(gatewayPid), "unknown"],
+    jobCase("caller outside the known job", pidRecord, "unknown"),
     ...[
       { label: "missing caller", stdout: `${gatewayPid} 900 0\n` },
       { label: "invalid group", stdout: `${process.pid} 0 0\n${gatewayPid} 900 0\n` },
@@ -173,6 +173,68 @@ describe("launchd process membership when launchctl denies PID domains", () => {
     expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe("unknown");
     expect(native.coalition).not.toHaveBeenCalled();
   });
+});
+
+describe("launchd process membership when launchctl omits the resource coalition header", () => {
+  // macOS 15 can answer `launchctl print pid/<pid>` successfully with a valid PID-domain
+  // record that omits the "resource coalition" section. The native coalition reader
+  // must be consulted as a fallback rather than treating the coalition as absent.
+  const omitted = uncontained;
+  const nativeRow = (id: number, name?: string) => ({ id: BigInt(id), name });
+  const observe = (caller: object | null, gateway: object | null) => {
+    native.spawn.mockImplementation((command: string, args: string[]) =>
+      command === "ps"
+        ? { status: 0, stdout: groupRows(901) }
+        : { status: 0, stdout: omitted(Number(args[1]!.slice(4))) },
+    );
+    native.coalition.mockImplementation((pid: number) => {
+      const value = pid === process.pid ? caller : gateway;
+      if (value instanceof Error) {
+        throw value;
+      }
+      return value;
+    });
+  };
+
+  it.each([
+    [
+      "an external terminal via native coalition",
+      nativeRow(1204, "com.apple.Terminal"),
+      "outside",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    [
+      "the Gateway coalition via native coalition",
+      nativeRow(1203),
+      "inside",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    [
+      "a child of an earlier Gateway instance via native coalition",
+      nativeRow(1204, "ai.openclaw.gateway"),
+      "inside",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    [
+      "distinct native coalitions without job names",
+      nativeRow(1204),
+      "unknown",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+    ["native reader confirms absence", null, "absent", null],
+    [
+      "native reader unavailable for the caller",
+      new Error("unavailable"),
+      "unknown",
+      nativeRow(1203, "ai.openclaw.gateway"),
+    ],
+  ] satisfies Array<[string, object | null, string, object | null]>)(
+    "classifies %s from native coalitions when the header is omitted",
+    (_label, caller, expected, gateway) => {
+      observe(caller, gateway);
+      expect(inspectServiceProcessMembershipSync(gatewayPid, "darwin")).toBe(expected);
+    },
+  );
 });
 
 describe("systemd process membership", () => {

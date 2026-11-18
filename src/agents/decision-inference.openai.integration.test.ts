@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { DecisionContractError } from "../decisions/contract-error.js";
 import { evaluateDecisionInRegistry, evaluateDecisionV2InRegistry } from "../decisions/runtime.js";
-import { DecisionContractError } from "../decisions/validation.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import {
   clearSecretsRuntimeSnapshot,
@@ -67,8 +67,8 @@ it.each([
         if (profiles) {
           delete provider.apiKey;
         }
-        if (privateRoute && route !== "private denied") {
-          request.allowPrivateNetwork = true;
+        if (privateRoute) {
+          request.allowPrivateNetwork = route !== "private denied";
         }
         if (route === "unresolved header") {
           request.headers!["X-Unresolved"] = {
@@ -261,10 +261,13 @@ it.each([
                   {
                     settled: { outcome: harness.unavailable("retiring") },
                     aborted: false,
-                    finalAdmission: false,
+                    finalAdmission: true,
                   },
                 );
-                expectNoEffects();
+                // A request admitted before DNS may finish; the host rejects its stale result.
+                expect(requests).toHaveLength(1);
+                expect(events).toEqual([]);
+                expect(registry.decisionProviders[0]?.host.inspect(config).activeRequests).toBe(0);
               } finally {
                 release.resolve();
                 await settled;

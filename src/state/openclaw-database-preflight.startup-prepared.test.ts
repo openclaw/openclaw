@@ -9,7 +9,6 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { recordLegacyMigrationReceipt } from "../infra/state-migrations.receipts.js";
-import * as logging from "../logging/subsystem.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
@@ -54,7 +53,11 @@ function createFleet() {
     expectInspections: (count: number) =>
       expect(onAgentInspection).toHaveBeenLastCalledWith(
         count === 0
-          ? { schemaInspectionCount: 0, schemaProcessCount: 0, schemaSnapshotCount: 0 }
+          ? expect.objectContaining({
+              schemaInspectionCount: 0,
+              schemaProcessCount: 0,
+              schemaSnapshotCount: 0,
+            })
           : expect.objectContaining({ schemaInspectionCount: count }),
       ),
     ready: () =>
@@ -79,12 +82,13 @@ it.each([
   { agentId: "crestodian", ownerId: "crestodian" },
   { agentId: "worker", ownerId: "worker" },
   { agentId: "openclaw", ownerId: "foreign" },
+  { agentId: "main", ownerId: "main", schemaVersion: supportedVersions.agent },
 ])(
-  "keeps a held old-schema $agentId store with owner $ownerId unavailable without blocking healthy startup",
-  async ({ agentId, ownerId }) => {
+  "skips a held $agentId store with owner $ownerId before schema inspection and refuses direct runtime access",
+  async ({ agentId, ownerId, schemaVersion = supportedVersions.agent - 1 }) => {
     const fleet = databaseFixture(tempDirs.make("startup-held-schema-"));
     const config = agentConfig(["main", "worker"], "main");
-    const healthyPath = fleet.agent("main").path;
+    const healthyPath = fleet.agent(agentId === "main" ? "worker" : "main").path;
     const heldPath = fleet.agent(agentId).path;
     // The shipped receipt can name reserved IDs even though reconstruction no longer does.
     runOpenClawStateWriteTransaction(
@@ -110,30 +114,36 @@ it.each([
     closeDatabases();
     execSql(
       heldPath,
-      `PRAGMA user_version=${supportedVersions.agent - 1}; UPDATE schema_meta SET schema_version=${supportedVersions.agent - 1}, agent_id='${ownerId}' WHERE meta_key='primary';`,
+      `PRAGMA user_version=${schemaVersion}; UPDATE schema_meta SET schema_version=${schemaVersion}, agent_id='${ownerId}' WHERE meta_key='primary';`,
     );
     const before = fs.readFileSync(heldPath);
+    const mtime = fs.statSync(heldPath).mtimeMs;
     const log = { info: vi.fn(), warn: vi.fn() };
-    const createLogger = logging.createSubsystemLogger;
-    vi.spyOn(logging, "createSubsystemLogger").mockImplementation((subsystem) => ({
-      ...createLogger(subsystem),
-      warn: log.warn,
-    }));
+    const inspected: string[] = [];
+    const createReader = schemaInspection.createAgentSchemaInspectionWorker;
+    vi.spyOn(schemaInspection, "createAgentSchemaInspectionWorker").mockImplementation(() => {
+      const reader = createReader();
+      const inspect = reader.inspect;
+      return Object.assign(reader, {
+        inspect: (...args: Parameters<typeof inspect>) => {
+          inspected.push(args[0].pathname);
+          return inspect(...args);
+        },
+      });
+    });
     await withImmediateAdmission(async () => {
       await expect(fleet.ready(config)).resolves.toBeUndefined();
       expect(readAgentDatabaseAdmissionRefusal(agentId, { env: fleet.env })).toMatchObject({
-        code: "agent-database-inspection-failed",
+        code: "agent-database-held",
         paths: [heldPath],
-        repairHint: expect.stringContaining("openclaw doctor --fix"),
       });
       const prepared = await prepareGatewayStartupSessions({ cfg: config, env: fleet.env, log });
       expect(prepared.map(({ database }) => database.path)).toEqual([healthyPath]);
-      expect(() => fleet.agent(agentId)).toThrow("held for deletion recovery");
+      expect(() => fleet.agent(agentId)).toThrow("held for explicit restoration");
     });
-    expect(log.warn).toHaveBeenCalledWith(
-      expect.stringMatching(new RegExp(`Agent ${agentId} database is held.*openclaw doctor --fix`)),
-    );
+    expect(inspected).not.toContain(heldPath);
     expect(fs.readFileSync(heldPath)).toEqual(before);
+    expect(fs.statSync(heldPath).mtimeMs).toBe(mtime);
   },
 );
 
@@ -141,6 +151,7 @@ it("still refuses an unmigrated reserved store without a recovery hold", async (
   const fleet = databaseFixture(tempDirs.make("startup-unheld-schema-"));
   const pathname = fleet.agent("openclaw").path;
   closeDatabases();
+  revokeSqliteDatabaseAdmissionsForPath(pathname);
   execSql(pathname, `PRAGMA user_version=${supportedVersions.agent - 1};`);
   await withImmediateAdmission(async () => {
     await expect(fleet.ready(agentConfig(["main"], "main"))).rejects.toThrow(
@@ -282,7 +293,7 @@ it("carries fleet compatibility once into bootstrap while readiness always inspe
     await fleet.inspect();
     fleet.expectInspections(fleet.paths.length);
   });
-  await fleet.inspect();
+  expect(await fleet.inspect()).toEqual(compatible);
   fleet.expectInspections(fleet.paths.length);
 });
 
@@ -308,6 +319,16 @@ it("preserves configured ownership when reusing an unchanged inspected database"
     ]);
     fleet.expectInspections(0);
   });
+});
+
+it("reads unsealed state for runtime preflight without a private snapshot", async () => {
+  const fleet = databaseFixture(tempDirs.make("preflight-live-state-"));
+  fleet.state();
+  closeDatabases();
+  revokeSqliteDatabaseAdmissionsForPath(fleet.statePath);
+  const prepare = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
+  expect(await fleet.inspect({ scope: "state" }, "runtime")).toEqual(compatible);
+  expect(prepare).not.toHaveBeenCalled();
 });
 
 it("reads newly registered stores without copying admitted state after startup writes", async () => {

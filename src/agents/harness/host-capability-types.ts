@@ -6,7 +6,15 @@ import type {
 import type { ImageContent } from "../../../packages/llm-core/src/types.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-export type AgentHarnessContextMedia = { text?: string; images: ImageContent[] };
+export type AgentHarnessContextMedia = {
+  text?: string;
+  images: ImageContent[];
+  /** User native-image sources, including intentionally suppressed or unavailable pixels. */
+  hasImageAttachments?: boolean;
+  /** User attachments are exclusively native images, even if restoration failed. */
+  imageOnly?: boolean;
+};
+/** maxChars=0 classifies the user source without hydrating attachment content. */
 export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
 
 type AgentHarnessHostApprovalResult = Readonly<{
@@ -122,6 +130,16 @@ export type AgentHarnessHostCapabilities = Readonly<{
     assertCurrent: () => void;
     signal?: AbortSignal;
   }) => Promise<string | undefined>;
+  /**
+   * Fits a current request over the runtime's hard per-turn text cap. The harness
+   * passes its own placement-aware preparer, so the full request becomes an
+   * attachment only where the runtime can read it; otherwise its middle is cut.
+   */
+  fitCurrentInput?: (request: {
+    prompt: string;
+    maxChars: number;
+    stageAttachment?: import("./current-input-budget.js").StageCurrentInputAttachment;
+  }) => Promise<string>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
   prepareContextMedia?: (
     request: AgentHarnessContextMediaRequest,

@@ -2,6 +2,9 @@ import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-i
 import type { SpeechProviderPlugin, SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech-core";
 import {
   createSpeechDirectiveParser,
+  buildOpenAiSpeechRequestBody,
+  OPENAI_TTS_MODELS,
+  OPENAI_TTS_VOICES,
   parseSpeechDirectiveNumberOverride,
 } from "openclaw/plugin-sdk/speech-provider";
 import {
@@ -17,30 +20,6 @@ import {
 } from "./realtime-provider-shared.js";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-
-const OPENAI_TTS_MODELS = [
-  "gpt-4o-mini-tts",
-  "gpt-4o-mini-tts-2025-12-15",
-  "tts-1",
-  "tts-1-hd",
-] as const;
-
-const OPENAI_TTS_VOICES = [
-  "alloy",
-  "ash",
-  "ballad",
-  "cedar",
-  "coral",
-  "echo",
-  "fable",
-  "juniper",
-  "marin",
-  "onyx",
-  "nova",
-  "sage",
-  "shimmer",
-  "verse",
-] as const;
 
 type OpenAiTtsVoice = (typeof OPENAI_TTS_VOICES)[number];
 
@@ -71,17 +50,6 @@ function isValidOpenAIVoice(voice: string, baseUrl?: string): voice is OpenAiTts
     return true;
   }
   return OPENAI_TTS_VOICES.some((candidate) => candidate === voice);
-}
-
-function sanitizeExtraBodyRecord(value: Record<string, unknown>): Record<string, unknown> {
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    if (key === "__proto__" || key === "constructor" || key === "prototype") {
-      continue;
-    }
-    sanitized[key] = entry;
-  }
-  return sanitized;
 }
 
 const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
@@ -255,15 +223,17 @@ async function synthesizeOpenAISpeech(req: SpeechSynthesisRequest, responseForma
       "Content-Type": "application/json",
     },
   );
-  const requestBody = JSON.stringify({
-    model,
-    input: text,
-    voice,
-    response_format: responseFormat,
-    ...(speed != null && { speed }),
-    ...(effectiveInstructions != null && { instructions: effectiveInstructions }),
-    ...(config.extraBody == null ? {} : sanitizeExtraBodyRecord(config.extraBody)),
-  });
+  const requestBody = JSON.stringify(
+    buildOpenAiSpeechRequestBody({
+      model,
+      text,
+      voice,
+      responseFormat,
+      speed,
+      instructions: effectiveInstructions,
+      extraBody: config.extraBody,
+    }),
+  );
   const requestUrl = `${config.baseUrl}/audio/speech`;
   const debugProxyFetchPatchInstalled = proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled();
   const { response, release } = await fetchWithSsrFGuard({

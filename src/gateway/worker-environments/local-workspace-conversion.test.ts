@@ -6,12 +6,15 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
 import {
   createLocalWorkspaceManifestTree,
   localWorkspaceManifestRootReference,
+  updateLocalWorkspaceManifestTree,
 } from "./local-workspace-manifest-tree.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import { localWorkspaceProjectionFixture } from "./local-workspace-store.test-support.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -102,3 +105,96 @@ it.each(["legacy", "v31"] as const)(
     expect(source()).toEqual(before);
   },
 );
+
+it("converts a v31 projection online without changing its root and recovers its saved checkpoint after restart", async () => {
+  const worktreeId = randomUUID();
+  const conversionBaseCommit = "a".repeat(40);
+  const records = createLocalWorkspaceManifestTree([
+    { path: "entry.txt", type: "file", mode: 0o644, size: 4, sha256: "a".repeat(64) },
+  ]);
+  const previousRoot = localWorkspaceManifestRootReference(records, conversionBaseCommit);
+  const previousTreeRoot = records.get("")!.treeRef;
+  const legacyRows = [...records.values()].map((record) =>
+    Object.assign({}, record, {
+      canonicalIdentity: "gateway:1:2:4:5:6",
+      projectionIdentity: "gateway:1:3:4:5:6",
+    }),
+  );
+  const changed = updateLocalWorkspaceManifestTree(records, [
+    {
+      path: "entry.txt",
+      node: { path: "entry.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) },
+    },
+  ]);
+  const resultingRoot = localWorkspaceManifestRootReference(records, conversionBaseCommit);
+  const checkpoint = {
+    version: 1 as const,
+    kind: "scan" as const,
+    previousRoot,
+    resultingRoot,
+    ...changed,
+    baseManifestRaw: serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: conversionBaseCommit,
+      entries: [legacyRows.find((record) => record.node.path === "entry.txt")!.node].filter(
+        (node) => node.type !== "directory",
+      ),
+    }),
+    baseManifestRef: "sha256:legacy-base",
+    currentManifestRaw: serializeWorkerWorkspaceManifest({
+      version: 1,
+      baseCommit: conversionBaseCommit,
+      entries: [{ path: "entry.txt", type: "file", mode: 0o644, size: 4, sha256: "b".repeat(64) }],
+    }),
+    currentManifestRef: "sha256:legacy-result",
+    buildCacheInputs: [],
+  };
+  const savedCheckpoint = JSON.stringify(checkpoint);
+  await withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+    store.create({
+      ...localWorkspaceProjectionFixture(worktreeId, root),
+      source_paths_json: '["entry.txt"]',
+      baseline_ref: previousRoot,
+      pending_ref: "refs/openclaw/results/legacy-checkpoint",
+      pending_target: "canonical",
+      checkpoint_json: savedCheckpoint,
+    }),
+  );
+  const database = openOpenClawStateDatabase({ env });
+  for (const record of legacyRows) {
+    database.db
+      .prepare(
+        "INSERT INTO local_workspace_manifest_nodes (worktree_id, path, node_json) VALUES (?, ?, ?)",
+      )
+      .run(worktreeId, record.node.path, JSON.stringify(record));
+  }
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const prepared = await store.manifest(store.get()!, { kind: "convert" });
+    assert(prepared.kind === "replace");
+    const converted = await store.accept(prepared.update);
+    expect(converted.baseline_ref).toBe(previousRoot);
+    expect(
+      Buffer.from(converted.tree_root_digest!).equals(localWorkspaceDigestBytes(previousTreeRoot)),
+    ).toBe(true);
+    expect(converted.checkpoint_json).toBe(savedCheckpoint);
+    expect(converted.pending_target).toBe("canonical");
+  });
+  expect(
+    database.db
+      .prepare("SELECT count(*) AS count FROM local_workspace_manifest_nodes WHERE worktree_id = ?")
+      .get(worktreeId)!.count,
+  ).toBe(0);
+  await closeOpenClawStateDatabaseAsync();
+  await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+    const selected = store.get()!;
+    const restored = JSON.parse(selected.checkpoint_json!) as typeof checkpoint;
+    expect(restored.previousRoot).toBe(selected.baseline_ref);
+    const accepted = await store.update(selected, { pending_target: null }, undefined, restored);
+    expect(accepted.baseline_ref).toBe(resultingRoot);
+    const materialized = await store.manifest(accepted, { kind: "materialize" });
+    expect(materialized).toMatchObject({
+      kind: "materialize",
+      rawManifest: checkpoint.currentManifestRaw,
+    });
+  });
+});

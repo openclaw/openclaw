@@ -92,7 +92,7 @@ it.for(["browser", "system"] as const)(
   "keeps caller custody for browser corrections to a %s direct command",
   async (source, { signal }) => {
     const steered = source === "browser";
-    const expectedReply = steered ? "result-required" : "optional";
+    const expectedReply = steered ? "required" : "optional";
     const expectedAnswer = steered ? "Correction applied." : "Completed.";
     const sessionKey = `agent:main:direct-steering-${source}`;
     const sessionId = `direct-steering-session-${source}`;

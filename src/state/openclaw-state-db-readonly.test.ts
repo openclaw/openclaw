@@ -311,7 +311,7 @@ it("requires Doctor for the exact dangling Workshop index without changing its s
         ),
       ),
     ).rejects.toThrow(/legacy-workshop-review-index.*openclaw doctor --fix/);
-    expect(fs.readFileSync(options.path)).toEqual(before);
+    expect(fs.readFileSync(options.path).equals(before), options.path).toBe(true);
   });
 });
 it("reuses an idle writer but isolates its transaction", async () => {
@@ -466,7 +466,7 @@ it.each(["synchronous", "report"])(
           expect(read()).toBe("first");
         });
         expect(openedReaders()).toHaveLength(1);
-        expect(artifacts()).toEqual(before);
+        artifacts().forEach((data, i) => expect(data.equals(before[i]!), `SQLite ${i}`).toBe(true));
         await run(() => {
           expect(read()).toBe("first");
           writer.exec("UPDATE held SET value='second'");
@@ -582,7 +582,7 @@ it("reads fresh authority without replacing an inherited discovery snapshot", as
       writer.exec("UPDATE held SET value='revoked'");
       const before = artifacts();
       expect(current()).toEqual(["revoked", "revoked"]);
-      expect(artifacts()).toEqual(before);
+      artifacts().forEach((data, i) => expect(data.equals(before[i]!), `SQLite ${i}`).toBe(true));
       expect(read()).toBe("first");
       expect(() =>
         withSynchronousArtifactPreservingStateSnapshot(

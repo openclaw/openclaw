@@ -30,6 +30,7 @@ import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 import { isProcessPresent } from "./run-process.test-support.js";
 
 const npmArtifact = {
@@ -56,10 +57,6 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
 function runAssertion(command: string, env: NodeJS.ProcessEnv) {
   return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, command], {
     encoding: "utf8",

@@ -20,10 +20,10 @@ import {
 import { listTrustedExternalProviderPolicyOwners } from "./provider-policy-owners.js";
 import { resolveDirectBundledProviderPolicySurface } from "./provider-policy-surface.js";
 import {
-  loadProviderPolicyArtifacts,
   loadProviderPolicyArtifactsAsync,
   resolveBundledProviderPolicySurface,
   resolveProviderPolicySurface,
+  resolveProviderPolicySurfaceForOwner,
 } from "./provider-public-artifacts.js";
 import {
   prepareModelCatalogThinkingPolicies,
@@ -371,7 +371,7 @@ describe("provider public artifacts", () => {
         }
         const resolve = () =>
           withPluginRuntimeRegistryScope(registry, () =>
-            withPluginCache(cache, () => loadProviderPolicyArtifacts([metadata])?.surface),
+            withPluginCache(cache, () => resolveProviderPolicySurfaceForOwner(metadata)),
           );
         if (scenario === "catalog") {
           const catalog: ModelCatalogSnapshot = {
@@ -518,7 +518,7 @@ describe("provider public artifacts", () => {
     await retirePluginCache(cache);
   });
 
-  it("retains a trusted installed provider owner without a policy artifact", () => {
+  it("retains a trusted installed provider owner without a policy artifact", async () => {
     const pluginRoot = tempDirs.make("openclaw-provider-owner-");
     const plugin = {
       id: "llama-cpp",
@@ -532,14 +532,14 @@ describe("provider public artifacts", () => {
     const manifestRegistry = { plugins: [plugin] };
 
     const owners = listTrustedExternalProviderPolicyOwners("local", manifestRegistry);
-    expect(loadProviderPolicyArtifacts(owners)).toEqual({
+    expect(await loadProviderPolicyArtifactsAsync(owners)).toEqual({
       owner: plugin,
       surface: null,
     });
     expect(resolveProviderPolicySurface("local", { manifestRegistry })).toBeNull();
   });
 
-  it("continues to a usable policy when the first trusted owner lacks its artifact", () => {
+  it("continues to a usable policy when the first trusted owner lacks its artifact", async () => {
     const missingPolicyRoot = tempDirs.make("openclaw-provider-owner-missing-");
     const policyRoot = writeExternalPolicyFixture();
     const owner = (id: string, rootDir: string) =>
@@ -557,7 +557,7 @@ describe("provider public artifacts", () => {
     };
 
     const owners = listTrustedExternalProviderPolicyOwners("fixture-embedding", manifestRegistry);
-    const artifacts = loadProviderPolicyArtifacts(owners);
+    const artifacts = await loadProviderPolicyArtifactsAsync(owners);
 
     expect(artifacts?.owner.id).toBe("b-policy");
     expect(artifacts?.surface?.inspectEmbeddingProviderSetup).toBeTypeOf("function");

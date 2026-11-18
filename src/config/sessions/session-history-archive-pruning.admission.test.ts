@@ -109,8 +109,12 @@ function interceptArchives(
   vi.spyOn(pageReclamation, "withSqliteSessionPageReclamation").mockImplementation(
     <T>(...args: Parameters<typeof withPages<T>>) => {
       const [input, run] = args;
-      return withPages(input, (reclaim, assertCurrent, options, archives) =>
-        run(reclaim, assertCurrent, options, wrap(archives, options)),
+      return withPages(
+        input,
+        (reclaim, assertCurrent, options, archives) =>
+          run(reclaim, assertCurrent, options, wrap(archives, options)),
+        args[2],
+        args[3],
       );
     },
   );
@@ -344,6 +348,7 @@ it("enforces a physical archive budget without ordinary host SQLite calls", asyn
   );
   const retained = { sessionKey: "agent:main:guard-retained", storePath: fixture.storePath };
   replaceSessionEntrySync(retained, { sessionId: "guard-retained", updatedAt: 1 });
+  await closeOpenClawAgentDatabaseByPathAsync(fixture.options.path);
   const database = openOpenClawAgentDatabase(fixture.options);
   database.walMaintenance.checkpoint();
   database.db.exec("PRAGMA incremental_vacuum;");

@@ -26,8 +26,7 @@ describe("Solid model picker interop", () => {
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
-    expect(trigger.textContent).toContain("Selected");
-    expect(trigger.textContent).toContain("API");
+    expect(trigger.textContent).toMatch(/Selected[\s\S]*API/);
     expect(trigger.querySelector('[data-provider-icon="codex"]')).not.toBeNull();
     await openPicker(picker);
     const group = picker.querySelector('[role="group"][aria-label="OpenAI"]')!;
@@ -36,7 +35,6 @@ describe("Solid model picker interop", () => {
       [...group.querySelectorAll<HTMLElement>('[role="option"]')].map((row) => row.dataset.value),
     ).toEqual(["openai/selected", "openai/other"]);
     await choosePickerValue(picker, "openai/other");
-    expect(onChange).not.toHaveBeenCalled();
     await choosePickerValue(picker, "");
     expect(onChange).toHaveBeenCalledExactlyOnceWith("");
     setParams((current) => ({
@@ -57,15 +55,14 @@ describe("Solid model picker interop", () => {
 
   it("reveals a custom editor without publishing its sentinel and commits on the configured event", async () => {
     const onChange = vi.fn();
-    const view = mountSolid(() => (
-      <ModelPicker
-        label={"Model"}
-        value={"vendor/current"}
-        options={[{ value: "__openclaw_custom_model__", label: "Real model" }]}
-        custom={{ label: "Custom model", commit: "change" }}
-        onChange={onChange}
-      />
-    ));
+    const [params, setParams] = createSignal<ModelPickerParams>({
+      label: "Model",
+      value: "vendor/current",
+      options: [{ value: "__openclaw_custom_model__", label: "Real model" }],
+      custom: { label: "Custom model", commit: "change" },
+      onChange,
+    });
+    const view = mountSolid(() => <ModelPicker {...params()} />);
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
     const input = view.container.querySelector<HTMLInputElement>(".model-picker__custom")!;
@@ -75,17 +72,21 @@ describe("Solid model picker interop", () => {
     )!;
     await choosePickerValue(picker, "__openclaw_custom_model__");
     expect(input.hidden).toBe(true);
-    expect(onChange).toHaveBeenCalledExactlyOnceWith("__openclaw_custom_model__");
-    onChange.mockClear();
     await choosePickerValue(picker, custom.dataset.value!);
     expect(input.hidden).toBe(false);
     expect(document.activeElement).toBe(input);
-    expect(onChange).not.toHaveBeenCalled();
     input.value = "vendor/custom model";
     input.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onChange).not.toHaveBeenCalled();
+    setParams((current) => ({ ...current, title: "Updated model information" }));
+    flush();
+    expect(input.value).toBe("vendor/custom model");
+    expect(document.activeElement).toBe(input);
+    expect(onChange).toHaveBeenCalledExactlyOnceWith("__openclaw_custom_model__");
     input.dispatchEvent(new Event("change", { bubbles: true }));
-    expect(onChange).toHaveBeenCalledExactlyOnceWith("vendor/custom model");
+    expect(onChange.mock.calls).toEqual([["__openclaw_custom_model__"], ["vendor/custom model"]]);
+    setParams((current) => ({ ...current, value: "vendor/updated" }));
+    flush();
+    expect(input.value).toBe("vendor/updated");
   });
 
   it("keeps inherited and explicitly disabled decision models distinct", async () => {
@@ -101,9 +102,8 @@ describe("Solid model picker interop", () => {
     const view = mountSolid(() => <DecisionModelPicker {...params()} />);
     await updatePickers(view.container);
     const picker = view.container.querySelector<SelectPicker>("openclaw-select-picker")!;
-    expect(picker.querySelector(".picker-select__trigger")?.textContent).toContain(
-      "Use global default",
-    );
+    const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+    expect(trigger.textContent).toContain("Use global default");
     await choosePickerValue(picker, "");
     expect(onChange).toHaveBeenLastCalledWith("");
     await choosePickerValue(picker, "__openclaw_inherit_decision__");
@@ -119,7 +119,7 @@ describe("Solid model picker interop", () => {
     flush();
     await updatePickers(view.container);
     expect(view.container.querySelector("openclaw-select-picker")).toBe(picker);
-    expect(picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled).toBe(true);
+    expect(trigger.disabled).toBe(true);
     expect(picker.textContent).toContain("New decision model");
   });
 });

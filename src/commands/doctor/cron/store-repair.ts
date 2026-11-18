@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
@@ -29,7 +29,6 @@ import { engineGreatest } from "../../../infra/database-engine/scalar.js";
 import { executeSqliteQuerySync } from "../../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
-import { createVerifiedSqliteSnapshot } from "../../../infra/sqlite-snapshot.js";
 import type { PluginDoctorRepairAuthority } from "../../../infra/state-migrations.types.js";
 import type {
   PluginDoctorCronChange,
@@ -46,7 +45,8 @@ import {
   readCronStorePartitionInventoryInDatabase,
   selectCronDefaultStoreIdentityInDatabase,
 } from "../../../state/openclaw-state-db-cron-identity-migration.js";
-import { isStatePostgres, stateEngineInput } from "../../../state/openclaw-state-db-engine.js";
+import { stateEngineInput } from "../../../state/openclaw-state-db-engine-input.js";
+import { isStatePostgres } from "../../../state/openclaw-state-db-engine.js";
 import { withMaintenanceOpenClawStateDatabaseReadOnly } from "../../../state/openclaw-state-db-readonly-reuse.js";
 import {
   withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
@@ -54,7 +54,6 @@ import {
 } from "../../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
-import { sanitizeOpenClawStateLeaseRows } from "../../../state/openclaw-state-snapshot-sanitizer.js";
 import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./store-inventory.js";
 
 type DoctorCronScope = { env: NodeJS.ProcessEnv };
@@ -85,7 +84,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
   authority: PluginDoctorRepairAuthority,
   storePath: string,
   legacyDefaultAgentId: string,
-): Promise<{ changed: number; backupPath?: string }> {
+): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   const rows = await inspectCronJobOwnersForDoctor(scope, storePath);
   authority.assertCurrent();
@@ -107,7 +106,8 @@ export async function repairLegacyCronJobOwnersForDoctor(
   if (changes.length === 0) {
     return { changed: 0 };
   }
-  const backupPath = await commitCronDoctorRepair(scope, authority, {
+  const backup = await commitCronDoctorRepair(scope, authority, {
+    plan: ["owners", storePath, rows, changes],
     assertRowsUnchanged(db) {
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, scope.env);
       if (!isDeepStrictEqual(inspectCronOwnerRowsForDoctor(db, storeKey), rows)) {
@@ -144,7 +144,7 @@ export async function repairLegacyCronJobOwnersForDoctor(
       deferSqlitePostCommitPublication(db, () => noteCronJobsStoreCommit(storeKey));
     },
   });
-  return { changed: changes.length, backupPath };
+  return { changed: changes.length, ...backup };
 }
 
 /** Explicit selection changes only the binding, retaining every partition and receipt byte. */
@@ -153,8 +153,9 @@ export async function repairCronDefaultStoreSelectionForDoctor(
   authority: PluginDoctorRepairAuthority,
   selection: Extract<CronStoreSelection, { status: "unresolved" }>,
   storeKey: string,
-): Promise<{ backupPath: string }> {
-  const backupPath = await commitCronDoctorRepair(scope, authority, {
+): Promise<{ backupPath: string; warnings: string[] }> {
+  return await commitCronDoctorRepair(scope, authority, {
+    plan: ["default-store", selection, storeKey],
     assertRowsUnchanged(db) {
       if (
         readCronDefaultStoreKeyInDatabase(db) !== undefined ||
@@ -167,7 +168,6 @@ export async function repairCronDefaultStoreSelectionForDoctor(
       selectCronDefaultStoreIdentityInDatabase(db, storeKey);
     },
   });
-  return { backupPath };
 }
 
 export async function inspectCronJobsForDoctor(
@@ -203,7 +203,7 @@ export async function repairCronInferenceBindingsForDoctor(
   authority: PluginDoctorRepairAuthority,
   inventory: PluginDoctorCronInventory,
   changes: readonly { job: PluginDoctorCronJob; binding: CronInferenceBinding }[],
-): Promise<{ changed: number; backupPath?: string }> {
+): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   if (changes.length === 0) {
     return { changed: 0 };
@@ -222,7 +222,8 @@ export async function repairCronInferenceBindingsForDoctor(
     }
     selected.add(key);
   }
-  const backupPath = await commitCronDoctorRepair(scope, authority, {
+  const backup = await commitCronDoctorRepair(scope, authority, {
+    plan: ["inference-binding", expected, changes],
     assertRowsUnchanged(db) {
       if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
         throw new Error(
@@ -287,7 +288,7 @@ export async function repairCronInferenceBindingsForDoctor(
       }
     },
   });
-  return { changed: changes.length, backupPath };
+  return { changed: changes.length, ...backup };
 }
 
 /** One host-owned repair transaction; plugins choose rows, never database paths or SQL. */
@@ -296,7 +297,7 @@ export async function repairCronJobsForDoctor(
   authority: PluginDoctorRepairAuthority,
   inspected: PluginDoctorCronInventory,
   requested: readonly PluginDoctorCronChange[],
-): Promise<{ changed: number; backupPath?: string }> {
+): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
   authority.assertCurrent();
   // Capture the plugin's plan before yielding to backup work.
   const inventory = structuredClone(inspected);
@@ -319,7 +320,8 @@ export async function repairCronJobsForDoctor(
     seen.add(key);
   }
   const expected = definitionEvidence(inventory.jobs);
-  const backupPath = await commitCronDoctorRepair(scope, authority, {
+  const backup = await commitCronDoctorRepair(scope, authority, {
+    plan: ["jobs", expected, changes],
     assertRowsUnchanged(db) {
       if (!isDeepStrictEqual(definitionEvidence(inspectCronRowsForDoctor(db)), expected)) {
         throw new Error(
@@ -347,22 +349,23 @@ export async function repairCronJobsForDoctor(
       }
     },
   });
-  return { changed: changes.length, backupPath };
+  return { changed: changes.length, ...backup };
 }
 
 /** Shared pre-mutation backup for core and plugin cron repairs. */
 export async function backupCronStoreForDoctor(
   scope: DoctorCronScope,
   repair: {
+    plan: readonly unknown[];
     assertCurrent: () => void;
     assertRowsUnchanged: (db: EngineConnection) => void;
   },
-): Promise<string> {
+): Promise<{ backupPath: string; warnings: string[] }> {
   repair.assertCurrent();
   const sourcePath = resolveOpenClawStateSqlitePath(scope.env);
-  const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
   const input = stateEngineInput();
   if (input) {
+    const backupPath = `${sourcePath}.doctor-cron-${Date.now()}-${randomUUID()}.bak`;
     const config = { database: { engine: "postgres" as const, postgres: input } };
     const assertSource = () => {
       repair.assertCurrent();
@@ -391,30 +394,41 @@ export async function backupCronStoreForDoctor(
       throw new Error(`PostgreSQL changed during the cron repair backup: ${backupPath}`);
     }
     assertSource();
-    return backupPath;
+    return { backupPath, warnings: [] };
   }
-  await createVerifiedSqliteSnapshot({
-    sourcePath,
-    targetPath: backupPath,
-    preserveRowIds: true,
-    transform: sanitizeOpenClawStateLeaseRows,
-    requireNonEmptySource: true,
-    validate: repair.assertRowsUnchanged,
-    beforePublish: repair.assertCurrent,
-    afterPublish: (guard) => guard.assertTargetUnchanged(repair.assertCurrent),
+  const { backupDoctorSqliteDatabases } = await import("../../doctor-migration-backup.js");
+  const backup = await backupDoctorSqliteDatabases({
+    env: scope.env,
+    databasePaths: [sourcePath],
+    pendingDatabasePaths: [sourcePath],
+    authority: { assertCurrent: repair.assertCurrent },
+    repair: {
+      // Bind retries to both the inspected rows and planned effect, not a wall clock.
+      key: createHash("sha256")
+        .update(JSON.stringify(["cron", repair.plan]))
+        .digest("hex"),
+      validate: repair.assertRowsUnchanged,
+    },
+    requireSnapshots: true,
   });
-  return backupPath;
+  const backupPath = backup.snapshots?.[0]?.path;
+  if (!backupPath) {
+    throw new Error("Cron Doctor repair requires a verified shared database backup.");
+  }
+  return { backupPath, warnings: backup.warnings };
 }
 
 async function commitCronDoctorRepair(
   scope: DoctorCronScope,
   authority: PluginDoctorRepairAuthority,
   repair: {
+    plan: readonly unknown[];
     assertRowsUnchanged: (db: EngineConnection) => void;
     write: (db: EngineConnection) => void;
   },
-): Promise<string> {
-  const backupPath = await backupCronStoreForDoctor(scope, {
+): Promise<{ backupPath: string; warnings: string[] }> {
+  const backup = await backupCronStoreForDoctor(scope, {
+    plan: repair.plan,
     assertCurrent: () => authority.assertCurrent(),
     assertRowsUnchanged: repair.assertRowsUnchanged,
   });
@@ -431,9 +445,9 @@ async function commitCronDoctorRepair(
     );
   } catch (error) {
     throw new Error(
-      `Cron Doctor repair failed; verified backup retained at ${backupPath}: ${String(error)}`,
+      `Cron Doctor repair failed; verified backup retained at ${backup.backupPath}: ${String(error)}`,
       { cause: error },
     );
   }
-  return backupPath;
+  return backup;
 }

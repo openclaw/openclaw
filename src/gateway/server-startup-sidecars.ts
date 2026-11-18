@@ -1,4 +1,3 @@
-import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
@@ -168,11 +167,6 @@ export async function startGatewaySidecars(params: {
         ),
       );
     })(),
-    // Readiness owns process-stable request imports so the first turn and connection do not.
-    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-      await prewarmConfigDrivenReplyRuntime();
-    }),
     measureStartup(
       params.startupTrace,
       "sidecars.connection-runtime",
@@ -291,7 +285,7 @@ export async function startGatewaySidecars(params: {
         const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
           cfg: params.cfg,
         });
-        if (result.checked === 0) {
+        if (result.checked === 0 && result.failed === 0) {
           return;
         }
         params.log.warn(
@@ -302,6 +296,20 @@ export async function startGatewaySidecars(params: {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
   }
+
+  // Native catalogs are advisory, so readiness does not wait; a turn arriving first joins this
+  // acquisition instead of starting its own.
+  scheduleSidecar({
+    name: "sidecars.native-model-catalog",
+    run: async (isStopped) => {
+      const { prewarmDefaultNativeModelCatalog } =
+        await import("../agents/prepared-model-catalog.js");
+      if (isStopped()) {
+        return;
+      }
+      await prewarmDefaultNativeModelCatalog(getModelRuntimeConfig());
+    },
+  });
 
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
   scheduleSidecar({

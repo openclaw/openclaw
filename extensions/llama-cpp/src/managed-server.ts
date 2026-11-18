@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE,
   DEFAULT_LLAMA_CPP_EMBEDDING_MODEL,
@@ -61,7 +62,7 @@ export type ManagedLlamaServer = {
 const modelPromises = new Map<string, Promise<string>>();
 const log = createSubsystemLogger("llama-cpp");
 // A new host process recovers once; in-process restarts retain that host's children.
-const recoveries = new Map<string, Promise<void>>();
+const recoveries = new Map<string, Promise<"recovered" | "cancelled">>();
 const resolvedModelArtifacts = new Map<string, ModelArtifact>(); // Presets remain request-scoped.
 const presetState = {
   appliedRevisions: new Map<string, string>(),
@@ -306,9 +307,10 @@ export async function ensureLlamaCppModel(params: {
   }
   const artifact = await resolveCachedModelArtifact(localSource, params.cacheDir, params.signal);
   const destination = path.join(params.cacheDir, artifact.fileName);
-  const load =
-    modelPromises.get(destination) ??
-    (async () => {
+  let load = modelPromises.get(destination);
+  if (!load) {
+    const shared = (async () => {
+      // Shared work outlives any caller; only each caller's wait is cancellable.
       const exists = await fsp
         .stat(destination)
         .then((stat) => stat.isFile())
@@ -318,7 +320,7 @@ export async function ensureLlamaCppModel(params: {
         artifact.expectedSha256 &&
         (artifact.expectedSize === undefined ||
           (await fsp.stat(destination)).size === artifact.expectedSize) &&
-        (await sha256File(destination, params.signal)) === artifact.expectedSha256
+        (await sha256File(destination)) === artifact.expectedSha256
       ) {
         await assertGguf(destination);
         return destination;
@@ -339,20 +341,22 @@ export async function ensureLlamaCppModel(params: {
         expectedSha256: artifact.expectedSha256,
         expectedSize: artifact.expectedSize,
         requireServerDigest: !artifact.expectedSha256,
-        signal: params.signal,
         onProgress: params.onProgress,
       });
       await assertGguf(destination);
       return destination;
     })();
-  modelPromises.set(destination, load);
-  try {
-    return await load;
-  } finally {
-    if (modelPromises.get(destination) === load) {
-      modelPromises.delete(destination);
-    }
+    modelPromises.set(destination, shared);
+    // Evict only on settlement so a cancelled waiter cannot start duplicate work.
+    const release = () => {
+      if (modelPromises.get(destination) === shared) {
+        modelPromises.delete(destination);
+      }
+    };
+    void shared.then(release, release);
+    load = shared;
   }
+  return await racePromiseWithAbortSignal(load, params.signal);
 }
 
 async function writePreset(presetPath: string, contents: string): Promise<void> {
@@ -515,27 +519,37 @@ export async function prepareManagedLlamaServer(params: {
           ? path.resolve(configuredCwd ?? process.cwd())
           : undefined;
         const key = JSON.stringify([command, [...required], cwd]);
-        let recovery = recoveries.get(key);
-        if (!recovery) {
-          recovery = (async () => {
-            const { reapOrphanedProcesses } = await import("openclaw/plugin-sdk/process-runtime");
-            await reapOrphanedProcesses({
-              command,
-              cwd,
-              matchesArguments: (argv) =>
-                [...required].every(([name, value]) => readUniqueArgument(argv, name) === value),
-              signal,
-              onReap: (pid) =>
-                log.info(`reaping orphaned managed llama-server: pid=${pid} port=${port}`),
+        while (true) {
+          let recovery = recoveries.get(key);
+          if (!recovery) {
+            recovery = (async () => {
+              const { reapOrphanedProcesses } = await import("openclaw/plugin-sdk/process-runtime");
+              await reapOrphanedProcesses({
+                command,
+                cwd,
+                matchesArguments: (argv) =>
+                  [...required].every(([name, value]) => readUniqueArgument(argv, name) === value),
+                signal,
+                onReap: (pid) =>
+                  log.info(`reaping orphaned managed llama-server: pid=${pid} port=${port}`),
+              });
+              return "recovered" as const;
+            })().catch((error: unknown) => {
+              recoveries.delete(key);
+              // A cancelled owner has joined cleanup; live waiters can try under their own signal.
+              if (signal?.aborted && error === signal.reason) {
+                return "cancelled" as const;
+              }
+              throw error;
             });
-          })().catch((error: unknown) => {
-            recoveries.delete(key);
-            throw error;
-          });
-          recoveries.set(key, recovery);
+            recoveries.set(key, recovery);
+          }
+          const outcome = await recovery;
+          signal?.throwIfAborted();
+          if (outcome === "recovered") {
+            break;
+          }
         }
-        await recovery;
-        signal?.throwIfAborted();
       }
     }
   }

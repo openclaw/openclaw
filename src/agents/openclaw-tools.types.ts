@@ -4,9 +4,13 @@ import type { ConversationReadInvocationOrigin } from "../channels/plugins/conve
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
-import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
+import type {
+  AgentRunClientContext,
+  AgentRunMessageContext,
+} from "./command/execution-context.types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import type { resolveConversationQuestionInputMode } from "./conversation-capability-profile.js";
 import type { ConversationRecallContext } from "./conversation-recall.types.js";
@@ -22,10 +26,11 @@ import type {
   SessionsYieldCallback,
   SessionsYieldRuntimeClaim,
 } from "./tools/sessions-yield-tool.js";
-import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Reads the sticky untrusted-content flag for the current user turn. */
+  isTurnTainted?: () => boolean;
   /** Session-owned declaration used only for tool listing, never invocation authority. */
   listingClientCaps?: string[];
   /** Creator policy retained by the scheduled session owner. */
@@ -77,12 +82,15 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Run-owned Workshop authority: review guard and personal library access. */
-  skillWorkshop?: SkillWorkshopRunOptions;
+  /** Run-owner-granted personal-library authority; adds `skill_library`. */
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;
   /** Construction fact for prompt guidance; never contains credentials or diagnostics. */
   onWebSearchConfiguration?: (configured: boolean) => void;
+  /** Assembly records permission ceilings before applying route-only presentation. */
+  retainUnavailableMessageTool?: boolean;
+  onMessageToolAvailability?: (available: boolean) => void;
   /** Routable target for the current conversation when it differs from the native channel ID. */
   currentMessagingTarget?: string;
   /** Dynamic audio state for runs that can accept steered input after tool creation. */
@@ -113,6 +121,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Internal listing owner pins discovery changes or renders a read-only inventory. */
+  githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */
   githubPublicationPreview?: true;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
@@ -143,6 +153,8 @@ export type OpenClawToolsOptions = {
   execSession?: ExecSessionDefaults;
   /** Effective run-local exec overrides, including prepared permission mode. */
   execOverrides?: ExecPolicyOverrides;
+  /** Host-owned execution path with final callable exec and no unverified client-side policy. */
+  delegationExecAuthority?: () => "gateway-host" | undefined;
   /** Trusted operator devices allowed to review this run's terminal input. */
   approvalReviewerDeviceIds?: string[];
   /** Trusted account used for authorization; delivery keeps agentAccountId. */

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
+import { prepareSandboxFsContext } from "../skills/runtime/refresh.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createCoreCodingTools } from "./core-coding-tools.js";
@@ -115,7 +116,18 @@ describe("coding-tool exec working directory", () => {
         fsBridge: createHostSandboxFsBridge(codingRoot),
       },
     });
-    const result = await createExecTool(sandbox).execute("coding-cleanup", { command: "fixture" });
+    sandbox.fsPreparation = await prepareSandboxFsContext(sandbox);
+    let tool: ReturnType<typeof createExecTool>;
+    {
+      using lstat = vi.spyOn(fs, "lstatSync");
+      using exists = vi.spyOn(fs, "existsSync");
+      using realpath = vi.spyOn(fs.realpathSync, "native");
+      tool = createExecTool(sandbox);
+      expect(lstat).not.toHaveBeenCalled();
+      expect(exists).not.toHaveBeenCalled();
+      expect(realpath).not.toHaveBeenCalled();
+    }
+    const result = await tool.execute("coding-cleanup", { command: "fixture" });
     expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
     expect(result.content.find((entry) => entry.type === "text")?.text.trim()).toBe(
       "coding-cleanup",

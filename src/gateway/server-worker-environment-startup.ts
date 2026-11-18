@@ -19,7 +19,10 @@ import { resolveRuntimeServiceBuildId } from "../version.js";
 import { configuredDefaultRepository } from "./configured-default-repository.js";
 import type { NodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import type { DesktopSessionRegistry } from "./desktop/session-registry.js";
-import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
+import {
+  waitForNodeWorkerSupervisor,
+  type NodeWorkerSupervisorTransport,
+} from "./node-registry-private.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./server-methods/types.js";
 import { createWorkerRuntimeInstallProgressPublisher } from "./server-worker-runtime-install-progress.js";
 import { retryGatewayWorkerStartupRecovery } from "./server-worker-startup-recovery.js";
@@ -418,6 +421,13 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   });
   const workerEnvironmentService = createWorkerEnvironmentService({
     resolveGatewayContext: params.resolveGatewayContext,
+    waitForRetainedNode: async (nodeId, options) => {
+      const context = params.resolveGatewayContext();
+      if (!context) {
+        throw new Error("Worker node registry is unavailable");
+      }
+      await waitForNodeWorkerSupervisor(context.nodeRegistry, nodeId, options);
+    },
     scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,

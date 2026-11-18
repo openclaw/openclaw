@@ -2,7 +2,9 @@ import type { v2 } from "./protocol.js";
 
 // Matches the sibling app-inventory cache window: upstream refreshes its remote
 // catalog in the background, so settled negatives must expire rather than deny
-// a configured plugin for the whole process lifetime.
+// a configured plugin for the whole process lifetime. The window is measured on
+// elapsed time (performance.now) because the cache is process-local and the
+// TTL should track real freshness, not the host wall clock.
 const CODEX_PLUGIN_METADATA_CACHE_TTL_MS = 60 * 60 * 1_000;
 
 export type CodexPluginMetadataQueryKind = "curated-global" | "installed";
@@ -67,7 +69,7 @@ export class CodexPluginMetadataCache {
     if (!entry) {
       return undefined;
     }
-    if (entry.expiresAtMs <= Date.now()) {
+    if (entry.expiresAtMs <= performance.now()) {
       this.entries.delete(entryKey);
       return undefined;
     }
@@ -110,7 +112,7 @@ export class CodexPluginMetadataCache {
         this.entries.set(entryKey, {
           appCacheKey: params.appCacheKey,
           response,
-          expiresAtMs: Date.now() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
+          expiresAtMs: performance.now() + CODEX_PLUGIN_METADATA_CACHE_TTL_MS,
         });
       }
       return response;

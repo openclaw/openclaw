@@ -11,6 +11,7 @@ import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
 } from "../../sessions/session-controller.session-reader.js";
+import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -45,14 +46,17 @@ export async function prepareReplySourceAdmission(params: {
   await recorder.resolveMessage();
   assertCurrent();
   const ownsCustody = !recorder.getPendingInputMessage?.() && !recorder.hasPersisted();
+  let admissionFailure: unknown;
   const release = ownsCustody
-    ? async () => {
-        try {
-          recorder.finishPendingInput?.("cancelled");
-        } finally {
-          await recorder.waitForPendingInputSettlement?.();
-        }
-      }
+    ? () =>
+        settleUserTurnPendingInput(
+          recorder,
+          operation.abortSignal,
+          admissionFailure,
+          false,
+          "cancelled",
+          operation.turnKind === "queued_followup",
+        )
     : undefined;
   try {
     if (ownsCustody && getReplyOperationSessionTarget(operation)) {
@@ -76,8 +80,37 @@ export async function prepareReplySourceAdmission(params: {
     assertCurrent();
     return release;
   } catch (error) {
+    admissionFailure = error;
     await release?.();
     throw error;
+  }
+}
+
+/** Required preflight can invoke models and tools before the reply runner exists. */
+export async function admitReplyMaintenance(
+  turn: {
+    readonly runId: string;
+    queued: FollowupRun;
+    operation: ReplyOperation;
+  },
+  sessionKey: string | undefined,
+  assertCurrent: () => void,
+): Promise<void> {
+  const execution = turn.queued.run.internalEventExecution;
+  await execution?.beforeScheduledStart?.(turn.runId);
+  assertCurrent();
+  // Maintenance owns the occurrence before effects, preventing pre-execution policy replay.
+  execution?.onStarted(turn.runId);
+  const automation = turn.queued.run.scheduledAutomation;
+  if (automation && sessionKey) {
+    automation.onExecutionStarted?.({
+      runId: turn.runId,
+      sessionId: turn.operation.sessionId,
+      sessionKey,
+      provider: turn.queued.run.provider,
+      model: turn.queued.run.model,
+    });
+    automation.onExecutionPhase?.({ jobId: automation.job.id, phase: "context_engine" });
   }
 }
 
@@ -117,7 +150,11 @@ export async function enqueueReplySourceAdmission(params: {
   }
   const enqueued = params.enqueue();
   if (!enqueued && staged) {
-    recorder?.finishPendingInput?.("cancelled");
+    // Terminal overflow already records its own cause. Retryable capacity pressure
+    // leaves the accepted row and its live owner with the mailbox.
+    if (recorder?.isPendingInputConsumed?.()) {
+      recorder.releasePendingInput?.();
+    }
     await recorder?.waitForPendingInputSettlement?.();
   }
   return enqueued;

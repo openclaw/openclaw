@@ -3,7 +3,8 @@ export const TOKEN_SHARING_AUTH_FLOW = "chatgpt-token-sharing";
 export const IDENTITY_AUTH_FLOW = "chatgpt-identity";
 export const TOKEN_SHARING_RESOURCE = "https://api.openai.com/v1";
 export const TOKEN_SHARING_ISSUER = "https://auth.openai.com";
-export const TOKEN_SHARING_REDIRECT_URI = "http://localhost:8080/auth/callback";
+// Port 0: the callback listener picks a free port before the authorization URL is built.
+export const TOKEN_SHARING_REDIRECT_URI = "http://localhost:0/auth/callback";
 export const TOKEN_SHARING_SCOPE =
   "openid email profile resource.invoke chatgpt.tokens.use.direct offline_access";
 // Existing static registrations did not request email/profile permissions.

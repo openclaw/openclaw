@@ -8,9 +8,11 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { expect, it } from "vitest";
 import { withEmbeddingHttpFixture } from "./embedding-http.test-support.js";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import { closeCompatibleIndexManagers } from "./manager-compatible-index.test-support.js";
 
 it("regenerates cached vectors that disagree with the provider's declared dimensions", async () => {
+  keepPublishedCacheDuplicates();
   await withEmbeddingHttpFixture(
     "memory-cache-dimensions-",
     async ({ workspace, baseUrl, requests, configure, open }) => {

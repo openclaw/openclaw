@@ -28,6 +28,7 @@ import {
   createScopedPluginChannelRuntime,
 } from "./registry-runtime-channel.js";
 import { createPluginRuntimeFacades } from "./registry-runtime-facades.js";
+import { runPluginForkedTurnAsOwner } from "./registry-runtime-forked-turn.js";
 import { createPluginSystemRuntime } from "./registry-runtime-system.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
@@ -136,11 +137,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         config: OpenClawConfig,
         isAdmissible: () => boolean,
       ) => Promise<Evaluation>,
-      complete: (runtime: typeof import("../decisions/runtime.js"), result: Evaluation) => Outcome,
+      complete: (
+        completion: typeof import("../decisions/completion.js"),
+        result: Evaluation,
+      ) => Outcome,
     ): Promise<Outcome> => {
       assertRuntimeCurrent();
       const capturedRegistry = currentDecisionRegistry();
-      const decisions = await import("../decisions/runtime.js");
+      const [decisions, completion] = await Promise.all([
+        import("../decisions/runtime.js"),
+        import("../decisions/completion.js"),
+      ]);
       assertRuntimeCurrent();
       const selectedRegistry = currentDecisionRegistry(capturedRegistry);
       const config = readRuntimeConfig();
@@ -152,7 +159,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
       );
       assertRuntimeCurrent();
       options.signal.throwIfAborted();
-      return complete(decisions, result);
+      return complete(completion, result);
     };
     const assertNativeRuntimeCurrent = () => {
       assertRuntimeCurrent();
@@ -347,7 +354,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     record.id,
                     isAdmissible,
                   ),
-                (decisions, evaluation) => decisions.completeDecisionEvaluation(evaluation),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
               ),
             evaluateV2: (batch, options) =>
               evaluateDecision(
@@ -361,7 +368,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     record.id,
                     isAdmissible,
                   ),
-                (decisions, evaluation) => decisions.completeDecisionEvaluation(evaluation),
+                (completion, evaluation) => completion.completeDecisionEvaluation(evaluation),
               ),
           } satisfies PluginRuntime["decisions"];
         }
@@ -623,6 +630,9 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             ) => invokeSelectedRuntime(() => agent.resolveSessionCatalogCreateTarget(params)),
             resolveThinkingPolicy: (params: Parameters<typeof agent.resolveThinkingPolicy>[0]) =>
               invokeSelectedRuntime(() => agent.resolveThinkingPolicy(params)),
+            explainToolAvailability: (
+              params: Parameters<typeof agent.explainToolAvailability>[0],
+            ) => invokeSelectedRuntime(() => agent.explainToolAvailability(params)),
             runCommandFromIngress,
             runEmbeddedAgent,
             session: scopedSession,
@@ -664,6 +674,14 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             : {}),
           complete: (params) => runWithPluginScope(() => subagent.complete(params)),
           forkSession: (params) => runWithPluginScope(() => subagent.forkSession(params)),
+          runForkedTurn: (params) =>
+            runPluginForkedTurnAsOwner(params, {
+              registry: currentRegistry(),
+              record,
+              scopedRuntime: registryParams.activateGlobalSideEffects === false,
+              runWithPluginScope,
+              subagent,
+            }),
           run: async (params) => {
             const { assertSessionIdentitiesOwned } = await loadSessionOwnership();
             return await runWithPluginScope(async () => {

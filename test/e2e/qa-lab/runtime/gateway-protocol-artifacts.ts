@@ -174,10 +174,6 @@ struct GatewayProtocolArtifactHarness {
 `;
 }
 
-export function buildPortableSwiftAnyCodableSource(source: string) {
-  return source.includes("import CoreFoundation") ? source : `import CoreFoundation\n${source}`;
-}
-
 export function parseGatewayProtocolArtifactOptions(
   args: readonly string[],
   cwd = process.cwd(),
@@ -436,8 +432,7 @@ async function compileAndRunSwiftProtocolModels(params: {
     path.join(params.repoRoot, "apps/shared/OpenClawKit/Sources/OpenClawProtocol/AnyCodable.swift"),
     "utf8",
   );
-  // Linux Foundation does not re-export the CoreFoundation type-ID helpers.
-  await fs.writeFile(anyCodablePath, buildPortableSwiftAnyCodableSource(anyCodableSource), "utf8");
+  await fs.writeFile(anyCodablePath, anyCodableSource, "utf8");
   await fs.writeFile(harnessPath, buildSwiftProtocolCompatibilityHarness(), "utf8");
   await runCommand({
     args: [

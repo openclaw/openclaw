@@ -49,6 +49,7 @@ function saveOptions(
     canDispatch: () => true,
     isCurrent: () => true,
     onSaved: vi.fn(),
+    onRetry: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   };
 }
 
@@ -140,8 +141,8 @@ describe("agent identity actions", () => {
   });
 
   it.each([
-    ["unusable", "That image can't be used. Pick an image file up to 2 MB."],
-    ["too-detailed", "That image is too detailed to store as an avatar"],
+    ["unusable", "Couldn’t use that image. Choose an image file up to 2 MB."],
+    ["too-detailed", "Couldn’t save that avatar. Try a simpler image."],
   ] as const)("explains a %s avatar rejection", async (reason, message) => {
     fileToAvatarDataUrlMock.mockResolvedValueOnce({ ok: false, reason });
     const state = host();
@@ -255,7 +256,9 @@ describe("agent identity actions", () => {
 
     expect(request).not.toHaveBeenCalled();
     expect((await state.identityOutcome)?.error).toContain(
-      `${changed} changed before the agent identity update started.`,
+      changed === "Connection"
+        ? "Couldn’t save the agent identity. Reconnect and try again."
+        : "Access changed before the agent identity update started.",
     );
   });
 

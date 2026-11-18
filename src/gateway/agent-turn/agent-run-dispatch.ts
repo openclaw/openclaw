@@ -13,8 +13,8 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { findReplaySafeRunAbort } from "../../agents/embedded-agent-runner/transcript-conflict.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
-import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
 import type {
   FollowupCompletionOwner,
   FollowupReply,
@@ -88,10 +88,9 @@ export function dispatchAgentRunFromGateway(params: {
    * touching a same-runId entry owned by a concurrent chat.send.
    */
   abortController: Pick<AbortController, "signal" | "abort">;
-  cleanupAbortController: () => void | Promise<void>;
+  cleanupAbortController: (failure?: unknown) => void | Promise<void>;
   io: AgentTurnIo;
   context: AgentTurnContext;
-  canonicalSkillWorkspaceDir?: string;
   commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
   /** Privacy classification carried from the resolved session entry. */
   isIncognito?: boolean;
@@ -201,6 +200,7 @@ export function dispatchAgentRunFromGateway(params: {
   };
   let runOwnerCleanedUp = false;
   let runOwnerCleanup: Promise<void> | undefined;
+  let runFailure: unknown;
   const cleanupRunOwner = () => {
     if (runOwnerCleanedUp) {
       return runOwnerCleanup;
@@ -213,15 +213,17 @@ export function dispatchAgentRunFromGateway(params: {
     if (ownsGlobalRegistration && ownsRunRegistration()) {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
     }
-    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController()).then(() => {
-      runOwnerSettled = true;
-      // Recovery can replace the replay while finish is pending; publish through this same owner.
-      if (pendingReplay) {
-        const entry = pendingReplay;
-        pendingReplay = undefined;
-        publishReplay(entry);
-      }
-    }));
+    return (runOwnerCleanup = Promise.resolve(params.cleanupAbortController(runFailure)).then(
+      () => {
+        runOwnerSettled = true;
+        // Recovery can replace the replay while finish is pending; publish through this same owner.
+        if (pendingReplay) {
+          const entry = pendingReplay;
+          pendingReplay = undefined;
+          publishReplay(entry);
+        }
+      },
+    ));
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
     ? (params.cronCreatorAuthority.boundRunScope ??
@@ -334,15 +336,13 @@ export function dispatchAgentRunFromGateway(params: {
       readAgentRunDispatchExecutionIdentity(params),
     );
     const invoke = () =>
-      runWithCanonicalSkillWorkspace(params.canonicalSkillWorkspaceDir, () =>
-        agentCommandFromGatewayIngress(
-          cronCreatorAuthorityCapability
-            ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
-            : ingressOptsWithSpawnFacts,
-          diagnostics.runtime,
-          params.context.deps,
-          params.commandRuntimeContext,
-        ),
+      agentCommandFromGatewayIngress(
+        cronCreatorAuthorityCapability
+          ? { ...ingressOptsWithSpawnFacts, cronCreatorAuthorityCapability }
+          : ingressOptsWithSpawnFacts,
+        diagnostics.runtime,
+        params.context.deps,
+        params.commandRuntimeContext,
       );
     if (followupCompletion) {
       if (
@@ -524,17 +524,20 @@ export function dispatchAgentRunFromGateway(params: {
       return { terminalOutcome, settled };
     })
     .catch(async (cause: unknown) => {
+      runFailure = cause;
+      const replaySafeAbort = findReplaySafeRunAbort(cause);
+      const abortCause = replaySafeAbort?.cause ?? cause;
       const operation = params.admittedRunEntry?.input.claim?.operation;
       const controllerAbortCommitted =
         operation?.result?.kind === "aborted" &&
         isGatewayAgentAbortRejection(operation.abortSignal.reason, operation.abortSignal);
       const aborted =
         controllerAbortCommitted ||
-        isGatewayAgentAbortRejection(cause, params.abortController.signal);
+        isGatewayAgentAbortRejection(abortCause, params.abortController.signal);
       const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, cause);
       const renderedErr = error.message;
       const stopReason = aborted
-        ? resolveGatewayAgentAbortStopReason(params.abortController.signal, cause)
+        ? resolveGatewayAgentAbortStopReason(params.abortController.signal, abortCause)
         : isAbortError(cause)
           ? "aborted"
           : undefined;
@@ -571,6 +574,7 @@ export function dispatchAgentRunFromGateway(params: {
         ...(aborted
           ? {
               stopReason,
+              ...(replaySafeAbort ? { replaySafe: true } : {}),
               ...(terminalOutcome.timeoutPhase
                 ? { timeoutPhase: terminalOutcome.timeoutPhase }
                 : {}),

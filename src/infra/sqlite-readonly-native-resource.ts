@@ -5,8 +5,10 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
-import { SqliteSnapshotCleanupError } from "./sqlite-readonly-location-cleanup.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "./sqlite-lifecycle-errors.js";
 import type {
   SqliteNativeOwnerRequest,
   SqliteNativeOwnerReply,

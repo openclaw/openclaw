@@ -118,8 +118,6 @@ function authOrder(provider: string, ...profiles: string[]): OpenClawConfig {
 }
 
 function mockRefreshFailure(message = "synthetic OAuth refresh failure") {
-  // Diagnostic hints are independent of refresh selection and load the full runtime.
-  vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
   return vi
     .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
     .mockRejectedValue(new Error(message));
@@ -298,10 +296,6 @@ describe("Provider model discovery auth preparation", () => {
       }
       await state.writeAuthProfiles(store);
       const events: string[] = [];
-      // Diagnostic copy is independent of refresh selection and loads the full plugin runtime.
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
       const refresh = vi
         .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
         .mockImplementation(async ({ credential }) => {
@@ -318,9 +312,13 @@ describe("Provider model discovery auth preparation", () => {
       const requests: string[] = [];
       const outcomes: ProviderCatalogOutcome[] = [];
       vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        // ChatGPT listing reads the newest Codex version first; it is not a catalog request.
+        if (url.hostname === "registry.npmjs.org") {
+          return Response.json({ version: "0.169.0" });
+        }
         events.push("catalog");
         requests.push(new Headers(init?.headers).get("authorization") ?? "");
-        const url = new URL(input instanceof Request ? input.url : input);
         return Response.json(
           url.hostname === "chatgpt.com"
             ? { models: [] }
@@ -366,6 +364,9 @@ describe("Provider model discovery auth preparation", () => {
             provider: providerId,
             ...(resolvedProfile ? { profileId: resolvedProfile } : {}),
             status: "ready",
+            ...(providerId === "openai"
+              ? { modelIdCatalog: { baseUrl: "https://api.openai.com/v1", modelIds: [modelId] } }
+              : {}),
           },
         ],
         action: "write",
@@ -558,9 +559,6 @@ describe("Provider model discovery auth preparation", () => {
         createDeferredCore<
           Awaited<ReturnType<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>>
         >();
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
       const refresh = vi
         .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
         .mockImplementation(async ({ credential }) => {

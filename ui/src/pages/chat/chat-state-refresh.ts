@@ -11,10 +11,6 @@ import {
   loadChatMetadataRefresh,
   retireChatMetadataRefresh,
 } from "../../lib/chat/chat-metadata-store.ts";
-import {
-  applyRemoteSlashCommandsResult,
-  refreshSlashCommands,
-} from "../../lib/chat/slash-command-catalog.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
@@ -39,6 +35,8 @@ import type { ObservedChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { flushChatQueueAfterIdleSessionReconciliation } from "./chat-queue-reconnect.ts";
 import { flushChatQueueForEvent } from "./chat-send-actions.ts";
+import { setSelectedChatSessionArchived } from "./chat-session-archive.ts";
+import { applyChatMetadataCommands } from "./chat-session-commands.ts";
 import {
   refreshCurrentChatSessionList,
   retireChatModelSelectionOwnership,
@@ -105,14 +103,6 @@ function scheduleChatMetadataRefresh(callback: () => void) {
     return;
   }
   globalThis.setTimeout(callback, 50);
-}
-
-export async function refreshChatCommands(host: ChatPageHost) {
-  return refreshSlashCommands({
-    client: host.client,
-    agentId: resolveChatAgentId(host),
-    sessionKey: host.sessionKey,
-  });
 }
 
 export function applySelectedChatAgent(
@@ -238,7 +228,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         }
         if (update.type !== "loading") {
           if (update.type === "result") {
-            applyRemoteSlashCommandsResult(update.result);
+            applyChatMetadataCommands(host, update.result);
           }
           if (binding.sessionFactsRetryPending) {
             binding.sessionFactsRetryPending = false;
@@ -254,7 +244,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   host.chatModelCatalogInitialized ||= hasUnrestrictedModelCatalogSnapshot(client);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyRemoteSlashCommandsResult(cached);
+    applyChatMetadataCommands(host, cached);
   }
   return binding;
 }
@@ -662,7 +652,7 @@ export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOpti
     }
     const sessionInfo = selectedChatSessionRow(host);
     if (sessionInfo) {
-      host.selectedChatSessionArchived = sessionInfo.archived === true;
+      setSelectedChatSessionArchived(host, sessionInfo.archived === true);
       host.selectedChatSessionIncognito = sessionInfo.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();

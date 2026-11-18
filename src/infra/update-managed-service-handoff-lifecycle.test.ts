@@ -4,6 +4,7 @@ import {
   createSpawnMock,
   useManagedServiceHandoffLifecycleFixture,
 } from "./update-managed-service-handoff-fixture.test-support.js";
+import type { ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -26,13 +27,10 @@ import {
 } from "./update-managed-service-handoff-artifacts.test-support.js";
 import { registerManagedCampaignFailureTests } from "./update-managed-service-handoff-campaign.test-support.js";
 import {
-  cleanupStaleManagedServiceUpdateHandoffs,
-  MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX,
-} from "./update-managed-service-handoff-cleanup.js";
-import {
   isManagedServiceInspectionCommand,
   registerManagedHandoffOwnerTests,
 } from "./update-managed-service-handoff-lifecycle.test-support.js";
+import * as boundaryProcesses from "./update-managed-service-handoff-process.test-support.js";
 import type { ManagedServiceUpdateHandoffParams } from "./update-managed-service-handoff-types.js";
 import { pathExists } from "./update-managed-service-native.test-support.js";
 import { recordUpdateRunStep } from "./update-run-ledger.js";
@@ -119,6 +117,38 @@ describe("managed service update handoff", () => {
       expect(() => tracker.add(dir), dir).toThrow(JSON.stringify(dir));
     }
     expect(tracker.dirs.size).toBe(0);
+  });
+
+  itUnix("reaps the parent when fixture setup rejects", async () => {
+    let parent: ChildProcess | undefined;
+    let closed = false;
+    const createParent = boundaryProcesses.createManagedServiceBoundaryParent;
+    const observer = vi
+      .spyOn(boundaryProcesses, "createManagedServiceBoundaryParent")
+      .mockImplementation((spawn) => {
+        const result = createParent(spawn);
+        parent = result.parent;
+        void result.parentClosed.then(() => {
+          closed = true;
+        });
+        return result;
+      });
+    try {
+      await expect(
+        runBoundary("systemd", {
+          async prepareState() {
+            await Promise.resolve();
+            throw new Error("fixture setup rejected");
+          },
+        }),
+      ).rejects.toThrow("fixture setup rejected");
+      expect(observer).toHaveBeenCalledTimes(1);
+      expect(closed).toBe(true);
+    } finally {
+      observer.mockRestore();
+      // The regression must reap its real parent even on the broken fixture.
+      await boundaryProcesses.createManagedServiceBoundaryCleanup(() => [parent])();
+    }
   });
 
   itUnix("tracks the real handoff artifacts with Bun runtime arguments", async () => {
@@ -684,6 +714,21 @@ describe("managed service update handoff", () => {
     }
   });
 
+  it("refuses a Windows Scheduled Task handoff before spawning the updater", async () => {
+    // Stopping the task would end the Job that also holds the helper (#169844).
+    await expect(
+      startHandoff({
+        supervisor: "schtasks",
+        env: { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway" },
+        meta: { sessionKey },
+      }),
+    ).rejects.toMatchObject({
+      reason: "managed-service-handoff-failed",
+      message: expect.stringContaining("Nothing was changed"),
+    });
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   itUnix("refuses missing Node before parking the Gateway", async () => {
     const originalExecPath = process.execPath;
     const runtimePaths = await import("../daemon/runtime-paths.js");
@@ -707,7 +752,7 @@ describe("managed service update handoff", () => {
     { supervisors: [undefined], timeoutMs: 1_800_000 },
     { supervisors: ["systemd"], timeoutMs: undefined },
     { supervisors: ["systemd"], timeoutMs: 1_800_000 },
-    { supervisors: ["launchd", "schtasks"], timeoutMs: 1_800_000 },
+    { supervisors: ["launchd"], timeoutMs: 1_800_000 },
   ] as const)(
     "preserves launch metadata for $supervisors (timeout=$timeoutMs)",
     async ({ supervisors, timeoutMs }) => {
@@ -746,9 +791,7 @@ describe("managed service update handoff", () => {
           ? { ...systemd.env, INVOCATION_ID: "gateway-invocation", KEEP_ME: "1" }
           : supervisor === "launchd"
             ? { OPENCLAW_LAUNCHD_LABEL: "test.gateway", HOME: "/Users/test" }
-            : supervisor === "schtasks"
-              ? { OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Test Gateway" }
-              : { ...supervisorEnv, ...serviceIdentityEnv, KEEP_ME: "1" };
+            : { ...supervisorEnv, ...serviceIdentityEnv, KEEP_ME: "1" };
         const result = await startHandoff({
           timeoutMs,
           ...(systemd
@@ -847,30 +890,5 @@ describe("managed service update handoff", () => {
         },
       },
     });
-  });
-
-  it("sweeps stale handoff directories but retains fresh and unrelated ones", async () => {
-    const tmpDir = tempDirs.make("openclaw-handoff-cleanup-test-");
-    const staleDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}stale`);
-    const freshDir = path.join(tmpDir, `${MANAGED_SERVICE_UPDATE_HANDOFF_TEMP_PREFIX}fresh`);
-    const unrelatedDir = path.join(tmpDir, "openclaw-other-temp");
-    await Promise.all(
-      [staleDir, freshDir, unrelatedDir].map((dir) => fs.mkdir(dir, { recursive: true })),
-    );
-    const now = Date.now();
-    const staleTime = new Date(now - 25 * 60 * 60_000);
-    await fs.utimes(staleDir, staleTime, staleTime);
-
-    await expect(
-      cleanupStaleManagedServiceUpdateHandoffs({
-        tmpDir,
-        nowMs: now,
-        ttlMs: 24 * 60 * 60_000,
-      }),
-    ).resolves.toBe(1);
-
-    await expect(pathExists(staleDir)).resolves.toBe(false);
-    await expect(pathExists(freshDir)).resolves.toBe(true);
-    await expect(pathExists(unrelatedDir)).resolves.toBe(true);
   });
 });

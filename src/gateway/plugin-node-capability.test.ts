@@ -198,6 +198,18 @@ describe("plugin node capability helpers", () => {
     expect(normalized.rewrittenUrl).toBeUndefined();
   });
 
+  test.each(["//", "///", "/\\", "\\\\", "/%2F%2F", "/%2f", "/%5C", "/%2F%5c"])(
+    "rejects an ambiguous inner path starting with %s",
+    (leading) => {
+      const normalized = normalizePluginNodeCapabilityScopedUrl(
+        `/__openclaw__/cap/token${leading}example/canvas`,
+      );
+      expect(normalized.scopedPath).toBe(true);
+      expect(normalized.malformedScopedPath).toBe(true);
+      expect(normalized.rewrittenUrl).toBeUndefined();
+    },
+  );
+
   test("marks malformed request targets without throwing", () => {
     for (const rawUrl of ["//", "///", "//${jndi:ldap://example}.action"]) {
       const normalized = normalizePluginNodeCapabilityScopedUrl(rawUrl);

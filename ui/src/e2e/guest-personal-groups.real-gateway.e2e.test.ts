@@ -147,6 +147,7 @@ suite.define(() => {
           });
         };
         const setupContext = await suite.newBrowserContext({
+          reducedMotion: "reduce",
           viewport: { width: 1280, height: 900 },
         });
         const editor = await setupContext.newPage();
@@ -171,6 +172,7 @@ suite.define(() => {
           : undefined;
         await suite.withPage(
           {
+            reducedMotion: "reduce",
             viewport: { width: 1280, height: 900 },
             storageState: initialStorage,
             ...(artifactDir
@@ -272,7 +274,10 @@ suite.define(() => {
             expect(
               await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
             ).toMatchObject({ status: "ok", entries: {} });
-            const freshContext = await suite.newBrowserContext({ storageState: initialStorage });
+            const freshContext = await suite.newBrowserContext({
+              reducedMotion: "reduce",
+              storageState: initialStorage,
+            });
             const fresh = await freshContext.newPage();
             await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(fresh);
@@ -311,7 +316,7 @@ suite.define(() => {
             }
           },
         );
-        const otherContext = await suite.newBrowserContext({});
+        const otherContext = await suite.newBrowserContext({ reducedMotion: "reduce" });
         const other = await otherContext.newPage();
         await connect(other, 1);
         await expect(rpc(other, "sessions.describe", { key: parentKey })).rejects.toThrow(

@@ -45,7 +45,9 @@ it("renders repo-relative paths when possible", () => {
 });
 
 it("filters tracked source files and bounds the git lookup", () => {
-  execFileSyncMock.mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
+  execFileSyncMock
+    .mockReturnValueOnce("")
+    .mockReturnValue("src/keep.ts\nsrc/keep.mjs\nsrc/skip.d.ts\n");
 
   expect(listRepoFilesSync("/fake/repo", { includeFile: isCodeFile })).toEqual([
     "src/keep.mjs",
@@ -67,7 +69,7 @@ it("falls back to filesystem traversal when git ls-files times out", () => {
     code: "ETIMEDOUT",
     signal: "SIGKILL",
   });
-  execFileSyncMock.mockImplementation(() => {
+  execFileSyncMock.mockReturnValueOnce("").mockImplementation(() => {
     throw error;
   });
   const rootDir = fixture("src/keep.ts");

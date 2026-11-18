@@ -1,6 +1,7 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelDirectoryEntryKind, ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { monotonicNow } from "../../shared/monotonic-time.js";
 import { getOrCreateWeakOwnerMap } from "../../shared/weak-owner-map.js";
 import { pruneMapToMaxSize } from "../map-size.js";
 
@@ -35,13 +36,13 @@ export class DirectoryCache<T> {
 
   get(key: string, cfg: OpenClawConfig): T | undefined {
     const cache = getOrCreateWeakOwnerMap(this.cachesByConfig, cfg);
-    this.pruneExpired(cache, Date.now());
+    this.pruneExpired(cache, monotonicNow());
     return cache.get(key)?.value;
   }
 
   set(key: string, value: T, cfg: OpenClawConfig): void {
     const cache = getOrCreateWeakOwnerMap(this.cachesByConfig, cfg);
-    const now = Date.now();
+    const now = monotonicNow();
     this.pruneExpired(cache, now);
     // Refresh insertion order so active keys are less likely to be evicted.
     cache.delete(key);

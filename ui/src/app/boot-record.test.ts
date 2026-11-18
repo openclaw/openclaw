@@ -1,6 +1,11 @@
 /* @vitest-environment jsdom */
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAgentCapability } from "../lib/agents/index.ts";
+import {
+  createTestSessionCapability,
+  sessionsResult,
+} from "../lib/sessions/session-capability.test-support.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
   clearBootRecords,
@@ -10,8 +15,11 @@ import {
   subscribeBootRecordChanges,
   type BootRecord,
 } from "./boot-record.ts";
-import { subscribeWarmBootConnection } from "./bootstrap-warm-boot.ts";
-import { makeBootRecord } from "./bootstrap.test-support.ts";
+import {
+  subscribeBootRecordPersistence,
+  subscribeWarmBootConnection,
+} from "./bootstrap-warm-boot.ts";
+import { makeBootRecord, makeBootRoster } from "./bootstrap.test-support.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 
 const credential = () => "test-token";
@@ -112,6 +120,77 @@ describe("Control UI boot record", () => {
       expect(readBootRecord("https://another.example", credential)).toBeNull();
     },
   );
+
+  it("preserves boot write deadlines across row and Gateway updates and catalog changes", async () => {
+    const { gateway, current, scope } = createConnection();
+    gateway.connect();
+    const client = current();
+    let groups: readonly BootRecord["groups"][number][] = [{ name: "Work", position: 0 }];
+    let sectionOrder: readonly string[] = ["category:Work", "ungrouped"];
+    client.request.mockImplementation(async (method) => {
+      switch (method) {
+        case "agents.list":
+          return makeBootRoster();
+        case "sessions.groups.list":
+          return { groups, sectionOrder };
+        case "sessions.groups.update":
+          return { defaults: [{ name: "Work", cwd: "/work", worktree: true }] };
+        case "sessions.list":
+          return sessionsResult([{ key: "agent:main:main", kind: "direct", updatedAt: 1 }]);
+        default:
+          throw new Error(`Unexpected request: ${method}`);
+      }
+    });
+    client.testOptions.onHello?.({
+      type: "hello-ok",
+      protocol: 1,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+        method: "trusted-proxy",
+        recoveryScope: "account-a",
+      },
+      features: {
+        methods: ["agents.list", "sessions.list", "sessions.groups.list", "sessions.groups.update"],
+      },
+      snapshot: { presence: [{ ts: 0, instanceId: client.instanceId, user: { id: "profile-a" } }] },
+    });
+    const agents = createAgentCapability(gateway);
+    const sessions = createTestSessionCapability(gateway);
+    await agents.ensureList();
+    await sessions.groupsLoad();
+    const persistence = subscribeBootRecordPersistence({ gateway, agents, sessions }, null);
+    disposers.push(persistence.dispose, sessions.dispose, () => agents.dispose());
+
+    await sessions.refresh({ agentId: "main", force: true });
+    await vi.advanceTimersByTimeAsync(400);
+    // Navigation publishes Gateway state without changing the boot catalog.
+    gateway.setSessionKey("agent:main:other");
+    await sessions.refresh({ agentId: "main", force: true });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(readBootRecord(scope, () => "")?.groups).toEqual(groups);
+
+    await sessions.groupsUpdate("Work", { cwd: "/work", worktree: true });
+    await settleWrite();
+    expect(readBootRecord(scope, () => "")?.groups).toEqual([
+      { name: "Work", position: 0, cwd: "/work", worktree: true },
+    ]);
+
+    // Retain the same catalog references to isolate the readiness transition.
+    groups = sessions.state.groupSettings;
+    sectionOrder = sessions.state.sectionOrder;
+    const savedAt = readBootRecord(scope, () => "")?.savedAt;
+    sessions.groupsInvalidate();
+    await sessions.groupsLoad();
+    await settleWrite();
+    expect(readBootRecord(scope, () => "")?.savedAt).toBeGreaterThan(savedAt!);
+
+    sectionOrder = ["ungrouped", "category:Work"];
+    sessions.groupsInvalidate();
+    await sessions.groupsLoad();
+    await settleWrite();
+    expect(readBootRecord(scope, () => "")?.sectionOrder).toEqual(sectionOrder);
+  });
 
   it.each([
     ["invalid JSON", "{"],

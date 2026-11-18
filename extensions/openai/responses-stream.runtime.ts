@@ -4,6 +4,7 @@ import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-str
 import {
   createOpenAIHostedWebSearchWrapper,
   mergeTransportHeaders,
+  wrapProviderPayloadHook,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord, normalizeFastMode } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyOpenAIBaseUrl } from "./base-url.js";
@@ -79,15 +80,19 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
         }
         return underlying(model, context, {
           ...options,
-          onPayload: async (payload, payloadModel) => {
-            const transformed = await options?.onPayload?.(payload, payloadModel);
-            const request = asOptionalRecord(transformed ?? payload);
-            if (!request) {
-              throw new Error("OpenAI access programs require a Responses request object.");
-            }
-            // Program selection and speed are independent; neither grants account access.
-            return { ...request, access_programs: cyber === undefined ? {} : { cyber } };
-          },
+          onPayload: wrapProviderPayloadHook(
+            options?.onPayload,
+            (payload, transformed) => {
+              const request = asOptionalRecord(transformed ?? payload);
+              if (!request) {
+                throw new Error("OpenAI access programs require a Responses request object.");
+              }
+              // Program selection and speed are independent; neither grants account access.
+              return { ...request, access_programs: cyber === undefined ? {} : { cyber } };
+            },
+            undefined,
+            true,
+          ),
         });
       },
     };
@@ -112,36 +117,40 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
           }),
           transport: "sse",
           replayResponsesItemIds: false,
-          onPayload: async (payload, payloadModel) => {
-            // Run caller and normal provider transforms first; scoped credential policy wins last.
-            const transformed = await options?.onPayload?.(payload, payloadModel);
-            const request = asOptionalRecord(transformed ?? payload);
-            if (!request) {
-              throw new Error("ChatGPT token sharing requires a Responses request object.");
-            }
-            if (
-              request.service_tier != null &&
-              !SIWC_SERVICE_TIERS.some((tier) => tier === request.service_tier)
-            ) {
-              throw new Error(
-                "Sign in with ChatGPT does not support this service tier. " +
-                  `Remove serviceTier/service_tier from the model params or select one of: ${SIWC_SERVICE_TIERS.join(", ")}.`,
-              );
-            }
-            request.store = false;
-            // Direct SIWC rejects these API request controls, including the model's default token cap.
-            for (const field of [
-              "context_management",
-              "metadata",
-              "max_output_tokens",
-              "temperature",
-              "top_p",
-              "prompt_cache_retention",
-            ]) {
-              delete request[field];
-            }
-            return request;
-          },
+          onPayload: wrapProviderPayloadHook(
+            options?.onPayload,
+            (payload, transformed) => {
+              // Scoped credential policy wins after caller and provider transforms.
+              const request = asOptionalRecord(transformed ?? payload);
+              if (!request) {
+                throw new Error("ChatGPT token sharing requires a Responses request object.");
+              }
+              if (
+                request.service_tier != null &&
+                !SIWC_SERVICE_TIERS.some((tier) => tier === request.service_tier)
+              ) {
+                throw new Error(
+                  "Sign in with ChatGPT does not support this service tier. " +
+                    `Remove serviceTier/service_tier from the model params or select one of: ${SIWC_SERVICE_TIERS.join(", ")}.`,
+                );
+              }
+              request.store = false;
+              // Direct SIWC rejects these API request controls, including the model's default token cap.
+              for (const field of [
+                "context_management",
+                "metadata",
+                "max_output_tokens",
+                "temperature",
+                "top_p",
+                "prompt_cache_retention",
+              ]) {
+                delete request[field];
+              }
+              return request;
+            },
+            undefined,
+            true,
+          ),
         };
         return underlying(model, context, sharingOptions);
       },

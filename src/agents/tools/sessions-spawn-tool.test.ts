@@ -30,6 +30,7 @@ import { registerSessionsSpawnCompletionTests } from "./sessions-spawn-tool.comp
 import { captureSessionDecisionWork } from "./sessions-spawn-tool.decision.test-support.js";
 import { registerSessionsSpawnInputTests } from "./sessions-spawn-tool.input.test-support.js";
 import { registerSessionsSpawnVisibleCleanupTests } from "./sessions-spawn-tool.visible-cleanup.test-support.js";
+import { registerSessionsSpawnVisibleDepthTests } from "./sessions-spawn-tool.visible-depth.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-visible-spawn-");
 
@@ -749,49 +750,7 @@ describe("sessions_spawn tool", () => {
     createTool,
   });
 
-  it("applies spawn depth limits to visible dashboard descendants", async () => {
-    const dir = sessionDirs.make();
-    const storePath = path.join(dir, "sessions.json");
-    const childKey = "agent:main:dashboard:child";
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:main", storePath },
-      { sessionId: "root", updatedAt: 1 },
-    );
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: childKey, storePath },
-      { sessionId: "child", updatedAt: 1, spawnDepth: 1, parentSessionKey: "agent:main:main" },
-    );
-    const callGateway = mockGateway();
-    const spawn = (maxSpawnDepth: number) =>
-      makeVisibleTool({
-        agentSessionKey: childKey,
-        callGateway,
-        config: {
-          session: { store: storePath },
-          agents: { defaults: { subagents: { maxSpawnDepth } } },
-        },
-      }).execute("nested", { task: "inspect", visible: true });
-    expect((await spawn(1)).details).toMatchObject({ status: "forbidden" });
-    expect(callGateway).not.toHaveBeenCalled();
-    vi.mocked(callGateway).mockResolvedValue({
-      ...visibleCreated,
-      key: "agent:main:dashboard:grandchild",
-      runId: "run-grandchild",
-    });
-    expect((await spawn(2)).details).toMatchObject({
-      status: "accepted",
-      childSessionKey: "agent:main:dashboard:grandchild",
-      runId: "run-grandchild",
-    });
-    expect(callGateway).toHaveBeenCalledWith(
-      "sessions.create",
-      expect.objectContaining({
-        parentSessionKey: childKey,
-        spawnDepth: 2,
-        task: expect.stringContaining("inspect"),
-      }),
-    );
-  });
+  registerSessionsSpawnVisibleDepthTests({ createTool, makeDir: () => sessionDirs.make() });
 
   it("dispatches a hidden managed-worktree child with caller identity, policy, and private completion", async () => {
     const caller: SpawnOptions = {

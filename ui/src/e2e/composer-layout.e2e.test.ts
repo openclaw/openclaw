@@ -25,8 +25,11 @@ suite.define(() => {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}new`);
           const shell = page.locator(".agent-chat__composer-shell");
-          const triggers = page.locator(".new-session-page__triggers");
+          const triggers = page.locator(
+            ".new-session-page__context-tray .new-session-page__triggers",
+          );
           const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
+          await shell.hover();
           await edge.waitFor();
           const width = () =>
             shell.evaluate((element) => Math.round(element.getBoundingClientRect().width));
@@ -80,7 +83,7 @@ suite.define(() => {
             const box = await trigger.boundingBox();
             expect(box!.x).toBeGreaterThanOrEqual(0);
             expect(box!.x + box!.width).toBeLessThanOrEqual(390);
-            expect(box!.height).toBeGreaterThanOrEqual(44);
+            expect(box!.height).toBe(36);
             await trigger.click({ trial: true });
           }
         },
@@ -95,20 +98,26 @@ suite.define(() => {
       const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
       const width = () =>
         shell.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+      const prepareKeyboardEdge = async () => {
+        const input = shell.locator("textarea");
+        await expect.poll(() => input.isEditable()).toBe(true);
+        await input.press("Tab");
+        await edge.waitFor();
+      };
       await page.goto(`${suite.server.baseUrl}new`);
-      await edge.waitFor();
+      await prepareKeyboardEdge();
       const initial = await width();
       await edge.press("ArrowRight");
       await expect.poll(width).toBe(initial - 20);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await edge.waitFor();
+      await prepareKeyboardEdge();
       await expect.poll(width).toBe(initial - 20);
       await edge.press("ArrowRight");
       await expect.poll(width).toBe(initial - 40);
 
       await page.goto(`${suite.server.baseUrl}new`);
-      await edge.waitFor();
+      await prepareKeyboardEdge();
       await expect.poll(width).toBe(initial - 40);
       await edge.dblclick();
       await expect.poll(width).toBe(initial - 40);
@@ -145,6 +154,7 @@ suite.define(() => {
       await expect.poll(width).toBe(initial - 40);
       expect(await savedWidth()).toBe(saved);
       await page.reload();
+      await page.locator(".agent-chat__input").press("Tab");
       await edge.waitFor();
       await expect.poll(width).toBe(initial - 40);
     });
@@ -183,6 +193,7 @@ suite.define(() => {
             await openChatSidePanelType(page, "Files");
           }
           const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
+          await page.locator(".agent-chat__composer-shell").hover();
           await edge.waitFor();
           const box = (await edge.boundingBox())!;
           await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -256,6 +267,7 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
+      await page.locator(".agent-chat__composer-shell").hover();
       await edge.waitFor();
       const transcript = page.locator(".chat-thread-inner");
       await transcript.getByText("Three things changed this week.").waitFor();
@@ -318,7 +330,10 @@ suite.define(() => {
     async (route) => {
       await suite.withPage({ viewport: { width: 1600, height: 900 } }, async ({ page }) => {
         const sessionKey = "agent:main:composer-width-reload";
-        await seedChatSettings(page, suite.server.baseUrl, { chatMessageMaxWidth: "1000px" });
+        const savedWidth = 1000;
+        await seedChatSettings(page, suite.server.baseUrl, {
+          chatMessageMaxWidth: `${savedWidth}px`,
+        });
         await installMockGateway(page, {
           sessionKey,
           historyMessages: [{ role: "assistant", content: "Reload keeps the composer still." }],
@@ -328,14 +343,14 @@ suite.define(() => {
             ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
             : suite.server.baseUrl + "new",
         );
-        const edge = page.getByRole("separator", { name: "Resize message width", exact: true });
-        await edge.waitFor();
+        const composer = page.locator(".agent-chat__composer-shell");
+        const composerWidth = () =>
+          composer.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+        await composer.waitFor();
         await waitForLayoutSettled(page, ".agent-chat__composer-shell");
-        const expectedWidth = await page
-          .locator(".agent-chat__composer-shell")
-          .evaluate((element) => Math.round(element.getBoundingClientRect().width));
+        const expectedWidth = await composerWidth();
         expect(expectedWidth).toBeGreaterThan(0);
-        expect(expectedWidth).toBeLessThanOrEqual(1000);
+        expect(expectedWidth).toBeLessThanOrEqual(savedWidth);
         await page.addInitScript(() => {
           window.composerWidthFrames = [];
           const tick = () => {
@@ -354,6 +369,9 @@ suite.define(() => {
         await expect.poll(() => page.evaluate(() => window.composerWidthFrames.length)).toBe(30);
         const frames = await page.evaluate(() => window.composerWidthFrames);
         expect(new Set(frames), frames.join(", ")).toEqual(new Set([expectedWidth]));
+        // The wider viewport leaves room for the full preference even beside docked Details.
+        await page.setViewportSize({ width: 1900, height: 900 });
+        await expect.poll(composerWidth).toBe(savedWidth);
       });
     },
   );

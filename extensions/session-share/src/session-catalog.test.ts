@@ -91,6 +91,9 @@ async function catalogFixture() {
   const api = createTestPluginApi({ runtime, registerService });
   const catalog = createSessionShareCatalog(api);
   const service = registerService.mock.calls[0]![0];
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   let scheduler = createTestPluginServiceScheduler();
   let serviceContext = {
     config,
@@ -513,6 +516,6 @@ it.each([
     await f.hydrate();
     expect(await f.host()).toMatchObject({ sessions: [], error: { code: "NODE_INVOKE_FAILED" } });
   } else {
-    await expect(f.read()).rejects.toThrow("Invalid OpenClaw transcript");
+    await expect(f.read()).rejects.toThrow("Invalid OpenClaw chat history");
   }
 });

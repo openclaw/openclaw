@@ -1,5 +1,7 @@
 import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
@@ -8,10 +10,7 @@ import type {
   SidebarSessionListHost,
   PersonHeaders,
 } from "./app-sidebar-session-render-types.ts";
-import {
-  renderPendingSessionCreateRow,
-  renderSessionTree as SessionTree,
-} from "./app-sidebar-session-row-render.tsx";
+import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import {
   rowDemandsVisibility,
@@ -35,11 +34,6 @@ export function renderSessionSection(params: {
     () => !(section().renderHeader && host().collapsedSessionSections.has(section().id)),
   );
   const group = createMemo(() => section().category);
-  // Created rows lead their section, so a create for this group takes that slot now.
-  const pendingCreate = createMemo(() => {
-    const pending = host().sessionCreateDisplay();
-    return pending?.category && pending.category === group() ? pending : undefined;
-  });
   const personOwner = createMemo(() => section().personOwner);
   const personIdentity = createMemo(() => personOwner()?.identity);
   const presence = createMemo(() => {
@@ -272,11 +266,7 @@ export function renderSessionSection(params: {
                 }
               : undefined
           }
-          draggable={!derivedSection()}
-          disabledReason={(() => {
-            const access = groupWriteAccess();
-            return access.allowed || pinned() ? undefined : access.reason;
-          })()}
+          draggable={!derivedSection() && groupWriteAccess().allowed}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
           onContextMenu={(() => {
@@ -347,6 +337,7 @@ export function renderSessionSection(params: {
                   target={{ group: group() ?? "" }}
                   class="sidebar-session-group-actions sidebar-new-session"
                   label={t("sessionsView.newSessionInGroup", { group: label() })}
+                  tooltip={t("chat.runControls.newSession")}
                   disabledReason={(() => {
                     const access = newSessionAccess();
                     return access.allowed ? undefined : access.reason;
@@ -385,15 +376,29 @@ export function renderSessionSection(params: {
                   </button>
                 )}
               </Show>
+              {/* Opens the Sessions page beside this list, which stays open. Sections derived
+                  from a person keep their actions in the shared toolbar. */}
+              <Show when={!derivedSection()}>
+                <a
+                  class="sidebar-session-group-actions sidebar-session-group-open"
+                  href={pathForRoute("sessions", host().basePath)}
+                  title={t("sessionsView.openSessionsPage")}
+                  aria-label={t("sessionsView.openSessionsPage")}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => host().onNavigate?.("sessions"))
+                  }
+                >
+                  <Icon name="sessionPanelExpand" />
+                </a>
+              </Show>
             </>
           }
         />
       ) : undefined}
       {collapsed() ? undefined : (
         <>
-          {section().rows.length > 0 || pendingCreate() ? (
+          {section().rows.length > 0 ? (
             <div class="sidebar-recent-sessions__list" role="list" aria-label={label()}>
-              {renderPendingSessionCreateRow(pendingCreate, true)}
               <div
                 ref={sessionWindow.bind}
                 class="sidebar-session-window"

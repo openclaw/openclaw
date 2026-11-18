@@ -8,7 +8,7 @@
 .shortcut-kbd {
   flex: none;
   padding-inline: 0.4em;
-  border-radius: 4px;
+  border-radius: min(4px, var(--radius-sm));
   background: color-mix(in srgb, var(--text) 12%, transparent);
   color: color-mix(in srgb, var(--text) 82%, transparent);
   font-family: var(--font-shortcut);

@@ -1,4 +1,7 @@
-import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
+import {
+  markModelPayloadObserver,
+  modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -316,7 +319,7 @@ export function createModelLifecycle(params: {
     ...options,
     requestId: callId,
     ...((options?.headers || traceparent) && { headers }),
-    onPayload,
+    onPayload: markModelPayloadObserver(onPayload, originalOnPayload),
     onResponse,
   };
   modelRequestBodyState(requestOptions).onBytes = (bytes) => {

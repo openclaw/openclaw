@@ -1,0 +1,13 @@
+# Exact net growth beyond the 400-line allowance for #198929, the in-place history cut.
+# Six review rounds each mandated one regression at an owning boundary, and these are the
+# two whose harnesses cannot shrink further: the usage cache-upgrade rebuild (seed a rollup
+# published at the previous semantic version over an unchanged navigated transcript, run the
+# real refresh through the worker, and read the republished rollup back) and the oversized
+# in-place repoint. Every other regression this PR added was folded into existing table-driven
+# tests, and one superseded ordering test was deleted. Three lines are notes: a mock-isolation
+# note this branch predates on main's worker-idle-gc test, and why the Gateway startup-trace
+# memory case cannot assert the process-wide worker count its shard shares. Fifteen lines pin
+# the upgrade cases: a v2026.11.3 whole-transcript rewind or switch copy keeps stable's bill,
+# also after an in-place rewind marks its displaced branch, and a main-era marked copy's own
+# inactive-sibling spend survives an in-place rewind.
+88

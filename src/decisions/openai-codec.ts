@@ -1,8 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { DecisionReasoning } from "./execution-types.js";
-import type { DecisionAnswerV2, DecisionBatchV2, ProviderDecisionOutcomeV2 } from "./types-v2.js";
-import type { DecisionEntry } from "./types.js";
-import { validateDecisionBatchV2 } from "./validation-v2.js";
+import type { DecisionEntry, DecisionReasoning } from "./input-types.js";
+import { validateDecisionBatchV2 } from "./input-validation.js";
+import type { ProviderDecisionOutcomeV2 } from "./provider-outcomes.js";
+import type { DecisionAnswerV2, DecisionBatchV2 } from "./types-v2.js";
 
 // Wire limits shared by native and router transports.
 const maxQuestions = 400;
@@ -56,10 +56,11 @@ function probability(value: unknown): value is number {
 
 export function decodeOpenAIDecisionResult(
   batch: DecisionBatchV2,
-  payload: Record<string, unknown>,
+  payload: unknown,
 ): ProviderDecisionOutcomeV2 {
   const entries = Object.entries(batch.questions);
   if (
+    !isRecord(payload) ||
     typeof payload.model !== "string" ||
     !payload.model ||
     payload.model.length > 256 ||

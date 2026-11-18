@@ -13,6 +13,7 @@ import {
   prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
+import type { SessionTranscriptTurnLifecyclePatch } from "../../config/sessions/session-transcript-turn-lifecycle.types.js";
 import {
   measureDiagnosticsTimelineSpan,
   observeDiagnosticsTimelinePhases,
@@ -34,7 +35,6 @@ import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
-import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -50,6 +50,7 @@ import type { GatewayClient } from "./shared-types.js";
 
 export type GatewayChatUserTurnPersist = (options?: {
   contextFreeCommand?: true;
+  sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
 }) => ReturnType<UserTurnTranscriptRecorder["persistFallback"]>;
 
 type GatewayChatUserTurnController = {
@@ -123,20 +124,27 @@ export function createGatewayChatUserTurnController(params: {
   });
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
+  // Recovery has restored this exact human source and current operator authority.
+  // Its transport is synthetic; only the private admission may reuse human mention policy.
+  const mentionClient =
+    recoveredInput && params.client
+      ? { ...params.client, internal: { ...params.client.internal, syntheticClient: undefined } }
+      : params.client;
   const selectedMentions =
     recoveredInput?.target.message["__openclaw"]?.humanMentions ?? request.mentions;
-  const sourceClients =
-    !params.client?.internal?.syntheticClient &&
-    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
-      ? normalizeMessageClientSources([request.clientInfo])
-      : [];
+  const humanInput =
+    !mentionClient?.internal?.syntheticClient &&
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user");
+  const sourceClients = humanInput ? normalizeMessageClientSources([request.clientInfo]) : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
     ...(request.goalOperation?.action === "resume" ? { display: false } : {}),
     text: request.rawMessage,
     requesterOrigin,
     ...(request.workContext ? { workContext: request.workContext } : {}),
+    ...(request.appContext ? { appContext: request.appContext } : {}),
     ...(request.mentions ? { mentions: request.mentions } : {}),
+    ...(request.humanAddressed ? { humanAddressed: true } : {}),
     timestamp: session.now,
     idempotencyKey: sourceId,
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
@@ -184,6 +192,31 @@ export function createGatewayChatUserTurnController(params: {
     });
   const prepareWorkerGoalSource = async () =>
     prepareSessionSourceAuthority(captureWorkerGoalSource());
+  const selectedCommittedMentions = (message: UserTurnOriginalInputCommit["message"]) => {
+    const stored = message["__openclaw"]?.humanMentions;
+    const text =
+      extractTextFromChatContent(message.content, {
+        joinWith: "\n",
+        normalizeText: (value) => value,
+      }) ?? "";
+    const retained = recoveredInput
+      ? (selectedMentions ?? [])
+      : (selectedMentions ?? []).filter(
+          (mention) =>
+            Array.isArray(stored) &&
+            stored.some((value) => {
+              const span = asOptionalRecord(value);
+              return (
+                span?.profileId === mention.profileId &&
+                span.start === mention.start &&
+                span.end === mention.end &&
+                text.slice(mention.start, mention.end) ===
+                  request.rawMessage.slice(mention.start, mention.end)
+              );
+            }),
+        );
+    return { retained, text };
+  };
   const workerGoalSource: SessionSourceAssertion | undefined =
     admission.codexGoalAdmission === "worker"
       ? Object.assign(() => captureWorkerGoalSource()(), {
@@ -248,17 +281,9 @@ export function createGatewayChatUserTurnController(params: {
         config: session.cfg,
       };
     },
-    ...(admission.localInputAdmission || params.commitInitialInput
-      ? {
-          sessionLifecyclePatch: {
-            ...deriveGatewaySessionLifecycleSnapshot({
-              event: { runId: session.clientRunId, ts: params.startedAt, data: { phase: "start" } },
-            }),
-            lifecycleRunId: session.clientRunId,
-            lastRunId: undefined,
-            ...(!progressRefresh ? { lastInteractionAt: params.startedAt } : {}),
-          },
-        }
+    // Commands record activity only; fresh plain input overrides this at its commit boundary.
+    ...((admission.localInputAdmission || params.commitInitialInput) && !progressRefresh
+      ? { sessionLifecyclePatch: { lastInteractionAt: params.startedAt } }
       : {}),
     errorContext: "gateway chat user turn transcript",
     assertOriginalInputCommit: composeSessionSourceAssertion([
@@ -328,51 +353,66 @@ export function createGatewayChatUserTurnController(params: {
     onPersistenceError,
     ...(selectedMentions && senderProfileId && mentionInbox
       ? {
+          ...(humanInput
+            ? {
+                prepareMentionInvitation: (message: UserTurnOriginalInputCommit["message"]) => {
+                  if (message.idempotencyKey !== sourceId) {
+                    return undefined;
+                  }
+                  const { retained, text } = selectedCommittedMentions(message);
+                  if (!retained.length) {
+                    return undefined;
+                  }
+                  return mentionInbox.prepareInvitation(
+                    mentionClient,
+                    {
+                      agentId: session.agentId,
+                      sessionKey: session.sessionKey,
+                      entry:
+                        admission.admittedSessionEntry ??
+                        admission.initialSessionEntry ??
+                        session.entry,
+                    },
+                    retained.map((mention) => ({
+                      profileId: mention.profileId,
+                      token: text.slice(mention.start, mention.end),
+                    })),
+                  );
+                },
+              }
+            : {}),
           onOriginalInputCommitted: ({ message, anchor }: UserTurnOriginalInputCommit) => {
-            const stored = message["__openclaw"]?.humanMentions;
-            const text =
-              extractTextFromChatContent(message.content, {
-                joinWith: "\n",
-                normalizeText: (value) => value,
-              }) ?? "";
-            const retained = recoveredInput
-              ? selectedMentions
-              : selectedMentions.filter(
-                  (mention) =>
-                    Array.isArray(stored) &&
-                    stored.some((value) => {
-                      const span = asOptionalRecord(value);
-                      return (
-                        span?.profileId === mention.profileId &&
-                        span.start === mention.start &&
-                        span.end === mention.end &&
-                        text.slice(mention.start, mention.end) ===
-                          request.rawMessage.slice(mention.start, mention.end)
-                      );
-                    }),
-                );
+            const { retained, text } = selectedCommittedMentions(message);
             if (!retained.length) {
               params.warn(
                 "Human mentions skipped because the committed text no longer contains the selected tokens.",
               );
               return;
             }
-            mentionCommit = mentionInbox.recordCommittedInputAsync({
-              sourceId,
-              committedSource: {
-                generation: anchor.generation,
-                sequence: anchor.rawSeq,
-                timestamp: message.timestamp,
-              },
-              agentId: anchor.agentId,
-              sessionKey: session.sessionKey,
-              sessionId: anchor.sessionId,
-              messageId: anchor.entryId,
-              senderProfileId,
-              recipientProfileIds: retained.map((mention) => mention.profileId),
-              excerpt: text,
-            });
-            void mentionCommit.catch(onPersistenceError);
+            mentionCommit = mentionInbox
+              .recordCommittedInputAsync(
+                {
+                  sourceId,
+                  committedSource: {
+                    generation: anchor.generation,
+                    sequence: anchor.rawSeq,
+                    timestamp: message.timestamp,
+                  },
+                  agentId: anchor.agentId,
+                  sessionKey: session.sessionKey,
+                  sessionId: anchor.sessionId,
+                  messageId: anchor.entryId,
+                  senderProfileId,
+                  recipientProfileIds: retained.map((mention) => mention.profileId),
+                  excerpt: text,
+                },
+                humanInput ? mentionClient : undefined,
+              )
+              .catch((error: unknown) => {
+                // The original message and invitation already committed. Inbox reports
+                // mentions.failed; notification delivery must not cancel agent dispatch.
+                params.warn(`gateway mention notification delivery failed: ${formatForLog(error)}`);
+              });
           },
         }
       : {}),
@@ -389,7 +429,7 @@ export function createGatewayChatUserTurnController(params: {
     }
     const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
-      () => recorder.persistFallback(),
+      () => recorder.persistFallback({ sessionLifecyclePatch: options?.sessionLifecyclePatch }),
       {
         phase: "agent-turn",
         config: session.cfg,

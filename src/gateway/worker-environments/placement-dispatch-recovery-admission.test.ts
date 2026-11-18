@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { worktreeRegistryPublication } from "../../agents/worktrees/registry-publication.js";
 import { insertRegistryWorktreeInDatabase } from "../../agents/worktrees/registry-run-end.worker.js";
+import {
+  admitWorktreeRunLeaseInDatabase,
+  releaseWorktreeRunLeaseInDatabase,
+} from "../../agents/worktrees/run-lease-store.kernel.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -174,6 +178,38 @@ describe("placement recovery session admission with persisted placements", () =>
     }
     expect(placements.get(REQUEST.sessionId)?.state).toBe("reclaimed");
     expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
+  it("targeted recovery waits for an earlier healthy placement recovery", async () => {
+    const harness = await harnessFor();
+    await seedActive(harness);
+    harness.markEnvironmentNodeDeviceId("healthy-worker-node");
+    const hold = barrier();
+    const reconcile = harness.service.reconcile;
+    vi.spyOn(harness.service, "reconcile").mockImplementation((mode, admit) =>
+      reconcile(mode, (ids, run) => {
+        if (!admit) {
+          throw new Error("Recovery requires coordinator admission");
+        }
+        return admit(ids, async (recoveryMode) => {
+          await run(recoveryMode);
+          await hold.wait();
+        });
+      }),
+    );
+    const coordinated = coordinate(harness);
+    const previous = coordinated.reconcile();
+    await hold.entered;
+    const admitted = observeTargetedAdmission(harness).then(() => "admitted");
+    const targeted = coordinated.reconcileActive(harness.ready.environmentId);
+    try {
+      expect(await Promise.race([admitted, targeted.then(() => "finished")])).toBe("admitted");
+    } finally {
+      hold.release();
+      await Promise.all([previous, targeted]);
+    }
+    expect(placements.get(REQUEST.sessionId)).toMatchObject({ state: "active" });
+    expect(harness.environments.destroy).not.toHaveBeenCalled();
   });
 
   it.each(["startup", "full", "targeted"] as const)(
@@ -501,12 +537,16 @@ describe("placement recovery session admission with persisted placements", () =>
       const sessionPublication = source.endsWith("session");
       const { root, ref: orphanRef, read } = await orphanWorkspace("parked-orphan");
       await seedFailed(placements);
+      let targetReads = 0;
       const target = {
         ...REQUEST,
         sessionKey: `agent:${source === "shared-store session" ? "logical" : "physical"}:canonical-orphan`,
         agentId: "physical",
         storePath: path.join(root, "sessions.sqlite"),
-        ...(sessionPublication ? {} : { worktreeId: "parked-worktree" }),
+        get worktreeId() {
+          targetReads++;
+          return sessionPublication ? undefined : "parked-worktree";
+        },
       };
       let available = false;
       const resolveWorkspace = vi.fn(async () => {
@@ -539,6 +579,23 @@ describe("placement recovery session admission with persisted placements", () =>
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);
         unsubscribe = subscribe();
         publish("unrelated");
+        if (!sessionPublication) {
+          targetReads = 0;
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              admitWorktreeRunLeaseInDatabase(db, {
+                worktreeId: "unrelated",
+                token: "unrelated-run",
+                pid: process.pid,
+                startTime: null,
+                now: 1,
+              });
+              releaseWorktreeRunLeaseInDatabase(db, "unrelated", "unrelated-run");
+            },
+            { database: support.testState.stateDb },
+          );
+          expect(targetReads, "lease publications must not scan parked workspaces").toBe(0);
+        }
         await coordinated.reconcileActive();
         await coordinated.reconcileActive();
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);

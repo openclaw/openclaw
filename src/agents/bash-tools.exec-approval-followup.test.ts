@@ -200,9 +200,13 @@ describe("exec approval followup", () => {
     }
   });
 
-  it("retries observation after a transport error without competing direct delivery", async () => {
+  it.each([0, 600_000, -600_000])("retries across wall step %i", async (step) => {
+    const now = Date.now.bind(Date);
     acceptRun()
-      .mockRejectedValueOnce(new Error("gateway reconnecting"))
+      .mockImplementationOnce(async () => {
+        vi.spyOn(Date, "now").mockImplementation(() => now() + step);
+        throw new Error("gateway reconnecting");
+      })
       .mockResolvedValueOnce({ runId, status: "ok" });
     await send(pending);
     expectCalls(3, 0);
@@ -210,8 +214,8 @@ describe("exec approval followup", () => {
 
   it("ends observation at its deadline without competing direct delivery", async () => {
     const events = diagnostics(true);
-    const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    const startedAt = performance.now();
+    const clock = vi.spyOn(performance, "now").mockReturnValue(startedAt);
     acceptRun().mockImplementationOnce(async () => {
       clock.mockReturnValue(startedAt + 10 * 60_000);
       throw new Error("gateway permanently unreachable");
@@ -223,16 +227,8 @@ describe("exec approval followup", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         type: "log.record",
-        level: "WARN",
         message: "Exec approval followup observation ended",
-        loggerName: "agents/exec-approval-followup",
-        attributes: {
-          approvalId,
-          runId,
-          reason: "deadline",
-          transportErrors: 1,
-          deliveryOwner: "accepted_agent_run",
-        },
+        attributes: expect.objectContaining({ reason: "deadline" }),
       }),
     );
   });

@@ -168,7 +168,7 @@ it.for([
         expect.soft(enqueued).not.toHaveBeenCalled();
         const errorMessage = expect.stringContaining(
           boundary === "mailbox"
-            ? "operator source identity changed; start a new request"
+            ? "Authenticated profile verification is unavailable"
             : change === "profile merge"
               ? "Selected account changed"
               : "authority is no longer current",
@@ -296,6 +296,10 @@ it.each(["backend", "question dispatcher"] as const)(
       throw new Error("Expected normal followup dispatch after unsupported steering");
     }
     expect(dispatched.replyOptions.messageInjectionDisposition).toBe("rejected");
+    expect(dispatched.replyOptions.messageInjectionRejection).toMatchObject({
+      status: "rejected",
+      reason: sink === "backend" ? "guarded_injection_unsupported" : "injection_unavailable",
+    });
     const authority = dispatched.replyOptions.operatorAuthority;
     assertAdmittedRunOperatorAuthority(authority);
     expect(authority).toBe(originalOperatorAuthority);

@@ -159,22 +159,28 @@ suite.define(() => {
           await expect
             .poll(() => page.locator("html").getAttribute("data-theme-mode"))
             .toBe(colorScheme);
-          const expected = await resolvedBackground(page, "var(--bg-elevated)");
-          const filters = page.locator(".usage-view-options");
+          await page.getByRole("button", { name: "Display", exact: true }).click();
+          const filters = page.locator(".usage-display-menu__metric");
           for (const label of ["Cost", "Tokens"]) {
             const selected = filters.getByRole("button", { name: label, exact: true });
             await selected.click();
+            await expect.poll(() => selected.getAttribute("aria-pressed")).toBe("true");
             await page.mouse.move(0, 0);
+            const restingBackground = await selected.evaluate(
+              (element) => getComputedStyle(element).backgroundColor,
+            );
             for (const state of ["rest", "hover"]) {
               if (state === "hover") {
                 await selected.hover();
               }
               await capture(filters, `usage-${colorScheme}-${label}-${state}.png`);
-              await expect
-                .poll(() =>
-                  selected.evaluate((element) => getComputedStyle(element).backgroundColor),
-                )
-                .toBe(expected);
+              if (state === "hover") {
+                await expect
+                  .poll(() =>
+                    selected.evaluate((element) => getComputedStyle(element).backgroundColor),
+                  )
+                  .toBe(restingBackground);
+              }
             }
           }
         },
@@ -283,7 +289,7 @@ suite.define(() => {
 
       const overview = page.locator(".security-page");
       const browserSwitchRole = overview.getByRole("switch", {
-        name: "Browser enabled",
+        name: "Browser tools",
         exact: true,
       });
       await browserSwitchRole.waitFor();
@@ -310,7 +316,7 @@ suite.define(() => {
         await expect
           .poll(() =>
             section
-              .getByRole("switch", { name: "Open links in Control UI browser", exact: true })
+              .getByRole("switch", { name: "Open links in the built-in browser", exact: true })
               .count(),
           )
           .toBe(0);
@@ -384,7 +390,7 @@ suite.define(() => {
 
           const section = await openBrowserSettings(page, suite.server.baseUrl);
           const preference = section.getByRole("switch", {
-            name: "Open links in Control UI browser",
+            name: "Open links in the built-in browser",
             exact: true,
           });
           await preference.waitFor();
@@ -423,6 +429,7 @@ suite.define(() => {
               body: { url: "https://example.com/control-ui-proof" },
               method: "POST",
               path: "/tabs/open",
+              query: { operatorInput: true },
               tabScope: { sessionKey: "agent:main:main" },
             });
           const browserPanel = page.locator("openclaw-browser-panel[embedded]");

@@ -87,13 +87,7 @@ The agent reads the body file from `fetch-content` output and:
 
 This is the only step that requires semantic understanding. Everything else is mechanical.
 
-For `issue_body` and `pull_request_body`: if the current body has already been redacted by the author and no plaintext credential remains, **do not post a public notification comment**. Resolve the alert with a maintainer-only resolution comment such as:
-
-```bash
-node secret-scanning.mjs resolve <ALERT_NUMBER> revoked "Current issue/PR body is already redacted; no public notification posted."
-```
-
-This avoids creating a fresh public pointer to historical sensitive content.
+For `issue_body` and `pull_request_body`: if the current body has already been redacted by the author and no plaintext credential remains, **do not post a public notification comment**. This avoids creating a fresh public pointer to historical sensitive content. Record that redaction separately and use Step 6 to decide whether the evidence supports resolving the alert.
 
 ## Step 3: Redact
 
@@ -184,17 +178,22 @@ The script picks the right template:
 - **body types**: "your issue/PR description … redacted in place"
 - **commit**: "code you committed"
 
-For `issue_body` and `pull_request_body`, only notify when the current body still contained plaintext and maintainers redacted it. If the user already redacted the current body, skip this step and resolve silently.
+For `issue_body` and `pull_request_body`, only notify when the current body still contained plaintext and maintainers redacted it. If the user already redacted the current body, skip notification and continue to Step 6.
 
 ## Step 6: Resolve
 
 ```bash
-node secret-scanning.mjs resolve <ALERT_NUMBER>
-# or with custom resolution:
-node secret-scanning.mjs resolve <ALERT_NUMBER> revoked "Custom comment"
+node secret-scanning.mjs resolve <ALERT_NUMBER> <RESOLUTION> [COMMENT]
 ```
 
-Resolution is `revoked` by default. As maintainers we cannot control whether users rotate — our responsibility is to remove current plaintext exposure and notify only when public notification is useful. The `revoked` means "this secret should be considered leaked", not "I confirmed it was revoked".
+Choose an explicit resolution supported by the evidence and the maintainer's authority:
+
+- `revoked`: the credential owner or issuer has confirmed revocation.
+- `false_positive`: the detection was confirmed to be a false positive.
+- `used_in_tests`: the credential was confirmed to be used for testing.
+- `wont_fix`: an authorized maintainer has accepted the risk and decided not to remediate; record that decision in the comment.
+
+Redaction and a request to rotate credentials do not establish revocation. If no resolution is substantiated, leave the alert open and report the redaction and notification outcomes separately. The command has no default resolution and adds a resolution comment only when one is supplied.
 
 ## Step 7: Summary
 

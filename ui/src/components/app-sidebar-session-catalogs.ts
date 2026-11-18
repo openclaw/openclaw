@@ -15,29 +15,24 @@ import type {
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
-
-export function catalogSessionRowsByKey(rows: readonly GatewaySessionRow[]) {
-  const byKey = new Map<string, GatewaySessionRow>();
-  for (const row of rows) {
-    if (!byKey.has(row.key)) {
-      byKey.set(row.key, row);
-    }
-  }
-  return byKey;
-}
+import type {
+  SidebarRecentSession,
+  SidebarSessionHovercardRow,
+} from "./app-sidebar-session-types.ts";
 
 export function catalogSessionActivity(
   sessions: readonly SessionCatalogSession[],
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
-  isRunVisuallyActive: (row: GatewaySessionRow) => boolean,
+  liveRowsByKey: ReadonlyMap<
+    string,
+    Pick<SidebarRecentSession, "unread" | "backgroundProcessCount" | "isRunVisuallyActive">
+  >,
 ) {
   let running = false;
   let unread = false;
   for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
     running ||= row
-      ? isRunVisuallyActive(row) || (row.backgroundProcessCount ?? 0) > 0
+      ? row.isRunVisuallyActive === true || (row.backgroundProcessCount ?? 0) > 0
       : session.status === "active" || session.status === "running";
     unread ||= row?.unread === true;
   }
@@ -210,7 +205,6 @@ export type CatalogRowControls = Partial<
 
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (
     element: HTMLElement,
     controls: CatalogRowControls,

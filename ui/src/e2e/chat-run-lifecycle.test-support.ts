@@ -20,7 +20,7 @@ export async function openMockAbortableRun(currentPage: Page, baseUrl: string, r
     methodResponses: { "chat.abort": { ok: true, aborted: false, runIds: [] } },
   });
   await currentPage.goto(controlUiSessionUrl(baseUrl, sessionKey));
-  const stop = currentPage.getByRole("button", { name: "Stop generating" });
+  const stop = currentPage.getByRole("button", { name: "Stop", exact: true });
   const composer = currentPage.locator(".agent-chat__input textarea");
   await stop.waitFor({ state: "visible" });
   await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();

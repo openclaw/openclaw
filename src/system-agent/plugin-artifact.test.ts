@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gzipSync } from "node:zlib";
+import { Header } from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { packToArchive } from "../plugins/test-helpers/archive-fixtures.js";
 import {
@@ -78,7 +80,7 @@ describe("exact system-agent plugin artifacts", () => {
     await fs.rm(fixture, { recursive: true, force: true });
   });
 
-  async function pack(packageFields: Record<string, unknown> = {}) {
+  async function pack(packageFields: Record<string, unknown> = {}, extraFiles = 0) {
     const pkgDir = path.join(fixture, "package");
     await fs.mkdir(path.join(pkgDir, "dist", "control-ui"), { recursive: true });
     await writeJson(pkgDir, "package.json", {
@@ -94,7 +96,15 @@ describe("exact system-agent plugin artifacts", () => {
       controlUi: { entry: "dist/control-ui/index.js" },
     });
     for (const entry of ["index.js", "control-ui/index.js"]) {
-      await fs.writeFile(path.join(pkgDir, "dist", entry), "export default {};\n");
+      await fs.writeFile(
+        path.join(pkgDir, "dist", entry),
+        'throw new Error("review must not execute plugin code");\n',
+      );
+    }
+    for (let index = 0; index < extraFiles; index += 1) {
+      const dir = path.join(pkgDir, "dist", `assets-${Math.floor(index / 3)}`);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, `${index}.js`), "export default {};\n");
     }
     const archivePath = await packToArchive({ pkgDir, outDir: fixture, outName: "artifact.tgz" });
     const bytes = await fs.readFile(archivePath);
@@ -105,13 +115,14 @@ describe("exact system-agent plugin artifacts", () => {
     };
   }
 
-  async function prepare() {
-    const operation = await pack();
+  async function prepare(extraFiles = 0) {
+    const operation = await pack({}, extraFiles);
     return { operation, review: await prepareArtifact(operation) };
   }
 
   it("retains reviewed bytes and installs them after the task source changes", async () => {
-    const { operation, review } = await prepare();
+    // Compiled chunks and directory headers both count toward archive admission.
+    const { operation, review } = await prepare(600);
     const reviewedBytes = await fs.readFile(operation.path);
     expect(review).toMatchObject({
       pluginId,
@@ -150,6 +161,31 @@ describe("exact system-agent plugin artifacts", () => {
     expect(mocks.audit.mock.calls.at(-1)?.[0]).toMatchObject({
       details: { pluginId, sha256: operation.sha256, sourcePath: installedPath },
     });
+  });
+
+  it("rejects archives beyond the shared entry ceiling before retaining a review", async () => {
+    // In-memory headers reach count admission without creating 50,001 fixture inodes.
+    const archive = Buffer.alloc(50_001 * 512 + 1024);
+    for (let index = 0; index < 50_001; index += 1) {
+      new Header({
+        path: `package/empty-${index}`,
+        type: "Directory",
+        mode: 0o755,
+        size: 0,
+      }).encode(archive, index * 512);
+    }
+    const bytes = gzipSync(archive);
+    const archivePath = path.join(fixture, "too-many.tgz");
+    await fs.writeFile(archivePath, bytes);
+    await expect(
+      prepareArtifact({
+        kind: "plugin-activate-artifact",
+        path: archivePath,
+        sha256: createHash("sha256").update(bytes).digest("hex"),
+      }),
+    ).rejects.toMatchObject({ code: "archive-entry-count-exceeds-limit" });
+    await expect(fs.access(importPath("pending"))).rejects.toThrow();
+    expect(mocks.install).not.toHaveBeenCalled();
   });
 
   it("preserves the approved source when the installer reports a late failure", async () => {

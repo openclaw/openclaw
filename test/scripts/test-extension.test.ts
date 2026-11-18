@@ -458,7 +458,7 @@ export default {root:${JSON.stringify(root)},cacheDir:${JSON.stringify(path.join
     const expectedHome = realHomeReplay ? JSON.stringify(home) : "path.join(tmpdir(), 'home')";
     writeFileSync(
       path.join(root, "selected.test.mjs"),
-      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
+      `import {homedir,tmpdir} from 'node:os';import path from 'node:path';import {test,expect} from 'vitest';let attempts=0;test('selected native case',()=>{expect(++attempts).toBe(2);expect(Uint8Array.fromBase64(Uint8Array.of(255).toBase64()).toHex()).toBe('ff');expect(Boolean(process.versions.bun)).toBe(${runtime === "bun"});expect(process.execArgv.includes('--no-concurrent-sparkplug')).toBe(${runtime === "node" && pool === "forks"});expect(process.execArgv).toContain('--no-warnings');expect(process.env.NODE_OPTIONS).toBe('--trace-warnings');expect(process.env.HOME).toBe(${expectedHome});expect(homedir()).toBe(${expectedHome});});`,
     );
     for (const name of ["excluded", "unrelated"]) {
       writeFileSync(
@@ -728,6 +728,37 @@ it.each([
     OPENCLAW_VITEST_RUNTIME: "node",
   });
 });
+
+it.each([
+  { policy: "dual-all", runtime: "node", expectedCalls: 3 },
+  { policy: "dual-all", runtime: "bun", expectedCalls: 3 },
+  { policy: "bun-all", runtime: "node", expectedCalls: 0 },
+  { policy: "bun-all", runtime: "bun", expectedCalls: 3 },
+])(
+  "runs only $runtime from the $policy extension selection",
+  async ({ policy, runtime, expectedCalls }) => {
+    const runGroup = vi.fn<(params: RunGroupParams) => Promise<number>>().mockResolvedValue(0);
+    vi.mocked(prepareVitestRuntime).mockClear();
+    expect(
+      await runExtensionBatchPlan(concurrentPlan(), {
+        env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy, OPENCLAW_CI_TEST_RUNTIME: runtime },
+        runGroup,
+      }),
+    ).toBe(0);
+    expect(runGroup).toHaveBeenCalledTimes(expectedCalls);
+    for (const [invocation] of runGroup.mock.calls) {
+      expect(invocation.env?.OPENCLAW_VITEST_RUNTIME).toBe(runtime);
+    }
+    if (expectedCalls === 0) {
+      expect(prepareVitestRuntime).not.toHaveBeenCalled();
+    } else {
+      expect(prepareVitestRuntime).toHaveBeenCalledOnce();
+      expect(vi.mocked(prepareVitestRuntime).mock.calls[0]?.[1]?.OPENCLAW_VITEST_RUNTIME).toBe(
+        runtime,
+      );
+    }
+  },
+);
 
 it("preserves Codex process bounds with release options", async () => {
   const excluded = "extensions/codex/src/app-server/run-attempt.test.ts";

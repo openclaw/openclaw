@@ -5,7 +5,7 @@ import { AttachmentRemove } from "./chat-attachment-file.tsx";
 import "../../../styles/chat/selection-annotations.css";
 
 export function AttachmentPreviewChip(props: {
-  label: string;
+  label: JSX.Element;
   icon: JSX.Element;
   onClick?: () => void;
   onReveal?: () => void;
