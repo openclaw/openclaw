@@ -264,7 +264,61 @@ describe("2026.11.4 exact-candidate exceptions", () => {
 });
 
 // Grant entries share the matching and rejection contract exercised above.
-it.each([
+it.each<{
+  sha?: string;
+  version?: string;
+  role: string;
+  names: string[];
+  aggregate: string;
+  step: string;
+  cause: string;
+}>([
+  {
+    version: "2026.11.6",
+    role: "normalCi",
+    names: [
+      "checks-node-compact-large-16 (node)",
+      "checks-node-compact-large-28 (bun)",
+      "checks-node-compact-large-28 (node)",
+      "checks-node-compact-large-31 (node)",
+      "checks-node-compact-large-32 (bun)",
+      "checks-node-compact-large-37 (bun)",
+      "checks-node-compact-large-42 (bun)",
+      "checks-node-compact-large-8 (node)",
+      "checks-node-compact-small-12 (node)",
+    ],
+    aggregate: "openclaw/ci-gate",
+    step: "Verify selected CI lanes",
+    cause: "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+  },
+  ...[
+    { name: "checks-node-compat-node24", key: "checks-node-compat" },
+    { name: "checks-ui (3/3)", key: "checks-ui" },
+    { name: "checks-ui-e2e (10/13)", key: "checks-ui-e2e" },
+    { name: "checks-ui-e2e-real-gateway (2/2)", key: "checks-ui-e2e-real-gateway" },
+  ].map(({ name, key }) => ({
+    version: "2026.11.6",
+    role: "normalCi",
+    names: [name],
+    aggregate: "openclaw/ci-gate",
+    step: "Verify selected CI lanes",
+    cause: key + " finished with failure (selected=true)",
+  })),
+  {
+    version: "2026.11.6",
+    role: "releaseChecksIndependent",
+    names: [
+      "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 3/4)",
+      "Run repo/live E2E validation / Native live suites (Native live agents)",
+      "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+      "Run repo/live E2E validation / Native live suites (Native live gateway OpenAI GPT-5.6 Ultra)",
+      "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "Run repo/live E2E validation / UI and plugin E2E / Repo E2E (UI 2/4)",
+    ],
+    aggregate: "Verify release checks",
+    step: "Verify release check results",
+    cause: "live_repo_e2e_release_checks ended with failure",
+  },
   {
     sha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
     role: "releaseChecksIndependent",
@@ -291,37 +345,74 @@ it.each([
     step: "Verify release check results",
     cause: "live_repo_e2e_release_checks ended with failure",
   },
-])("admits $role grants on $sha", async ({ sha, role, names, aggregate, step, cause }) => {
-  const currentChild = {
-    ...child,
-    key: role,
-    jobs: [
-      ...names.map((name, id) => ({ ...failedJob, id, name })),
-      { ...gate, name: aggregate, steps: [{ name: step, conclusion: "failure" }] },
-    ],
-  };
-  const policy = evaluateReleaseChildPolicy({
-    child: currentChild,
-    targetVersion: stableVersion,
-    targetSha: sha,
-  });
-  expect(policy.waivers.map((waiver) => waiver.jobName)).toEqual(names);
-  expect(terminalPolicyPass(currentChild, stableVersion, sha)).toBe(true);
-  expect(() =>
-    validateReleaseManifestAdvisoryJobs({
+])(
+  "admits $role grants on $sha",
+  async ({ sha, version: grantVersion = stableVersion, role, names, aggregate, step, cause }) => {
+    const currentChild = {
+      ...child,
+      key: role,
+      jobs: [
+        ...names.map((name, id) => ({ ...failedJob, id, name })),
+        { ...gate, name: aggregate, steps: [{ name: step, conclusion: "failure" }] },
+      ],
+    };
+    const policy = evaluateReleaseChildPolicy({
+      child: currentChild,
+      targetVersion: grantVersion,
       targetSha: sha,
-      validationInputs: { targetVersion: stableVersion },
-      childEvidence: { [role]: currentChild },
-    }),
-  ).not.toThrow();
-  await expect(
-    validateReleaseWaiverAggregates({
-      policy,
-      jobs: currentChild.jobs,
-      getJobLog: () => "##[error]" + cause,
-    }),
-  ).resolves.toBeUndefined();
-});
+    });
+    expect(policy.waivers.map((waiver) => waiver.jobName)).toEqual(names);
+    expect(terminalPolicyPass(currentChild, grantVersion, sha)).toBe(true);
+    expect(currentChild.jobs.every((job) => job.conclusion === "failure")).toBe(true);
+    expect(terminalPolicyPass(currentChild, "2026.11.7", sha)).toBe(false);
+    for (const name of [
+      "checks-node-compact-large-5 (node)",
+      "checks-node-compact-large-32 (node)",
+      "checks-node-compact-large-38 (bun)",
+      "checks-ui-e2e (1/13)",
+      "checks-ui-e2e (12/13)",
+      "Seal full release child evidence / Seal child receipt",
+    ]) {
+      expect(
+        terminalPolicyPass(
+          { ...currentChild, jobs: [...currentChild.jobs, { ...failedJob, name }] },
+          grantVersion,
+          sha,
+        ),
+      ).toBe(false);
+    }
+    for (const conclusion of ["cancelled", "timed_out"]) {
+      expect(
+        terminalPolicyPass(
+          { ...currentChild, jobs: currentChild.jobs.map((job) => ({ ...job, conclusion })) },
+          grantVersion,
+          sha,
+        ),
+      ).toBe(false);
+    }
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        targetSha: sha,
+        validationInputs: { targetVersion: grantVersion },
+        childEvidence: { [role]: currentChild },
+      }),
+    ).not.toThrow();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: currentChild.jobs,
+        getJobLog: () => "##[error]" + cause,
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      validateReleaseWaiverAggregates({
+        policy,
+        jobs: currentChild.jobs,
+        getJobLog: () => "##[error]" + cause + "\n##[error]artifact integrity failure",
+      }),
+    ).rejects.toThrow("unwaived failure");
+  },
+);
 
 describe("2026.10.33 mobile validation exception", () => {
   const names = [
