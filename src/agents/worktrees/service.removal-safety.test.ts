@@ -364,9 +364,14 @@ describe("managed removal custody", () => {
     const started = Date.now();
     service = new ManagedWorktreeService({ env });
     const created = await materialize("snapshot-loss-finalization");
-    const nested = path.join(created.path, "nested");
-    await fs.mkdir(nested);
-    await git(nested, "init", "-b", "main");
+    await write(created.path, "snapshot input\n");
+    const execute = gitExec.executeGitCommandBytes;
+    vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation((cwd, args, options) => {
+      if (args.includes("write-tree")) {
+        throw new Error("injected snapshot failure");
+      }
+      return execute(cwd, args, options);
+    });
     const head = await git(created.path, "rev-parse", "HEAD");
     const pendingRef = `refs/openclaw/removals/${created.id}`;
     const requireGit = gitOwner.requireGit;

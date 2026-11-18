@@ -12,7 +12,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import { captureSwap } from "../../infra/package-update-swap.assertions.test-support.js";
+import {
+  captureSwap,
+  publishWithoutPathExchange,
+} from "../../infra/package-update-swap.assertions.test-support.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -136,11 +139,11 @@ async function scenario(
     | "cleanup-deadline"
     | "verified-report-read"
     | "unverified-completion",
+  { preparedRecovery = kind === "revoked" } = {},
 ) {
   const json = kind !== "healthy";
   const repeat = kind === "retained" || kind === "cleanup-deadline";
   const deferred = kind !== "unverified-completion";
-  const preparedRecovery = kind === "revoked" || kind === "link-retained";
   const completedByGateway = kind === "healthy" || kind === "release-failure";
   async function publishSwap(
     fixture: Awaited<ReturnType<typeof createPackageSwapFixture>>,
@@ -151,10 +154,13 @@ async function scenario(
     return { ...fixture, result, transaction };
   }
   let swap;
+  let linkTarget: string | undefined;
   let setupInjected = false;
   if (kind === "unverified-completion") {
     const fixture = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
+    // The denied move is the backup move of a publication without an exchange.
+    const exchange = publishWithoutPathExchange();
     const effect = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
       if (String(args[0]) === fixture.packageRoot) {
         setupInjected = true;
@@ -166,6 +172,7 @@ async function scenario(
       swap = await publishSwap(fixture, "failed");
     } finally {
       effect.mockRestore();
+      exchange.mockRestore();
     }
   } else if (["link-retained", "link-changed", "transient-read"].includes(kind)) {
     const fixture = await createPackageSwapFixture(base);
@@ -176,6 +183,7 @@ async function scenario(
       fixture.packageRoot,
       process.platform === "win32" ? "junction" : "dir",
     );
+    linkTarget = await fs.readlink(fixture.packageRoot);
     swap = await publishSwap(fixture);
   } else if (kind === "verified-report-read") {
     const fixture = await createPackageSwapFixture(base);
@@ -488,6 +496,7 @@ async function scenario(
     () => true,
     () => false,
   );
+  const retainedLinkTarget = await fs.readlink(expectedRetained).catch(() => undefined);
   const history = getUpdateRun(run.runId, { env: run.env });
   const report = history ? renderUpdateRunReport(history).markdown : "missing history";
   const observations = {
@@ -499,6 +508,8 @@ async function scenario(
     afterRevocation: revokedState ? await retainedState() : undefined,
     expectedRetained,
     retainedExists,
+    retainedLinkTarget,
+    linkTarget,
     package: JSON.parse(await fs.readFile(path.join(swap.packageRoot, "package.json"), "utf8")),
     launcher: await fs.readFile(swap.launcher, "utf8"),
     jsonOutput,
@@ -565,9 +576,9 @@ describe("composed cleanup and terminal outcome", () => {
     expect(value.afterRevocation).toEqual(value.revokedState);
     expect(value.package.version).toBe("2.0.0");
   });
-  it("qualifies pending recovery claims after link-retained settlement", async () => {
+  it("keeps recovery claims in the report when a changed backup link fails cleanup", async () => {
     // Service verification is supplied data; publication, cleanup and owner failure are real.
-    const value = await scenario("link-retained");
+    const value = await scenario("link-changed", { preparedRecovery: true });
     const reason = "package-backup-retention-failed";
     expect(value.injected).toBe(true);
     expect(value).toMatchObject({ exitCode: 1, history: { status: "failed" } });
@@ -638,6 +649,43 @@ describe("composed cleanup and terminal outcome", () => {
       }
     },
   );
+  it("keeps the update when the filesystem refuses to remove the unchanged backup link", async () => {
+    const value = await scenario("link-retained");
+    expect(value.injected).toBe(true);
+    expect(value).toMatchObject({ exitCode: 0, history: { status: "succeeded" } });
+    expect(value.package.version).toBe("2.0.0");
+    expect(value.launcher).toBe("candidate launcher\n");
+    // Cleanup stops at the link, so the warning also names the launcher backup it left.
+    const globalRoot = path.dirname(value.expectedRetained);
+    const shimBackup = (await fs.readdir(globalRoot)).find((name) =>
+      name.startsWith(".openclaw.shim-backup-"),
+    );
+    expect(shimBackup).toBeDefined();
+    expect(value.jsonOutput).toEqual([
+      expect.objectContaining({
+        status: "ok",
+        steps: expect.arrayContaining([
+          expect.objectContaining({
+            name: "package-backup-retention",
+            advisory: {
+              kind: "recoverable-maintenance",
+              message: expect.stringContaining(
+                `fixture obsolete link deletion denied; backup retained at ${value.expectedRetained} (a link to a checkout: remove the link itself, never recursively)\nshim backup also retained at ${path.join(globalRoot, String(shimBackup))}`,
+              ),
+            },
+          }),
+        ]),
+      }),
+    ]);
+    expect(value.report).toContain(value.expectedRetained);
+    // The link is not removed another way, and its checkout is never followed.
+    expect(value.linkTarget).toBeDefined();
+    expect(value.retainedLinkTarget).toBe(value.linkTarget);
+    expect(
+      JSON.parse(await fs.readFile(path.join(base, "operator-checkout", "package.json"), "utf8")),
+    ).toMatchObject({ version: "1.0.0" });
+    expect(value.lease).toBe("absent");
+  });
   it.each(["link-changed", "transient-read"] as const)(
     "keeps producer-qualification failure hard for %s",
     async (kind) => {

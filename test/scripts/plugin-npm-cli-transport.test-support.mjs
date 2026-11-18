@@ -1,8 +1,10 @@
 // Raw external-I/O fixture shared by the real CLI and its gh subprocesses.
 // No release owner is replaced: all authentication and archive checks run in CLI.
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const callsite = () =>
@@ -22,6 +24,24 @@ function record(value) {
   );
 }
 
+function responsePath(route) {
+  return join(
+    process.env.NPM_CLI_RESPONSES_DIR,
+    createHash("sha256").update(route).digest("hex") + ".json",
+  );
+}
+
+function readResponse(route) {
+  try {
+    return JSON.parse(readFileSync(responsePath(route), "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 function response(route, transport) {
   record({
     kind: "request",
@@ -29,24 +49,27 @@ function response(route, transport) {
     route,
     callsite: process.env.NPM_CLI_CALLSITE ?? callsite(),
   });
-  const responses = JSON.parse(readFileSync(process.env.NPM_CLI_RESPONSES, "utf8"));
   const [path, query] = route.split("?");
   const params = new URLSearchParams(query);
   params.sort();
-  const value = responses[query ? path + "?" + params.toString() : route];
+  const key = query ? path + "?" + params.toString() : route;
+  const value = readResponse(key);
   if (!value) {
     throw new Error("Unconfigured external fixture request: " + route);
   }
   if (value.after) {
-    responses[value.after.route] = value.after.value;
+    const after = value.after;
     delete value.after;
-    writeFileSync(process.env.NPM_CLI_RESPONSES, JSON.stringify(responses));
+    writeFileSync(responsePath(after.route), JSON.stringify(after.value));
+    if (after.route !== key) {
+      writeFileSync(responsePath(key), JSON.stringify(value));
+    }
     record({ kind: "external-change", route });
   }
   if (/^actions\/runs\/[0-9]+\/artifacts$/u.test(path)) {
     const page = JSON.parse(value.data);
     page.artifacts = page.artifacts.map((artifact) => {
-      const current = responses["actions/artifacts/" + artifact.id];
+      const current = readResponse("actions/artifacts/" + artifact.id);
       return current ? JSON.parse(current.data) : artifact;
     });
     return Buffer.from(JSON.stringify(page));

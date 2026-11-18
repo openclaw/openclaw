@@ -25,8 +25,7 @@ suite.define(() => {
           "cron.status": { enabled: true, jobs: 0, triggersEnabled: true },
         },
       });
-      await page.goto(suite.server.baseUrl + "cron");
-      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.goto(suite.server.baseUrl + "cron?new");
       await page.locator("#cron-name").fill("Synthetic garden inventory");
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
       const advanced = page.locator("details.cron-advanced").first();

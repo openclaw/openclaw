@@ -15482,8 +15482,9 @@ struct ChatHistoryMutationTests {
         await model.performReset()
         await gate.waitUntilBlocked()
         #expect(model.historyRequiresCanonicalReplacement)
-        await model.handleTransportEvent(.routeChanged)?.value
+        let recovery = model.handleTransportEvent(.routeChanged)
         await gate.release()
+        await recovery?.value
         await model.bootstrapTask?.value
         await model.pendingCacheWriteTask?.value
         #expect(model.messages.isEmpty)

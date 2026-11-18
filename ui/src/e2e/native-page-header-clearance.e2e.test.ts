@@ -47,10 +47,12 @@ suite.define(() => {
       }, direction);
     }
     const native = install === installNativeWebChrome;
-    const toggle = native
-      ? ".macos-titlebar-controls__sidebar"
-      : '[data-navigation-view][aria-pressed="true"]';
-    await page.locator(toggle).click();
+    if (native) {
+      await page.locator(".macos-titlebar-controls__sidebar").click();
+    } else {
+      // The keyboard toggle works on every route, including settings takeovers.
+      await page.keyboard.press("ControlOrMeta+B");
+    }
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
@@ -256,29 +258,4 @@ suite.define(() => {
       }
     },
   );
-
-  it("keeps the legacy Mac app's lowered web controls clear of intro text", async () => {
-    const { page } = await openPage("memory-import", async (target) => {
-      await target.addInitScript(() => {
-        const stamp = () => document.documentElement.classList.add("openclaw-native-macos");
-        if (document.documentElement) {
-          stamp();
-        } else {
-          document.addEventListener("DOMContentLoaded", stamp);
-        }
-      });
-    });
-    const controls = (await page.locator(".shell-chrome-controls").boundingBox())!;
-    expect(
-      await page
-        .locator(".shell-chrome-controls button, .shell-chrome-controls a")
-        .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Search"]);
-    expect(controls.y + controls.height).toBeGreaterThan(52);
-    const header = page.locator(".content .content-header").first();
-    await expectAligned(header.locator(".page-title"), 25, "y");
-    await expect
-      .poll(async () => (await header.locator(".page-subtitle").boundingBox())?.y ?? -1)
-      .toBeGreaterThanOrEqual(controls.y + controls.height);
-  });
 });

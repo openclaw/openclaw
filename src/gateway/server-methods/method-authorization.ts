@@ -24,7 +24,8 @@ import {
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "../operator-role-policy.js";
-import { APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import { PUBLICATION_READ_SCOPE, APPROVALS_SCOPE, isOperatorScope } from "../operator-scopes.js";
+import { isPublicationReaderCurrent, isPublicationReaderMethod } from "../publication-reader.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { isDirectCronOwnerClient, isHumanCronMutation } from "./cron-human-owner.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./shared-types.js";
@@ -36,6 +37,28 @@ export function authorizeGatewayMethod(
   methodRegistry: GatewayMethodRegistryView,
   context: GatewayRequestContext,
 ): { error: ErrorShape | null; sessionScope?: SessionOperatorScope } {
+  if (
+    client?.internal?.publicationReader ||
+    client?.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+  ) {
+    const admission = client.internal?.publicationReader;
+    const allowed =
+      isPublicationReaderCurrent(admission) &&
+      !client.invalidated &&
+      client.isDeviceTokenAuth === true &&
+      client.connect.role === "operator" &&
+      client.connect.scopes?.length === 1 &&
+      client.connect.scopes[0] === PUBLICATION_READ_SCOPE &&
+      client.connect.device?.id === admission.deviceId &&
+      client.internal?.operatorDeviceTokenIdentity?.key === admission.key &&
+      !client.internal?.syntheticClient &&
+      !client.authenticatedUserProfile &&
+      !client.internal?.operatorRoleActor &&
+      isPublicationReaderMethod(methodRegistry, method);
+    return {
+      error: allowed ? null : errorShape(ErrorCodes.FORBIDDEN, "publication reader method denied"),
+    };
+  }
   // Pre-connect and health requests are allowed through; role/scope checks require the
   // authenticated connect metadata established by the gateway handshake.
   if (!client?.connect || method === "health") {

@@ -220,6 +220,7 @@ export async function runBridgeRequest(params: {
   sessionStore?: CodeModeSessionStoreAccess;
   remainingMs: number;
   completionRequired?: boolean;
+  onDeadline?: (deadlineAtMs: number) => void;
   ctx: ToolSearchToolContext;
   request: PendingBridgeRequest;
   signal?: AbortSignal;
@@ -531,7 +532,9 @@ export async function runBridgeRequest(params: {
         if (typeof delay !== "number" || !Number.isFinite(delay) || delay < 0) {
           throw new ToolInputError("setTimeout delay must be a non-negative finite number.");
         }
-        value = await sleep(resolveSafeTimeoutDelayMs(delay, { minMs: 0 }), null, {
+        const timeoutMs = resolveSafeTimeoutDelayMs(delay, { minMs: 0 });
+        params.onDeadline?.(Date.now() + timeoutMs);
+        value = await sleep(timeoutMs, null, {
           signal: params.signal,
         });
         break;

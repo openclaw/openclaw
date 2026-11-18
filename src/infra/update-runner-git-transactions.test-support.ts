@@ -131,6 +131,28 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
     await expectRuntimeRetained(root, targetSha, retained);
   });
 
+  it("names the validated candidate's commit and exact build on its activation", async () => {
+    const fixture = await advanceFixture(getFixture);
+    const { root, beforeSha, targetSha } = fixture;
+    let validatedBuild: string | undefined;
+    const { retained } = await activateTransaction(fixture, {
+      validateCandidate: async (directory) => {
+        // A build ID distinct from every commit, as real builds have.
+        const file = path.join(directory, "dist", "build-info.json");
+        validatedBuild = JSON.stringify({ commit: targetSha, buildId: "validated-build" });
+        await fs.writeFile(file, validatedBuild);
+      },
+    });
+    assert(validatedBuild);
+    // Activation installs the validated build-info byte for byte, so its build ID is comparable.
+    expect(await readText(path.join(root, "dist", "build-info.json"))).toBe(validatedBuild);
+    expect(await retained.readGitActivation?.()).toEqual({
+      sha: targetSha,
+      buildId: "validated-build",
+      previousBuildId: beforeSha,
+    });
+  });
+
   it("retains the activated runtime when backup cleanup fails", async () => {
     const fixture = await advanceFixture(getFixture);
     const { retained } = await activateTransaction(fixture);

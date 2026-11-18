@@ -13,6 +13,7 @@ export const pluginProcessRuntimeEntrypoints = {
   installedPluginIndexWrite: entrypoint("installed-plugin-index-store-write"),
   sourceSnapshot: entrypoint("plugin-source-snapshot-artifact"),
   sourceCapture: entrypoint("plugin-generation-capture"),
+  loadedAddon: entrypoint("plugin-capture-loaded-addon.test-support"),
   snapshotPreparation: entrypoint("plugin-generation-worker"),
   nativeLifecycle: entrypoint(
     "../infra/worker-native-lifecycle",

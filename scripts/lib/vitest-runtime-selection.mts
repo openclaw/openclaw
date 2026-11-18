@@ -323,6 +323,9 @@ export function shouldPrepareVitestCoreWorkers(
   }
   const configs = [config];
   const workers = [
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.tooling.config.ts")
+      ? ["test/scripts/runtime-process-build-graph.test.ts"]
+      : []),
     ...(includesRuntimeConfig(configs, "test/vitest/vitest.unit-fast.config.ts")
       ? ["src/agents/sessions/windows-git-bash-path.test.ts"]
       : []),
