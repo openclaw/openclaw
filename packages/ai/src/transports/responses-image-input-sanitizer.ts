@@ -94,7 +94,8 @@ function sanitizeValue(value: unknown, immutableData?: AiTransportHost["immutabl
   if (Array.isArray(value)) {
     next = value.map(sanitizeChild);
   } else {
-    const object: Record<string, unknown> = {};
+    // Spread keeps non-wire symbol provenance (retained users, system prompt) on the copy.
+    const object: Record<string, unknown> = { ...value };
     for (const [key, child] of Object.entries(value)) {
       object[key] = sanitizeChild(child);
       unchanged &&= Object.hasOwn(object, key);
