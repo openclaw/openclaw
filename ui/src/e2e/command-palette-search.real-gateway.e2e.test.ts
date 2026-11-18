@@ -626,9 +626,7 @@ suite.define(() => {
           const absent = await search("copperfinch absentconstellation", 0, "05-no-match.png");
           expect(absent.truncated).toBe(false);
           expect(await results.getByRole("option").count()).toBe(0);
-          await emptyState
-            .getByRole("heading", { name: "No results match your search.", exact: true })
-            .waitFor();
+          await emptyState.getByText("No results match your search.", { exact: true }).waitFor();
 
           await search("copperfinch observatory", 1, "06-selected-search-result.png");
           await results.getByRole("option").filter({ hasText: targetLabel }).click();

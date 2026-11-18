@@ -140,7 +140,9 @@ describe("CommandPalette pending searches", () => {
     expect(results.getAttribute("aria-busy")).toBe("false");
     expect(palette.textContent).not.toContain("Searching sessions");
     const empty = query(".cmd-palette__no-results")!;
-    expect(empty.querySelector("h2")?.textContent).toBe("No results match your search.");
+    expect(empty.querySelector(".empty-state__title")?.textContent).toBe(
+      "No results match your search.",
+    );
     expect(empty.textContent).toContain("to compose a new session.");
     expect(empty.querySelector("button")).toBeNull();
   });

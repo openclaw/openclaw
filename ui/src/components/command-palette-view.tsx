@@ -65,9 +65,10 @@ import {
   DESKTOP_PANEL_TOGGLE_EVENT,
 } from "./panel-toggle-contract.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "./solid/kbd.tsx";
 import "./modal-dialog.tsx";
 import "./tooltip.ts";
-import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./solid/kbd.tsx";
+import { PanelEmptyState } from "./solid/panel-empty-state.tsx";
 
 registerCommandPaletteEnglish();
 
@@ -413,19 +414,14 @@ function PaletteSearch(props: {
         )}
       </For>
       <Show when={results().items.length === 0 && searchSettled()}>
-        <div class="cmd-palette__no-results" role="status">
-          <span class="cmd-palette__no-results-icon" aria-hidden="true">
-            <Icon name="messageSquarePlus" />
-          </span>
-          <h2>{t("palette.noResults")}</h2>
-          <Show when={!isMobileBrowserPlatform()}>
-            <p>
-              <ShortcutText
-                text={t("palette.noResultsStart", { shortcut: "{shortcut}" })}
-                shortcut={() => <Kbd keys="Tab" />}
-              />
-            </p>
-          </Show>
+        <div class="cmd-palette__no-results">
+          <PanelEmptyState
+            icon={<Icon name="search" />}
+            heading={t("palette.noResults")}
+            description={
+              isMobileBrowserPlatform() ? "" : t("palette.noResultsStart", { shortcut: "Tab" })
+            }
+          />
         </div>
       </Show>
     </>

@@ -258,43 +258,8 @@
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
   overflow-y: auto;
-  padding: 30px 20px 34px;
-  text-align: center;
-}
-
-.cmd-palette__no-results-icon {
-  display: grid;
-  place-items: center;
-  width: 72px;
-  height: 72px;
-  flex-shrink: 0;
-  margin-bottom: 10px;
-  color: var(--muted);
-}
-
-.cmd-palette__no-results-icon svg {
-  width: 48px;
-  height: 48px;
-}
-
-.cmd-palette__no-results h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 26px;
-  letter-spacing: -0.02em;
-}
-
-.cmd-palette__no-results p {
-  max-width: 320px;
-  margin: 8px 0 0;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 20px;
+  padding: 12px 20px 16px;
 }
 
 .cmd-palette__source-error {
