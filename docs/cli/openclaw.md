@@ -46,7 +46,27 @@ It does not dump secrets or load plugin CLI commands just to start.
 
 Use `status` for the detailed inventory: config path, docs/source paths, local CLI checks, key/token presence, agents, model, and Gateway details.
 
-OpenClaw uses the same reference discovery as regular agents: in a Git checkout it points at local `docs/` and the source tree; in an npm install it uses bundled docs and links to [https://github.com/openclaw/openclaw](https://github.com/openclaw/openclaw), with guidance to check source when docs are not enough.
+### Documentation and assistant-led setup
+
+OpenClaw reports documentation/source locations through the same reference
+discovery used by regular agents: local paths in a checkout or bundled
+installation, plus the [source repository](https://github.com/openclaw/openclaw).
+Those locations are references, not document contents automatically loaded into
+the setup conversation.
+
+Regular agents can consult those references with their available read/search
+tools and use the [assistant-led setup framework](/start/small-host-setup#assistant-led-setup)
+to guide the user without assigning a reading task. The built-in setup agent is
+more restricted: its primary loop acts only through the typed `openclaw` tool,
+and its fallback planner uses the supplied overview and conversation without
+file or network lookups. It does not currently have an arbitrary documentation
+reader. Linking a guide does not by itself make that agent consume it.
+
+Keep guidance within the current surface: inspect through supported operations,
+use protected sign-in controls, and report what their results actually confirm.
+For an app-managed Mac, follow [native onboarding](/start/onboarding) and
+[Gateway on macOS](/platforms/mac/bundled-gateway); do not substitute Linux
+service setup or an independent runtime installation.
 
 ## Examples
 

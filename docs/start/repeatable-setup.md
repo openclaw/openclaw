@@ -12,6 +12,12 @@ for repeating selected settings on another host after the first chat works.
 It uses the existing config, credential, Template, and plugin commands, not a
 new portable-profile format.
 
+An assistant applying this recipe should follow the
+[assistant-led setup framework](/start/small-host-setup#assistant-led-setup):
+inspect the destination, explain the intended non-secret changes, use existing
+action owners, and report observed results. Do not make the user reconstruct
+this workflow from reference pages.
+
 ## Keep configuration separate from access and state
 
 Share only reviewed, non-secret settings. Do not copy a production config, auth

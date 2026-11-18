@@ -4,6 +4,7 @@ read_when:
   - You are setting up OpenClaw on a small Linux host
   - You have an API key in a password manager or an existing Ollama server
   - Setup stopped and you want the next step without starting over
+  - You are an assistant guiding setup without assigning the user a reading task
 title: "Small-host setup"
 ---
 
@@ -13,6 +14,64 @@ a channel, a plugin suite, or a deployment profile to reach your first chat.
 
 This guide composes existing commands; it is not a new installer or an automatic
 acceptance report. Use the documentation matching your installed release.
+
+## Assistant-led setup
+
+An assistant should use this page as a working reference, not ask a beginner to
+read it and assemble the commands. Use the installed release's documentation
+and only the operations actually available in the current conversation. A
+reference does not grant permission or add a missing tool.
+
+1. **Identify the destination and installation owner.** Establish which machine
+   runs the Gateway, whether the user is connecting remotely, and whether the
+   desktop app or an independent CLI manages it. Do not infer the Gateway's OS
+   from the computer displaying chat. For an app-managed Mac, use
+   [native onboarding](/start/onboarding) and
+   [Gateway on macOS](/platforms/mac/bundled-gateway), not this page's Linux
+   service commands or a second global runtime installation.
+2. **Inspect before proposing work.** Reuse existing agents, saved connections,
+   and local model servers. Distinguish detected, configured, selected, and
+   verified. Ask only for a missing choice the system cannot discover, such as
+   which account the user wants to use.
+3. **Use the existing action owner.** Guide credential entry through a supported
+   masked flow, never ordinary chat. A password-manager key does not require
+   granting the model access to the whole vault. Inspect non-secret config
+   changes and use the supported config, plugin, or service operation; preserve
+   its approval and installation-ownership rules.
+4. **Verify the requested outcome.** Use the checks below to distinguish config,
+   service, actual listener scope, model replies, and optional tool execution.
+   Do not turn a successful save or dashboard launch into an inference receipt.
+   Do not test paid providers, download models, or exercise optional plugins
+   without the applicable user choice and authorization.
+5. **Resume rather than repeat.** Keep completed setup, credentials, workspace,
+   and the chosen connection. Inspect ambiguous writes or chat outcomes before
+   retrying. Report one actionable next step, not another full install recipe.
+6. **Finish in usable chat.** Summarize what was confirmed, what remains untested,
+   and the next action if blocked. Do not claim a handoff or tool test completed
+   without its result. Channels and optional plugins are not prerequisites to
+   chatting in the existing app.
+
+This framework is reference material, not a new automatic setup mode. The
+built-in setup agent's narrower capabilities are described in
+[OpenClaw setup agent](/cli/openclaw#documentation-and-assistant-led-setup).
+
+### Acceptance scenarios for the setup experience
+
+Use these scenarios when validating a setup implementation, not as claims that
+this documentation enables the behavior:
+
+- **Saved API key:** the user chooses an account/key through a supported protected
+  flow, the assistant does not receive the raw key, and the selected route
+  produces a real reply without requiring the user to study reference pages.
+- **Existing Ollama:** inspect and select the existing server/model; explain
+  unavailable or idle models without reinstalling the server or downloading a
+  replacement automatically.
+- **Native Mac or existing remote Gateway:** preserve the user's hosting choice,
+  app-owned runtime, and saved connection. Pending connection/device approval is
+  not a reason to create a second local Gateway.
+- **Interrupted setup:** reopen after credentials or baseline config were saved;
+  continue the incomplete step without duplicating agents, imports, or service
+  installation. Mark unperformed persistence/failover checks as not tested.
 
 ## Install once, then choose your AI connection
 
