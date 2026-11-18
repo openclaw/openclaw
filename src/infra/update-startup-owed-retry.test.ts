@@ -39,6 +39,8 @@ const { checkTelemetryUpdateMock, detectRespawnSupervisorMock, versionMock } = a
 );
 
 const HOUR_MS = 60 * 60_000;
+// The ledger worker stamps campaign runs with real time; fixture runs use it too to keep order.
+const realDateNow = Date.now.bind(Date);
 const stable: OpenClawConfig = { update: { channel: "stable", auto: { enabled: true } } };
 
 let state: OpenClawTestState;
@@ -63,7 +65,6 @@ beforeEach(async () => {
   });
   versionMock.value = "2.0.0";
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
-  // The ledger worker stamps campaign runs with real time; start here so runs keep their order.
   clock = createGatewaySchedulerClock(Date.now());
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
   scheduler = createTestGatewayScheduler(clock.clock);
@@ -122,6 +123,7 @@ function owedUpdate(
   } = {},
 ) {
   const installed = options.installed ?? "2.0.0";
+  vi.mocked(Date.now).mockImplementationOnce(realDateNow);
   const { runId } = ledger.createUpdateRun({
     trigger: options.trigger ?? "campaign",
     target: { channel: "stable", kind: "package", version: installed },
@@ -210,6 +212,11 @@ describe("automatic retry of owed plugin steps", () => {
 
     // A person runs `openclaw update` on the current core; convergence fails again.
     owedUpdate({ trigger: "cli", before: "2.0.0" });
+    await hourlyCheck();
+    expect(runAuto).toHaveBeenCalledTimes(2);
+    const [second] = ledger.listUpdateRuns();
+    expect(second).toMatchObject({ trigger: "campaign", before: { version: "2.0.0" } });
+    finishHandoff(second!.runId, second!.runId, "owed");
     await hourlyCheck();
     expect(runAuto).toHaveBeenCalledTimes(2);
   });

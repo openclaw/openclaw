@@ -448,6 +448,9 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
       spawnSync("systemctl", ["--user", "daemon-reload"], { env, stdio: "ignore" });
       if (registry.exitCode === null && registry.signalCode === null) {
         registry.kill("SIGTERM");
+        if ((await Promise.race([registryExit, delay(10_000, "timeout")])) === "timeout") {
+          registry.kill("SIGKILL");
+        }
       }
       await registryExit;
       fs.closeSync(registryLog);
