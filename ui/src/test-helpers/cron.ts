@@ -13,7 +13,6 @@ export function createCronJob(id: string, name: string, overrides: Partial<CronJ
     configRevision: "config-revision-1",
     schedule: { kind: "cron", expr: "0 * * * *" },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "run" },
     state: {},
     ...overrides,

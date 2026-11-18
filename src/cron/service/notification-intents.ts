@@ -18,7 +18,7 @@ export function captureCronNotificationRouting(
 
 export type CronNotificationJob = Pick<
   CronJob,
-  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "wakeMode" | "owner"
+  "id" | "name" | "agentId" | "sessionTarget" | "sessionKey" | "owner"
 > & {
   state: Pick<
     CronJob["state"],
@@ -34,7 +34,6 @@ export function cronNotificationJob(job: CronJob): CronNotificationJob {
     sessionTarget: job.sessionTarget,
     sessionKey: job.sessionKey,
     owner: job.owner ? { ...job.owner } : undefined,
-    wakeMode: job.wakeMode,
     state: {
       lastRunAtMs: job.state.lastRunAtMs,
       lastFailureAlertAtMs: job.state.lastFailureAlertAtMs,

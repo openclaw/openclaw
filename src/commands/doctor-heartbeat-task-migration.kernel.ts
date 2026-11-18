@@ -73,7 +73,6 @@ function taskJobInput(params: TaskJobInput) {
     activeHours: params.monitor.activeHours,
     idleOnly: params.monitor.idleOnly,
     delivery: params.monitor.delivery,
-    wakeMode: "now" as const,
     ...(params.lastRunAtMs === undefined ? {} : { state: { lastRunAtMs: params.lastRunAtMs } }),
   };
 }
@@ -137,7 +136,6 @@ export function convertStoredHeartbeatTask(
     activeHours: monitor.activeHours,
     idleOnly: monitor.idleOnly,
     delivery: previous.delivery ?? monitor.delivery,
-    wakeMode: "now",
     updatedAtMs: nowMs,
   };
   delete job.declarationKey;

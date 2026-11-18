@@ -83,7 +83,6 @@ it.each(["force", "due"] as const)(
           await cron.start();
           const job = await cron.add({
             ...cronTestInput(),
-            wakeMode: "now",
             delivery: { mode: "announce", channel: "telegram", to: "123" },
           });
           const scheduledAt = job.state.nextRunAtMs;

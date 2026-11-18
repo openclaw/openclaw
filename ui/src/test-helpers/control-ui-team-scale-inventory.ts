@@ -251,7 +251,6 @@ export function createTeamScaleCronInventory(
       updatedAtMs: now - index * 1_000,
       schedule: { kind: "every", everyMs: 3_600_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: `Run synthetic scheduled verification ${index + 1}.` },
       state: {
         nextRunAtMs: now + (index + 1) * 60_000,

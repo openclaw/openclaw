@@ -147,7 +147,6 @@ async function createExistingInboxJob(fixture: Awaited<ReturnType<typeof createF
     schedule: { kind: "every", everyMs: 5 * 60 * 60_000, anchorMs: fixture.nowMs - 60_000 },
     payload: { kind: "systemEvent", text: "Previous inbox prompt", toolsAllow: ["read"] },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     state: { lastRunAtMs: fixture.nowMs - 10_000 },
   };
   const store = await loadCronJobsStore(fixture.storePath);
@@ -379,7 +378,6 @@ describe("heartbeat scratch task cron migration", () => {
           toolsAllow: ["read"],
         },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         schedule: { kind: "every", everyMs: 50000, anchorMs: 12 },
         state: { nextRunAtMs: 12345, queuedAtMs: 12345, lastRunAtMs: 9999 },
       };

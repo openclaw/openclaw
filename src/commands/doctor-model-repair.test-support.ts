@@ -32,7 +32,6 @@ export function cronJob(
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: {
       kind: "agentTurn",
       message: "Synthetic reminder",

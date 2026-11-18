@@ -324,7 +324,6 @@ it.each(["operator.cron", "operator.write"])(
       schedule: { kind: "every" as const, everyMs: 60_000 },
       sessionTarget: "current" as const,
       sessionKey: SESSION,
-      wakeMode: "next-heartbeat" as const,
       payload: { ...timedPayload, kind: "agentTurn" as const, toolsAllow: [] },
       delivery: { mode: "none" as const },
     };
@@ -480,7 +479,6 @@ it.each([
           transportTools = tools;
           const invoke = (name: string) =>
             addJob(tools, name, {
-              wakeMode: "next-heartbeat",
               ...(origin === "template-setup"
                 ? { enabled: false, declarationKey: "template:main:status" }
                 : {}),
@@ -617,7 +615,6 @@ it.each(["admin", "caller", "non-admin"] as const)(
       enabled: false,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "Original prompt", toolsAllow: [] },
       owner: { agentId: "main", sessionKey: "agent:main:foreign", accountId: "other" },
       delivery: { mode: "none" },

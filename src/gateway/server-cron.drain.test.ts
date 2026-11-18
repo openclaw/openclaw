@@ -113,7 +113,6 @@ async function startGatewayCron(
     schedule: { kind: "stream", command: ["source"] },
     payload: { kind: "systemEvent", text: "event" },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
   });
   return fixture;
 }
@@ -150,7 +149,6 @@ async function addCommand(original: StartedGatewayCron, name: string, deleteAfte
     schedule: { kind: "at", at: new Date(original.clock.clock.now() - 1_000).toISOString() },
     payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     delivery: { mode: "none" },
     deleteAfterRun,
   });
@@ -206,7 +204,6 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       enabled: true,
       schedule: { kind: "at", at: new Date(original.clock.clock.now() + 1_000).toISOString() },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "must remain due" },
     });
     const sessionAgents = vi

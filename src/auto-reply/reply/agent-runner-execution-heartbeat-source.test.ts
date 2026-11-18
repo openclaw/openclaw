@@ -95,7 +95,7 @@ describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
       if (scheduled) {
         followupRun.run.scheduledAutomation = {
           ...TEST_SCHEDULED_TURN,
-          job: makeCronJob({ sessionTarget: "session:main", wakeMode: "now" }),
+          job: makeCronJob({ sessionTarget: "session:main" }),
         };
       }
       const params = createMinimalRunAgentTurnParams({

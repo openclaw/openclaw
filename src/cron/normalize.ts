@@ -277,14 +277,6 @@ function normalizeSessionTarget(raw: unknown) {
   return undefined;
 }
 
-function normalizeWakeMode(raw: unknown) {
-  const trimmed = normalizeOptionalLowercaseString(raw);
-  if (trimmed === "now" || trimmed === "next-heartbeat") {
-    return trimmed;
-  }
-  return undefined;
-}
-
 /** Normalizes raw cron job input without deciding whether create-time defaults apply. */
 export function normalizeCronJobInput(
   raw: unknown,
@@ -378,15 +370,6 @@ export function normalizeCronJobInput(
     }
   }
 
-  if ("wakeMode" in base) {
-    const normalized = normalizeWakeMode(base.wakeMode);
-    if (normalized) {
-      next.wakeMode = normalized;
-    } else {
-      delete next.wakeMode;
-    }
-  }
-
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
   }
@@ -410,9 +393,6 @@ export function normalizeCronJobInput(
   if (options.applyDefaults) {
     // Defaults apply only on create; patch normalization must preserve omitted
     // fields so partial updates do not rewrite unrelated cron settings.
-    if (!next.wakeMode) {
-      next.wakeMode = "now";
-    }
     if (typeof next.enabled !== "boolean") {
       next.enabled = true;
     }

@@ -143,7 +143,6 @@ function scriptFixture(mode: "now" | "next-heartbeat", cronEnabled = true) {
   });
   const job = makeCronJob({
     agentId: "finn",
-    wakeMode: "now",
     payload: { kind: "script", script: "return { wake: 'now' }" },
   });
   return {

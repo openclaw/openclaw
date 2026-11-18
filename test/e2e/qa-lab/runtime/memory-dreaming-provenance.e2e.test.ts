@@ -273,7 +273,6 @@ describe("memory provenance through a real Gateway", () => {
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: {
           kind: "agentTurn",
           message: MEMORY_DREAMING_SYSTEM_EVENT_TEXT,

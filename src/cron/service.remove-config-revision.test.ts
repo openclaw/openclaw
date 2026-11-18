@@ -24,7 +24,6 @@ it("preserves a job edited after its removal revision was reviewed", async () =>
     updatedAtMs: 1,
     schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Daily report" },
     delivery: { mode: "none" },
     state: {},

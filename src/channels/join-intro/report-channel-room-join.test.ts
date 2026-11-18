@@ -179,7 +179,6 @@ describe("reportChannelRoomJoin", () => {
       trigger: "event",
       job: {
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: {
           kind: "agentTurn",
           message,

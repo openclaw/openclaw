@@ -47,7 +47,6 @@ test("deleting a conversation does not disable its linked command automation", a
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "command", argv: ["echo", "synthetic backup"] },
       },
       { sourceConversation: { sessionKey: key, sessionId } },

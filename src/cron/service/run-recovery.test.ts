@@ -34,7 +34,6 @@ function job(id: string, overrides: Partial<CronJob> = {}): CronJob {
     updatedAtMs: now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "command", argv: ["echo", "synthetic"] },
     delivery: { mode: "none" },
     state: { nextRunAtMs: now },

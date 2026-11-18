@@ -34,16 +34,15 @@ const otherConversation = "agent:ops:discord:channel:other";
 const deliveryContext: DeliveryContext = { channel: "telegram", to: "-10042", threadId: 77 };
 
 it.for([
-  ["persistent target", `session:${target}`, otherConversation, "now", true, false],
-  ["targeted next-heartbeat", "isolated", target, "next-heartbeat", true, false],
-  ["default owner", "isolated", undefined, "now", false, false],
-  ["deferred default owner", "isolated", undefined, "next-heartbeat", false, false],
+  ["persistent target", `session:${target}`, otherConversation, true, false],
+  ["isolated with origin", "isolated", target, true, false],
+  ["default owner", "isolated", undefined, false, false],
   // Owner alerts resolve like the job's own delivery; their fallback never borrows the last route.
-  ["owner-targeted session", "isolated", target, "now", true, true],
+  ["owner-targeted session", "isolated", target, true, true],
 ] as const)(
   "routes a rejected failure alert to %s with scheduling disabled",
   async (
-    [_name, sessionTarget, creationSessionKey, wakeMode, carriesOrigin, ownerTarget],
+    [_name, sessionTarget, creationSessionKey, carriesOrigin, ownerTarget],
     { signal },
   ) => {
     await withOpenClawTestState(
@@ -115,7 +114,6 @@ it.for([
             name: "Important report",
             sessionTarget,
             sessionKey: creationSessionKey,
-            wakeMode,
             ...(ownerTarget ? { delivery: { mode: "announce", target: "owner" } } : {}),
           });
 

@@ -27,7 +27,6 @@ suite.define(() => {
       updatedAtMs: Date.UTC(2026, 8, 20, 12),
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Prepare a synthetic report." },
       delivery: { mode: "announce", channel: "last" },
       state: {},

@@ -15,7 +15,6 @@ export function cronJob(id: string, name: string, overrides: Partial<CronJob> = 
     updatedAtMs: 0,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "Synthetic automation" },
     state: {},
     ...overrides,

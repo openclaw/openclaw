@@ -256,13 +256,6 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.session === "string") {
             patch.sessionTarget = sessionTarget;
           }
-          if (typeof opts.wake === "string") {
-            const wakeMode = opts.wake.trim();
-            if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {
-              throw new CronCliError("--wake must be now or next-heartbeat");
-            }
-            patch.wakeMode = wakeMode;
-          }
           const agentId = parseCronStringOption(opts.agent, "--agent");
           if (agentId && opts.clearAgent) {
             throw new CronCliError("Use --agent or --clear-agent, not both");

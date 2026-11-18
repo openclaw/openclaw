@@ -394,7 +394,6 @@ export async function configureHeapRigTurns(config, root, mockPort, provider = "
             enabled: false,
             schedule: { kind: "every", everyMs: 86_400_000 },
             sessionTarget: "isolated",
-            wakeMode: "now",
             payload: { kind: "agentTurn", message: `Begin your synthetic report with ${marker}.` },
             delivery: { mode: "none" },
           });

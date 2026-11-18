@@ -46,7 +46,6 @@ describe("scheduled policy preservation across payload conversions", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "report", toolsAllow: ["message"] },
         delivery: { mode: "none" },
       };

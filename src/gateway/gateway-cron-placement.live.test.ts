@@ -186,7 +186,6 @@ describeLive("cron placement identity through production Gateway routing", () =>
             schedule: { kind: "every", everyMs: 86_400_000 },
             sessionTarget: "current",
             sessionKey: SOURCE_KEY,
-            wakeMode: "next-heartbeat",
             payload: {
               kind: "agentTurn",
               message: "Reply exactly SCHEDULED_OK.",

@@ -53,7 +53,6 @@ async function createFixture(runSchedulerOwned?: CronServiceDeps["runSchedulerOw
     updatedAtMs: now,
     schedule: { kind: "at", at: new Date(now + 30_000).toISOString() },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "command", argv: ["fixture-command"] },
     delivery: { mode: "none" },
     state: { nextRunAtMs: now + 30_000 },

@@ -21,7 +21,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--agent <id>", "Agent id for this job")
     .option("--session <target>", "Session target (main|isolated|current|session:<id>)")
     .option("--session-key <key>", "Session key for job routing")
-    .option("--wake <mode>", "Wake mode (now|next-heartbeat)", create ? "now" : undefined)
     .option("--at <when>", "One-shot time (ISO, offset-less uses --tz) or duration like 20m")
     .option("--every <duration>", "Interval duration (e.g. 10m, 1h)")
     .option("--pacing-min <duration>", "Minimum delay for a dynamic next check")

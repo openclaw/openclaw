@@ -171,8 +171,8 @@ export function createCronTestContext(
 }
 
 export function agentTurnCronParams(overrides: Record<string, unknown> = {}) {
-  const { name, enabled, schedule, sessionTarget, wakeMode, payload } = createCronJob();
-  return { name, enabled, schedule, sessionTarget, wakeMode, payload, ...overrides };
+  const { name, enabled, schedule, sessionTarget, payload } = createCronJob();
+  return { name, enabled, schedule, sessionTarget, payload, ...overrides };
 }
 
 export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
@@ -184,7 +184,6 @@ export function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "hello", toolsAllow: ["*"] },
     delivery: { mode: "none" },
     state: {},

@@ -23,7 +23,6 @@ const input = () =>
     enabled: false,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Review" },
     delivery: { mode: "none" },
   })!;

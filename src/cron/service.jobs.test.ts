@@ -21,7 +21,6 @@ const input = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     name: "job",
     sessionTarget: "main",
-    wakeMode: "now",
     payload: { kind: "systemEvent", text: "tick" },
     ...overrides,
   });
@@ -283,7 +282,6 @@ function maintenanceFixture(statePatch: CronJob["state"]) {
   const job = fixtureJob({
     id: "test-job",
     schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    wakeMode: "next-heartbeat",
     state: statePatch,
   });
   return { job, state: createMockCronStateForJobs({ jobs: [job], nowMs: NOW }) };

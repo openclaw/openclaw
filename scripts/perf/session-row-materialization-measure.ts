@@ -172,7 +172,6 @@ async function measure() {
       sessionTarget: "main",
       sessionKey: keys[0],
       agentId: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "Synthetic materialization control" },
     });
     assert(isRecord(job) && typeof job.id === "string");

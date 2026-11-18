@@ -27,7 +27,6 @@ function gardenJob(overrides: Partial<CronJob> = {}): CronJob {
     configRevision: "garden-revision",
     schedule: { kind: "every", everyMs: 1_800_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: gardenMessage },
     ...overrides,
   });

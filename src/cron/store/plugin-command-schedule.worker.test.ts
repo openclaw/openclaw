@@ -76,7 +76,6 @@ const commandCreate = (id: string, declarationKey = "plugin:watcher:" + id): Cro
   enabled: true,
   schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: { ...reservedPayload, toolsAllow: [...reservedPayload.toolsAllow] },
   delivery: { mode: "none" },
 });

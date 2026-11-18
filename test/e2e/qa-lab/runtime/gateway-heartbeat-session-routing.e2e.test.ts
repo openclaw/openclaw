@@ -276,7 +276,6 @@ describe("Gateway automation session routing", () => {
           enabled: true,
           schedule: { kind: "every", everyMs: 86_400_000 },
           sessionTarget: `session:${configuredSessionKey}`,
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message: `Process this scheduled task and report what was handled: ${configuredEvent}`,

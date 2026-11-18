@@ -19,7 +19,6 @@ function fixture() {
     const grant = {
       id,
       description: "Migrated automation",
-      wakeMode: "now",
       schedule: enabled ? schedule : { everyMs: 1_800_000, kind: "every" },
     };
     return {

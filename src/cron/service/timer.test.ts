@@ -90,7 +90,7 @@ describe("cron service timer seam coverage", () => {
       { kind: "stream", command: ["true"], mode: "line" },
     ];
     const jobs = schedules.map((schedule) => {
-      const job = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+      const job = createDueMainJob({ now });
       job.id = `stale-${schedule.kind}`;
       job.schedule = schedule;
       job.state = {
@@ -121,7 +121,7 @@ describe("cron service timer seam coverage", () => {
   });
 
   it("persists the next schedule after the main-session run settles", async () => {
-    const jobWithoutExplicitOwner = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    const jobWithoutExplicitOwner = createDueMainJob({ now });
     delete jobWithoutExplicitOwner.sessionKey;
     await writeJobs(jobWithoutExplicitOwner);
 
@@ -221,7 +221,6 @@ describe("cron service timer seam coverage", () => {
       enabled: true,
       schedule: { kind: "stream", command: ["true"] },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Handle stream events" },
     });
     await updateJob(state, job.id, { state: { nextRunAtMs: now - 1 } });

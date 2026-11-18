@@ -75,7 +75,6 @@ flow:
                 at:
                   ref: scheduledFor
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 message: "Failed tool terminal recovery QA check: read the missing workspace file, then respond with exact marker: `CRON-FAILED-TOOL-FINALIZED-OK`."

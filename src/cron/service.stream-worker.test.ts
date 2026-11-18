@@ -56,7 +56,6 @@ async function streamFixture(storePath: string) {
       enabled: true,
       schedule: { kind: "stream", command: ["synthetic-stream-source"] },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "handle synthetic events" },
     });
     const job = "job" in added ? added.job : added;

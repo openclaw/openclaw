@@ -29,7 +29,6 @@ function job(id = "ci", overrides: Partial<CronJob> = {}): CronJob {
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 300_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: prompt },
     state: {
       nextRunAtMs: NOW + 120_000,

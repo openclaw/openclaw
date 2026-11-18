@@ -49,7 +49,6 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
     updatedAtMs: 1_800_000_000_005,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "operator event" },
     state: { nextRunAtMs: 1_800_000_060_000, lastRunStatus: "ok" },
     runtimeAuthorityRecoveryRequired: true,
@@ -561,7 +560,6 @@ describe("host Cron Doctor repair", () => {
               enabled: originalDefinition.enabled,
               createdAtMs: originalDefinition.createdAtMs,
               schedule: originalDefinition.schedule,
-              wakeMode: originalDefinition.wakeMode,
               sessionTarget: "isolated",
               payload: {
                 kind: "agentTurn",

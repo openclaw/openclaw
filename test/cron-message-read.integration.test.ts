@@ -646,7 +646,6 @@ describe("scheduled message actions", () => {
           enabled: true,
           schedule: { kind: "every", everyMs: 86_400_000 },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: {
             kind: "agentTurn",
             message: nativeCreator

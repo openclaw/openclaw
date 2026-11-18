@@ -8,7 +8,6 @@ import { applyJobPatch, createJob } from "./jobs.js";
 
 function makeJob(overrides: Partial<CronJob> = {}): CronJob {
   return makeCronJob({
-    wakeMode: "now",
     delivery: { mode: "announce", channel: "telegram", to: "-1001234567890" },
     ...overrides,
   });

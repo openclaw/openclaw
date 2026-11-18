@@ -127,7 +127,6 @@ it.each([true, false])(
       enabled: false,
       schedule: { kind: "cron" as const, expr: "0 2 * * *" },
       sessionTarget: "isolated" as const,
-      wakeMode: "now" as const,
       payload: { kind: "agentTurn" as const, message: "maintenance" },
       delivery: { mode: "none" as const },
     };

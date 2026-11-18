@@ -9,6 +9,20 @@ import {
 
 installCronToolTestFixture();
 
+it("queues an immediate wake for the calling session without a timing mode", async () => {
+  const sessionKey = "agent:main:telegram:direct:42";
+  const tool = createTestCronTool({ agentSessionKey: sessionKey });
+  await tool.execute("wake", { action: "wake", text: "Resume work" });
+  expect(readGatewayCall()).toEqual({
+    method: "wake",
+    params: { mode: "now", text: "Resume work", sessionKey, agentId: "main" },
+  });
+  await expect(
+    tool.execute("defer", { action: "wake", text: "Not yet", mode: "next-heartbeat" }),
+  ).rejects.toThrow("no longer takes a mode");
+  expect(callGatewayMock).toHaveBeenCalledOnce();
+});
+
 it.each([
   { everyMs: 60_000, text: "Stretch" },
   { "schedule.everyMs": 60_000, "payload.text": "Stretch" },

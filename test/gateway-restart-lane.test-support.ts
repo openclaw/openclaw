@@ -242,7 +242,6 @@ export async function measureRestartLaneFlood(options: {
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: `LANE_CRON_${id}`, timeoutSeconds: 60 },
         delivery: { mode: "none" },
       });

@@ -371,7 +371,6 @@ async function main() {
       enabled: false,
       schedule: { kind: "every", everyMs: 3600000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: `${campaign}_cron_${randomUUID()}` },
       delivery: { mode: "none" },
     });

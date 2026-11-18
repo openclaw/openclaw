@@ -32,7 +32,6 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
         enabled: true,
         schedule: { kind: "cron", expr: "* * * * *" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "cron-tick" },
       });
 

@@ -1224,7 +1224,6 @@ export function createSessionDesignScenario(
     updatedAtMs: now - 5 * minute,
     schedule,
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: name },
     delivery: { mode: "none" },
     state,

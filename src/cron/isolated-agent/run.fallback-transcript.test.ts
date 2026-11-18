@@ -126,7 +126,6 @@ it("continues one cron user turn when the primary times out after provider dispa
         name: "Fallback transcript proof",
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        wakeMode: "now",
         payload: { kind: "agentTurn", message, timeoutSeconds: 120, toolsAllow: [] },
         state: {},
       },

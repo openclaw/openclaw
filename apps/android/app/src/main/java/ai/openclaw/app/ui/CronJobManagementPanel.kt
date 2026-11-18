@@ -268,23 +268,6 @@ private fun CronEditorPanel(
       label = nativeString("Session target"),
       enabled = enabled,
     )
-    val wakeModeOptions = cronWakeModeOptions()
-    ClawSegmentedControl(
-      options = wakeModeOptions.map(CronWakeModeOption::label),
-      selected = cronWakeModeLabel(edit.wakeMode),
-      onSelect = { selectedLabel ->
-        wakeModeOptions
-          .firstOrNull { it.label == selectedLabel }
-          ?.let { onDraftChange(draft.withEdit(edit.copy(wakeMode = it.code))) }
-      },
-      modifier = Modifier.fillMaxWidth(),
-      enabledOptions =
-        if (enabled) {
-          wakeModeOptions.mapTo(mutableSetOf(), CronWakeModeOption::label)
-        } else {
-          emptySet()
-        },
-    )
     CronPayloadEditor(
       payload = edit.payload,
       originalCommandCwd = job.payloadCommandCwd,
@@ -620,19 +603,6 @@ private fun cronPayloadKindLabel(payload: GatewayCronPayloadEdit): String =
     is GatewayCronPayloadEdit.Command -> nativeString("Command")
     is GatewayCronPayloadEdit.ReadOnlyScript -> nativeString("Script · read-only")
   }
-
-internal data class CronWakeModeOption(
-  val code: String,
-  val label: String,
-)
-
-internal fun cronWakeModeOptions(): List<CronWakeModeOption> =
-  listOf(
-    CronWakeModeOption(code = "next-heartbeat", label = nativeString("Next heartbeat")),
-    CronWakeModeOption(code = "now", label = nativeString("Now")),
-  )
-
-internal fun cronWakeModeLabel(code: String): String = cronWakeModeOptions().firstOrNull { it.code == code }?.label ?: code
 
 internal fun cronRunSubtitle(run: GatewayCronRunSummary): String =
   listOfNotNull(

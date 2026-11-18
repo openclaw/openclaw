@@ -154,7 +154,6 @@ type PluginHookGatewayCronCreateInput = {
     tz?: string;
   };
   sessionTarget: string;
-  wakeMode: string;
   payload: {
     kind: string;
     text?: string;

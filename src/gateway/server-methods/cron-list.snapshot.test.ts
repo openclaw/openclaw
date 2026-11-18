@@ -20,7 +20,6 @@ it("reuses immutable rows across list variants until the owner or default agent 
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 1_000, anchorMs: 1 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "synthetic job" },
     delivery: { mode: "none" },
     state: { nextRunAtMs: 100 },
