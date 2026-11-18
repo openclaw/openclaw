@@ -436,16 +436,17 @@ export function resolveSettledToolTerminalContinuation(
   };
 }
 
-export function isRejectedBeforeDispatch(params: {
-  assistant: ReturnType<typeof classifyAssistantTurn>["assistant"] | null;
-  attempt: IncompleteTurnAttempt;
-  replyDeliveryState: ReplyDeliveryState;
-}): boolean {
-  const { assistant, attempt } = params;
+/**
+ * A pre-dispatch rejection ran nothing. Error turns are never silent replies,
+ * so inspect model output directly rather than the host's failure notice.
+ * Visible progress text from the rejected turn does not make the replay
+ * unsafe: the call never ran. Callers still veto a delivered final answer.
+ */
+export function isRejectedBeforeDispatch(attempt: IncompleteTurnAttempt): boolean {
+  const assistant = resolveCurrentAttemptAssistant(attempt);
   return (
     attempt.itemLifecycle.completedCount > 0 &&
     !attempt.hasToolMediaBlockReply &&
-    params.replyDeliveryState === "missing" &&
     assistant?.stopReason === "error" &&
     (assistant.errorCode === MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE ||
       isPreDispatchToolCallRejectionMessage(assistant.errorMessage)) &&
@@ -465,16 +466,8 @@ function resolveEmptyResponseRetryInstruction(
 ): string | null {
   const assistantState = classifyAssistantTurn(params);
   const assistant = assistantState.assistant ?? null;
-  // A pre-dispatch rejection ran nothing. Error turns are never silent replies,
-  // so inspect model output directly rather than the host's failure notice.
-  // Visible progress text from the rejected turn does not make the replay
-  // unsafe: the call never ran, and replyDeliveryState still vetoes a delivered
-  // final answer.
-  const rejectedBeforeDispatch = isRejectedBeforeDispatch({
-    assistant,
-    attempt: params.attempt,
-    replyDeliveryState: params.replyDeliveryState,
-  });
+  const rejectedBeforeDispatch =
+    params.replyDeliveryState === "missing" && isRejectedBeforeDispatch(params.attempt);
   let consumedToolFailure = false;
   if (
     rejectedBeforeDispatch &&

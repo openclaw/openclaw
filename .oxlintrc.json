@@ -500,6 +500,13 @@
       }
     },
     {
+      "files": ["src/agents/embedded-agent-runner/run/terminal-resolution.ts"],
+      "rules": {
+        // Keeps the optional-reply recovery gate beside its sibling gates; #201104
+        "max-lines": ["error", { "max": 701, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["**/*.{ts,tsx,mts,cts}"],
       "rules": {
         // tsgo owns TypeScript type/value namespace validity; no-var still rejects var declarations.

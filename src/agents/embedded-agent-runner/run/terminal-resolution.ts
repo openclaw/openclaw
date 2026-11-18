@@ -227,15 +227,10 @@ export async function resolveEmbeddedRunTerminal(input: {
   });
   const authoredSilenceRequiresResult =
     replyExpectation === "result-required" && classifyAssistantTurn(terminalFacts).silent;
-  // Optional replies may be silent, but a rejected call is not authored silence.
-  const rejectedBeforeDispatch = isRejectedBeforeDispatch({
-    assistant: resolveCurrentAttemptAssistant(attempt) ?? null,
-    attempt,
-    replyDeliveryState: input.prepared.replyDeliveryState,
-  });
   const replyRecoverySuppressed =
     !authoredSilenceRequiresResult &&
-    ((replyExpectation === "optional" && !rejectedBeforeDispatch) ||
+    // Optional replies may be silent, but a rejected call is not authored silence.
+    ((replyExpectation === "optional" && !isRejectedBeforeDispatch(attempt)) ||
       emptyAssistantReplyIsSilent ||
       input.prepared.replyDeliveryState !== "missing");
   const replyRecoveryAllowed = !replyRecoverySuppressed && !settledTurnFinalizationAttempted;
