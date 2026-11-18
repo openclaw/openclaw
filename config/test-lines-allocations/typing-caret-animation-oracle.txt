@@ -1,2 +1,0 @@
-# Observe the actual caret and prove animation before paused/reduced-motion assertions.
-3

@@ -120,7 +120,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -267,7 +267,7 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list; use supported-lines for latest/previous/extended/floor, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
+        description: Optional baseline list; use supported-lines for latest/previous/extended, last-stable-4, all-since-2026.6.1, release-history, or exact June 2026+ versions
         required: false
         default: ""
         type: string
@@ -1401,7 +1401,7 @@ jobs:
 
       - name: Upload npm 12 installed tree inventory
         if: always() && steps.npm12_install.outcome == 'success'
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.0
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: npm12-installed-tree-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/npm12-installed-tree.jsonl

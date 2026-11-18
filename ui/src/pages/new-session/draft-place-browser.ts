@@ -34,7 +34,7 @@ export type BrowserProjectRegistration = Readonly<{
 }>;
 
 type DraftPickerKind = "where" | "project" | "checkout";
-export type ProjectBrowserFocus = Partial<Record<"browse" | "path", HTMLElement>>;
+export type ProjectBrowserFocus = Partial<Record<"browse" | "path" | "search", HTMLElement>>;
 
 type DraftPlaceBrowserSnapshot = Readonly<{
   context: ApplicationContext | undefined;
@@ -604,9 +604,13 @@ export class DraftPlaceBrowser {
       }
       const active = this.callbacks.activeElement();
       const target = this.projectFocus[kind];
+      // The root view's search field focuses itself on arrival; that is not the user moving on.
       if (
         target?.isConnected &&
-        (!active || active === origin || active === active.ownerDocument.body)
+        (!active ||
+          active === origin ||
+          active === active.ownerDocument.body ||
+          active === this.projectFocus.search)
       ) {
         target.focus({ preventScroll: true });
       }

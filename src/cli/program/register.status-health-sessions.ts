@@ -4,6 +4,7 @@ import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { sessionsCommand } from "../../commands/sessions.js";
 import { setVerbose } from "../../globals.js";
 import { defaultRuntime } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { throwExpectedCliError } from "../expected-cli-error.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
@@ -259,6 +260,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json),
             timeoutMs,
             verbose,
+            signal: getAsyncWorkSignal(),
           },
           defaultRuntime,
         );

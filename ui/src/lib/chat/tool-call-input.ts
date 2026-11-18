@@ -75,6 +75,11 @@ export function resolveToolCallInput(name: string, args: Record<string, unknown>
   return {
     editorCommand,
     kind: resolveToolCallKind(key, args, editorCommand),
+    pattern:
+      readNonBlankString(args?.pattern) ??
+      readNonBlankString(args?.query) ??
+      readNonBlankString(args?.glob),
+    url: readNonBlankString(args?.url),
     path:
       readNonBlankString(args?.path) ??
       readNonBlankString(args?.file_path) ??

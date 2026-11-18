@@ -347,7 +347,9 @@ class StateReadTransport {
       const task = pool.pool.runTask(
         async () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation, [], undefined, () =>
+            authority.assertCurrent(),
+          );
           if (turn) {
             releaseAdmission = await turn;
           }

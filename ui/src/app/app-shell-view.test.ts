@@ -424,7 +424,7 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
 
   owner.routeState = { routeId: "appearance" };
   refresh();
-  expect(query("openclaw-app-sidebar")).toBeNull();
+  expect(query("openclaw-app-sidebar")).toBe(sidebar);
   expect(owner.navigationSidebar).toBe(sidebar);
 
   owner.routeState = { routeId: "chat" };
@@ -799,7 +799,7 @@ it("briefly reveals collapsed status transitions without reserving footer space"
   publish({ ...connected, phase: "reconnecting", offlineStable: true });
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
-  expect(flag()?.textContent).toContain("Reconnecting…");
+  expect(flag()?.textContent).toContain("Reconnecting");
   publish(connected);
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);

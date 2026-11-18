@@ -30,15 +30,15 @@ export function parseKnipCompactUnusedFiles(output: string) {
       inUnusedFilesSection = true;
       continue;
     }
-    if (inUnusedFilesSection && line.trim() === "") {
-      break;
+    if (line.trim() === "" || /^.+ \(\d+\)$/u.test(line)) {
+      inUnusedFilesSection = false;
+    }
+    if (!inUnusedFilesSection) {
+      continue;
     }
 
     const separatorIndex = line.lastIndexOf(": ");
-    if (separatorIndex === -1) {
-      continue;
-    }
-    const file = line.slice(separatorIndex + 2).trim();
+    const file = line.slice(separatorIndex === -1 ? 0 : separatorIndex + 2).trim();
     if (isLikelyRepoFilePath(file)) {
       files.push(file);
     }

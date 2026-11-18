@@ -4,6 +4,7 @@ import type { GetReplyOptions } from "../../auto-reply/get-reply-options.types.j
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { LegacyPluginSdkResourceHost } from "../legacy-sdk-resource-host.js";
 import { PluginInstance } from "../plugin-instance.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRecord } from "../status.test-helpers.js";
@@ -49,6 +50,43 @@ it("warns about synchronous runtime timestamps while preserving the shipped resu
 });
 
 describe("inbound dispatch", () => {
+  it("keeps buffered SDK dispatch on its host and projects only public reply options", async () => {
+    const result = { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
+    const dispatch = vi.fn(async () => result);
+    const host = new LegacyPluginSdkResourceHost({
+      tryDispatchAcpReplyHook: async () => undefined,
+      dispatchReplyWithBufferedBlockDispatcher: dispatch,
+      dispatchReplyWithDispatcher: dispatch,
+    });
+    const channel = createRuntimeChannel();
+    const ordinary = vi.fn();
+    const forbidden = vi.fn();
+    const replyOptions = { onModelSelected: ordinary, onReplyOperationOwned: forbidden };
+    const params = {
+      ctx: { Body: "hello", CommandAuthorized: false },
+      cfg: {},
+      dispatcherOptions: { deliver: async () => {} },
+      replyOptions,
+    };
+    try {
+      await expect(
+        host.run(() => channel.reply.dispatchReplyWithBufferedBlockDispatcher(params)),
+      ).resolves.toBe(result);
+      expect(dispatch).toHaveBeenCalledExactlyOnceWith({
+        ...params,
+        replyOptions: { onModelSelected: ordinary },
+      });
+      expect(replyOptions.onReplyOperationOwned).toBe(forbidden);
+      await host.close();
+      await expect(
+        host.run(() => channel.reply.dispatchReplyWithBufferedBlockDispatcher(params)),
+      ).rejects.toThrow("closed");
+      expect(dispatch).toHaveBeenCalledOnce();
+    } finally {
+      await host.close();
+    }
+  });
+
   function createOwnedInboundFixture(observerOnly = false) {
     const registry = createEmptyPluginRegistry();
     const record = createPluginRecord({ id: "owned-channel" });

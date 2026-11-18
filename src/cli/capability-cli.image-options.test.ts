@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { runCapability } from "./capability-cli.test-harness.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 
 const mocks = await vi.hoisted(async () => ({
   runtime: (await import("./test-runtime-mock.js")).createInertRuntime(vi),
@@ -62,10 +63,9 @@ it.each([
   ["edit", "16/9"],
   ["edit", "-1:1"],
 ])("rejects malformed image %s --aspect-ratio %s before dispatch", async (action, value) => {
-  await expect(runImage(action, value)).rejects.toThrow("exit 1");
-  expect(mocks.runtime.error.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
-    "--aspect-ratio must be a W:H ratio of positive numbers, like 16:9",
-  );
+  const run = runImage(action, value);
+  await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(run).rejects.toThrow("--aspect-ratio must be a W:H ratio");
   expect(mocks.resolveLocalCapabilityAgent).not.toHaveBeenCalled();
   expect(mocks.generateImage).not.toHaveBeenCalled();
 });

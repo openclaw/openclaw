@@ -17,7 +17,7 @@ export function messageToolCall(id: string, message: string, args: Record<string
 }
 
 export async function readSseEvent(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
+  reader: Pick<ReadableStreamDefaultReader<Uint8Array>, "read">,
   state: { buffer: string },
 ): Promise<{ event: string; data: unknown }> {
   const decoder = new TextDecoder();

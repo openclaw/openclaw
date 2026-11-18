@@ -2,7 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
 import type { SessionAccessScope } from "./session-accessor.sqlite-contract.js";
 import {
-  listLiveSessionPendingInputIds,
+  listLiveSessionPendingInputs,
   preserveSessionQueuedInputOwnersForRestart,
   type SessionPendingInputPage,
   type SessionPendingInput,
@@ -24,19 +24,20 @@ type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
 /** Capture live queue custody now; preserve it only after the session marker commits. */
 export async function captureSessionQueuedInputsForRestart(scope: Scope) {
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     scope,
     "Queued shutdown inputs changed their database owner",
   );
   const resolved = await prepareSqliteScope(scope);
-  const physical = captured.resolve(resolved);
+  const physical = await captured.resolve(resolved);
   physical.assertCurrent();
-  const queuedInputIds = listLiveSessionPendingInputIds(
+  const queuedInputs = listLiveSessionPendingInputs(
     physical.identity.canonicalPath,
     resolved.sessionKey,
     scope.sessionId,
     true,
   );
+  const queuedInputIds = queuedInputs.map((input) => input.inputId);
   return {
     queuedInputIds,
     preserve: () => {
@@ -70,11 +71,11 @@ async function readPendingInputRows(
             ...options,
             sessionKey: binding.actor.target.sessionKey,
             sessionId: scope.sessionId,
-            liveInputIds: listLiveSessionPendingInputIds(
+            liveInputIds: listLiveSessionPendingInputs(
               binding.path,
               binding.actor.target.sessionKey,
               scope.sessionId,
-            ),
+            ).map((input) => input.inputId),
           };
           if (onRead) {
             const snapshot = currentWindow(
@@ -100,7 +101,7 @@ async function readPendingInputRows(
     ...scope,
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Pending input history changed its captured database owner",
   );
@@ -110,23 +111,23 @@ async function readPendingInputRows(
     identity,
     source: readSource,
     assertReadCurrent,
-  } = target.resolve(resolved);
+  } = await target.resolve(resolved);
   const query = {
     ...options,
     sessionKey: resolved.sessionKey,
     sessionId: scope.sessionId,
-    liveInputIds: listLiveSessionPendingInputIds(
+    liveInputIds: listLiveSessionPendingInputs(
       identity.canonicalPath,
       resolved.sessionKey,
       scope.sessionId,
-    ),
+    ).map((input) => input.inputId),
   };
   if (!identity.key.startsWith("file:")) {
     return { rows: [], total: 0 };
   }
   assertReadCurrent();
   if (
-    !query.queuedInputIds &&
+    !query.queuedOnly &&
     hasSessionActorEmptyPendingInputHistory(identity, resolved.sessionKey, query.sessionId)
   ) {
     return { rows: [], total: 0 };
@@ -182,16 +183,11 @@ export async function listSessionPendingInputs(
   };
 }
 
-/** Called only for a session explicitly marked by graceful shutdown. */
-export async function readSessionQueuedInputPage(
-  scope: Scope,
-  options: { queuedInputIds: readonly string[]; before?: number },
-) {
-  if (options.queuedInputIds.length === 0) {
-    return { rows: [], total: 0 };
-  }
+/** Read all unconsumed durable queued inputs without current process custody. */
+export async function readSessionQueuedInputPage(scope: Scope, options: { before?: number } = {}) {
   return readPendingInputRows(scope, {
     ...options,
+    queuedOnly: true,
     limit: 20,
     includeTotal: false,
   });

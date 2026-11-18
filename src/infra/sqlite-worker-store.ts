@@ -119,28 +119,34 @@ export function createSqliteWorkerWriteAdmission(
   assertCurrent: (request: SqliteWorkerAdmissionRequest) => void,
   nativeLocations: readonly string[],
   attachment?: unknown,
+  prepare?: (request: SqliteWorkerAdmissionRequest) => Promise<void>,
 ): SqliteWorkerAdmissionFactory {
   return () => {
     let phase: "waiting" | "transaction" | "commit" = "waiting";
     return {
       nativeLocations,
-      admission: createSqliteWorkerOperationAdmission((request, grant) => {
-        if (
-          !(
-            ((phase === "waiting" || phase === "transaction") && request.stage === "transaction") ||
-            (phase === "transaction" && request.stage === "commit")
-          )
-        ) {
-          throw new Error("SQLite worker write authority requested out of order");
-        }
-        assertCurrent(request);
-        if (!grant()) {
-          throw new Error("SQLite worker write authority expired");
-        }
-        // A rolled-back attempt can reacquire its initial grant. A successful
-        // commit grant remains terminal for this command's admission owner.
-        phase = request.stage === "transaction" ? "transaction" : "commit";
-      }, attachment),
+      admission: createSqliteWorkerOperationAdmission(
+        (request, grant) => {
+          if (
+            !(
+              ((phase === "waiting" || phase === "transaction") &&
+                request.stage === "transaction") ||
+              (phase === "transaction" && request.stage === "commit")
+            )
+          ) {
+            throw new Error("SQLite worker write authority requested out of order");
+          }
+          assertCurrent(request);
+          if (!grant()) {
+            throw new Error("SQLite worker write authority expired");
+          }
+          // A rolled-back attempt can reacquire its initial grant. A successful
+          // commit grant remains terminal for this command's admission owner.
+          phase = request.stage === "transaction" ? "transaction" : "commit";
+        },
+        attachment,
+        prepare,
+      ),
     };
   };
 }

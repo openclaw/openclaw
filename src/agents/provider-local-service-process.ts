@@ -1,6 +1,11 @@
 import type { ChildProcess } from "node:child_process";
 import { sleepWithAbort } from "@openclaw/retry";
-import { isChildProcessTreeAlive, signalChildProcessTree } from "../process/child-process-tree.js";
+import {
+  isChildProcessTreeAlive,
+  isChildProcessTreeAliveAsync,
+  isProcessGroupGoneByKernel,
+  signalChildProcessTree,
+} from "../process/child-process-tree.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
 
@@ -51,15 +56,33 @@ function isLocalServiceProcessTreeAlive(owned: ManagedLocalServiceProcess): bool
   return alive;
 }
 
-function isLocalServiceProcessSettled(owned: ManagedLocalServiceProcess): boolean {
-  return owned.closed && owned.pendingSignals.size === 0 && !isLocalServiceProcessTreeAlive(owned);
+async function isLocalServiceProcessTreeAliveAsync(
+  owned: ManagedLocalServiceProcess,
+): Promise<boolean> {
+  if (process.platform === "win32") {
+    return isLocalServiceProcessTreeAlive(owned);
+  }
+  return await isChildProcessTreeAliveAsync(owned.child);
+}
+
+async function isLocalServiceProcessSettled(owned: ManagedLocalServiceProcess): Promise<boolean> {
+  return (
+    owned.closed &&
+    !(await isLocalServiceProcessTreeAliveAsync(owned)) &&
+    owned.pendingSignals.size === 0
+  );
 }
 
 function signalLocalServiceProcess(
   owned: ManagedLocalServiceProcess,
   signal: "SIGTERM" | "SIGKILL",
 ) {
-  if (owned.pendingSignals.has(signal) || !isLocalServiceProcessTreeAlive(owned)) {
+  if (
+    owned.pendingSignals.has(signal) ||
+    (process.platform === "win32"
+      ? !isLocalServiceProcessTreeAlive(owned)
+      : typeof owned.child.pid === "number" && isProcessGroupGoneByKernel(owned.child.pid))
+  ) {
     return;
   }
   const completion = createDeferredCore();
@@ -85,7 +108,7 @@ export function forceStopLocalServiceProcess(owned: ManagedLocalServiceProcess):
 }
 
 export async function stopLocalServiceProcess(owned: ManagedLocalServiceProcess): Promise<void> {
-  if (isLocalServiceProcessSettled(owned)) {
+  if (await isLocalServiceProcessSettled(owned)) {
     return;
   }
   drainLocalServiceOutput(owned.child);
@@ -93,18 +116,20 @@ export async function stopLocalServiceProcess(owned: ManagedLocalServiceProcess)
   // monotonic clock; the deadlines must live there too, or a wall-clock step
   // (NTP correction, VM resume) stretches the stop window past its bound.
   const gracefulDeadline = monotonicNow() + DEFAULT_PROBE_TIMEOUT_MS;
-  if (owned.pendingSignals.size === 0) {
+  if (owned.pendingSignals.size === 0 && (await isLocalServiceProcessTreeAliveAsync(owned))) {
     signalLocalServiceProcess(owned, "SIGTERM");
   }
   await waitForChildProcessTreeExit(owned, gracefulDeadline);
-  if (!isLocalServiceProcessSettled(owned)) {
-    signalLocalServiceProcess(owned, "SIGKILL");
+  if (!(await isLocalServiceProcessSettled(owned))) {
+    if (await isLocalServiceProcessTreeAliveAsync(owned)) {
+      signalLocalServiceProcess(owned, "SIGKILL");
+    }
     // Windows taskkill owns its bounded completion deadline. Join every helper
     // before timing final exit observation, even if the service already closed.
     await Promise.all(owned.pendingSignals.values());
     await waitForChildProcessTreeExit(owned, monotonicNow() + DEFAULT_PROBE_TIMEOUT_MS);
   }
-  if (!isLocalServiceProcessSettled(owned)) {
+  if (!(await isLocalServiceProcessSettled(owned))) {
     throw new Error(`Local model service process tree ${owned.child.pid} did not stop`);
   }
 }
@@ -113,7 +138,7 @@ async function waitForChildProcessTreeExit(
   owned: ManagedLocalServiceProcess,
   deadline: number,
 ): Promise<void> {
-  while (!isLocalServiceProcessSettled(owned)) {
+  while (!(await isLocalServiceProcessSettled(owned))) {
     const remainingMs = deadline - monotonicNow();
     if (remainingMs <= 0) {
       return;

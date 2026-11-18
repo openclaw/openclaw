@@ -14,6 +14,7 @@ import {
   deleteSessionEntryRows,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
+import { clearHistoryNavigation } from "./session-accessor.sqlite-history.test-support.js";
 import {
   readSessionInputCompletion,
   writeSessionInputCompletion,
@@ -262,7 +263,9 @@ it("hydrates once and commits, rejects, and rolls back against the exact actor p
           readSessionPendingInputByKey(database, scope, pending.idempotencyKey)?.input_id,
         ).toBe("accepted-input");
       });
-      expect(counter.counts.reads, reads.join("\n")).toBe(0);
+      // Staging an absent active key must check retained receipts before inserting.
+      expect(counter.counts.reads, reads.join("\n")).toBe(1);
+      expect(reads[0]).toContain('from "session_pending_inputs"');
       const postimage = projectSessionActorHotState(working);
       expect(postimage.pendingInputs).toMatchObject([
         { input_id: "accepted-input", state: "queued" },
@@ -369,13 +372,7 @@ it("initializes over a retained transcript and preserves prepared snapshots, rel
         header(scope.sessionId),
         timedMessageEvent("retained-user", null, "2026-01-01T00:00:01.000Z", user("retained")),
       ]);
-      database.db
-        .prepare(`UPDATE transcript_events
-        SET navigation_type = NULL, navigation_custom_type = NULL,
-            navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
-            navigation_last_custom_type = NULL, navigation_valid = 1
-        WHERE session_id = ?`)
-        .run(scope.sessionId);
+      clearHistoryNavigation(database, scope.sessionId);
       deleteSessionEntryRows(database, scope.sessionKey);
     });
     expect(f.events()).toHaveLength(2);

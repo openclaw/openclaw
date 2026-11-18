@@ -45,7 +45,6 @@ it("records successful discovered skill reads with the original sandbox provenan
       discoverySkills: [skill],
     },
     skillUsagePaths: [{ skillName: "guide", skillSource: "workspace", skillFile, readPath }],
-    loopDetection: { enabled: false },
   });
   await expect(tool.execute("invalid", { name: "unknown" })).rejects.toThrow();
   expect(consumeRunSkillUsage(runId)).toEqual([]);
@@ -106,7 +105,6 @@ it.each(["read", "skills_read"])(
     const tool = wrapToolWithBeforeToolCallHook(raw, {
       workspaceDir: root,
       skillsSnapshot: { prompt: "", skills: [{ name: skill.name }], resolvedSkills: [skill] },
-      loopDetection: { enabled: false },
     });
     const events: DiagnosticSkillUsedEvent[] = [];
     const stopEvents = onInternalDiagnosticEvent((event) => {

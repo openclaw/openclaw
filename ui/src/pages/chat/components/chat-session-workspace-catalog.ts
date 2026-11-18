@@ -16,6 +16,10 @@ export type WorkspaceCatalogFile = {
   activity?: "modified" | "read" | "mixed";
   artifactId?: string;
   mimeType?: string;
+  size?: number;
+  missing?: boolean;
+  /** Last modification reported by the Gateway; absent for missing files and artifacts. */
+  updatedAtMs?: number;
 };
 export type WorkspaceCatalogRow = WorkspaceCatalogFile & { directory: boolean };
 
@@ -54,6 +58,7 @@ function mergeActivity(
 export function projectWorkspaceCatalog(
   list: SessionWorkspaceListResult | null,
   directories: Readonly<Record<string, Pick<SessionWorkspaceDirectory, "browser">>> = {},
+  filePlacement: "project" | "session" = "project",
 ) {
   const project = new Map<string, WorkspaceCatalogRow>();
   const session = new Map<string, WorkspaceCatalogFile>();
@@ -83,16 +88,19 @@ export function projectWorkspaceCatalog(
       name: entry.name,
       origin: "workspace",
       activity: mergeActivity(project.get(entry.path)?.activity, entry.sessionKind),
+      size: entry.kind === "file" ? entry.size : undefined,
       directory: entry.kind === "directory",
     });
-    addParents(entry.path);
+    if (filePlacement === "project") {
+      addParents(entry.path);
+    }
   };
   for (const directory of Object.values(directories)) {
     for (const entry of directory.browser?.entries ?? []) {
       addEntry(entry);
     }
   }
-  if (!list?.browser?.search) {
+  if (!list?.browser?.search || filePlacement === "session") {
     for (const entry of list?.browser?.entries ?? []) {
       addEntry(entry);
     }
@@ -101,15 +109,18 @@ export function projectWorkspaceCatalog(
     // Session request paths are cwd-relative; only workspacePath establishes root identity.
     const path = file.workspacePath;
     const entry: WorkspaceCatalogFile = {
-      key: path === undefined ? `file:${file.path}` : fileKey(path),
+      key: filePlacement === "session" || path === undefined ? `file:${file.path}` : fileKey(path),
       path: file.path,
       workspacePath: file.workspacePath,
       name: file.name,
       origin: "session",
       activity: file.kind,
       mimeType: file.mimeType,
+      size: file.size,
+      missing: file.missing,
+      updatedAtMs: file.updatedAtMs,
     };
-    if (path === undefined || absolutePath(path)) {
+    if (filePlacement === "session" || path === undefined || absolutePath(path)) {
       session.set(entry.key, {
         ...entry,
         activity: mergeActivity(session.get(entry.key)?.activity, entry.activity),
@@ -132,6 +143,7 @@ export function projectWorkspaceCatalog(
       origin: "session",
       artifactId: artifact.id,
       mimeType: artifact.mimeType,
+      size: artifact.sizeBytes,
     });
   }
   const sources = { session: [...session.values()], project };
@@ -168,6 +180,7 @@ export function workspaceCatalogFilters(
 export function workspaceCatalogChildren(
   catalog: { project: ReadonlyMap<string, WorkspaceCatalogRow> },
   filter: SessionWorkspaceFilter,
+  flatPath?: string,
 ): ReadonlyMap<string, readonly WorkspaceCatalogRow[]> {
   const children = new Map<string, WorkspaceCatalogRow[]>();
   if (filter === "artifacts") {
@@ -188,7 +201,7 @@ export function workspaceCatalogChildren(
     if (filter !== "all" && !relevant.has(path)) {
       continue;
     }
-    const parent = parentPath(path);
+    const parent = flatPath ?? parentPath(path);
     const siblings = children.get(parent) ?? [];
     siblings.push(file);
     children.set(parent, siblings);
@@ -202,19 +215,28 @@ export function workspaceCatalogChildren(
 export function workspaceCatalogSearch(
   list: SessionWorkspaceListResult | null,
   query: string,
-): WorkspaceCatalogFile[] {
+  filePlacement: "project" | "session" = "project",
+): (WorkspaceCatalogFile & { directory?: boolean })[] {
   const search = query.trim();
   if (!search) {
     return [];
   }
   // Canonically equivalent names may arrive in either Unicode form; compare on NFC.
   const normalizedSearch = foldSearchCase(search).normalize("NFC");
-  const catalog = projectWorkspaceCatalog(list);
-  const results = new Map<string, WorkspaceCatalogFile>();
-  for (const entry of [...catalog.session, ...catalog.project.values()]) {
+  const catalog = projectWorkspaceCatalog(list, {}, filePlacement);
+  const results = new Map<string, WorkspaceCatalogFile & { directory?: boolean }>();
+  // Clearing a flat search retains its listed rows; a different query cannot reuse them.
+  const project =
+    filePlacement === "session" && list?.browser?.search ? [] : catalog.project.values();
+  for (const entry of [...catalog.session, ...project]) {
     if (
-      !("directory" in entry && entry.directory) &&
-      [entry.name, entry.workspacePath, entry.path].some(
+      (filePlacement === "session" || !("directory" in entry && entry.directory)) &&
+      [
+        entry.name,
+        entry.workspacePath,
+        entry.path,
+        ...(filePlacement === "session" ? [entry.artifactId, entry.mimeType] : []),
+      ].some(
         (value) =>
           value !== undefined && foldSearchCase(value).normalize("NFC").includes(normalizedSearch),
       )
@@ -225,7 +247,7 @@ export function workspaceCatalogSearch(
   // A previous query must never supply the next query's project results.
   if (list?.browser?.search?.toLowerCase() === search.toLowerCase()) {
     for (const entry of list.browser.entries) {
-      if (entry.kind === "directory") {
+      if (entry.kind === "directory" && filePlacement !== "session") {
         continue;
       }
       const key = sessionWorkspaceFileKey(list.sessionKey, list.root, entry.path);
@@ -243,6 +265,8 @@ export function workspaceCatalogSearch(
           workspacePath: entry.path,
           origin: "workspace",
           activity: entry.sessionKind,
+          size: entry.kind === "file" ? entry.size : undefined,
+          ...(filePlacement === "session" ? { directory: entry.kind === "directory" } : {}),
         });
       }
     }

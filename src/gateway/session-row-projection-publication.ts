@@ -27,6 +27,7 @@ export function createSessionRowPublication(owner: {
     invalidate: (sessionId: string) => void;
   };
   invalidateFacts: (row: records.Row, domain: true | "category") => boolean;
+  invalidateSelection: () => void;
   enqueue: (row: records.Row | undefined) => void;
   defer: (row: records.Row) => void;
   deferArchive: (row: records.Row) => void;
@@ -40,6 +41,7 @@ export function createSessionRowPublication(owner: {
     owner.markRelated(row, records.changesSessionRowDependents(row.storedEntry, entry));
     owner.runAsOwner(() => {
       if (entry.archivedAt !== undefined && !owner.registryFactsReady()) {
+        owner.invalidateSelection();
         // Retain committed metadata while the independent lineage owner recovers.
         const previous = row.storedEntry ?? row.entry;
         const changedIdentity =
@@ -54,6 +56,10 @@ export function createSessionRowPublication(owner: {
           entryAcquisitionPending: true,
         });
         return;
+      }
+      // Board facts install after entry comparison and still require broad invalidation.
+      if (databaseFacts && row.hasBoard !== databaseFacts.hasBoard) {
+        owner.invalidateSelection();
       }
       const next = owner.acquireEntry(row, entry);
       if (next && databaseFacts) {
@@ -71,6 +77,9 @@ export function createSessionRowPublication(owner: {
     change: Extract<SessionRowChange, { sessionKey: string }>,
     prepared = readPreparedSessionEntryChange(change, row.key),
   ) {
+    if (!prepared?.entry || change.factsInvalidated) {
+      owner.invalidateSelection();
+    }
     const source = prepared?.source;
     const previousSource = row.publishedSource;
     if (

@@ -214,9 +214,9 @@ the hosted TypeSafe endpoint.
 optional port and trailing slash. Supply the origin, without `/v1`, credentials,
 query, or fragment; the plugin appends `/v1/systemone`. This existing plugin
 setting remains loopback-only. For a separate inference host or reverse proxy,
-use the standard model-provider configuration below. Ordinary ambient HTTP proxy
-variables are not used for configured endpoints; explicitly enabled managed proxy
-policy still applies. `localhost` stays pinned to loopback, independently of system DNS.
+use the standard model-provider configuration below. Requests use the shared
+Decision HTTP executor, so ambient HTTP proxy variables and `NO_PROXY` apply as
+they do for other providers.
 
 Kev runs one checkpoint per server process. Its request model label does not
 load or switch weights. Choose the checkpoint when starting the server and

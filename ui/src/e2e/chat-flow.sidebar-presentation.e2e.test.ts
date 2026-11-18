@@ -400,7 +400,7 @@ suite.define(() => {
           .locator(`[data-session-key="${runningKey}"]`)
           .locator(".sidebar-session-indicator .session-glyph__ring")
           .evaluate((element) => {
-            const style = getComputedStyle(element);
+            const style = getComputedStyle(element, "::before");
             const accent = document.createElement("span").style;
             accent.color = style.getPropertyValue("--accent").trim();
             return {

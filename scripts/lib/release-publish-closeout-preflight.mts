@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import {
   loadReleaseNotesForTag,
+  regularStableVersionFromReleaseBody,
   renderGithubReleaseNotes,
   verifyGithubReleaseNotes,
 } from "../render-github-release-notes.mts";
@@ -13,12 +14,15 @@ import {
   requirePreflightRecord,
   type PublishPreflightGh,
 } from "./release-publish-preflight-evidence.mts";
+import { classifyReleaseTrain, parseReleaseVersion } from "./release-version.mjs";
 import { verifyStableMainCloseout } from "./stable-release-closeout.mjs";
 
 export function inspectPublishReleasePage(input: {
   repo: string;
   tag: string;
   sourceSha: string;
+  toolingSha: string;
+  retiredLineReason?: string;
   runGh: PublishPreflightGh;
 }) {
   // Initial publication always renders the frozen notes, including when no
@@ -28,14 +32,47 @@ export function inspectPublishReleasePage(input: {
     ref: input.sourceSha,
     tag: input.tag,
   });
-  renderGithubReleaseNotes({
+  const version = parseReleaseVersion(notes.version);
+  let regularStableVersion: unknown;
+  let mainPackageVersion: unknown;
+  let lookup: ReturnType<typeof readPublishPreflightRelease> | undefined;
+  if (version && classifyReleaseTrain(version) === "extended-stable") {
+    // Retirement remains bound to the publisher main context, not Latest.
+    mainPackageVersion = requirePreflightRecord(
+      JSON.parse(
+        execFileSync("git", ["show", `${input.toolingSha}:package.json`], { encoding: "utf8" }),
+      ),
+      "publisher package.json",
+    ).version;
+    lookup = readPublishPreflightRelease(input.runGh, input.repo, input.tag);
+    // A public page retains the version observed when it was first rendered.
+    // Drafts can be replaced and must use the currently published regular stable.
+    if (
+      lookup.state === "found" &&
+      !lookup.release.draft &&
+      typeof lookup.release.body === "string"
+    ) {
+      regularStableVersion = regularStableVersionFromReleaseBody(lookup.release.body);
+    } else {
+      const latest = requirePreflightRecord(
+        preflightApi(input.runGh, input.repo, "releases/latest"),
+        "Latest release",
+      );
+      regularStableVersion = trimString(latest.tag_name).replace(/^v/u, "");
+    }
+  }
+  const target = {
     changelog: notes.section,
     version: notes.version,
     tag: input.tag,
     repository: input.repo,
     contributionRecordPath: notes.recordPath ?? undefined,
-  });
-  const lookup = readPublishPreflightRelease(input.runGh, input.repo, input.tag);
+    regularStableVersion,
+    mainPackageVersion,
+    retiredLineReason: input.retiredLineReason,
+  };
+  renderGithubReleaseNotes(target);
+  lookup ??= readPublishPreflightRelease(input.runGh, input.repo, input.tag);
   if (lookup.state !== "found") {
     return undefined;
   }
@@ -53,11 +90,7 @@ export function inspectPublishReleasePage(input: {
   if (!release.draft) {
     const canonical = verifyGithubReleaseNotes({
       body,
-      changelog: notes.section,
-      version: notes.version,
-      tag: input.tag,
-      repository: input.repo,
-      contributionRecordPath: notes.recordPath ?? undefined,
+      ...target,
     });
     const assets = Array.isArray(release.assets) ? release.assets.filter(isRecord) : [];
     const hasAsset = assets.some(

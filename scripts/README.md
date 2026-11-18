@@ -57,6 +57,17 @@ also verify `dist/build-info.json` against a source commit should use
 or declaration build. Keep generated files unchanged after either build so
 equivalent-input admission can certify the same source bytes.
 
+## Interrupted Control UI builds
+
+Source UI builds and Settings preparation share checkout artifact ownership.
+On POSIX, a canceled managed child retires its invocation claim only after the
+existing process owner verifies child-tree and output completion. The UI builder
+stops admitting steps on cancellation and does not publish canceled output.
+The Gateway gives that builder 15 seconds to join before escalating termination.
+Unverified cleanup retains the artifact lock and staging directory; abrupt owner
+death still requires inspection, not PID-based lock reclamation. Windows retains
+the existing child-owned claim when interrupted completion cannot be certified.
+
 ## Exact memory search benchmark
 
 Use `scripts/bench-memory-search.mjs` against a disposable PostgreSQL database
@@ -330,6 +341,24 @@ streaming. It alternates engines and bundles within each pair:
 NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
   --bundle-dir dist/control-ui --pairs 10 --viewport both
 ```
+
+Use `--fresh-browser` to start a new browser process for every observation when
+the host cannot reliably reuse a process after closing a context. Apply it to
+every comparison arm. The manifest records this mode; do not pool it with
+reused-process runs because browser caches and compilation state differ. Warm
+boot still reloads within the observation's own context.
+
+`bench-control-ui-rpc-payloads.ts` seeds each compiled Gateway with the storage
+owners from that Gateway's source checkout. The source root defaults to the
+parent of `dist/` for the selected `--entry`; use `--fixture-source-root` and
+`--compare-fixture-source-root` for other layouts. Each source HEAD must match
+its runtime's `build-info.json` commit before fixture writes begin. Each worker's
+`report.json` records `fixtureSource` with the root, commit, and schema versions.
+Its `--fresh-browser` mode also starts a separate browser process per sample on
+every comparison arm and records `freshBrowser`. Each sample still owns a fresh
+context, with warm reloads and route visits inside that context. Process caches
+therefore differ from the default reused-browser mode; compare and report the
+two modes separately.
 
 Continuous gestures are opt-in with `--steps gestures`: pointer sweeps and wheel
 scrolling over Sidebar, Chat, Advanced Settings and Sessions; transcript selection
@@ -1135,3 +1164,35 @@ See also [Scripts](https://docs.openclaw.ai/help/scripts) for public-facing scri
 ### Dynamic validator benchmark
 
 `node --import ./scripts/tsx.mjs scripts/bench-dynamic-validators.mts <jit|aot> [iterations] [warmup] [mcp|plugin|llm|llm-coerce]` measures the actual validation owners. Compare five interleaved fresh baseline/candidate processes per fixture; import/setup and warm CPU/wall costs are reported separately.
+
+### Message-tool request proof
+
+Run the maintained synthetic workload from inside a disposable built installation:
+
+```bash
+INSTALL=/absolute/path/to/disposable-install
+cp scripts/perf/message-tool-availability.mjs "$INSTALL/message-tool-availability.mjs"
+node "$INSTALL/message-tool-availability.mjs" --build "$INSTALL" \
+  --state .openclaw/tmp/message-proof/state --out .openclaw/tmp/message-proof/base \
+  --route none
+```
+
+The worker self-spawns from its entry path, which also selects the bundled-plugin
+package root. Launching the source-checkout entry with a different `--build` can
+therefore mix that checkout's plugins into the compared installation.
+
+The routes are `none`, `internal`, `external-webchat`, and `configured`.
+Add `--unbound-sender` to the configured route to verify that a disabled bound
+channel does not hide a working sender on a different channel.
+Stage baseline and candidate artifacts at the same disposable installation path;
+installation paths appear in prompts. Use the same state path for each edition,
+preserving the completed state elsewhere before the next run. Existing state and
+output paths are refused, never deleted. The script runs only an isolated agent,
+a loopback provider, and an optional synthetic direct-channel adapter.
+
+Each turn captures the received HTTP body bytes, then observes the actual Code
+Mode catalog. The six-stage flows cover normal/source-only/normal, internal wake,
+and process-reentry recovery, not a live Gateway restart. The configured route
+requires a synthetic adapter receipt. Provider usage fields are protocol fixtures,
+not token or billing measurements. No timing claim is made. The existing
+`scripts/perf/**` Knip entry covers this command and its same-file worker.

@@ -1,3 +1,0 @@
-176
-# Baseline-native Workshop opt-out and strict canonical preservation across
-# boolean, core-mode and migrated plugin eras; current Doctor warning policy.

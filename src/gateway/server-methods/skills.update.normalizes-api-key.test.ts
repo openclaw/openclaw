@@ -5,10 +5,12 @@ import { callGatewayHandler } from "./skills.test-helpers.js";
 
 let writtenConfig: unknown = null;
 let loadedConfig: OpenClawConfig = { skills: { entries: {} } };
+let authoredConfig: OpenClawConfig | undefined;
 const secretEntry = {
   apiKey: "secret-api-key-123",
   env: { GEMINI_API_KEY: "secret-env-key-456", BRAVE_REGION: "us" },
 };
+const envRef = { source: "env", provider: "default", id: "DEMO_KEY" } as const;
 
 // mock-isolation: record config mutations without reading or writing operator configuration.
 vi.mock("../../config/config.js", () => {
@@ -24,11 +26,15 @@ vi.mock("../../config/config.js", () => {
     mutateConfigFileWithRetry: async (params: {
       mutate: (
         draft: OpenClawConfig,
-        context: { snapshot: { path: string }; previousHash: string; attempt: number },
+        context: { snapshot: object; previousHash: string; attempt: number },
       ) => unknown;
     }) => {
       const draft = structuredClone(loadedConfig);
-      const snapshot = { path: "/tmp/openclaw/config.json" };
+      const snapshot = {
+        path: "/tmp/openclaw/config.json",
+        sourceConfig: loadedConfig,
+        authoredConfig,
+      };
       const result = await params.mutate(draft, {
         snapshot,
         previousHash: "test-hash",
@@ -84,6 +90,29 @@ describe("skills.update", () => {
     expectWrittenSkillEntry("demo-skill", {
       ...secretEntry,
       env: { ...secretEntry.env, BRAVE_REGION: "eu" },
+    });
+  });
+
+  it.each([
+    { stored: envRef, apiKey: "plain-key", written: null },
+    { stored: "env-value", authored: "${DEMO_KEY}", apiKey: "plain-key", written: null },
+    { stored: envRef, apiKey: "${OTHER_KEY}", written: { apiKey: "${OTHER_KEY}" } },
+    { stored: envRef, apiKey: "", written: {} },
+    { stored: "old-key", apiKey: "plain-key", written: { apiKey: "plain-key" } },
+  ])("only replaces a referenced apiKey with another reference: $apiKey", async (c) => {
+    loadedConfig = { skills: { entries: { "demo-skill": { apiKey: c.stored } } } };
+    authoredConfig = c.authored
+      ? { skills: { entries: { "demo-skill": { apiKey: c.authored } } } }
+      : undefined;
+    const result = await update({ apiKey: c.apiKey });
+    if (c.written) {
+      expectWrittenSkillEntry("demo-skill", c.written);
+      return;
+    }
+    expect(writtenConfig).toBeNull();
+    expect(result.error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: expect.stringContaining("skills.entries.demo-skill.apiKey is set by a SecretRef"),
     });
   });
 });

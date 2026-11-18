@@ -7,7 +7,6 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { OpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import { stateDirGatewayFixtureEntrypoint } from "../cli/cli-entrypoint.test-support.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
 
@@ -112,6 +111,9 @@ export async function startMinimalRealGateway(options: {
     cancellation.signal.throwIfAborted();
     const { createOpenClawTestInstance } =
       await import("../../test/helpers/openclaw-test-instance.js");
+    // Protocol-only helpers do not need the compiled real-Gateway fixture.
+    const { stateDirGatewayFixtureEntrypoint } =
+      await import("../cli/cli-entrypoint.test-support.js");
     const entrypoint = resolveRuntimeWorkerUrl(stateDirGatewayFixtureEntrypoint);
     const gateway = await createOpenClawTestInstance({
       name: "minimal-real-gateway",

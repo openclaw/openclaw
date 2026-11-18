@@ -30,15 +30,32 @@ const system: ToolsGitHubStatusResult["effective"] = {
 const disconnected = disconnectedGitHub.personal;
 const personalStatus = { personal: disconnected, system };
 const unavailable = "Couldn’t load account status. Try again.";
-const statusParams = (agentId: string) => ({ agentId, selectedScope: "system" as const });
-const status = (agentId = "main", effective = system): ToolsGitHubStatusResult => ({
-  ...statusParams(agentId),
-  selected: { scope: "system", configured: true, identity: effective },
+type Scope = "system" | "agent";
+type StatusParams = { agentId?: string; selectedScope?: Scope };
+const statusParams = (agentId: string, selectedScope: Scope = "system") => ({
+  agentId,
+  selectedScope,
+});
+/** The Gateway answers for the scope asked; agents without an override report the shared account. */
+const status = (
+  agentId = "main",
+  effective = system,
+  selectedScope: Scope = "system",
+): ToolsGitHubStatusResult => ({
+  ...statusParams(agentId, selectedScope),
+  selected: {
+    scope: selectedScope,
+    configured: selectedScope === "system" || effective.source === "agent-override",
+    identity:
+      selectedScope === "system" || effective.source === "agent-override" ? effective : null,
+  },
   effective,
 });
+const statusFor = (params: StatusParams | undefined, effective = system) =>
+  status(params?.agentId ?? "main", effective, params?.selectedScope ?? "system");
 const statusRequest = (effective = system) =>
-  vi.fn(async (method: string) =>
-    method === "users.github.status" ? personalStatus : status("main", effective),
+  vi.fn(async (method: string, params?: StatusParams) =>
+    method === "users.github.status" ? personalStatus : statusFor(params, effective),
   );
 function expectText(element: Element | null, present: string[], absent: string[] = []) {
   // Row buttons show a short verb; their full name is what tells them apart.
@@ -108,7 +125,7 @@ function mount(
     row: (scope: string) => query(`[data-github-connection="${scope}"]`),
     button,
     openPat: () =>
-      ["Change System GitHub", "Use a PAT instead"].forEach((label) => {
+      ["Change shared agent account", "Use a PAT instead"].forEach((label) => {
         button(label).click();
         flush();
       }),
@@ -135,7 +152,7 @@ it.each([
   const { text, waitText, query, button, openPat } = harness;
   await waitText(["@admin-only-account"]);
   openPat();
-  const input = () => query<HTMLInputElement>('input[aria-label="Author name"]');
+  const input = () => query<HTMLInputElement>('input[aria-label="Commit author name (optional)"]');
   const token = () => query<HTMLInputElement>(".settings-secret input");
   expect(input()).not.toBeNull();
   input()!.value = "Draft author";
@@ -176,7 +193,7 @@ it.each([
     text([], ["@admin-only-account"]);
     expect(query("[data-github-setup]")).toBeNull();
     harness.emit({ hello: gatewayHelloForMethods([], ["operator.admin"]) });
-    await waitForFast(() => expect(button("Change System GitHub")?.disabled).toBe(false));
+    await waitForFast(() => expect(button("Change shared agent account")?.disabled).toBe(false));
     openPat();
     expect(input()?.value).toBe("Configured author");
     expect(token()?.value).toBe("");
@@ -187,47 +204,70 @@ it.each([
   expect(input()).toBeNull();
 });
 
-it.each([null, "profile-a"])("separates GitHub scopes for profile %s", async (profileId) => {
-  const pending = createDeferredCore<ToolsGitHubStatusResult>();
-  const agentStatus = (agentId: string): ToolsGitHubStatusResult => ({
-    ...status(agentId),
-    effective: { ...system, source: "agent-override", account: { login: `${agentId}-account` } },
-  });
-  const request = vi.fn(async (method: string, params: { agentId?: string }) =>
+it("shows the shared and agent accounts to an admin without a personal profile", async () => {
+  const request = statusRequest();
+  const { waitText, row, query, text } = mount(["operator.admin"], null, request);
+  await waitText(["@system-account"]);
+  await waitForFast(() => expectText(query('[data-agent-id="research"]'), ["@system-account"]));
+  text(["Personal sign-in required"], ["Connect My GitHub"]);
+  // The shared account's row names everything it serves, not only agents.
+  expectText(row("system"), [
+    "Shared agent account",
+    "Agents without their own account, including their dashboards and Publish PR",
+  ]);
+  expect(request.mock.calls.map(([, params]) => params)).toEqual(
+    expect.arrayContaining([
+      statusParams("main"),
+      statusParams("main", "agent"),
+      statusParams("research", "agent"),
+    ]),
+  );
+  expect(request).not.toHaveBeenCalledWith("users.github.status", {});
+});
+
+it("lists every agent's account and opens setup under only the chosen agent", async () => {
+  const ownAccount = {
+    ...system,
+    source: "agent-override" as const,
+    credentialKind: "managed-pat" as const,
+    account: { login: "research-bot" },
+  };
+  const config = { agents: { entries: { research: { tools: { github: { mode: "managed" } } } } } };
+  const request = vi.fn(async (method: string, params?: StatusParams) =>
     method === "users.github.status"
       ? personalStatus
-      : profileId && params.agentId === "main"
-        ? pending.promise
-        : agentStatus(params.agentId ?? "main"),
+      : statusFor(params, params?.agentId === "research" ? ownAccount : system),
   );
-  const { context, row, text, waitText } = mount(["operator.admin"], profileId, request);
+  const ui = mount(["operator.admin"], "profile-a", request, config);
+  const agentRow = (id: string) => ui.query(`[data-agent-id="${id}"]`);
+  await waitForFast(() => expectText(agentRow("research"), ["@research-bot"]));
+  await waitForFast(() => expectText(agentRow("main"), ["@system-account"]));
+  expectText(ui.row("system"), ["Shared agent account", "@system-account", "Change for 1 agent"]);
+  // The same login can serve both connections, so the source is always spelled out.
+  expectText(
+    agentRow("main"),
+    ["Clawd", "Uses the shared agent account", "Give Clawd its own GitHub account"],
+    ["Use the shared agent account for Clawd"],
+  );
+  expectText(
+    agentRow("research"),
+    [
+      "Research",
+      "Own account · Personal access token",
+      "Change the GitHub account for Research",
+      "Use the shared agent account for Research",
+    ],
+    ["Give Research its own GitHub account"],
+  );
   await waitForFast(() =>
-    expect(request).toHaveBeenCalledWith("tools.github.status", statusParams("main")),
+    expect(ui.button("Give Clawd its own GitHub account").disabled).toBe(false),
   );
-  const agent = () => row("agent");
-  if (profileId) {
-    context.settingsAgentSelection.set("research");
-    await waitText(["GitHub for Research"]);
-    await waitForFast(() => expectText(agent(), ["@research-account"]));
-    pending.resolve(agentStatus("main"));
-    await pending.promise;
-    await new Promise<void>(queueMicrotask);
-    expectText(agent(), [], ["@main-account"]);
-    const personalReads = request.mock.calls.filter(([method]) => method === "users.github.status");
-    expect(personalReads).toHaveLength(1);
-    expect(request).toHaveBeenCalledWith("tools.github.status", statusParams("research"));
-  } else {
-    await waitText(["@system-account"]);
-    expect(request.mock.calls).toEqual([["tools.github.status", statusParams("main")]]);
-    text(["Personal sign-in required"], ["Connect My GitHub"]);
-  }
-  const agentId = profileId ? "research" : "main";
-  expectText(row("system"), ["@system-account"], [`@${agentId}-account`]);
-  expectText(agent(), [`@${agentId}-account`, "Agent override", "Verified"]);
-  agent()?.querySelector("button")?.click();
-  expect(context.navigate).toHaveBeenCalledWith("agents", {
-    pathname: `/ui/settings/agents/${agentId}/tools`,
-  });
+  ui.button("Give Clawd its own GitHub account").click();
+  await waitForFast(() =>
+    expect(agentRow("main")?.querySelector("[data-github-setup]")).not.toBeNull(),
+  );
+  expectText(agentRow("main"), ["Own account for Clawd", "Only Clawd changes."]);
+  expect(agentRow("research")?.querySelector("[data-github-setup]")).toBeNull();
 });
 
 it("shows one status failure during setup and retries without reconnecting the account", async () => {
@@ -244,7 +284,7 @@ it("shows one status failure during setup and retries without reconnecting the a
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   ui.text(
     ["Retry", unavailable],
-    ["Change System GitHub", "Not verified", "Connect My GitHub", "Disconnected"],
+    ["Change shared agent account", "Not verified", "Connect My GitHub", "Disconnected"],
   );
   expectText(ui.row("system"), [unavailable]);
   ui.button("Manage accounts").click();
@@ -286,7 +326,7 @@ it.each(["available", "unavailable"] as const)("loads native %s", async (credent
   }
   text(
     ["Connect My GitHub", "Managed by admins"],
-    [unavailable, "Change System GitHub", "Use a PAT instead"],
+    [unavailable, "Change shared agent account", "Use a PAT instead"],
   );
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(context.runtimeConfig.ensureLoaded).not.toHaveBeenCalled();
@@ -296,8 +336,8 @@ it("closes setup and resets its purpose when the same Gateway snapshot changes p
   const { query, button, replaceProfile } = mount(["operator.admin"], "profile-a", statusRequest());
   const setupRow = () => query("[data-github-setup]")?.closest("[data-github-connection]");
   const purpose = () => setupRow()?.getAttribute("data-github-connection");
-  await waitForFast(() => expect(button("Change System GitHub").disabled).toBe(false));
-  button("Change System GitHub").click();
+  await waitForFast(() => expect(button("Change shared agent account").disabled).toBe(false));
+  button("Change shared agent account").click();
   await waitForFast(() => expect(purpose()).toBe("system"));
   button("Use a PAT instead").click();
   await waitForFast(() => expect(query(".settings-secret input")).not.toBeNull());
@@ -311,12 +351,12 @@ it("closes setup and resets its purpose when the same Gateway snapshot changes p
 
 it("disables connection controls while a PAT save is pending", async () => {
   const stored = createDeferredCore<{ ok: boolean }>();
-  const request = vi.fn(async (method: string) =>
+  const request = vi.fn(async (method: string, params?: StatusParams) =>
     method === "secrets.store.set"
       ? stored.promise
       : method === "users.github.status"
         ? personalStatus
-        : status(),
+        : statusFor(params),
   );
   const ui = mount(["operator.admin"], "profile-a", request);
   vi.mocked(ui.context.runtimeConfig.runExternalMutation).mockImplementation(
@@ -333,7 +373,7 @@ it("disables connection controls while a PAT save is pending", async () => {
   try {
     await waitForFast(() => expect(ui.button("Saving…").disabled).toBe(true));
     expect(ui.button("Verify").disabled).toBe(true);
-    expect(ui.button("Change System GitHub").disabled).toBe(true);
+    expect(ui.button("Change shared agent account").disabled).toBe(true);
   } finally {
     stored.resolve({ ok: true });
   }
@@ -341,13 +381,13 @@ it("disables connection controls while a PAT save is pending", async () => {
 });
 
 it("opens setup under the connection it changes, with that connection's own actions", async () => {
-  const request = vi.fn(async (method: string) =>
+  const request = vi.fn(async (method: string, params?: StatusParams) =>
     method === "users.github.status"
       ? {
           personal: { ...disconnected, state: "connected", account: { login: "personal-account" } },
           system,
         }
-      : status(),
+      : statusFor(params),
   );
   const ui = mount(["operator.admin"], "profile-a", request);
   await ui.waitText(["@personal-account", "@system-account"]);
@@ -360,7 +400,7 @@ it("opens setup under the connection it changes, with that connection's own acti
   );
   expectText(ui.row("personal"), ["Disconnect My GitHub"], ["Use GitHub CLI"]);
 
-  ui.button("Change System GitHub").click();
+  ui.button("Change shared agent account").click();
   await waitForFast(() =>
     expect(ui.row("system")?.querySelector("[data-github-setup]")).not.toBeNull(),
   );

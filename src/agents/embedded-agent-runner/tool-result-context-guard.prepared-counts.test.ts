@@ -3,7 +3,7 @@ import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization
 import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
-import { cloneSessionModelContextEntries } from "../sessions/session-manager-codec.js";
+import { projectSessionModelContextEntries } from "../sessions/session-manager-codec.js";
 import { toolResult } from "../sessions/session-message-fixtures.test-support.js";
 import { createToolResultPromptProjectionState } from "./session-prompt-state.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
@@ -55,7 +55,7 @@ it.each(["frozen", "initial-context"])("reuses %s history budgets", async (kind)
   const text = "historical 漢字🙂\n".repeat(128);
   let source: AgentMessage = freezeTrustedJsonSnapshot(toolResult(text));
   if (kind === "initial-context") {
-    const [entry] = cloneSessionModelContextEntries([
+    const [entry] = projectSessionModelContextEntries([
       {
         type: "message",
         id: "history",
@@ -68,7 +68,7 @@ it.each(["frozen", "initial-context"])("reuses %s history budgets", async (kind)
       throw new Error("Missing model history");
     }
     source = entry.message;
-    expect(Object.isFrozen(source.content)).toBe(false);
+    expect(Object.isFrozen(source.content)).toBe(true);
   }
   const history = [source];
   expect(truncate(history, 128_000).messages).toBe(history);

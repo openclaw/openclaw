@@ -1,6 +1,10 @@
 import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
+import {
+  MCP_APP_OPEN_EVENT,
+  type McpAppOpenEventDetail,
+  type McpAppOpenDetail,
+} from "../../components/mcp-app-launch.ts";
 import {
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
@@ -51,7 +55,7 @@ declare global {
     [MCP_APP_MESSAGE_EVENT]: CustomEvent<McpAppMessageEventDetail>;
     [MCP_APP_FILE_OPEN_EVENT]: CustomEvent<McpAppFileOpenEventDetail>;
     [MCP_APP_CONTEXT_EVENT]: CustomEvent<McpAppContextEventDetail>;
-    [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenDetail>;
+    [MCP_APP_OPEN_EVENT]: CustomEvent<McpAppOpenEventDetail>;
   }
 }
 
@@ -65,6 +69,7 @@ type ChatPaneMcpAppState = ChatComposerScope &
     | "hello"
     | "handleSendChat"
     | "handleOpenSidebar"
+    | "handleCloseSidebar"
     | "sessionWorkspaceState"
     | "connectionEpoch"
     | "sessions"
@@ -83,6 +88,7 @@ export type ChatPaneMcpAppOwner = {
   replaceAttachments: (attachments: ChatPaneMcpAppState["chatAttachments"]) => void;
   /** Captures this state; the workspace owner still owns file admission and rendering. */
   openFile: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
+  openAppPanel?: () => void;
 };
 
 /** Create inside the mounted pane's Solid owner. */
@@ -299,17 +305,23 @@ export function createChatPaneMcpApps(options: {
     });
   }
 
-  function receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
+  function receiveOpen(event: CustomEvent<McpAppOpenEventDetail>): void {
     const owner = presentedEventOwner(event);
     const detail = event.detail;
-    if (!owner || detail.owner !== owner.context.gateway.snapshot.client) {
+    if (!owner) {
       return;
     }
-    event.preventDefault();
-    openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    if ("present" in detail) {
+      event.preventDefault();
+      detail.present(owner);
+    } else if (detail.owner === owner.context.gateway.snapshot.client) {
+      event.preventDefault();
+      openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    }
   }
 
   // Pane-local listeners keep split-view prompts with their iframe.
+
   const element = options.element;
   const stopEvents = [
     listen(element, MCP_APP_RESOURCE_MENTION_EVENT, { handleEvent: receiveResourceMention }),

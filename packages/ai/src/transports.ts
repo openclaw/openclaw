@@ -9,6 +9,7 @@ export { resolveCompletionTokenReservation } from "./transports/anthropic-transp
 export * from "./transports/deepseek-text-filter.js";
 export * from "./transports/google-thinking-level.js";
 export * from "./transports/json-unsafe-integers.js";
+export { prepareFinalModelRequestJson } from "./transports/model-request-body.js";
 export * from "./transports/model-max-tokens-params.js";
 export * from "./transports/model-transport-debug.js";
 export * from "./transports/model-transport-url.js";
