@@ -7,7 +7,6 @@ import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { createOpenClawCodingToolsInternalAsync } from "../../agents/agent-tools.async.js";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { admitEmbeddedContextEngine } from "../../agents/embedded-agent-runner/run/context-engine-admission.js";
-import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import { createSkillLibraryTool } from "../../agents/tools/skill-library-tool.js";
@@ -35,10 +34,8 @@ import { bindWorkerGitHubTurn } from "./worker-github-binding.js";
 import { createWorkerReplyMedia } from "./worker-reply-media.js";
 import { resolveWorkerToolAuthority } from "./worker-tool-authority.js";
 import { releaseClaimIfOwned, waitForTurnOperation } from "./worker-turn-admission.js";
-import {
-  WorkerTurnExecutionError,
-  type WorkerTurnEnvironmentService,
-} from "./worker-turn-failure.js";
+import type { WorkerTurnExecutionParams } from "./worker-turn-execution.types.js";
+import { WorkerTurnExecutionError } from "./worker-turn-failure.js";
 import { prepareWorkerTurnMedia } from "./worker-turn-media.js";
 import { prepareWorkerTurnModel, workerTurnRuntimeLeaseOptions } from "./worker-turn-model.js";
 import {
@@ -64,20 +61,11 @@ import {
   persistWorkerTurnInput,
   readWorkerTurnInputContext,
 } from "./worker-turn-user-message.js";
-import {
-  type executeRemoteExecTurn,
-  recoverWorkspaceBeforeTurn,
-} from "./workspace-result-finalize.js";
+import { recoverWorkspaceBeforeTurn } from "./workspace-result-finalize.js";
 
-export async function executeWorkerTurn(
-  params: Omit<Parameters<typeof executeRemoteExecTurn>[0], "environments" | "runLocal"> & {
-    environments: WorkerTurnEnvironmentService;
-    assertRunCurrent: () => void;
-    onTerminal: () => void;
-    onReply: (result: EmbeddedAgentRunResult) => void;
-  },
-) {
+export async function executeWorkerTurn(params: WorkerTurnExecutionParams) {
   const { placement, turn: input } = params;
+  params.qualificationPhase?.("prepared-runtime");
   await using preparedRuntime = await acquireAgentRunPreparedModelRuntime(
     {
       config: input.config ?? {},
@@ -87,6 +75,7 @@ export async function executeWorkerTurn(
     },
     workerTurnRuntimeLeaseOptions(input),
   );
+  params.qualificationPhase?.("input-context");
   return await preparedRuntime.run(async () => {
     const backend = "cloud-worker";
     const runPrepared = <T>(run: () => T): T =>
@@ -189,6 +178,7 @@ export async function executeWorkerTurn(
     const { manager, history, userMessageAlreadyPersisted } = context;
     let baseLeafId = context.baseLeafId;
 
+    params.qualificationPhase?.("model");
     const { model, reasoning, transcriptPolicy, inference } = await prepareWorkerTurnModel({
       target: transcriptTarget,
       modelRef,
@@ -199,6 +189,7 @@ export async function executeWorkerTurn(
     });
 
     assertContextCurrent();
+    params.qualificationPhase?.("worker-connection");
     const credential = await waitForTurnOperation({
       start: () => params.environments.acquireTurnCredential(params.turnClaim),
       ...(turn.abortSignal ? { signal: turn.abortSignal } : {}),
@@ -235,6 +226,7 @@ export async function executeWorkerTurn(
       turn,
     });
     const { browser, computer, preparedComputer } = desktop;
+    params.qualificationPhase?.("tool-authority");
     const {
       authProfileStoreSource,
       capabilityProfile,
@@ -267,6 +259,7 @@ export async function executeWorkerTurn(
       },
       assertSourceCurrent,
     });
+    params.qualificationPhase?.("tool-surface");
     const {
       admittedRunContext,
       operationalRunInstance,
@@ -443,6 +436,7 @@ export async function executeWorkerTurn(
         credentialExpiresAtMs: credential.expiresAtMs,
       };
       const surface = await toolRuntime.getSurface(connectionIdentity);
+      params.qualificationPhase?.("prompt");
       const promptPreparation = {
         turn: { ...turn, thinkLevel: turn.thinkLevel ?? reasoning ?? "off", admittedRunContext },
         agentId: placement.agentId,
@@ -461,6 +455,7 @@ export async function executeWorkerTurn(
         assertCurrent: assertActive,
       };
       const promptContext = await runPrepared(() => prepareWorkerTurnPrompt(promptPreparation));
+      params.qualificationPhase?.("launch-input");
       using mcpQuestions = new DisposableStack();
       const { allowedToolNames, issueLaunchAuthority } = await prepareWorkerLaunchTools({
         ...turnOwner,
@@ -548,6 +543,7 @@ export async function executeWorkerTurn(
         );
         throw new WorkerTurnExecutionError(WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE);
       }
+      params.qualificationPhase?.("launch-descriptor");
       const toolAuthority = issueLaunchAuthority();
       githubGrant = await bindWorkerGitHubTurn({
         operatorAuthority: readAdmittedRunOperatorAuthority(admittedRunContext),
@@ -663,6 +659,7 @@ export async function executeWorkerTurn(
       };
       let processResult: Awaited<ReturnType<NonNullable<typeof tunnel.launchTurn>>>;
       try {
+        params.qualificationPhase?.();
         processResult = await tunnel.launchTurn({
           assertCurrent: githubGrant?.assertCurrent ?? assertActive,
           plan: launchPlan.plan,
