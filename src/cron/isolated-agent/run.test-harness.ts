@@ -268,7 +268,8 @@ vi.mock("../../agents/model-fallback-runner.js", async (importOriginal) => ({
   runWithModelFallback: runWithModelFallbackMock,
 }));
 
-vi.mock("./run-execution.runtime.js", () => ({
+vi.mock("./run-execution.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./run-execution.runtime.js")>()),
   resolveEffectiveModelFallbacks: resolveEffectiveModelFallbacksMock,
   resolveSubagentModelFallbacksOverride: resolveSubagentModelFallbacksOverrideMock,
   resolveBootstrapWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeenMock,
