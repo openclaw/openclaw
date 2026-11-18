@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
@@ -18,6 +19,11 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  createDiagnosticTraceContext,
+  getActiveDiagnosticTraceContext,
+  runWithDiagnosticTraceContext,
+} from "../../infra/diagnostic-trace-context.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -36,6 +42,7 @@ import {
   startSessionMutationRequest,
 } from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
+import { sessionLog } from "./sessions-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
 function expectSuccess(respond: ReturnType<typeof vi.fn>, result: unknown = expect.any(Object)) {
@@ -249,15 +256,29 @@ test(
     const metadataResponse = vi.fn();
     const successorResponse = vi.fn();
     const patch = patchRequest(context);
-    const catalogPatch = patch({ key: catalogKey, contextWindow: "extended" }, catalogResponse);
+    let diagnosticClock = performance.now();
+    const clockSpy = vi.spyOn(performance, "now").mockImplementation(() => diagnosticClock);
+    const records: Array<{ traceId: string | undefined; message: string }> = [];
+    const logSpy = vi.spyOn(sessionLog, "info").mockImplementation((message) => {
+      if (message.startsWith("slow session patch ")) {
+        records.push({ traceId: getActiveDiagnosticTraceContext()?.traceId, message });
+      }
+    });
+    const catalogTrace = createDiagnosticTraceContext();
+    const successorTrace = createDiagnosticTraceContext();
+    const catalogPatch = runWithDiagnosticTraceContext(catalogTrace, () =>
+      patch({ key: catalogKey, contextWindow: "extended" }, catalogResponse),
+    );
     let metadataPatch: ReturnType<typeof patch> | undefined;
     let successorPatch: ReturnType<typeof patch> | undefined;
     try {
       await Promise.race([entered.promise, catalogPatch]);
       expect(catalogResponse).not.toHaveBeenCalled();
-      successorPatch = patch({ key: catalogKey, pinned: true }, successorResponse);
+      successorPatch = runWithDiagnosticTraceContext(successorTrace, () =>
+        patch({ key: catalogKey, pinned: true }, successorResponse),
+      );
       metadataPatch = patch({ key: metadataKey, pinned: true }, metadataResponse);
-      // Join independent work before releasing the catalog.
+      // Join independent work before advancing the diagnostic clock or releasing the catalog.
       await metadataPatch;
       expectSuccess(metadataResponse);
       expect(catalogResponse).not.toHaveBeenCalled();
@@ -265,17 +286,26 @@ test(
       expect(readEntry(catalogKey)?.pinnedAt).toBeUndefined();
       expect(loadGatewayModelCatalog).toHaveBeenCalledOnce();
     } finally {
+      diagnosticClock += 1_500;
       rejectPendingPreparedModelRuntimeReplacement(
         replacement,
         new Error("Synthetic catalog reload failed"),
       );
       await Promise.allSettled([catalogPatch, metadataPatch, successorPatch]);
+      clockSpy.mockRestore();
+      logSpy.mockRestore();
     }
     expectFailure(catalogResponse, unexpectedFailure);
     expect(readEntry(catalogKey)?.contextWindow).toBeUndefined();
     expectSuccess(successorResponse);
     expect(readEntry(catalogKey)?.pinnedAt).toEqual(expect.any(Number));
     expect(readEntry(metadataKey)?.pinnedAt).toEqual(expect.any(Number));
+    expect(records.find((record) => record.traceId === catalogTrace.traceId)?.message).toContain(
+      "catalog=1500ms",
+    );
+    expect(records.find((record) => record.traceId === successorTrace.traceId)?.message).toContain(
+      "lifecycleAdmission=1500ms",
+    );
   }),
 );
 

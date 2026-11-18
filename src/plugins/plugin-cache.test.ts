@@ -100,24 +100,38 @@ function installedFixture(id: string) {
 
 it("keeps registry metadata and index fingerprints on the captured generation", () => {
   const id = "generation-owner";
-  const { write, env } = installedFixture(id);
+  const { root: pluginDir, write, env } = installedFixture(id);
   const first = write("1.0.0");
   const discovery = discoverOpenClawPlugins({ env, installRecords: {} });
   expect(discovery.candidates.find((candidate) => candidate.idHint === id)).toBeDefined();
   write("2.0.0");
   const registry = loadPluginManifestRegistryCore({ env, discovery, installRecords: {} });
-  const records = buildInstalledPluginIndexRecords({
-    candidates: discovery.candidates,
-    registry,
-    diagnostics: [],
-    installRecords: {},
-  });
+  const buildRecords = () =>
+    buildInstalledPluginIndexRecords({
+      candidates: discovery.candidates,
+      registry,
+      diagnostics: [],
+      installRecords: {},
+    });
+  const records = buildRecords();
   expect(registry.plugins.find((plugin) => plugin.id === id)?.version).toBe("1.0.0");
   const hash = (text: string) => crypto.createHash("sha256").update(text).digest("hex");
   expect(records.find((record) => record.pluginId === id)).toMatchObject({
     manifestHash: hash(first.manifest),
     packageJson: { hash: hash(first.packageJson) },
   });
+  expect(records.find((record) => record.pluginId === id)?.doctorContractHash).toBeUndefined();
+  const distDir = path.join(pluginDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
+  const contract = "module.exports = {};";
+  fs.writeFileSync(path.join(distDir, "doctor-contract-api.cjs"), contract);
+  expect(
+    buildRecords().find((record) => record.pluginId === id)?.doctorContractHash,
+  ).toBeUndefined();
+  invalidatePluginCacheMetadata(getProcessPluginCache());
+  expect(buildRecords().find((record) => record.pluginId === id)?.doctorContractHash).toBe(
+    hash(contract),
+  );
 });
 
 function checkEntry(rootDir: string, relativePath: string, rootRealPath?: string) {
