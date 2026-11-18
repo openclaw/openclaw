@@ -48,10 +48,12 @@ it.each([undefined, false, true, "unknown"] as const)(
     await runner.runBeforeReset({}, ctx);
     await runner.runAgentTurnPrepare({ ...prompt, queuedInjections: [] }, ctx);
     expect([...seen.keys()]).toEqual(hooks);
-    for (const hook of supported)
+    for (const hook of supported) {
       expect(seen.get(hook)).toHaveProperty("turnTainted", measurement ?? "unknown");
-    for (const hook of ["before_reset", "agent_turn_prepare"])
+    }
+    for (const hook of ["before_reset", "agent_turn_prepare"]) {
       expect(seen.get(hook)).not.toHaveProperty("turnTainted");
+    }
     expect(ctx.turnTainted).toBe(measurement);
   },
 );

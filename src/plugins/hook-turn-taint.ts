@@ -20,6 +20,7 @@ export function projectHookTurnTaint<T extends object>(name: PluginHookName, ctx
   }
   if ("turnTainted" in ctx) {
     const { turnTainted: _omitted, ...rest } = ctx;
+    // SAFETY: Unrelated hook contexts do not declare turnTainted; all their declared fields are preserved.
     return rest as T;
   }
   return ctx;
