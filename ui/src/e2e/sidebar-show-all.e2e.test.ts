@@ -70,11 +70,7 @@ suite.define(() => {
             await page.keyboard.press("ControlOrMeta+B");
             await shellClass().toContain("shell--nav-collapsed");
           }
-          if (panel !== "sessions") {
-            // Outside Sessions, or with the sidebar closed, the avatar opens Sessions; the next click opens the switcher.
-            await switcher.click();
-            await polledAttribute(sessionTab, "aria-pressed").toBe("true");
-          }
+          // The avatar opens the switcher from any view, open or collapsed; Show all returns to Sessions.
           await switcher.click();
           await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
           await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
