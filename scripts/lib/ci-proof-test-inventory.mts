@@ -3629,7 +3629,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/ci-workflow-planning.test.ts",
   "test/scripts/clawhub-fixture-server.test.ts",
   "test/scripts/code-mode-matrix-gateway-fixtures.test.ts",
-  "test/scripts/code-mode-matrix-gateway.test.ts",
   "test/scripts/code-mode-model-matrix.gateway-evidence.test.ts",
   "test/scripts/codex-install-assertions.test.ts",
   "test/scripts/codex-media-path-client.test.ts",

@@ -3,7 +3,6 @@ import {
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
 import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
@@ -21,7 +20,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const runtimeConfig = page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
-  let agentSuggestions: string[] = [];
   let modelSuggestions: string[] = [];
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
@@ -42,19 +40,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       : [];
     const configValue = currentConfigObject(runtimeConfig);
     const channel = cron.cronForm.deliveryChannel.trim() || "last";
-    const systemAgentIds = new Set(
-      (agentsList?.agents ?? [])
-        .filter((entry) => entry.kind === "system")
-        .map((entry) => entry.id.trim()),
-    );
-    agentSuggestions = normalizeSortedUniqueTrimmedStringList([
-      ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
-      ...cron.cronJobs.map((job) =>
-        typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
-          ? job.agentId.trim()
-          : "",
-      ),
-    ]);
     modelSuggestions = normalizeSortedUniqueTrimmedStringList([
       ...page.cronModelSuggestions(),
       ...resolveConfiguredCronModelSuggestions(configValue),
@@ -151,7 +136,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     eventSource,
     fieldErrors,
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
-    agentSuggestions,
+    agentsList,
     modelSuggestions,
     thinkingSuggestions: THINKING_SUGGESTIONS,
     timezoneSuggestions,
