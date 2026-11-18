@@ -149,6 +149,7 @@ export function dispatchCompositedBrowserAnnotation(
   strokes: AnnotationStroke[],
   element: BrowserInspectedNode | null,
   highlight: AnnotationRegion | null,
+  target: EventTarget = window,
 ): BrowserAnnotationDispatchResult {
   const url = view.metrics?.url || view.url || tab?.url || "";
   const title = view.metrics?.title || tab?.title || "";
@@ -166,5 +167,5 @@ export function dispatchCompositedBrowserAnnotation(
     strokes,
     highlight,
   });
-  return dispatchBrowserAnnotation({ ...content, dataUrl, fileName: "annotated-page.png" });
+  return dispatchBrowserAnnotation({ ...content, dataUrl, fileName: "annotated-page.png" }, target);
 }

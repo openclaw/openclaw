@@ -1,6 +1,6 @@
 import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
-import type { AnnotationStroke } from "./browser-annotation.ts";
+import { AnnotationDrawing } from "./annotation-drawing.ts";
 import type {
   BrowserInspectedNode,
   BrowserOperatorInput,
@@ -68,12 +68,6 @@ interface BrowserPanelInputHost extends BrowserPanelStateWriter<
   exitCaptureModes(): void;
 }
 
-type BrowserPanelDrawingGesture = {
-  pointerId: number;
-  captureTarget: HTMLElement;
-  stroke: AnnotationStroke;
-};
-
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
 export class BrowserPanelInputOwner {
   elements: {
@@ -83,7 +77,12 @@ export class BrowserPanelInputOwner {
     overlay?: HTMLCanvasElement;
   } = {};
   // An annotation stroke belongs to one pointer until that owner or the panel lifecycle ends.
-  private drawingGesture: BrowserPanelDrawingGesture | null = null;
+  private readonly drawing = new AnnotationDrawing({
+    stage: () => this.elements.stage ?? null,
+    strokes: () => this.host.strokes,
+    setStrokes: (strokes) => this.host.setState("strokes", strokes),
+    paint: () => this.paintOverlay(),
+  });
   private suppressStageClick = false;
   private inspectionError: string | null = null;
   private clickSequence = 0;
@@ -508,49 +507,14 @@ export class BrowserPanelInputOwner {
       void this.sendAnnotation({ element: this.host.inspected });
       return;
     }
-    if (this.host.mode !== "annotate" || event.button !== 0 || this.drawingGesture) {
-      return;
+    if (this.host.mode === "annotate") {
+      this.drawing.down(event);
     }
-    const point = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
-    if (!point) {
-      return;
-    }
-    const captureTarget =
-      event.currentTarget instanceof HTMLElement
-        ? event.currentTarget
-        : event.target instanceof HTMLElement
-          ? event.target
-          : null;
-    if (!captureTarget) {
-      return;
-    }
-    event.preventDefault();
-    try {
-      captureTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Detached and synthetic targets can reject capture; owner filtering still applies.
-    }
-    const gesture = {
-      pointerId: event.pointerId,
-      captureTarget,
-      stroke: { points: [point] },
-    };
-    this.drawingGesture = gesture;
-    this.host.setState("strokes", [...this.host.strokes, gesture.stroke]);
-    this.paintOverlay();
   }
 
   handleOverlayPointerMove(event: PointerEvent): void {
     if (this.host.mode === "annotate") {
-      const gesture = this.drawingGesture;
-      if (!gesture || event.pointerId !== gesture.pointerId) {
-        return;
-      }
-      const point = browserPanelNormalizedPoint(this.elements.stage ?? null, event);
-      if (point) {
-        gesture.stroke.points.push(point);
-        this.paintOverlay();
-      }
+      this.drawing.move(event);
       return;
     }
     if (this.host.mode === "inspect") {
@@ -601,36 +565,19 @@ export class BrowserPanelInputOwner {
   }
 
   handleOverlayPointerUp(event: PointerEvent): void {
-    if (event.pointerId === this.drawingGesture?.pointerId) {
-      this.drawingGesture = null;
-    }
+    this.drawing.up(event);
   }
 
   cancelOverlayPointerGesture(): void {
-    const gesture = this.drawingGesture;
-    this.drawingGesture = null;
-    if (!gesture) {
-      return;
-    }
-    try {
-      if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
-        gesture.captureTarget.releasePointerCapture(gesture.pointerId);
-      }
-    } catch {
-      // Capture may already be gone because its canvas was detached.
-    }
+    this.drawing.cancel();
   }
 
   undoStroke(): void {
-    this.cancelOverlayPointerGesture();
-    this.host.setState("strokes", this.host.strokes.slice(0, -1));
-    this.paintOverlay();
+    this.drawing.undo();
   }
 
   clearStrokes(): void {
-    this.cancelOverlayPointerGesture();
-    this.host.setState("strokes", []);
-    this.paintOverlay();
+    this.drawing.clear();
   }
 
   async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {

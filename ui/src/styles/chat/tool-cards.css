@@ -806,12 +806,9 @@
   overflow: hidden;
 }
 
-.chat-tool-card__preview[data-has-widget-actions] {
-  overflow: visible;
-}
-
 .chat-tool-card__preview[data-content-kind="canvas-html"] {
-  border-radius: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
 }
 
 /* MCP Apps are responsive documents, so give them the assistant column instead
@@ -821,17 +818,87 @@
   width: 100%;
 }
 
-.chat-tool-card__preview-actions {
-  position: absolute;
-  z-index: 2;
-  top: 0;
-  left: 100%;
+.widget-header {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  width: max-content;
-  gap: 4px;
-  padding-left: 4px;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 10px 6px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.widget-header__title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tool-card__preview-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+}
+
+.widget-header__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.widget-header__control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.widget-header__control .settings-segmented {
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
+.widget-header__control .settings-segmented__btn {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.widget-annotation__stage {
+  position: relative;
+  width: 100%;
+}
+
+.widget-annotation__image {
+  display: block;
+  width: 100%;
+  height: auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.widget-annotation .bp-overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  cursor: crosshair;
+}
+
+.widget-annotation .bp-annotatebar {
+  flex-wrap: wrap;
 }
 
 .chat-tool-card__preview-panel {
@@ -844,12 +911,11 @@
   flex-shrink: 0;
 }
 
-/* Keep outside actions reachable and avoid restoring stale row geometry when
+/* Keep native header actions reachable and avoid restoring stale row geometry when
    the active widget's top-layer menu closes. */
 .chat-virtual-row:has(
   .chat-tool-card__preview:hover,
   .chat-tool-card__preview:focus-within,
-  .chat-tool-card__preview[data-widget-actions-above],
   .chat-tool-card__widget-actions [aria-expanded="true"]
 ) {
   content-visibility: visible;
@@ -859,44 +925,6 @@
 .chat-tool-card__widget-actions-panel {
   min-width: 164px;
   max-width: 208px;
-}
-
-.chat-tool-card__preview[data-widget-actions-above] .chat-tool-card__preview-actions {
-  top: auto;
-  bottom: 100%;
-  /* Keep the top-right gutter clear for Details without moving the transcript. */
-  left: 0;
-  right: auto;
-  flex-direction: row;
-  padding: 0;
-  opacity: 0.6;
-  pointer-events: auto;
-}
-
-[data-widget-actions] {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease-out;
-}
-
-.chat-tool-card__preview:hover [data-widget-actions],
-.chat-tool-card__preview:focus-within [data-widget-actions],
-[data-widget-actions]:has(.chat-tool-card__widget-actions [aria-expanded="true"]) {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-/* Touch keeps actions reachable; focus, hover, and an open menu reveal them. */
-@media (hover: none) {
-  [data-widget-actions] {
-    opacity: 0.6;
-    pointer-events: auto;
-  }
-
-  .chat-virtual-row:has(.chat-tool-card__preview[data-has-widget-actions]) {
-    content-visibility: visible;
-    contain: none;
-  }
 }
 
 .chat-tool-card__widget-action[data-pinned] {

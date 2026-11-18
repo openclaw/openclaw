@@ -40,6 +40,7 @@ import {
   restorePaneStagedAttachments,
 } from "./chat-pane-attachment-handoff.ts";
 import {
+  browserAnnotationTargetsPane,
   focusBrowserAnnotationComposerAfterUpdate,
   receiveBrowserAnnotation as admitBrowserAnnotation,
 } from "./chat-pane-browser-annotation.ts";
@@ -207,7 +208,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       !state ||
       !admitBrowserAnnotation(
         state,
-        this.active && this.presented,
+        this.presented && browserAnnotationTargetsPane(event, this.element, this.active),
         event,
         this.chatState.attachmentReads.pendingBytes(
           resolveChatAttachmentLimits(state.hello?.policy),

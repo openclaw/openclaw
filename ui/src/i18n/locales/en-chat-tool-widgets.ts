@@ -8,6 +8,8 @@ const enChatToolWidgets = {
       showRawDetails: "Show raw details",
       hideRawDetails: "Hide raw details",
       widgetActions: "Widget actions",
+      annotateWidget: "Annotate widget",
+      widgetCaptureFailed: "Couldn’t capture this widget. Try again after it finishes rendering.",
       copyAsImage: "Copy as image",
       downloadAsImage: "Download as image",
       widgetExportRerender: "Render this widget again to export it as an image.",

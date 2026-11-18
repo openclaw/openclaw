@@ -16,6 +16,7 @@ type WidgetProperties = Pick<
   | "onHeightChange"
   | "allowScripts"
   | "connectionGeneration"
+  | "onPreviewControlsChange"
 >;
 type CanvasWidgetMountProps = WidgetProperties & {
   onElement?: (element: OpenClawCanvasWidgetView | undefined) => void;
@@ -118,6 +119,7 @@ function CanvasWidgetHost(props: {
               "prop:onHeightChange": props.properties.onHeightChange,
               "prop:allowScripts": props.properties.allowScripts,
               "prop:connectionGeneration": props.properties.connectionGeneration,
+              "prop:onPreviewControlsChange": props.properties.onPreviewControlsChange,
               "prop:presentationActive": presented(),
             }),
             true,

@@ -1,0 +1,78 @@
+.bp-annotatebar .bp-btn > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.bp-annotatebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.bp-annotatebar__hint {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bp-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+}
+.bp-btn:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.bp-btn--primary {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.bp-tooltip {
+  position: absolute;
+  z-index: 3;
+  max-width: 320px;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  pointer-events: none;
+}
+.bp-tooltip__title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  justify-content: space-between;
+}
+.bp-tooltip__selector {
+  color: var(--accent);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  word-break: break-all;
+}
+.bp-tooltip__size {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.bp-tooltip__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+  color: var(--muted);
+}
+.bp-tooltip__row span:last-child {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

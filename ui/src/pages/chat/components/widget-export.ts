@@ -7,10 +7,27 @@ const WIDGET_SNAPSHOT_REPLY_TYPE = "openclaw:widget-snapshot";
 const WIDGET_SNAPSHOT_TIMEOUT_MS = 5_000;
 const WIDGET_SNAPSHOT_MAX_DATA_URL_CHARS = 32 * 1024 * 1024;
 
-type WidgetSnapshotReply = { type?: unknown; id?: unknown; dataUrl?: unknown; error?: unknown };
+type WidgetSnapshotReply = {
+  type?: unknown;
+  id?: unknown;
+  dataUrl?: unknown;
+  error?: unknown;
+  width?: unknown;
+  height?: unknown;
+  elements?: unknown;
+};
+export type WidgetCapture = {
+  dataUrl: string;
+  width: number;
+  height: number;
+  elements: unknown[];
+};
 class WidgetSnapshotUnavailableError extends Error {}
 
-function requestWidgetSnapshot(frame: HTMLIFrameElement): Promise<string> {
+export function captureWidget(
+  frame: HTMLIFrameElement,
+  includeElements = false,
+): Promise<WidgetCapture> {
   const target = frame.contentWindow;
   if (!target) {
     return Promise.reject(new Error("widget frame is unavailable"));
@@ -46,7 +63,15 @@ function requestWidgetSnapshot(frame: HTMLIFrameElement): Promise<string> {
         fail(new Error("widget returned an invalid snapshot"));
       } else {
         cleanup();
-        resolve(payload.dataUrl);
+        const width =
+          typeof payload.width === "number" && Number.isFinite(payload.width) ? payload.width : 0;
+        const height =
+          typeof payload.height === "number" && Number.isFinite(payload.height)
+            ? payload.height
+            : 0;
+        const elements =
+          includeElements && Array.isArray(payload.elements) ? payload.elements.slice(0, 500) : [];
+        resolve({ dataUrl: payload.dataUrl, width, height, elements });
       }
     };
 
@@ -56,7 +81,14 @@ function requestWidgetSnapshot(frame: HTMLIFrameElement): Promise<string> {
       WIDGET_SNAPSHOT_TIMEOUT_MS,
     );
     try {
-      target.postMessage({ type: WIDGET_SNAPSHOT_REQUEST_TYPE, id }, "*");
+      target.postMessage(
+        {
+          type: WIDGET_SNAPSHOT_REQUEST_TYPE,
+          id,
+          ...(includeElements ? { includeElements: true } : {}),
+        },
+        "*",
+      );
     } catch (error) {
       fail(error instanceof Error ? error : new Error(String(error)));
     }
@@ -87,7 +119,7 @@ export async function exportWidget(
     .replace(/-+/g, "-")
     .replace(/^[. -]+|[. -]+$/g, "");
   const filename = truncateUtf16Safe(rawStem, 120).replace(/[. -]+$/g, "") || "widget";
-  const snapshot = requestWidgetSnapshot(frame);
+  const snapshot = captureWidget(frame).then((capture) => capture.dataUrl);
 
   if (action === "copy") {
     beginClipboardCopy();

@@ -1,4 +1,5 @@
 import { Show, createEffect, createMemo, onCleanup } from "solid-js";
+import type { WidgetPreviewControl } from "../../../src/shared/widget-preview-controls.ts";
 import { registerBoardEnglish } from "../i18n/locales/en-board.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
@@ -15,6 +16,8 @@ registerEnglishCatalog(registerBoardEnglish);
 type CanvasWidgetViewContent = {
   readonly documentHtml: string | undefined;
   readonly previewFrame: HTMLIFrameElement | undefined;
+  readonly previewControls: WidgetPreviewControl[];
+  setPreviewControl: (id: string, value: string) => void;
 };
 export type OpenClawCanvasWidgetView = SolidBridgeElement<
   CanvasWidgetViewProps,
@@ -200,6 +203,7 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasW
       connectionGeneration: { default: 0 },
       presentationActive: { default: true },
       allowScripts: { default: true },
+      onPreviewControlsChange: { default: undefined, attribute: false },
     },
   },
 );

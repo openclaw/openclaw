@@ -13,6 +13,17 @@ import {
 } from "./components/chat-attachment-admission.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 
+/** Inline capture targets its own pane; sidebar capture follows the active pane. */
+export function browserAnnotationTargetsPane(
+  event: Event,
+  pane: HTMLElement,
+  active: boolean,
+): boolean {
+  const sourcePane =
+    event.target instanceof Element ? event.target.closest("openclaw-chat-pane") : null;
+  return sourcePane ? sourcePane === pane : active;
+}
+
 export function focusBrowserAnnotationComposerAfterUpdate(host: {
   composer: () => HTMLTextAreaElement | null;
   updateComplete: Promise<unknown>;

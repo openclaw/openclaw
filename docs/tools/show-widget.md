@@ -33,10 +33,10 @@ In Control UI sessions, a Canvas widget can also be pinned to the session dashbo
 For browser embedding, the wrapper document injects six small host bridges around the widget code:
 
 - A size reporter posts the rendered content height, including child margins and floats, to the embedding chat. The chat clamps that height and fits the iframe (48 to 8000 pixels).
-- A host bridge defines a global `sendPrompt(text)` helper plus the structured `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. `sendPrompt(text)` is the fire-and-forget form of `openclaw.prompt.send`. Inline chat prompts retain their private message channel. Dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
+- A host bridge defines a global `sendPrompt(text)` helper plus the structured `openclaw.preview`, `openclaw.prompt`, `openclaw.state`, `openclaw.data`, and `openclaw.cron` APIs. `sendPrompt(text)` is the fire-and-forget form of `openclaw.prompt.send`. Inline chat prompts retain their private message channel. Dashboard APIs use a view-ticket-bound request channel. See [Interactive widgets](#interactive-widgets) and [Dashboard capabilities](#dashboard-capabilities).
 - An error reporter captures uncaught script and event-handler exceptions and unhandled promise rejections. It sends at most three distinct messages per document load, with messages capped at 500 UTF-16 units, source basenames at 200, and optional integer line and column numbers. The Control UI shows a notice and forwards one report per document and chat session per page load to the Gateway as a session wake event, with an additional shared limit of 10 reports per key per 60 seconds (up to 100 tracked keys). Reports are forwarded to the agent only for widgets rendered within ten minutes of their message. Older restored history shows the notice without waking the agent. If the session already has an active run, the event stays queued and the immediate wake retries until the session lane is free, so the model sees it on its next available turn. The wake turn retains the session's tool listing, but has no originating inline renderer, so inline `show_widget` calls are refused with guidance to retry from the open Control UI. The report asks the model to reply with the corrected code and show it on the next turn. Native apps do not report runtime errors yet.
 - A theme bridge listens for the Control UI's current design tokens and applies them as CSS variables. It does this on load and again on every theme change.
-- A snapshot bridge renders the current widget document as a PNG when the embedding chat requests an export.
+- A snapshot bridge renders the current widget document as a PNG when the embedding chat requests an export or annotation. It preserves live input values, checked boxes, selected options, textarea text, and canvas content. An annotation capture can additionally request a bounded map of visible element descriptions and rectangles; normal exports omit this map.
 - A chat-host bridge hides embedded scrollbar chrome when the widget runs inline while preserving scrolling behavior.
 
 Everything else stays inside the frame. The document runs in an opaque origin with a restrictive Content Security Policy. Widget scripts cannot directly reach the Control UI or Gateway. Public CDN assets are allowed as described below; API connections remain separate from static-resource loading.
@@ -297,6 +297,61 @@ Embedded media counts toward the 10 MiB UTF-8 HTML limit, including base64
 encoding, the surrounding HTML, and OpenClaw's wrapper. The same document limit
 applies to inline widgets and pinned dashboards. For larger clips, use a direct
 HTTPS URL or a normal media attachment instead of base64.
+
+## Local preview controls
+
+Scripted widgets can publish a small row of host-rendered segmented controls in the Control
+UI preview header. Use these for local states such as viewport, theme, or a sample
+dataset, rather than recreating preview chrome inside the document:
+
+```html
+<script>
+  openclaw.preview.setControls(
+    [
+      {
+        id: "viewport",
+        label: "Viewport",
+        value: "desktop",
+        options: [
+          { value: "desktop", label: "Desktop" },
+          { value: "mobile", label: "Mobile" },
+        ],
+      },
+    ],
+    ({ id, value }) => {
+      if (id === "viewport") document.body.dataset.viewport = value;
+    },
+  );
+</script>
+```
+
+Each call replaces the controls and callback. Pass `[]` with a callback to clear
+the optional row. There may be at most four controls, each with one to eight
+options. Control IDs must be unique, nonblank strings up to 40 characters. Option
+values are strings up to 40 characters and must be unique within a control; the
+selected value must match an option. Labels are nonblank text up to 80 characters.
+Invalid controls throw an error rather than replacing the current selection.
+
+A selection updates the bridge's local value and calls only the supplied callback
+with `{ id, value }`. It does not submit a message, start an agent turn, make a
+request, or grant a capability. The header renders validated plain text and
+options, not widget-authored HTML. Controls are republished when the chat host
+re-adopts a retained widget. Non-script widgets and strict sandbox mode retain
+the standard header without the optional control row; keep essential content
+understandable without it.
+
+## Annotating widget previews
+
+The native chat header shows the widget title, an annotation pen, and the existing
+pin and menu actions. The pen captures the current rendered state without
+reloading the live widget. Select an element or draw marks, then use the same
+**Undo**, **Clear**, **Exit**, and **Add to message** controls as the browser sidebar.
+
+**Add to message** stages the existing annotation comment card in that widget’s
+chat composer. It preserves typed feedback and attachments and does not send a
+message automatically. A rejected attachment stays editable so you can remove an
+older comment and try again. Scripts must be enabled to capture a widget; strict
+and non-script previews retain their title and applicable pin/menu actions.
 
 ## Interactive widgets
 
