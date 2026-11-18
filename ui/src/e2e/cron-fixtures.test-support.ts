@@ -66,6 +66,14 @@ export async function openAutomation(page: Page, id: string) {
   return row;
 }
 
+/** Opens an automation's settings as a person does: its row, then Edit on the prompt. */
+export async function editAutomation(page: Page, id: string) {
+  const row = await openAutomation(page, id);
+  await page.locator('[data-test-id="cron-edit"]').click();
+  await page.locator("fieldset.cron-editor").waitFor();
+  return row;
+}
+
 /** Opens every automation's runs from the Automations sidebar. */
 export async function openAutomationActivity(page: Page) {
   await page.locator('.sidebar-automations a[href$="?activity"]').click();

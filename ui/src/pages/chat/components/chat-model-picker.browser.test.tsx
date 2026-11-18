@@ -83,6 +83,8 @@ function mountPicker(optionsReady = true) {
     flush();
     await new Promise(requestAnimationFrame);
     if (picker.open) {
+      // Settle the first lazy panel import before the fast DOM-only readiness check.
+      await vi.dynamicImportSettled();
       await waitForModelMenu(picker);
       if (params.modelOptions.length) {
         await waitForSolid(() =>
@@ -129,7 +131,7 @@ it("keeps numeric shortcuts functional without visible keycaps", async () => {
 });
 
 it("centers provider icons with their model labels in search results", async () => {
-  const { params, update, open } = mountPicker();
+  const { params, update, open, picker } = mountPicker();
   params.modelOptions = [
     modelOption("openai", "sol", { label: "Example Sol" }),
     modelOption("clawrouter", "astra", { label: "Example Astra" }),
@@ -138,6 +140,9 @@ it("centers provider icons with their model labels in search results", async () 
   update();
   await open();
   await page.getByRole("combobox", { name: "Search models" }).fill("Example");
+  // Compare settled geometry, not two samples during the opening transform.
+  const pickerSurface = picker.querySelector<HTMLElement>(".chat-picker-overlay")!;
+  await Promise.all(pickerSurface.getAnimations().map((animation) => animation.finished));
   for (const value of ["openai/sol", "clawrouter/astra"]) {
     const row = option(value);
     const icon = row.querySelector<HTMLElement>(".provider-brand-icon")!.getBoundingClientRect();

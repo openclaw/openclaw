@@ -5,7 +5,7 @@ export const OPENAI_CODEX_RESPONSES_BASE_URL = "https://chatgpt.com/backend-api/
 // Bundled @openai/codex pin, reported when the Codex plugin cannot name the
 // binary its turns run; the client-version contract test keeps it equal to
 // extensions/codex's exact dependency.
-const OPENAI_CODEX_CLIENT_VERSION = "0.164.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.169.0";
 
 export type OpenAICodexModelsEndpointContext = {
   config?: OpenClawConfig;
@@ -14,8 +14,8 @@ export type OpenAICodexModelsEndpointContext = {
 };
 
 /**
- * Versioned Codex catalog URL used to discover Platform access programs.
- * Subscription model discovery uses a separate, broader query.
+ * ChatGPT model-list URL. The backend gates models on the client version, so
+ * discovery reports the Codex binary this process's turns run.
  */
 export async function resolveOpenAICodexModelsEndpoint(
   context: OpenAICodexModelsEndpointContext = {},

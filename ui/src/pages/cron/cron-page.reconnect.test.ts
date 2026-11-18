@@ -128,8 +128,8 @@ it.each([
     await page.settle();
     expected = null;
     if (intent === "another job") {
+      // The automation opens on its history.
       await openJob(page, other.id);
-      page.querySelector<HTMLButtonElement>('[data-test-id="cron-detail-tab-history"]')!.click();
       await page.settle();
       expected = other;
     }

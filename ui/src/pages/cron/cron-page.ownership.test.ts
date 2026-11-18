@@ -56,6 +56,8 @@ it("lets a human owner edit their job but not another person's job", async () =>
   expect(await canRun(own)).toBe(true);
   page.selectJob(own);
   await page.settle();
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
+  await page.settle();
   await waitForCronPage(() =>
     expect(page.querySelector<HTMLInputElement>("#cron-name")?.matches(":disabled")).toBe(false),
   );
@@ -67,6 +69,8 @@ it("lets a human owner edit their job but not another person's job", async () =>
   expect(page.cron.cronForm.name).toBe("Edited by owner");
   expect(page.cron.cronForm.ownerProfileId).toBe("bob");
   page.selectJob(other);
+  await page.settle();
+  page.querySelector<HTMLButtonElement>('[data-test-id="cron-edit"]')!.click();
   await page.settle();
   await waitForCronPage(() =>
     expect(page.querySelector<HTMLInputElement>("#cron-name")?.matches(":disabled")).toBe(true),
