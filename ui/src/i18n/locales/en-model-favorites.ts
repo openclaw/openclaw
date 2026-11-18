@@ -7,7 +7,6 @@ const catalog = {
       label: "Favorites",
       add: "Add {model} to favorites",
       remove: "Remove {model} from favorites",
-      reorder: "Reorder {model}",
       unavailable: "Could not load favorites. Retry.",
       changed: "Favorites changed or could not be saved. Refresh and try again.",
     },

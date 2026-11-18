@@ -345,7 +345,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     scope: owner.scope,
     rows: favoriteRows,
     disabled: () => disabled() || favorites.disabled(),
-    move: (source, destination) => favorites.move(source, destination),
+    move: (source, destination, side) => favorites.move(source, destination, side),
   });
   function ModelOption(props: {
     entry: ModelPickerOption;

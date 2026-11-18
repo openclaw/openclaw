@@ -2738,7 +2738,7 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-recent-sessions__group--dragging,
-.sidebar-recent-session--dragging,
+.reorder-dragging,
 .sidebar-zone-entry--dragging {
   opacity: 0.45;
 }
@@ -2753,15 +2753,9 @@ div.shell.shell--onboarding {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-/* A row's rounded fill would bend an inset edge; draw the drop line straight in the row gap. */
-.sidebar-recent-session:is(.sidebar-zone-entry--drop-before, .sidebar-zone-entry--drop-after) {
-  box-shadow: none;
-}
-
-.sidebar-recent-session:is(
-    .sidebar-zone-entry--drop-before,
-    .sidebar-zone-entry--drop-after
-  )::before {
+/* Draw a straight insertion line in the gap between rounded rows. */
+.reorder-drop-before::before,
+.reorder-drop-after::before {
   content: "";
   position: absolute;
   inset-inline: 6px;
@@ -2771,12 +2765,12 @@ div.shell.shell--onboarding {
   pointer-events: none;
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-before::before {
-  top: -2px;
+.reorder-drop-before::before {
+  top: var(--reorder-edge, -2px);
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-after::before {
-  bottom: -2px;
+.reorder-drop-after::before {
+  bottom: var(--reorder-edge, -2px);
 }
 
 /* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
