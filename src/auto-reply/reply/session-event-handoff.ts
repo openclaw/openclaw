@@ -695,7 +695,7 @@ function enqueueSessionEventAttempt(
       accept();
     } else {
       if (!started) {
-        failure ??= "Session event was not admitted; retry against the current session";
+        genericFailure ??= "Session event was not admitted; retry against the current session";
       }
       finish();
     }
