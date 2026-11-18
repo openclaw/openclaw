@@ -74,6 +74,21 @@ export async function editAutomation(page: Page, id: string) {
   return row;
 }
 
+const SENTENCE_FREQUENCY: Record<string, string> = { at: "once", every: "every", cron: "custom" };
+
+/** Chooses a schedule kind from the tray: the sentence's frequency menu, or Repeat for kinds with their own controls. */
+export async function chooseScheduleKind(page: Page, kind: "at" | "every" | "cron" | "event") {
+  const segmented = page.locator(`[data-test-id="cron-schedule-kind-${kind}"]`).getByRole("radio");
+  if ((await segmented.count()) > 0) {
+    await segmented.click();
+    return;
+  }
+  await page.locator('button:has([data-test-id="cron-schedule-frequency"])').click();
+  await page
+    .locator(`[data-test-id="cron-schedule-frequency-${SENTENCE_FREQUENCY[kind] ?? kind}"]`)
+    .click();
+}
+
 /** Opens every automation's runs from the Automations sidebar. */
 export async function openAutomationActivity(page: Page) {
   await page.locator('.sidebar-automations a[href$="?activity"]').click();
