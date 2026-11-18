@@ -19,7 +19,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearActivePluginRegistry } from "../plugins/runtime.js";
-import { omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
+import {
+  captureOpenAIResponsesOutput,
+  normalizeOpenAIResponsesPrefixInput,
+} from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 import { buildStableCachePrefix, type LiveResolvedModel } from "./live-cache-test-support.js";
 import { buildUsageWithNoCost } from "./stream-message-shared.js";
@@ -254,15 +257,7 @@ export async function runEmbeddedReleasePrefixScenario(
             }
             effectivePayload = {
               ...payload,
-              input: effectiveInput.map((item) => {
-                // Responses may omit provider item envelopes during replay; call IDs
-                // and function-call-output envelopes remain part of the input contract.
-                return isRecord(item) &&
-                  (item.type === "function_call" ||
-                    (item.type === "message" && item.role === "assistant"))
-                  ? omitWireFields(item, ["id", "status"])
-                  : item;
-              }),
+              input: normalizeOpenAIResponsesPrefixInput(effectiveInput),
             };
           }
           // Stored outputs have provider-owned object key order. Canonicalize the
@@ -316,26 +311,7 @@ export async function runEmbeddedReleasePrefixScenario(
                   assert(isRecord(event.response));
                   const completed = event.response;
                   assert(typeof completed.id === "string" && Array.isArray(completed.output));
-                  // Completion status and log probabilities are response envelopes,
-                  // not replay input. Keep every model-visible field in the inherited context.
-                  const output = completed.output.map((item: unknown) => {
-                    if (!isRecord(item)) {
-                      return item;
-                    }
-                    const replayItem = omitWireFields(
-                      item,
-                      item.type === "function_call" ? ["status"] : [],
-                    );
-                    if (item.type === "function_call" && typeof item.arguments === "string") {
-                      replayItem.arguments = JSON.stringify(JSON.parse(item.arguments));
-                    }
-                    if (item.type === "message" && Array.isArray(item.content)) {
-                      replayItem.content = item.content.map((block: unknown) =>
-                        isRecord(block) ? omitWireFields(block, ["logprobs"]) : block,
-                      );
-                    }
-                    return replayItem;
-                  });
+                  const output = captureOpenAIResponsesOutput(completed.output);
                   responseHistory.set(completed.id, [...inheritedInput, ...output]);
                   return;
                 }

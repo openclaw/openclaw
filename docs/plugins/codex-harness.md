@@ -104,6 +104,12 @@ for other requests. The worker preserves the Gateway's parent-process identity,
 so existing orphan registration and descendant cleanup still apply. Each retained
 app-server has one transport worker; shared-client idle retirement closes both.
 
+Before starting a managed package launcher, OpenClaw checks access to its selected
+native executable. A missing or non-executable artifact reports that exact path
+and stops repeated starts until the Gateway restarts. This also preserves a useful
+error on Node 24, whose `execve` failure can abort the launcher without naming the
+native executable. Repair the artifact or reinstall OpenClaw, then restart the Gateway.
+
 The native session catalog keeps one resident index per Codex home, shared across
 agents, working-directory filters, searches, and pages. Lists normally filter and page
 bounded display rows in memory. They do not expire or restart native discovery

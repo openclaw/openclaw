@@ -37,7 +37,8 @@ import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bun
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import {
   cacheRunnerConfig,
-  omitWireFields,
+  captureOpenAIResponsesOutput,
+  normalizeOpenAIResponsesPrefixInput,
   providerResponse,
   type WireApi,
 } from "./embedded-agent-runner.wire.test-support.js";
@@ -68,6 +69,9 @@ function responseFor(api: WireApi, model: string, request: number, tool: boolean
     id,
     messageId: `msg_${id}`,
     text: `answer ${request}`,
+    ...(api === "openai-responses" && !failure
+      ? { reasoning: { id: `rs_${id}`, encrypted_content: `opaque_${id}` } }
+      : {}),
     calls: tool
       ? Array.from({ length: 5 }, (_, index) => ({
           id: `${api === "anthropic-messages" ? "toolu" : "call"}_${id}_${index}`,
@@ -246,9 +250,15 @@ it.for(cases)(
                 } else {
                   effectiveInput = payload.input;
                 }
-                effectivePayload = { ...payload, input: effectiveInput };
+                effectivePayload = {
+                  ...payload,
+                  input: normalizeOpenAIResponsesPrefixInput(effectiveInput),
+                };
               }
-              const prefix = snapshotProviderPrefix(api, effectivePayload);
+              const prefix = snapshotProviderPrefix(
+                api,
+                JSON.parse(stableStringify(effectivePayload)),
+              );
               if (route === "messages") {
                 const runtimeIndex = prefix.history.findIndex((item) =>
                   item.includes(RUNTIME_CONTEXT_HEADER),
@@ -288,11 +298,7 @@ it.for(cases)(
                 failure,
               );
               if (effectiveInput) {
-                // Full replay omits provider item IDs. Function calls also omit
-                // status; assistant messages retain their completed status.
-                const output = result.output.map((item) =>
-                  omitWireFields(item, item.type === "function_call" ? ["id", "status"] : ["id"]),
-                );
+                const output = captureOpenAIResponsesOutput(result.output);
                 responseHistory.set(`cache_${requests.length}`, [...effectiveInput, ...output]);
               }
               return result.response;
@@ -321,6 +327,7 @@ it.for(cases)(
             }
             if (turn === 7) {
               // Simulate the durable runner lifecycle after Gateway restart, without a second server boot.
+              cleanupSessionResources(sessionId);
               clearEmbeddedSessionPromptStates([sessionId]);
               await closeOpenClawAgentDatabasesAsync(state.stateDir);
             }

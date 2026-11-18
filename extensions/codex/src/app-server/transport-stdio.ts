@@ -1,3 +1,5 @@
+import { constants as fsConstants } from "node:fs";
+import { access } from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { resolveLaunchableNodePath } from "openclaw/plugin-sdk/process-runtime";
@@ -137,6 +139,17 @@ export async function createStdioTransport(
     (nativeCommand ? getCodexAppServerSpawnFailure(nativeCommand) : undefined);
   if (previousFailure) {
     throw previousFailure;
+  }
+  if (nativeCommand && invocation.resolution === "node-entrypoint") {
+    // Codex 0.169 uses execve; Node 24 aborts on failure without reporting the
+    // native path. Preserve the OS error at its source, not by guessing from stderr.
+    // A later filesystem change still belongs to the launcher diagnostic path.
+    try {
+      await access(nativeCommand, fsConstants.X_OK);
+    } catch (error) {
+      await assertCurrent?.();
+      throw recordCodexAppServerSpawnFailure(error, nativeCommand, nativeCommand);
+    }
   }
   const register = await prepareCodexAppServerProcessRegistration();
   await assertCurrent?.();

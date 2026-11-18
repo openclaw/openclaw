@@ -1,7 +1,44 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 export const omitWireFields = (value: Record<string, unknown>, fields: string[]) =>
   Object.fromEntries(Object.entries(value).filter(([key]) => !fields.includes(key)));
+
+// Responses may omit provider item envelopes during replay; call IDs and
+// function-call-output envelopes remain part of the input contract.
+export function normalizeOpenAIResponsesPrefixInput(input: unknown[]): unknown[] {
+  return input.map((item) => {
+    if (!isRecord(item)) {
+      return item;
+    }
+    // Native OpenAI cold replay omits unverifiable IDs for self-contained ciphertext.
+    // Keep reference-only reasoning IDs and every reasoning/content byte strict.
+    if (item.type === "reasoning" && item.encrypted_content) {
+      return omitWireFields(item, ["id"]);
+    }
+    return item.type === "function_call" || (item.type === "message" && item.role === "assistant")
+      ? omitWireFields(item, ["id", "status"])
+      : item;
+  });
+}
+
+// Completion status and log probabilities are response envelopes, not replay input.
+export function captureOpenAIResponsesOutput(output: unknown[]): unknown[] {
+  return output.map((item) => {
+    if (!isRecord(item)) {
+      return item;
+    }
+    const replayItem = omitWireFields(item, item.type === "function_call" ? ["status"] : []);
+    // Same-route production replay retains the raw argument signature, including
+    // whitespace and numeric spelling. Parsing here would invent prefix drift.
+    if (item.type === "message" && Array.isArray(item.content)) {
+      replayItem.content = item.content.map((block: unknown) =>
+        isRecord(block) ? omitWireFields(block, ["logprobs"]) : block,
+      );
+    }
+    return replayItem;
+  });
+}
 
 export type WireApi = "openai-responses" | "openai-completions" | "anthropic-messages";
 type ToolCall = { id: string; name: string; itemId?: string };
@@ -74,6 +111,7 @@ export function providerResponse(params: {
   messageId: string;
   text: string;
   calls: ToolCall[];
+  reasoning?: { id: string; encrypted_content: string };
   cacheRead?: number;
   completedToolStatus?: boolean;
   completionModel?: boolean;
@@ -175,6 +213,9 @@ export function providerResponse(params: {
           ),
         )
       : [message(text)];
+    if (params.reasoning) {
+      output.unshift({ type: "reasoning", summary: [], ...params.reasoning });
+    }
     if (failure) {
       output.push(message(failure.text));
     }
@@ -183,7 +224,11 @@ export function providerResponse(params: {
         event("response.output_item.added", {
           output_index,
           item:
-            item.type === "function_call" ? { ...item, arguments: "" } : { ...item, content: [] },
+            item.type === "function_call"
+              ? { ...item, arguments: "" }
+              : item.type === "message"
+                ? { ...item, content: [] }
+                : item,
         }),
         ...(item.type === "function_call"
           ? [event("response.function_call_arguments.delta", { output_index, delta: "{}" })]

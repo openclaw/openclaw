@@ -19,7 +19,11 @@ function codexSpawnFailureReason(error: unknown): string | undefined {
     return undefined;
   }
   const failure: NodeJS.ErrnoException = error;
-  if (failure.syscall === undefined || failure.syscall.startsWith("spawn")) {
+  if (
+    failure.syscall === undefined ||
+    failure.syscall === "access" ||
+    failure.syscall.startsWith("spawn")
+  ) {
     if (
       failure.code === "EBADARCH" ||
       failure.errno === -86 ||
