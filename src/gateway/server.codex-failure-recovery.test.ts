@@ -1,10 +1,10 @@
-import childProcess, { type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import http from "node:http";
 import { createRequire, syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import nodeProcess from "node:process";
+import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, onTestFinished, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
@@ -92,6 +92,15 @@ async function startNativeGatewayWithClient(
 
 type ProviderRequest = { body: string; threadId: string | string[] | undefined };
 type ReadyThread = { threadId: string; clientId: string; action: string };
+type NativeReceipt =
+  | { type: "spawn"; pid: number }
+  | { type: "exit"; code: number | null; signal: NodeJS.Signals | null };
+type NativeProcess = {
+  output: string;
+  pid?: number;
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+};
 
 // Mirrors the Codex plugin's private CODEX_THREAD_UNLOAD_CONFIRMATION_TIMEOUT_MS.
 const CODEX_UNLOAD_CONFIRMATION_MS = 10_000;
@@ -156,31 +165,41 @@ module.exports = {
 };`,
     );
 
-    const nativeProcesses = new Map<ChildProcess, { output: string }>();
+    const nativeProcesses = new Map<Worker, NativeProcess>();
     if (shutdown) {
-      const spawn = childProcess.spawn;
-      const spawnSpy = vi.spyOn(childProcess, "spawn").mockImplementation((...args) => {
-        // Keep native retention only in replacement controls, so no unload receipt arrives.
-        if (Array.isArray(args[1])) {
-          args[1] = args[1].map((arg) =>
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Every call supplies its Worker receiver.
+      const postMessage = Worker.prototype.postMessage;
+      const launch = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        message: unknown,
+        transfer,
+      ) {
+        // Native spawning is worker-owned. Observe its real process receipts, not Worker exit.
+        if (
+          isRecord(message) &&
+          message.type === "launch" &&
+          Array.isArray(message.args) &&
+          message.args.includes("app-server")
+        ) {
+          message.args = message.args.map((arg) =>
             arg === "thread_unload_delay_secs=0" ? "thread_unload_delay_secs=1800" : arg,
           );
-        }
-        const child = spawn(...args);
-        if (Array.isArray(args[1]) && args[1].includes("app-server")) {
-          const captured = { output: "" };
-          nativeProcesses.set(child, captured);
-          child.stdout?.on("data", (chunk: Buffer) => {
+          const captured: NativeProcess = { output: "", exitCode: null, signalCode: null };
+          nativeProcesses.set(this, captured);
+          this.stdout?.on("data", (chunk: Buffer) => {
             captured.output += chunk.toString();
           });
+          this.on("message", (receipt: NativeReceipt) => {
+            if (receipt.type === "spawn") {
+              captured.pid = receipt.pid;
+            } else if (receipt.type === "exit") {
+              Object.assign(captured, { exitCode: receipt.code, signalCode: receipt.signal });
+            }
+          });
         }
-        return child;
+        return postMessage.call(this, message, transfer);
       });
-      syncBuiltinESMExports();
-      onTestFinished(() => {
-        spawnSpy.mockRestore();
-        syncBuiltinESMExports();
-      });
+      onTestFinished(() => launch.mockRestore());
     }
     const requests: ProviderRequest[] = [];
     const idleSiblingRequests: ProviderRequest[] = [];
@@ -487,9 +506,7 @@ module.exports = {
     const exitGate = shutdown
       ? holdNativeExit(nativeProcesses, previous.threadId, shutdown === "unconfirmed")
       : undefined;
-    if (exitGate) {
-      onTestFinished(exitGate.release);
-    }
+    onTestFinished(() => exitGate?.release());
     const beforeRecoveryProcesses = nativeProcesses.size;
     const continued = await start("Continue with changed instructions.", "second");
     let abortRequest: ReturnType<typeof gateway.client.request> | undefined;
@@ -568,70 +585,46 @@ module.exports = {
 
 /** Hold only the observed native child's exit; protocol, writer lock and run cancellation stay real. */
 function holdNativeExit(
-  processes: Map<ChildProcess, { output: string }>,
+  processes: Map<Worker, NativeProcess>,
   threadId: string,
   withholdExitConfirmation: boolean,
 ) {
   const matches = [...processes].filter(([, captured]) => captured.output.includes(threadId));
   expect(matches).toHaveLength(1);
-  const child = matches[0]?.[0];
-  assert(child?.stdin && child.pid, "the native thread must belong to a captured process");
-  const stdin = child.stdin;
+  const [worker, child] = matches[0]!;
+  assert(worker.stdin && child.pid, "the native thread must belong to a captured process");
+  const stdin = worker.stdin;
   const pid = child.pid;
   const waiting = createDeferred();
   const exited = createDeferred();
   let closing = false;
-  child.once("exit", () => exited.resolve());
-  const onListener = (event: string) => {
-    // close() installs its exit handler before ending stdin. closeAndWait()
-    // subsequently subscribes to physical exit, after closure has begun.
-    if (event === "exit" && closing) {
-      waiting.resolve();
+  worker.on("message", (message: NativeReceipt) => {
+    if (message.type === "exit") {
+      exited.resolve();
     }
-  };
-  child.on("newListener", onListener);
+  });
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
-    // Pause only controls that release the child explicitly. Missing-exit proof
-    // needs real deadlines across asynchronous native containment.
+    // Missing-exit proof keeps real deadlines; only explicitly released controls pause timers.
     if (!closing && !withholdExitConfirmation) {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     }
     closing = true;
+    waiting.resolve();
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
-  // Lost exit notification and stale child status must not become a successful
-  // shutdown receipt. Keep actual Node exit state separately for teardown.
-  let restoreExitConfirmation = () => {};
-  if (withholdExitConfirmation) {
-    const restoreStatus = (["exitCode", "signalCode"] as const).map((key) => {
-      let value = child[key];
-      const descriptor = Object.getOwnPropertyDescriptor(child, key);
-      assert(descriptor);
-      Object.defineProperty(child, key, {
-        configurable: true,
-        get: () => null,
-        set: (next: typeof value) => {
-          value = next;
-        },
-      });
-      return () => Object.defineProperty(child, key, { ...descriptor, value });
-    });
-    const once = child.once.bind(child);
-    const receipt = vi.spyOn(child, "once").mockImplementation((event, listener) => {
-      if (event === "exit" && closing) {
-        waiting.resolve();
-        return child;
-      }
-      return once(event, listener);
-    });
-    restoreExitConfirmation = () => {
-      receipt.mockRestore();
-      restoreStatus.forEach((restore) => restore());
-    };
-  }
-  // Containment stops the launcher before killing its native child. Keep it
-  // stopped after stdin closes: on resume it mirrors the child's fatal signal.
+  // Withhold native receipts and Worker exit, leaving host status stale until cleanup.
+  const emit = worker.emit.bind(worker);
+  const held: Array<[string | symbol, ...unknown[]]> = [];
+  const receipt = vi.spyOn(worker, "emit").mockImplementation((event, ...args: unknown[]) => {
+    const nativeExit = event === "message" && isRecord(args[0]) && args[0].type === "exit";
+    if (withholdExitConfirmation && (nativeExit || event === "exit")) {
+      held.push([event, ...args]);
+      return true;
+    }
+    return emit(event, ...args);
+  });
+  // Keep containment's stopped native process paused until explicit release.
   const kill = nodeProcess.kill.bind(nodeProcess);
   const signal = vi.spyOn(nodeProcess, "kill").mockImplementation((targetPid, value) => {
     if (
@@ -643,12 +636,19 @@ function holdNativeExit(
     return kill(targetPid, value);
   });
   syncBuiltinESMExports();
-  const killChild = child.kill.bind(child);
+  const postMessage = worker.postMessage.bind(worker);
   const childKill = vi
-    .spyOn(child, "kill")
-    .mockImplementation((value) =>
-      value === "SIGSTOP" || (value === "SIGCONT" && !closing) ? killChild(value) : true,
-    );
+    .spyOn(worker, "postMessage")
+    .mockImplementation((message: unknown, transfer) => {
+      if (
+        !isRecord(message) ||
+        message.type !== "kill" ||
+        message.signal === "SIGSTOP" ||
+        (message.signal === "SIGCONT" && !closing)
+      ) {
+        postMessage(message, transfer);
+      }
+    });
   let released = false;
   return {
     child,
@@ -661,15 +661,15 @@ function holdNativeExit(
       }
       released = true;
       vi.useRealTimers();
-      child.off("newListener", onListener);
-      restoreExitConfirmation();
+      receipt.mockRestore();
+      held.forEach(([event, ...args]) => emit(event, ...args));
       end.mockRestore();
       destroy.mockRestore();
       signal.mockRestore();
       syncBuiltinESMExports();
       childKill.mockRestore();
       stdin.end();
-      killChild("SIGCONT");
+      postMessage({ type: "kill", signal: "SIGCONT" });
     },
   };
 }
