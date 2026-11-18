@@ -490,7 +490,7 @@ it("records a Telegram owner's origin when creating a job within the visible too
       expect(result, JSON.stringify(result)).toMatchObject({ kind: "evaluated", fire: false });
       expect(stored.payload.toolsAllow).toEqual(["read"]);
       expect(stored.scheduledToolPolicy).toEqual(cronAccountPolicy(parentSessionKey, accountId));
-      setRuntimeConfigSnapshot({ ...config, channels: { telegram: { accounts: {} } } });
+      setRuntimeConfigSnapshot({ ...config, channels: { telegram: { accounts: {} } } }, config);
       const missing = await evaluate();
       expect(missing, JSON.stringify(missing)).toMatchObject({
         kind: "error",
