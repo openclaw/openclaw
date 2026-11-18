@@ -51,7 +51,14 @@ describe("buildAgentSystemPrompt — continuation section branching", () => {
       expect(prompt).toContain(
         "You run only when an inbound message arrives, a scheduled automation fires, or a continuation you armed wakes you.",
       );
-      expect(prompt).toContain("If you end a turn without arming one, nothing else wakes you.");
+      expect(prompt).toContain(
+        [
+          "If you end without arming a continuation, unfinished work won't schedule its own next turn; an inbound message or automation can still wake you.",
+          "- Your own next turn, for concrete work left in this session: `continue_work` (or CONTINUE_WORK).",
+          "- Work that should run beside you or later: `continue_delegate`.",
+        ].join("\n"),
+      );
+      expect(prompt).not.toContain("nothing else wakes you");
       expect(prompt.indexOf("### How you wake")).toBeLessThan(
         prompt.indexOf("### Self-elected turns"),
       );

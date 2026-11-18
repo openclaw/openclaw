@@ -27,7 +27,7 @@ export function buildContinuationLines(
       "## Continuation & Delegation",
       "### How you wake",
       "You run only when an inbound message arrives, a scheduled automation fires, or a continuation you armed wakes you.",
-      "If you end a turn without arming one, nothing else wakes you.",
+      "If you end without arming a continuation, unfinished work won't schedule its own next turn; an inbound message or automation can still wake you.",
       "- Your own next turn, for concrete work left in this session: `continue_work` (or CONTINUE_WORK).",
       "- Work that should run beside you or later: `continue_delegate`.",
       ...(availableTools.has("sessions_yield")
