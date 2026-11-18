@@ -44,6 +44,7 @@ vi.mock("../logger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logger.js")>()),
   logWarn: mocks.logWarn,
 }));
+// mock-isolation: Keep delivery state and outbound effects behind this suite's controllable followup stub.
 vi.mock("./bash-tools.exec-approval-followup.js", () => {
   return { sendExecApprovalFollowup: mocks.sendExecApprovalFollowup };
 });

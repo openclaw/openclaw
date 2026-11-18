@@ -3,7 +3,11 @@
  *
  * Extracts text result blocks and asserts common read/write/edit tool bundles.
  */
-import { expect } from "vitest";
+import { Type } from "typebox";
+import { expect, it, vi } from "vitest";
+import { wrapReadToolWithSkillContent } from "../agent-tools.read.js";
+import type { AgentToolResult } from "../runtime/index.js";
+import type { ReadToolDetails } from "../sessions/tools/tool-contracts.js";
 
 type TextResultBlock = { type: string; text?: string };
 
@@ -43,4 +47,56 @@ export function expectReadWriteTools<T extends { name: string }>(tools: T[]) {
     readTool: expectTool(tools, "read"),
     writeTool: expectTool(tools, "write"),
   };
+}
+
+export function createSkillReadFixture() {
+  const skillLocator = "/skills/pond/SKILL.md";
+  const skillContent = "# Pond\ncomplete instructions";
+  const fullSkillResult: AgentToolResult<ReadToolDetails> = {
+    content: [{ type: "text", text: skillContent }],
+    details: { kind: "text", content: skillContent },
+  };
+
+  function skillReadTool(execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"]) {
+    return wrapReadToolWithSkillContent(
+      {
+        name: "read",
+        label: "read",
+        description: "read a file",
+        parameters: Type.Object({ path: Type.String() }),
+        execute,
+      },
+      [{ filePath: skillLocator }],
+      { instructionDeliveryCache: new Map<string, Promise<boolean>>() },
+    );
+  }
+
+  return { skillLocator, fullSkillResult, skillReadTool };
+}
+
+export function registerSkillReadDeduplicationTest(
+  makeRead: (execute: () => Promise<AgentToolResult<ReadToolDetails>>) => {
+    execute: (id: string, args: { path: string }) => Promise<AgentToolResult<ReadToolDetails>>;
+  },
+  locator: string,
+  fullResult: AgentToolResult<ReadToolDetails>,
+) {
+  it("deduplicates sequential and concurrent successful skill reads within one attempt", async () => {
+    let releaseRead = (): void => undefined;
+    const pendingRead = new Promise<AgentToolResult<ReadToolDetails>>((resolve) => {
+      releaseRead = () => resolve(fullResult);
+    });
+    const execute = vi.fn(() => pendingRead);
+    const tool = makeRead(execute);
+    const first = tool.execute("first-skill-read", { path: locator });
+    const concurrent = tool.execute("concurrent-skill-read", { path: locator });
+    expect(execute).toHaveBeenCalledTimes(1);
+    releaseRead();
+    expect(getTextContent(await first)).toBe("# Pond\ncomplete instructions");
+    expect(getTextContent(await concurrent)).toContain("already served whole");
+    expect(
+      getTextContent(await tool.execute("sequential-skill-read", { path: locator })),
+    ).toContain("already served whole");
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
 }

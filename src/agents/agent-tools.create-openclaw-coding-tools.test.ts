@@ -21,7 +21,7 @@ import "./test-helpers/fast-openclaw-tools.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { createSandboxedReadTool, wrapReadToolWithSkillContent } from "./agent-tools.read.js";
+import { createSandboxedReadTool } from "./agent-tools.read.js";
 import { runWithAgentRingZeroTools } from "./agent-tools.ring-zero-context.js";
 import { expectOwnerGated } from "./agent-tools.turn-authority.test-support.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -35,7 +35,9 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 import type { ReadToolDetails } from "./sessions/tools/tool-contracts.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
 import {
+  createSkillReadFixture,
   expectReadWriteEditTools,
+  registerSkillReadDeduplicationTest,
   getTextContent as extractToolText,
 } from "./test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "./test-helpers/agent-tools-sandbox-context.js";
@@ -59,26 +61,7 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-completion-grant
 const openClawOnlyPlan = createOpenClawOnlyToolConstructionPlan();
 const pluginOnlyPlan = createPluginOnlyToolConstructionPlan();
 const baseOnlyPlan = createBaseOnlyToolConstructionPlan();
-const skillLocator = "/skills/pond/SKILL.md";
-const skillContent = "# Pond\ncomplete instructions";
-const fullSkillResult: AgentToolResult<ReadToolDetails> = {
-  content: [{ type: "text", text: skillContent }],
-  details: { kind: "text", content: skillContent },
-};
-
-function skillReadTool(execute: Parameters<typeof wrapReadToolWithSkillContent>[0]["execute"]) {
-  return wrapReadToolWithSkillContent(
-    {
-      name: "read",
-      label: "read",
-      description: "read a file",
-      parameters: Type.Object({ path: Type.String() }),
-      execute,
-    },
-    [{ filePath: skillLocator }],
-    { instructionDeliveryCache: new Map<string, Promise<boolean>>() },
-  );
-}
+const { skillLocator, fullSkillResult, skillReadTool } = createSkillReadFixture();
 
 function sandboxReadTool(root: string) {
   return createSandboxedReadTool({ root, bridge: createHostSandboxFsBridge(root) });
@@ -978,6 +961,7 @@ describe("createOpenClawCodingTools", () => {
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 describe("createOpenClawCodingTools read behavior", () => {
+  registerSkillReadDeduplicationTest(skillReadTool, skillLocator, fullSkillResult);
   it("protects materialized sandbox skill identities when no skill snapshot exists", async () => {
     const relativePath = "skills/demo/SKILL.md";
     const { root, filePath } = await fileFixture(relativePath, "# Demo\ncomplete instructions");
