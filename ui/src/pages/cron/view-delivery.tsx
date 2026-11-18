@@ -159,6 +159,7 @@ export const ADVANCED_FIELDS = [
   "failureAlertAfter",
   "failureAlertCooldownSeconds",
   "staggerAmount",
+  "cronTz",
 ] as const;
 function AdvancedGroup(props: { title: string; children: JSX.Element }) {
   return (
@@ -205,6 +206,17 @@ export function Advanced(
       </summary>
       <div class="settings-group cron-editor-card cron-advanced__card">
         <p class="cron-help cron-advanced__desc">{t("cron.form.advancedHelp")}</p>
+        {isCronSchedule() ? (
+          <CronInput
+            {...props}
+            field="cronTz"
+            errorKey="cronTz"
+            label={t("cron.form.timezoneOptional")}
+            help={t("cron.form.timezoneHelp")}
+            list="cron-tz-suggestions"
+            placeholder={t("cron.form.timezonePlaceholder")}
+          />
+        ) : undefined}
         <AdvancedGroup title={t("cron.form.advancedTask")}>
           {props.form.payloadLocked ? (
             <FieldRow

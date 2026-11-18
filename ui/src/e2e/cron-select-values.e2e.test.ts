@@ -61,6 +61,7 @@ suite.define(() => {
       const timeZone = page.locator("#cron-cron-tz");
       await part("frequency").click();
       await part("frequency-custom").click();
+      await page.locator('[data-test-id="cron-advanced"]').click();
       await timeZone.fill("Mars/Phobos");
       await expect.poll(() => submit.isDisabled()).toBe(true);
       await part("frequency").click();

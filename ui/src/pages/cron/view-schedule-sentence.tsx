@@ -69,32 +69,38 @@ function Part(props: {
   id: string;
   label: string;
   text: string;
+  rowLabel?: string;
   testId: string;
   /** Receives a way to close the menu once a single choice is made. */
   children: (close: () => void) => JSX.Element;
 }) {
   let handle: PopoverHandle | undefined;
   return (
-    <Popover
-      ref={(next) => {
-        handle = next;
-      }}
-      id={`${props.id}-menu`}
-      triggerId={props.id}
-      triggerClass="cron-sentence__part"
-      triggerAriaLabel={`${props.label}: ${props.text}`}
-      trigger={
-        <span class="cron-sentence__text" data-test-id={props.testId}>
-          {props.text}
-          <Icon name="chevronDown" />
-        </span>
-      }
-      class="cron-sentence__menu"
-      placement="bottom-start"
-      label={props.label}
-    >
-      {props.children(() => handle?.hide())}
-    </Popover>
+    <span class="cron-sentence__row">
+      <span class="cron-sentence__label" aria-hidden="true">
+        {props.rowLabel ?? props.label}
+      </span>
+      <Popover
+        ref={(next) => {
+          handle = next;
+        }}
+        id={`${props.id}-menu`}
+        triggerId={props.id}
+        triggerClass="cron-sentence__part"
+        triggerAriaLabel={`${props.label}: ${props.text}`}
+        trigger={
+          <span class="cron-sentence__text" data-test-id={props.testId}>
+            {props.text}
+            <Icon name="chevronDown" />
+          </span>
+        }
+        class="cron-sentence__menu"
+        placement="bottom-start"
+        label={props.label}
+      >
+        {props.children(() => handle?.hide())}
+      </Popover>
+    </span>
   );
 }
 
@@ -181,6 +187,7 @@ function NumberChoice(props: {
 export function ScheduleSentence(
   props: CronProps & {
     frequency: SentenceFrequency;
+    phoneLayout: boolean;
     kinds: Kind[];
     onFrequencyPreference: (mode: "custom" | "daily" | null) => void;
   },
@@ -290,7 +297,12 @@ export function ScheduleSentence(
               <Part
                 id={`${id}-days`}
                 label={t("cron.schedule.days")}
-                text={t("cron.schedule.onDays", { days: daysLabel(withDays().days) })}
+                rowLabel={t("cron.schedule.on")}
+                text={
+                  props.phoneLayout
+                    ? daysLabel(withDays().days)
+                    : t("cron.schedule.onDays", { days: daysLabel(withDays().days) })
+                }
                 testId="cron-schedule-days"
               >
                 {() => (
@@ -321,7 +333,12 @@ export function ScheduleSentence(
               <Part
                 id={`${id}-day`}
                 label={t("cron.schedule.day")}
-                text={t("cron.schedule.onDays", { days: weekdayName(weekly().day, "long") })}
+                rowLabel={t("cron.schedule.on")}
+                text={
+                  props.phoneLayout
+                    ? weekdayName(weekly().day, "long")
+                    : t("cron.schedule.onDays", { days: weekdayName(weekly().day, "long") })
+                }
                 testId="cron-schedule-day"
               >
                 {(close) => (
@@ -351,7 +368,12 @@ export function ScheduleSentence(
               <Part
                 id={`${id}-date`}
                 label={t("cron.schedule.dayOfMonth")}
-                text={t("cron.schedule.onDayOfMonth", { day: String(monthly().dayOfMonth) })}
+                rowLabel={t("cron.schedule.onThe")}
+                text={
+                  props.phoneLayout
+                    ? String(monthly().dayOfMonth)
+                    : t("cron.schedule.onDayOfMonth", { day: String(monthly().dayOfMonth) })
+                }
                 testId="cron-schedule-date"
               >
                 {() => (
@@ -371,14 +393,17 @@ export function ScheduleSentence(
               <Part
                 id={`${id}-hours`}
                 label={t("cron.schedule.hours")}
+                rowLabel={t(hourly().hours ? "cron.schedule.betweenLabel" : "cron.schedule.hours")}
                 text={(() => {
                   const hours = hourly().hours;
-                  return hours
-                    ? t("cron.schedule.between", {
-                        from: timeLabel(hours.from),
-                        until: timeLabel(hours.until),
-                      })
-                    : t("cron.schedule.allDay");
+                  if (!hours) {
+                    return t("cron.schedule.allDay");
+                  }
+                  const from = timeLabel(hours.from);
+                  const until = timeLabel(hours.until);
+                  return props.phoneLayout
+                    ? `${from} – ${until}`
+                    : t("cron.schedule.between", { from, until });
                 })()}
                 testId="cron-schedule-hours"
               >
@@ -445,9 +470,12 @@ export function ScheduleSentence(
               <Part
                 id={`${id}-time`}
                 label={t("cron.schedule.time")}
-                text={t("cron.schedule.atTime", {
-                  time: timeLabel(timed().hour, timed().minute),
-                })}
+                rowLabel={t("cron.form.at")}
+                text={
+                  props.phoneLayout
+                    ? timeLabel(timed().hour, timed().minute)
+                    : t("cron.schedule.atTime", { time: timeLabel(timed().hour, timed().minute) })
+                }
                 testId="cron-schedule-time"
               >
                 {() => (
