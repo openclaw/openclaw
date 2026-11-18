@@ -16,6 +16,7 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { assertServedUi } from "./chat-lifecycle.test-support.ts";
 import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -182,10 +183,8 @@ suite.define(() => {
           expect(capable).not.toContain("wait");
           expect(capable).toContain("tool_search");
           expect(instance.child?.pid).toBe(pid);
-          const codeRow = code.locator("xpath=ancestor::*[contains(@class, 'settings-row')][1]");
-          const searchRow = search.locator(
-            "xpath=ancestor::*[contains(@class, 'settings-row')][1]",
-          );
+          const codeRow = page.locator(".settings-row", { has: code });
+          const searchRow = page.locator(".settings-row", { has: search });
           const frame = await takeControlUiScreenshotFrame(page, codeRow, [codeRow, searchRow], {
             elements: [codeRow, searchRow],
             animations: "disabled",
@@ -203,6 +202,48 @@ suite.define(() => {
           console.info(`GRADUATION_PROOF=${artifacts}`);
         },
       );
+      const layout: Array<{ width: number; cls: number; entries: number }> = [];
+      for (const width of [400, 820, 1280]) {
+        await suite.withPage(
+          {
+            colorScheme: "dark",
+            locale: "en-US",
+            serviceWorkers: "block",
+            viewport: { width, height: 1300 },
+          },
+          async ({ page }) => {
+            const layoutHandoff = await instance.cli(["dashboard", "--json"]);
+            expect(layoutHandoff.code, layoutHandoff.stderr).toBe(0);
+            const { browserUrl: layoutUrl } = JSON.parse(layoutHandoff.stdout);
+            const agents = new URL("settings/agents", layoutUrl);
+            agents.hash = new URL(layoutUrl).hash;
+            await page.goto(agents.href);
+            await waitForControlUiGatewayReady(page);
+            await page.getByRole("button", { name: /^Agent defaults/ }).click();
+            await page.getByRole("heading", { name: "Agent defaults", exact: true }).waitFor();
+            const tools = page.getByRole("tab", { name: "Tools", exact: true });
+            await tools.waitFor();
+            const shifts = await observeLayoutShifts(page);
+            try {
+              await tools.click();
+              const code = page.getByRole("switch", { name: "Code Mode", exact: true });
+              const row = page.locator(".settings-row", { has: code });
+              const frame = await takeControlUiScreenshotFrame(page, row, [row], {
+                animations: "disabled",
+              });
+              await writeFile(path.join(artifacts, `tools-after-${width}.png`), frame.png);
+              const result = await shifts.evaluate((probe) => probe.read());
+              layout.push({ width, cls: result.value, entries: result.entries.length });
+              await writeFile(path.join(artifacts, `layout-${width}.json`), JSON.stringify(result));
+              expect(result.value, `Tools navigation layout shift at ${width}px`).toBe(0);
+            } finally {
+              await shifts.evaluate((probe) => probe.stop());
+              await shifts.dispose();
+            }
+          },
+        );
+      }
+      await writeFile(path.join(artifacts, "layout-probes.json"), JSON.stringify(layout, null, 2));
     } finally {
       await client.stopAndWait();
       await writeFile(
