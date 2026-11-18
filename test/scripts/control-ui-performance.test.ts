@@ -597,56 +597,6 @@ describe("Control UI performance budgets", () => {
     },
   );
 
-  it.each([
-    { route: "chat", approved: 273 },
-    { route: "new", approved: 193 },
-  ] as const)("limits the Solid 2 upgrade to its approved $route delta", ({ route, approved }) => {
-    const base = createCliFixture();
-    const head = createCliFixture();
-    const writePins = (root: string, solid: string, plugin: string) => {
-      fs.mkdirSync(path.join(root, "ui"), { recursive: true });
-      const manifest = path.join(root, "ui/package.json");
-      fs.writeFileSync(
-        manifest,
-        JSON.stringify({
-          dependencies: { "solid-js": solid, "@solidjs/signals": solid, "@solidjs/web": solid },
-          devDependencies: { "@solidjs/compiler": solid, "@solidjs/vite-plugin": plugin },
-        }),
-      );
-      return manifest;
-    };
-    const baseManifest = writePins(base.rootDir, "2.0.0-rc.18", "3.0.0-next.51");
-    writePins(head.rootDir, "2.0.0", "3.0.1");
-    const args = ["--base-dist", base.distDir, "--base-ui-manifest", baseManifest];
-    const baseBytes = CONTROL_UI_PERFORMANCE_BUDGETS[`${route}BootJsGzipBytes`] + 100;
-    base.routeAssets(route, chunks(baseBytes - 65));
-    head.routeAssets(route, chunks(baseBytes + approved - 65));
-    expect(jsonCli(head, args).report).toContain("Solid 2 upgrade (#200929)");
-    expect(head.run([...args, "--dist", base.distDir]).stderr).toContain(
-      "requires its paired --base-dist and the default candidate build",
-    );
-
-    head.routeAssets(route, chunks(baseBytes + approved + 1 - 65));
-    expect(jsonCli(head, args, 1).violations).toEqual([
-      expect.objectContaining({ limit: baseBytes + approved, actual: baseBytes + approved + 1 }),
-    ]);
-    head.routeAssets(route, chunks(baseBytes + approved - 65));
-    head.writeAsset("index-a.js", 66);
-    expect(jsonCli(head, args, 1).violations).toEqual([
-      expect.objectContaining({ limit: baseBytes + 64 }),
-    ]);
-    head.writeAsset("index-a.js", 65);
-    head.routeAssets(route, [...chunks(baseBytes + approved - 66), 1]);
-    expect(jsonCli(head, args, 1).violations).toEqual([
-      expect.objectContaining({ limit: baseBytes + 64 }),
-    ]);
-    head.routeAssets(route, chunks(baseBytes + approved - 65));
-    writePins(base.rootDir, "2.0.0", "3.0.1");
-    expect(jsonCli(head, args, 1).violations).toEqual([
-      expect.objectContaining({ limit: baseBytes + 64 }),
-    ]);
-  });
-
   it.each(["report-only", "over-budget base"])(
     "annotates document and total CSS overages in Actions with %s",
     (mode) => {

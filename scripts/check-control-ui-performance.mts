@@ -37,12 +37,6 @@ const DEFAULT_STARTUP_BUDGET_BASELINE_PATH = path.resolve(
 const CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES = 512;
 // Generated hashes are normalized; retain only the cross-toolchain variance floor.
 const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
-// PR #200929: Vincent Koc approved these measured deltas for the Solid rc.18
-// to 2.0.0 cutover only. Remove this policy after the transition lands.
-const SOLID_2_UPGRADE_ROUTE_GROWTH = new Map([
-  ["chat boot JS gzip", 273],
-  ["new boot JS gzip", 193],
-]);
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
@@ -371,7 +365,6 @@ type ControlUiPerformanceBudgetViolation = {
   limit: number;
   unit: "count" | "bytes";
   overBudgetBase?: { actual: number; cap: number };
-  solid2UpgradeGrowth?: number;
 };
 
 export function evaluateControlUiPerformanceBudgets(
@@ -380,7 +373,6 @@ export function evaluateControlUiPerformanceBudgets(
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
   baseMetrics: ReturnType<typeof collectControlUiPerformanceMetrics> | null = null,
-  solid2Upgrade = false,
 ): ControlUiPerformanceBudgetViolation[] {
   const baselineBytes = startupBudgetBaseline?.startupJsGzipBytes;
   const { enforcementLimit } = resolveControlUiStartupJsGzipLimits(
@@ -396,24 +388,13 @@ export function evaluateControlUiPerformanceBudgets(
         )
       : [],
   );
-  const upgradeEligible =
-    solid2Upgrade &&
-    baseMetrics?.routeBoot &&
-    metrics.routeBoot &&
-    metrics.startup.js.gzipBytes <= baseMetrics.startup.js.gzipBytes &&
-    metrics.startup.js.requests <= baseMetrics.startup.js.requests &&
-    metrics.routeBoot.chat.js.requests <= baseMetrics.routeBoot.chat.js.requests &&
-    metrics.routeBoot.new.js.requests <= baseMetrics.routeBoot.new.js.requests;
   const violations: ControlUiPerformanceBudgetViolation[] = [];
   for (const [metric, actual, cap, unit] of checks) {
     const baseActual = baseChecks.get(metric);
     const overBudgetBase =
       baseActual !== undefined && baseActual > cap ? { actual: baseActual, cap } : undefined;
-    const solid2UpgradeGrowth =
-      overBudgetBase && upgradeEligible ? SOLID_2_UPGRADE_ROUTE_GROWTH.get(metric) : undefined;
     const limit = overBudgetBase
-      ? overBudgetBase.actual +
-        (unit === "bytes" ? (solid2UpgradeGrowth ?? CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES) : 0)
+      ? overBudgetBase.actual + (unit === "bytes" ? CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES : 0)
       : cap;
     if (actual > limit) {
       violations.push({
@@ -422,7 +403,6 @@ export function evaluateControlUiPerformanceBudgets(
         limit,
         unit,
         ...(overBudgetBase ? { overBudgetBase } : {}),
-        ...(solid2UpgradeGrowth !== undefined ? { solid2UpgradeGrowth } : {}),
       });
     }
   }
@@ -519,9 +499,6 @@ function formatViolation(violation: ControlUiPerformanceBudgetViolation): string
       ? ` (${violation.actual} B vs ${violation.limit} B)`
       : "";
   const base = violation.overBudgetBase;
-  if (base && violation.solid2UpgradeGrowth !== undefined) {
-    return `${violation.metric}: ${violation.actual} B exceeds ${violation.limit} B (base ${base.actual} B + approved Solid 2 upgrade ${violation.solid2UpgradeGrowth} B)`;
-  }
   const inherited = base
     ? `; base already exceeds the cap (${base.actual} > ${base.cap}); no growth${violation.unit === "bytes" ? ` beyond ${CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES} B build variance` : ""} is allowed`
     : "";
@@ -534,7 +511,6 @@ export function formatControlUiPerformanceReport(
   startupBudgetBaseline: Readonly<ControlUiStartupBudgetBaseline> | null = null,
   startupJsTolerance: number = CONTROL_UI_STARTUP_JS_GZIP_TOLERANCE_BYTES,
   baseMetrics: ReturnType<typeof collectControlUiPerformanceMetrics> | null = null,
-  solid2Upgrade = false,
 ): string {
   const startupJsLimits = resolveControlUiStartupJsGzipLimits(
     budgets,
@@ -547,7 +523,6 @@ export function formatControlUiPerformanceReport(
     startupBudgetBaseline,
     startupJsTolerance,
     baseMetrics,
-    solid2Upgrade,
   );
   const lines = [
     "Control UI performance:",
@@ -661,11 +636,6 @@ export function formatControlUiPerformanceReport(
       `  hint: startup JS gzip is more than ${STARTUP_JS_BASELINE_RATCHET_BYTES} B below the ${startupBudgetBaseline.startupJsGzipBytes} B baseline; lower it with ${BASELINE_UPDATE_COMMAND}`,
     );
   }
-  if (solid2Upgrade) {
-    lines.push(
-      "  Solid 2 upgrade (#200929): approved growth is 273 B Chat and 193 B New Session JS gzip, only on already-over-cap routes and with no growth in startup JS bytes or boot JS request counts.",
-    );
-  }
   if (violations.length > 0) {
     lines.push(
       "  violations:",
@@ -742,34 +712,12 @@ function validateExplicitStartupJsBytes(
   }
 }
 
-function isSolid2Upgrade(baseManifest: string): boolean {
-  const matchesPins = (manifestPath: string, solid: string, vitePlugin: string) => {
-    const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-    return (
-      isRecord(manifest) &&
-      isRecord(manifest.dependencies) &&
-      manifest.dependencies["solid-js"] === solid &&
-      manifest.dependencies["@solidjs/signals"] === solid &&
-      manifest.dependencies["@solidjs/web"] === solid &&
-      isRecord(manifest.devDependencies) &&
-      manifest.devDependencies["@solidjs/compiler"] === solid &&
-      manifest.devDependencies["@solidjs/vite-plugin"] === vitePlugin
-    );
-  };
-  return (
-    matchesPins(baseManifest, "2.0.0-rc.18", "3.0.0-next.51") &&
-    matchesPins(path.resolve(SCRIPT_DIR, "../ui/package.json"), "2.0.0", "3.0.1")
-  );
-}
-
 function runControlUiPerformanceCheck(
   distDir: string,
   budgets: Readonly<typeof CONTROL_UI_PERFORMANCE_BUDGETS> = CONTROL_UI_PERFORMANCE_BUDGETS,
   baselinePath = DEFAULT_STARTUP_BUDGET_BASELINE_PATH,
   baseDistDir?: string,
-  baseUiManifest?: string,
 ) {
-  const solid2Upgrade = baseUiManifest !== undefined && isSolid2Upgrade(baseUiManifest);
   const startupBudgetBaseline = readControlUiStartupBudgetBaseline(baselinePath);
   const metrics = collectControlUiPerformanceMetrics(distDir);
   const baseMetrics = baseDistDir ? collectControlUiPerformanceMetrics(baseDistDir) : null;
@@ -779,7 +727,6 @@ function runControlUiPerformanceCheck(
     startupBudgetBaseline,
     undefined,
     baseMetrics,
-    solid2Upgrade,
   );
   const report = formatControlUiPerformanceReport(
     metrics,
@@ -787,7 +734,6 @@ function runControlUiPerformanceCheck(
     startupBudgetBaseline,
     undefined,
     baseMetrics,
-    solid2Upgrade,
   );
   return {
     metrics,
@@ -808,7 +754,6 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   let moduleAttribution = false;
   let distDir: string | undefined;
   let baseDistDir: string | undefined;
-  let baseUiManifest: string | undefined;
   let updateBaseline = false;
   let reason: string | undefined;
   let startupJsBytes: number | undefined;
@@ -820,15 +765,13 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       reportOnly = true;
     } else if (arg === "--module-attribution") {
       moduleAttribution = true;
-    } else if (arg === "--base-dist" || arg === "--dist" || arg === "--base-ui-manifest") {
+    } else if (arg === "--base-dist" || arg === "--dist") {
       const value = argv[++index];
       if (!value || value.startsWith("--")) {
         throw new Error(`${arg} requires a directory`);
       }
       if (arg === "--dist") {
         distDir = path.resolve(value);
-      } else if (arg === "--base-ui-manifest") {
-        baseUiManifest = path.resolve(value);
       } else {
         baseDistDir = path.resolve(value);
       }
@@ -871,18 +814,6 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       "--report-only, --base-dist and --dist cannot be combined with --update-baseline",
     );
   }
-  if (
-    baseUiManifest &&
-    (distDir ||
-      !baseDistDir ||
-      baseDistDir !== path.resolve(path.dirname(baseUiManifest), "../dist/control-ui") ||
-      path.basename(baseUiManifest) !== "package.json" ||
-      path.basename(path.dirname(baseUiManifest)) !== "ui")
-  ) {
-    throw new Error(
-      "--base-ui-manifest requires its paired --base-dist and the default candidate build",
-    );
-  }
   distDir ??= path.resolve(SCRIPT_DIR, "../dist/control-ui");
   if (updateBaseline) {
     if (startupJsBytes !== undefined) {
@@ -903,13 +834,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     );
     return;
   }
-  const result = runControlUiPerformanceCheck(
-    distDir,
-    undefined,
-    undefined,
-    baseDistDir,
-    baseUiManifest,
-  );
+  const result = runControlUiPerformanceCheck(distDir, undefined, undefined, baseDistDir);
   let attribution;
   if (moduleAttribution) {
     const { collectControlUiModuleAttribution, formatControlUiModuleAttribution } =

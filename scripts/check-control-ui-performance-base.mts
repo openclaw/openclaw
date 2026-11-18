@@ -260,7 +260,6 @@ async function main(): Promise<void> {
         "scripts/check-control-ui-performance.mts",
         "--base-dist",
         baseDist,
-        ...(identicalInputs ? [] : ["--base-ui-manifest", path.join(baseUiRoot, "package.json")]),
       ]);
     } catch (comparisonError) {
       // Attribute a completed failure before its paired archive is retired. An
