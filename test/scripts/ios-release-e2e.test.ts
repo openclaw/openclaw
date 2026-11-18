@@ -710,6 +710,8 @@ describe("release qualification workflow authority", () => {
         GITHUB_WORKFLOW_REF: `${repository}/.github/workflows/ios-release-e2e.yml@${ref}`,
         GITHUB_EVENT_NAME: "workflow_dispatch",
         TARGET_SHA: target,
+        CLIENT_SHA: "",
+        CLIENT_RELEASE_TAG: "",
         E2E_MODE: "mode" in options ? options.mode : "stock",
       },
     });
@@ -1242,6 +1244,8 @@ it.each([
         cleanup: preflightCleanup,
       };
     }
+    expect(options.config.agents.defaults.utilityModel).toBe("openai/ios-e2e-utility");
+    expect(options.config.agents.defaults.model.primary).toBe("openai/ios-e2e");
     expect(simulatorReady).toBe(false);
     lifecycle.push("gateway-create");
     const index = instances.length + 1;
@@ -1483,6 +1487,11 @@ it.each([
                 metadata: { title: marker },
               };
             });
+        requests.push({
+          model: "ios-e2e-utility",
+          input: [{ role: "user", content: "Synthetic utility request" }],
+          metadata: { title: "Synthetic utility request" },
+        });
         writeFileSync(
           requestLog,
           requests

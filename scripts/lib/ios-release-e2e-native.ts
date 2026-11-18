@@ -663,7 +663,11 @@ export async function createNativeDependencies(options: {
                 readinessAbort.abort();
               }
               const config = { gateway: { controlUi: { enabled: false } } };
-              applyMockOpenAiModelConfig(config, { mockPort: port, modelRef: MODEL_REF });
+              applyMockOpenAiModelConfig(config, {
+                mockPort: port,
+                modelRef: MODEL_REF,
+                utilityModelRef: "openai/ios-e2e-utility",
+              });
               try {
                 instance = await createOpenClawTestInstance({
                   name: `ios-release-e2e-${index}`,
