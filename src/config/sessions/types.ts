@@ -730,6 +730,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   resumeAfterRestart?: {
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
     operatorSource?: QueuedOperatorRecoverySource;
+    /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */
+    scope?: string;
   };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only

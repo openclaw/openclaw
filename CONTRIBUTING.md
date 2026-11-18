@@ -124,11 +124,19 @@ permissions receive a security-review notice with the affected files and review
 guidance. For sensitive product changes, a PR author with a GitHub user account and
 repository `maintain` or `admin` access needs no additional security approval.
 Other authors need a command comment from a user with either role. Dependency
-changes instead require a repository admin or an active member of
+changes generally require a repository admin or an active member of
 `@openclaw/openclaw-secops`, either as the PR author or as the command approver:
 
 - `/allow-security-sensitive-change` for sensitive product changes.
 - `/allow-dependencies-change` from a repository admin or SecOps member for dependency changes that require approval.
+
+Maintain authors also qualify when all dependency-sensitive edits are release-version
+alignment in existing manifests: top-level `version` in the root, the `ai`,
+`gateway-client`, and `gateway-protocol` packages, and `extensions/*/package.json`;
+bundled plugins may also update existing `devDependencies.openclaw` and
+`peerDependencies.openclaw` release floors. This exemption does not let Maintain
+commenters approve another author's dependencies. See the
+[exact release-alignment scope](https://docs.openclaw.ai/ci/pipeline#security-review-checks).
 
 Wait for the guard notice to show the current PR commit, then post the applicable
 command on its own line in a new PR comment. Use only command lines in that

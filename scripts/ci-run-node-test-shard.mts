@@ -27,7 +27,7 @@ import {
   decodeNodeTestGroups,
   nodeTestVolumeEnvironment,
 } from "./lib/ci-node-test-groups-codec.mts";
-import type { NodeTestVolume } from "./lib/ci-node-test-inventory.mts";
+import type { NodeTestTargetVolume, NodeTestVolume } from "./lib/ci-node-test-inventory.mts";
 import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -87,7 +87,13 @@ function reportCiResourceSnapshot(phase: "start" | "end") {
   );
 }
 
-export type ShardTargetPlan = { kind: "target"; name: string; target: string };
+export type ShardTargetPlan = {
+  kind: "target";
+  name: string;
+  target: string;
+  configs?: string[];
+  volume?: NodeTestVolume;
+};
 type ShardGroupConfig = {
   configs: string[];
   requiresDist?: boolean;
@@ -120,6 +126,17 @@ function isShardGroupConfig(value: unknown): value is ShardGroupConfig {
   return isRecord(value) && isStringArray(value.configs);
 }
 
+function isTargetVolume(value: unknown): value is NodeTestTargetVolume {
+  return (
+    isRecord(value) &&
+    typeof value.target === "string" &&
+    isStringArray(value.configs) &&
+    value.configs.length > 0 &&
+    new Set(value.configs).size === value.configs.length &&
+    isRecord(value.volume)
+  );
+}
+
 function volumeCount(value: unknown) {
   return isRecord(value) &&
     typeof value.count === "number" &&
@@ -147,9 +164,31 @@ function parseJsonEnv(
 export function resolveShardPlans(env: NodeJS.ProcessEnv = process.env): ShardPlan[] {
   const targets = parseJsonEnv(env, "OPENCLAW_NODE_TEST_TARGETS_JSON");
   if (isStringArray(targets) && targets.length > 0) {
+    let volumes: unknown[] = [];
+    try {
+      const packed = env.OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64;
+      if (packed) {
+        volumes = decodeNodeTestGroups(packed);
+      }
+    } catch {
+      // Optional accounting cannot prevent a selected target from executing.
+    }
     // One target per child process preserves the isolation boundaries encoded
     // by full-suite include-pattern shards while keeping one runner job.
-    return targets.map((target) => ({ kind: "target", name: target, target }));
+    return targets.map((target) => {
+      // Malformed duplicates are still duplicate identities, not permission to pick a valid row.
+      const matches = volumes.filter((value) => isRecord(value) && value.target === target);
+      const measured = matches.length === 1 ? matches[0] : undefined;
+      return isTargetVolume(measured)
+        ? {
+            kind: "target",
+            name: target,
+            target,
+            configs: measured.configs,
+            volume: measured.volume,
+          }
+        : { kind: "target", name: target, target };
+    });
   }
 
   // The CI manifest packs matrix groups so preflight's job outputs stay under
@@ -607,6 +646,8 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
   const inheritedEnv = options.env ?? process.env;
   const jobEnv = mergePlanEnv({}, parseJsonEnv(inheritedEnv, "OPENCLAW_NODE_TEST_ENV_JSON"));
   const baseEnv = mergePlanEnv(inheritedEnv, jobEnv);
+  // The runner consumes accounting transport; it is not part of a test child's environment.
+  delete baseEnv.OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64;
   const observationRoot = baseEnv.OPENCLAW_CI_TEST_OBSERVATIONS_DIR;
   const observe = Boolean(
     observationRoot &&
@@ -1014,20 +1055,28 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
             }
           }
           Object.assign(childEnv, selection.env, preparedBuildEnv);
-          if (entry.kind === "group" && entry.plan.volume?.version === 1) {
-            const volume = entry.plan.volume;
+          const volume = entry.kind === "group" ? entry.plan.volume : entry.volume;
+          if (entry.kind === "target" || volume?.version === 1) {
+            const configs =
+              entry.kind === "group"
+                ? selectedArgs
+                : entry.configs?.length
+                  ? entry.configs
+                  : [null];
             const environment = nodeTestVolumeEnvironment(childEnv, [
               ...Object.keys(jobEnv),
-              ...Object.keys(entry.plan.env ?? {}),
+              ...Object.keys(entry.kind === "group" ? (entry.plan.env ?? {}) : {}),
             ]);
-            for (const config of selectedArgs) {
+            for (const config of configs) {
               const argsDigest = createHash("sha256")
                 .update(JSON.stringify([config, ...selectedVitestArgs]))
                 .digest("hex");
               const matches =
+                volume?.version === 1 &&
                 volume.policy === policy &&
                 Array.isArray(volume.entries) &&
-                volume.entries.length <= 4 * entry.plan.configs.length &&
+                volume.entries.length <=
+                  4 * (entry.kind === "group" ? entry.plan.configs.length : configs.length) &&
                 !baseEnv.OPENCLAW_VITEST_INCLUDE_FILE &&
                 !baseEnv.OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE
                   ? volume.entries.filter(
@@ -1047,11 +1096,15 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                   version: 1,
                   unit: "test-file",
                   state: "planned",
-                  revision: /^[a-f0-9]{40}$/u.test(volume.revision) ? volume.revision : null,
+                  revision:
+                    typeof volume?.revision === "string" && /^[a-f0-9]{40}$/u.test(volume.revision)
+                      ? volume.revision
+                      : null,
                   config,
+                  ...(entry.kind === "target" ? { target: entry.target } : {}),
                   runtime,
                   engine: selection.engine ?? "vitest",
-                  timingKey: entry.timingKey,
+                  timingKey: entry.kind === "group" ? entry.timingKey : undefined,
                   admittedProfile: createHash("sha256")
                     .update(
                       JSON.stringify([
@@ -1065,7 +1118,10 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                     )
                     .digest("hex"),
                   profile:
-                    measured && /^[a-f0-9]{64}$/u.test(measured.profile) ? measured.profile : null,
+                    typeof measured?.profile === "string" &&
+                    /^[a-f0-9]{64}$/u.test(measured.profile)
+                      ? measured.profile
+                      : null,
                   full:
                     full && typeof fullId === "string" && /^[a-f0-9]{64}$/u.test(fullId)
                       ? { ...full, id: fullId }

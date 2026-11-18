@@ -16,6 +16,7 @@ import {
   withDiagnosticsTimelineObserver,
 } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
@@ -30,6 +31,7 @@ import { runOutsideOperatorToolGatewayAuthority } from "../operator-tool-gateway
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
+import { resolveSessionChildController } from "../session-utils-core.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
@@ -157,6 +159,11 @@ export async function handleChatSendWithStorage(
     runId: clientRunId,
     sessionKey,
     spawnedBy: entry?.spawnedBy,
+    isUncontrolledDashboardChild: Boolean(
+      entry?.spawnedBy &&
+      parseAgentSessionKey(sessionKey)?.rest.startsWith("dashboard:") &&
+      !resolveSessionChildController(sessionKey, entry),
+    ),
     client,
     isCurrent: hasCurrentClientAuthority,
     inputProvenance: systemInputProvenance,

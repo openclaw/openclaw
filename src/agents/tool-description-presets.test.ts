@@ -53,6 +53,14 @@ it.each([describeSessionsListTool, describeSessionsHistoryTool, describeSessions
   },
 );
 
+it("describes the dashboard filter and distinguishes absence from unknown", () => {
+  const description = describeSessionsListTool();
+  expect(description).toContain("hasBoard, kind/agent/activity/archive");
+  expect(description).toContain(
+    "hasBoard reports saved dashboard presence without content; omitted means unknown, not empty.",
+  );
+});
+
 it("distinguishes sessions_send local context selection from exact external addressing", () => {
   const description = describeSessionsSendTool();
   expect(SESSIONS_SEND_TOOL_DISPLAY_SUMMARY).toContain("same-Gateway");

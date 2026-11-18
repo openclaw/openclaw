@@ -31,13 +31,13 @@ suite.define(() => {
       const advanced = page.locator("details.cron-advanced").first();
       const summary = advanced.locator("summary").first();
       await summary.click();
-      await page.getByRole("switch", { name: "Active hours", exact: true }).click();
+      await page.getByRole("switch", { name: "Only run during set hours", exact: true }).click();
       const input = page.locator("#cron-active-hours-start");
       await input.fill("invalid");
       await expect.poll(() => input.getAttribute("aria-invalid")).toBe("true");
       await summary.click();
       expect(await input.isVisible()).toBe(false);
-      const link = page.locator(".cron-form-status__link").filter({ hasText: "Window start:" });
+      const link = page.locator(".cron-form-status__link").filter({ hasText: "From:" });
       await link.focus();
       await page.keyboard.press("Enter");
       const outcome = await input.evaluate((element) => ({

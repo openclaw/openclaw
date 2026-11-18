@@ -104,7 +104,7 @@ async function refusedExecThenRejectedCall() {
   return { ...turn, failure, failedTool, failedResult, modelApi: "anthropic-messages" };
 }
 
-function terminalCase(turn: Partial<TerminalInput>) {
+function terminalCase(turn: Parameters<typeof makeTerminalInput>[0]) {
   const activateInternalPrompt = vi.fn();
   const input = makeTerminalInput({
     ...turn,
@@ -254,4 +254,16 @@ it("does not continue after an unrelated provider error", async () => {
 
   expect(result.action).toBe("complete");
   expect(activateInternalPrompt).not.toHaveBeenCalled();
+});
+
+it("continues a rejected call once in a scheduled run", async () => {
+  const turn = rejectedCallAfterSettledTool();
+  const { resolve, activateInternalPrompt } = terminalCase({
+    ...turn,
+    runParams: { trigger: "cron" },
+  });
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("rejected before it ran"),
+  );
 });
