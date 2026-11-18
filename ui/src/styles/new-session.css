@@ -1073,41 +1073,43 @@ span.new-session-page__select {
   }
 }
 
-/* Keep the keyboard's visible canvas separate from its panned layout extent. */
-:root[data-shell-keyboard] .new-session-page__scroll {
-  container: new-session / size;
-  max-height: var(--shell-visible-height);
-  margin-top: auto;
-}
-
-/* A roomy keyboard keeps the full-size welcome, but its long draft still has
-   to shrink so the tray and Send fit within the visual viewport. */
-@container new-session (max-width: 932px) and (height > 500px) {
-  :root[data-shell-keyboard] .new-session-page .agent-chat__welcome,
-  :root[data-shell-keyboard] .new-session-page__draft {
-    flex-shrink: 1;
-    min-height: 0;
+:root[data-shell-keyboard] {
+  /* Keep the keyboard's visible canvas separate from its panned layout extent. */
+  .new-session-page__scroll {
+    container: new-session / size;
+    max-height: var(--shell-visible-height);
+    margin-top: auto;
   }
 
-  :root[data-shell-keyboard] .new-session-page__composer {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
-    min-height: 0;
-  }
+  /* A roomy keyboard keeps the full-size welcome, but its long draft still has
+     to shrink so the tray and Send fit within the visual viewport. */
+  @container new-session (max-width: 932px) and (height > 500px) {
+    .new-session-page .agent-chat__welcome,
+    .new-session-page__draft {
+      flex-shrink: 1;
+      min-height: 0;
+    }
 
-  :root[data-shell-keyboard] .new-session-page__context-tray {
-    flex-shrink: 0;
-  }
+    .new-session-page__composer {
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-height: 0;
+    }
 
-  :root[data-shell-keyboard] .new-session-page__composer > .agent-chat__input,
-  :root[data-shell-keyboard] .new-session-page__composer .agent-chat__composer-input-row {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
+    .new-session-page__context-tray {
+      flex-shrink: 0;
+    }
 
-  :root[data-shell-keyboard] .new-session-page__composer .agent-chat__composer-combobox {
-    min-height: 0;
+    .new-session-page__composer > .agent-chat__input,
+    .new-session-page__composer .agent-chat__composer-input-row {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
+
+    .new-session-page__composer .agent-chat__composer-combobox {
+      min-height: 0;
+    }
   }
 }
 
@@ -1125,31 +1127,31 @@ span.new-session-page__select {
     margin-top: 8px;
   }
 
+  .new-session-page__context-tray {
+    flex-shrink: 0;
+  }
+
   /* A long draft yields to the tray and Send inside the available canvas. */
   .new-session-page__composer {
     display: flex;
     flex-direction: column;
     align-items: stretch;
     min-height: 0;
-  }
 
-  .new-session-page__context-tray {
-    flex-shrink: 0;
-  }
+    > .agent-chat__input,
+    .agent-chat__composer-input-row {
+      flex: 1 1 auto;
+      min-height: 0;
+    }
 
-  .new-session-page__composer > .agent-chat__input,
-  .new-session-page__composer .agent-chat__composer-input-row {
-    flex: 1 1 auto;
-    min-height: 0;
-  }
+    .agent-chat__composer-combobox {
+      min-height: 0;
+    }
 
-  .new-session-page__composer .agent-chat__composer-combobox {
-    min-height: 0;
-  }
-
-  .new-session-page__composer .new-session-page__message {
-    min-height: 48px;
-    max-height: min(10lh, max(48px, 25cqh));
+    .new-session-page__message {
+      min-height: 48px;
+      max-height: min(10lh, max(48px, 25cqh));
+    }
   }
 
   .new-session-page .agent-chat__welcome-identity {
@@ -1620,22 +1622,6 @@ span.new-session-page__select {
   width: 6ch;
 }
 
-/* The context tray tucks behind the composer; each picker anchors its own menu. */
-.new-session-page__context-tray {
-  --new-session-tray-radius: var(--composer-radius);
-  --new-session-tray-edge: 18px;
-  --new-session-tray-surface: color-mix(in oklab, var(--text) 3%, var(--bg));
-
-  position: relative;
-  z-index: 1;
-  margin-top: calc(-1 * var(--new-session-tray-radius));
-  padding-top: var(--new-session-tray-radius);
-  border-radius: 0 0 var(--new-session-tray-radius) var(--new-session-tray-radius);
-  background: var(--new-session-tray-surface);
-  box-shadow: var(--shadow-sm);
-  corner-shape: superellipse(1.5);
-}
-
 /* The tray is secondary: dark themes' small shadow is strong enough to outline it. */
 :root[data-theme-mode="dark"] .new-session-page__context-tray {
   box-shadow: none;
@@ -1668,80 +1654,95 @@ span.new-session-page__select {
     0 2px 4px rgb(0 0 0 / 4%);
 }
 
-.new-session-page__context-tray .new-session-page__triggers {
-  position: relative;
-  top: -3px;
-  flex-wrap: nowrap;
-  gap: 2px;
-  width: 100%;
-  max-width: none;
-  height: 36px;
-  padding-block: 0;
-  padding-inline: calc(var(--new-session-tray-edge) - 10px);
-}
-
-/* The device path and its explanation need their own content-sized row. */
-.new-session-page__context-tray
-  .new-session-page__triggers:has(> .new-session-page__device-folder) {
-  flex-wrap: wrap;
-  height: auto;
-}
-
-.new-session-page__context-tray .new-session-page__workspace {
-  gap: 2px;
-  border: 0;
-}
-
-.new-session-page__context-tray span.new-session-page__select {
-  display: flex;
-  align-items: center;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 100%;
-}
-
-.new-session-page__context-tray .new-session-page__trigger {
-  min-width: 0;
-  max-width: 100%;
-  height: 26px;
-  min-height: 0;
-  padding: 0 10px;
-  gap: 6px;
-  border: 0;
-  border-radius: var(--radius-full);
-  font-size: 12px;
-  font-weight: var(--control-ui-font-weight-normal);
-}
-
-@media (hover: hover) {
-  .new-session-page__context-tray .new-session-page__trigger:hover:not(:disabled) {
-    background: var(--surface-hover);
-  }
-}
-
-.new-session-page__context-tray .new-session-page__trigger-label {
-  min-inline-size: 8ch;
-  max-width: 300px;
-}
-
 .new-session-page__picker-chevron {
   display: none;
 }
 
-.new-session-page__context-tray .new-session-page__target-icon {
-  flex: 0 0 14px;
-  width: 14px;
-  height: 14px;
-}
+/* The context tray tucks behind the composer; each picker anchors its own menu. */
+.new-session-page__context-tray {
+  --new-session-tray-radius: var(--composer-radius);
+  --new-session-tray-edge: 18px;
+  --new-session-tray-surface: color-mix(in oklab, var(--text) 3%, var(--bg));
 
-.new-session-page__context-tray .new-session-page__target-icon svg {
-  width: 14px;
-  height: 14px;
-}
+  position: relative;
+  z-index: 1;
+  margin-top: calc(-1 * var(--new-session-tray-radius));
+  padding-top: var(--new-session-tray-radius);
+  border-radius: 0 0 var(--new-session-tray-radius) var(--new-session-tray-radius);
+  background: var(--new-session-tray-surface);
+  box-shadow: var(--shadow-sm);
+  corner-shape: superellipse(1.5);
 
-.new-session-page__context-tray .new-session-page__trigger:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
+  .new-session-page__triggers {
+    position: relative;
+    top: -3px;
+    flex-wrap: nowrap;
+    gap: 2px;
+    width: 100%;
+    max-width: none;
+    height: 36px;
+    padding-block: 0;
+    padding-inline: calc(var(--new-session-tray-edge) - 10px);
+  }
+
+  /* The device path and its explanation need their own content-sized row. */
+  .new-session-page__triggers:has(> .new-session-page__device-folder) {
+    flex-wrap: wrap;
+    height: auto;
+  }
+
+  .new-session-page__workspace {
+    gap: 2px;
+    border: 0;
+  }
+
+  span.new-session-page__select {
+    display: flex;
+    align-items: center;
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .new-session-page__trigger {
+    min-width: 0;
+    max-width: 100%;
+    height: 26px;
+    min-height: 0;
+    padding: 0 10px;
+    gap: 6px;
+    border: 0;
+    border-radius: var(--radius-full);
+    font-size: 12px;
+    font-weight: var(--control-ui-font-weight-normal);
+  }
+
+  @media (hover: hover) {
+    .new-session-page__trigger:hover:not(:disabled) {
+      background: var(--surface-hover);
+    }
+  }
+
+  .new-session-page__trigger-label {
+    min-inline-size: 8ch;
+    max-width: 300px;
+  }
+
+  .new-session-page__target-icon {
+    flex: 0 0 14px;
+    width: 14px;
+    height: 14px;
+  }
+
+  .new-session-page__target-icon svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .new-session-page__trigger:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
 }
 
 .new-session-page__picker-panel {
@@ -2089,51 +2090,51 @@ span.new-session-page__select {
     border-radius: 0;
     background: none;
     box-shadow: none;
-  }
 
-  .new-session-page__context-tray .new-session-page__triggers {
-    top: 0;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 2px;
-    height: auto;
-    padding: 0;
-  }
+    .new-session-page__triggers {
+      top: 0;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 2px;
+      height: auto;
+      padding: 0;
+    }
 
-  .new-session-page__context-tray .new-session-page__workspace {
-    display: contents;
-  }
+    .new-session-page__workspace {
+      display: contents;
+    }
 
-  .new-session-page__context-tray span.new-session-page__select {
-    flex: none;
-    width: 100%;
-    max-width: none;
-  }
+    span.new-session-page__select {
+      flex: none;
+      width: 100%;
+      max-width: none;
+    }
 
-  .new-session-page__context-tray span.new-session-page__select > .new-session-page__trigger {
-    justify-content: flex-start;
-    width: 100%;
-    height: 36px;
-    padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
-  }
+    span.new-session-page__select > .new-session-page__trigger {
+      justify-content: flex-start;
+      width: 100%;
+      height: 36px;
+      padding: 0 calc(var(--chat-composer-editor-inset-inline, 14px) + 1px);
+    }
 
-  .new-session-page__context-tray .new-session-page__trigger-label {
-    max-width: none;
-  }
+    .new-session-page__trigger-label {
+      max-width: none;
+    }
 
-  .new-session-page__context-tray .new-session-page__picker-chevron {
-    display: block;
-    flex: 0 0 14px;
-    width: 14px;
-    height: 14px;
-    margin-inline-start: auto;
-    color: var(--muted);
-    stroke-width: 1.5px;
-  }
+    .new-session-page__picker-chevron {
+      display: block;
+      flex: 0 0 14px;
+      width: 14px;
+      height: 14px;
+      margin-inline-start: auto;
+      color: var(--muted);
+      stroke-width: 1.5px;
+    }
 
-  .new-session-page__context-tray .new-session-page__trigger-summary {
-    display: block;
-    max-width: none;
+    .new-session-page__trigger-summary {
+      display: block;
+      max-width: none;
+    }
   }
 
   .new-session-page__skeletons--tray {
