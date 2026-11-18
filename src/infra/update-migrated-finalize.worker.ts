@@ -21,6 +21,7 @@ import type {
   MigratedUpdateFinalizationResult,
   UpdatePluginCohortSettlementResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
+import { reinspectInconclusiveGitReleaseState } from "../cli/update-cli/update-command-migrated.js";
 import { writePostCoreUpdateFailureFile } from "../cli/update-cli/update-command-post-core.js";
 import { finishUpdate } from "../cli/update-cli/update-command-post-update.js";
 import {
@@ -595,24 +596,23 @@ async function finalizeInput(
   let exitCode = 0;
   let candidateStartAttempted = false;
   try {
+    const params = await reinspectInconclusiveGitReleaseState({
+      ...input.params,
+      result: { ...input.params.result, runId: run.runId },
+      opts: { ...input.params.opts, run },
+      ...(stopped
+        ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
+        : {}),
+    });
+    executorFence.assertCurrent();
     // This worker already loaded the candidate; the local flag conveys no authority.
-    result = await finishUpdate(
-      {
-        ...input.params,
-        result: { ...input.params.result, runId: run.runId },
-        opts: { ...input.params.opts, run },
-        ...(stopped
-          ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
-          : {}),
+    result = await finishUpdate(params, {
+      candidateRuntime: true,
+      adoptedFinalization: true,
+      onGatewayStartAttempted: () => {
+        candidateStartAttempted = true;
       },
-      {
-        candidateRuntime: true,
-        adoptedFinalization: true,
-        onGatewayStartAttempted: () => {
-          candidateStartAttempted = true;
-        },
-      },
-    );
+    });
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
       throw error;

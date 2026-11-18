@@ -10,6 +10,7 @@ import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveUserPath } from "../../infra/home-dir.js";
+import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -21,9 +22,12 @@ import {
   updateStateSchemaVersionsMatch,
 } from "../../infra/update-candidate-state.versions.js";
 import { resolveUpdateFinalizationTimeoutMs } from "../../infra/update-finalization-budget.js";
+import { verifyGitUpdateRecovery } from "../../infra/update-git-runtime.js";
 import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import { runUtf8CommandBuffersWithTimeout } from "../../process/exec-runner.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
@@ -55,15 +59,27 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
-/** Inspect private state copies without reopening migrated state through the previous runtime. */
+/**
+ * Inspect private state copies without reopening migrated state through the previous runtime.
+ *
+ * Data at risk needs positive evidence: a changed schema, or an unreadable store after a
+ * candidate Doctor or boot may have written it. Before any candidate opened state, an
+ * unreadable store still holds the previous version's state; that read is a warning.
+ *
+ * A Git release switches only the release link: the previous Gateway keeps serving and
+ * writing, no Doctor runs, and the Gateway that starts from the release migrates at boot.
+ * Its inspection reads the live stores directly, as the pre-activation baseline does.
+ */
 export async function inspectActivatedUpdateState(
   params: Pick<
     FinishUpdateParams,
-    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner"
+    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner" | "gitRelease"
   > & {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
     candidateSchemaVersions?: OpenClawSchemaVersions;
+    /** Omitted means a candidate may have written state. */
+    candidateOpenedState?: boolean;
     timeoutMs?: number;
   },
 ): Promise<FinishUpdateParams["rollbackBlockedReason"]> {
@@ -71,6 +87,7 @@ export async function inspectActivatedUpdateState(
   if (!schemaVersions) {
     return undefined;
   }
+  const gitRelease = params.gitRelease === true;
   const agentPaths = new Set(
     [env.OPENCLAW_AGENT_DIR, env.PI_CODING_AGENT_DIR].flatMap((directory) =>
       directory?.trim()
@@ -88,7 +105,9 @@ export async function inspectActivatedUpdateState(
       nodeRunner: params.packageUpdateNodeRunner,
       timeoutMs: params.timeoutMs,
       includeRetainedAgentPaths: true,
-      preserveSourceArtifacts: true,
+      // Preserved artifacts keep the final Doctor's captured generation valid. A Git
+      // release captures none, and a full copy of a live store never stabilizes.
+      preserveSourceArtifacts: !gitRelease,
       onInventory: (files) => {
         for (const database of files.values()) {
           if (
@@ -113,6 +132,7 @@ export async function inspectActivatedUpdateState(
       : [];
     if (
       result.status === "ok" &&
+      !gitRelease &&
       candidateSchemaVersions &&
       (sharedVersion !== candidateSchemaVersions.state || incompleteAgents.length > 0)
     ) {
@@ -146,6 +166,13 @@ export async function inspectActivatedUpdateState(
       ? undefined
       : "state-migrated-no-rollback";
   } catch (error) {
+    if (params.candidateOpenedState === false && result.root) {
+      // No candidate has opened live state, so an unreadable store is no evidence of change.
+      result.steps.push(
+        inconclusiveInspectionStep(result.root, error, gitRelease, result.status === "ok"),
+      );
+      return undefined;
+    }
     result.status = "error";
     result.reason = "rollback-state-unverified";
     result.steps.push({
@@ -162,6 +189,121 @@ export async function inspectActivatedUpdateState(
     result.recovery = unsafeUpdateRecovery(result.recovery, blocked);
   }
   return blocked;
+}
+
+function schemaVerificationAdvisory(cwd: string, message: string): UpdateStepResult {
+  return {
+    name: "state-schema-verification",
+    command: "openclaw update",
+    cwd,
+    durationMs: 0,
+    exitCode: 0,
+    advisory: { kind: "recoverable-maintenance", message },
+  };
+}
+
+/** Warnings render as one line. */
+function oneLine(cause: unknown): string {
+  return formatErrorMessage(cause).replace(/\s+/g, " ");
+}
+
+function inconclusiveInspectionStep(
+  cwd: string,
+  cause: unknown,
+  gitRelease: boolean,
+  continues: boolean,
+): UpdateStepResult {
+  const state = gitRelease
+    ? "The previous Gateway kept serving and no data was changed."
+    : "No data was changed because no new-version process had opened the state.";
+  const outcome = !continues
+    ? ""
+    : gitRelease
+      ? " The update continues; the new release migrates state when it starts."
+      : " The update continues.";
+  return schemaVerificationAdvisory(
+    cwd,
+    `State schema check was inconclusive (${oneLine(cause)}). ${state}${outcome}`,
+  );
+}
+
+/**
+ * Installed updaters that already run Git releases (main from #199706) copy every live
+ * store after the switch and record a source that never stabilized as data at risk,
+ * then hand the run to this candidate before any Gateway restart. Only that exact
+ * record is re-inspected; any other failure, or a changed schema, keeps its outcome.
+ */
+export async function reinspectInconclusiveGitReleaseState(
+  params: FinishUpdateParams,
+): Promise<FinishUpdateParams> {
+  const { result } = params;
+  // The adopting driver appends its own handoff timing after the recorded failure.
+  const failedIndex = result.steps.findLastIndex(
+    (step) => step.name === "state-schema-verification",
+  );
+  const failed = result.steps[failedIndex];
+  if (
+    params.gitRelease !== true ||
+    // Under --no-restart the link stays on the previous release until the next start.
+    !params.shouldRestart ||
+    params.rollbackBlockedReason !== "rollback-state-unverified" ||
+    params.databaseBackup ||
+    params.packageTransaction ||
+    params.preManagedServiceStop?.stopped ||
+    result.status !== "error" ||
+    result.reason !== "rollback-state-unverified" ||
+    result.recovery?.serviceRestartSafe !== false ||
+    result.recovery.dataAtRisk !== "rollback-state-unverified" ||
+    failed?.name !== "state-schema-verification" ||
+    failed.exitCode !== 1 ||
+    !failed.stderrTail?.includes("SQLite source did not stabilize") ||
+    result.steps.slice(failedIndex + 1).some((step) => step.exitCode !== 0) ||
+    !result.root ||
+    !readPackageReleaseSlotSync(result.root)
+  ) {
+    return params;
+  }
+  try {
+    const { reason: _failure, ...unfailed } = result;
+    const steps = result.steps.filter((_, index) => index !== failedIndex);
+    const retried: UpdateRunResult = {
+      ...unfailed,
+      status: "ok",
+      // The selected release's own verdict, which the shipped record overwrote.
+      recovery: await verifyGitUpdateRecovery({
+        root: result.root,
+        sha: result.after?.sha ?? null,
+      }),
+      steps,
+    };
+    const recordedSteps = steps.length;
+    const blocked = await inspectActivatedUpdateState({
+      ...params,
+      result: retried,
+      candidateOpenedState: false,
+      config: params.configSnapshot.config,
+      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env ?? process.env,
+      timeoutMs: params.updateStepTimeoutMs,
+    });
+    if (blocked || retried.status !== "ok") {
+      return params;
+    }
+    // An inconclusive reread already recorded its own warning in place of this one.
+    if (retried.steps.length === recordedSteps) {
+      retried.steps.splice(
+        failedIndex,
+        0,
+        schemaVerificationAdvisory(
+          failed.cwd,
+          `The installed updater's copy of the live stores did not stabilize while the previous Gateway kept writing (${oneLine(failed.stderrTail)}). The new release reread them directly: no schema moved and no data was changed. The update continues.`,
+        ),
+      );
+    }
+    return { ...params, result: retried, rollbackBlockedReason: undefined };
+  } catch {
+    // The recheck is best effort; the recorded outcome still stands.
+    return params;
+  }
 }
 
 /** After migration, only candidate code may reopen state or finish the run. */

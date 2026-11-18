@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
@@ -26,8 +26,17 @@ import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journ
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
-import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
-import { inspectActivatedUpdateState } from "./update-command-migrated.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
+import {
+  finishParams,
+  updateResult,
+  updateStep,
+} from "./update-command-maintenance-fixtures.test-support.js";
+import {
+  inspectActivatedUpdateState,
+  reinspectInconclusiveGitReleaseState,
+} from "./update-command-migrated.js";
+import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 // The retained updater reads through the real candidate's newer schema contract.
 vi.mock("../../state/openclaw-schema-versions.js", async (importOriginal) => {
@@ -41,11 +50,17 @@ const currentSchemas = {
 };
 const runtimeFixture = createFixtureLifetime();
 let candidateRoot: string;
+/** The Git release link selecting the candidate runtime, as a switched release leaves it. */
+let releaseSlot: string;
 beforeAll(async () => {
-  const runtime = await runtimeFixture.run(() =>
-    prepareCandidateAuthorityRuntime(runtimeFixture.createTempDir("schema-candidate-runtime-")),
-  );
+  const prefix = await fs.realpath(runtimeFixture.createTempDir("schema-candidate-runtime-"));
+  const releaseRoot = path.join(prefix, "releases", "r1", "lib", "node_modules", "openclaw");
+  await fs.mkdir(releaseRoot, { recursive: true });
+  const runtime = await runtimeFixture.run(() => prepareCandidateAuthorityRuntime(releaseRoot));
   candidateRoot = fileURLToPath(new URL("../../", runtime.worker));
+  releaseSlot = path.join(prefix, "lib", "node_modules", "openclaw");
+  await fs.mkdir(path.dirname(releaseSlot), { recursive: true });
+  await fs.symlink(path.relative(path.dirname(releaseSlot), releaseRoot), releaseSlot);
 });
 afterAll(() => runtimeFixture.cleanup());
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -298,5 +313,183 @@ it("refuses state inspection when activation leaves no known runtime root", asyn
   expect(result).toMatchObject({
     reason: "rollback-state-unverified",
     steps: [expect.objectContaining({ name: "state-schema-verification", exitCode: 1 })],
+  });
+});
+
+/** A main agent store at the installed schema, registered as the serving Gateway leaves it. */
+async function servingAgentStore(prefix: string) {
+  const state = await fixture(prefix);
+  runOpenClawAgentWriteTransaction(() => {}, { agentId: "main", env: state.env });
+  closeOpenClawAgentDatabasesForTest();
+  const agentPath = path.join(state.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  const schemaVersions = await readUpdateStateSchemaVersions({
+    stateDir: state.stateDir,
+    config: {},
+    env: state.env,
+  });
+  return { ...state, agentPath, schemaVersions };
+}
+
+/** Any unreadable store: the read fails without saying whether the schema moved. */
+async function makeUnreadable(file: string) {
+  await fs.rm(`${file}-wal`, { force: true });
+  await fs.rm(`${file}-shm`, { force: true });
+  await fs.writeFile(file, "not an sqlite database, the read cannot classify it");
+}
+
+const nextSchemas = { ...currentSchemas, agent: OPENCLAW_AGENT_SCHEMA_VERSION + 1 };
+
+it.each([
+  // A switched release: nothing from the candidate has run before the restart.
+  { path: "Git release", gitRelease: true, opened: false, status: "ok", atRisk: false },
+  // Activation failed before the candidate Doctor ran.
+  {
+    path: "package, before Doctor",
+    gitRelease: false,
+    opened: false,
+    status: "error",
+    atRisk: false,
+  },
+  { path: "package, after Doctor", gitRelease: false, opened: true, status: "ok", atRisk: true },
+  {
+    path: "caller without the fact",
+    gitRelease: false,
+    opened: undefined,
+    status: "ok",
+    atRisk: true,
+  },
+] as const)(
+  "an unreadable store is data at risk only after a candidate opened state ($path)",
+  async ({ gitRelease, opened, status, atRisk }) => {
+    const { env, agentPath, schemaVersions } = await servingAgentStore("update-unreadable-");
+    const result = updateResult({ root: releaseSlot, durationMs: 0, status });
+    await makeUnreadable(agentPath);
+    const blocked = await inspect({
+      result,
+      schemaVersions,
+      candidateSchemaVersions: nextSchemas,
+      gitRelease,
+      candidateOpenedState: opened,
+      env,
+    });
+    const nextAction = resolveUpdateResultNextAction({ result, serviceRunning: true, env });
+    if (atRisk) {
+      expect(blocked).toBe("rollback-state-unverified");
+      expect(result).toMatchObject({
+        status: "error",
+        recovery: { serviceRestartSafe: false, dataAtRisk: "rollback-state-unverified" },
+      });
+      expect(nextAction).toContain("data at risk (rollback-state-unverified)");
+      return;
+    }
+    expect(blocked).toBeUndefined();
+    expect(result.status).toBe(status);
+    expect(result.recovery).toBeUndefined();
+    const warning = result.steps.at(-1);
+    expect(warning).toMatchObject({ name: "state-schema-verification", exitCode: 0 });
+    expect(warning?.advisory?.message).toMatch(
+      gitRelease
+        ? /^State schema check was inconclusive \(.*\)\. The previous Gateway kept serving and no data was changed\. The update continues; the new release migrates state when it starts\.$/
+        : /^State schema check was inconclusive \(.*\)\. No data was changed because no new-version process had opened the state\.$/,
+    );
+    expect(nextAction ?? "").not.toMatch(/data at risk|Keep the Gateway stopped/);
+  },
+);
+
+it.each([
+  { changed: false, blocked: undefined },
+  { changed: true, blocked: "state-migrated-no-rollback" },
+])(
+  "a Git release leaves migration to the Gateway start and blocks only a moved schema (changed=$changed)",
+  async ({ changed, blocked }) => {
+    const { env, agentPath, schemaVersions } = await servingAgentStore("update-release-schema-");
+    if (changed) {
+      setSchema(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
+    }
+    const result = updateResult({ root: releaseSlot, durationMs: 0 });
+    await expect(
+      inspect({
+        result,
+        schemaVersions,
+        candidateSchemaVersions: nextSchemas,
+        gitRelease: true,
+        candidateOpenedState: false,
+        env,
+      }),
+    ).resolves.toBe(blocked);
+    // The previous Gateway still serves the old schema; no Doctor ran to finish it.
+    expect(result).toMatchObject({ status: "ok", steps: [] });
+  },
+);
+
+describe("a shipped Git release updater's inconclusive record", () => {
+  const unstable =
+    "SQLite source did not stabilize (reason=wal-copy-unstable, attempts=10) after 10 read-only inspection attempts.";
+  async function shippedFailure(
+    overrides: { stderrTail?: string; shouldRestart?: boolean; laterFailure?: boolean } = {},
+  ) {
+    const { stderrTail = unstable, shouldRestart = true, laterFailure = false } = overrides;
+    const store = await servingAgentStore("update-shipped-inconclusive-");
+    const params = finishParams({
+      shouldRestart,
+      root: releaseSlot,
+      gitRelease: true,
+      configSnapshot: { config: {} } as FinishUpdateParams["configSnapshot"],
+      schemaVersions: store.schemaVersions,
+      candidateSchemaVersions: nextSchemas,
+      ownedManagedUpdateEnv: store.env,
+      rollbackBlockedReason: "rollback-state-unverified",
+      result: updateResult({
+        status: "error",
+        mode: "git",
+        root: releaseSlot,
+        reason: "rollback-state-unverified",
+        recovery: {
+          serviceRestartSafe: false,
+          reason: "state-migration-started",
+          dataAtRisk: "rollback-state-unverified",
+        },
+        steps: [
+          updateStep("state-schema-verification", { cwd: releaseSlot, stderrTail }),
+          // The adopting driver records its handoff timing before finalizing.
+          updateStep("update-driver-handoff", { exitCode: laterFailure ? 1 : 0 }),
+        ],
+      }),
+    });
+    return { ...store, params };
+  }
+
+  it("re-reads the live stores and continues the update when nothing moved", async () => {
+    const { params } = await shippedFailure();
+    const recovered = await reinspectInconclusiveGitReleaseState(params);
+    expect(recovered.rollbackBlockedReason).toBeUndefined();
+    expect(recovered.result).toMatchObject({
+      status: "ok",
+      steps: [
+        { name: "state-schema-verification", exitCode: 0 },
+        { name: "update-driver-handoff", exitCode: 0 },
+      ],
+    });
+    expect(recovered.result.reason).toBeUndefined();
+    expect(recovered.result.steps[0]?.advisory?.message).toContain(
+      "The new release reread them directly: no schema moved and no data was changed. The update continues.",
+    );
+    // The selected release's own verdict replaces the shipped data-at-risk stamp.
+    expect(recovered.result.recovery).not.toMatchObject({ reason: "state-migration-started" });
+    expect(recovered.result.recovery?.dataAtRisk).toBeUndefined();
+  });
+
+  it.each([
+    { control: "a moved schema", moveSchema: true, overrides: {} },
+    { control: "another read failure", overrides: { stderrTail: "permission denied" } },
+    { control: "--no-restart", overrides: { shouldRestart: false } },
+    { control: "a later failed step", overrides: { laterFailure: true } },
+  ])("keeps the recorded outcome for $control", async ({ moveSchema, overrides }) => {
+    const { params, agentPath } = await shippedFailure(overrides);
+    if (moveSchema) {
+      setSchema(agentPath, OPENCLAW_AGENT_SCHEMA_VERSION + 1);
+    }
+    await expect(reinspectInconclusiveGitReleaseState(params)).resolves.toBe(params);
+    expect(params.result).toMatchObject({ status: "error", reason: "rollback-state-unverified" });
   });
 });

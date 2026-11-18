@@ -696,6 +696,8 @@ export async function executeMutableUpdate(
     result,
     failure,
     mutationStarted,
+    // A Git release starts nothing from the candidate before its restart.
+    candidateOpenedState: params.gitRelease !== true && (doctorEntered || !params.shouldRestart),
     preManagedServiceStop,
     ownedManagedUpdateContext,
     recoveryEnv,
