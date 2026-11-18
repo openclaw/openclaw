@@ -11,6 +11,7 @@ const spawnProductionBoundaryFiles = [
 // These suites mock shared runtime, network, or plugin modules and cannot
 // share the non-isolated core worker without leaking module state.
 const coreIsolatedFiles = [
+  "src/agents/bash-tools.exec.pty.test.ts",
   "src/agents/cli-runner/bundle-mcp.user-config.test.ts",
   "src/agents/failover/classify.legacy-provider-predicates.test.ts",
   "src/agents/failover/failover-classification.corpus.test.ts",

@@ -36,6 +36,7 @@ import {
   KITCHEN_RESOURCE_CONTROLS,
   type KitchenSinkCalibration,
 } from "./lib/kitchen-sink-calibration.mts";
+import { resolveKitchenSinkNpmSpec } from "./lib/kitchen-sink-plugin/npm-spec.mts";
 import {
   compareResourcePhases,
   measureResourceOperations,
@@ -137,8 +138,7 @@ type PosixProcessRow = {
 };
 type MalformedProcessRow = { pidRaw: string; ppidRaw: string };
 
-const PLUGIN_SPEC =
-  process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
+const PLUGIN_SPEC = resolveKitchenSinkNpmSpec();
 const PLUGIN_ID = process.env.OPENCLAW_KITCHEN_SINK_PLUGIN_ID || "openclaw-kitchen-sink-fixture";
 const CHANNEL_ID = "kitchen-sink-channel";
 const CHANNEL_ACCOUNT_ID = "local";
@@ -230,7 +230,7 @@ Runs the external Kitchen Sink plugin RPC walk against a built OpenClaw entry.
 
 Environment:
   OPENCLAW_ENTRY                         Built OpenClaw entrypoint. Defaults to dist/index.mjs or dist/index.js.
-  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: npm:@openclaw/kitchen-sink@latest.
+  OPENCLAW_KITCHEN_SINK_NPM_SPEC         Plugin package spec. Default: branch-recorded npm version.
   OPENCLAW_KITCHEN_SINK_PLUGIN_ID        Plugin id. Default: openclaw-kitchen-sink-fixture.
   OPENCLAW_KITCHEN_SINK_PERSONALITY      Plugin fixture personality. Default: conformance.
   OPENCLAW_KITCHEN_SINK_RPC_PORT         Gateway loopback port. Default: OS-selected free port.

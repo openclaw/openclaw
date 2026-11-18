@@ -23,6 +23,12 @@ import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
 import * as update from "./update-cli-modules.test-support.js";
 
+// These cases cover the in-place Git runner that Windows checkouts and package-to-Git switches use.
+vi.mock("../infra/git-release-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-release-paths.js")>()),
+  usesGitReleases: () => false,
+}));
+
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
@@ -303,7 +309,7 @@ describe("update-cli", () => {
         },
       );
       const writeStep = stepWrites.recordUpdateRunStepAsync;
-      vi.spyOn(stepWrites, "recordUpdateRunStepAsync").mockImplementation((...args) => {
+      vi.spyOn(stepWrites, "recordUpdateRunStepAsync").mockImplementation(async (...args) => {
         if (args[1].step !== "core migrations" || args[1].status !== "completed") {
           return writeStep(...args);
         }
@@ -311,7 +317,8 @@ describe("update-cli", () => {
         receiptRunId = args[0];
         armed = !intercepted;
         try {
-          return writeStep(...args).catch((error: unknown) => {
+          // Recovery preparation can yield before dispatch; retain the selected receipt through settlement.
+          return await writeStep(...args).catch((error: unknown) => {
             receiptError = error;
             throw error;
           });

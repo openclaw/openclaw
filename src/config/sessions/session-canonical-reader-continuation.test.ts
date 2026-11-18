@@ -64,7 +64,7 @@ async function withReaders(
     database: FixtureDatabase;
     reader: FixtureReader;
     options: { agentId: string; env: NodeJS.ProcessEnv };
-  }) => void,
+  }) => void | Promise<void>,
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
@@ -80,7 +80,7 @@ async function withReaders(
     assert(opened.found, "Expected the seeded read-only database");
     const reader = opened.database;
     try {
-      run({ database, reader, options });
+      await run({ database, reader, options });
     } finally {
       reader.close();
     }
@@ -216,6 +216,63 @@ it.runIf(process.platform !== "win32").each(["before host publication", "before 
         }
       } finally {
         restore?.();
+      }
+    }),
+);
+
+// POSIX keeps the original handles open after replacement; the async host must
+// compare the path again before publishing evidence from their continuation.
+it.runIf(process.platform !== "win32")(
+  "rejects physical replacement at async host publication",
+  () =>
+    withReaders(async ({ database, reader }) => {
+      const held = await canonical.prepareCanonicalSessionReaderContinuation(database);
+      assert(held, "Expected an existing committed reader admission");
+      let restore: (() => void) | undefined;
+      try {
+        corrupt(database);
+        expect(readHealthy(reader, held.receipt)?.entry.sessionId).toBe("healthy");
+        restore = replaceDatabasePath(database.path);
+        expect(database.db.isOpen).toBe(true);
+        await expect(held.prepareCurrent()).rejects.toThrow("no longer current");
+        expect(await canonical.prepareCanonicalSessionReaderContinuation(database)).toBeUndefined();
+      } finally {
+        restore?.();
+        held.release();
+      }
+    }),
+);
+
+it.each(["capture", "publication"] as const)(
+  "refuses a native owner closed during async %s observation",
+  (stage) =>
+    withReaders(async ({ database }) => {
+      // Confirm the actual admitted handle before exercising its close owner.
+      capture(database).release();
+      const held =
+        stage === "publication"
+          ? await canonical.prepareCanonicalSessionReaderContinuation(database)
+          : undefined;
+      if (stage === "publication") {
+        assert(held, "Expected an existing committed reader admission");
+      }
+      let observing: Promise<unknown> | undefined;
+      try {
+        observing = held
+          ? held.prepareCurrent()
+          : canonical.prepareCanonicalSessionReaderContinuation(database);
+        // The async stat is submitted before this call; no callback can resume
+        // before this same-turn native close, so no arbitrary timer is involved.
+        expect(agentDb.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+        expect(database.db.isOpen).toBe(false);
+        if (held) {
+          await expect(observing).rejects.toThrow("no longer current");
+        } else {
+          expect(await observing).toBeUndefined();
+        }
+      } finally {
+        await Promise.allSettled(observing ? [observing] : []);
+        held?.release();
       }
     }),
 );

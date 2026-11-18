@@ -540,7 +540,36 @@ function trackMaterializedKeys(database: OpenClawAgentDatabase) {
 }
 
 describe("SQLite exclusions and candidate reference reads", () => {
-  it.each(["UTF-8", "UTF-16le"] as const)(
+  it("reuses writer-owned reference predicates without validating plain entry JSON again", () => {
+    const { database, put, refs } = excludedRowsFixture();
+    put(
+      "plain",
+      "plain",
+      JSON.stringify({ sessionId: "plain", updatedAt: 1, label: "x".repeat(16384) }),
+    );
+    const validator = new DatabaseSync(":memory:");
+    const validate = validator.prepare("SELECT json_valid(?) AS valid");
+    let validations = 0;
+    requireNativeSqliteDatabase(database.db).function("json_valid", (value) => {
+      validations++;
+      return Number(validate.get(value)?.valid);
+    });
+    try {
+      expect(refs()).toEqual(new Set(["plain"]));
+      expect(validations).toBe(0);
+      put(
+        "optional",
+        "optional",
+        '{"sessionId":"optional","updatedAt":1,"previousSessionId":"retained"}',
+      );
+      expect(refs()).toEqual(new Set(["plain", "optional", "retained"]));
+      expect(validations).toBe(1);
+    } finally {
+      validator.close();
+    }
+  });
+
+  it.each(["UTF-8", "UTF-16le", "UTF-16be"] as const)(
     "preserves exact exclusions across %s text conversion",
     (encoding) => {
       const { database, seed, cap } = excludedRowsFixture(encoding);
@@ -550,11 +579,16 @@ describe("SQLite exclusions and candidate reference reads", () => {
       seed(keys);
       expect(database.db.prepare("PRAGMA encoding").get()?.encoding).toBe(encoding);
       const excluded = new Set(["agent:main:\uFFFE", "agent:main:\uFFFF", ...keys.slice(1)]);
+      const storedRows = database.db
+        .prepare("SELECT session_key, current_session_id FROM session_nodes")
+        .all();
       expect(read(excluded).toSorted()).toEqual(
-        encoding === "UTF-8" ? ["id-0"] : ["id-0", "id-1", "id-2"],
+        storedRows
+          .filter((row) => !excluded.has(String(row.session_key)))
+          .map((row) => String(row.current_session_id))
+          .toSorted(),
       );
-      const storedKeys = database.db.prepare("SELECT session_key FROM session_nodes").all();
-      expect(read(new Set(storedKeys.map((row) => String(row.session_key))))).toEqual([]);
+      expect(read(new Set(storedRows.map((row) => String(row.session_key))))).toEqual([]);
     },
   );
 

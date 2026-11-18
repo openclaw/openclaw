@@ -79,8 +79,8 @@ export async function waitForControlUiGatewayReconnecting(page: Page): Promise<v
       { timeout: controlUiE2eWaitTimeoutMs },
     ),
     page
-      .getByRole("button", { name: /Reconnecting…/ })
-      .or(page.locator(".gateway-status__label:visible", { hasText: "Reconnecting…" }))
+      .getByRole("button", { name: /Reconnecting/ })
+      .or(page.locator(".gateway-status__label:visible", { hasText: "Reconnecting" }))
       .first()
       .waitFor({ state: "visible", timeout: controlUiE2eWaitTimeoutMs }),
   ]);
@@ -114,4 +114,12 @@ export async function waitForConfirmModal(
     await element?.dispose();
   }
   return modal;
+}
+
+/** Answers the confirm named `title`, which can mount after a dialog that stays open behind it. */
+export async function answerConfirmModal(page: Page, title: string | RegExp, button: string) {
+  const has = page.getByRole("dialog", { name: title, exact: true });
+  const modals = page.locator("openclaw-modal-dialog").filter({ has });
+  const modal = await waitForConfirmModal(page, modals);
+  await modal.getByRole("button", { name: button, exact: true }).click();
 }

@@ -288,7 +288,7 @@ export function decodeSandboxHostCsp(value: string | null): SandboxHostCsp | und
 }
 
 /** Trusted outer document. Untrusted content is written only into its inner iframe. */
-function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
+export function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   const blockDescendantFrames = csp?.blockDescendantFrames === true;
   // Runtime insertion reaches existing saved widgets without changing their
   // approved bytes. Capture listeners consume private host state before stored
@@ -375,6 +375,18 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
           inner.replaceWith(nextInner);
           inner = nextInner;
         }
+        return;
+      }
+      if (event.data?.method === "ui/notifications/sandbox-activation-query") {
+        // Transient activation reaches this frame only from input inside its own
+        // widget (activation propagates to ancestors), so the host can bind a
+        // widget request to a gesture in that widget. The widget cannot forge
+        // the answer: this proxy never relays its sandbox- notifications.
+        window.parent.postMessage({
+          jsonrpc: "2.0",
+          method: "ui/notifications/sandbox-activation",
+          params: { id: event.data.params?.id, active: navigator.userActivation?.isActive === true },
+        }, hostOrigin);
         return;
       }
       if (typeof event.data?.method === "string" && event.data.method.startsWith("ui/notifications/sandbox-")) return;

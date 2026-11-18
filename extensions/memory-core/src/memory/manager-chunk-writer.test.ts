@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
+import { keepPublishedCacheDuplicates } from "./manager-cache-retention.test-support.js";
 import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
@@ -99,6 +100,7 @@ describe("memory chunk publication", () => {
   it.each(CHUNK_WRITE_TABLES)(
     "preserves the previous index and retries after %s publication fails",
     async (failedTable) => {
+      keepPublishedCacheDuplicates();
       const manager = await fixture.getFreshManager(
         fixture.createConfig({ cacheEnabled: true }),
         "cli",

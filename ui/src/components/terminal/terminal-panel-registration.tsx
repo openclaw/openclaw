@@ -85,7 +85,7 @@ export const TerminalPanelHost = defineSolidBridge<TerminalInputs, TerminalPanel
       restoreTerminalPanelOpenState: (host) => ownerFor(host).restoreTerminalPanelOpenState(),
       resetTerminalSessionPicker: (host) => ownerFor(host).resetTerminalSessionPicker(),
       findTerminalPanelViewport: (host) => ownerFor(host).findTerminalPanelViewport(),
-      selectHostedTab: (host, id) => ownerFor(host).selectHostedTab(id),
+      selectHostedTab: (host, id, event) => ownerFor(host).selectHostedTab(id, event),
       closeHostedTab: (host, id) => ownerFor(host).closeHostedTab(id),
       handleToggleRequest: (host, event) => ownerFor(host).handleToggleRequest(event),
     },

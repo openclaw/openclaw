@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { setImmediate as yieldImmediate } from "node:timers/promises";
 import { promisify } from "node:util";
-import { constants, deflateRawSync } from "node:zlib";
+import { constants, createDeflateRaw, deflateRawSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ClientOptions } from "ws";
@@ -21,6 +21,8 @@ import {
   SerializedJsonPayload,
   serializeGatewayFrame,
 } from "../serialized-json.js";
+import { createGatewayBroadcaster } from "../server-broadcast.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE, installGatewayDeflateCodec } from "./ws-compression.js";
 import { createGatewayWebSocketTransport } from "./ws-transport.js";
 
@@ -207,7 +209,7 @@ it.each(["small", "large"])("owns and reuses %s offset segments per window", asy
   const bytes = storage.subarray(8, -8);
   const messages = new SerializedJsonArray(bytes);
   const activity = new SerializedJsonArray(Buffer.from('[{"messageId":"tool","items":[]}]'));
-  const retained = new Map<number, Uint8Array>();
+  const retained = new Map<number, readonly Uint8Array[]>();
   for (const windowBits of [15, 10]) {
     const {
       peer: client,
@@ -235,26 +237,52 @@ it.each(["small", "large"])("owns and reuses %s offset segments per window", asy
       ]);
       using materialize = vi.spyOn(SerializedGatewayFrame.prototype, "toBuffer");
       using compress = vi.spyOn(codec, "compress");
+      using ownedCopies = vi.spyOn(Buffer, "allocUnsafeSlow");
+      using concatenations = vi.spyOn(Buffer, "concat");
       const received = once(client, "message");
+      transport.batchWrites?.();
       const sent = send(transport, frame);
+      // Retained output copies each byte once, including multi-chunk streams.
+      const retainedBytes =
+        ownedCopies.mock.calls.reduce((sum, [allocated]) => sum + allocated, 0) +
+        concatenations.mock.results.reduce(
+          (sum, result) => sum + (result.type === "return" ? result.value.length : 0),
+          0,
+        );
       expect(materialize).not.toHaveBeenCalled();
       const payload = compress.mock.results[0]?.value;
       expect(payload).toBeInstanceOf(SerializedGatewayFrame);
-      const segment = (payload instanceof SerializedGatewayFrame ? payload.segments : []).find(
-        (chunk): chunk is Buffer => Buffer.isBuffer(chunk) && chunk.equals(compressed),
-      );
+      const output = payload instanceof SerializedGatewayFrame ? payload.segments : [];
+      const from = Buffer.concat(output).indexOf(compressed);
+      expect(from).toBeGreaterThanOrEqual(0);
+      let offset = 0;
+      const segments = output.filter((chunk) => {
+        const start = offset;
+        offset += chunk.byteLength;
+        return start >= from && offset <= from + compressed.length;
+      });
+      expect(Buffer.concat(segments)).toEqual(compressed);
+      for (const segment of segments) {
+        expect(segment.buffer.byteLength).toBe(segment.byteLength);
+      }
+      // Overwrite all scratch chunks while the first frame is still corked.
+      codec.compress(randomBytes(encoded.length));
       const [[data, binary]] = await Promise.all([received, sent]);
+      if (!process.versions.bun) {
+        expect(retainedBytes).toBeLessThanOrEqual(compressed.length + 4096);
+      }
       expect([binary, data.toString()]).toEqual([false, frame.toString()]);
-      const byteLength = compressed.byteLength;
-      expect([segment?.byteLength, segment?.buffer.byteLength]).toEqual([byteLength, byteLength]);
       if (sequence === 0) {
-        retained.set(windowBits, segment!);
+        retained.set(windowBits, segments);
       } else {
-        expect(segment).toBe(retained.get(windowBits));
+        expect(segments.length).toBe(retained.get(windowBits)?.length);
+        segments.forEach((segment, index) =>
+          expect(segment).toBe(retained.get(windowBits)?.[index]),
+        );
       }
     }
   }
-  expect(retained.get(10)).not.toBe(retained.get(15));
+  expect(retained.get(10)?.[0]).not.toBe(retained.get(15)?.[0]);
 });
 
 it.each([512, 2048])(
@@ -293,3 +321,88 @@ it.each([512, 2048])(
     expect(retained.get(10)).not.toBe(retained.get(15));
   },
 );
+
+it("preserves a direct JSON frame across a deflate output chunk boundary", async () => {
+  const text = randomBytes(96 * 1024).toString("base64");
+  const inputFor = (length: number) => Buffer.from(JSON.stringify({ text: text.slice(0, length) }));
+  const compress = (input: Buffer) => deflateRawSync(input, { level: 1, finishFlush });
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (compress(inputFor(middle)).length <= 64 * 1024) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const input = inputFor(low);
+  const compressed = compress(input).subarray(0, -4);
+  const { peer, request, transport } = await connectTransport({});
+  using writes = vi.spyOn(request.socket, "write");
+  const received = once(peer, "message");
+  await send(transport, input);
+  expect((await received)[0]).toEqual(input);
+  const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
+  expect(wire.subarray(compressed.length < 65536 ? 4 : 10)).toEqual(compressed);
+});
+
+it("compresses broadcast audiences once without allocating input-sized output per update", async () => {
+  const clients = new GatewayClientRegistry();
+  const deliveries: string[][] = [];
+  for (let index = 0; index < 20; index++) {
+    const { peer, transport } = await connectTransport({});
+    const received: string[] = [];
+    deliveries.push(received);
+    peer.on("message", (data) => received.push(rawDataToString(data)));
+    clients.add({
+      connId: String(index),
+      preparedRecipientProfileId: index < 17 ? "shared" : index === 17 ? "one" : "two",
+      socket: transport,
+      usesSharedGatewayAuth: false,
+      connect: {
+        minProtocol: 3,
+        maxProtocol: 3,
+        client: { id: "openclaw-control-ui", version: "test", platform: "web", mode: "ui" },
+        role: "operator",
+        scopes: ["operator.admin"],
+      },
+    });
+  }
+  const { broadcastToConnIds } = createGatewayBroadcaster({ clients });
+  const connIds = new Set(Array.from(clients, (client) => client.connId));
+  const payloads = ["warm", "first", "second"].map((label) => ({
+    text: `${label} é🦞 `.repeat(2048),
+  }));
+  const publish = (payload: (typeof payloads)[number]) =>
+    broadcastToConnIds("tick", payload, connIds);
+  publish(payloads[0]!);
+  await vi.waitFor(() => expect(deliveries.every((received) => received.length === 1)).toBe(true));
+  const probe = createDeflateRaw();
+  // The native handle is the work boundary used by the Gateway's synchronous codec.
+  const handle = Object.getPrototypeOf(Reflect.get(probe, "_handle")) as {
+    writeSync: (...args: unknown[]) => void;
+  };
+  probe.close();
+  using deflates = vi.spyOn(handle, "writeSync");
+  using buffers = vi.spyOn(Buffer, "allocUnsafe");
+  publish(payloads[1]!);
+  publish(payloads[2]!);
+  // Per update: one shared large segment and prefix/suffix for each of three audiences.
+  expect(deflates).toHaveBeenCalledTimes(14);
+  expect(buffers.mock.calls.filter(([size]) => size >= 16 * 1024)).toHaveLength(0);
+  await vi.waitFor(() => expect(deliveries.every((received) => received.length === 3)).toBe(true));
+  for (const [index, received] of deliveries.entries()) {
+    expect(received).toEqual(
+      payloads.map((payload, update) =>
+        JSON.stringify({
+          type: "event",
+          event: "tick",
+          payload,
+          seq: update + 1,
+          recipientProfileId: index < 17 ? "shared" : index === 17 ? "one" : "two",
+        }),
+      ),
+    );
+  }
+});

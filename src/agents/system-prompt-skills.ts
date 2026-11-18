@@ -52,8 +52,8 @@ export function buildSkillsSection(params: {
           : `Clear match: read exact <location> with \`${params.readToolName}\`; obey.`,
       ...(installedSkillSearch
         ? [
-            `Before work involving files, specialized tools, or a reusable workflow, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} for an applicable skill. Read the best match before implementing the workflow yourself.`,
-            "Search by the task goal and distinctive terms. Simple conversation or a self-contained answer does not need a search. Search covers installed skills; it does not install skills.",
+            `Before specialized or unfamiliar tasks or reusable workflows, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} for an applicable skill. Read the best match before implementing the workflow yourself.`,
+            "Search by the task goal and distinctive terms. Fully specified simple local file work and self-contained answers need no search unless another instruction requires it. Search covers installed skills; it does not install skills.",
           ]
         : []),
       "Several: most specific. No relevant skill: read none.",

@@ -1,4 +1,5 @@
 import { types } from "node:util";
+import { serialize } from "node:v8";
 import { isMainThread, type Worker } from "node:worker_threads";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { resolveGlobalSingleton } from "../shared/global-singleton.ts";
@@ -22,6 +23,15 @@ export type WorkerMessageKind =
 
 export type WorkerMessageDirection = "to_worker" | "from_worker";
 
+type AuthorityComponent =
+  | "admission_entry"
+  | "admission_other"
+  | "receipt_entry"
+  | "receipt_events"
+  | "receipt_value"
+  | "receipt_other";
+type ComponentSample = { bytes: number; samples: number; unmeasured: number };
+
 export type WorkerMessageMetric = {
   kind: WorkerMessageKind;
   direction: WorkerMessageDirection;
@@ -29,7 +39,146 @@ export type WorkerMessageMetric = {
   payloadBytes: number;
   payloadBytesByRequestClass?: Record<string, number>;
   unmeasuredMessages: number;
+  payloadComponents?: Record<string, Partial<Record<AuthorityComponent, ComponentSample>>>;
 };
+
+/** Whole-operation Bernoulli samples avoid aliasing alternating user/assistant appends. */
+function sampleWorkerAuthorityOperation(requestClass: string | undefined): boolean {
+  return (
+    isMainThread &&
+    normalizeWorkerRequestClass(requestClass).startsWith("session.actor.") &&
+    Math.random() < 1 / 128
+  );
+}
+
+/** The admission owner retains this sampling decision for all frames in one operation. */
+export function recordWorkerAuthorityMessage(
+  message: Record<string, unknown> | undefined,
+  requestClass: string | undefined,
+  sampled = sampleWorkerAuthorityOperation(requestClass),
+): boolean {
+  recordWorkerMessage(
+    message?.kind === "sqlite-database-admissions" ? "admission" : "authority",
+    "from_worker",
+    typeof message?.payloadBytes === "number" ? message.payloadBytes : undefined,
+    requestClass,
+    sampled ? message : undefined,
+  );
+  return sampled;
+}
+
+function withoutField(value: unknown, field: string): unknown {
+  if (!isRecord(value) || !Object.hasOwn(value, field)) {
+    return value;
+  }
+  const copy = { ...value };
+  delete copy[field];
+  return copy;
+}
+
+function recordAuthorityPayload(
+  counter: WorkerMessageMetric,
+  message: Record<string, unknown>,
+  requestClass: string | undefined,
+): void {
+  const label = normalizeWorkerRequestClass(requestClass);
+  if (!label.startsWith("session.actor.")) {
+    return;
+  }
+  const committed =
+    message.kind === "native-settlement" && isRecord(message.settlement)
+      ? message.settlement.committed
+      : message.committed;
+  const receipt = isRecord(committed);
+  // Empty settlement frames carry no facts; do not count a second receipt sample.
+  if (!receipt && !Object.hasOwn(message, "facts")) {
+    return;
+  }
+  const components: AuthorityComponent[] = receipt
+    ? ["receipt_entry", "receipt_events", "receipt_value", "receipt_other"]
+    : ["admission_entry", "admission_other"];
+  const totals = ((counter.payloadComponents ??= {})[label] ??= {});
+  let bytes: number[] | undefined;
+  let total =
+    receipt && typeof message.payloadBytes === "number" ? message.payloadBytes : undefined;
+  try {
+    const facts = receipt ? committed.facts : message.facts;
+    total ??= serialize(facts).byteLength;
+    if (receipt && isRecord(facts) && isRecord(facts.receipt)) {
+      const strippedReceipt: Record<string, unknown> = {
+        ...facts.receipt,
+        postimage: withoutField(facts.receipt.postimage, "entry"),
+      };
+      delete strippedReceipt.entryMetadata;
+      const noEntries = {
+        ...facts,
+        receipt: strippedReceipt,
+      };
+      // Native cloning can change V8's array encoding. Bound each remainder by
+      // its predecessor so main-side sizing cannot discard the worker's bytes.
+      const afterEntries = Math.min(total, serialize(noEntries).byteLength);
+      const noEvents = {
+        ...noEntries,
+        receipt: {
+          ...noEntries.receipt,
+          transcript: withoutField(
+            withoutField(facts.receipt.transcript, "appendedEvents"),
+            "authorityReceipts",
+          ),
+        },
+      };
+      const afterEvents = Math.min(afterEntries, serialize(noEvents).byteLength);
+      // The phase result and transcript.append can alias the same append value.
+      const other = Math.min(
+        afterEvents,
+        serialize({
+          ...noEvents,
+          value: undefined,
+          receipt: {
+            ...noEvents.receipt,
+            transcript: withoutField(noEvents.receipt.transcript, "append"),
+          },
+        }).byteLength,
+      );
+      bytes = [total - afterEntries, afterEntries - afterEvents, afterEvents - other, other];
+    } else if (
+      !receipt &&
+      isRecord(facts) &&
+      isRecord(facts.publication) &&
+      facts.publication.kind === "session-actor-admission"
+    ) {
+      const other = serialize({
+        ...facts,
+        publication: {
+          ...facts.publication,
+          snapshot: withoutField(facts.publication.snapshot, "entry"),
+        },
+      }).byteLength;
+      bytes = [total - other, other];
+    } else {
+      bytes = receipt ? [0, 0, 0, total] : [0, total];
+    }
+    // Marginal V8 sizes preserve shared references. Unsupported graphs remain explicitly unmeasured.
+    if (bytes.some((value) => value < 0)) {
+      bytes = undefined;
+    }
+  } catch {
+    // Telemetry must not refuse authority (e.g. transferable or shared-buffer facts).
+  }
+  for (const [index, component] of components.entries()) {
+    const sample = (totals[component] ??= { bytes: 0, samples: 0, unmeasured: 0 });
+    if (bytes) {
+      sample.bytes += bytes[index] ?? 0;
+      sample.samples++;
+    } else {
+      sample.unmeasured++;
+      // A failed breakdown must not erase a receipt's independently known total.
+      if (component === "receipt_other" && total !== undefined) {
+        sample.bytes += total;
+      }
+    }
+  }
+}
 
 const counters = resolveGlobalSingleton(
   Symbol.for("openclaw.workerMessageMetrics"),
@@ -42,6 +191,7 @@ export function recordWorkerMessage(
   direction: WorkerMessageDirection,
   payloadBytes?: number,
   requestClass?: string,
+  sampledAuthorityMessage?: Record<string, unknown>,
 ): void {
   if (!isMainThread) {
     return;
@@ -69,6 +219,9 @@ export function recordWorkerMessage(
       classes[label] = (classes[label] ?? 0) + payloadBytes;
     }
   }
+  if (sampledAuthorityMessage && kind === "authority" && direction === "from_worker") {
+    recordAuthorityPayload(counter, sampledAuthorityMessage, requestClass);
+  }
 }
 
 /** Process-lifetime totals survive worker retirement and Gateway restarts in the same process. */
@@ -80,6 +233,9 @@ export function getWorkerMessageMetrics(): WorkerMessageMetric[] {
         counter,
         counter.payloadBytesByRequestClass
           ? { payloadBytesByRequestClass: Object.assign({}, counter.payloadBytesByRequestClass) }
+          : undefined,
+        counter.payloadComponents
+          ? { payloadComponents: structuredClone(counter.payloadComponents) }
           : undefined,
       ),
     ),

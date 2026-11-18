@@ -32,6 +32,7 @@ import {
   isSettledOAuthRefreshFailure,
   markOAuthRefreshFailureSettled,
   OAuthRefreshFailureError,
+  OAuthRefreshOwnerError,
 } from "./oauth-refresh-failure.js";
 import { withPersonalAuthProfileStore, type PersonalAuthProfileStore } from "./personal-store.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
@@ -356,7 +357,7 @@ async function resolveApiKeyForProfileOwned(
     return resolved;
   } catch (error) {
     params.signal?.throwIfAborted();
-    if (hasSqliteWorkerOutcomeUnknown(error)) {
+    if (hasSqliteWorkerOutcomeUnknown(error) || error instanceof OAuthRefreshOwnerError) {
       throw error;
     }
     let settlementComplete = isSettledOAuthRefreshFailure(error);

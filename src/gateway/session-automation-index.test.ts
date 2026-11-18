@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronStoredJob } from "../cron/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   invalidateSessionAutomationIndex,
@@ -23,7 +23,7 @@ function watchChanges() {
     );
   };
 }
-function registerJobs(jobs?: CronJob[]) {
+function registerJobs(jobs?: CronStoredJob[]) {
   const source = { jobs, defaultAgentId: "main" };
   registerSessionAutomationSource({
     getJobs: () => source.jobs,
@@ -32,8 +32,8 @@ function registerJobs(jobs?: CronJob[]) {
   return source;
 }
 
-function job(partial: Partial<CronJob> & Pick<CronJob, "id">): CronJob {
-  return { enabled: true, sessionTarget: "isolated", ...partial } as CronJob;
+function job(partial: Partial<CronStoredJob> & Pick<CronStoredJob, "id">): CronStoredJob {
+  return { enabled: true, sessionTarget: "isolated", ...partial } as CronStoredJob;
 }
 
 afterEach(() => {

@@ -216,6 +216,7 @@ describe("watched session PR retention", () => {
     const callsAtBackoff = fetchImpl.mock.calls.length;
     expect(callsAtBackoff).toBeGreaterThan(101);
     expectSnapshots(true);
+    elapsedMs += 61_000;
     vi.setSystemTime(Date.now() + 61_000);
     await subscriptions.replace("watcher", keys, new Set(keys));
     expect(fetchImpl.mock.calls).toHaveLength(callsAtBackoff);

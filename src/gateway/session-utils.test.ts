@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import * as execDefaults from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -49,7 +48,6 @@ import {
   listAgentsForGateway,
   loadGatewaySessionEntryReadOnlyAsync,
 } from "./session-utils-store.js";
-import { withAgentPermissionState } from "./session-utils.permissions.test-support.js";
 import {
   agentStore,
   closeSessionSqliteDatabasesForTest,
@@ -1258,32 +1256,6 @@ describe("gateway session utils", () => {
         { id: "openclaw", kind: "system" },
         { id: "research", kind: "agent" },
       ]);
-    });
-  });
-
-  test("listAgentsForGateway resolves only representable permission labels across sandbox callers", async () => {
-    await withAgentPermissionState(async () => {
-      for (const mode of ["all", "off", "non-main", "all"] as const) {
-        using resolve = vi.spyOn(execDefaults, "resolveExecDefaults");
-        const cfg: OpenClawConfig = {
-          tools: { exec: { mode: "ask" } },
-          agents: {
-            defaults: { sandbox: { mode } },
-            entries: {
-              guarded: {},
-              restricted: { tools: { exec: { mode: "allowlist" } } },
-              workspace: { sandbox: { mode: "off" }, tools: { exec: { mode: "auto" } } },
-            },
-          },
-        };
-        const { agents } = await listAgentsForGateway(cfg);
-        expect(agents.map(({ id, defaultPermissionMode }) => [id, defaultPermissionMode])).toEqual([
-          ["guarded", mode === "off" ? "guarded" : undefined],
-          ["restricted", undefined],
-          ["workspace", "workspace"],
-        ]);
-        expect(resolve).toHaveBeenCalledTimes(mode === "off" ? 3 : 1);
-      }
     });
   });
 

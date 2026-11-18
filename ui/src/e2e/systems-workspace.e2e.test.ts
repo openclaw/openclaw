@@ -1,11 +1,14 @@
+import { writeFile } from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { observeLayoutShifts } from "../test-helpers/control-ui-layout-shift.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { expandSidebarSessions } from "./sidebar-session-pagination.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Systems workspace mocked Gateway E2E",
@@ -53,6 +56,9 @@ function installSystemsGateway(
       "config.get",
       "config.patch",
       "desktop.observe",
+      "sessions.create",
+      "chat.metadata",
+      "chat.startup",
     ],
     methodResponses: {
       "environments.list": {
@@ -83,9 +89,153 @@ function installSystemsGateway(
 }
 
 suite.define(() => {
+  it.each([390, 1280])(
+    "keeps one useful Systems recovery message while reconnecting at %ipx",
+    async (width) => {
+      await suite.withPage(
+        { viewport: { width, height: 900 }, locale: "en-US", serviceWorkers: "block" },
+        async ({ page }) => {
+          const gateway = await installSystemsGateway(page, 0, {
+            "environments.list": {
+              environments: [
+                {
+                  id: "gateway",
+                  type: "local",
+                  label: "Gateway machine",
+                  status: "available",
+                  desktop: false,
+                },
+              ],
+            },
+          });
+          await page.goto(new URL("systems", suite.server.baseUrl).href);
+          const workspace = page.locator(".systems-workspace");
+          const desktop = workspace.locator(".systems-state");
+          await desktop
+            .getByRole("heading", { name: "No desktop available", exact: true })
+            .waitFor();
+          await workspace
+            .locator(".systems-backups__summary")
+            .getByText("No backups yet.", { exact: true })
+            .waitFor({ state: "attached" });
+          await gateway.setOnline(false);
+          const recovery = "Reconnect to refresh devices or open a desktop.";
+          await desktop.getByRole("heading", { name: recovery, exact: true }).waitFor();
+          const repeatedMessages = await workspace
+            .getByText(recovery, { exact: true })
+            .filter({ visible: true })
+            .count();
+          const prematureRefreshHint = await desktop
+            .getByText("Refresh devices to check screen-sharing availability on this computer.", {
+              exact: true,
+            })
+            .count();
+          const artifacts =
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? createControlUiE2eArtifactDir("systems-recovery-" + width)
+              : undefined;
+          if (artifacts) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              workspace,
+              [desktop.getByRole("heading")],
+              { animations: "disabled" },
+            );
+            await writeFile(artifacts + "/offline.png", frame.png);
+          }
+          await workspace.locator('.systems-toolbar button[aria-label="Device details"]').click();
+          const details = workspace.locator(".systems-details");
+          await details.locator("dd").getByText("Offline", { exact: true }).waitFor();
+          const detailsRepeatedMessage = await details.getByText(recovery, { exact: true }).count();
+          await gateway.setOnline(true);
+          await desktop
+            .getByRole("heading", { name: "No desktop available", exact: true })
+            .waitFor();
+          await workspace
+            .locator(".systems-overview .systems-backups__summary")
+            .getByText("No backups yet.", { exact: true })
+            .waitFor({ state: "attached" });
+          await details.getByRole("button", { name: "Close details", exact: true }).click();
+          await details.waitFor({ state: "hidden" });
+          expect(repeatedMessages, "One connection problem needs one recovery explanation").toBe(1);
+          expect(
+            prematureRefreshHint,
+            "Refreshing devices cannot help while the Gateway is disconnected",
+          ).toBe(0);
+          expect(detailsRepeatedMessage, "Details already reports its disconnected status").toBe(0);
+        },
+      );
+    },
+  );
+  it("keeps the phone gutter unchanged across cold, Activity and Chat entries", async () => {
+    const proofDir = createControlUiE2eArtifactDir("systems-gutter");
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installSystemsGateway(page, 0);
+        const header = page.locator(".systems-page-header");
+        const gutter = () =>
+          header.evaluate((element) => {
+            const { x, width } = element.getBoundingClientRect();
+            return { x, width };
+          });
+        const capture = async (name: string) => {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator("body"),
+            [header, page.locator(".systems-mobile-picker")],
+            { animations: "disabled" },
+          );
+          await writeFile(`${proofDir}/${name}.png`, frame.png);
+        };
+        const navigate = async (path: string) => {
+          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+          if (path === "activity") {
+            // Activity heads the Users section; on a phone People only opens its list.
+            await page.locator('[data-navigation-view="online"]').click();
+            await page.locator(".sidebar-online__overview a").click();
+            return;
+          }
+          await page.locator("[data-rail-more]").click();
+          await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
+        };
+        await page.goto(suite.server.baseUrl + "systems");
+        await page
+          .locator('.systems-mobile-picker option[value="worker-one"]')
+          .waitFor({ state: "attached" });
+        await capture("cold");
+        const cold = await gutter();
+        await navigate("activity");
+        await waitForControlUiRoute(page, { routeId: "activity" });
+        await navigate("systems");
+        await header.waitFor();
+        await capture("activity-return");
+        expect(await gutter()).toEqual(cold);
+        expect(cold).toEqual({ x: 8, width: 374 });
+        await page.locator(".header-new-session").click();
+        await page.locator(".new-session-page__message").waitFor();
+        const inset = () =>
+          page
+            .locator("main.content")
+            .evaluate((element) => getComputedStyle(element).paddingInline);
+        expect(await inset()).toBe("0px");
+        // New session shows the Sessions drawer; tapping its avatar there would open the agent menu.
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
+        await page.locator(".chat-thread").waitFor();
+        expect(await inset()).toBe("0px");
+        await navigate("systems");
+        await header.waitFor();
+        expect(await gutter()).toEqual(cold);
+        await page.locator(".header-new-session").click();
+        await page.locator(".new-session-page__message").waitFor();
+        expect(await inset()).toBe("0px");
+      },
+    );
+  });
   it.each(
     [400, 820, 1280].flatMap((width) =>
-      [1, 4, 12].flatMap((diskCount) =>
+      [1, 12].flatMap((diskCount) =>
         [false, true].map((backups) => ({ width, diskCount, backups })),
       ),
     ),
@@ -127,12 +277,6 @@ suite.define(() => {
           });
           await page.goto(suite.server.baseUrl + "new");
           await waitForControlUiRoute(page, { routeId: "new-session" });
-          const outletOrigin = () =>
-            page.locator("openclaw-router-outlet").evaluate((element) => {
-              const { x, y } = element.getBoundingClientRect();
-              return { x, y };
-            });
-          const initialOrigin = await outletOrigin();
           const inventoryReads = await gateway.deferNext("environments.list");
           const backupReads = await gateway.deferNext("backup.status");
           await page.evaluate(() => {
@@ -140,8 +284,13 @@ suite.define(() => {
           });
           await gateway.waitForRequest("environments.list", { after: inventoryReads });
           await gateway.waitForRequest("backup.status", { after: backupReads });
+          await waitForControlUiRoute(page, { routeId: "systems" });
+          await page.locator(".systems-body").waitFor();
+          const shifts = await observeLayoutShifts(page);
+          if (width <= 640) {
+            await page.getByRole("button", { name: "Show statistics" }).click();
+          }
           await page.getByText("Loading backups…", { exact: true }).waitFor();
-          expect(await outletOrigin()).toEqual(initialOrigin);
           const body = page.locator(".systems-body");
           expect(await body.locator(".systems-state").isVisible()).toBe(false);
           const position = () => body.evaluate((element) => element.getBoundingClientRect().y);
@@ -162,23 +311,6 @@ suite.define(() => {
               ),
             )
             .toBe(true);
-          const shifts = await page.evaluateHandle(() => {
-            let cls = 0;
-            const observer = new PerformanceObserver((list) => {
-              for (const entry of list.getEntries()) {
-                const shift = entry as PerformanceEntry & {
-                  hadRecentInput: boolean;
-                  value: number;
-                };
-                if (!shift.hadRecentInput) {
-                  cls += shift.value;
-                }
-              }
-            });
-            observer.observe({ type: "layout-shift", buffered: false });
-            return { read: () => cls, stop: () => observer.disconnect() };
-          });
-
           await gateway.resolveDeferred("environments.list");
           await page.locator(".systems-volume-summary").waitFor();
           await expect.poll(position).toBe(initialY);
@@ -188,7 +320,7 @@ suite.define(() => {
           );
           await gateway.resolveDeferred("backup.status");
           await page
-            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups recorded —", {
+            .getByText(backups ? "Recorded: 1 · Failed: 1" : "No backups yet.", {
               exact: false,
             })
             .waitFor();
@@ -212,7 +344,8 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
               }),
           );
-          expect(await shifts.evaluate((probe) => probe.read())).toBe(0);
+          const layoutShifts = await shifts.evaluate((probe) => probe.read());
+          expect(layoutShifts.value, JSON.stringify(layoutShifts, null, 2)).toBe(0);
           await shifts.evaluate((probe) => probe.stop());
           await shifts.dispose();
           const more = page.locator(".systems-volume-summary button");
@@ -254,6 +387,119 @@ suite.define(() => {
       );
     },
   );
+  it("opens on the viewer at phone width until the operator chooses stats", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installSystemsGateway(page, 0, {
+          "backup.status": {
+            targets: [
+              {
+                kind: "archive",
+                target: "Synthetic archive",
+                latest: { id: "backup", kind: "archive", createdAt: 1, archivePath: "/backup" },
+              },
+            ],
+            schedules: [],
+            locations: [],
+          },
+        });
+        await page.goto(suite.server.baseUrl + "systems");
+        await page.locator(".systems-mobile-picker option[value='worker-one']").waitFor({
+          state: "attached",
+        });
+        const overview = page.locator(".systems-overview");
+        const stats = page.locator(".systems-overview__telemetry");
+        const backups = page.locator(".systems-backups");
+        const toolbarBottom = () =>
+          page
+            .locator(".systems-toolbar")
+            .evaluate((element) => element.getBoundingClientRect().bottom);
+        const bodyTop = () =>
+          page.locator(".systems-body").evaluate((element) => element.getBoundingClientRect().top);
+
+        expect(await overview.isVisible()).toBe(false);
+        expect(await stats.count()).toBe(0);
+        expect(await backups.isVisible()).toBe(false);
+        expect(await bodyTop()).toBe(await toolbarBottom());
+
+        const show = page.getByRole("button", { name: "Show statistics" });
+        await show.click();
+        await stats.waitFor();
+        await backups.waitFor();
+        expect(await bodyTop()).toBeGreaterThan(await toolbarBottom());
+
+        // The choice survives leaving the page and overrides the width default.
+        await page.evaluate(() => {
+          window.openclawControlUi!.navigate("dashboards");
+        });
+        await expect.poll(() => page.locator("openclaw-systems-page").isVisible()).toBe(false);
+        await page.evaluate(() => {
+          window.openclawControlUi!.navigate("systems");
+        });
+        await stats.waitFor();
+
+        await page.getByRole("button", { name: "Hide statistics" }).click();
+        await expect.poll(() => stats.count()).toBe(0);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        expect(await page.getByRole("button", { name: "Show statistics" }).isVisible()).toBe(true);
+        await backups.waitFor();
+      },
+    );
+  });
+
+  it("follows the viewport until the operator chooses", async () => {
+    await suite.withPage(
+      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
+      async ({ page }) => {
+        const sampledAt = Date.UTC(2026, 0, 1);
+        await page.clock.setFixedTime(sampledAt);
+        const gateway = await installSystemsGateway(page, 0);
+        await page.goto(suite.server.baseUrl + "systems");
+        const stats = page.locator(".systems-overview__telemetry");
+        await stats.waitFor();
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect.poll(() => stats.count()).toBe(0);
+        const samples = (await gateway.getRequests("system.info")).length;
+        // Expire the Date-based sample without advancing the separate polling timer.
+        await page.clock.setFixedTime(sampledAt + 10_100);
+        await page.setViewportSize({ width: 1280, height: 900 });
+        await stats.waitFor();
+        // Revealing stats must request a fresh sample before the 15-second polling tick.
+        await expect
+          .poll(async () => (await gateway.getRequests("system.info")).length, { timeout: 2_000 })
+          .toBeGreaterThan(samples);
+      },
+    );
+  });
+
+  it("keeps search, filter and refresh reachable in the touch drawer", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 390, height: 844 },
+        hasTouch: true,
+        isMobile: true,
+      },
+      async ({ page }) => {
+        const gateway = await installSystemsGateway(page, 0);
+        await page.goto(suite.server.baseUrl + "systems");
+        await gateway.waitForRequest("environments.list");
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).tap();
+        const inventory = page.locator(".systems-sidebar");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).waitFor();
+        await inventory.getByRole("button", { name: "Filter & sort devices" }).waitFor();
+        const refresh = inventory.getByRole("button", { name: "Refresh devices" });
+        await expect.poll(() => refresh.isEnabled()).toBe(true);
+        expect(await refresh.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+        const reads = (await gateway.getRequests("environments.list")).length;
+        await refresh.tap();
+        await gateway.waitForRequest("environments.list", { after: reads });
+      },
+    );
+  });
+
   it("names Macs consistently and enables a discovered desktop without reconnecting", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
@@ -315,18 +561,18 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
-        await inventory.getByRole("searchbox", { name: "Find a machine…" }).fill("macOS");
+        await inventory.getByRole("searchbox", { name: "Find a device…" }).fill("macOS");
         await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(2);
         await page
           .locator(".systems-toolbar")
-          .getByRole("button", { name: "Machine details" })
+          .getByRole("button", { name: "Device details" })
           .click();
         expect(await page.locator(".systems-details dd").allTextContents()).toContain(
           "macOS 27.0.0",
         );
         const systemReads = (await gateway.getRequests("system.info")).length;
         await gateway.deferNext("system.info");
-        await inventory.getByRole("button", { name: "Refresh machines" }).click();
+        await inventory.getByRole("button", { name: "Refresh devices" }).click();
         await gateway.waitForRequest("system.info", { after: systemReads });
         await gateway.rejectDeferred("system.info", {
           code: "UNAVAILABLE",
@@ -444,90 +690,69 @@ suite.define(() => {
     },
   );
 
-  it.each(["dashboards", "systems"])(
-    "scrolls the %s middle sidebar without moving the personal rail",
-    async (route) => {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { width: 1440, height: 900 },
-        },
-        async ({ page }) => {
-          // The middle column no longer includes the navigation stack: overflow its own roster.
-          await installSystemsGateway(page, 40);
-          await page.goto(suite.server.baseUrl + route);
-          await page.locator('[data-navigation-view="pages"]').click();
-          await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-          await page.locator('[data-navigation-view="sessions"]').click();
-          const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
-          const scroller = page.locator(".sidebar-shell__body");
-          const railControls = page.locator(
-            ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+  it("scrolls the systems middle sidebar without moving the personal rail", async () => {
+    await suite.withPage(
+      {
+        locale: "en-US",
+        serviceWorkers: "block",
+        viewport: { width: 1440, height: 900 },
+      },
+      async ({ page }) => {
+        // The middle column no longer includes the navigation stack: overflow its own roster.
+        await installSystemsGateway(page, 40);
+        await page.goto(suite.server.baseUrl + "systems");
+        const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
+        const scroller = page.locator(".sidebar-shell__body");
+        const railControls = page.locator(
+          ".sidebar-rail__bottom :is(.sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card)",
+        );
+        const railBounds = () =>
+          railControls.evaluateAll((controls) =>
+            controls.map((control) => {
+              const { x, y, width, height } = control.getBoundingClientRect();
+              return { x, y, width, height };
+            }),
           );
-          const railBounds = () =>
-            railControls.evaluateAll((controls) =>
-              controls.map((control) => {
-                const { x, y, width, height } = control.getBoundingClientRect();
-                return { x, y, width, height };
-              }),
-            );
-          const row = page
-            .locator(route === "systems" ? ".systems-machine" : ".sidebar-recent-session")
-            .first();
-          await row.waitFor();
-          if (route === "dashboards") {
-            await expandSidebarSessions(scroller, 30);
-            await revealSidebarTarget(
-              scroller,
-              page.locator('.sidebar-recent-session[data-session-key="agent:main:task-29"]'),
-            );
-            await scroller.evaluate((element) => {
-              element.scrollTop = 0;
-            });
-            await page
-              .locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]')
-              .waitFor();
-          }
-          const homeTop = () => home.evaluate((element) => element.getBoundingClientRect().top);
-          const rowTop = () => row.evaluate((element) => element.getBoundingClientRect().top);
-          await home.hover();
-          await row.hover();
-          const initialHomeTop = await homeTop();
-          const initialRowTop = await rowTop();
-          const firstRow = await row.elementHandle();
-          const initialRailBounds = await railBounds();
-          expect(initialRailBounds).toHaveLength(3);
+        const row = page.locator(".systems-machine").first();
+        await row.waitFor();
+        const homeTop = () => home.evaluate((element) => element.getBoundingClientRect().top);
+        const rowTop = () => row.evaluate((element) => element.getBoundingClientRect().top);
+        await home.hover();
+        await row.hover();
+        const initialHomeTop = await homeTop();
+        const initialRowTop = await rowTop();
+        const firstRow = await row.elementHandle();
+        const initialRailBounds = await railBounds();
+        expect(initialRailBounds).toHaveLength(3);
 
-          await page.mouse.wheel(0, 160);
-          await expect
-            .poll(() =>
-              firstRow!.evaluate(
-                (element, top) =>
-                  !element.isConnected || element.getBoundingClientRect().top < top - 80,
-                initialRowTop,
-              ),
-            )
-            .toBe(true);
+        await page.mouse.wheel(0, 160);
+        await expect
+          .poll(() =>
+            firstRow!.evaluate(
+              (element, top) =>
+                !element.isConnected || element.getBoundingClientRect().top < top - 80,
+              initialRowTop,
+            ),
+          )
+          .toBe(true);
 
-          expect(await homeTop()).toBe(initialHomeTop);
-          expect(await railBounds()).toEqual(initialRailBounds);
-          expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
+        expect(await homeTop()).toBe(initialHomeTop);
+        expect(await railBounds()).toEqual(initialRailBounds);
+        expect(await scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(80);
 
-          await page.mouse.wheel(0, -1000);
-          await expect.poll(rowTop).toBeCloseTo(initialRowTop, 0);
-          await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
-          await home.hover();
-          await page.mouse.wheel(0, 120);
-          expect(await homeTop()).toBe(initialHomeTop);
-          expect(await railBounds()).toEqual(initialRailBounds);
-          expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
-          expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
-          await firstRow!.dispose();
-        },
-      );
-    },
-  );
+        await page.mouse.wheel(0, -1000);
+        await expect.poll(rowTop).toBeCloseTo(initialRowTop, 0);
+        await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBe(0);
+        await home.hover();
+        await page.mouse.wheel(0, 120);
+        expect(await homeTop()).toBe(initialHomeTop);
+        expect(await railBounds()).toEqual(initialRailBounds);
+        expect(await scroller.evaluate((element) => element.scrollTop)).toBe(0);
+        expect(await rowTop()).toBeCloseTo(initialRowTop, 0);
+        await firstRow!.dispose();
+      },
+    );
+  });
 
   it("loads the lazy workspace and keeps its machine picker aligned after navigation", async () => {
     const context = await suite.browser.newContext({
@@ -548,11 +773,10 @@ suite.define(() => {
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
-      await page.locator('[data-navigation-view="pages"]').click();
-      await page.locator('.sidebar-pages a[href$="/dashboards"]').click();
+      // Leave through a page without a sidebar so the Sessions view and its inventory remain.
+      await evaluateControlUiContext(page, (app) => app.navigate("usage"));
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-      await page.locator('.sidebar-pages a[href$="/systems"]').click();
-      await page.locator('[data-navigation-view="sessions"]').click();
+      await evaluateControlUiContext(page, (app) => app.navigate("systems"));
       await inventory.waitFor();
       await expect
         .poll(() => page.locator(".systems-heading h2").textContent())
@@ -578,7 +802,7 @@ suite.define(() => {
         ],
       });
       await page.setViewportSize({ width: 1440, height: 900 });
-      await inventory.getByRole("button", { name: "Refresh machines" }).click();
+      await inventory.getByRole("button", { name: "Refresh devices" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
       await page.setViewportSize({ width: 640, height: 900 });
@@ -586,5 +810,41 @@ suite.define(() => {
     } finally {
       await context.close();
     }
+  });
+  it("reports the source and geometry of a layout shift", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      await page.setContent(
+        '<div id="moving" style="position:absolute;left:8px;top:8px;width:100px;height:40px">Probe</div>',
+      );
+      const paint = () =>
+        page.evaluate(
+          () =>
+            new Promise((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(resolve));
+            }),
+        );
+      await paint();
+      const shifts = await observeLayoutShifts(page);
+      await page.locator("#moving").evaluate((element) => {
+        element.style.top = "28px";
+      });
+      await paint();
+      const result = await shifts.evaluate((probe) => probe.read());
+      expect(result.entries[0]?.value).toBeGreaterThan(0);
+      expect(result.entries).toContainEqual({
+        startTime: expect.any(Number),
+        value: expect.any(Number),
+        hadRecentInput: expect.any(Boolean),
+        sources: [
+          {
+            node: "div#moving",
+            previousRect: { x: 8, y: 8, width: 100, height: 40 },
+            currentRect: { x: 8, y: 28, width: 100, height: 40 },
+          },
+        ],
+      });
+      await shifts.evaluate((probe) => probe.stop());
+      await shifts.dispose();
+    });
   });
 });

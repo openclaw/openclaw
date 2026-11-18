@@ -38,7 +38,7 @@ beforeEach(() => {
   runtime.runWorkerProcess.mockReset().mockResolvedValue();
   runtime.loadWorkerTurnRuntime.mockReset().mockResolvedValue();
   runtime.flushCompileCache.mockReset();
-  process.exitCode = undefined;
+  process.exitCode = 0;
   Object.defineProperty(process, "connected", { configurable: true, value: true, writable: true });
   process.disconnect = disconnect.mockReset();
   runtime.releaseProcessStdin.mockReset();
@@ -47,7 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   process.argv = originalArgv;
-  process.exitCode = originalExitCode;
+  process.exitCode = originalExitCode ?? 0;
   for (const [key, descriptor] of originalTransport) {
     if (descriptor) {
       Object.defineProperty(process, key, descriptor);
@@ -127,7 +127,7 @@ it("prewarms the turn runtime before flushing its compile cache", async () => {
   expect(runtime.loadWorkerTurnRuntime).toHaveBeenCalledOnce();
   expect(runtime.flushCompileCache).toHaveBeenCalledOnce();
   expect(runtime.runWorkerProcess).not.toHaveBeenCalled();
-  expect(process.exitCode).toBeUndefined();
+  expect(process.exitCode).toBe(0);
   expect(disconnect).toHaveBeenCalledOnce();
 });
 

@@ -2,6 +2,7 @@
 export {
   createPluginCommandRuntime,
   PLUGIN_COMMAND_DISPATCH,
+  pluginCommandResultContinuesAgent,
 } from "../plugins/plugin-command-runtime.js";
 export type {
   PluginCommandCatalogDecision,

@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import fs, { existsSync } from "node:fs";
 import * as os from "node:os";
-import { Worker } from "node:worker_threads";
+import { MessagePort, Worker } from "node:worker_threads";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import * as retry from "@openclaw/retry";
@@ -21,12 +21,16 @@ import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.j
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
 import { StateDatabaseAdmissionPendingError } from "./gateway-state-owner-record.js";
 import * as stateOwner from "./gateway-state-owner.js";
+import type { GcSample } from "./gc-observer.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "./sqlite-database-admission-turn.js";
+import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
   readWorkerRows as read,
 } from "./sqlite-worker-fixture.test-support.js";
+import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 import {
   reserveSqliteWorkerInputPreparation,
   runSqliteWorkerStoreOperation,
@@ -55,6 +59,64 @@ const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRun
 const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const queueRows = Array.from({ length: 128 }, (_, index) => String(index));
 const rejectedOutcome = (reason: unknown) => ({ status: "rejected", reason });
+
+it("retains real SQLite broker forced GC in memory diagnostics", async () => {
+  const samples: GcSample[] = [];
+  let memoryPort: MessagePort | undefined;
+  const receive = workerCpu.receiveWorkerMemoryPort;
+  vi.spyOn(workerCpu, "receiveWorkerMemoryPort").mockImplementation((worker, message) => {
+    if (isRecord(message) && message.status === "memory" && message.port instanceof MessagePort) {
+      memoryPort = message.port;
+    }
+    return receive(worker, message);
+  });
+  workerCpu.setTrackedWorkerGcObserver((batch, script) => {
+    if (script === "sqlite-store.worker.js") {
+      samples.push(...batch);
+    }
+  });
+  onTestFinished(() => workerCpu.setTrackedWorkerGcObserver(undefined));
+  const store = await open(databasePath());
+  assert(memoryPort);
+  const port = memoryPort;
+  // The flush acknowledgement follows GC enablement on the same diagnostics port.
+  const flush = () =>
+    new Promise<void>((resolve) => {
+      const onMessage = (message: unknown) => {
+        if (isRecord(message) && message.flushed === true) {
+          port.off("message", onMessage);
+          resolve();
+        }
+      };
+      port.on("message", onMessage);
+      port.postMessage({ flush: true }, []);
+    });
+  await flush();
+  const before = workerCpu
+    .sampleTrackedWorkerMemory({ refresh: false })
+    .workerTaskMetrics.find((entry) => entry.script === "sqlite-store.worker.js")
+    ?.gc.find((entry) => entry.kind === "mark_sweep_compact");
+  await store.execute({ type: "collectGarbage", input: undefined });
+  await flush();
+  await store.close();
+  const metrics = workerCpu
+    .sampleTrackedWorkerMemory({ refresh: false })
+    .workerTaskMetrics.filter((entry) => entry.script === "sqlite-store.worker.js");
+  expect(samples.some((sample) => sample.kind === "mark_sweep_compact")).toBe(
+    !process.versions.bun,
+  );
+  expect(metrics).toHaveLength(1);
+  expect(metrics[0]).toMatchObject({ workerClass: "writer", tasksCompleted: undefined });
+  const major = metrics[0]!.gc.find((entry) => entry.kind === "mark_sweep_compact");
+  if (process.versions.bun) {
+    expect(samples).toEqual([]);
+    expect(metrics[0]!.gc).toEqual([]);
+    return;
+  }
+  expect(major!.count).toBeGreaterThan(before?.count ?? 0);
+  expect(major!.durationMs).toBeGreaterThan(before?.durationMs ?? 0);
+  expect(major!.reclaimedBytes).toBeGreaterThanOrEqual(before?.reclaimedBytes ?? 0);
+});
 
 it.each([false, true])(
   "dispatches captured SQLite selection without an engine scope (different ambient: %s)",
@@ -361,6 +423,63 @@ function openBroker(broker: SqliteWorkerBroker, pathname: string, cancel?: Abort
   );
 }
 
+it.each([false, true])(
+  "reports OPEN phase stamps only with detailed timing: %s",
+  async (detailed) => {
+    const completed = detailed
+      ? collectRequests((event) => event.phase === "completed")
+      : undefined;
+    const replies = vi.spyOn(Worker.prototype, "emit");
+    const broker = new SqliteWorkerBroker();
+    const file = databasePath();
+    try {
+      await broker.open<FixtureOperations>(
+        {
+          moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+          databasePath: file,
+          input: undefined,
+        },
+        undefined,
+        undefined,
+        {
+          createAdmission: () => ({
+            admission: createSqliteWorkerOperationAdmission((_request, grant) => grant()),
+            nativeLocations: [file],
+          }),
+        },
+      );
+      const reply = replies.mock.calls.find(
+        ([event, value]) => event === "message" && isRecord(value) && value.ok === true,
+      )?.[1];
+      assert(isRecord(reply));
+      if (!detailed) {
+        expect(reply.timing).toBeUndefined();
+        return;
+      }
+      await waitForDiagnosticEventsDrained();
+      const timing = completed?.[0]?.timing;
+      assert(timing);
+      const stages = [
+        "received",
+        "backendLoadStarted",
+        "backendLoadFinished",
+        "openGrantStarted",
+        "openGrantFinished",
+        "factoryStarted",
+        "factoryFinished",
+        "serialized",
+        "replied",
+        "replyReceived",
+      ] as const;
+      const stamps = stages.map((stage) => timing[stage]);
+      expect(stamps).toEqual(stages.map(() => expect.any(Number)));
+      expect(stamps).toEqual(stamps.toSorted((a, b) => a! - b!));
+    } finally {
+      await broker.close();
+    }
+  },
+);
+
 it("waits for schema publication after opening, then dispatches queued writes once in order", async () => {
   const file = databasePath();
   const { store, access } = await openWithRetainedAccess(file);
@@ -517,6 +636,64 @@ it("borrows an open database while an unrelated cold open awaits its reply", asy
     await broker.close();
   }
 });
+
+it("releases broker client capacity and drains after synchronous cold path failures", async ({
+  signal,
+  skip,
+}) => {
+  if (process.platform === "win32") {
+    skip(); // File symlinks require privileges on Windows.
+  }
+  const broker = new SqliteWorkerBroker();
+  const loop = databasePath();
+  fs.symlinkSync(loop, loop);
+  // Exhaust the client limit if any failed open keeps its reservation.
+  for (let index = 0; index < 64; index++) {
+    await expect(openBroker(broker, loop)).rejects.toMatchObject({ code: "ELOOP" });
+  }
+  try {
+    const store = await withinTest(openBroker(broker, databasePath()), signal);
+    assert(store);
+    expect(await append(store, "capacity recovered")).toMatchObject({ writes: 1 });
+  } finally {
+    await withinTest(broker.close(), signal);
+  }
+});
+
+it("lets a cold admission turn open its database while a later open waits on that turn", async ({
+  signal,
+}) =>
+  withSqliteDatabaseAdmissionExchange(
+    () => [],
+    async () => {
+      const broker = new SqliteWorkerBroker();
+      const file = databasePath();
+      const entered = createDeferredCore();
+      const proceed = createDeferredCore();
+      // A cold agent writer holds the database's turn, then opens its worker inside it.
+      const owner = runWithSqliteDatabaseAdmissionTurn([file], async () => {
+        entered.resolve();
+        await proceed.promise;
+        return await openBroker(broker, file);
+      });
+      const pending: Promise<unknown>[] = [owner];
+      try {
+        await withinTest(entered.promise, signal);
+        // An unrelated open of the same cold file arrives outside that turn.
+        const later = openBroker(broker, file);
+        pending.push(later);
+        proceed.resolve();
+        const [ownerStore, laterStore] = await withinTest(Promise.all([owner, later]), signal);
+        assert(ownerStore && laterStore, "Fixture stores missing");
+        expect(await append(ownerStore, "turn owner")).toMatchObject({ writes: 1 });
+        expect(await read(laterStore)).toEqual(["turn owner"]);
+      } finally {
+        proceed.resolve();
+        await Promise.allSettled(pending);
+        await broker.close();
+      }
+    },
+  ));
 
 it("cancels queued opens without overtaking an accepted open or abandoning its settlement", async ({
   signal,

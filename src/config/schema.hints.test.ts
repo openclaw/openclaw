@@ -12,6 +12,28 @@ const branches = () =>
     z.object({ type: z.literal("none") }),
     z.object({ type: z.literal("token"), value: secret() }),
   ] as const;
+
+it("publishes localizable labels and help for nested security settings", () => {
+  const { uiHints } = buildConfigSchemaCore();
+  const paths = `audit audit.suppressions audit.suppressions.*.checkId
+    audit.suppressions.*.titleIncludes audit.suppressions.*.detailIncludes
+    audit.suppressions.*.reason installPolicy installPolicy.enabled installPolicy.targets
+    installPolicy.exec installPolicy.exec.source installPolicy.exec.command installPolicy.exec.args
+    installPolicy.exec.timeoutMs installPolicy.exec.noOutputTimeoutMs installPolicy.exec.maxOutputBytes
+    installPolicy.exec.env installPolicy.exec.passEnv installPolicy.exec.trustedDirs`;
+  for (const path of paths.split(/\s+/)) {
+    expect(uiHints[`security.${path}`]?.label, path).toEqual(expect.stringMatching(/\S/));
+  }
+  for (const path of [
+    "audit.suppressions",
+    "installPolicy.enabled",
+    "installPolicy.targets",
+    "installPolicy.exec",
+  ]) {
+    expect(uiHints[`security.${path}`]?.help, path).toEqual(expect.stringMatching(/\S/));
+  }
+});
+
 function expectSensitive(hints: ReturnType<typeof mapSensitivePaths>, paths: string) {
   const fields = paths.trim().split(/\s+/);
   expect(hints).toMatchObject(

@@ -8,7 +8,10 @@ import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
-import { selectProfileAccessEntries } from "./user-profile-github-identity.js";
+import {
+  selectProfileAccessEntries,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
@@ -234,7 +237,17 @@ export function selectUserProfileDisplaysInDatabase(
     }
     return displays;
   }
-  const byId = new Map(rows.map((row) => [row.id, row]));
+  const namelessIds = rows.filter((row) => !row.display_name?.trim()).map((row) => row.id);
+  const githubNames = selectUserProfileGitHubIdentities(db, namelessIds);
+  const byId = new Map(
+    rows.map((row) => [
+      row.id,
+      {
+        ...row,
+        ...(githubNames.has(row.id) ? { githubIdentity: githubNames.get(row.id) } : {}),
+      },
+    ]),
+  );
   return new Map(
     ids.map((id) => {
       // Match native text binding before indexing the returned SQLite rows.

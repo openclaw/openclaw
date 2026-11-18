@@ -41,6 +41,7 @@ import { readModelPromptProjection } from "../../../sessions/user-turn-transcrip
 import { extractTextFromChatContent } from "../../../shared/chat-content.js";
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { decideContextPressure } from "../../context-pressure.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
@@ -50,7 +51,7 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import { sanitizeToolUseResultPairingForModel } from "../../session-transcript-repair.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/index.js";
-import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool.js";
+import { invalidateComputerFrameIfMissing } from "../../tools/computer-tool-shared.js";
 import { resolveAttemptWorkspaceSandbox } from "../../workspace-sandbox.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { log } from "../logger.js";
@@ -61,6 +62,8 @@ import {
   installToolResultContextGuard,
 } from "../tool-result-context-guard.js";
 import {
+  estimateToolResultReductionPotential,
+  projectToolResultMessages,
   pruneExpiredCacheTtlToolResults,
   resolveCacheTtlPruningSettings,
   resolveLiveToolResultMaxChars,
@@ -403,6 +406,7 @@ export function installEmbeddedAttemptContextGuards(input: {
 
   const previousContextTransform = activeSession.agent.transformContext;
   activeSession.agent.transformContext = async (messages, signal) => {
+    let localRoots: readonly string[] | undefined;
     const hydrated = await hydratePromptMediaMessages(messages, {
       workspaceDir: input.effectiveWorkspace,
       agentWorkspaceDir: attempt.workspaceDir,
@@ -412,7 +416,11 @@ export function installEmbeddedAttemptContextGuards(input: {
       workspaceOnly: input.effectiveFsWorkspaceOnly,
       localRoots: input.effectiveFsWorkspaceOnly
         ? undefined
-        : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+        : () =>
+            (localRoots ??= getAgentScopedMediaLocalRoots(
+              attempt.config ?? {},
+              input.sessionAgentId,
+            )),
       sandbox:
         input.sandbox?.enabled && input.sandbox.fsBridge
           ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }
@@ -436,7 +444,7 @@ export function installEmbeddedAttemptContextGuards(input: {
       request: Pick<
         Parameters<typeof resolveProjectedRequestPressure>[0],
         "context" | "previousRequest" | "fixedTokenPressure"
-      > & { measuredContextTokens?: number },
+      > & { measuredContextTokens?: number; boundarySafe?: () => boolean },
     ) => {
       // Deferring maintenance never authorizes an over-window provider request.
       const deferThreshold = activeSession[agentSessionDeferThresholdCompaction];
@@ -453,8 +461,20 @@ export function installEmbeddedAttemptContextGuards(input: {
         !deferThreshold &&
         compaction?.enabled !== false &&
         (request.measuredContextTokens ?? request.previousRequest?.contextTokens ?? 0) >= threshold;
+      // The reserve only selects the compaction target; context-pressure owns the verdict.
       const decision = resolveProjectedRequestPressure({
         ...request,
+        // Provider projections may contain text that the transcript owner cannot rewrite.
+        estimateRecoverableToolResultChars: () =>
+          estimateToolResultReductionPotential({
+            messages: projectToolResultMessages({
+              messages: input.sessionManager.buildSessionContext().messages,
+              projectionState: input.toolResultPromptProjectionState,
+              recovering: true,
+            }).messages,
+            contextWindowTokens: contextTokenBudget,
+            maxCharsOverride: toolResultMaxChars,
+          }).maxReducibleChars,
         contextTokenBudget,
         reserveTokens: deferThreshold
           ? 0
@@ -468,13 +488,24 @@ export function installEmbeddedAttemptContextGuards(input: {
         replay: {
           model: attempt.model,
           sessionId: attempt.sessionId,
-          authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
           enabled: input.getCompactionReplayEnabled(),
         },
       });
       await publishEmbeddedRequestContext(attempt, decision.estimatedPromptTokens);
-      if (decision.route !== "fits") {
-        pendingMidTurnPrecheckRequest = { ...decision, route: decision.route };
+      const pressure = decideContextPressure({
+        estimatedPromptTokens: decision.estimatedPromptTokens,
+        windowTokens: contextTokenBudget,
+        maintenanceDue: decision.route !== "fits",
+        // Evaluated lazily: only due maintenance needs the tool-batch evidence.
+        boundarySafe: decision.route !== "fits" && (request.boundarySafe?.() ?? false),
+        runId: attempt.runId,
+      });
+      if (pressure) {
+        pendingMidTurnPrecheckRequest = {
+          ...decision,
+          pressure,
+          route: decision.route === "fits" ? "compact_only" : decision.route,
+        };
         throw new MidTurnPrecheckSignal(pendingMidTurnPrecheckRequest);
       }
       return decision.estimatedPromptTokens;

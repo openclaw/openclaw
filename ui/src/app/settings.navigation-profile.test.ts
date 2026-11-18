@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { DEFAULT_SIDEBAR_ENTRIES } from "../app-navigation.ts";
+import { createMediaQueryList } from "../test-helpers/media-query.ts";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
@@ -93,6 +94,7 @@ it.each([false, true])(
     const events = new EventTarget();
     vi.stubGlobal("addEventListener", events.addEventListener.bind(events));
     vi.stubGlobal("removeEventListener", events.removeEventListener.bind(events));
+    vi.stubGlobal("matchMedia", (media: string) => createMediaQueryList(media, false));
     const initial = loadSettings();
     const { gateway } = createGatewayStoreTestStore({ settings: initial });
     const theme = createApplicationTheme(initial, gateway);

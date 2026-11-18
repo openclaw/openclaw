@@ -225,6 +225,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_row_partition_revisions_total`          | counter   | `reason`                                                                                  |
 | `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite and authority)                               |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_authority_component_sampled_bytes_total` | counter   | `request_class`, `component`                                                              |
+| `openclaw_worker_authority_component_samples_total`       | counter   | `request_class`, `component`, `result`                                                    |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                          | counter   | `level`, `reason`                                                                         |
@@ -251,6 +253,14 @@ failures and zero-byte reads. Nested readers count once under their outer
 operation. Usage operations distinguish `sessions.usage.refresh`, `summary`,
 `overview`, `sessions`, and `inventory` suffixes.
 
+Transcript hydration uses `sessions.transcript-hydration.<caller>` with fixed
+caller names, including `model-open`, `cron-model`, `subagent-model`,
+`model-reload`, `compaction`, `preview`, and `export`. Sum this prefix to compare
+with the former `sessions.transcript-hydration` total. Reused actor snapshots
+and followers sharing an in-flight hydration do not add reader operations;
+the dispatched read is attributed to its initiating caller. Chat history and
+message subscriptions use separate history operations.
+
 These process-lifetime totals include retired direct reader workers and travel
 with the existing diagnostic memory samples. The label uses internal operation
 names, capped at 256 plus `other`; paths and session identities are excluded.
@@ -268,6 +278,10 @@ classes use `other`; continuation frames and private admission-port commit and
 settlement receipts keep their job's class. Other message kinds and the
 message-count/unmeasured-count metrics retain their existing labels.
 No payload decoding or extra serialization is performed for attribution.
+Local workspace requests use the fixed `localWorkspace.*` operation names, such as
+`localWorkspace.prepare` and `localWorkspace.mutate`, so pack preparation and
+checkpoint publication can be measured separately. Unknown suffixes remain grouped
+under `localWorkspace`; workspace IDs and paths never become labels.
 
 ```promql
 # Known SQLite request payload MB/min by bounded request class
@@ -303,6 +317,47 @@ Object graphs without a known size increase `openclaw_worker_message_unmeasured_
 instead of appearing as measured zero-byte messages. Compare byte rankings with
 this coverage counter before drawing conclusions; nested worker-to-worker traffic
 does not cross the main-thread boundary.
+
+Actor authority component counters independently sample each complete operation
+with probability 1/128, grouped by fixed `session.actor.*` request class. They include native admission facts
+that have no `payloadBytes` and therefore remain absent from the older payload byte
+counter. The older counter is unchanged: do not add it to the sampled series.
+Only numbers and fixed labels are retained; sampling does not change worker frames.
+
+Components partition V8-serialized facts using marginal removal sizes:
+`admission_entry` removes the snapshot's full entry; `admission_other` includes
+references and all remaining admission facts. `receipt_entry` removes the postimage
+entry and the complete entry-metadata receipts (including their small envelopes).
+`receipt_events` then removes appended events and transcript authority receipts.
+`receipt_value` then removes the phase result and transcript append result, including
+reloads, initial entries and model prompt projections; `receipt_other` includes
+everything left. Shared objects belong to the last component still referencing
+them. Native cloning can change V8 array encoding sizes, so each receipt remainder
+is capped at the previous remainder. Attribution is approximate, but receipt
+components sum exactly to the worker-recorded `payloadBytes` (zero total-byte
+error). Port, decision-cell and transport framing bytes are excluded. This is byte
+attribution, not structured-clone allocation. If serialization fails, the known
+receipt total goes to `receipt_other` and its component samples increment
+`result="unmeasured"`. Unsupported admission facts without a known size still
+contribute no bytes.
+
+For ordinary appends with one committed receipt, divide each component's sampled
+bytes by receipt samples to estimate bytes per append (including all admission
+frames in each sampled operation):
+
+```promql
+sum by (component) (
+  rate(openclaw_worker_authority_component_sampled_bytes_total{request_class="session.actor.appendTranscriptEvent"}[15m])
+)
+/
+scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other"}[15m])))
+```
+
+Check sample counts and unmeasured samples before interpreting a short window.
+Rejected admissions can contribute bytes without a receipt; oversized transferred
+outcomes appear under admission-other rather than decoded receipt components.
+Independent sampling avoids aliasing alternating user/assistant appends; use longer
+windows when sample counts are low.
 
 Foreign Worker instances with accessor or read-only methods, or nonextensible
 instances, retain CPU and lifecycle tracking but exclude per-message traffic.
@@ -441,7 +496,7 @@ reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
 `trigger` parameter filters job types and does not identify why a client fetched.
 
 The budget is at most **8 additional samples and scrape series per method**,
-created only for observed kinds and subject to the shared 16,384-sample cap.
+created only for observed kinds and subject to the shared 16,576-sample cap.
 Existing method-only counters and timing histograms keep their labels and bucket
 counts. To attribute polling, use:
 
@@ -538,7 +593,7 @@ uses one sample in the existing shared cap.
 
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
-samples in the shared 16,384-sample cap. An RPC duration histogram occupies one sample
+samples in the shared 16,576-sample cap. An RPC duration histogram occupies one sample
 but expands into 44 scrape series (41 finite buckets, `+Inf`, sum, and count).
 The four timing histograms therefore use 176 scrape series per method, compared
 with 76 previously. Including request and exclusive-sample counters and both
@@ -745,7 +800,7 @@ queue and exporter endpoint whenever diagnostics and an interested trusted
 consumer are active. They have no slow-log threshold and add no request, session,
 provider or host labels. The six elapsed and two CPU populations consume at most
 eight aggregate samples, or 152 exposed histogram series, under the existing
-16,384-sample cap. Startup-phase emission and its whole-process CPU semantics are
+16,576-sample cap. Startup-phase emission and its whole-process CPU semantics are
 unchanged.
 
 An OpenTelemetry exporter with traces disabled does not request phase events.
@@ -1167,7 +1222,14 @@ Labels contain a bounded `worker_class` (`reader`, `file-reader`, `compute`,
 above. GC counters also carry the same `kind` values as
 `openclaw_gc_duration_seconds`. No worker, pool, session, or task ID is exported.
 
-`openclaw_worker_tasks_completed_total` counts observed terminal task replies,
+SQLite broker workers share these totals under
+`worker_class="writer",script="sqlite-store.worker.js"`, across all databases and
+worker retirements. They omit `openclaw_worker_tasks_completed_total` because
+broker operations do not use the pool task-reply protocol. This adds at most four
+series to each existing GC counter family (one per kind) and one heap high-water
+series, independent of database or worker count.
+
+`openclaw_worker_tasks_completed_total` counts observed terminal pool task replies,
 including handled failures. `openclaw_worker_gc_duration_seconds_total` and
 `openclaw_worker_gc_collections_total` record elapsed GC seconds and collection
 counts. `openclaw_worker_gc_reclaimed_bytes_total` sums positive differences
@@ -1181,10 +1243,13 @@ byte counter or a sum of simultaneous worker heaps. It can miss peaks between
 samples, and remains visible after the last worker exits.
 
 Workers report through the existing periodic memory channel. The native sampler
-drains worker GC batches every 100 ms (the main thread remains at one second).
-Task replies carry
+drains GC samples once per second; broker samples travel with the next memory
+sample. The 30-second diagnostics heartbeat publishes the cumulative totals, so a
+15-second scrape window cannot precisely locate a collection. Inspector-triggered
+collections contribute to `mark_sweep_compact`; the native profiler does not
+expose a forced flag. Task replies carry
 only a completion marker, without a heap read or another per-task round trip.
-Healthy retirement flushes the last GC batch and heap sample over the same channel
+Healthy pool retirement flushes the last GC batch and heap sample over the same channel
 before stopping the worker, with a 100 ms best-effort limit. Collection requires
 enabled diagnostics and an interested consumer. Tasks before activation are not
 backfilled. Forced termination, crashes, cancellation, or a retirement flush timeout
@@ -1340,6 +1405,51 @@ OpenTelemetry's `openclaw.gc.duration_ms` uses the corresponding
 `openclaw.gc.kind`, `openclaw.gc.thread`, and optional `openclaw.gc.worker_slot`
 attributes.
 
+## Plugin metric families
+
+Enabling Prometheus alone exports core metrics, not every plugin's metrics. To add a plugin's counters, gauges, and histograms to the same scrape, set `plugins.entries.<id>.allowMetrics` to `true` for **that plugin**. If omitted or `false`, its `api.metrics` is undefined. Other plugins are unaffected.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "diagnostics-prometheus": { enabled: true },
+      "my-plugin": { enabled: true, allowMetrics: true },
+    },
+  },
+}
+```
+
+This controls plugin-published metrics, not core measurements or a plugin's own HTTP routes. Anyone who can read the shared scrape can read these metrics; don't put secrets or personal identifiers in labels. The opt-in does not enable the plugin or an exporter. An opted-in plugin can register before Prometheus starts. Samples recorded with no listener are discarded, not buffered. Starting or stopping the exporter does not require the producer to restart. Today only `diagnostics-prometheus` exports these families.
+
+Plugin code can use the optional API:
+
+```ts
+const metrics = api.metrics?.register({
+  families: [
+    { name: "retain_total", type: "counter", help: "Retains by outcome", labels: ["outcome"] },
+    {
+      name: "recall_seconds",
+      type: "histogram",
+      help: "Recall latency",
+      buckets: [0.05, 0.1, 0.5, 1, 5],
+    },
+  ],
+});
+metrics?.counter("retain_total").inc({ outcome: "ok" });
+metrics?.histogram("recall_seconds").observe({}, 0.12);
+```
+
+- The host prefixes every family with `openclaw_plugin_<plugin id>_`; non `[a-z0-9_]` characters in the id become `_`. The example above exports `openclaw_plugin_my_plugin_retain_total` for a plugin with id `my-plugin`. Two plugins cannot register the same exported name, and a histogram also reserves its `_bucket`, `_sum` and `_count` names, so no other family (from the same plugin or another) can use them.
+- Names match `[a-z][a-z0-9_]*`, counters end in `_total`, label names are declared up front, and histogram buckets are finite and strictly ascending. `register()` throws on an invalid declaration, so the error shows up when the plugin loads.
+- Every sample must carry exactly the declared labels. A sample with other labels is dropped and the plugin logger warns once per family. Label values that fail the low-cardinality policy (`[A-Za-z0-9_.:-]`, up to 120 characters) are exported as `other`.
+- Plugin families have no reserve. They use the shared pool, each family keeps at most 128 label sets, and drops appear in `openclaw_prometheus_family_series_dropped_total{family="openclaw_plugin_..."}`. Core family reserves are unchanged, so plugin traffic cannot starve them.
+- Samples are recorded only while the exporter runs and reset when it stops, like core metrics. Record from runtime paths (routes, services, hooks): the exporter starts after plugins register.
+- Samples are accepted only while the recording plugin instance is the published one. During a reload the replacement instance can register the same families without disturbing the live one, but samples it records before the reload commits (from `register()` or a service start) are dropped, and the live instance keeps recording. If the reload fails and the previous instance is restored, its families and recorders keep working without registering again.
+- Calling `register()` again from the same instance replaces that instance's families: a family left out disappears from the next scrape, and recorders from the earlier call stop recording. A family whose type, help, labels or buckets changed across a reload starts over under its new shape once the reload commits: when the previous instance is disposed, or at the first new sample, whichever comes first.
+- When a plugin instance is disposed (disabled, uninstalled, or replaced by a committed reload), the families no other instance of that plugin still declares are dropped from the scrape and their names are released. Its retained recorders stop recording, and `register()` on its retained `api.metrics` throws.
+- The TypeScript type is `NonNullable<OpenClawPluginApi["metrics"]>`; the SDK exports no separate name for it.
+
 ## Label policy
 
 <AccordionGroup>
@@ -1350,7 +1460,7 @@ attributes.
 
   </Accordion>
   <Accordion title="Series cap and overflow accounting">
-    The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
+    The exporter retains at most **16,576 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
     A fixed catalog of 141 metric families reserves **16,128 entries**, leaving **256 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 
@@ -1364,8 +1474,8 @@ attributes.
     | 512 | `gateway_rpc_client_requests_total`, `worker_message_payload_bytes_total`, `worker_queue_depth`, `worker_queue_wait_seconds`, `worker_request_seconds` |
     | 384 | `gc_duration_seconds` |
     | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
-    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `heap_used_after_major_gc_bytes`, `heap_used_after_major_gc_timestamp_seconds`, `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total`, `worker_authority_component_samples_total` |
+    | 64 | `heap_used_after_major_gc_bytes`, `heap_used_after_major_gc_timestamp_seconds`, `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total`, `worker_authority_component_sampled_bytes_total` |
     | 32 | `chat_send_phase_seconds`, `session_row_partition_cache_total`, `worktree_preparation_seconds` |
     | 8 | `session_row_partition_revisions_total` |
     | 4 | Every other cataloged family |
@@ -1375,7 +1485,7 @@ attributes.
 
     These budgets cover 170 RPC methods (including two client kinds per method), 400 worker request/queue label sets, 400 worker phase label sets, 200 WebSocket event names, 390 worker heap-space label sets, and 250 main/worker GC label sets without using the shared pool. Worker heap spaces multiply `script × space`; GC can multiply `thread × kind × reason × slot`. The GC `reason` and reusable Code Mode `slot` labels retain callback attribution and per-isolate correlation with heap samples. Worker phases multiply `kind × request_class × phase`: 400 fully timed request combinations would need 2,800 phase entries, exceeding that family's 1,024-entry limit. Reservations guarantee capacity, not unlimited cardinality.
 
-    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
+    Rejected new-series observations increment `openclaw_prometheus_series_dropped_total` and `openclaw_prometheus_family_series_dropped_total{family="..."}`. Repeated observations of the same rejected label set increment again; these counters do not count unique rejected sets. Both counters bypass admission, so saturation cannot hide drops. The family label comes only from the fixed catalog or a host-admitted plugin family name, never from diagnostic label values. The exporter also logs one warning per affected family per process, including across exporter restarts.
 
     Drop counters reset when the exporter stops. Drops can reflect legitimate combinations of bounded labels as well as an upstream cardinality leak. Inspect the named family before changing its labels or budget. The exporter never raises its cap automatically; the family reserve is a guarantee of capacity, not complete coverage for arbitrarily many label combinations.
 

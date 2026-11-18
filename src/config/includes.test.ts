@@ -231,6 +231,17 @@ it.runIf(process.platform !== "win32")(
 );
 
 it.runIf(process.platform !== "win32")(
+  "accepts an absolute include spelled through an alias of the config dir",
+  async () => {
+    const files = await withFiles({ "config/agents.json5": { agents: true } });
+    await fs.symlink(files.at("config"), files.at("config-alias"));
+    expect(files.resolve({ $include: files.at("config-alias/agents.json5") })).toEqual({
+      agents: true,
+    });
+  },
+);
+
+it.runIf(process.platform !== "win32")(
   "keeps the original root boundary after a parent symlink swap",
   async () => {
     const { at } = await withFiles({

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect } from "vitest";
-import { requireGit } from "./git.js";
+import { requireGitPath } from "./git.js";
 
 export const read = (directory: string, file: string) =>
   fs.readFile(path.join(directory, file), "utf8");
@@ -10,10 +10,10 @@ export const write = (directory: string, file: string, contents: string) =>
 export const linkDirectory = (target: string, link: string) =>
   fs.symlink(target, link, process.platform === "win32" ? "junction" : "dir");
 export const gitDirectory = async (checkout: string) =>
-  fs.realpath(await requireGit(checkout, ["rev-parse", "--absolute-git-dir"]));
+  fs.realpath(await requireGitPath(checkout, ["rev-parse", "--absolute-git-dir"]));
 export const gitCommonDirectory = async (checkout: string) =>
   fs.realpath(
-    path.resolve(checkout, await requireGit(checkout, ["rev-parse", "--git-common-dir"])),
+    path.resolve(checkout, await requireGitPath(checkout, ["rev-parse", "--git-common-dir"])),
   );
 const metadataBytes = (directory: string) =>
   Promise.all(["HEAD", "index"].map((file) => fs.readFile(path.join(directory, file))));

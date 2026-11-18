@@ -1,7 +1,9 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { STALE_WORKER_BUILD_REASON } from "./admission.js";
 import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
+import type { PreparedWorkerWorkspaceRecovery } from "./placement-reclaim-contract.js";
 import {
   FORCED_WORKER_ABANDONMENT_ERROR,
   projectPlacementTurnClaim,
@@ -15,6 +17,8 @@ import {
   isFailedWorkerPlacementEnvironmentGone,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
+import { isCurrentWorkerWorkspacePendingResultOwner } from "./placement-workspace-result-owner.js";
+import type { WorkerWorkspacePendingResult } from "./placement-workspace-result.types.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementAuthorization,
@@ -88,6 +92,7 @@ export type WorkerDispatchEnvironmentService = Pick<
   | "prepareProjectIntent"
   | "assertPreparedIntentCurrent"
   | "getPreparedCandidates"
+  | "refreshPreparedEnvironment"
   | "schedulePreparedRefill"
   | "createWithRequest"
   | "destroy"
@@ -158,6 +163,56 @@ export function workerDisappearanceError(
   return new Error(
     `cloud worker disappeared: ${environment.error ?? `environment state ${environment.state}`}`,
   );
+}
+
+export async function reportPendingWorkspaceResultFailure(params: {
+  placements: Pick<
+    WorkerDispatchPlacementStore,
+    "readProjection" | "loadWorkspaceReconciliation" | "failWorkspaceResultAndReleaseTurn"
+  >;
+  pending: WorkerWorkspacePendingResult;
+  recovery: Pick<PreparedWorkerWorkspaceRecovery, "reportFailure" | "assertCurrent">;
+  error: unknown;
+}): Promise<void> {
+  const { placements, recovery, error } = params;
+  const observed = params.pending;
+  const facts = await placements.readProjection([observed.sessionId], { current: true });
+  const candidate = facts.pendingResults.get(observed.sessionId);
+  const pending =
+    candidate &&
+    candidate.sessionId === observed.sessionId &&
+    candidate.environmentId === observed.environmentId &&
+    candidate.ownerEpoch === observed.ownerEpoch &&
+    candidate.placementGeneration === observed.placementGeneration &&
+    candidate.claimId === observed.claimId &&
+    candidate.runId === observed.runId &&
+    candidate.gatewayInstanceId === observed.gatewayInstanceId
+      ? candidate
+      : undefined;
+  if (
+    !pending ||
+    !isCurrentWorkerWorkspacePendingResultOwner(facts.placements.get(observed.sessionId), pending)
+  ) {
+    return;
+  }
+  const reject =
+    hasErrnoCode(error, "WORKSPACE_RESULT_LIMIT") &&
+    pending.stagedResultRef &&
+    pending.workspaceAcceptedAtMs === null &&
+    !pending.repositoryDiskAuthority &&
+    !(await placements.loadWorkspaceReconciliation(pending));
+  const failure = reject
+    ? new Error(`${boundedError(error)} Rejected result preserved at ${pending.stagedResultRef}.`)
+    : error;
+  try {
+    await recovery.reportFailure(boundedError(failure));
+  } finally {
+    if (reject) {
+      // Keep the staged Git ref for inspection, but retire this unaccepted
+      // result instead of retrying it on every pass.
+      await placements.failWorkspaceResultAndReleaseTurn(pending, failure, recovery.assertCurrent);
+    }
+  }
 }
 
 export function isUnavailableEnvironment(

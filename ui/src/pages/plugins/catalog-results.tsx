@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, For, latest, Loading, onSettled, Repeat, Reveal } from "solid-js";
+import { createMemo, Errored, For, latest, Loading, Repeat, Reveal } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import {
   CatalogDiscoveryChip,
@@ -8,7 +8,9 @@ import {
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
+import { SettingsSection, SettingsUnavailable } from "../../components/solid/settings-ui.tsx";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PageReadResult } from "../../lib/page-request.ts";
@@ -45,6 +47,7 @@ export type PluginCatalogResultsProps = PluginDiscoveryState & {
   iconLoading?: (url: string) => boolean;
   pluginIconLoading?: (pluginId: string) => boolean;
   canInstall: boolean;
+  installTitle?: string;
   busy?: Readonly<Record<string, PluginMutationAction>>;
   installProgress?: ReadonlyMap<string, PluginInstallProgress>;
   /** Installed inventory; publishes local state before catalog pages are read again. */
@@ -173,6 +176,7 @@ function CatalogCard(props: {
                       }
                       pluginName={props.plugin.catalog.name}
                       busy={busy()}
+                      title={props.state.installTitle}
                       disabled={!canInstall()}
                       progress={progress()}
                       onInstall={() => props.state.onInstall(props.plugin.id)}
@@ -201,24 +205,16 @@ function CatalogCard(props: {
 
 function renderError(error: string, onRetry: () => void, warning = false): JSX.Element {
   return (
-    <div
-      class={[
-        "callout",
-        warning ? "warning" : "danger",
-        "oc-banner",
-        { "oc-banner-error": !warning },
-      ]}
-      role={warning ? "status" : "alert"}
+    <InlineAlert
+      tone={warning ? "warning" : "danger"}
+      action={
+        <button type="button" class="btn btn--sm" onClick={() => onRetry()}>
+          {t("pluginsPage.tryAgain")}
+        </button>
+      }
     >
-      <span>{formatUiExternalText(error)}</span>
-      <button
-        type="button"
-        class="btn btn--sm oc-action oc-action-secondary oc-banner-action"
-        onClick={() => onRetry()}
-      >
-        {t("pluginsPage.tryAgain")}
-      </button>
-    </div>
+      {formatUiExternalText(error)}
+    </InlineAlert>
   );
 }
 
@@ -421,9 +417,11 @@ function RawResults(props: CatalogResultsState): JSX.Element {
   return (
     <>
       {!props.connected ? (
-        <p class="plugin-catalog-results__empty">{t("pluginsPage.discoveryOffline")}</p>
+        <SettingsSection>
+          <SettingsUnavailable message={t("pluginsPage.discoveryOffline")} />
+        </SettingsSection>
       ) : items().length === 0 ? (
-        renderCatalogEmptyState()
+        !props.remoteError && renderCatalogEmptyState()
       ) : (
         <>
           {props.query.trim() && official().length > 0 && community().length > 0 ? (
@@ -541,34 +539,15 @@ export function renderPluginCatalogResults(props: PluginCatalogResultsProps): JS
     }
     return null;
   };
-  let input!: HTMLInputElement;
-  onSettled(() => {
-    input.dataset.autofocused = "true";
-    input.focus();
-    let secondFrame = 0;
-    const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => {
-        if (input.isConnected) {
-          input.focus();
-        }
-      });
-    });
-    return () => {
-      cancelAnimationFrame(firstFrame);
-      cancelAnimationFrame(secondFrame);
-    };
-  });
   return (
     <section class="plugin-catalog-results" aria-label={t("pluginsPage.exploreTitle")}>
       <CatalogDiscoverySearch>
         <input
           type="search"
-          class="oc-input"
-          autofocus
+          class="settings-input"
           aria-label={t("pluginsPage.searchPlugins")}
           placeholder={t("pluginsPage.searchPlugins")}
           value={props.query}
-          ref={(element) => (input = element)}
           onInput={(event) => props.onQueryChange(event.currentTarget.value)}
         />
       </CatalogDiscoverySearch>

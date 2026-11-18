@@ -1,0 +1,7 @@
+# +617 net LF test lines against 2b9b23b9f3afbd8ebb233c097e13b847df0b73a3.
+# Preserve every generic retired-claim final-write regression byte-for-byte.
+# Native admission/recovery cases reuse the shared fixture in their own owner
+# so current-main generic coverage stays below the canonical file-size limit.
+# Five extra lines preserve child worker limits when the selected CI job shares setup.
+# The ordinary allowance covers 400; allocate only the verified excess.
+217

@@ -6,6 +6,22 @@ read_when:
   - You need to distinguish measured workflow walls from planner estimates
 ---
 
+## Blacksmith physical allocation
+
+On November 3, 2026, the same Linux x64 label began receiving four times its
+previous CPU and memory allocation. The 8-vCPU label reported two CPUs and
+7.65 GiB in [the 18:49 UTC job](https://github.com/openclaw/openclaw/actions/runs/41696743325/job/126131569819),
+then eight CPUs and 30.95 GiB in [the 19:13 UTC job](https://github.com/openclaw/openclaw/actions/runs/41700487643/job/126144726154).
+These jobs also changed region from eu-west to us-east; the logs do not establish
+why the provider changed allocation.
+
+The planner's historical 4/8/16/32 profiles select physical 2/2/4/8-vCPU labels.
+`runner` remains the planning and timing identity; `runner_label` is the requested
+allocation. Group memory thresholds can raise that allocation: the 28-GiB
+Gateway groups retain an 8-vCPU runner even when their profile is 16.
+Static Linux x64 jobs and Testboxes request the corresponding physical size.
+Windows and ARM require separate qualification.
+
 ## Routing from measured wall time
 
 Use GitHub-hosted runners for independent checks that fit the workflow's remaining time. Retain Blacksmith where the measured job tail threatens completion. Qualify RunsOn by workload before assigning it a production tier. Requested Blacksmith 8/16/32 labels delivered 2/4/8 CPUs in the capacity check; labels are not worker counts.

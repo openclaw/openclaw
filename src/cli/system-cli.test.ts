@@ -44,16 +44,16 @@ describe("system-cli", () => {
     expect(runtimeErrors[0]).toContain("unwakeable-session-key");
   });
 
-  it("writes JSON when invalid wake mode fails", async () => {
-    await expect(
-      runCli(["system", "event", "--text", "hello", "--mode", "later", "--json"]),
-    ).rejects.toThrow("__exit__:1");
-    const failure = {
-      ok: false,
-      error: { type: "cli_error", message: "--mode must be now or next-heartbeat" },
-    };
-    expect(runtimeLogs).toEqual([JSON.stringify(failure, null, 2)]);
-    expect(runtimeErrors).toEqual([]);
+  it.each([
+    [["--text", "hello", "--mode", "later"], "--mode must be now or next-heartbeat"],
+    [["--text", "   "], "--text is required."],
+  ] as const)("hands %j refusals to the CLI failure owner", async (args, message) => {
+    await expect(runCli(["system", "event", ...args, "--json"])).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: expect.stringContaining(message),
+    });
+    expect([runtimeLogs, runtimeErrors]).toEqual([[], []]);
+    expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 

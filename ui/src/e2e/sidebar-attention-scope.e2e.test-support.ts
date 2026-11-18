@@ -149,9 +149,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("08a-desktop-inbox-row-click-result.png");
     await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     await captureProof("08b-desktop-inbox-row-navigation.png");
-    await page.goBack();
-    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
-
+    // Sessions returns to the conversation with its list and agent switcher.
+    await sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
     await sidebar.getByRole("button", { name: /Switch agent/ }).click();
     await sidebar.locator('.sidebar-agent-menu [data-value="agent:writer"]').click();
     await waitForCronScope("writer");
@@ -162,9 +161,11 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof("09-desktop-inbox-writer-agent.png", true);
     await sidebar.locator(".sidebar-issues-button").click();
 
+    // The Automations page has no header beside its sidebar; Usage keeps the shared agent scope
+    // in its header.
     const pages = await openSidebarPages(page);
-    await pages.getByRole("link", { name: "Automations", exact: true }).click();
-    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
+    await pages.getByRole("link", { name: "Usage", exact: true }).click();
+    await waitForControlUiRoute(page, { pathname: "/usage", routeId: "usage" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
@@ -260,7 +261,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await expectAutomations(0, 1);
     await captureProof("11-mobile-inbox-writer-agent.png", true);
 
-    await sidebar.getByRole("button", { name: "Dismiss shown" }).click();
+    await sidebar.locator(".sidebar-issues-panel__more").click();
+    await sidebar.getByRole("menuitem", { name: "Dismiss shown" }).click();
     await expectCount(sidebarUpdate, 0);
     await expectCount(automationRows, 0);
     await sidebar.getByRole("tab", { name: /All/ }).click();

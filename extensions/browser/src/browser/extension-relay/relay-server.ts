@@ -230,8 +230,7 @@ export async function startExtensionRelayServer(params: {
     return (grant: HttpAuthGrant, authority: BrowserRelayAuthV2Authority, payload: unknown) => {
       res.once("finish", () => {
         if (!socket.destroyed && httpStates.get(socket) === pending) {
-          const timer = setTimeout(() => socket.destroy(), BROWSER_RELAY_CHALLENGE_TTL_MS);
-          timer.unref?.();
+          const timer = setTimeout(() => socket.destroy(), BROWSER_RELAY_CHALLENGE_TTL_MS).unref();
           httpStates.set(socket, { ...grant, authority, timer });
         }
       });

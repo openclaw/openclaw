@@ -5,7 +5,15 @@
 import { z } from "zod";
 import type { AcpxAgentCommand } from "./command-line.js";
 
-export const ACPX_NATIVE_AGENT_IDS = ["opencode", "qwen", "pi", "kilocode", "copilot"] as const;
+export const ACPX_NATIVE_AGENT_IDS = [
+  "opencode",
+  "qwen",
+  "pi",
+  "kilocode",
+  "copilot",
+  "grok-build",
+  "qoder",
+] as const;
 export type AcpxNativeAgentId = (typeof ACPX_NATIVE_AGENT_IDS)[number];
 export const AcpxNativeAgentsSchema = z
   .strictObject({
@@ -14,6 +22,8 @@ export const AcpxNativeAgentsSchema = z
     pi: z.boolean().optional(),
     kilocode: z.boolean().optional(),
     copilot: z.boolean().optional(),
+    "grok-build": z.boolean().optional(),
+    qoder: z.boolean().optional(),
   })
   .optional();
 

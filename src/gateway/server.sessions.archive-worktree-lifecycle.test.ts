@@ -125,6 +125,34 @@ async function createPeer() {
   return { ...peer, target: { key: peer.key, expectedSessionId: peer.sessionId } };
 }
 
+test("only a newly archived checkout wakes maintenance", async () => {
+  const fixture = await archiveFixture();
+  const peer = await createPeer();
+  using gc = vi.spyOn(managedWorktrees, "gc");
+  expect(
+    await directSessionReq("sessions.patch", { ...peer.target, archived: true }),
+  ).toMatchObject({ ok: true });
+  await fixture.tickWorktreeMaintenance();
+  expect.soft(gc).not.toHaveBeenCalled();
+  gc.mockClear();
+  for (let request = 0; request < 6; request++) {
+    expect(
+      await directSessionReq("sessions.patch", { ...peer.target, archived: true }),
+    ).toMatchObject({ ok: true });
+    await fixture.tickWorktreeMaintenance(10 * 60_000);
+    await fixture.tickWorktreeMaintenance();
+  }
+  expect.soft(gc).toHaveBeenCalledOnce(); // Only the hourly expiry pass remains.
+  gc.mockClear();
+  await fixture.archive();
+  await fixture.tickWorktreeMaintenance();
+  expect(gc).toHaveBeenCalledOnce();
+  await fixture.expectSnapshot();
+  await fixture.archive();
+  await fixture.tickWorktreeMaintenance();
+  expect(gc).toHaveBeenCalledOnce();
+});
+
 test("patchMany releases unrelated writes while restore waits for allocation", async ({
   signal,
 }) => {

@@ -17,6 +17,7 @@ export type SystemRunDeniedReason =
   | "companion-unavailable"
   | "timeout"
   | "response-lost"
+  | "too-large"
   | "cwd-unavailable"
   | "permission:screenRecording";
 
@@ -24,6 +25,7 @@ const transportErrorCodes: Partial<Record<SystemRunDeniedReason, string>> = {
   "companion-unavailable": "UNAVAILABLE",
   timeout: "TIMEOUT",
   "response-lost": "UNKNOWN",
+  "too-large": "INVALID_REQUEST",
 };
 
 export function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
@@ -35,6 +37,7 @@ export function normalizeDeniedReason(reason: string | null | undefined): System
     case "companion-unavailable":
     case "timeout":
     case "response-lost":
+    case "too-large":
     case "cwd-unavailable":
     case "permission:screenRecording":
       return reason;

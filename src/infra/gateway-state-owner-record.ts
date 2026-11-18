@@ -125,7 +125,9 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     return;
   }
   if (namespace === "same" && !isPidAlive(owner.pid)) {
-    throw new StateDatabaseAccessError(unavailable);
+    // The owner can exit after the stale check. Cold admission must re-observe
+    // proof of death, not treat this transient disagreement as a terminal failure.
+    throw new StateDatabaseAdmissionPendingError(databasePath, unavailable);
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {
@@ -135,7 +137,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     assertMaintenance();
     return;
   }
-  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}; retry when it finishes. For update progress, run \`openclaw update status --json\`.`;
+  const maintenancePending = `OpenClaw state at ${databasePath} is undergoing offline maintenance by ${role} process ${owner.pid}, started ${owner.createdAt}; retry when it finishes. For update progress, run \`openclaw update status --json\`. ${describeGatewayLockHolder(owner, ownerPath, namespace === "same" ? "live" : "unknown")}`;
   if (owner.stateOwnerKind === "schema" && owner.role === "sqlite-maintenance") {
     throw new StateDatabaseAdmissionPendingError(databasePath, maintenancePending);
   }

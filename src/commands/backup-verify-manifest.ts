@@ -295,6 +295,7 @@ export type BackupManifest = {
   nodeVersion: string;
   options?: {
     includeWorkspace?: boolean;
+    excludeWorktreeTemplates?: boolean;
     onlyConfig?: boolean;
   };
   paths?: {
@@ -594,11 +595,9 @@ export function isRootBackupManifestEntry(entryPath: string): boolean {
 
 export function verifyBackupManifestEntries(manifest: BackupManifest, entries: Set<string>): void {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
-  const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
-
-  if (!entries.has(manifestEntryPath)) {
-    throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
+  if (!entries.has(`${archiveRoot}/manifest.json`)) {
+    throw new Error(`Archive is missing manifest entry: ${archiveRoot}/manifest.json`);
   }
 
   for (const entry of normalizedEntries) {

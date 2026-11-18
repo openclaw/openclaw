@@ -1,3 +1,4 @@
+import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { getActiveAgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
@@ -7,6 +8,7 @@ import {
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
 import { recordModelFallbackStop } from "./failover-error.js";
+import { isSchedulerOwnedRequesterYield } from "./openclaw-tools.requester-yield.js";
 import { createSessionPlacementSettlementClosedAbortError } from "./run-termination.js";
 import {
   markRequesterTurnYielded,
@@ -107,6 +109,13 @@ export async function settleRequesterRun(
     },
   };
   requester.assertCurrent();
+  // An automation yield records no requester claim, so it settles as an ordinary turn end.
+  const requesterYielded =
+    result.meta.yielded === true &&
+    !isSchedulerOwnedRequesterYield({
+      requesterSessionKey: params.sessionKey,
+      scheduledToolTargets: readScheduledToolTargets({ operationalRunInstance: instance }),
+    });
   try {
     if (result.meta.continuationPending) {
       // The outbox transfers this batch only after its waiting status is delivered.
@@ -117,10 +126,10 @@ export async function settleRequesterRun(
     }
     const settled = await settleRequesterAfterSessionSpawns({
       ...requester,
-      requesterYielded: result.meta.yielded === true,
+      requesterYielded,
       acceptedSessionSpawns: result.acceptedSessionSpawns ?? [],
     });
-    if (result.meta.yielded) {
+    if (requesterYielded) {
       if (!settled) {
         throw new Error("accepted continuation children could not transfer terminal delivery");
       }

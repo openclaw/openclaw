@@ -37,7 +37,7 @@ const checkoutPopover = (page: Page) =>
   page.locator(".oc-popover.new-session-page__checkout-popover");
 const worktreeOption = (page: Page) =>
   checkoutPopover(page).getByRole("button", {
-    name: "New worktree Isolated copy of the repo",
+    name: "New worktree",
     exact: true,
   });
 const messageInput = (page: Page) => page.locator(".new-session-page__message");
@@ -159,12 +159,100 @@ async function expectPendingNewSession(page: Page, message: string) {
   await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
   await pollLocatorText(submittedPrompt).toContain(message);
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
   expect(await messageInput(page).isVisible()).toBe(false);
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps branch choices usable through pushed refreshes (cold cache: %s)",
+    async (cold) => {
+      await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+        const gateway = await openNewPage(
+          page,
+          {
+            "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+            "worktrees.branches": cold
+              ? { branches: [], refreshing: true }
+              : { ...branchList(), refreshing: true },
+          },
+          { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
+        );
+        await gateway.waitForRequest("worktrees.branches");
+        await page.locator("#new-session-checkout-trigger").click();
+        const picker = checkoutPopover(page);
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+        if (cold) {
+          expect(await worktreeOption(page).isDisabled()).toBe(true);
+          await captureUiProof(suite, page, "checkout-cold-refreshing.png");
+          await gateway.setMethodResponse("worktrees.branches", {
+            ...branchList(),
+            refreshing: true,
+          });
+          await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+          await expect.poll(() => worktreeOption(page).isDisabled()).toBe(false);
+        }
+        await worktreeOption(page).click();
+        const base = checkoutBaseRefInput(picker);
+        await base.fill("release/custom");
+        await picker.locator("[data-worktree-name]").fill("my-task");
+        await base.focus();
+        await picker.locator('[data-worktree-suggestion="main"]').waitFor({ state: "visible" });
+        expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 2 : 1);
+        await captureUiProof(suite, page, "checkout-branches-refreshing.png");
+        await gateway.setMethodResponse("worktrees.branches", {
+          ...branchList(),
+          branches: [
+            { kind: "local", name: "main" },
+            { kind: "local", name: "feature/new" },
+          ],
+        });
+        await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+        await picker
+          .locator('[data-worktree-suggestion="feature/new"]')
+          .waitFor({ state: "visible" });
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "hidden" });
+        expect(await base.inputValue()).toBe("release/custom");
+        expect(await picker.locator("[data-worktree-name]").inputValue()).toBe("my-task");
+        expect(await requestCount(gateway, "worktrees.branches")).toBe(cold ? 3 : 2);
+        await captureUiProof(suite, page, "checkout-branches-refreshed.png");
+      });
+    },
+  );
+
+  it("keeps a failed cold refresh visible with a retry instruction", async () => {
+    await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
+      const gateway = await openNewPage(
+        page,
+        {
+          "agents.list": LOCAL_GIT_WORKSPACE_RESPONSES["agents.list"],
+          "worktrees.branches": { branches: [], refreshing: true },
+        },
+        { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
+      );
+      await gateway.waitForRequest("worktrees.branches");
+      const trigger = page.locator("#new-session-checkout-trigger");
+      await trigger.click();
+      const picker = checkoutPopover(page);
+      await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+      await gateway.setMethodResponse("worktrees.branches", {
+        branches: [],
+        branchesUnavailable: true,
+      });
+      await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+      await picker
+        .getByText("Couldn’t verify Git for this folder. Try again.", {
+          exact: true,
+        })
+        .waitFor({ state: "visible" });
+      expect(await trigger.isVisible()).toBe(true);
+      expect(await worktreeOption(page).isDisabled()).toBe(true);
+      expect(await requestCount(gateway, "worktrees.branches")).toBe(2);
+      await captureUiProof(suite, page, "checkout-cold-unavailable.png");
+    });
+  });
+
   it("keeps worktree editing stable and resets the accepted name", async () => {
     await suite.withPage(DESKTOP_CONTEXT, async ({ page }) => {
       const sessionKey = "agent:main:picker-inputs";
@@ -218,11 +306,9 @@ suite.define(() => {
       await expectFocus(name);
       await expectOpen(checkout, true);
       await name.fill("picker-inputs");
-      await checkout
-        .getByText("Creates branch openclaw/picker-inputs in a separate checkout.", {
-          exact: true,
-        })
-        .waitFor();
+      await expect
+        .poll(() => name.getAttribute("title"))
+        .toBe("Creates branch openclaw/picker-inputs in a separate checkout.");
 
       const box = await name.boundingBox();
       expect(box).not.toBeNull();
@@ -283,14 +369,13 @@ suite.define(() => {
           page,
           `worktree-branches-${branchesUnavailable ? "unavailable" : "limited"}.png`,
         );
-        await page
-          .getByText(
-            branchesUnavailable
-              ? "Branch suggestions are unavailable. Enter a branch or commit."
-              : "Suggestions are limited. Enter any branch or commit.",
-            { exact: true },
-          )
-          .waitFor({ state: "visible" });
+        if (branchesUnavailable) {
+          await page
+            .getByText("Branch suggestions are unavailable. Enter a branch or commit.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
+        }
         await page.keyboard.press("Escape");
         await messageInput(page).fill("start from the selected release");
         await startButton(page).click();
@@ -377,10 +462,16 @@ suite.define(() => {
             expect(await worktree.isDisabled()).toBe(true);
             await expect
               .poll(() => tooltipTitleText(worktree))
-              .toBe("Couldn't verify Git for this folder. Choose it again to retry.");
+              .toBe("Couldn’t verify Git for this folder. Try again.");
           }
           await checkoutPopover(page).getByRole("button", { name: "Current checkout" }).click();
-          await expect.poll(() => trigger.count()).toBe(0);
+          await expectAttribute(trigger, "data-worktree", "false");
+          expect(await trigger.isVisible()).toBe(true);
+          await checkoutPopover(page)
+            .getByText("Couldn’t verify Git for this folder. Try again.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
           if (folder === "custom") {
             await expect.poll(() => start.isEnabled()).toBe(true);
           }
@@ -777,7 +868,11 @@ suite.define(() => {
           "agents.list": {
             agents: [
               agent("main", "Main", WORKSPACE),
-              agent("research", "Research", "/home/peter/research"),
+              {
+                ...agent("research", "Research", "/home/peter/research"),
+                description: "Researches project decisions.",
+                recommendedPrompts: ["Research a decision"],
+              },
             ],
             defaultId: "main",
             mainKey: "main",
@@ -810,6 +905,10 @@ suite.define(() => {
         "#new-session-project-trigger .new-session-page__trigger-label",
       );
       await pollLocatorText(folderLabel).toBe("research");
+      await pollLocatorText(page.locator(".agent-chat__description")).toBe(
+        "Researches project decisions.",
+      );
+      await pollLocatorText(page.locator(".agent-chat__suggestion")).toBe("Research a decision");
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=main&catalog=claude");
@@ -817,6 +916,10 @@ suite.define(() => {
       });
 
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await expect.poll(() => page.locator(".agent-chat__description").count()).toBe(0);
+      expect(await page.locator(".agent-chat__welcome").textContent()).not.toContain(
+        "Research a decision",
+      );
       await pollLocatorText(folderLabel).toBe("openclaw");
       await messageInput(page).fill("retarget this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();

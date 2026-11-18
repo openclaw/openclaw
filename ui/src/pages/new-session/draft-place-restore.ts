@@ -235,7 +235,12 @@ export function restoreDraftPlacePreferences(params: {
     notify();
   }
 
-  if (preferredRemoteProject) {
+  if (preferredRemoteProject && !browser.canOpenRemoteProjects) {
+    // Remote repositories open through operator.write projectGitUrl; never restore
+    // a selection this caller cannot create from.
+    state.preferredRemoteProjectRestore = null;
+    changed = true;
+  } else if (preferredRemoteProject) {
     const selectingConfiguredRemoteProject =
       configuredDefaultRequested &&
       preferredRemoteProject.cloneUrl === configuredRemoteProject?.cloneUrl;
