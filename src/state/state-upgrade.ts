@@ -39,6 +39,10 @@ import {
 } from "./sqlite-copy-swap.js";
 import { createDoctorChain, type StateUpgradeChain } from "./state-upgrade-doctor.js";
 import {
+  APPLIED_UPGRADE_PREFIX as APPLIED_PREFIX,
+  UPGRADE_WORK_PREFIX as WORK_PREFIX,
+} from "./state-upgrade-receipts.js";
+import {
   applyPlan,
   companionRemovals,
   changedShadowFiles,
@@ -67,7 +71,7 @@ import {
 
 const UPGRADE_REPORT_SCOPE = "upgrade.report";
 const UPGRADE_PIN_SCOPE = "upgrade.pin";
-const WORK_PREFIX = ".upgrade-";
+
 // Previous files are kept as `<name>.pre-<generation>`, named after the build that replaced
 // them: commits of one version can each upgrade, and a failed Git release trial restores
 // exactly what its build replaced. A build without a build ID names them by version, as
@@ -75,7 +79,6 @@ const WORK_PREFIX = ".upgrade-";
 const generation = () => resolveRuntimeServiceBuildId() ?? VERSION;
 // An applied plan is kept as `.upgraded-<generation>.json` until a later upgrade: a failed
 // Git release trial reads it to remove the files that upgrade added (no `.pre-*` to restore).
-const APPLIED_PREFIX = ".upgraded-";
 
 function retainAppliedPlan(stateDir: string, plan: UpgradePlan): void {
   const file = path.join(stateDir, `${APPLIED_PREFIX}${plan.appVersion}.json`);

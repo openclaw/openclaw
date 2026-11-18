@@ -78,6 +78,13 @@ credential databases at their eventual live paths. Reads and repairs remain on
 the private copy. The updater passes this destination directly to Doctor; no
 additional environment variable or operator configuration is needed.
 
+If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
+While the applied upgrade receipt remains, Doctor can verify the saved account at
+its old path and restore it without changing the schedule, enabling the job, or
+replaying a missed run. If the receipt is gone or the account changed, Doctor
+leaves the job alone. To explicitly choose its account, use
+`openclaw automations edit <id> --model <provider/model>@<profileId>`.
+
 The copy excludes managed worktrees, configured agent workspaces, nested mounts
 and btrfs subvolumes, Knowledge stores, browser profiles, backups, and caches.
 Completed agent deletions whose journal retains files are excluded from startup

@@ -100,6 +100,7 @@ export function migrateCronInferenceStandingGrantReferences(
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
+  verifiedPreviousAuthorizationId?: string,
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
@@ -121,9 +122,19 @@ export function migrateCronInferenceStandingGrantReferences(
     unchanged.operatorSource = source;
   }
   if (
-    previous.inferenceBinding !== undefined ||
     !inferenceBinding ||
-    !isDeepStrictEqual(previous, unchanged)
+    !isDeepStrictEqual(
+      previous,
+      verifiedPreviousAuthorizationId === undefined
+        ? unchanged
+        : {
+            ...unchanged,
+            inferenceBinding: {
+              ...inferenceBinding,
+              authorizationId: verifiedPreviousAuthorizationId,
+            },
+          },
+    )
   ) {
     throw new Error("Cron inference migration must preserve the entire approved job definition.");
   }
