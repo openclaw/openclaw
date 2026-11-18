@@ -155,13 +155,13 @@ export function createAgentDatabaseExecution(
         (error: unknown) => {
           materializeErrorStack(error);
           const firstFailure = !cleanupFailure;
-          const failure = { error, reason: "Agent database cleanup failed" };
-          cleanupFailure = failure;
+          cleanupFailure = { error, reason: "Agent database cleanup failed" };
           executionState.idle.delete(owner);
           try {
-            failure.reason = formatErrorMessageWithCode(error);
+            const reason = formatErrorMessageWithCode(error);
+            cleanupFailure.reason = reason;
             if (firstFailure) {
-              log.warn(`Agent database cleanup failed (agent ${agentId}): ${failure.reason}`);
+              log.warn(`Agent database cleanup failed (agent ${agentId}): ${reason}`);
             }
           } catch {
             // Retain cleanup custody even when formatting or diagnostic delivery fails.
@@ -170,9 +170,7 @@ export function createAgentDatabaseExecution(
         },
       )
       .finally(() => {
-        if (nativeClosing === result) {
-          nativeClosing = undefined;
-        }
+        nativeClosing = undefined;
       });
     nativeClosing = result;
     return result;
@@ -270,7 +268,12 @@ export function createAgentDatabaseExecution(
         signal,
       );
       // A peer's intentional native close can finish while this admitted operation settles.
-      if (generation === current && !nativeClosing && current.failure()) {
+      // Completed absent reads have no native file to retain for the next creator.
+      if (
+        generation === current &&
+        !nativeClosing &&
+        (current.failure() || (!fileIdentity && !current.getPendingPreparation()))
+      ) {
         await closeNative(current).catch(() => undefined);
       }
       return result;
@@ -566,10 +569,8 @@ export function createAgentDatabaseExecution(
               !nativeClosing &&
               !cleanupFailure
             ) {
-              if (generation) {
-                // Source refusal can leave an unaccepted generation allocated before native open.
-                await closeNative(generation).catch(() => undefined);
-              }
+              // Source refusal can leave an unaccepted generation allocated before native open.
+              await closeNative().catch(() => undefined);
               if (!creationBorrowers && !generation && !nativeClosing && !cleanupFailure) {
                 creationIdentity = undefined;
               }

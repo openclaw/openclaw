@@ -1,4 +1,7 @@
+import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
+import { raceWithAbortSignal } from "./agent-tools.abort.js";
+import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import {
   CODE_MODE_RESUME_MARGIN_MS,
   type CodeModeConfig,
@@ -38,6 +41,55 @@ export function isCodeModePendingReady(
     (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled)) ||
     required.every((entry) => entry.settled)
   );
+}
+
+/** Ordinary input can release a parked shell observer, never the cell or the shell. */
+export async function waitForRequiredCodeModePending(
+  pending: readonly PendingBridgeState[],
+  mode: CodeModeSettlementMode,
+  params: {
+    signal: AbortSignal;
+    owner: CodeModeRunOwner;
+    catalogProjection: CodeModeCatalogProjection;
+  },
+  reserveForSteering: () => boolean,
+): Promise<boolean> {
+  const input = getAgentToolExecutionContext()?.pendingInput;
+  const yieldWait = new AbortController();
+  const onInput = () => {
+    if (yieldWait.signal.aborted || !input?.hasPending()) {
+      return;
+    }
+    const outstanding = pending.filter((entry) => !entry.settled);
+    if (
+      outstanding.length &&
+      outstanding.every(
+        (entry) =>
+          entry.method === "callValue" &&
+          typeof entry.args[0] === "string" &&
+          params.catalogProjection.byCallableName.get(entry.args[0])?.id === "openclaw:core:exec",
+      ) &&
+      reserveForSteering()
+    ) {
+      yieldWait.abort();
+    }
+  };
+  const unsubscribe = input?.subscribe(onInput);
+  try {
+    onInput();
+    await raceWithAbortSignal(
+      waitForPendingBridgeSettlement(
+        pending,
+        mode,
+        AbortSignal.any([params.signal, yieldWait.signal]),
+        params.owner.registerAwaiting,
+      ),
+      params.signal,
+    );
+    return yieldWait.signal.aborted && !params.signal.aborted;
+  } finally {
+    unsubscribe?.();
+  }
 }
 
 export async function waitForCodeModePending(
