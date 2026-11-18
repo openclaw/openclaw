@@ -137,6 +137,7 @@ function enqueueSessionEventAttempt(
   let operation: ReplyOperation | undefined;
   let inputRecorder: UserTurnTranscriptRecorder | undefined;
   let delivered = false;
+  let conversationResultCommitted: true | undefined;
   let deliveryAttempted = false;
   let deliveryAmbiguous = false;
   let deliveryError: string | undefined;
@@ -377,6 +378,7 @@ function enqueueSessionEventAttempt(
         errorReason: status === "failed" ? errorReason : undefined,
         interruptedByRestart: terminalOutcome.stopReason === "restart",
         delivered,
+        conversationResultCommitted,
         deliveryAttempted,
         deliveryAmbiguous,
         deliveryError,
@@ -626,6 +628,7 @@ function enqueueSessionEventAttempt(
               nextCheckMs = terminal.nextCheckMs;
               sourceDeliveryOutcome = terminal.sourceDeliveryOutcome;
               automationResult = terminal.automationResult;
+              conversationResultCommitted = terminal.conversationResultCommitted;
               delivered ||= sourceDeliveryOutcome?.satisfiesSourceDelivery === true;
             },
           },
