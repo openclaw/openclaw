@@ -1757,7 +1757,7 @@ settles that recovery only when all of these still hold:
 - the killed update recorded that activation, for the same build its plugin
   recovery targets;
 - the checkout is still at that commit and has no local changes;
-- its build was made from that commit and is that same build.
+- its build is complete, was made from that commit, and is that same build.
 
 Then the checkout runs the killed update's build, and the update treats it like
 a package install that has the candidate installed. A checkout that was pulled,

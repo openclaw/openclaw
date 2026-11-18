@@ -38,7 +38,11 @@ const { end, candidate, installed, trigger, gateway, checkout } = JSON.parse(opt
   installed: "previous" | "candidate";
   trigger: "cli" | "api";
   gateway: "untouched" | "stopped" | "restarted";
-  checkout?: { sha: string; buildId: string; marker?: "none" | { buildId: string } };
+  checkout?: {
+    sha: string;
+    buildId: string;
+    marker?: "none" | { buildId?: string; previousBuildId?: string };
+  };
 };
 const manifest = path.join(installKey, "package.json");
 const { version, buildId = null } = await readPackageUpdateIdentity(installKey);
@@ -56,15 +60,18 @@ await withUpdateCommandExecutor(
     recordUpdateRunPhase(runId, "activating", {}, ledger);
     if (checkout) {
       execFileSync("git", ["-C", installKey, "checkout", "-q", "--detach", checkout.sha]);
-      const build = { commit: checkout.sha, buildId: checkout.buildId };
-      fs.writeFileSync(path.join(installKey, "dist", "build-info.json"), JSON.stringify(build));
-      const { marker = { buildId: checkout.buildId } } = checkout;
+      const { sha: head } = checkout;
+      for (const [file, value] of Object.entries({
+        "build-info.json": { commit: head, buildId: checkout.buildId },
+        ".buildstamp": { head },
+        ".runtime-postbuildstamp": { head },
+      })) {
+        fs.writeFileSync(path.join(installKey, "dist", file), JSON.stringify(value));
+      }
+      const { marker = {} } = checkout;
       if (marker !== "none") {
-        const gitActivation = {
-          sha: checkout.sha,
-          buildId: marker.buildId,
-          previousBuildId: buildId,
-        };
+        const recorded = { buildId: checkout.buildId, previousBuildId: buildId, ...marker };
+        const gitActivation = { sha: head, ...recorded };
         recordUpdateRunPhase(runId, "activating", { origin: { gitActivation } }, ledger);
       }
     }

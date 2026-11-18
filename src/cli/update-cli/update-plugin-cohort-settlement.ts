@@ -15,7 +15,10 @@ import { readReleasedPackageActivationReceipt } from "../../infra/package-update
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { readBuiltGatewayBuildId, readBuiltRuntimeCommit } from "../../infra/update-git-runtime.js";
+import {
+  readBuiltGatewayBuildId,
+  verifyGitUpdateRecovery,
+} from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
@@ -108,18 +111,19 @@ async function inspectGitActivation(
   if (head.code !== 0 || head.stdout.trim() !== activation.sha) {
     return ", and the checkout is no longer at the commit that update activated";
   }
-  const status = await git(gitCleanCheckArgs(root));
+  // The updater's own clean check, showing untracked files whatever the local config says.
+  const clean = gitCleanCheckArgs(root);
+  clean.splice(clean.indexOf("--porcelain") + 1, 0, "--untracked-files=normal");
+  const status = await git(clean);
   if (status.code !== 0 || status.stdout.trim()) {
     return ", and the checkout has local changes";
   }
-  const [commit, buildId] = await Promise.all([
-    readBuiltRuntimeCommit(root),
-    readBuiltGatewayBuildId(root),
-  ]);
-  if (commit !== activation.sha) {
-    return ", and its build is missing or was not built from the checked-out commit";
+  // The check the updater itself trusts before restarting a checkout's Gateway.
+  const build = await verifyGitUpdateRecovery({ root, sha: activation.sha });
+  if (!build.serviceRestartSafe) {
+    return ", and its build is missing, incomplete or not built from the checked-out commit";
   }
-  return buildId === activation.buildId
+  return build.buildId === activation.buildId
     ? undefined
     : ", and its build is not the one that update activated";
 }

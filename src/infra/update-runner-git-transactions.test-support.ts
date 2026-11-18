@@ -137,7 +137,10 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
     let validatedBuild: string | undefined;
     const { retained } = await activateTransaction(fixture, {
       validateCandidate: async (directory) => {
-        validatedBuild = await readText(path.join(directory, "dist", "build-info.json"));
+        // A build ID distinct from every commit, as real builds have.
+        const file = path.join(directory, "dist", "build-info.json");
+        validatedBuild = JSON.stringify({ commit: targetSha, buildId: "validated-build" });
+        await fs.writeFile(file, validatedBuild);
       },
     });
     assert(validatedBuild);
@@ -145,7 +148,7 @@ export function registerGitActivationDoctorOutcomeTests(getFixture: () => GitCan
     expect(await readText(path.join(root, "dist", "build-info.json"))).toBe(validatedBuild);
     expect(await retained.readGitActivation?.()).toEqual({
       sha: targetSha,
-      buildId: JSON.parse(validatedBuild).buildId,
+      buildId: "validated-build",
       previousBuildId: beforeSha,
     });
   });

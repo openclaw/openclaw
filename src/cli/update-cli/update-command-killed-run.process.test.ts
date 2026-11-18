@@ -213,7 +213,11 @@ type Updater = {
   installed?: "previous" | "candidate";
   trigger?: "cli" | "api";
   gateway?: "untouched" | "stopped" | "restarted";
-  checkout?: { sha: string; buildId: string; marker?: "none" | { buildId: string } };
+  checkout?: {
+    sha: string;
+    buildId: string;
+    marker?: "none" | { buildId?: string; previousBuildId?: string };
+  };
 };
 /**
  * A real updater process that reserved its plugin cohort and changed config
@@ -270,8 +274,16 @@ const git = (slot: string, ...args: string[]) =>
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
-const writeBuild = (slot: string, commit: string, buildId: string) =>
-  fs.writeFileSync(path.join(slot, "dist", "build-info.json"), JSON.stringify({ commit, buildId }));
+/** The build identity and stamps a checkout's build writes, as the child's activation does. */
+function writeBuild(slot: string, commit: string, buildId: string) {
+  for (const [file, value] of Object.entries({
+    "build-info.json": { commit, buildId },
+    ".buildstamp": { head: commit },
+    ".runtime-postbuildstamp": { head: commit },
+  })) {
+    fs.writeFileSync(path.join(slot, "dist", file), JSON.stringify(value));
+  }
+}
 /**
  * A real source checkout serving its built previous commit, with the candidate
  * commit beside it. The update this kills checks that candidate out with its build.
@@ -281,8 +293,13 @@ function sourceCheckout(name = "checkout") {
   if (vi.isMockFunction(updateCheck.resolveUpdateInstallKind)) {
     vi.mocked(updateCheck.resolveUpdateInstallKind).mockRestore();
   }
+  // Host Git configuration cannot change what this checkout reports, here or in the child.
+  vi.stubEnv("GIT_CONFIG_GLOBAL", "/dev/null");
+  vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
   const slot = path.join(root, name);
-  fs.mkdirSync(path.join(slot, "dist"), { recursive: true });
+  fs.mkdirSync(path.join(slot, "dist", "control-ui"), { recursive: true });
+  fs.writeFileSync(path.join(slot, "dist", "entry.js"), "export {};\n");
+  fs.writeFileSync(path.join(slot, "dist", "control-ui", "index.html"), "ready\n");
   git(slot, "init", "-q");
   // Like the repository's own ignore rules: builds and runtime staging stay untracked.
   fs.writeFileSync(path.join(slot, ".gitignore"), "dist\n*.tmp\n");
@@ -830,7 +847,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     /** A killed update that had checked out and installed its built candidate, then reserved its cohort. */
     async function killedCheckout(
       dead: Omit<Updater, "checkout"> = {},
-      marker?: "none" | { buildId: string },
+      marker?: "none" | { buildId?: string; previousBuildId?: string },
       name?: string,
     ) {
       const checkout = sourceCheckout(name);
@@ -899,7 +916,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     it.each<{
       name: string;
       refusal: RegExp;
-      marker?: "none" | { buildId: string };
+      marker?: "none" | { buildId?: string; previousBuildId?: string };
       control?: (killed: Checkout) => unknown;
     }>([
       {
@@ -914,23 +931,38 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
         marker: { buildId: "build-other" },
       },
       {
+        name: "the recorded previous build is not the plugin recovery's origin",
+        refusal: /recorded build does not match its plugin recovery/u,
+        marker: { previousBuildId: "build-other" },
+      },
+      {
         name: "the checkout was moved to another commit",
         refusal: /no longer at the commit that update activated/u,
         control: (killed) => git(killed.slot, "checkout", "-q", killed.previous),
       },
       {
-        name: "the checkout has local changes",
+        name: "the checkout has an untracked file",
         refusal: /checkout has local changes/u,
         control: (killed) => fs.writeFileSync(path.join(killed.slot, "notes.txt"), "operator\n"),
       },
       {
+        name: "a tracked file was edited",
+        refusal: /checkout has local changes/u,
+        control: (killed) => fs.appendFileSync(path.join(killed.slot, "package.json"), "\n"),
+      },
+      {
         name: "the build is missing",
-        refusal: /build is missing or was not built from the checked-out commit/u,
+        refusal: /build is missing, incomplete or not built from the checked-out commit/u,
         control: (killed) => fs.rmSync(path.join(killed.slot, "dist", "build-info.json")),
       },
       {
+        name: "the build is incomplete",
+        refusal: /build is missing, incomplete or not built from the checked-out commit/u,
+        control: (killed) => fs.rmSync(path.join(killed.slot, "dist", "entry.js")),
+      },
+      {
         name: "the build was made from another commit",
-        refusal: /build is missing or was not built from the checked-out commit/u,
+        refusal: /build is missing, incomplete or not built from the checked-out commit/u,
         control: (killed) => writeBuild(killed.slot, killed.previous, killed.buildId),
       },
       {
