@@ -905,6 +905,29 @@ describe("ModelProvidersPage agent scope", () => {
     );
   });
 
+  it("replaces a successful check when the next check request fails", async () => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    request.mockImplementationOnce(async () => ({ provider: "openai", status: "ok", results: [] }));
+    page.view.props.onProbe("openai", ["openai"]);
+    await waitForSolid(() => expect(page.view.props.probeResults.openai?.status).toBe("ok"));
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.probe") {
+        throw new Error("Connection interrupted");
+      }
+      return originalRequest(method);
+    });
+    page.view.props.onProbe("openai", ["openai"]);
+    await waitForSolid(() => expect(page.view.props.busy["probe:openai"]).toBeUndefined());
+    expect(page.view.props.probeResults.openai).toMatchObject({
+      status: "unknown",
+      error: expect.stringContaining("Connection interrupted"),
+      results: [],
+    });
+  });
+
   it("stops queued provider probes after switching away from and back to the selected agent", async () => {
     const { settingsAgentSelection, context, notifySelection, request } = createHarness("main");
     const page = appendPage(context);

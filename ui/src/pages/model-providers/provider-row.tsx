@@ -549,7 +549,9 @@ export function ProviderRow(props: ProviderRowProps) {
             <span class="provider-row__meta-part">{modelsText(card())}</span>
           </span>
         </span>
-        <span class="provider-row__status">{renderProviderStatus(card())}</span>
+        <span class="provider-row__status">
+          {renderProviderStatus(card(), props.probeResults[card().id])}
+        </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>
