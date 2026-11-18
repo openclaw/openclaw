@@ -37,6 +37,10 @@ async function fixture(files: Record<string, string>) {
   const bin = path.join(f.home, "fixture-bin");
   await fs.mkdir(bin);
   const nodeExecutable = resolveTestNodeExecPath();
+  const shellExecutable = resolveExecutablePath("sh");
+  if (!shellExecutable) {
+    throw new Error("Project preparation fixture requires sh");
+  }
   // Linux selects tools beside process.execPath; a symlink to host Node would select host tools.
   // A separate copier keeps writable Node descriptors out of sibling Vitest forks.
   execFileSync(nodeExecutable, [
@@ -64,7 +68,9 @@ async function fixture(files: Record<string, string>) {
   f.runScript.mockImplementation(async (script) =>
     execFileSync(path.join(bin, "sh"), ["-c", script], {
       env: {
-        PATH: bin,
+        // Keep fixture Node/package-manager shims first while allowing the host
+        // Git transport wrapper to resolve its backing executable and POSIX tools.
+        PATH: [bin, path.dirname(shellExecutable)].join(path.delimiter),
         HOME: f.home,
         LANG: "C.UTF-8",
         PREPARATION_UNRELATED_ENV: "must-not-forward",
