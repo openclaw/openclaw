@@ -1,6 +1,7 @@
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
+import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { pruneRegisteredAgentToolUsage } from "../config/sessions/tool-usage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,6 +26,7 @@ import { pruneOrphanedDeliveryQueueMedia } from "../infra/outbound/delivery-queu
 import { generateSecureInt } from "../infra/secure-random.js";
 import { reclaimAbandonedSqliteSnapshots } from "../infra/sqlite-readonly-worker.js";
 import { checkTelemetryUpdate } from "../infra/telemetry.js";
+import type { SubsystemLogger } from "../logging/subsystem.js";
 import { cleanOldMedia, pruneOutboundMedia, prunePlaybackTranscodeCache } from "../media/store.js";
 import {
   getGatewayRestartDrainSignal,
@@ -97,6 +99,32 @@ type PendingHostThawRestart = {
   targets: ThawRestartTarget[];
 };
 
+function worktreeCleanupLogLevel(result: ManagedWorktreeGcResult): "debug" | "info" | "error" {
+  if (result.outcome === "partial") {
+    return "error";
+  }
+  const scratch = result.scratch;
+  if (
+    result.outcome === "deferred" ||
+    result.limitsSatisfied !== true ||
+    result.eligibleCount ||
+    result.removed.length ||
+    result.orphansDeleted ||
+    result.orphansRetired ||
+    result.snapshotsPruned ||
+    result.gitMaintenance ||
+    result.scratchDeferred ||
+    scratch?.entriesRemoved ||
+    scratch?.filesRemoved ||
+    scratch?.skippedLive ||
+    scratch?.deferred ||
+    scratch?.errors.length
+  ) {
+    return "info";
+  }
+  return "debug";
+}
+
 export function startGatewayMaintenanceTimers(params: {
   scheduler: GatewayScheduler;
   resolveGatewayContext?: GatewayContextResolver;
@@ -116,7 +144,7 @@ export function startGatewayMaintenanceTimers(params: {
     probe?: boolean;
     includeSensitive?: boolean;
   }) => Promise<HealthSummary>;
-  logHealth: { info: (msg: string) => void; error: (msg: string) => void };
+  logHealth: Pick<SubsystemLogger, "debug" | "info" | "error">;
   channelManager: ThawRestartManager;
   activeWorkInspectors: Partial<GatewayActiveWorkInspectors>;
   refreshPresence: () => void;
@@ -393,12 +421,7 @@ export function startGatewayMaintenanceTimers(params: {
     scheduler: params.scheduler,
     getRuntimeConfig: params.getRuntimeConfig,
     onComplete: (result) => {
-      const message = formatWorktreeGcResult(result);
-      if (result.outcome === "partial") {
-        params.logHealth.error(message);
-      } else {
-        params.logHealth.info(message);
-      }
+      params.logHealth[worktreeCleanupLogLevel(result)](formatWorktreeGcResult(result));
     },
     onError: (message) => params.logHealth.error(`managed worktree cleanup failed: ${message}`),
   });
