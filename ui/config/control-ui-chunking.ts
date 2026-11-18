@@ -192,7 +192,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":
