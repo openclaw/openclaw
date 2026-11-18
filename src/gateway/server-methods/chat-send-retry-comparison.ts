@@ -111,16 +111,14 @@ export function compareChatSendSubmittedInput(
       !storedSteer ||
       typeof storedSteer.profileId !== "string" ||
       typeof storedSteer.sessionId !== "string" ||
-      typeof storedSteer.runId !== "string" ||
-      typeof storedSteer.originalText !== "string"
+      typeof storedSteer.runId !== "string"
     ) {
       return "unverifiable";
     }
     if (
       storedSteer.profileId !== request.activeSteer.profileId ||
       storedSteer.sessionId !== request.p.sessionId ||
-      storedSteer.runId !== request.activeSteer.runId ||
-      storedSteer.originalText !== request.p.message
+      storedSteer.runId !== request.activeSteer.runId
     ) {
       return true;
     }
@@ -132,7 +130,15 @@ export function compareChatSendSubmittedInput(
     return storedIdentity !== request.requestIdentity;
   }
   if (request.activeSteer) {
-    return false;
+    // Never retain original plaintext to bypass hook redaction. Without a keyed
+    // identity, only exact approved text can establish the original input.
+    const storedText = extractTextFromChatContent(submitted.content, {
+      joinWith: "\n",
+      normalizeText: (text) => text,
+    });
+    return storedSteer?.textUnchanged === true && storedText === request.p.message
+      ? false
+      : "unverifiable";
   }
   // Pre-fingerprint transcripts retain their existing annotation comparison contract.
   const storedMentions = submitted["__openclaw"]?.humanMentions;

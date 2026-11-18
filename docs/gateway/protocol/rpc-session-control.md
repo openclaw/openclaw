@@ -175,7 +175,11 @@ The retained request binds the person, physical session, target run, and text;
 changed requests conflict. A retained active-only input is never injected again,
 even when its native outcome is unknown or the Gateway restarted. This guarantee
 lasts while its source or receipt remains in that session. Reconciliation still
-requires current access. Do not generate a new key to recover an uncertain result.
+requires current access. Original text comparison uses the existing keyed request
+fingerprint without retaining a plaintext copy that could undo message-hook
+redaction. If that fingerprint is unavailable, reconciliation requires retained
+proof that the approved text was unchanged and an exact text match; otherwise the
+retry fails closed. Do not generate a new key to recover an uncertain result.
 This host method does not add remote writer authentication or grant write access
 to a Session Share reader.
 

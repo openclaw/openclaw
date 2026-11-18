@@ -30,7 +30,7 @@ const request: Request = {
 const marker = {
   ...request.activeSteer,
   sessionId: "physical-session",
-  originalText: " original text ",
+  textUnchanged: true,
 };
 function comparison(activeSteer: unknown, withIdentity = true): ChatSendRetryComparison {
   return {
@@ -49,19 +49,38 @@ function comparison(activeSteer: unknown, withIdentity = true): ChatSendRetryCom
     source: "pending",
   };
 }
-it.each([true, false])(
-  "compares exact active metadata independently of HMAC (%s)",
-  (withIdentity) => {
+it("uses the keyed identity to reconcile hook-transformed text", () => {
+  expect(compareChatSendSubmittedInput(request, session, comparison(marker))).toBe(false);
+  expect(
+    compareChatSendSubmittedInput(
+      { ...request, requestIdentity: "different-hmac" },
+      session,
+      comparison(marker),
+    ),
+  ).toBe(true);
+});
+it.each(["pending", "transcript"] as const)(
+  "fails closed on keyless transformed %s text but accepts unchanged retained text",
+  (source) => {
+    const keyless = { ...request, requestIdentity: undefined };
+    const retained = { ...comparison(marker, false), source };
+    expect(compareChatSendSubmittedInput(keyless, session, retained)).toBe("unverifiable");
     expect(
-      compareChatSendSubmittedInput(
-        { ...request, requestIdentity: withIdentity ? "same-hmac" : undefined },
-        session,
-        comparison(marker, withIdentity),
-      ),
+      compareChatSendSubmittedInput(keyless, session, {
+        ...retained,
+        submitted: { ...retained.submitted!, content: request.p.message },
+      }),
     ).toBe(false);
   },
 );
-it.each(["profileId", "runId", "sessionId", "originalText"])(
+it("requires proof that keyless retained text was not transformed", () => {
+  const retained = comparison({ ...marker, textUnchanged: false }, false);
+  retained.submitted = { ...retained.submitted!, content: request.p.message };
+  expect(
+    compareChatSendSubmittedInput({ ...request, requestIdentity: undefined }, session, retained),
+  ).toBe("unverifiable");
+});
+it.each(["profileId", "runId", "sessionId"])(
   "rejects mismatched or missing retained %s even with a matching HMAC",
   (field) => {
     expect(

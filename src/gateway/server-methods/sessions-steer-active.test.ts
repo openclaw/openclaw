@@ -498,3 +498,41 @@ it.each(["run", "person"])(
     }
   },
 );
+
+it.each([true, false])(
+  "does not resurrect hook-redacted steering text (keyed: %s)",
+  async (keyed) => {
+    await using f = await createFixture({ preserveContent: false });
+    human(f);
+    vi.spyOn(identity, "loadChatRequestIdentityKeyAsync").mockResolvedValue(
+      keyed ? Buffer.from("synthetic-steer-test-key") : null,
+    );
+    const received = vi.fn();
+    attach(f, async (text, options) => {
+      received(text);
+      options?.onQueueAccepted?.(true);
+    });
+    expect((await send(f)).mock.calls[0]?.[1]).toMatchObject({ status: "accepted" });
+    expect(received).toHaveBeenCalledExactlyOnceWith(f.approvedContent);
+    const receipt = await readSessionSubmittedInput(f.scope, "active-steer-input:user");
+    expect(receipt?.content).toBe(f.approvedContent);
+    expect(JSON.stringify(receipt)).not.toContain("/stop literal");
+    expect(JSON.stringify(f.readTranscript())).not.toContain("/stop literal");
+    f.context.dedupe.clear();
+    const replay = (await send(f)).mock.calls[0];
+    if (keyed) {
+      expect(replay).toMatchObject({ 0: true, 1: { status: "accepted" } });
+      expect((await send(f, { message: "different original" })).mock.calls[0]).toMatchObject({
+        0: false,
+        2: { details: { reason: "chat-request-conflict" } },
+      });
+    } else {
+      expect(replay).toMatchObject({
+        0: false,
+        2: { details: { reason: "chat-request-conflict" } },
+      });
+    }
+    expect(received).toHaveBeenCalledOnce();
+    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  },
+);

@@ -323,7 +323,11 @@ export function createGatewayChatUserTurnController(params: {
                   activeSteer: {
                     ...request.activeSteer,
                     sessionId: request.p.sessionId,
-                    originalText: request.p.message,
+                    textUnchanged:
+                      extractTextFromChatContent(next.content, {
+                        joinWith: "\n",
+                        normalizeText: (text) => text,
+                      }) === request.p.message,
                   },
                 }
               : {}),
