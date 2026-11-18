@@ -23,18 +23,18 @@ function requestFixture(id: string, startup = false) {
   const issued = Promise.withResolvers<void>();
   const wire = { send: vi.fn<(raw: string) => void>(() => issued.resolve()) };
   const pending = new GatewayPendingRequests({ createRequestId: () => id, nowMs: Date.now });
-  onTestFinished(() => pending.flush(new Error("test request owner disposed")));
   const client = createTestGatewayClient((method, params, options) =>
     !startup || method === "chat.send"
       ? pending.request(wire, method, params, options)
       : Promise.resolve({ messages: [], status: "aborted" }),
   );
-  return {
-    pending,
-    wire,
-    issued,
-    host: makeChatHost({ client, currentSessionId: "deadline-session" }),
-  };
+  const host = makeChatHost({ client, currentSessionId: "deadline-session" });
+  onTestFinished(() => {
+    // Retire ACK-triggered outbox work before the next test replaces browser storage.
+    host.connected = false;
+    pending.flush(new Error("test request owner disposed"));
+  });
+  return { pending, wire, issued, host };
 }
 
 it.each(["send", "send-consumed"] as const)("bounds %s without a client deadline", async (kind) => {
