@@ -1,11 +1,16 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
+import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
+import { listNodeTestConfigFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import * as planOwner from "../../scripts/lib/ci-node-test-plan.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  resolveCanonicalNodeTestConfig,
   type NodeTestVolumeContext,
   type NodeTestShardGroup,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import { buildVitestRunPlans } from "../../scripts/test-projects.test-support.mts";
 
 const prepareNodeTestVolumes = planOwner.prepareNodeTestVolumes;
 
@@ -180,4 +185,50 @@ it("adds volumes to all-tooling selections without changing execution bytes", ()
     }
   }
   expect(JSON.stringify(stripped)).toBe(JSON.stringify(baseline));
+});
+
+it("keeps direct volume bound to the real source config instead of its canonical remap", () => {
+  const canonical = "test/vitest/vitest.auto-reply-core.config.ts";
+  const source = "test/vitest/vitest.auto-reply.config.ts";
+  const target = expectDefined(listNodeTestConfigFiles(canonical)?.[0], "canonical target");
+  expect(buildVitestRunPlans([target]).map((plan) => plan.config)).toEqual([source]);
+  expect(resolveCanonicalNodeTestConfig(target, source)).toBe(canonical);
+  const jobs = expectDefined(
+    createChangedNodeTestShards([target], {
+      selectedTestTargets: [target],
+      volumeContext: {
+        revision: "a".repeat(40),
+        runtimePolicy: "node",
+        eligibility: {
+          changedPaths: [target],
+          includeReleaseOnlyRuntimeTests: false,
+          includePrExemptRuntimeTests: false,
+        },
+        fullPlan: () =>
+          createNodeTestShardBundles({
+            changedPaths: [target],
+            includeReleaseOnlyRuntimeTests: false,
+            includePrExemptRuntimeTests: false,
+            includeReleaseOnlyPluginShards: false,
+            includeReleaseOnlyToolingShards: false,
+            includeProofTests: false,
+            compactMode: "pull-request",
+          }),
+      },
+    }),
+    "planned jobs",
+  );
+  const direct = expectDefined(
+    jobs.find((job) => job.targets?.includes(target)),
+    "direct job",
+  );
+  expect(direct.targets).toEqual([target]);
+  expect(direct.targetVolumes).toEqual([
+    {
+      target,
+      configs: [source],
+      // The full schedule uses the canonical config. It is not a source-config oracle.
+      volume: expect.objectContaining({ entries: [] }),
+    },
+  ]);
 });

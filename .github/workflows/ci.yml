@@ -3882,6 +3882,7 @@ jobs:
           OPENCLAW_NODE_TEST_ENV_JSON: ${{ toJson(matrix.env) }}
           OPENCLAW_NODE_TEST_INCLUDE_PATTERNS_JSON: ${{ toJson(matrix.includePatterns) }}
           OPENCLAW_NODE_TEST_TARGETS_JSON: ${{ toJson(matrix.targets) }}
+          OPENCLAW_NODE_TEST_TARGET_VOLUMES_GZIP_BASE64: ${{ matrix.target_volumes_gzip_base64 || '' }}
           # Keep the watchdog above Vitest so frozen hook diagnostics finish.
           OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: ${{ needs.preflight.outputs.compatibility_target == 'true' && '["--hookTimeout=600000"]' || '[]' }}
           OPENCLAW_VITEST_SHARD_NAME: ${{ matrix.shard_name }}
