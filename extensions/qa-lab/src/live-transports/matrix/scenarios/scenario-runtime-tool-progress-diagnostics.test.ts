@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
   assertMatrixQaToolProgressMentionsInert,
   buildMatrixQaToolProgressFinalTimeoutMessage,
   buildMatrixQaToolProgressTimeoutMessage,
+  findMatrixQaUnexpectedWorkingEvents,
 } from "./scenario-runtime-tool-progress-diagnostics.js";
 
 const UNPAIRED_SURROGATE_PATTERN =
@@ -21,67 +22,71 @@ function buildBoundaryEvent(overrides: Partial<MatrixQaObservedEvent> = {}) {
   } satisfies MatrixQaObservedEvent;
 }
 
-function expectValidUtf16(message: string) {
+const timeoutContext = {
+  cause: new Error("wait timed out"),
+  previewEventId: "$preview",
+  roomId: "!room:matrix-qa.test",
+  startIndex: 0,
+  sutUserId: "@sut:matrix-qa.test",
+};
+
+it.each([
+  [undefined, ["$unrelated", "$preview", "$replacement"]],
+  ["$preview", ["$unrelated"]],
+])(
+  "detects progress outside the allowed events with preview %s",
+  (previewEventId, unexpectedEventIds) => {
+    expect(
+      findMatrixQaUnexpectedWorkingEvents({
+        ...timeoutContext,
+        events: ["$unrelated", "$preview", "$replacement", "$final"].map((eventId) =>
+          buildBoundaryEvent({
+            body: eventId === "$final" ? "Working complete" : "Working",
+            eventId,
+            replacesEventId: eventId === "$replacement" ? "$preview" : undefined,
+          }),
+        ),
+        finalEventId: "$final",
+        previewEventId,
+      }).map((event) => event.eventId),
+    ).toEqual(unexpectedEventIds);
+  },
+);
+
+it.each([
+  [
+    "Working\n\n`🛠️ Run Matrix progress QA command`",
+    "<p>Working</p><p><code>🛠️ Run Matrix progress QA command</code></p>",
+    false,
+  ],
+  ["Working @room", "<p>Working @room</p>", true],
+])("validates inert mentions in %s", (body, formattedBody, rejects) => {
+  const assertion = expect(() =>
+    assertMatrixQaToolProgressMentionsInert(
+      buildBoundaryEvent({ body, formattedBody, mentions: { room: false, userIds: [] } }),
+    ),
+  );
+  if (rejects) {
+    assertion.toThrow("did not preserve mention-looking text inside code");
+  } else {
+    assertion.not.toThrow();
+  }
+});
+
+it.each([
+  [buildMatrixQaToolProgressTimeoutMessage, buildBoundaryEvent()],
+  [
+    buildMatrixQaToolProgressFinalTimeoutMessage,
+    buildBoundaryEvent({ eventId: "$replacement", replacesEventId: "$preview" }),
+  ],
+])("preserves Unicode in %s", (buildMessage, event) => {
+  const message = buildMessage({
+    ...timeoutContext,
+    events: [event],
+    expectedPreviewKind: "notice",
+    token: "x",
+  });
   expect(message).toContain(`${"a".repeat(236)}...`);
   expect(message).not.toMatch(UNPAIRED_SURROGATE_PATTERN);
   expect(Buffer.from(message, "utf8").toString("utf8")).not.toContain("�");
-}
-
-describe("Matrix tool-progress timeout diagnostics", () => {
-  it("accepts progress that omits mention-looking command text", () => {
-    expect(() =>
-      assertMatrixQaToolProgressMentionsInert(
-        buildBoundaryEvent({
-          body: "Working\n\n`🛠️ Run Matrix progress QA command`",
-          formattedBody: "<p>Working</p><p><code>🛠️ Run Matrix progress QA command</code></p>",
-          mentions: { room: false, userIds: [] },
-        }),
-      ),
-    ).not.toThrow();
-  });
-
-  it("rejects visible mention-looking command text outside code", () => {
-    expect(() =>
-      assertMatrixQaToolProgressMentionsInert(
-        buildBoundaryEvent({
-          body: "Working @room",
-          formattedBody: "<p>Working @room</p>",
-          mentions: { room: false, userIds: [] },
-        }),
-      ),
-    ).toThrow("did not preserve mention-looking text inside code");
-  });
-
-  it("preserves complete Unicode code points in preview candidates", () => {
-    const message = buildMatrixQaToolProgressTimeoutMessage({
-      cause: new Error("preview wait timed out"),
-      events: [buildBoundaryEvent()],
-      expectedPreviewKind: "notice",
-      previewEventId: "$preview",
-      roomId: "!room:matrix-qa.test",
-      startIndex: 0,
-      sutUserId: "@sut:matrix-qa.test",
-    });
-
-    expectValidUtf16(message);
-  });
-
-  it("preserves complete Unicode code points in final candidates", () => {
-    const message = buildMatrixQaToolProgressFinalTimeoutMessage({
-      cause: new Error("final wait timed out"),
-      events: [
-        buildBoundaryEvent({
-          eventId: "$replacement",
-          replacesEventId: "$preview",
-        }),
-      ],
-      previewEventId: "$preview",
-      roomId: "!room:matrix-qa.test",
-      startIndex: 0,
-      sutUserId: "@sut:matrix-qa.test",
-      token: "x",
-    });
-
-    expectValidUtf16(message);
-  });
 });

@@ -29,7 +29,6 @@ export async function formatSessionUsageCostSummary(params: {
   const agentId = sessionAgentId ?? DEFAULT_AGENT_ID;
   const sessionSummary = await loadSessionCostSummary({
     sessionId: params.sessionEntry?.sessionId,
-    sessionEntry: params.sessionEntry,
     ...(params.sessionEntry?.sessionId && params.sessionKey
       ? {
           sessionTarget: {
@@ -55,7 +54,12 @@ export async function formatSessionUsageCostSummary(params: {
   const sessionTokens = sessionSummary?.totalTokens
     ? formatTokenCount(sessionSummary.totalTokens)
     : undefined;
-  const sessionSuffix = (sessionSummary?.missingCostEntries ?? 0) > 0 ? " (partial)" : "";
+  const sessionSuffix =
+    sessionSummary?.staleSince !== undefined
+      ? " (stale)"
+      : (sessionSummary?.missingCostEntries ?? 0) > 0
+        ? " (partial)"
+        : "";
   const sessionLine =
     sessionCost || sessionTokens
       ? `Session ${sessionCost ?? "n/a"}${sessionSuffix}${sessionTokens ? ` · ${sessionTokens} tokens` : ""}`

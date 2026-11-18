@@ -66,6 +66,5 @@ async function readHostAccountAvatar(): Promise<HostAccountAvatar | null> {
 
 /** Best-effort macOS host photo; callers bind it only to the Gateway owner. */
 export function resolveHostAccountAvatar(): Promise<HostAccountAvatar | null> {
-  cachedAvatar ??= readHostAccountAvatar().catch(() => null);
-  return cachedAvatar;
+  return (cachedAvatar ??= readHostAccountAvatar().catch(() => null));
 }

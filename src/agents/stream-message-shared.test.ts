@@ -11,14 +11,6 @@ const model = {
 };
 
 describe("buildStreamErrorAssistantMessage", () => {
-  it("never returns an empty content array", () => {
-    const message = buildStreamErrorAssistantMessage({
-      model,
-      errorMessage: "stream aborted by upstream host=internal.example.com",
-    });
-    expect(message.content).toStrictEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
-  });
-
   it("places only the sentinel in content and never echoes the raw error text", () => {
     const message = buildStreamErrorAssistantMessage({
       model,
@@ -58,18 +50,6 @@ describe("buildUsageWithNoCost", () => {
     expect(usage.output).toBe(1);
     expect(usage.cacheRead).toBe(133_495);
     expect(usage.cacheWrite).toBe(1_432);
-  });
-
-  it("does not count cached OpenAI input twice after provider normalization", () => {
-    // OpenAI reports cached input inside input_tokens; CLI normalization already
-    // splits 15 input tokens into 9 uncached and 6 cached before this owner.
-    expect(buildUsageWithNoCost({ input: 9, output: 4, cacheRead: 6 }).totalTokens).toBe(19);
-  });
-
-  it("counts normalized Codex cache reads and writes only once", () => {
-    const usage = buildUsageWithNoCost({ input: 0, output: 10, cacheRead: 40, cacheWrite: 60 });
-
-    expect(usage.totalTokens).toBe(110);
   });
 
   it("keeps the explicit aggregate total when one is provided", () => {

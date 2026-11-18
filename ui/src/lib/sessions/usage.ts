@@ -1,8 +1,23 @@
-import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult } from "../../../../src/shared/usage-types.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SessionRequestClient } from "./session-capability.ts";
 
-type SessionRequestClient = Pick<GatewayBrowserClient, "request">;
+type PromptCacheUsage = {
+  input: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Input from calls that reported no cache split; their cache use is unknown. */
+  cacheUnmeasuredInput?: number;
+};
+
+/** Prompt tokens of calls that reported how much of their prompt the cache served. */
+export const measuredPromptTokens = (usage: PromptCacheUsage) =>
+  usage.input - (usage.cacheUnmeasuredInput ?? 0) + usage.cacheRead + usage.cacheWrite;
+
+/** Share of measured prompt tokens read from the provider cache; null when none were measured. */
+export function promptCacheHitRate(usage: PromptCacheUsage): number | null {
+  const prompt = measuredPromptTokens(usage);
+  return prompt > 0 ? usage.cacheRead / prompt : null;
+}
 
 export type SessionUsageTarget = { key: string; agentId?: string };
 
@@ -12,7 +27,19 @@ export type SessionUsageQuery = {
   scope: "instance" | "family";
   timeZone: "local" | "utc";
   agentId?: string;
+  creatorKey?: string;
+  query?: string;
+  selectedDays?: string[];
+  selectedSessions?: string[];
+  offset?: number;
+  sort?: "recent" | "tokens" | "cost" | "messages" | "errors";
+  sortDirection?: "asc" | "desc";
 };
+
+/** Whole-history reads (one session's lifetime total) replace the calendar window. */
+type SessionUsageRequestQuery =
+  | SessionUsageQuery
+  | (Omit<SessionUsageQuery, "startDate" | "endDate"> & { range: "all" });
 
 function formatUtcOffset(timezoneOffsetMinutes: number): string {
   const offsetFromUtcMinutes = -timezoneOffsetMinutes;
@@ -25,7 +52,7 @@ function formatUtcOffset(timezoneOffsetMinutes: number): string {
     : `UTC${sign}${hours}:${minutes.toString().padStart(2, "0")}`;
 }
 
-export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
+function buildSessionUsageDateParams(timeZone: "local" | "utc") {
   return timeZone === "utc"
     ? { mode: "utc" }
     : {
@@ -35,47 +62,41 @@ export function buildSessionUsageDateParams(timeZone: "local" | "utc") {
       };
 }
 
-function buildSessionUsageParams(query: SessionUsageQuery, key?: string): Record<string, unknown> {
-  return {
-    startDate: query.startDate,
-    endDate: query.endDate,
-    ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
-    ...buildSessionUsageDateParams(query.timeZone),
-    groupBy: query.scope,
-    ...(key ? { key, limit: 1 } : { limit: 1000 }),
-    includeContextWeight: false,
-  };
-}
-
 export function requestSessionUsage(
   client: SessionRequestClient,
-  query: SessionUsageQuery,
-  options?: { key?: string; includeContextWeight?: boolean; signal?: AbortSignal },
+  query: SessionUsageRequestQuery,
+  options?: {
+    key?: string;
+    projection?: "overview";
+    limit?: number;
+    includeContextWeight?: boolean;
+    signal?: AbortSignal;
+  },
 ): Promise<SessionsUsageResult> {
+  const key = options?.key;
   const params = {
-    ...buildSessionUsageParams(query, options?.key),
+    ...("range" in query
+      ? { range: query.range }
+      : { startDate: query.startDate, endDate: query.endDate }),
+    ...(query.agentId ? { agentId: query.agentId } : key ? {} : { agentScope: "all" }),
+    ...buildSessionUsageDateParams(query.timeZone),
+    ...(query.creatorKey ? { creatorKey: query.creatorKey } : {}),
+    groupBy: query.scope,
+    ...(key
+      ? { key, limit: 1 }
+      : {
+          limit: options?.limit ?? (options?.projection === "overview" ? 50 : 1000),
+          ...(options?.projection ? { projection: options.projection } : {}),
+          ...(query.query ? { query: query.query } : {}),
+          ...(query.selectedDays?.length ? { selectedDays: query.selectedDays } : {}),
+          ...(query.selectedSessions?.length ? { selectedSessions: query.selectedSessions } : {}),
+          ...(query.offset ? { offset: query.offset } : {}),
+          ...(query.sort ? { sort: query.sort } : {}),
+          ...(query.sortDirection ? { sortDirection: query.sortDirection } : {}),
+        }),
     includeContextWeight: options?.includeContextWeight === true,
   };
   return options?.signal
     ? client.request<SessionsUsageResult>("sessions.usage", params, { signal: options.signal })
     : client.request<SessionsUsageResult>("sessions.usage", params);
-}
-
-export function requestSessionUsageTimeSeries(
-  client: SessionRequestClient,
-  target: SessionUsageTarget,
-): Promise<SessionUsageTimeSeries | null> {
-  return client
-    .request<SessionUsageTimeSeries | undefined>("sessions.usage.timeseries", target)
-    .then((result) => result ?? null);
-}
-
-export function requestSessionUsageLogs(
-  client: SessionRequestClient,
-  target: SessionUsageTarget,
-): Promise<{ logs?: unknown }> {
-  return client.request<{ logs?: unknown }>("sessions.usage.logs", {
-    ...target,
-    limit: 1000,
-  });
 }

@@ -1,1 +1,4 @@
-export const PACKAGE_ACTIVATION_HELPER = "recovery.mjs";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.ts";
+
+export const packageActivationRuntimeEntrypoint =
+  runtimeProcessEntrypoints.packageActivationRecovery;

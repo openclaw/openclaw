@@ -1,14 +1,8 @@
-import { createHash } from "node:crypto";
-import {
-  EventType,
-  MatrixError,
-  MatrixEventEvent,
-  MsgType,
-  Preset,
-  type MatrixEvent,
-} from "matrix-js-sdk/lib/matrix.js";
+import { EventType, MatrixError, MsgType, Preset } from "matrix-js-sdk/lib/matrix.js";
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
+import type { MatrixSyncIngressHandler } from "../client/file-sync-store.js";
 import { formatMatrixErrorReason } from "../errors.js";
 import { MATRIX_REACTION_EVENT_TYPE } from "../reaction-common.js";
 import { MatrixClientBase } from "./client-base.js";
@@ -92,15 +86,9 @@ export abstract class MatrixClientCore extends MatrixClientBase {
         this.transactionScopeDeviceId = deviceId;
         // Include both device and token identities. This deliberately fails closed
         // across credential rotation even where a homeserver could reuse a device txn scope.
-        return createHash("sha256")
-          .update(this.transactionScopeHomeserver)
-          .update("\0")
-          .update(userId)
-          .update("\0")
-          .update(deviceId ?? "")
-          .update("\0")
-          .update(this.transactionScopeAccessTokenHash)
-          .digest("hex");
+        return sha256Hex(
+          `${this.transactionScopeHomeserver}\0${userId}\0${deviceId ?? ""}\0${this.transactionScopeAccessTokenHash}`,
+        );
       });
     this.transactionScopePromise = active;
     try {
@@ -151,9 +139,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
   }
 
   async resolveRoom(aliasOrRoomId: string): Promise<string | null> {
-    if (aliasOrRoomId.startsWith("!")) {
-      return aliasOrRoomId;
-    }
     if (!aliasOrRoomId.startsWith("#")) {
       return aliasOrRoomId;
     }
@@ -199,7 +184,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     const assertCurrent = captureMatrixSendCurrentness(this);
     const wireTransactionId =
       transactionId ?? (beforeWireDispatch || assertCurrent ? this.client.makeTxnId() : undefined);
-    return await this.runSerializedRoomSend(roomId, async () => {
+    return await this.sendQueue.enqueue(roomId, async () => {
       return await this.messageWireDispatchGuards.run({
         transactionId: wireTransactionId,
         guard: beforeWireDispatch,
@@ -303,7 +288,7 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     eventType: string,
     content: Record<string, unknown>,
   ): Promise<string> {
-    return await this.runSerializedRoomSend(roomId, async () => {
+    return await this.sendQueue.enqueue(roomId, async () => {
       // SDK encryption trusts these wire event types without inspecting their
       // payload; only SDK encryption and the dedicated redaction owner may emit them.
       if (
@@ -322,12 +307,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       const sent = await this.client.sendEvent(roomId, eventType as never, content as never);
       return sent.event_id;
     });
-  }
-
-  // Keep outbound room events ordered when multiple plugin paths emit
-  // messages/reactions/polls into the same Matrix room concurrently.
-  private async runSerializedRoomSend<T>(roomId: string, task: () => Promise<T>): Promise<T> {
-    return await this.sendQueue.enqueue(roomId, task);
   }
 
   async sendStateEvent(
@@ -388,10 +367,6 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     await this.client.joinRoom(roomId);
   }
 
-  mxcToHttp(mxcUrl: string): string | null {
-    return this.client.mxcUrlToHttp(mxcUrl, undefined, undefined, undefined, true, false, true);
-  }
-
   async downloadContent(
     mxcUrl: string,
     opts: {
@@ -438,25 +413,17 @@ export abstract class MatrixClientCore extends MatrixClientBase {
     return uploaded.content_uri;
   }
 
-  async getEvent(roomId: string, eventId: string): Promise<Record<string, unknown>> {
-    const rawEvent = (await this.client.fetchRoomEvent(roomId, eventId)) as Record<string, unknown>;
+  async getEvent(roomId: string, eventId: string): Promise<MatrixRawEvent> {
+    const rawEvent = await this.client.fetchRoomEvent(roomId, eventId);
     if (rawEvent.type !== "m.room.encrypted") {
-      return rawEvent;
+      // SAFETY: This endpoint returns a complete room event despite the SDK Partial<IEvent> type.
+      return rawEvent as MatrixRawEvent;
     }
 
     const mapper = this.client.getEventMapper();
     const event = mapper(rawEvent);
-    let decryptedEvent: MatrixEvent | undefined;
-    const onDecrypted = (candidate: MatrixEvent) => {
-      decryptedEvent = candidate;
-    };
-    event.once(MatrixEventEvent.Decrypted, onDecrypted);
-    try {
-      await this.client.decryptEventIfNeeded(event);
-    } finally {
-      event.off(MatrixEventEvent.Decrypted, onDecrypted);
-    }
-    return matrixEventToRaw(decryptedEvent ?? event);
+    await this.client.decryptEventIfNeeded(event);
+    return matrixEventToRaw(event);
   }
 
   async getRelations(
@@ -481,6 +448,23 @@ export abstract class MatrixClientCore extends MatrixClientBase {
       nextBatch: result.nextBatch ?? null,
       prevBatch: result.prevBatch ?? null,
     };
+  }
+
+  async bindSyncIngress(handler: MatrixSyncIngressHandler): Promise<() => void> {
+    if (!this.syncStore) {
+      throw new Error("Matrix sync ingress requires a persistent sync store");
+    }
+    return await this.syncStore.bindSyncIngress(async (sync, context) => {
+      try {
+        await handler(sync, context);
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        // The SDK only logs a rejected store callback; the monitor must retire
+        // this generation instead of leaving a stopped sync loop marked healthy.
+        this.emitter.emit("sync.unexpected_error", failure);
+        throw failure;
+      }
+    });
   }
 
   async hydrateEvents(

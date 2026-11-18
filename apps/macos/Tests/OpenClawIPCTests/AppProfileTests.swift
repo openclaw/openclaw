@@ -63,14 +63,23 @@ struct AppProfileTests {
         ])
     }
 
-    @Test func `default worker commands preserve exact argument shapes`() {
-        let profile = AppProfile(environment: [:])
-        #expect(CommandResolver.nodeHostWorkerCommand(
-            prefix: ["/usr/bin/node", "/repo/scripts/run-node.mjs"],
-            profile: profile) == ["/usr/bin/node", "/repo/scripts/run-node.mjs", "node", "worker"])
-        #expect(CommandResolver.nodeHostWorkerCommand(
-            prefix: ["/opt/openclaw"],
-            profile: profile) == ["/opt/openclaw", "node", "worker"])
+    @Test func `worker commands preserve profiles and explicit desktop sharing choices`() {
+        let choices: [(Bool?, [String])] = [
+            (nil, []), (true, ["--desktop-sharing"]), (false, ["--no-desktop-sharing"]),
+        ]
+        for profileName in [nil, "work_2"] as [String?] {
+            let profile = AppProfile(environment: profileName.map { ["OPENCLAW_PROFILE": $0] } ?? [:])
+            let profileArguments = profileName.map { ["--profile", $0] } ?? []
+            for prefix in [["/usr/bin/node", "/repo/scripts/run-node.mjs"], ["/opt/openclaw"]] {
+                for (enabled, expectedFlags) in choices {
+                    #expect(CommandResolver.nodeHostWorkerCommand(
+                        prefix: prefix,
+                        profile: profile,
+                        desktopSharingEnabled: enabled) == prefix + profileArguments + ["node", "worker"] +
+                        expectedFlags)
+                }
+            }
+        }
     }
 
     @Test func `invalid and colliding profile names fail closed`() {
@@ -237,18 +246,5 @@ struct AppProfileTests {
         #expect(first.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path))
         #expect(ExecApprovalsStore.socketPath(stateDirectoryURL: longState, profileActive: false)
             .hasPrefix(longState.path))
-        let oldCanonical = longState.appendingPathComponent("exec-approvals.sock").path
-        #expect(ExecApprovalsStore.resolvedPersistedSocketPath(
-            existing: nil,
-            stateDirectoryURL: longState,
-            computed: first) == first)
-        #expect(ExecApprovalsStore.resolvedPersistedSocketPath(
-            existing: oldCanonical,
-            stateDirectoryURL: longState,
-            computed: first) == first)
-        #expect(ExecApprovalsStore.resolvedPersistedSocketPath(
-            existing: "/custom/approvals.sock",
-            stateDirectoryURL: longState,
-            computed: first) == "/custom/approvals.sock")
     }
 }

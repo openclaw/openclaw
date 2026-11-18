@@ -1,8 +1,3 @@
-/**
- * Conversation label resolver.
- *
- * Builds readable labels from inbound context while preserving useful id disambiguators.
- */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -22,18 +17,9 @@ function extractConversationId(from?: string): string | undefined {
 // Numeric ids and address-like ids are useful disambiguators. Human labels, hashtags,
 // and handles are already readable enough and should not get redundant "id:" suffixes.
 function shouldAppendId(id: string): boolean {
-  if (/^[0-9]+$/.test(id)) {
-    return true;
-  }
-  if (/^[^\s:@]+@[^\s:@]+$/.test(id)) {
-    return true;
-  }
-  return false;
+  return /^[0-9]+$/.test(id) || /^[^\s:@]+@[^\s:@]+$/.test(id);
 }
 
-/**
- * Resolves the most readable conversation label from normalized inbound message context.
- */
 export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   const explicit = normalizeOptionalString(ctx.ConversationLabel);
   if (explicit) {
@@ -61,22 +47,14 @@ export function resolveConversationLabel(ctx: MsgContext): string | undefined {
   }
 
   const id = extractConversationId(ctx.From);
-  if (!id) {
-    return base;
-  }
-  if (!shouldAppendId(id)) {
-    return base;
-  }
-  if (base === id) {
-    return base;
-  }
-  if (base.includes(id)) {
-    return base;
-  }
-  if (normalizeLowercaseStringOrEmpty(base).includes(" id:")) {
-    return base;
-  }
-  if (base.startsWith("#") || base.startsWith("@")) {
+  if (
+    !id ||
+    !shouldAppendId(id) ||
+    base.includes(id) ||
+    normalizeLowercaseStringOrEmpty(base).includes(" id:") ||
+    base.startsWith("#") ||
+    base.startsWith("@")
+  ) {
     return base;
   }
   return `${base} id:${id}`;

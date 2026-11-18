@@ -1,0 +1,506 @@
+import type { Page } from "playwright";
+import { expect, it } from "vitest";
+import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+
+const suite = createControlUiE2eSuite({
+  name: "mobile sheet motion",
+  startServerBeforeBrowser: true,
+});
+const sessionKey = "agent:main:mobile-sheet-motion";
+const viewport = { width: 390, height: 844 };
+const mobile = {
+  viewport,
+  userAgent:
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148",
+  isMobile: true,
+  hasTouch: true,
+  colorScheme: "dark",
+} as const;
+
+async function openSession(page: Page) {
+  await installMockGateway(page, {
+    sessionKey,
+    sessions: [{ key: sessionKey, label: "Mobile sheet motion", kind: "direct", updatedAt: 1 }],
+    historyMessages: [
+      { role: "assistant", content: [{ type: "text", text: "Sheet motion ready." }] },
+    ],
+  });
+  await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+  await page.getByText("Sheet motion ready.").first().waitFor();
+}
+
+async function openPanels(page: Page) {
+  await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+  await page.locator(".chat-mobile-host:not([hidden])").waitFor();
+  await settle(page);
+}
+
+/** Waits for the real sheet motion and gesture-release override to finish. */
+async function settle(page: Page) {
+  await page.evaluate(async () => {
+    await Promise.all(
+      document
+        .getAnimations()
+        .filter((animation) => Number.isFinite(animation.effect?.getComputedTiming().endTime))
+        .map((animation) => animation.finished.catch(() => undefined)),
+    );
+  });
+  await expect
+    .poll(() =>
+      page
+        .locator(".sidebar-region")
+        .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
+    )
+    .toBe("");
+}
+
+async function shellState(page: Page) {
+  return page.locator(".chat-mobile-host").evaluate((shell) => {
+    const style = getComputedStyle(shell);
+    const region = shell.parentElement!.getBoundingClientRect();
+    return {
+      hidden: shell.hasAttribute("hidden"),
+      visibility: style.visibility,
+      mode: shell.getAttribute("data-mode"),
+      height: shell.getBoundingClientRect().height,
+      top: shell.getBoundingClientRect().top,
+      regionHeight: region.height,
+      regionBottom: region.bottom,
+      easing: style.transitionTimingFunction,
+      releaseEasing: shell.parentElement!.style.getPropertyValue("--motion-sheet"),
+    };
+  });
+}
+
+/** Samples the actual spring timeline before browser round trips can outlast it. */
+async function sampleSheetTransition(
+  page: Page,
+  time: number,
+  action: () => Promise<void>,
+  inspect: (
+    state: Awaited<ReturnType<typeof shellState>> & {
+      launcherVisible: boolean;
+      contentVisible: boolean;
+    },
+  ) => void | Promise<void>,
+  options: { property?: string; content?: string } = {},
+) {
+  const sample = await page.locator(".chat-mobile-host").evaluateHandle(
+    (shell, { sampleTime, property, content }) => ({
+      started: new Promise<{
+        animations: CSSTransition[];
+        state: Awaited<ReturnType<typeof shellState>> & {
+          launcherVisible: boolean;
+          contentVisible: boolean;
+        };
+      }>((resolve, reject) => {
+        const onTransition = (event: Event) => {
+          if (
+            !(event instanceof TransitionEvent) ||
+            event.target !== shell ||
+            event.propertyName !== property
+          ) {
+            return;
+          }
+          shell.removeEventListener("transitionrun", onTransition);
+          const animations = shell
+            .getAnimations()
+            .filter((entry): entry is CSSTransition => entry instanceof CSSTransition);
+          if (!animations.some((entry) => entry.transitionProperty === property)) {
+            reject(new Error(`Missing sheet ${property} transition`));
+            return;
+          }
+          for (const animation of animations) {
+            animation.pause();
+            animation.currentTime = sampleTime;
+          }
+          // Sample in this frame: pausing CSS does not pause the owner's exit timer.
+          const style = getComputedStyle(shell);
+          const bounds = shell.getBoundingClientRect();
+          const region = shell.parentElement!.getBoundingClientRect();
+          resolve({
+            animations,
+            state: {
+              hidden: shell.hasAttribute("hidden"),
+              visibility: style.visibility,
+              mode: shell.getAttribute("data-mode"),
+              height: bounds.height,
+              top: bounds.top,
+              regionHeight: region.height,
+              regionBottom: region.bottom,
+              easing: style.transitionTimingFunction,
+              releaseEasing: shell.parentElement!.style.getPropertyValue("--motion-sheet"),
+              launcherVisible:
+                (shell.querySelector(".chat-panel-launcher-mobile")?.getClientRects().length ?? 0) >
+                0,
+              contentVisible: Boolean(
+                content &&
+                shell.querySelector(content)?.checkVisibility({ visibilityProperty: true }),
+              ),
+            },
+          });
+        };
+        shell.addEventListener("transitionrun", onTransition);
+      }),
+    }),
+    { sampleTime: time, property: options.property ?? "transform", content: options.content },
+  );
+  await action();
+  const state = await sample.evaluate(({ started }) => started.then((value) => value.state));
+  try {
+    await inspect(state);
+  } finally {
+    await sample.evaluate(async ({ started }) => {
+      for (const animation of (await started).animations) {
+        animation.play();
+      }
+    });
+    await sample.dispose();
+  }
+}
+
+const lastGestureTime = new WeakMap<Page, number>();
+
+/**
+ * Input timestamps preserve velocity and pauses without pacing the host. Keep later
+ * gestures ahead of the previous release even when logical time outruns wall time.
+ */
+async function drag(
+  page: Page,
+  origin: { x: number; y: number },
+  dy: number,
+  options: { steps: number; stepMs: number; pauseMs: number },
+) {
+  const cdp = await page.context().newCDPSession(page);
+  const start = Math.max(Date.now() / 1000, (lastGestureTime.get(page) ?? 0) + 0.001);
+  const send = (
+    type: "mousePressed" | "mouseMoved" | "mouseReleased",
+    at: number,
+    offset: number,
+  ) =>
+    cdp.send("Input.dispatchMouseEvent", {
+      type,
+      x: origin.x,
+      y: origin.y + offset,
+      button: "left",
+      buttons: type === "mouseReleased" ? 0 : 1,
+      clickCount: type === "mouseMoved" ? 0 : 1,
+      timestamp: start + at / 1000,
+    });
+  try {
+    await send("mousePressed", 0, 0);
+    for (let step = 1; step <= options.steps; step += 1) {
+      await send("mouseMoved", step * options.stepMs, (dy * step) / options.steps);
+    }
+    const release = options.steps * options.stepMs + options.pauseMs;
+    await send("mouseReleased", release, dy);
+    lastGestureTime.set(page, start + release / 1000);
+  } finally {
+    await cdp.detach();
+  }
+}
+
+/** Defaults to the existing 96 ms flick; slow placements pause before lifting. */
+async function dragGrabber(page: Page, dy: number, options = { steps: 6, stepMs: 16, pauseMs: 4 }) {
+  const box = await page.locator(".chat-mobile-host__grabber").boundingBox();
+  if (!box) {
+    throw new Error("grabber is not visible");
+  }
+  await drag(page, { x: box.x + box.width / 2, y: box.y + box.height / 2 }, dy, options);
+}
+
+suite.define(() => {
+  it("presents and dismisses the Panels sheet with the sheet spring", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      // The sheet enters from below the viewport instead of fading in place.
+      await sampleSheetTransition(
+        page,
+        40,
+        () => page.getByRole("button", { name: "Panels", exact: true }).first().click(),
+        (entering) => {
+          expect(entering.top).toBeGreaterThan(entering.regionBottom - entering.height + 20);
+          expect(entering.easing).toContain("linear(");
+        },
+      );
+      await settle(page);
+      await page.locator(".chat-panel-launcher-mobile").waitFor();
+      const open = await shellState(page);
+      expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
+
+      await sampleSheetTransition(
+        page,
+        60,
+        () => page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click(),
+        (leaving) => {
+          // Hidden immediately for focus and accessibility, but still sliding out on screen.
+          expect(leaving.hidden).toBe(true);
+          expect(leaving.visibility).toBe("visible");
+          expect(leaving.top).toBeGreaterThan(open.top + 10);
+          // The page it showed slides away with it instead of blanking first.
+          expect(leaving.launcherVisible).toBe(true);
+        },
+      );
+      await settle(page);
+      expect((await shellState(page)).visibility).toBe("hidden");
+    });
+  });
+
+  it("steps flicks through the dock and expanded detents and dismisses downward", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const dock = await shellState(page);
+      expect(dock.mode).toBe("dock");
+
+      await sampleSheetTransition(
+        page,
+        40,
+        () => dragGrabber(page, -150),
+        (releasing) => expect(releasing.releaseEasing).toContain("linear("),
+        { property: "height" },
+      );
+      await settle(page);
+      const expanded = await shellState(page);
+      expect(expanded.mode).toBe("expanded");
+      const detent = Math.min(expanded.regionHeight * 0.85, expanded.regionHeight - 24);
+      expect(Math.abs(expanded.height - detent)).toBeLessThan(2);
+      // The velocity curve is released once the spring has settled.
+      expect(
+        await page
+          .locator(".sidebar-region")
+          .evaluate((region) => region.style.getPropertyValue("--motion-sheet")),
+      ).toBe("");
+
+      await dragGrabber(page, 150);
+      await settle(page);
+      const docked = await shellState(page);
+      expect(docked.mode).toBe("dock");
+      expect(Math.abs(docked.height - dock.height)).toBeLessThan(2);
+
+      await sampleSheetTransition(
+        page,
+        60,
+        () => dragGrabber(page, 150),
+        (dismissing) => {
+          expect(dismissing.hidden).toBe(true);
+          expect(dismissing.visibility).toBe("visible");
+        },
+      );
+      await settle(page);
+      expect((await shellState(page)).visibility).toBe("hidden");
+    });
+  });
+
+  it("keeps slow releases where people leave them and only closes past half the minimum", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const dock = await shellState(page);
+
+      // A slow drag with a pause before lifting carries no momentum.
+      await dragGrabber(page, -120, { steps: 12, stepMs: 40, pauseMs: 150 });
+      await settle(page);
+      const placed = await shellState(page);
+      expect(Math.abs(placed.height - (dock.height + 120))).toBeLessThan(3);
+
+      await dragGrabber(page, 120, { steps: 12, stepMs: 40, pauseMs: 150 });
+      await settle(page);
+      const minimum = await page
+        .locator(".chat-mobile-host")
+        .evaluate((shell) =>
+          getComputedStyle(shell.parentElement!).getPropertyValue("--mobile-min-height"),
+        );
+      expect(minimum).not.toBe("");
+
+      // A short pull below the minimum springs back instead of closing.
+      const before = await shellState(page);
+      await dragGrabber(page, before.height - 150, { steps: 16, stepMs: 40, pauseMs: 150 });
+      await settle(page);
+      const back = await shellState(page);
+      expect(back.hidden).toBe(false);
+      expect(Math.abs(back.top + back.height - back.regionBottom)).toBeLessThan(1.5);
+
+      // Pulled most of the way out, the same slow release dismisses.
+      await dragGrabber(page, back.height - 40, { steps: 20, stepMs: 40, pauseMs: 150 });
+      await settle(page);
+      expect((await shellState(page)).visibility).toBe("hidden");
+    });
+  });
+
+  it("drags from empty header space but leaves header controls tappable", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const header = await page.locator(".chat-mobile-host__header").boundingBox();
+      const close = await page
+        .locator(".chat-mobile-host__header .chat-mobile-host__circle")
+        .first()
+        .boundingBox();
+      if (!header || !close) {
+        throw new Error("header is not visible");
+      }
+      // Between the close button and the segmented control.
+      const x = close.x + close.width + 10;
+      const y = header.y + header.height / 2;
+      await drag(page, { x, y }, -150, { steps: 6, stepMs: 16, pauseMs: 0 });
+      await settle(page);
+      expect((await shellState(page)).mode).toBe("expanded");
+
+      // The segmented control's thumb slides to the pressed segment.
+      const thumb = () =>
+        page
+          .locator(".chat-mobile-host__segments")
+          .evaluate((segments) => getComputedStyle(segments, "::before").insetInlineStart);
+      const surface = await page.locator(".chat-mobile-host__segments").evaluate((segments) => {
+        const reference = document.createElement("span");
+        reference.style.background = "var(--surface-selected)";
+        segments.append(reference);
+        const selectedSurface = getComputedStyle(reference).backgroundColor;
+        reference.remove();
+        return {
+          thumb: getComputedStyle(segments, "::before").backgroundColor,
+          selectedSurface,
+        };
+      });
+      expect(surface.thumb).toBe(surface.selectedSurface);
+      const panelsThumb = await thumb();
+      await page.getByRole("button", { name: "Details", exact: true }).click();
+      await expect
+        .poll(() =>
+          page.getByRole("button", { name: "Details", exact: true }).getAttribute("aria-pressed"),
+        )
+        .toBe("true");
+      await settle(page);
+      expect(await thumb()).not.toBe(panelsThumb);
+    });
+  });
+
+  it("swipes the Filter & sort sheet down, springs back from short pulls, and slides out on outside taps", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await page.getByRole("button", { name: "Expand sidebar" }).first().click();
+      const filter = page.getByRole("button", { name: /^Filter & sort/ }).first();
+      const panel = page.locator(".sidebar-session-filter-panel");
+      const grabber = page.locator(".sidebar-session-filter-panel__grabber");
+      const swipe = async (dy: number) => {
+        const box = await grabber.boundingBox();
+        if (!box) {
+          throw new Error("grabber is not visible");
+        }
+        const x = box.x + box.width / 2;
+        const y = box.y + box.height / 2;
+        await drag(page, { x, y }, dy, { steps: 8, stepMs: 40, pauseMs: 120 });
+      };
+
+      await filter.click();
+      await panel.waitFor();
+      await settle(page);
+      const resting = await panel.boundingBox();
+      await swipe(40);
+      await settle(page);
+      expect(await panel.isVisible()).toBe(true);
+      expect((await panel.boundingBox())?.y).toBeCloseTo(resting?.y ?? 0, 0);
+
+      await swipe(resting ? resting.height * 0.5 : 300);
+      await expect.poll(() => panel.count()).toBe(0);
+
+      await filter.click();
+      await panel.waitFor();
+      await settle(page);
+      await page.mouse.click(195, 40);
+      // The sheet is still leaving the screen right after the tap.
+      await page.waitForTimeout(60);
+      expect(await panel.count()).toBe(1);
+      await expect.poll(() => panel.count()).toBe(0);
+    });
+  });
+
+  it("pushes deeper sheet pages from the trailing edge and pops them back", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const shell = page.locator(".chat-mobile-host");
+      const push = () =>
+        shell.evaluate((element) => element.style.getPropertyValue("--mobile-push"));
+      expect(await push()).toBe("");
+      await shell.getByRole("button", { name: "Details", exact: true }).click();
+      await settle(page);
+      expect(await push()).toBe("");
+      await shell.getByRole("button", { name: /^Outputs/ }).click();
+      await expect.poll(push).toBe("1");
+      await settle(page);
+      await page.locator(".chat-mobile-host").getByRole("button", { name: "Back" }).first().click();
+      await expect.poll(push).toBe("-1");
+    });
+  });
+
+  it("keeps the open panel and Details page on screen while the sheet slides out", async () => {
+    await suite.withPage(mobile, async ({ page }) => {
+      await openSession(page);
+      await openPanels(page);
+      const shell = page.locator(".chat-mobile-host");
+      // Detail pages lead with Back; Close is the labelled control on every page.
+      const close = shell
+        .locator(".chat-mobile-host__header")
+        .getByRole("button", { name: "Close", exact: true });
+      await shell.getByRole("button", { name: "Files", exact: true }).click();
+      const files = page.locator('[data-panel-slot="workspace"]');
+      await files.waitFor();
+      await settle(page);
+
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => {
+          expect(leaving.hidden).toBe(true);
+          // Closed for focus and accessibility, but the panel slides out with the sheet.
+          expect(leaving.contentVisible).toBe(true);
+        },
+        { content: '[data-panel-slot="workspace"]' },
+      );
+      await settle(page);
+      expect(await files.isVisible()).toBe(false);
+
+      await openPanels(page);
+      await shell.getByRole("button", { name: "Details", exact: true }).click();
+      await shell.getByRole("button", { name: /^Outputs/ }).click();
+      const outputs = shell.locator('.chat-mobile-details-page[data-details-page="outputs"]');
+      await outputs.waitFor();
+      await settle(page);
+      await sampleSheetTransition(
+        page,
+        60,
+        () => close.click(),
+        (leaving) => expect(leaving.contentVisible).toBe(true),
+        { content: '.chat-mobile-details-page[data-details-page="outputs"]' },
+      );
+      await settle(page);
+      expect(await outputs.isVisible()).toBe(false);
+
+      // Reopening mid-exit cancels the pending close instead of hiding the page later.
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await outputs.waitFor();
+      await close.click();
+      await page.waitForTimeout(60);
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await settle(page);
+      expect((await shellState(page)).hidden).toBe(false);
+      expect(await outputs.isVisible()).toBe(true);
+    });
+  });
+
+  it("switches instantly when the person prefers reduced motion", async () => {
+    await suite.withPage({ ...mobile, reducedMotion: "reduce" }, async ({ page }) => {
+      await openSession(page);
+      await page.getByRole("button", { name: "Panels", exact: true }).first().click();
+      await page.locator(".chat-mobile-host:not([hidden])").waitFor();
+      const open = await shellState(page);
+      expect(Math.abs(open.top + open.height - open.regionBottom)).toBeLessThan(1.5);
+      await page.locator(".chat-mobile-host__header .chat-mobile-host__circle").first().click();
+      await expect.poll(async () => (await shellState(page)).visibility).toBe("hidden");
+    });
+  });
+});

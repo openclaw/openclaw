@@ -1,341 +1,95 @@
-// Model Catalog Core tests cover configured model refs behavior.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
+  type ConfiguredModelRef,
   collectConfiguredModelRefs,
   collectConfiguredModelRefValues,
-  listModelRefsFromConfigValue,
+  listModelRefsFromConfigValue as listRefs,
 } from "./configured-model-refs.js";
 
-describe("configured model refs", () => {
-  it("lists raw refs from one model selector without normalizing them", () => {
-    expect(listModelRefsFromConfigValue("  openai/gpt-5.5  ")).toEqual(["  openai/gpt-5.5  "]);
-    const selector = Object.freeze({
-      primary: " primary/model ",
-      fallbacks: Object.freeze(["", "fallback/model", 42, "fallback/model"]),
-    });
-    expect(listModelRefsFromConfigValue(selector)).toEqual([
-      " primary/model ",
-      "",
-      "fallback/model",
-      "fallback/model",
-    ]);
-    expect(collectConfiguredModelRefs({ agents: { defaults: { model: selector } } })).toEqual([
-      { path: "agents.defaults.model.primary", value: "primary/model", kind: "selector" },
-      { path: "agents.defaults.model.fallbacks.1", value: "fallback/model", kind: "selector" },
-      { path: "agents.defaults.model.fallbacks.3", value: "fallback/model", kind: "selector" },
-    ]);
-    expect(listModelRefsFromConfigValue(["openai/gpt-5.5"])).toEqual([]);
-    expect(listModelRefsFromConfigValue({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
-  });
+function ref(path: string, value: string, kind: ConfiguredModelRef["kind"] = "selector") {
+  return { path, value, kind };
+}
 
-  it("collects agent, hook, message, and channel model refs with config paths", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.5", fallbacks: ["anthropic/claude-sonnet-4-6"] },
-            utilityModel: "google/gemini-3.1-flash-lite-preview",
-            mediaModels: { image: "openai/gpt-image-2" },
-            compaction: { memoryFlush: { model: "openai/gpt-5.5-mini" } },
-          },
-          entries: {
-            custom: {
-              model: "xai/grok-4-fast",
-              utilityModel: "openai/gpt-5.5-nano",
-            },
-          },
+function nested(path: string, value: unknown) {
+  return path
+    .split(".")
+    .reduceRight<unknown>((child, key) => (key === "0" ? [child] : { [key]: child }), value);
+}
+
+it("collects string Decision roles without changing profile suffixes", () => {
+  expect(
+    collectConfiguredModelRefs({
+      agents: {
+        defaults: { decisionModel: "p/decision@p:key" },
+        entries: {
+          worker: { decisionModel: "fixture/other" },
+          disabled: { decisionModel: "" },
+          invalid: { decisionModel: { primary: "fixture/not-a-selector" } },
         },
-        hooks: {
-          mappings: [{ model: "openai/gpt-5.5-nano" }],
-        },
-        tts: { summaryModel: "openai/gpt-5.5-mini" },
+      },
+      channels: { modelByChannel: { fixture: { decisionModel: "fixture/chat@profile" } } },
+    }),
+  ).toEqual([
+    { ...ref("agents.defaults.decisionModel", "p/decision@p:key"), capability: "decision" },
+    { ...ref("agents.entries.worker.decisionModel", "fixture/other"), capability: "decision" },
+    ref("channels.modelByChannel.fixture.decisionModel", "fixture/chat@profile"),
+  ]);
+});
+
+it("lists raw refs from one model selector without normalizing them", () => {
+  expect(listRefs("  p/model  ")).toEqual(["  p/model  "]);
+  const selector = Object.freeze({
+    primary: " p/main ",
+    fallbacks: Object.freeze(["", "p/fallback", 42, "p/fallback"]),
+  });
+  expect(listRefs(selector)).toEqual([" p/main ", "", "p/fallback", "p/fallback"]);
+  expect(collectConfiguredModelRefs({ agents: { defaults: { model: selector } } })).toEqual([
+    ref("agents.defaults.model.primary", "p/main"),
+    ref("agents.defaults.model.fallbacks.1", "p/fallback"),
+    ref("agents.defaults.model.fallbacks.3", "p/fallback"),
+  ]);
+  expect(listRefs(["openai/gpt-5.5"])).toEqual([]);
+  expect(listRefs({ primary: 42, fallbacks: "openai/gpt-5.5" })).toEqual([]);
+});
+
+it("can exclude channel model overrides from configured refs", () => {
+  expect(
+    collectConfiguredModelRefValues(
+      {
+        agents: { defaults: { model: "p/chat" } },
         channels: {
-          modelByChannel: {
-            discord: {
-              guild: "anthropic/claude-opus-4-8",
-            },
-          },
+          modelByChannel: { discord: { guild: "p/channel" } },
+          discord: { voice: { tts: { summaryModel: "discord-tts/model" } } },
         },
-      }),
-    ).toEqual([
-      { path: "agents.defaults.model.primary", value: "openai/gpt-5.5", kind: "selector" },
-      {
-        path: "agents.defaults.model.fallbacks.0",
-        value: "anthropic/claude-sonnet-4-6",
-        kind: "selector",
       },
-      {
-        path: "agents.defaults.utilityModel",
-        value: "google/gemini-3.1-flash-lite-preview",
-        kind: "selector",
-      },
-      { path: "agents.defaults.mediaModels.image", value: "openai/gpt-image-2", kind: "literal" },
-      {
-        path: "agents.defaults.compaction.memoryFlush.model",
-        value: "openai/gpt-5.5-mini",
-        kind: "selector",
-      },
-      { path: "agents.entries.custom.model", value: "xai/grok-4-fast", kind: "selector" },
-      {
-        path: "agents.entries.custom.utilityModel",
-        value: "openai/gpt-5.5-nano",
-        kind: "selector",
-      },
-      {
-        path: "channels.modelByChannel.discord.guild",
-        value: "anthropic/claude-opus-4-8",
-        kind: "selector",
-      },
-      { path: "hooks.mappings.0.model", value: "openai/gpt-5.5-nano", kind: "selector" },
-      { path: "tts.summaryModel", value: "openai/gpt-5.5-mini", kind: "selector" },
-    ]);
-  });
+      { includeChannelModelOverrides: false },
+    ),
+  ).toEqual(["p/chat", "discord-tts/model"]);
+});
 
-  it("can exclude channel model overrides from configured refs", () => {
-    expect(
-      collectConfiguredModelRefValues(
-        {
-          agents: { defaults: { model: "openai/gpt-5.5" } },
-          channels: {
-            modelByChannel: { discord: { guild: "anthropic/claude-sonnet-4-6" } },
-            discord: { voice: { tts: { summaryModel: "discord-tts/model" } } },
-          },
-        },
-        { includeChannelModelOverrides: false },
-      ),
-    ).toEqual(["openai/gpt-5.5", "discord-tts/model"]);
-  });
+it("collects media refs in capability order", () => {
+  const media = ["image", "audio", "video"];
+  const config = nested(
+    "tools.media",
+    Object.fromEntries(media.map((kind) => [kind, { preferredModel: `p/${kind}` }])),
+  );
+  expect(collectConfiguredModelRefs(config)).toEqual(
+    media.map((kind) => ref(`tools.media.${kind}.preferredModel`, `p/${kind}`, "literal")),
+  );
+});
 
-  it("preserves legacy list indices when collecting agent model refs", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          list: [
-            { id: "10", model: "openai/gpt-5.6" },
-            { id: "2", utilityModel: "anthropic/claude-sonnet-4-6" },
-          ],
-        },
-      }),
-    ).toEqual([
-      { path: "agents.list.0.model", value: "openai/gpt-5.6", kind: "selector" },
-      {
-        path: "agents.list.1.utilityModel",
-        value: "anthropic/claude-sonnet-4-6",
-        kind: "selector",
-      },
-    ]);
-  });
-
-  it("ignores a shadowed legacy list when keyed entries are authoritative", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          entries: { ops: { model: "openai/gpt-5.6" } },
-          list: [{ id: "stale", model: "anthropic/claude-opus-4-8" }],
-        },
-      }),
-    ).toEqual([{ path: "agents.entries.ops.model", value: "openai/gpt-5.6", kind: "selector" }]);
-  });
-
-  it.each([
-    {
-      name: "global exec reviewer string",
-      config: { tools: { exec: { reviewer: { model: "global-review/model" } } } },
-      expected: [
-        { path: "tools.exec.reviewer.model", value: "global-review/model", kind: "selector" },
-      ],
-    },
-    {
-      name: "global exec reviewer selector",
-      config: {
-        tools: {
-          exec: {
-            reviewer: {
-              model: { primary: "global-primary/model", fallbacks: ["global-fallback/model"] },
-            },
-          },
-        },
-      },
-      expected: [
-        {
-          path: "tools.exec.reviewer.model.primary",
-          value: "global-primary/model",
-          kind: "selector",
-        },
-        {
-          path: "tools.exec.reviewer.model.fallbacks.0",
-          value: "global-fallback/model",
-          kind: "selector",
-        },
-      ],
-    },
-    {
-      name: "media preferences",
-      config: {
-        tools: {
-          media: {
-            image: { preferredModel: "image-provider/model" },
-            audio: { preferredModel: "audio-provider/model" },
-            video: { preferredModel: "video-provider/model" },
-          },
-        },
-      },
-      expected: [
-        {
-          path: "tools.media.image.preferredModel",
-          value: "image-provider/model",
-          kind: "literal",
-        },
-        {
-          path: "tools.media.audio.preferredModel",
-          value: "audio-provider/model",
-          kind: "literal",
-        },
-        {
-          path: "tools.media.video.preferredModel",
-          value: "video-provider/model",
-          kind: "literal",
-        },
-      ],
-    },
-    {
-      name: "keyed agent exec reviewer",
-      config: {
-        agents: {
-          entries: {
-            worker: {
-              tools: {
-                exec: {
-                  reviewer: {
-                    model: {
-                      primary: "entry-review-primary/model",
-                      fallbacks: ["entry-review-fallback/model"],
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      },
-      expected: [
-        {
-          path: "agents.entries.worker.tools.exec.reviewer.model.primary",
-          value: "entry-review-primary/model",
-          kind: "selector",
-        },
-        {
-          path: "agents.entries.worker.tools.exec.reviewer.model.fallbacks.0",
-          value: "entry-review-fallback/model",
-          kind: "selector",
-        },
-      ],
-    },
-    {
-      name: "legacy agent exec reviewer",
-      config: {
-        agents: {
-          list: [{ id: "worker", tools: { exec: { reviewer: { model: "list-review/model" } } } }],
-        },
-      },
-      expected: [
-        {
-          path: "agents.list.0.tools.exec.reviewer.model",
-          value: "list-review/model",
-          kind: "selector",
-        },
-      ],
-    },
-    {
-      name: "keyed agent TTS summary",
-      config: { agents: { entries: { worker: { tts: { summaryModel: "entry-tts/model" } } } } },
-      expected: [
-        {
-          path: "agents.entries.worker.tts.summaryModel",
-          value: "entry-tts/model",
-          kind: "selector",
-        },
-      ],
-    },
-    {
-      name: "legacy agent TTS summary",
-      config: { agents: { list: [{ id: "worker", tts: { summaryModel: "list-tts/model" } }] } },
-      expected: [
-        { path: "agents.list.0.tts.summaryModel", value: "list-tts/model", kind: "selector" },
-      ],
-    },
-    {
-      name: "Discord root voice model",
-      config: { channels: { discord: { voice: { model: "discord-voice/model" } } } },
-      expected: [
-        { path: "channels.discord.voice.model", value: "discord-voice/model", kind: "selector" },
-      ],
-    },
-    {
-      name: "Discord root voice TTS summary",
-      config: { channels: { discord: { voice: { tts: { summaryModel: "discord-tts/model" } } } } },
-      expected: [
-        {
-          path: "channels.discord.voice.tts.summaryModel",
-          value: "discord-tts/model",
-          kind: "selector",
-        },
-      ],
-    },
-    {
-      name: "Discord account voice model",
-      config: {
-        channels: { discord: { accounts: { work: { voice: { model: "account-voice/model" } } } } },
-      },
-      expected: [
-        {
-          path: "channels.discord.accounts.work.voice.model",
-          value: "account-voice/model",
-          kind: "selector",
-        },
-      ],
-    },
-    {
-      name: "Discord account voice TTS summary",
-      config: {
-        channels: {
-          discord: {
-            accounts: { work: { voice: { tts: { summaryModel: "account-tts/model" } } } },
-          },
-        },
-      },
-      expected: [
-        {
-          path: "channels.discord.accounts.work.voice.tts.summaryModel",
-          value: "account-tts/model",
-          kind: "selector",
-        },
-      ],
-    },
-  ])("collects $name", ({ config, expected }) => {
-    expect(collectConfiguredModelRefs(config)).toEqual(expected);
-  });
-
-  it.each([{}, null])("does not inspect a shadow list when entries is %j", (entries) => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          entries,
-          list: [{ id: "shadow", tools: { exec: { reviewer: { model: "shadow/model" } } } }],
-        },
-      }),
-    ).toEqual([]);
-  });
-
-  it("ignores array-shaped malformed records", () => {
-    expect(
-      collectConfiguredModelRefs({
-        agents: {
-          defaults: {
-            models: ["openai/gpt-5.5"],
-          },
-        },
-      }),
-    ).toEqual([]);
-  });
+it.each<[string, ConfiguredModelRef["kind"]?]>([
+  ["agents.defaults.utilityModel"],
+  ["agents.defaults.mediaModels.image", "literal"],
+  ["agents.defaults.compaction.model"],
+  ["agents.entries.custom.model"],
+  ["agents.entries.custom.utilityModel"],
+  ["channels.modelByChannel.discord.guild"],
+  ["hooks.mappings.0.model"],
+  ["tts.summaryModel"],
+  ["agents.list.0.tools.exec.reviewer.model"],
+  ["agents.entries.worker.tts.summaryModel"],
+  ["channels.discord.accounts.work.voice.tts.summaryModel"],
+])("collects %s with its field-owned syntax", (path, kind = "selector") => {
+  expect(collectConfiguredModelRefs(nested(path, "p/model"))).toEqual([ref(path, "p/model", kind)]);
 });

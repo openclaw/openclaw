@@ -3,37 +3,42 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
   extractPluginInstallRecordsFromInstalledPluginIndex,
   loadInstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import {
+  callFixtureGatewayMethod,
+  disposeLoaderFixtures,
+  writeFixtureJson,
+} from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistry } from "./registry-types.js";
-import { disposePluginRegistryInstances } from "./runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
+afterEach(async () => {
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
+  await closeStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });
 
 it.each(["global", "bundled", "bundled without package.json"] as const)(
   "retains a %s runtime across persisted and fresh metadata, but replaces it when its inputs change",
   async (kind) => {
+    const id = "metadata-sibling";
+    const method = `${id}.probe`;
     const origin = kind === "global" ? "global" : "bundled";
     const hasPackage = kind !== "bundled without package.json";
     const root = makeTrackedTempDir("openclaw-loader-metadata-retention", tempDirs);
@@ -47,35 +52,21 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
     };
     const packageDir =
       origin === "global"
-        ? writeManagedNpmPlugin({
-            stateDir,
-            packageName: "metadata-sibling",
-            pluginId: "metadata-sibling",
-            version: "1.0.0",
-          })
-        : path.join(bundledDir, "metadata-sibling");
+        ? writeManagedNpmPlugin({ stateDir, packageName: id, pluginId: id, version: "1.0.0" })
+        : path.join(bundledDir, id);
     const entryPath = hasPackage
       ? path.join(packageDir, "dist", "index.js")
       : path.join(packageDir, "index.js");
     fs.mkdirSync(path.dirname(entryPath), { recursive: true });
-    fs.writeFileSync(
-      path.join(packageDir, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "metadata-sibling",
-        configSchema: { type: "object" },
-      }),
-    );
+    writeFixtureJson(packageDir, "openclaw.plugin.json", { id, configSchema: { type: "object" } });
     const writeDescription = (description: string) =>
-      fs.writeFileSync(
-        path.join(packageDir, "package.json"),
-        JSON.stringify({
-          name: "metadata-sibling",
-          version: "1.0.0",
-          type: "commonjs",
-          description,
-          openclaw: { extensions: ["./dist/index.js"] },
-        }),
-      );
+      writeFixtureJson(packageDir, "package.json", {
+        name: id,
+        version: "1.0.0",
+        type: "commonjs",
+        description,
+        openclaw: { extensions: ["./dist/index.js"] },
+      });
     if (hasPackage) {
       writeDescription("Original package description");
     }
@@ -95,19 +86,20 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
       });
     } };`,
     );
-    const config: OpenClawConfig = {
-      agents: { entries: { main: { workspace: workspaceDir } } },
+    const configFor = (workspace: string): OpenClawConfig => ({
+      agents: { entries: { main: { workspace } } },
       plugins: {
-        allow: ["metadata-sibling"],
-        entries: { "metadata-sibling": { enabled: true } },
+        allow: [id],
+        entries: { [id]: { enabled: true } },
         slots: { memory: "none" },
       },
-    };
+    });
+    const config = configFor(workspaceDir);
     const registries: PluginRegistry[] = [];
     const caches: ReturnType<typeof createPluginCache>[] = [];
     try {
       await withEnvAsync(env, async () => {
-        writePersistedInstalledPluginIndexSync(
+        await writePersistedInstalledPluginIndex(
           loadInstalledPluginIndex({
             config,
             env,
@@ -115,9 +107,9 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
             installRecords:
               origin === "global"
                 ? {
-                    "metadata-sibling": {
+                    [id]: {
                       source: "npm",
-                      spec: "metadata-sibling@1.0.0",
+                      spec: `${id}@1.0.0`,
                       version: "1.0.0",
                       installPath: packageDir,
                     },
@@ -130,16 +122,11 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         const load = (preferPersisted: boolean, nextWorkspace = workspaceDir) => {
           const cache = createPluginCache();
           caches.push(cache);
-          const nextConfig: OpenClawConfig = {
-            ...config,
-            agents: { entries: { main: { workspace: nextWorkspace } } },
-          };
+          const context = { config: configFor(nextWorkspace), env, workspaceDir: nextWorkspace };
           return withPluginCache(cache, () => {
             // Read the same committed installation facts through both real metadata producers.
             const snapshot = loadPluginMetadataSnapshot({
-              config: nextConfig,
-              env,
-              workspaceDir: nextWorkspace,
+              ...context,
               allowCurrent: false,
               preferPersisted,
               ...(!preferPersisted ? { installRecords } : {}),
@@ -150,9 +137,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
             );
             expect(snapshotInstallRecords).toEqual(installRecords);
             const registry = loadOpenClawPlugins({
-              config: nextConfig,
-              env,
-              workspaceDir: nextWorkspace,
+              ...context,
               installRecords: snapshotInstallRecords,
               manifestRegistry: snapshot.manifestRegistry,
               discovery: snapshot.discovery,
@@ -163,15 +148,14 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
               throwOnLoadError: true,
             });
             registries.push(registry);
-            const record = registry.plugins.find((entry) => entry.id === "metadata-sibling");
-            const manifest = snapshot.manifestRegistry.plugins.find(
-              (entry) => entry.id === "metadata-sibling",
-            );
-            const handler = registry.gatewayHandlers["metadata-sibling.probe"];
+            const record = registry.plugins.find((entry) => entry.id === id);
+            const manifest = snapshot.manifestRegistry.plugins.find((entry) => entry.id === id);
+            const handler = registry.gatewayHandlers[method];
             assert.ok(record && manifest && handler);
             expect(record.origin).toBe(origin);
-            expect.soft(manifest.packageDependencies).toEqual({});
-            expect.soft(manifest.packageOptionalDependencies).toEqual({});
+            expect
+              .soft([manifest.packageDependencies, manifest.packageOptionalDependencies])
+              .toEqual([{}, {}]);
             return { record, manifest, handler };
           });
         };
@@ -180,15 +164,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
           .soft(initial.manifest.packageDescription)
           .toBe(hasPackage ? "Original package description" : undefined);
         const call = async (handler: typeof initial.handler) => {
-          const respond = vi.fn();
-          await handler({
-            req: { type: "req", id: "metadata-retention", method: "metadata-sibling.probe" },
-            params: {},
-            client: null,
-            isWebchatConnect: () => false,
-            respond,
-            context: {} as GatewayRequestHandlerOptions["context"],
-          });
+          const respond = await callFixtureGatewayMethod(handler, method);
           expect(respond).toHaveBeenCalledExactlyOnceWith(
             true,
             expect.any(String),
@@ -201,9 +177,6 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         // First installation can derive metadata; the following settings reload hydrates it.
         for (const preferPersisted of [false, true]) {
           const current = load(preferPersisted);
-          expect
-            .soft(current.manifest.packageDescription)
-            .toBe(hasPackage ? "Original package description" : undefined);
           expect.soft(current.manifest).toEqual(initial.manifest);
           expect.soft(current.record).toBe(initial.record);
           expect.soft(current.handler).toBe(initial.handler);
@@ -237,12 +210,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         expect.soft(registered).toHaveBeenCalledTimes(expectedRegistrations + 1);
       });
     } finally {
-      for (const registry of registries.toReversed()) {
-        await disposePluginRegistryInstances(registry);
-      }
-      for (const cache of caches.toReversed()) {
-        await cache[Symbol.asyncDispose]();
-      }
+      await disposeLoaderFixtures(registries, caches);
       process.off(registrationEvent, registered);
     }
   },

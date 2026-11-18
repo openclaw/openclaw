@@ -4,7 +4,7 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginRegistryParams } from "../../plugins/registry-types.js";
 import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
-import type { PluginRuntime } from "../../plugins/runtime/types.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import {
   registerProviderPlugins as registerProviders,
@@ -32,7 +32,7 @@ export function createPluginRegistryFixture(
         error() {},
         debug() {},
       },
-      runtime: {} as PluginRuntime,
+      runtime: createPluginRuntime(),
       allowProcessHomeSessionCatalogs: params.allowProcessHomeSessionCatalogs ?? true,
       ...(params.hostServices ? { hostServices: params.hostServices } : {}),
     }),

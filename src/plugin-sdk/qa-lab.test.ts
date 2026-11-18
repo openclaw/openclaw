@@ -34,12 +34,6 @@ describe("plugin-sdk qa-lab", () => {
       dirName: "qa-lab",
       artifactBasename: "cli.js",
     });
-  });
-
-  it("delegates qa cli registration through the bundled public surface", async () => {
-    const module = await import("./qa-lab.js");
-
-    module.registerQaLabCli({} as never);
     expect(registerQaLabCliImpl).toHaveBeenCalledWith({} as never);
   });
 

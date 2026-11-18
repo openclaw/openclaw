@@ -1,4 +1,5 @@
 // The real non-probe models-status route must scope discovery to providers already in use.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -41,8 +42,11 @@ import { tryRouteCli } from "./route.js";
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-models-status-route-"));
 
 afterAll(() => {
-  fs.rmSync(tempRoot, { recursive: true, force: true });
-  vi.unstubAllEnvs();
+  try {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it("does not execute an unrelated provider plugin", async () => {

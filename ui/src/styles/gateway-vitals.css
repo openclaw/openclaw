@@ -49,12 +49,6 @@
   font-family: var(--mono);
 }
 
-.gateway-cpu-detail p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 10px;
-}
-
 .gateway-cpu-detail__total {
   border-bottom: 1px solid var(--border);
 }

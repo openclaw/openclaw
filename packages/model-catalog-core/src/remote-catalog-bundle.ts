@@ -1,10 +1,14 @@
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import {
   MODEL_CATALOG_APIS,
+  MODEL_CATALOG_INPUTS,
   MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
+  MODEL_CATALOG_STATUSES,
   MODEL_CATALOG_THINKING_LEVELS,
 } from "./model-catalog-types.js";
-import type { ModelCatalogProvider } from "./model-catalog-types.js";
+import type { ModelCatalogModel, ModelCatalogProvider } from "./model-catalog-types.js";
+import { ModelInferenceCapabilitiesSchema } from "./model-inference-capabilities.js";
 
 export const REMOTE_CATALOG_MAX_FUTURE_SKEW_MS = 24 * 60 * 60_000;
 
@@ -22,25 +26,17 @@ const pricingTierSchema = z
   })
   .strict();
 
-const costSchema = z
-  .object({
-    input: z.number().finite().nonnegative().optional(),
-    output: z.number().finite().nonnegative().optional(),
-    cacheRead: z.number().finite().nonnegative().optional(),
-    cacheWrite: z.number().finite().nonnegative().optional(),
+const costSchema = pricingTierSchema
+  .omit({ range: true })
+  .partial()
+  .extend({
     tieredPricing: z.array(pricingTierSchema).optional(),
-  })
-  .strict();
+  });
 
-const hostedPricingSchema = z
-  .object({
-    input: z.number().finite().nonnegative(),
-    output: z.number().finite().nonnegative(),
-    cacheRead: z.number().finite().nonnegative().optional(),
-    cacheWrite: z.number().finite().nonnegative().optional(),
-    tieredPricing: z.array(pricingTierSchema).optional(),
-  })
-  .strict();
+const hostedPricingSchema = costSchema.extend({
+  input: pricingTierSchema.shape.input,
+  output: pricingTierSchema.shape.output,
+});
 
 export type RemoteModelCatalogPricing = z.infer<typeof hostedPricingSchema>;
 
@@ -52,49 +48,96 @@ const contextWindowOptionSchema = z
   })
   .strict();
 
-const modelSchema = z
-  .object({
-    id: z.string().trim().min(1),
-    name: z.string().optional(),
-    api: z.enum(MODEL_CATALOG_APIS).optional(),
-    baseUrl: z.string().optional(),
-    headers: stringMapSchema.optional(),
-    input: z.array(z.enum(["text", "image", "document"])).optional(),
-    reasoning: z.boolean().optional(),
-    contextWindow: z.number().finite().positive().optional(),
-    contextWindows: z
-      .array(contextWindowOptionSchema)
-      .max(MODEL_CATALOG_MAX_CONTEXT_WINDOWS)
-      .optional(),
-    contextWindowDefault: z.string().trim().min(1).optional(),
-    contextTokens: z.number().int().positive().optional(),
-    maxTokens: z.number().finite().positive().optional(),
-    thinkingLevelMap: z
-      .partialRecord(z.enum(MODEL_CATALOG_THINKING_LEVELS), z.string().nullable())
-      .optional(),
-    cost: costSchema.optional(),
-    compat: z.record(z.string(), z.unknown()).optional(),
-    mediaInput: z.record(z.string(), z.unknown()).optional(),
-    status: z.enum(["available", "preview", "deprecated", "disabled"]).optional(),
-    statusReason: z.string().optional(),
-    replaces: z.array(z.string()).optional(),
-    replacedBy: z.string().optional(),
-    tags: z.array(z.string()).optional(),
-  })
-  .superRefine((model, context) => {
-    if (
-      model.contextWindowDefault &&
-      !model.contextWindows?.some((option) => option.id === model.contextWindowDefault)
-    ) {
-      context.addIssue({
-        code: "custom",
-        message: "contextWindowDefault must reference a declared contextWindows option",
-        path: ["contextWindowDefault"],
-      });
-    }
-  });
+const inputModalitySchema = z.enum(MODEL_CATALOG_INPUTS);
+const modelFieldsSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().optional(),
+  api: z.enum(MODEL_CATALOG_APIS).optional(),
+  baseUrl: z.string().optional(),
+  headers: stringMapSchema.optional(),
+  input: z.array(inputModalitySchema).optional(),
+  reasoning: z.boolean().optional(),
+  contextWindow: z.number().finite().positive().optional(),
+  contextWindows: z
+    .array(contextWindowOptionSchema)
+    .max(MODEL_CATALOG_MAX_CONTEXT_WINDOWS)
+    .optional(),
+  contextWindowDefault: z.string().trim().min(1).optional(),
+  contextTokens: z.number().int().positive().optional(),
+  parameterCount: z.number().int().positive().optional(),
+  maxTokens: z.number().finite().positive().optional(),
+  thinkingLevelMap: z
+    .partialRecord(z.enum(MODEL_CATALOG_THINKING_LEVELS), z.string().nullable())
+    .optional(),
+  cost: costSchema.optional(),
+  compat: z.record(z.string(), z.unknown()).optional(),
+  mediaInput: z.record(z.string(), z.unknown()).optional(),
+  status: z.enum(MODEL_CATALOG_STATUSES).optional(),
+  statusReason: z.string().optional(),
+  replaces: z.array(z.string()).optional(),
+  replacedBy: z.string().optional(),
+  tags: z.array(z.string()).optional(),
+});
 
-export const remoteModelCatalogProviderSchema = z
+function validateContextWindowDefault(
+  model: { contextWindowDefault?: string; contextWindows?: Array<{ id: string }> },
+  context: z.RefinementCtx,
+) {
+  if (
+    model.contextWindowDefault &&
+    !model.contextWindows?.some((option) => option.id === model.contextWindowDefault)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "contextWindowDefault must reference a declared contextWindows option",
+      path: ["contextWindowDefault"],
+    });
+  }
+}
+
+const modelSchema = modelFieldsSchema.superRefine(validateContextWindowDefault);
+
+type CatalogWarning = (message: string) => void;
+
+function parseCatalogRows<T extends { id: string }>(
+  rows: unknown[],
+  parse: (value: unknown, row: string) => z.ZodSafeParseResult<T>,
+  path: string,
+  warn: CatalogWarning,
+  key: (model: T) => string = (model) => model.id,
+): T[] {
+  const seen = new Set<string>();
+  return rows.flatMap((raw, index) => {
+    const row = `${path}.${index}${isRecord(raw) && typeof raw.id === "string" ? ` (${raw.id})` : ""}`;
+    let value = raw;
+    let droppedInput = false;
+    if (isRecord(raw) && isStringArray(raw.input)) {
+      const input = raw.input.filter((v) =>
+        inputModalitySchema.options.some((known) => known === v),
+      );
+      droppedInput = input.length !== raw.input.length;
+      if (droppedInput) {
+        if (input.length === 0) {
+          warn(`remote model catalog: skipped row with no supported input modalities ${row}`);
+          return [];
+        }
+        value = { ...raw, input };
+      }
+    }
+    const parsed = parse(value, row);
+    if (!parsed.success || seen.has(key(parsed.data))) {
+      warn(`remote model catalog: skipped invalid row ${row}`);
+      return [];
+    }
+    seen.add(key(parsed.data));
+    if (droppedInput) {
+      warn(`remote model catalog: dropped unknown input modalities from ${row}`);
+    }
+    return [parsed.data];
+  });
+}
+
+const providerFieldsSchema = z
   .object({
     baseUrl: z.string().optional(),
     api: z.enum(MODEL_CATALOG_APIS).optional(),
@@ -103,8 +146,10 @@ export const remoteModelCatalogProviderSchema = z
     defaultUtilityModel: z.string().optional(),
     models: z.array(modelSchema).min(1),
   })
-  .strict()
-  .superRefine((provider, context) => {
+  .strict();
+
+export const remoteModelCatalogProviderSchema = providerFieldsSchema.superRefine(
+  (provider, context) => {
     const seen = new Set<string>();
     for (const [index, model] of provider.models.entries()) {
       if (seen.has(model.id)) {
@@ -116,7 +161,8 @@ export const remoteModelCatalogProviderSchema = z
       }
       seen.add(model.id);
     }
-  });
+  },
+);
 
 export const remoteModelCatalogBundleSchema = z
   .object({
@@ -142,6 +188,200 @@ export type RemoteModelCatalogBundle = Omit<
   providers: Record<string, ModelCatalogProvider>;
 };
 
+// "Known" describes the supplied rates, not a complete tariff. Preserve omitted
+// components so ingestion retains the existing partial-cost contract.
+const knownPricingV2Schema = costSchema
+  .extend({
+    status: z.literal("known"),
+    currency: z.literal("USD"),
+    unit: z.literal("million_tokens"),
+    source: z.string().trim().min(1).optional(),
+  })
+  .refine(
+    (pricing) =>
+      pricing.input !== undefined ||
+      pricing.output !== undefined ||
+      pricing.cacheRead !== undefined ||
+      pricing.cacheWrite !== undefined ||
+      Boolean(pricing.tieredPricing?.length),
+    { message: "known pricing must contain rates" },
+  );
+
+const pricingV2Schema = z.discriminatedUnion("status", [
+  knownPricingV2Schema,
+  z
+    .object({
+      status: z.enum(["unknown", "unavailable"]),
+      source: z.string().trim().min(1).optional(),
+    })
+    .strict(),
+]);
+
+export type RemoteModelCatalogPricingV2 = z.infer<typeof pricingV2Schema>;
+
+// Standalone rates cover models outside `models`, in USD per million tokens.
+// `upstreamPricing` is keyed by the source's vendor/model ID and serves passthrough
+// gateways plus same-vendor lookups. The entry's own rate wins; `alternatives` keep
+// later sources' rates for providers that allow only those sources. `passthroughOnly`
+// entries are owned by catalog rows and serve gateways alone. `providerPricing` holds
+// provider-owned rates for models without a catalog row.
+const sourcedPricingV2Schema = hostedPricingSchema
+  .extend({ source: z.string().trim().min(1) })
+  .strict();
+const upstreamPricingV2Schema = sourcedPricingV2Schema
+  .extend({
+    passthroughOnly: z.literal(true).optional(),
+    alternatives: z.array(sourcedPricingV2Schema).min(1).optional(),
+  })
+  .strict();
+const standalonePricingKeySchema = z
+  .string()
+  .regex(/^[^/\s]+\/\S+$/u, "standalone pricing keys must be provider/model");
+
+const modelV2Schema = modelFieldsSchema
+  .omit({ cost: true, baseUrl: true, headers: true })
+  .extend({ provider: z.string().trim().min(1), pricing: pricingV2Schema })
+  .strict()
+  .superRefine(validateContextWindowDefault);
+
+const providerV2Schema = z
+  .object({
+    api: z.enum(MODEL_CATALOG_APIS).optional(),
+    defaultModel: z.string().optional(),
+    defaultUtilityModel: z.string().optional(),
+    recommendedModels: z
+      .array(z.string().trim().min(1))
+      .refine((ids) => new Set(ids).size === ids.length, "duplicate recommended model id")
+      .optional(),
+  })
+  .strict();
+
+const bundleV2FieldsSchema = remoteModelCatalogBundleSchema
+  .omit({ providers: true, pricing: true })
+  .extend({
+    schemaVersion: z.literal(2),
+    providers: z.record(z.string().trim().min(1), providerV2Schema),
+    models: z.array(modelV2Schema).min(1),
+    upstreamPricing: z.record(standalonePricingKeySchema, upstreamPricingV2Schema).optional(),
+    providerPricing: z.record(standalonePricingKeySchema, sourcedPricingV2Schema).optional(),
+  });
+
+function validateBundleModelRefs(
+  bundle: Pick<z.infer<typeof bundleV2FieldsSchema>, "providers" | "models">,
+  context: z.RefinementCtx,
+) {
+  const providers = new Map<string, Set<string>>();
+  for (const [index, model] of bundle.models.entries()) {
+    if (!Object.hasOwn(bundle.providers, model.provider)) {
+      context.addIssue({
+        code: "custom",
+        message: `undeclared model provider: ${model.provider}`,
+        path: ["models", index, "provider"],
+      });
+    }
+    const ids = providers.get(model.provider) ?? new Set<string>();
+    if (ids.has(model.id)) {
+      context.addIssue({
+        code: "custom",
+        message: `duplicate provider/model: ${model.provider}/${model.id}`,
+        path: ["models", index, "id"],
+      });
+    }
+    ids.add(model.id);
+    providers.set(model.provider, ids);
+  }
+  for (const [provider, entry] of Object.entries(bundle.providers)) {
+    for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+      if (!providers.get(provider)?.has(id)) {
+        context.addIssue({
+          code: "custom",
+          message: `recommended model must reference a model of provider ${provider}: ${id}`,
+          path: ["providers", provider, "recommendedModels", index],
+        });
+      }
+    }
+  }
+}
+
+export const remoteModelCatalogBundleV2Schema =
+  bundleV2FieldsSchema.superRefine(validateBundleModelRefs);
+
+export type RemoteModelCatalogModelV2 = Omit<
+  ModelCatalogModel,
+  "cost" | "baseUrl" | "headers" | "upstreamModel" | "inference"
+> & {
+  provider: string;
+  pricing: RemoteModelCatalogPricingV2;
+};
+
+export type RemoteModelCatalogBundleV2 = Omit<
+  z.infer<typeof remoteModelCatalogBundleV2Schema>,
+  "models"
+> & { models: RemoteModelCatalogModelV2[] };
+
+const modelV3Schema = modelFieldsSchema
+  .omit({ cost: true, baseUrl: true, headers: true })
+  .extend({
+    provider: z.string().trim().min(1),
+    pricing: pricingV2Schema,
+    inference: ModelInferenceCapabilitiesSchema.optional(),
+  })
+  .strict()
+  .superRefine(validateContextWindowDefault);
+
+const bundleV3FieldsSchema = bundleV2FieldsSchema.extend({
+  schemaVersion: z.literal(3),
+  models: z.array(modelV3Schema).min(1),
+});
+
+export const remoteModelCatalogBundleV3Schema = bundleV3FieldsSchema.superRefine(
+  (bundle, context) => {
+    validateBundleModelRefs(bundle, context);
+    for (const [provider, entry] of Object.entries(bundle.providers)) {
+      const chatIds = new Set(
+        bundle.models
+          .filter((model) => model.provider === provider && model.inference?.chat !== false)
+          .map((model) => model.id),
+      );
+      for (const field of ["defaultModel", "defaultUtilityModel"] as const) {
+        if (entry[field] !== undefined && !chatIds.has(entry[field])) {
+          context.addIssue({
+            code: "custom",
+            message: `${field} must reference a chat model of provider ${provider}`,
+            path: ["providers", provider, field],
+          });
+        }
+      }
+      for (const [index, id] of (entry.recommendedModels ?? []).entries()) {
+        if (!chatIds.has(id)) {
+          context.addIssue({
+            code: "custom",
+            message: "recommended model must support chat",
+            path: ["providers", provider, "recommendedModels", index],
+          });
+        }
+      }
+    }
+  },
+);
+
+export type RemoteModelCatalogModelV3 = RemoteModelCatalogModelV2 &
+  Pick<ModelCatalogModel, "inference">;
+export type RemoteModelCatalogBundleV3 = Omit<
+  z.infer<typeof remoteModelCatalogBundleV3Schema>,
+  "models"
+> & { models: RemoteModelCatalogModelV3[] };
+
+export function parseRemoteModelCatalogBundleV3(value: unknown): RemoteModelCatalogBundleV3 {
+  // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
+  return remoteModelCatalogBundleV3Schema.parse(value) as RemoteModelCatalogBundleV3;
+}
+
+export function parseRemoteModelCatalogBundleV2(value: unknown): RemoteModelCatalogBundleV2 {
+  // SAFETY: the schema validates every model field; shared catalog types narrow compat metadata.
+  return remoteModelCatalogBundleV2Schema.parse(value) as RemoteModelCatalogBundleV2;
+}
+
 export function parseRemoteModelCatalogBundle(value: unknown): RemoteModelCatalogBundle {
   return remoteModelCatalogBundleSchema.parse(value) as RemoteModelCatalogBundle;
 }
@@ -166,14 +406,340 @@ function stripRemoteTransportOverrides(value: unknown): unknown {
 }
 
 /** Removes every transport endpoint/header override before remote data reaches persistence. */
-export function sanitizeRemoteModelCatalogBundle(
-  bundle: RemoteModelCatalogBundle,
-): RemoteModelCatalogBundle {
-  return stripRemoteTransportOverrides(bundle) as RemoteModelCatalogBundle;
+export function sanitizeRemoteModelCatalogBundle<
+  T extends RemoteModelCatalogBundle | RemoteModelCatalogBundleV2 | RemoteModelCatalogBundleV3,
+>(bundle: T): T {
+  // Provider dictionary keys are identities, even when named "headers" or "baseUrl".
+  return (
+    bundle.schemaVersion === 1
+      ? stripRemoteTransportOverrides(bundle)
+      : { ...bundle, models: bundle.models.map(stripRemoteTransportOverrides) }
+  ) as T;
 }
 
 export function validateAndSanitizeRemoteModelCatalogBundle(
   value: unknown,
+  warn: CatalogWarning = console.warn,
 ): RemoteModelCatalogBundle {
-  return sanitizeRemoteModelCatalogBundle(parseRemoteModelCatalogBundle(value));
+  const bundle = remoteModelCatalogBundleSchema
+    .extend({
+      providers: z.record(
+        z.string().trim().min(1),
+        providerFieldsSchema.extend({
+          models: z.array(z.unknown()),
+        }),
+      ),
+    })
+    .parse(value);
+  const providers = Object.fromEntries(
+    Object.entries(bundle.providers).flatMap<[string, ModelCatalogProvider]>(([id, provider]) => {
+      const models = parseCatalogRows(
+        provider.models,
+        (row) => modelSchema.safeParse(row),
+        `providers.${id}.models`,
+        warn,
+      );
+      return models.length > 0 ? [[id, { ...provider, models }]] : [];
+    }),
+  );
+  // v1 permits standalone pricing without declaring model providers.
+  if (Object.keys(bundle.providers).length > 0 && Object.keys(providers).length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers });
+}
+
+function pruneRemoteCatalogRecommendations(
+  providers: RemoteModelCatalogBundleV2["providers"],
+  models: readonly Pick<RemoteModelCatalogModelV2, "provider" | "id">[],
+) {
+  return Object.fromEntries(
+    Object.entries(providers).map(([id, provider]) => [
+      id,
+      {
+        ...provider,
+        ...(provider.recommendedModels
+          ? {
+              recommendedModels: provider.recommendedModels.filter((modelId) =>
+                models.some((model) => model.provider === id && model.id === modelId),
+              ),
+            }
+          : {}),
+      },
+    ]),
+  );
+}
+
+export function validateAndSanitizeRemoteModelCatalogBundleV2(
+  value: unknown,
+  warn: CatalogWarning = console.warn,
+): RemoteModelCatalogBundleV2 {
+  const bundle = bundleV2FieldsSchema
+    .extend({
+      models: z.array(z.unknown()),
+    })
+    .parse(value);
+  const rowSchema = modelV2Schema.refine((model) =>
+    Object.hasOwn(bundle.providers, model.provider),
+  );
+  const models = parseCatalogRows(
+    bundle.models,
+    (row) => rowSchema.safeParse(row),
+    "models",
+    warn,
+    (model) => JSON.stringify([model.provider, model.id]),
+  );
+  if (models.length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  const providers = pruneRemoteCatalogRecommendations(bundle.providers, models);
+  return sanitizeRemoteModelCatalogBundle({ ...bundle, providers, models });
+}
+
+// v3 readers freeze with their release, so a newer publisher's value degrades the narrowest
+// field instead of the row or catalog. The strict schemas keep validating authoring; readers
+// drop keys those schemas report as unknown and let `repair` fix one reported issue.
+type IssueRepair = (issue: z.core.$ZodIssue, value: unknown) => boolean;
+
+function valueAt(root: unknown, path: readonly PropertyKey[]): unknown {
+  return path.reduce<unknown>(
+    (node, key) =>
+      (isRecord(node) || Array.isArray(node)) && Object.hasOwn(node, key)
+        ? Reflect.get(node, key)
+        : undefined,
+    root,
+  );
+}
+
+function safeParseIgnoringUnknownKeys<T>(
+  schema: z.ZodType<T>,
+  value: unknown,
+  repair: IssueRepair = () => false,
+): z.ZodSafeParseResult<T> {
+  let current = value;
+  let cloned = false;
+  for (;;) {
+    const parsed = schema.safeParse(current);
+    if (parsed.success) {
+      return parsed;
+    }
+    if (!cloned) {
+      current = structuredClone(current);
+      cloned = true;
+    }
+    let changed = false;
+    for (const issue of parsed.error.issues) {
+      if (issue.code !== "unrecognized_keys") {
+        changed = repair(issue, current) || changed;
+        continue;
+      }
+      const target = valueAt(current, issue.path);
+      if (isRecord(target)) {
+        for (const key of issue.keys) {
+          changed = Reflect.deleteProperty(target, key) || changed;
+        }
+      }
+    }
+    if (!changed) {
+      return parsed;
+    }
+  }
+}
+
+/** A null optional field is absent; a null required field still fails as missing. */
+function deleteNullAt(root: unknown, path: readonly PropertyKey[]): boolean {
+  const parent = valueAt(root, path.slice(0, -1));
+  const key = path.at(-1);
+  return (
+    isRecord(parent) &&
+    typeof key === "string" &&
+    parent[key] === null &&
+    Reflect.deleteProperty(parent, key)
+  );
+}
+
+/**
+ * Unusable pricing is unknown; an unknown status hides the row like `deprecated` (configured
+ * refs keep working, pickers and utility defaults skip it); unusable context window options or
+ * decision routes are dropped, leaving `contextWindow` and `inference.chat`. An unknown row `api` still drops the row: this client cannot call that transport,
+ * and without the hosted row the bundled row keeps the transport this build knows.
+ */
+function repairV3Row(row: string, warn: CatalogWarning): IssueRepair {
+  return (issue, value) => {
+    if (deleteNullAt(value, issue.path)) {
+      return true;
+    }
+    if (!isRecord(value)) {
+      return false;
+    }
+    const [field, child] = issue.path;
+    const pricing = value.pricing;
+    if (
+      field === "pricing" &&
+      !(isRecord(pricing) && pricing.status === "unknown" && Object.keys(pricing).length === 1)
+    ) {
+      value.pricing = { status: "unknown" };
+      warn(`remote model catalog: treated unsupported pricing as unknown for ${row}`);
+      return true;
+    }
+    if (field === "status" && issue.path.length === 1 && value.status !== "deprecated") {
+      value.status = "deprecated";
+      warn(`remote model catalog: treated unknown status as deprecated for ${row}`);
+      return true;
+    }
+    if (
+      (field === "contextWindows" || field === "contextWindowDefault") &&
+      (Object.hasOwn(value, "contextWindows") || Object.hasOwn(value, "contextWindowDefault"))
+    ) {
+      delete value.contextWindows;
+      delete value.contextWindowDefault;
+      warn(`remote model catalog: dropped unsupported context window options from ${row}`);
+      return true;
+    }
+    if (
+      field === "inference" &&
+      child === "decision" &&
+      isRecord(value.inference) &&
+      Object.hasOwn(value.inference, "decision")
+    ) {
+      delete value.inference.decision;
+      warn(`remote model catalog: dropped unsupported decision capabilities from ${row}`);
+      return true;
+    }
+    return false;
+  };
+}
+
+/** Unsupported provider fields are absent; duplicate or blank recommendations are dropped. */
+function repairV3Provider(provider: string, warn: CatalogWarning): IssueRepair {
+  return (issue, value) => {
+    const [field] = issue.path;
+    if (deleteNullAt(value, issue.path)) {
+      return true;
+    }
+    if (!isRecord(value) || typeof field !== "string" || !Object.hasOwn(value, field)) {
+      return false;
+    }
+    const ids = value[field];
+    if (field === "recommendedModels" && Array.isArray(ids)) {
+      // Unique non-blank ids always parse, so this repair runs at most once.
+      value[field] = [
+        ...new Set(ids.flatMap((id) => (typeof id === "string" && id.trim() ? [id.trim()] : []))),
+      ];
+    } else {
+      delete value[field];
+    }
+    warn(`remote model catalog: dropped unsupported ${field} from provider ${provider}`);
+    return true;
+  };
+}
+
+function parseStandalonePricingV3<T>(
+  entries: Record<string, unknown> | undefined,
+  schema: z.ZodType<T>,
+  field: string,
+  warn: CatalogWarning,
+): Record<string, T> | undefined {
+  return (
+    entries &&
+    Object.fromEntries(
+      Object.entries(entries).flatMap(([key, raw]) => {
+        const parsed = standalonePricingKeySchema.safeParse(key).success
+          ? safeParseIgnoringUnknownKeys(schema, raw, (issue, value) =>
+              deleteNullAt(value, issue.path),
+            )
+          : undefined;
+        if (!parsed?.success) {
+          warn(`remote model catalog: skipped invalid ${field} entry ${key}`);
+          return [];
+        }
+        return [[key, parsed.data]];
+      }),
+    )
+  );
+}
+
+export function validateAndSanitizeRemoteModelCatalogBundleV3(
+  value: unknown,
+  warn: CatalogWarning = console.warn,
+): RemoteModelCatalogBundleV3 {
+  const entries = z.record(z.string(), z.unknown());
+  const envelope = safeParseIgnoringUnknownKeys(
+    bundleV3FieldsSchema.extend({
+      providers: z.record(z.string().trim().min(1), z.unknown()),
+      models: z.array(z.unknown()),
+      upstreamPricing: entries.optional(),
+      providerPricing: entries.optional(),
+    }),
+    value,
+  );
+  if (!envelope.success) {
+    throw envelope.error;
+  }
+  const { upstreamPricing, providerPricing, ...bundle } = envelope.data;
+  const declared = Object.fromEntries(
+    Object.entries(bundle.providers).flatMap(([id, raw]) => {
+      const parsed = safeParseIgnoringUnknownKeys(
+        providerV2Schema,
+        raw,
+        repairV3Provider(id, warn),
+      );
+      if (!parsed.success) {
+        warn(`remote model catalog: skipped invalid provider ${id}`);
+        return [];
+      }
+      return [[id, parsed.data]];
+    }),
+  );
+  const rowSchema = modelV3Schema.refine((model) => Object.hasOwn(declared, model.provider));
+  const models = parseCatalogRows(
+    bundle.models,
+    (row, label) => safeParseIgnoringUnknownKeys(rowSchema, row, repairV3Row(label, warn)),
+    "models",
+    warn,
+    (model) => JSON.stringify([model.provider, model.id]),
+  );
+  if (models.length === 0) {
+    throw new Error("remote model catalog contains no valid models");
+  }
+  // Row salvage also removes chat references to dropped or native-only rows.
+  const chatModels = models.filter((model) => model.inference?.chat !== false);
+  const providers = Object.fromEntries(
+    Object.entries(pruneRemoteCatalogRecommendations(declared, chatModels)).map(
+      ([id, { defaultModel, defaultUtilityModel, ...provider }]) => {
+        const hasChatModel = (modelId: string | undefined) =>
+          modelId !== undefined &&
+          chatModels.some((model) => model.provider === id && model.id === modelId);
+        return [
+          id,
+          {
+            ...provider,
+            ...(hasChatModel(defaultModel) ? { defaultModel } : {}),
+            ...(hasChatModel(defaultUtilityModel) ? { defaultUtilityModel } : {}),
+          },
+        ];
+      },
+    ),
+  );
+  const pricing = {
+    upstreamPricing: parseStandalonePricingV3(
+      upstreamPricing,
+      upstreamPricingV2Schema,
+      "upstreamPricing",
+      warn,
+    ),
+    providerPricing: parseStandalonePricingV3(
+      providerPricing,
+      sourcedPricingV2Schema,
+      "providerPricing",
+      warn,
+    ),
+  };
+  return sanitizeRemoteModelCatalogBundle({
+    ...bundle,
+    ...(pricing.upstreamPricing ? { upstreamPricing: pricing.upstreamPricing } : {}),
+    ...(pricing.providerPricing ? { providerPricing: pricing.providerPricing } : {}),
+    providers,
+    models,
+  });
 }

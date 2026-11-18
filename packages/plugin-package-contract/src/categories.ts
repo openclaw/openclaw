@@ -7,6 +7,7 @@ export const PLUGIN_CATEGORY_SLUGS = [
   "context",
   "voice",
   "web",
+  "computer-use",
   "media",
   "security",
   "integrations",

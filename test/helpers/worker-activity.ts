@@ -3,10 +3,11 @@ import { BroadcastChannel, type Worker } from "node:worker_threads";
 import { onTestFinished } from "vitest";
 import { createDeferred } from "./promise.js";
 
+const workerChannel = channel("worker_threads");
+
 /** Resolve the real worker that reports its threadId on a private activity channel. */
 export function observeWorkerActivity(channelName: string): Promise<Worker> {
   const workers = new Map<number, Worker>();
-  const workerChannel = channel("worker_threads");
   const track = (message: unknown) => {
     const { worker } = message as { worker: Worker };
     workers.set(worker.threadId, worker);

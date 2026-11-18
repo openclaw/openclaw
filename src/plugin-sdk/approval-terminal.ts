@@ -62,3 +62,6 @@ export function buildSystemAgentApprovalResolvedText(view: SystemAgentResolvedVi
           ? "⚠️ OpenClaw change approved, but completion could not be confirmed. Check the current settings before retrying."
           : `✅ OpenClaw change approved. Applying: ${view.operationSummary}`;
 }
+
+/** Terminal copy for a system change approval that expired before a decision. */
+export const SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT = "⏱️ OpenClaw change expired. No change was made.";

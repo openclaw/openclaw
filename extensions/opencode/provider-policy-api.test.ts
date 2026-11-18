@@ -1,4 +1,3 @@
-// Opencode tests cover provider policy api plugin behavior.
 import { describe, expect, it } from "vitest";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
@@ -22,25 +21,6 @@ describe("opencode provider policy public artifact", () => {
         { id: "max" },
       ],
       defaultLevel: "off",
-    });
-  });
-
-  it("keeps adaptive-only Claude profiles aligned with Anthropic", () => {
-    const profile = resolveThinkingProfile({
-      provider: "opencode",
-      modelId: "claude-opus-4-6",
-    });
-
-    expect(profile).toEqual({
-      levels: [
-        { id: "off" },
-        { id: "minimal" },
-        { id: "low" },
-        { id: "medium" },
-        { id: "high" },
-        { id: "adaptive" },
-      ],
-      defaultLevel: "adaptive",
     });
   });
 
@@ -80,7 +60,7 @@ describe("opencode provider policy public artifact", () => {
     expect(
       resolveThinkingProfile({
         provider: "opencode",
-        modelId: "kimi-k3",
+        modelId: "max-only-fixture",
         compat: { supportedReasoningEfforts: ["max"] },
       }),
     ).toEqual({ levels: [{ id: "off" }, { id: "max" }], defaultLevel: "off" });

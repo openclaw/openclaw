@@ -130,6 +130,34 @@ export function writePlugin(
   return { dir, file, id: params.id };
 }
 
+export function writeMultiEntryPluginPack(packageDir: string): void {
+  mkdirSafe(packageDir);
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "pack",
+      version: "1.0.0",
+      openclaw: { extensions: ["./one.cjs", "./two.cjs"] },
+    }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "openclaw.plugin.json"),
+    JSON.stringify({ id: "pack", configSchema: EMPTY_PLUGIN_SCHEMA }),
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "one.cjs"),
+    'module.exports = { id: "pack/one", register() {} };',
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(packageDir, "two.cjs"),
+    'module.exports = { id: "pack/two", register() {} };',
+    "utf8",
+  );
+}
+
 export function useNoBundledPlugins() {
   process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
   delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;

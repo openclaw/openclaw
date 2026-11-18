@@ -1,4 +1,4 @@
-// Migration provenance can differ from an authored systemAgent; data locators must retain it.
+// Doctor retains preimage ownership until its config/state repair commits. Runtime ignores it.
 const legacyDefaultAgentIdByConfig = new WeakMap<object, string>();
 
 export function setRetainedLegacyDefaultAgentId(config: object, agentId: string | undefined): void {

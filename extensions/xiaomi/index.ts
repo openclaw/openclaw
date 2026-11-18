@@ -1,21 +1,12 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   OpenClawConfig,
-  ProviderAuthContext,
   ProviderAuthMethod,
-  ProviderAuthMethodNonInteractiveContext,
-  ProviderCatalogContext,
-  ProviderAuthResult,
   ProviderRuntimeModel,
+  ProviderThinkingProfile,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  applyAuthProfileConfig,
-  buildApiKeyCredential,
-  captureProviderApiKey,
-  normalizeOptionalSecretInput,
-  persistProviderApiKey,
-} from "openclaw/plugin-sdk/provider-auth-api-key";
+import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import {
   applyModelCompatPatch,
@@ -23,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   applyXiaomiConnectionConfig,
   applyXiaomiTokenPlanConfig,
@@ -37,7 +29,6 @@ import {
   type XiaomiTokenPlanRegion,
 } from "./provider-catalog.js";
 import { buildXiaomiSpeechProvider } from "./speech-provider.js";
-import { isMiMoReasoningModelRef, resolveMiMoThinkingProfile } from "./thinking.js";
 
 const PAYG_FLAG_NAME = "--xiaomi-api-key";
 const PAYG_OPTION_KEY = "xiaomiApiKey";
@@ -50,6 +41,21 @@ const XIAOMI_WIZARD_GROUP = {
   groupLabel: "Xiaomi",
   groupHint: "Pay-as-you-go / Token Plan",
 };
+const MIMO_REASONING_MODEL_IDS = new Set([
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-flash",
+  "mimo-v2.6-pro",
+  "mimo-v2.6-pro-ultraspeed",
+]);
+
+const MIMO_THINKING_PROFILE = {
+  levels: (["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const).map((id) => ({
+    id,
+  })),
+  defaultLevel: "high",
+} satisfies ProviderThinkingProfile;
+
 const XIAOMI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
     family: "openai-compatible",
@@ -61,195 +67,42 @@ const XIAOMI_PROVIDER_HOOKS = {
     createDeepSeekV4OpenAICompatibleThinkingWrapper({
       baseStreamFn: ctx.streamFn,
       thinkingLevel: ctx.thinkingLevel,
-      shouldPatchModel: isMiMoReasoningModelRef,
+      shouldPatchModel: (model) =>
+        (model.provider === XIAOMI_PROVIDER_ID ||
+          model.provider === XIAOMI_TOKEN_PLAN_PROVIDER_ID) &&
+        MIMO_REASONING_MODEL_IDS.has(model.id.toLowerCase()),
     }),
-  resolveThinkingProfile: ({ modelId }: { modelId: string }) => resolveMiMoThinkingProfile(modelId),
+  resolveThinkingProfile: ({ modelId }: { modelId: string }) =>
+    MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()) ? MIMO_THINKING_PROFILE : undefined,
   isModernModelRef: ({ modelId }: { modelId: string }) =>
-    Boolean(resolveMiMoThinkingProfile(modelId)),
+    MIMO_REASONING_MODEL_IDS.has(modelId.toLowerCase()),
 };
 
-function trimConfiguredBaseUrl(
-  ctx: ProviderCatalogContext,
-  providerId: string,
-): string | undefined {
-  const configuredProvider = ctx.config.models?.providers?.[providerId];
-  const baseUrl =
-    typeof configuredProvider?.baseUrl === "string" ? configuredProvider.baseUrl.trim() : "";
-  return baseUrl || undefined;
-}
-
-function hasConfiguredProviderEntry(ctx: ProviderCatalogContext, providerId: string): boolean {
-  const configuredProvider = ctx.config.models?.providers?.[providerId];
-  return Boolean(configuredProvider && typeof configuredProvider === "object");
-}
-
-async function resolveXiaomiCatalog(params: {
-  ctx: ProviderCatalogContext;
-  providerId: string;
-  buildProvider: () => ReturnType<typeof buildXiaomiProvider>;
-  requireConfiguredProvider?: boolean;
-  requireBaseUrl?: boolean;
-}) {
-  const auth = params.ctx.resolveProviderApiKey(params.providerId);
-  if (!auth.apiKey) {
-    return null;
-  }
-  if (
-    params.requireConfiguredProvider === true &&
-    !hasConfiguredProviderEntry(params.ctx, params.providerId)
-  ) {
-    return null;
-  }
-  const explicitBaseUrl = trimConfiguredBaseUrl(params.ctx, params.providerId);
-  if (params.requireBaseUrl === true && !explicitBaseUrl) {
-    return null;
-  }
-  return await buildOpenAICompatibleLiveProviderCatalog({
-    discoveryMode: "strict",
-    providerId: params.providerId,
-    providerConfig: {
-      ...params.buildProvider(),
-      ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
-    },
-    apiKey: auth.apiKey,
-    discoveryApiKey: auth.discoveryApiKey,
-    profileId: auth.profileId,
-  });
-}
-
-function buildXiaomiKeyMismatchMessage(params: {
-  actualKey: string;
-  expectedKind: "payg" | "token-plan";
-}): string | undefined {
-  const normalized = params.actualKey.trim().toLowerCase();
-  const expectedPrefix = params.expectedKind === "payg" ? "sk-" : "tp-";
-  const kindLabel = params.expectedKind === "payg" ? "pay-as-you-go" : "Token Plan";
+function assertCompatibleXiaomiKey(actualKey: string, expectedKind: "payg" | "token-plan"): void {
+  const normalized = actualKey.trim().toLowerCase();
+  const expectedPrefix = expectedKind === "payg" ? "sk-" : "tp-";
+  const kindLabel = expectedKind === "payg" ? "pay-as-you-go" : "Token Plan";
 
   if (normalized.startsWith(expectedPrefix)) {
-    return undefined;
+    return;
   }
-  if (params.expectedKind === "payg" && normalized.startsWith("tp-")) {
-    return (
+  if (expectedKind === "payg" && normalized.startsWith("tp-")) {
+    throw new Error(
       "This looks like a Xiaomi MiMo Token Plan key (tp-...). " +
-      "Re-run onboarding with one of: --auth-choice xiaomi-token-plan-cn, " +
-      "--auth-choice xiaomi-token-plan-sgp, or --auth-choice xiaomi-token-plan-ams."
+        "Re-run onboarding with one of: --auth-choice xiaomi-token-plan-cn, " +
+        "--auth-choice xiaomi-token-plan-sgp, or --auth-choice xiaomi-token-plan-ams.",
     );
   }
-  if (params.expectedKind === "token-plan" && normalized.startsWith("sk-")) {
-    return (
+  if (expectedKind === "token-plan" && normalized.startsWith("sk-")) {
+    throw new Error(
       "This looks like a Xiaomi MiMo pay-as-you-go key (sk-...). " +
-      `Re-run onboarding with --auth-choice xiaomi-api-key or pass ${PAYG_FLAG_NAME}.`
+        `Re-run onboarding with --auth-choice xiaomi-api-key or pass ${PAYG_FLAG_NAME}.`,
     );
   }
-  return (
+  throw new Error(
     `Xiaomi MiMo ${kindLabel} keys must start with "${expectedPrefix}". ` +
-    "The entered key does not match the expected format."
+      "The entered key does not match the expected format.",
   );
-}
-
-function assertCompatibleXiaomiKey(params: {
-  actualKey: string;
-  expectedKind: "payg" | "token-plan";
-}): void {
-  const message = buildXiaomiKeyMismatchMessage(params);
-  if (message) {
-    throw new Error(message);
-  }
-}
-
-function resolveProfileId(providerId: string): string {
-  return `${providerId}:default`;
-}
-
-async function runXiaomiApiKeyAuth(
-  ctx: ProviderAuthContext,
-  params: {
-    providerId: string;
-    optionKey: string;
-    envVar: string;
-    promptMessage: string;
-    expectedKind: "payg" | "token-plan";
-    defaultModel: string;
-    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
-  },
-): Promise<ProviderAuthResult> {
-  const profileId = resolveProfileId(params.providerId);
-  const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
-    token:
-      normalizeOptionalSecretInput(ctx.opts?.[params.optionKey]) ??
-      normalizeOptionalSecretInput(ctx.opts?.token),
-    tokenProvider: normalizeOptionalSecretInput(ctx.opts?.[params.optionKey])
-      ? params.providerId
-      : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
-    env: ctx.env,
-    expectedProviders: [params.providerId],
-    provider: params.providerId,
-    envLabel: params.envVar,
-    promptMessage: params.promptMessage,
-    missingInputMessage: `Missing Xiaomi API key for provider "${params.providerId}".`,
-  });
-  assertCompatibleXiaomiKey({
-    actualKey: apiKey,
-    expectedKind: params.expectedKind,
-  });
-  return {
-    profiles: [
-      {
-        profileId,
-        credential: buildApiKeyCredential(
-          params.providerId,
-          input,
-          undefined,
-          mode ? { secretInputMode: mode } : undefined,
-        ),
-      },
-    ],
-    configPatch: params.applyConfig(ctx.config),
-    defaultModel: params.defaultModel,
-  };
-}
-
-async function runXiaomiApiKeyAuthNonInteractive(
-  ctx: ProviderAuthMethodNonInteractiveContext,
-  params: {
-    providerId: string;
-    optionKey: string;
-    flagName: `--${string}`;
-    envVar: string;
-    expectedKind: "payg" | "token-plan";
-    applyConfig: (cfg: OpenClawConfig) => OpenClawConfig;
-  },
-) {
-  const resolved = await ctx.resolveApiKey({
-    provider: params.providerId,
-    flagValue: normalizeOptionalSecretInput(ctx.opts[params.optionKey]),
-    flagName: params.flagName,
-    envVar: params.envVar,
-  });
-  if (!resolved) {
-    return null;
-  }
-  assertCompatibleXiaomiKey({
-    actualKey: resolved.key,
-    expectedKind: params.expectedKind,
-  });
-
-  const profileId = resolveProfileId(params.providerId);
-  if (
-    !(await persistProviderApiKey(ctx, profileId, {
-      provider: params.providerId,
-      resolved,
-    }))
-  ) {
-    return null;
-  }
-
-  const next = applyAuthProfileConfig(ctx.config, {
-    profileId,
-    provider: params.providerId,
-    mode: "api_key",
-  });
-  return params.applyConfig(next);
 }
 
 function createXiaomiApiKeyAuthMethod(region?: XiaomiTokenPlanRegion): ProviderAuthMethod {
@@ -281,20 +134,28 @@ function createXiaomiApiKeyAuthMethod(region?: XiaomiTokenPlanRegion): ProviderA
         defaultModel: XIAOMI_DEFAULT_MODEL_REF,
         applyConfig: applyXiaomiConnectionConfig,
       } as const);
-  return {
-    id: region ? `token-plan-${region}` : "api-key",
+  return createProviderApiKeyAuthMethod({
+    providerId: auth.providerId,
+    methodId: region ? `token-plan-${region}` : "api-key",
     label: choiceLabel,
     hint: choiceHint,
-    kind: "api_key",
+    optionKey: auth.optionKey,
+    flagName: auth.flagName,
+    envVar: auth.envVar,
+    promptMessage: auth.promptMessage,
+    defaultModel: auth.defaultModel,
+    applyConfig: auth.applyConfig,
+    validateApiKey: (key) => {
+      assertCompatibleXiaomiKey(key, auth.expectedKind);
+      return undefined;
+    },
     wizard: {
       choiceId: region ? `xiaomi-token-plan-${region}` : "xiaomi-api-key",
       choiceLabel,
       choiceHint,
       ...XIAOMI_WIZARD_GROUP,
     },
-    run: async (ctx) => await runXiaomiApiKeyAuth(ctx, auth),
-    runNonInteractive: async (ctx) => await runXiaomiApiKeyAuthNonInteractive(ctx, auth),
-  };
+  });
 }
 
 export default definePluginEntry({
@@ -330,14 +191,29 @@ export default definePluginEntry({
         auth: provider.auth(),
         catalog: {
           order: "simple",
-          run: async (ctx) =>
-            resolveXiaomiCatalog({
-              ctx,
+          run: async (ctx) => {
+            const auth = ctx.resolveProviderApiKey(provider.id);
+            if (!auth.apiKey) {
+              return null;
+            }
+            const explicitBaseUrl = normalizeOptionalString(
+              ctx.config.models?.providers?.[provider.id]?.baseUrl,
+            );
+            if (provider.requiresRegion && !explicitBaseUrl) {
+              return null;
+            }
+            return await buildOpenAICompatibleLiveProviderCatalog({
+              discoveryMode: "strict",
               providerId: provider.id,
-              buildProvider: provider.buildProvider,
-              requireConfiguredProvider: provider.requiresRegion,
-              requireBaseUrl: provider.requiresRegion,
-            }),
+              providerConfig: {
+                ...provider.buildProvider(),
+                ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+              },
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+              profileId: auth.profileId,
+            });
+          },
         },
         staticCatalog: {
           order: "simple",
@@ -345,10 +221,12 @@ export default definePluginEntry({
         },
         ...XIAOMI_PROVIDER_HOOKS,
         resolveUsageAuth: async (ctx) => {
-          const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-            providerIds: [provider.id],
-            envDirect: [ctx.env[provider.envVar]],
-          });
+          const apiKey = (
+            await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+              providerIds: [provider.id],
+              envDirect: [ctx.env[provider.envVar]],
+            })
+          )?.[0];
           return apiKey ? { token: apiKey } : null;
         },
         fetchUsageSnapshot: async () => ({

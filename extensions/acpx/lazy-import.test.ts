@@ -10,10 +10,19 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 describe("acpx Pi session catalog lazy imports", () => {
   afterEach(() => {
     vi.doUnmock("./src/pi-session-catalog-runtime.js");
+    vi.doUnmock("acpx/runtime");
+    vi.doUnmock("openclaw/plugin-sdk/agent-harness-session-runtime");
     vi.resetModules();
   });
 
   it("loads catalog and node handlers only on first use", async () => {
+    vi.doMock("acpx/runtime", () => {
+      throw new Error("native model inspection loaded during registration");
+    });
+    // mock-isolation: importing the real runtime would defeat the cold-registration guard.
+    vi.doMock("openclaw/plugin-sdk/agent-harness-session-runtime", () => {
+      throw new Error("session mutation runtime loaded during registration");
+    });
     let runtimeImports = 0;
     vi.doMock("./src/pi-session-catalog-runtime.js", () => {
       runtimeImports += 1;

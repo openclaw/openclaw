@@ -1,4 +1,3 @@
-// Control UI chat module owns low-level WebRTC offer and media-message helpers.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeRealtimeVoiceResponseOutcome } from "../../../../../src/talk/provider-types.js";
 import { readResponseTextWithLimit } from "../../../lib/response-body.ts";
@@ -42,7 +41,6 @@ export type RealtimeServerEvent = {
 };
 
 export type RealtimeTalkCompletedToolCall = {
-  itemId?: string;
   name: string;
   callId: string;
   args: string;
@@ -63,12 +61,11 @@ export function* realtimeTalkCompletedToolCalls(
     ) {
       continue;
     }
-    const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
     const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
     const name = typeof output.name === "string" ? output.name.trim() : "";
     const args = typeof output.arguments === "string" ? output.arguments : "";
     if (callId && name && args.trim()) {
-      yield { itemId, callId, name, args };
+      yield { callId, name, args };
     }
   }
 }
@@ -200,70 +197,6 @@ export class RealtimeTalkWebRtcOfferExchange {
     gatewayUrl: string;
     isCurrent: () => boolean;
   }): Promise<string | undefined> {
-    const request = this.beginRequest();
-    try {
-      let response: Response;
-      try {
-        response = await fetch(
-          resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
-          {
-            method: "POST",
-            body: params.offer.sdp,
-            headers: {
-              ...params.session.offerHeaders,
-              Authorization: `Bearer ${params.session.clientSecret}`,
-              "Content-Type": "application/sdp",
-            },
-            signal: request.controller.signal,
-          },
-        );
-      } catch (error) {
-        if (!params.isCurrent()) {
-          return undefined;
-        }
-        throw error;
-      }
-      if (!params.isCurrent()) {
-        void response.body?.cancel().catch(() => undefined);
-        return undefined;
-      }
-      if (!response.ok) {
-        void response.body?.cancel().catch(() => undefined);
-        throw new Error(`Realtime WebRTC setup failed (${response.status})`);
-      }
-      let answer: string;
-      try {
-        const maxBytes = params.session.offerResponseMaxBytes;
-        answer =
-          maxBytes === undefined
-            ? await response.text()
-            : await readResponseTextWithLimit(response, {
-                maxBytes,
-                tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${maxBytes} bytes`,
-              });
-      } catch (error) {
-        if (!params.isCurrent()) {
-          return undefined;
-        }
-        throw error;
-      }
-      return params.isCurrent() ? answer : undefined;
-    } finally {
-      this.finishRequest(request);
-    }
-  }
-
-  abort(): void {
-    const request = this.pendingRequest;
-    if (!request) {
-      return;
-    }
-    this.pendingRequest = null;
-    globalThis.clearTimeout(request.timeout);
-    request.controller.abort();
-  }
-
-  private beginRequest(): PendingOfferRequest {
     this.abort();
     const controller = new AbortController();
     const request = {
@@ -277,16 +210,60 @@ export class RealtimeTalkWebRtcOfferExchange {
       }, REALTIME_WEBRTC_OFFER_TIMEOUT_MS),
     };
     this.pendingRequest = request;
-    return request;
+    try {
+      const response = await fetch(
+        resolveRealtimeTalkOfferUrl(params.session.offerUrl, params.gatewayUrl),
+        {
+          method: "POST",
+          body: params.offer.sdp,
+          headers: {
+            ...params.session.offerHeaders,
+            Authorization: `Bearer ${params.session.clientSecret}`,
+            "Content-Type": "application/sdp",
+          },
+          signal: request.controller.signal,
+        },
+      );
+      if (!params.isCurrent()) {
+        void response.body?.cancel().catch(() => undefined);
+        return undefined;
+      }
+      if (!response.ok) {
+        void response.body?.cancel().catch(() => undefined);
+        throw new Error(`Realtime WebRTC setup failed (${response.status})`);
+      }
+      const maxBytes = params.session.offerResponseMaxBytes;
+      const answer =
+        maxBytes === undefined
+          ? await response.text()
+          : await readResponseTextWithLimit(response, {
+              maxBytes,
+              tooLargeMessage: `Realtime WebRTC SDP answer: text response exceeds ${maxBytes} bytes`,
+            });
+      return params.isCurrent() ? answer : undefined;
+    } catch (error) {
+      if (!params.isCurrent()) {
+        return undefined;
+      }
+      throw error;
+    } finally {
+      globalThis.clearTimeout(request.timeout);
+      // A stopped transport may already have started a replacement request.
+      // Never let the old request's finally block detach the new lifecycle owner.
+      if (this.pendingRequest === request) {
+        this.pendingRequest = null;
+      }
+    }
   }
 
-  private finishRequest(request: PendingOfferRequest): void {
-    globalThis.clearTimeout(request.timeout);
-    // A stopped transport may already have started a replacement request.
-    // Never let the old request's finally block detach the new lifecycle owner.
-    if (this.pendingRequest === request) {
-      this.pendingRequest = null;
+  abort(): void {
+    const request = this.pendingRequest;
+    if (!request) {
+      return;
     }
+    this.pendingRequest = null;
+    globalThis.clearTimeout(request.timeout);
+    request.controller.abort();
   }
 }
 

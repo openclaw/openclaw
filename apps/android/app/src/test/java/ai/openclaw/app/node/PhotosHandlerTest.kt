@@ -284,12 +284,9 @@ private class FakePhotosDataSource(
   private val hasPermission: Boolean,
   private val latest: List<EncodedPhotoPayload> = emptyList(),
 ) : PhotosDataSource {
-  override fun hasPermission(context: Context): Boolean = hasPermission
+  override fun hasPermission(): Boolean = hasPermission
 
-  override fun latest(
-    context: Context,
-    request: PhotosLatestRequest,
-  ): List<EncodedPhotoPayload> = latest
+  override fun latest(request: PhotosLatestRequest): List<EncodedPhotoPayload> = latest
 }
 
 private data class TestPhotoRow(

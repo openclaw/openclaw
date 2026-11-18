@@ -6,41 +6,63 @@ read_when:
 title: "Background exec and process tool"
 ---
 
-OpenClaw runs shell commands through the `exec` tool and keeps long-running tasks in memory. The `process` tool manages those background sessions.
+OpenClaw runs shell commands through the `exec` tool. Ordinary long-running tasks stay in memory; opt-in [durable processes](/gateway/background-process#durable-processes) on a Linux or macOS Gateway retain ownership across Gateway restarts. The `process` tool manages background sessions from gateway, sandbox, and worker-local execution. Remote `host=node` calls use synchronous `system.run` and never create a process session, even when `process` is enabled.
 
 ## exec tool
 
 Parameters:
 
-| Parameter        | Description                                                                                                                                                       |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`        | Required. Shell command to run.                                                                                                                                   |
-| `workdir`        | Working directory; omit to use the default cwd.                                                                                                                   |
-| `env`            | Extra environment variables for the command.                                                                                                                      |
-| `yieldMs`        | Milliseconds to wait before backgrounding (default 10000).                                                                                                        |
-| `background`     | Run in background immediately.                                                                                                                                    |
-| `timeoutSeconds` | Timeout in seconds (default `tools.exec.timeoutSeconds`); kills the process on expiry. Set `timeoutSeconds: 0` to disable the exec process timeout for that call. |
-| `pty`            | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                       |
-| `elevated`       | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                                     |
-| `host`           | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                             |
-| `node`           | Node id/name, used with `host: "node"`.                                                                                                                           |
+| Parameter        | Description                                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`        | Required. Shell command to run.                                                                                                                                                                                   |
+| `workdir`        | Working directory; omit to use the default cwd.                                                                                                                                                                   |
+| `env`            | Extra environment variables for the command.                                                                                                                                                                      |
+| `yieldMs`        | Milliseconds before returning a handle for an ordinary command (default 10000).                                                                                                                                   |
+| `background`     | Start a deliberately independent service immediately.                                                                                                                                                             |
+| `durable`        | Survive Gateway restarts as a systemd user service (Linux) or launchd job (macOS); requires explicit `background: true` or `yieldMs`.                                                                             |
+| `timeoutSeconds` | Timeout in seconds (default `tools.exec.timeoutSeconds`; for `background: true`, none unless configured); kills the process on expiry. Set `timeoutSeconds: 0` to disable the exec process timeout for that call. |
+| `pty`            | Run in a pseudo-terminal when available (TTY-required CLIs, coding agents).                                                                                                                                       |
+| `elevated`       | Run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`).                                                                                     |
+| `host`           | Exec target: `auto`, `sandbox`, `gateway`, or `node`.                                                                                                                                                             |
+| `node`           | Node id/name, used with `host: "node"`.                                                                                                                                                                           |
 
 Behavior:
 
 - Foreground runs return retained output directly and disclose when earlier output exceeded the aggregate cap.
-- When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail.
-- Backgrounded and `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`.
-- With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
-- Returning a background session ID does not stop the process timeout. For a persistent service on the gateway or in a sandbox, use `background: true` with `timeoutSeconds: 0`, then stop it with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
+- Set `awaitResults: true` when a command result is needed to finish the task. It stays an owned tool call through process settlement and terminal collection instead of returning an uncollected background handle. This works with `notifyOnExit=false`; no completion notification is enabled. `awaitResults: true` cannot be combined with `background: true`, which explicitly selects an independently running service. Run, tool, and process deadlines still apply. In OpenClaw Code Mode, the cell retains required calls and resumes on their settlement without model polling.
+- When backgrounded (explicit or via `yieldMs` timeout), the tool returns `status: "running"` + `sessionId` and a short output tail. On the Gateway and in its sandbox, a yielded handle does not make an ordinary command independent: the browser's **Stop** button and typed `/stop` cancel the selected request's commands. Stop waits for process cleanup and reports when cleanup could not be confirmed. Completed output remains available, and canceled commands do not emit a new completion notification. Managed workers retain the separate behavior described below.
+- One session can run at most 16 services, and the Gateway at most 64. Services are `background: true` sessions. At the limit, a new `background: true` start fails. Processes that a foreground command leaves running are always tracked, but they do not count toward the limit and OpenClaw never stops one for capacity. OpenClaw never stops an older process to make room. A `background: true` start holds its slot from admission until it is running, so concurrent starts cannot pass the limit. A process whose stop OpenClaw cannot confirm (for example, a signal is denied) stays tracked, and the result says so. Use `process list` and `process kill` to free a slot.
+- Use `background: true` only for a deliberately independent service. Request Stop leaves that service running; use its process handle to stop it separately. Resetting, starting a new, or deleting the session stops it, because nothing would manage it afterwards. Normal turn completion also preserves ordinary commands that are still running. When a one-shot `openclaw agent --local` run ends, it hands its `background: true` services off without stopping them, and stops only work that is still in flight.
+- Launch failures return the operating-system error and release worker cleanup even when no process starts.
+- Ordinary non-PTY Gateway-hosted exec on Linux and macOS completes when its root command exits, after up to 250 ms to drain output. Later descendant output is discarded. Completion does not terminate processes that the command deliberately left running (`cmd &`, `nohup`, `setsid`, `disown`, or a daemon that forks itself away, such as `nginx` or `sshd`). Each one, and each of its descendants, becomes a background session: the tool result names its process ID and session ID, `process list` shows it, and `process kill` stops it by process identity. OpenClaw drops a session when its process exits (checked every 5 seconds), stops these processes when the session is reset or deleted, and stops them when the Gateway stops. Only a one-shot `openclaw agent --local` run leaves them running when it exits, and it prints them. OpenClaw discards their later output to the command's stdout and stderr, so send it to a file to keep it. While they keep those pipes open, one small OpenClaw process stays alive to drain them, and it exits when they close them. On macOS, a process that leaves the command's process group (`setsid`, double fork) is not visible to OpenClaw: it is not tracked, and it keeps running after session reset and Gateway stop, as in other agent harnesses. Keep long-running work in the foreground of the shell when you need its eventual output.
+- Native Windows command shells retain `SystemRoot` when launched with a replacement environment, including on ARM64. Other omitted variables stay absent, and an explicitly supplied `SystemRoot` takes precedence.
+- Managed sandbox workspace finalization bounds each container inspection, pause, and resume command to 30 seconds. A failed or timed-out operation preserves its recovery receipt rather than treating an uncertain pause or resume as successful.
+- `yieldMs` runs inherit `tools.exec.timeoutSeconds` unless the call passes an explicit `timeoutSeconds`. `background: true` services have no built-in timeout; an explicit `timeoutSeconds` or a configured `tools.exec.timeoutSeconds` still applies. In a subagent or cron run that can wait for the command with `sessions_yield`, the default still bounds that wait.
+- With the [secret egress proxy](/gateway/secrets#secret-egress-proxy) enabled, each non-durable Gateway-hosted command retains its own proxy access across turns. Process exit, cancellation, timeout, or Gateway shutdown revokes that access and closes its connections. Use `process kill` to stop a background command and its proxy access together.
+- Returning a background session ID does not stop an explicit process timeout. Stop a persistent service with `process` action `kill` when finished. Host and worker lifecycle limits still apply.
 - Output stays in memory up to the per-session aggregate cap until the session is polled or cleared.
 - Finished sessions expire after their configured TTL, measured from completion. Each exec captures its agent's retention setting when admitted; using another agent's process tool does not change existing results' lifetimes. The registry also retains at most 50 finished sessions and 2,000,000 total retained output characters, evicting the oldest records first. The newest completed session retains its capped per-session aggregate even when that record alone exceeds the global limit.
-- If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
+- Remote `host=node` execution ignores `background`/`yieldMs`. Explicit `background: true` or `yieldMs` requests produce a warning with the execution result, not while approval is pending. The call returns output without a process `sessionId`.
+- If the `process` tool is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`.
 - Spawned exec commands receive `OPENCLAW_SHELL=exec` for context-aware shell/profile rules.
-- For long-running work that starts now: start it once and rely on automatic completion wake (when enabled) once the command emits output or fails.
+- For long-running work that starts now: start it once. Automatic completion wake (when enabled) happens after the command exits, including a success with no output. New output while it is still running does not start another turn. Ending the turn does not stop the command; use `process kill` when it is no longer needed. Completion and the configured timeout still apply; background exec is not a saved, restartable automation.
+- To wait inside the current conversation for a condition or a time, run one background command that loops until it holds, exits non-zero on failure states and prints the result. To wait on a change you caused, pin the expected state, for example the exact commit you pushed, and exit non-zero if it moved. When automatic completion wake is available, end the turn. The completion wake includes the exit code, the duration and the last 2,000 characters of output.
+
+- A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn. A silent completion turn is valid in every conversation, including Control UI chats; subagent runs still require a final result.
+- Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
+- A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
+- Completions that arrive while an earlier completion turn in the same conversation is still queued or running wait for it, plus about one second for close stragglers, then share one turn: the agent gets every waiting result (each with its process ID, status, exit code, duration and output tail) in one message instead of one turn per command. One shared turn carries at most about 8,000 characters of results; later results start the next turn. Only completions of commands started by the same request and the same agent run share a turn: a request Stop retires the whole shared turn, and the turn's input provenance names one launching run. A completion with no earlier completion turn in flight starts at once, as before. A waiting completion can start after a human message queued in `followup` or `collect` mode.
+- Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes use the owning session principal's current authority as described below.
+- Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
-- If automatic completion wake is unavailable, or you need quiet-success confirmation for a command that exits cleanly with no output, poll with `process`.
-- Background exec does not automatically wake subagent sessions. A subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
-- Don't emulate reminders or delayed follow-ups with `sleep` loops or repeated polling — use cron for future work.
+- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. A command whose exit would wake its conversation is reported after the restart instead; see [lost background commands](#lost-background-commands). Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. A surviving durable process is not reported as lost. Check saved output and side effects before repeating work whose outcome is unknown.
+- Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
+- Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
+- Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
+- If automatic completion wake is unavailable, or `tools.exec.notifyOnExitEmptySuccess=false` keeps silent successes quiet, poll with `process`.
+- Hidden subagent runs and isolated cron runs end with their final reply, so their running results say to call `sessions_yield` if only waiting remains. `sessions_yield` awaits the wake-armed commands this run started, bounded by each command's `timeoutSeconds`, and the first exit resumes the same run with the exit result. Without that yield, a hidden subagent gets the exit only as a passive notice. Visible spawned sessions are woken like other sessions.
+- A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
+- Don't emulate saved reminders, recurring work or cross-session follow-ups with `sleep` loops or repeated polling; use cron for those. A one-time wait in the current conversation is one background command.
 
 ### Env overrides
 
@@ -54,20 +76,43 @@ Behavior:
 
 ### Config (preferred over env overrides)
 
-| Key                                   | Default | Effect                                                                          |
-| ------------------------------------- | ------- | ------------------------------------------------------------------------------- |
-| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                               |
-| `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                       |
-| `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                             |
-| `tools.exec.notifyOnExit`             | true    | Enqueue a system event + request heartbeat when a backgrounded exec exits.      |
-| `tools.exec.notifyOnExitEmptySuccess` | false   | Also enqueue completion events for successful backgrounded runs with no output. |
+| Key                                   | Default | Effect                                                                                                           |
+| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------- |
+| `tools.exec.backgroundMs`             | 10000   | Same as `OPENCLAW_BASH_YIELD_MS`.                                                                                |
+| `tools.exec.timeoutSeconds`           | 1800    | Default per-call timeout.                                                                                        |
+| `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                                                              |
+| `tools.exec.notifyOnExit`             | true    | Continue backgrounded host exec through an ordinary turn in its originating session on exit.                     |
+| `tools.exec.notifyOnExitEmptySuccess` | true    | Also wake the session when a backgrounded run succeeds with no output. Set false to keep silent successes quiet. |
+
+### Lost background commands
+
+When the Gateway restarts while an ordinary background command is still running and its
+exit would wake the conversation, the next Gateway start sends that conversation a
+notice for each such command, which starts a turn. The notice names the command's process handle and start time, so
+the agent can find the command in its transcript and decide whether to run it again.
+This covers crashes too, not only graceful restarts. The notice is new system input under
+the session's current authority. Reset, archived, hidden subagent and ended cron sessions
+get no notice, incognito sessions are never recorded, and disabling
+`tools.exec.notifyOnExit` suppresses the notice.
+A command whose exit would not wake the conversation, such as a service started with
+`notifyOnExit` off, gets no notice.
+
+What happened to the command depends on how the Gateway stopped:
+
+- A graceful stop or restart stops ordinary commands. The notice says the command was stopped.
+- On Linux, a Gateway that crashes or is killed also takes its ordinary commands with it. The notice says the command was stopped.
+- On macOS, a killed Gateway can leave a command running: it keeps going until it next writes output, then ends. The notice says the command may still be running but its result will not wake the conversation. Other platforms get the same cautious notice after a crash.
+- A command that ran in a sandbox container gets the same cautious notice, because the Gateway cannot observe the container.
+
+The stored row carries no command text or output. If the Gateway cannot record the
+row, the command still runs normally; only the restart notice is missing. Use
+`durable: true` when the command itself must survive a restart.
 
 ### Disable automatic completion turns
 
 Background exec completion notifications are enabled by default. They can run a
-model turn marked `[OpenClaw exec completion]` even when
-`agents.defaults.heartbeat.every` is `"0m"`: that setting disables recurring polls,
-not completion follow-ups.
+model turn marked `[OpenClaw exec completion]` even when recurring automation
+jobs are disabled. A periodic schedule does not own completion follow-ups.
 
 To keep background commands running without automatic completion turns, set:
 
@@ -78,21 +123,133 @@ openclaw config set tools.exec.notifyOnExit false
 An agent's `agents.entries.<id>.tools.exec.notifyOnExit` overrides the global
 setting. Set that override to `false` too, or remove it to inherit the global
 value. Newly started commands use the updated setting; commands already running
-retain the setting they started with. Use `process poll` or `process log` to
+retain the setting they started with. Durable restart wakes also check the current setting,
+so disabling notifications suppresses any pending durable completion or lost-process wake. Use `process poll` or `process log` to
 collect their results on demand. This disables the completion event and its
 automatic model call without disabling `background: true` or the `process` tool.
 
+For an active process, a successful `process kill` result acknowledges the cancellation request. Its
+`cancellationRequested: true` and `terminationConfirmed: false` fields mean that
+exit and backend cleanup still need confirmation. Use `process poll` until the
+terminal result arrives, and report any cleanup failure. `process remove` also
+hides the process record immediately, so use `kill` followed by `poll` when you
+need to verify a stop. Stopping a saved automation does not cancel separate
+ordinary processes created while preparing it; stop related process IDs too,
+while leaving unrelated work running.
+
+### Durable processes
+
+Set `durable: true` together with explicit `background: true` or `yieldMs` to keep
+Gateway-hosted work alive across Gateway restarts:
+
+```json
+{ "tool": "exec", "command": "npm run build", "background": true, "durable": true }
+```
+
+This requires either Linux, systemd 250 or newer, and a reachable user manager for the
+Gateway's user, with `XDG_RUNTIME_DIR` or `DBUS_SESSION_BUS_ADDRESS` available; or macOS
+with the Gateway running in a logged-in user's GUI session (`launchctl managername`
+reports `Aqua`; an SSH-only session does not qualify). The `process` tool
+must be enabled. Sandbox, remote `host=node`, worker, and Windows execution
+are unsupported. An unavailable requirement produces an error; durable execution
+never silently falls back to ordinary background execution. OpenClaw does not
+enable linger or keep the user manager alive after logout; on macOS, logging out
+ends the GUI session and its durable jobs. A host reboot or user
+manager shutdown still ends transient services; this is not a saved automation or
+an automatic command-restart policy.
+
+The existing background-process registry remains the owner. On Linux it launches a transient
+`openclaw-proc-<opaque id>` user service outside the Gateway's cgroup. The unit uses
+`ExitType=cgroup`: descendants keep the service running after its initial shell
+exits, and completion waits until the cgroup is empty. `KillMode=control-group`
+lets `process kill` stop the entire tree through `systemctl --user stop`.
+On macOS, each durable command is a transient `ai.openclaw.durable-proc.<opaque id>` launchd job
+in the user's `gui/<uid>` domain, loaded from a plist under `$OPENCLAW_STATE_DIR/processes/`
+rather than `~/Library/LaunchAgents`, so it is never reloaded at login. launchd starts a
+small OpenClaw wrapper that runs the command in its own process group, records that
+group, waits until the group is empty, enforces `timeoutSeconds`, and records the exit
+status in a status file the returning Gateway reads. The registry reads job state from
+`launchctl list`; a failed or unreadable listing is retried, never treated as a finished
+or missing job. `process kill` signals the wrapper, which stops the group (SIGTERM, then
+SIGKILL after 10 seconds). macOS has no cgroups: a descendant that leaves the process
+group (for example `setsid`, `tmux new -d`, or a self-daemonizing program) is neither
+waited for nor stopped. If the wrapper itself is killed, the registry checks the recorded
+group and reports the outcome as unknown once it is empty; `process kill` can no longer
+stop that group and reports the stop as unconfirmed. The job runs as its own
+process for macOS privacy permissions, so access the Gateway or app was granted (for
+example Full Disk Access) may not apply to a durable command.
+
+Durable commands have no interactive input: `pty: true`
+and `awaitResults: true` are refused, as are `process write`, `send-keys`, `submit`,
+and `paste`. Exec security policy, approvals, managed environment preparation, cwd
+restrictions, and process timeouts remain in effect. On Linux, `timeoutSeconds` maps to
+`RuntimeMaxSec`; on macOS the wrapper enforces it. `timeoutSeconds: 0` disables that lifetime bound. On Linux, durable work shares the automatic
+[host-exec memory budget](/tools/exec#host-memory-protection) with ordinary commands.
+The shared sampler accounts their cgroup usage, including descendants after the
+initial shell exits. Each new unit also has hard RAM and swap bounds equal to the
+full shared allowance. Durable processes do not block safe Gateway
+restart or cooperative suspension. Ordinary background processes retain their
+existing restart and suspension behavior.
+
+Durable commands launch without [secret-egress proxy](/gateway/secrets#secret-egress-proxy)
+grants, secret-store sentinels, or proxy environment because those grants end with
+the Gateway. The exec result reports how many credentials were omitted; no grant
+or binding is persisted. For commands that need credentials, use the managed
+GitHub identity, the command's own configuration, or non-durable background
+execution. A [managed GitHub identity](/gateway/config-tools/github-identity) remains available:
+its direct credential and Git author environment are bound at launch. Running
+commands retain that token without refresh, so a very long process can outlive a
+short-lived credential.
+
+Stdout and stderr append to a per-process log under
+`$OPENCLAW_STATE_DIR/processes/`. A small ownership row in the
+[shared state database](/reference/database-schemas/layout#durable-background-processes)
+records the process, owning agent and session generation, unit identity, cwd, log
+path, start time, notification policy, and terminal outcome. It contains no
+environment values, credentials, command arguments, or output. After restart, the
+displayed command is a generic summary rather than the original command text.
+Logs are named local artifacts and can contain whatever the command prints. The
+in-memory output caps do not limit a running command's log file size.
+
+On Gateway startup, the registry adopts persisted records under the same process
+IDs and session scope. Live units become tracked background sessions again, so
+`process list`, `poll`, `log`, and `kill`, along with the Processes panel, use the
+same registry observations. The registry reads a bounded log tail into its normal
+output buffers and checks unit state through its existing observation owner. A
+unit that exited while the Gateway was down retains its real exit status until
+the registry records it and cleans up the unit. A missing unit is recorded as a
+lost process with an unknown outcome; check saved output and side effects before
+repeating work. Adoption never re-executes the command.
+
+An adopted completion or lost-process outcome is new system input to the owning
+session under that session principal's current authority. OpenClaw does not
+restore the original requester or operator continuation. Reset or archived
+sessions, incognito sessions, subagents, ended cron runs, and disabled completion
+notifications receive no restart wake. Empty successful outcomes follow the
+captured `notifyOnExitEmptySuccess` policy. The registry checks these conditions
+when it adopts the process and again when it exits. A still-running adopted
+process whose exit will wake its session says so in `process poll`. Before
+restart, ordinary live-requester completion behavior stays unchanged. Completed
+durable records and their logs expire under the captured completion-relative
+retention setting and normal registry limits; restarting does not renew
+retention.
+
 ## Worker environments
 
+For managed background work on a paired device, enable [session hosting](/nodes/session-hosting) and select that device for an OpenClaw session. Use the worker's local `exec` with `background: true` and its `process` tool when permitted by the session's tool and exec policy. This runs the session on the device instead of sending individual remote `host=node` commands.
+
 On a paired-node or node-backed cloud worker, background processes belong to the
-session's environment. Finishing or cancelling a turn leaves already-backgrounded
-commands running. A later turn in the same environment can use `process` to poll,
-send input, or stop them; foreground commands still stop when their turn is cancelled.
+session's environment. Finishing a turn leaves already-backgrounded commands running.
+A later turn in the same environment can use `process` to poll, send input, or stop
+them. Cancelling an active worker turn also stops its retained background commands
+and releases the worker after process cleanup completes.
 
 The retained worker occupies one node worker slot. Reusing it needs no additional
 slot. If a command finishes between turns, its retained output remains available
 to the next turn, subject to the normal process output limits and TTL. Once a turn
-finishes with no live background commands, the worker exits. Moving or retiring
+finishes with no live background commands, the worker exits unless negotiated
+idle retention keeps it ready for a follow-up. See [node session hosting](/nodes/session-hosting)
+for idle limits and eviction. Moving or retiring
 the environment, replacing its ownership, or stopping the node also stops its
 processes. Process handles do not survive a worker or node restart.
 
@@ -105,35 +262,81 @@ Worker completion does not currently wake the Gateway session automatically;
 use `process poll` in a later turn to inspect the result. Closing a portal closes
 its proxy, not the development server: stop the server with `process kill`.
 
+## Control UI
+
+The chat side panel offers a separate **Processes** tab through its **+** menu
+and the chat header's **Panels** menu. **Subagents** remains its own tab.
+Processes shows the current conversation's background exec commands and retained
+finished records, including status, duration, exit information, and recent output.
+Reading the output does not drain pending agent output or acknowledge completion
+notifications. **Stop** requests termination of the exact observed process instance.
+
+The list is bounded, prioritizes running processes, and follows the existing
+in-memory retention limits. It refreshes while visible. A connected node returns
+an empty list after confirming that the worker has fully retired and no launch
+is still active for that environment. Disconnected workers and uncertain cleanup show
+an error. It does not provide an interactive terminal or enumerate unrelated
+operating-system processes.
+
 ## Child process bridging
 
-After a host exec command finishes, OpenClaw releases its retained service-child
-group before reporting completion. Children left behind by shell backgrounding
-(`&`) are stopped with that group. To continue work across turns, start the
-long-running command with `background: true` and use `process` to collect its
-result. Its group stays owned until the command finishes; sandbox runtime
+An unreadable previously recorded process identity does not prove exit. OpenClaw keeps
+that process tracked and reports its stop as unconfirmed instead of signaling an
+unverified PID. Retry `process kill` when process inspection is available again.
+
+After a host exec command exits normally, OpenClaw releases its process owner
+before it reports completion. The owner exits without signalling the processes
+that the command left running (shell backgrounding with `&`, `nohup`, `setsid`,
+or a daemon), and the tool result lists them. Timeout, cancellation, request Stop,
+`process kill` and a failed launch still stop the whole process tree. Scopes that
+require full cleanup (the local TUI shell and managed workers) also still stop
+everything when the command exits. To continue ordinary work across turns, let the
+long-running command yield a handle with `yieldMs` and use `process` to collect its
+result. Request Stop still cancels it on the Gateway or in its sandbox. Reserve
+`background: true` for a deliberately independent service. Sandbox runtime
 lifetimes remain with the sandbox backend.
 
 When spawning long-running child processes outside the exec/process tools (CLI respawns, gateway helpers), attach the child-process bridge helper so termination signals forward and listeners detach on exit/close. This avoids orphaned processes on systemd and keeps shutdown consistent across platforms.
 
+For retained Linux process-group cleanup, adopted zombies are reaped after the
+tracked root exits. Active groups share asynchronous direct-child discovery,
+woken by child-exit signals with a one-second fallback while descendants remain.
+Cleanup stops when the groups disappear or their cleanup budgets expire; it does
+not periodically scan the host's process table.
+
 On Linux with the default Node runtime, the Gateway starts a small spawn broker
-before loading its main runtime.
+before loading its main runtime. On hosts with 1 GiB of RAM or less, or a process
+memory limit of 1 GiB or less, it uses in-process spawning instead. This leaves
+more memory for requests but retains Linux's per-command fork cost. Commands
+spawned in-process do not use the broker's optional agent-exec cgroup placement;
+shared command memory monitoring still applies. Native database resource brokers
+keep their separate ownership and cleanup.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
 entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.
 When the broker is ready, exec commands, shell-snapshot capture and validation,
 and helpers using the shared command runner spawn from it, so Linux does not copy
-the Gateway's page tables for each command. The existing process supervisors and
+the Gateway's page tables for each command. The broker belongs to the Gateway's
+lifetime, so detached work also uses it after leaving a request's async context.
+Asynchronous child-runtime probes, including readiness and health observations,
+also launch through the broker when available. Each observation still launches
+the runtime to detect removed executables and shared-library loader failures.
+Explicit native-only scopes still keep their local transport. The existing process supervisors and
 service relays still own cancellation, output, and cleanup. After the broker first
 becomes ready, broker loss fails affected commands rather than rerunning them; later commands use the restarted
 broker. One-shot CLI commands, native file-descriptor inputs, and independently
 launched applications keep their local process transport, as do Bun, macOS, and Windows.
 The broker has its own process group, which the Gateway terminates on broker loss;
 service relays also retain their own parent-loss cleanup.
+When the host denies group signals, the broker's own process group and the worker's retained
+detached groups are signaled member by member, and their extinction is confirmed from the process
+table. A detached child lost with the broker before its group identity was recorded can only be
+confirmed, not signaled.
+Broker cleanup grace periods use elapsed time and are unaffected by system-clock corrections.
 A detached child can survive a broker crash before its PID is reported, matching
 the existing residual for directly spawned children when the Gateway crashes.
 
-Canonical credential readers also use the broker. If it confirms that a reader
+Readers of stored credentials also use the broker. If it confirms that a reader
 never started, the read falls back once to a local process with the original
 environment and working directory. Cancellation, timeouts, uncertain launches, and
 cleanup failures do not trigger a retry. Snapshot-backed credential readers keep
@@ -145,13 +348,45 @@ and Gateway shutdown wait for the cleanup owner separately; when that owner repo
 uncertainty, they report failure instead of treating the timeout as proof that the
 command has stopped.
 
-For owned POSIX process groups, cleanup also waits for the operating system to
-confirm that the group has disappeared after graceful shutdown. A completed
-command or closed output pipe alone does not establish that its descendants have
-stopped. Forced termination without confirmed cleanup remains uncertain. Local
-TUI shell shutdown uses the same cleanup owner for its own commands.
-Permission-denied group probes still count as present; cleanup continues waiting
-within its original deadline for confirmed disappearance.
+Managed exec on Linux with Node or Bun uses a dedicated
+child subreaper. It acquires kernel child ownership before launch, adopts orphaned
+descendants, and stops and reaps them even if they create another process group
+or session. Negotiated worker workspace commands use the same owner through their
+Node host. Completion requires the kernel to report no remaining children, the
+matching owner receipt, and output drain. It does not depend on group-directed
+signals, a process-table census, or inherited-pipe closure alone.
+
+Portable workers use the native helper supplied by their admitted Node host; the
+portable archive does not acquire native dependencies. Use matching current host
+and worker builds in environments that prohibit process-group signaling. An
+unsupported ownership contract fails before launch instead of downgrading to
+transport-only cleanup. A source loader with an independent child reaper cannot
+share this ownership; source installations using one must build their process helpers.
+Process helpers discard inherited instrumentation hooks (`--import`, `--require`,
+`-r`, `--loader`, and `--experimental-loader`) from `NODE_OPTIONS`, while retaining
+other options such as `--max-old-space-size`. The Gateway and executed commands
+keep their instrumentation environment. An explicit source loader needed to run
+an unbuilt helper still prevents it from claiming Linux child ownership.
+Admission uses the runtime's standalone identity and startup hooks, including
+`--import`, `--require`, and loader flags in argv or `NODE_OPTIONS`. A TypeScript
+filename alone does not require a source loader: native TypeScript execution and
+compiled helpers can retain their source filenames without installing one.
+
+The node journal records Linux descendant extinction separately from older
+lineage receipts. A surviving owner can publish that fact after its host stops.
+After restart, a missing certificate or uncertain owner identity retains the
+physical reservation; restarting is not proof that old descendants stopped.
+Older builds do not reinterpret the new certificate as lineage completion.
+
+macOS and retained Bun process-group owners still require kernel group
+disappearance. Permission-denied checks never prove absence. A completed command
+or closed output pipe alone does not establish that its descendants stopped.
+When cleanup must stop the whole tree (cancellation or a strict scope), a
+descendant that leaves the process group, such as a daemonized tmux server,
+can outlive cleanup there. Exec then still reports the command's own exit, adds a
+note that a detached process may still be running, and records the cleanup as
+uncertain; a failed or canceled command keeps reporting the cleanup failure.
+Local TUI shell shutdown uses the same cleanup owner for its own commands.
 If the host was busy, cleanup processes queued native completion events before
 reporting a timeout.
 
@@ -179,40 +414,54 @@ Actions:
 | `send-keys` | Send explicit key tokens or bytes to a PTY-backed session.                    |
 | `submit`    | Send Enter/carriage return to a PTY-backed session.                           |
 | `paste`     | Send literal text, optionally wrapped in bracketed paste mode.                |
-| `kill`      | Terminate a background session.                                               |
-| `clear`     | Remove a finished session from memory.                                        |
+| `kill`      | Request termination, or return retained terminal facts if already finished.   |
+| `clear`     | Remove a finished retained session, including its durable record and log.     |
 | `remove`    | Kill if running, otherwise clear if finished.                                 |
 
 Notes:
 
-- Only backgrounded sessions are listed/persisted — in memory only, not on disk. Sessions are lost on process restart.
-- Resetting or deleting a session clears only its completed background processes; other sessions, explicit shared scopes, and running processes remain unaffected.
-- A live background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit.
-- `process remove` can hide a running session immediately after requesting termination; suspension and restart remain blocked until exit confirmation.
-- Session logs are only saved to chat history if you run `process poll`/`log` and the tool result is recorded.
-- `process` is scoped per agent; it only sees sessions started by that agent.
-- After an explicit `kill` or task cancellation, `poll` and `log` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors. The process list retains the underlying terminal status.
+- Only backgrounded sessions are listed. Ordinary records stay in memory and are lost on process restart; durable records are adopted from SQLite. New handles include an opaque boot suffix so old handles cannot select a different process after restart. A durable process keeps its original handle when adopted. Looking up a lost ordinary handle advises checking saved output and side effects before rerunning. Older handles without a boot suffix cannot distinguish restart from expiry or removal.
+- Graceful Gateway shutdown stops ordinary supervised process trees and waits for their cleanup; durable processes keep running under the systemd user manager (Linux) or launchd (macOS). Restart interruption signals active requests' ordinary commands after saving restart markers, so their cleanup grace overlaps request draining. Accepted finalizers still finish before database sealing. If earlier Gateway cleanup fails, the spawn broker remains available while command results, output, and process-tree cleanup settle. The shutdown caller still obeys its existing deadline and reports incomplete cleanup. After an abrupt crash, ordinary service-managed child processes have parent-loss cleanup; raw detached processes and native PTY descendants may survive. A lost handle does not establish that the process stopped.
+- Resetting, starting a new, or deleting a session stops everything that session still runs: in-flight commands, `background: true` services and processes its commands left running (SIGTERM, then SIGKILL, by process identity). It also clears the session's completed records. Durable processes, other sessions and explicit shared scopes are not affected. Processes that OpenClaw never tracked, such as a daemon that left the process group on macOS, keep running.
+- A live ordinary background session blocks cooperative host suspension and safe Gateway restart until the process owner confirms its actual exit. Durable processes do not block either operation.
+- `process remove` can hide a running session immediately after requesting termination; ordinary processes keep suspension and restart blocked until exit confirmation.
+- Process output enters chat history only when a `process poll`/`log` result is recorded. Durable commands also retain their local log artifact until the process record is retired.
+- `process` sees its own session’s processes and processes started by ancestor sessions belonging to the same agent. It cannot access sibling sessions, unrelated session trees, or another agent’s processes. Visibility follows the recorded session tree; handles do not need to be copied.
+- After an explicit `kill` or task cancellation, `list`, `poll`, `log`, and a repeated `kill` report a confirmed requested stop as a completed observation, retaining the process's signal and cancellation reason. Unexpected termination, timeouts, and cleanup failures remain errors; `finalizationFailed: true` identifies cleanup failure.
+- A repeated `kill` of a retained finished session returns its terminal facts without sending another signal or consuming output. An unknown or cleared session ID does not confirm termination.
+- Process context shown at turn start is a snapshot. Later `process` results supersede it; the snapshot is not refreshed during the turn.
 - Use `poll`/`log` for status, logs, or completion confirmation when automatic completion wake is unavailable.
 - Use `log` before recovering an interactive CLI, so the current transcript, stdin state, and input-wait hint are visible together.
 - Use `write`/`send-keys`/`submit`/`paste`/`kill` when you need input or intervention.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
 - `process list`, `poll`, and `log` report `waitingForInput` only when the session still has writable stdin and has been idle longer than the input-wait threshold (default 15000 ms, `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`).
 - `process log` uses line-based `offset`/`limit`. When both are omitted, it returns the last 200 lines with a paging hint. When `offset` is set and `limit` isn't, it returns from `offset` to the end (not capped to 200).
-- `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Discarded output cannot be recovered; paged logs can inspect only the retained portion.
-- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000.
+- `process poll` and `process log` distinguish output discarded at the aggregate retention cap from output merely omitted by the pending buffer or retained tail. Paged logs can inspect only the retained portion. A Gateway-host command's output file (named in the note, see [exec](/tools/exec)) and a durable command's separate local log artifact can still contain earlier output.
+- `poll`'s `timeout` waits up to that many milliseconds before returning; values above 30000 are clamped to 30000. The wait ends as soon as the process owner records new output or completion.
 - Polling is for on-demand status, not wait-loop scheduling. If the work should happen later, use cron.
+
+Conversational requests can stop an authorized process or remove its retained status by its exact ID without another confirmation. The process owner checks the current record and scope immediately before acting. A stop request does not confirm termination; inspect the resulting process state before reporting it stopped.
+
+Refusal applies to the individual operation. Every later action still requires its
+own current authorization and policy checks, including actions from the same
+request. Runtime observations describe recorded operation outcomes; they do not
+guarantee that all assistant narration is consistent with those outcomes.
+
+Stopping a process reports that termination was requested; use a later poll to
+confirm exit and cleanup. Work already admitted follows its own lifecycle.
 
 In [Code Mode](/tools/code-mode), `process` returns its structured details directly.
 For `action: "log"`, `output` contains the requested log page, including paging,
-retention, and input-recovery hints. Failed process actions include an `error`
-message alongside `status: "failed"`, so the agent can choose the next action.
+retention, and input-recovery hints. Invalid actions and unknown session IDs include
+an `error` message alongside `status: "failed"`. Terminal process failures retain
+their exit facts, including `finalizationFailed: true` when cleanup failed.
 
 ## Examples
 
-Run a long task and poll later:
+Run a task longer than the default 10000 ms yield window and poll later:
 
 ```json
-{ "tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000 }
+{ "tool": "exec", "command": "sleep 30 && echo done" }
 ```
 
 ```json
@@ -225,10 +474,10 @@ Inspect an interactive session before sending input:
 { "tool": "process", "action": "log", "sessionId": "<id>" }
 ```
 
-Start immediately in background:
+Yield an ordinary build after one second:
 
 ```json
-{ "tool": "exec", "command": "npm run build", "background": true }
+{ "tool": "exec", "command": "npm run build", "yieldMs": 1000 }
 ```
 
 Send stdin:

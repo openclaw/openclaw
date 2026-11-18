@@ -5,6 +5,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mts";
+import { reportLimitViolations } from "./lib/check-limits.mts";
 import {
   assertCompatibleCliStartupExecutionModes,
   assertCompatibleCliStartupMemoryMetrics,
@@ -216,6 +217,7 @@ const shouldRequireEveryBaselineCase = opts.preset === "all";
 const matchedBaselineCaseIds = [...baselineCases.keys()].filter((id) => currentCases.has(id));
 
 let failed = false;
+const limitViolations: string[] = [];
 
 try {
   cliStartupExecutionMode(isRecord(current) ? current.primary : undefined);
@@ -287,53 +289,27 @@ if (!opts.skipBaseline) {
 
     const baselineDuration = baselineCase.summary?.durationMs?.avg;
     const currentDuration = currentCase.summary?.durationMs?.avg;
-    if (baselineDuration !== undefined && currentDuration !== undefined && baselineDuration > 0) {
-      const allowedDuration = baselineDuration * (1 + opts.maxDurationRegressionPct / 100);
-      if (currentDuration > allowedDuration) {
-        console.error(
-          `[test-cli-startup-bench-budget] ${baselineCase.name} avg duration ${formatMs(
-            currentDuration,
-          )} exceeded ${formatMs(allowedDuration)} (baseline ${formatMs(
-            baselineDuration,
-          )}, +${String(opts.maxDurationRegressionPct)}%).`,
-        );
-        failed = true;
-      }
-    }
-
     const baselineFirstOutput = baselineCase.summary?.firstOutputMs?.avg;
     const currentFirstOutput = currentCase.summary?.firstOutputMs?.avg;
-    if (
-      baselineFirstOutput !== undefined &&
-      currentFirstOutput !== undefined &&
-      baselineFirstOutput > 0
-    ) {
-      const allowedFirstOutput = baselineFirstOutput * (1 + opts.maxFirstOutputRegressionPct / 100);
-      if (currentFirstOutput > allowedFirstOutput) {
-        console.error(
-          `[test-cli-startup-bench-budget] ${baselineCase.name} avg first output ${formatMs(
-            currentFirstOutput,
-          )} exceeded ${formatMs(allowedFirstOutput)} (baseline ${formatMs(
-            baselineFirstOutput,
-          )}, +${String(opts.maxFirstOutputRegressionPct)}%).`,
-        );
-        failed = true;
-      }
-    }
-
     const baselineRss = baselineCase.summary?.maxRssMb?.avg;
     const currentRss = currentCase.summary?.maxRssMb?.avg;
-    if (baselineRss !== undefined && currentRss !== undefined && baselineRss > 0) {
-      const allowedRss = baselineRss * (1 + opts.maxRssRegressionPct / 100);
-      if (currentRss > allowedRss) {
-        console.error(
-          `[test-cli-startup-bench-budget] ${baselineCase.name} avg RSS ${formatMb(
-            currentRss,
-          )} exceeded ${formatMb(allowedRss)} (baseline ${formatMb(
-            baselineRss,
-          )}, +${String(opts.maxRssRegressionPct)}%).`,
+    for (const [metric, label, regressionPct, format] of [
+      ["durationMs", "duration", opts.maxDurationRegressionPct, formatMs],
+      ["firstOutputMs", "first output", opts.maxFirstOutputRegressionPct, formatMs],
+      ["maxRssMb", "RSS", opts.maxRssRegressionPct, formatMb],
+    ] as const) {
+      const baselineValue = baselineCase.summary?.[metric]?.avg;
+      const currentValue = currentCase.summary?.[metric]?.avg;
+      if (baselineValue === undefined || currentValue === undefined || baselineValue <= 0) {
+        continue;
+      }
+      const allowed = baselineValue * (1 + regressionPct / 100);
+      if (currentValue > allowed) {
+        limitViolations.push(
+          `[test-cli-startup-bench-budget] ${baselineCase.name} avg ${label} ${format(
+            currentValue,
+          )} exceeded ${format(allowed)} (baseline ${format(baselineValue)}, +${String(regressionPct)}%).`,
         );
-        failed = true;
       }
     }
 
@@ -384,28 +360,33 @@ for (const currentCase of currentCases.values()) {
         );
         failed = true;
       } else if (firstOutputMax > firstOutputBudgetMs) {
-        console.error(
+        limitViolations.push(
           `[test-cli-startup-bench-budget] ${currentCase.name} first output ${formatMs(
             firstOutputMax,
           )} exceeded contract ${formatMs(firstOutputBudgetMs)}.`,
         );
-        failed = true;
       }
     }
 
     const exitBudgetMs = contract.exitBudgetMs;
     const durationMax = currentCase.summary?.durationMs?.max;
     if (exitBudgetMs != null && durationMax !== undefined && durationMax > exitBudgetMs) {
-      console.error(
+      limitViolations.push(
         `[test-cli-startup-bench-budget] ${currentCase.name} exit ${formatMs(
           durationMax,
         )} exceeded contract ${formatMs(exitBudgetMs)}.`,
       );
-      failed = true;
     }
   }
 }
 
-if (failed) {
+const limitsFailed = reportLimitViolations(
+  limitViolations.map((message) => ({
+    file: "scripts/test-cli-startup-bench-budget.mts",
+    title: "CLI startup budget",
+    message,
+  })),
+);
+if (failed || limitsFailed) {
   process.exit(1);
 }

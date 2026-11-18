@@ -1,4 +1,3 @@
-import { resolveSystemAgentDelegationKey } from "../../system-agent/delegation-session.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import type { GatewayClient } from "./types.js";
 
@@ -6,7 +5,10 @@ export function resolveSystemAgentSessionOwnerKey(params: {
   delegation?: { agentId?: string; sessionKey?: string };
   client: GatewayClient | null;
 }): string | undefined {
-  const delegationKey = resolveSystemAgentDelegationKey(params.delegation);
+  const delegation = params.delegation;
+  const delegationKey = delegation
+    ? JSON.stringify([delegation.agentId ?? null, delegation.sessionKey ?? null])
+    : undefined;
   if (delegationKey !== undefined) {
     // Delegation is a host-only cross-connection owner from the regular-agent tool path.
     return delegationKey;

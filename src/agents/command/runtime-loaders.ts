@@ -4,9 +4,15 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 type AttemptExecutionRuntime = typeof import("./attempt-execution.runtime.js");
 export type AgentAttemptResult = Awaited<ReturnType<AttemptExecutionRuntime["runAgentAttempt"]>>;
 
-export const loadAttemptExecutionRuntime = createLazyPromise(
-  () => import("./attempt-execution.runtime.js"),
-);
+export const loadAttemptExecutionRuntime = createLazyPromise(async () => {
+  // Both embedded and ACP attempts must retain result delivery before inference
+  // can outlive an installation replacement.
+  const [attempt] = await Promise.all([
+    import("./attempt-execution.runtime.js"),
+    loadDeliveryRuntime(),
+  ]);
+  return attempt;
+});
 export const loadAcpManagerRuntime = createLazyPromise(
   () => import("../../acp/control-plane/manager.js"),
 );
@@ -24,9 +30,6 @@ export const loadSessionStoreRuntime = createLazyPromise(
 export const loadCliCompactionRuntime = createLazyPromise(() => import("./cli-compaction.js"));
 export const loadAgentRunnerMemoryRuntime = createLazyPromise(
   () => import("../../auto-reply/reply/agent-runner-memory.js"),
-);
-export const loadTranscriptResolveRuntime = createLazyPromise(
-  () => import("../../config/sessions/transcript-resolve.runtime.js"),
 );
 export const loadTranscriptAppendRuntime = createLazyPromise(
   () => import("../../config/sessions/transcript.runtime.js"),

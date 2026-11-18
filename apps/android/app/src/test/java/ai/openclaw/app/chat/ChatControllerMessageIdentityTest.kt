@@ -1,7 +1,5 @@
 package ai.openclaw.app.chat
 
-import ai.openclaw.app.ui.chat.formatContextUsageTokens
-import ai.openclaw.app.ui.chat.latestChatMessageUsage
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -124,11 +122,6 @@ class ChatControllerMessageIdentityTest {
       advanceUntilIdle()
 
       assertEquals(cases.map { it.second }, controller.messages.value.map { it.usage })
-      controller.messages.value.forEachIndexed { index, message ->
-        val expected = cases[index].second
-        assertEquals(expected, latestChatMessageUsage(listOf(message)))
-        if (expected.input == null) assertEquals("\u2014", formatContextUsageTokens(expected.input))
-      }
     }
 
   @Test
@@ -276,6 +269,37 @@ class ChatControllerMessageIdentityTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun historyPreservesBrowserSelectionFromTopLevelToolResults() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """{"messages":[{"role":"toolResult","toolName":"browser","toolCallId":"browser-1","content":"Opened travel page","details":{"browserTab":{"target":"host","profile":"openclaw","targetId":"t1","url":"https://example.test/travel"}}}]}"""
+            } else {
+              emptyChatGatewayResponse(method)
+            }
+          },
+        )
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        ChatBrowserTab("host", null, "openclaw", "t1", "https://example.test/travel", null),
+        controller.messages.value
+          .single()
+          .content
+          .single()
+          .toolActivity
+          ?.browserTab,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun liveHistoryDecodesSystemNoticeMetadataWithoutChangingRoles() =
     runTest {
       val controller =
@@ -341,7 +365,7 @@ class ChatControllerMessageIdentityTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
-  fun markerOnlyDeliveryMirrorDoesNotReplaceLatestRunUsage() =
+  fun liveHistoryKeepsDeliveryMirrorAndUsageMetadataSeparate() =
     runTest {
       val controller =
         ChatController(
@@ -383,7 +407,10 @@ class ChatControllerMessageIdentityTest {
           .last()
           .deliveryMirror,
       )
-      assertEquals(ChatMessageUsage(input = 12_000, output = 300), latestChatMessageUsage(controller.messages.value))
+      assertEquals(
+        listOf(ChatMessageUsage(input = 12_000, output = 300), ChatMessageUsage(input = 0, output = 0)),
+        controller.messages.value.map { it.usage },
+      )
     }
 
   @Test

@@ -1,4 +1,6 @@
 import type { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { createMatrixStartupAbortError } from "../startup-abort.js";
 import {
   isMatrixReadySyncState,
@@ -27,79 +29,55 @@ export async function waitForMatrixInitialSyncReady(params: {
     throw new Error(`Matrix sync entered ${params.state} during startup`);
   }
 
-  await new Promise<void>((resolve, reject) => {
-    let settled = false;
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const abortSignal = params.abortSignal;
-
-    const cleanup = () => {
-      params.emitter.off("sync.state", onSyncState);
-      params.emitter.off("sync.unexpected_error", onUnexpectedError);
-      abortSignal?.removeEventListener("abort", onAbort);
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = undefined;
-      }
-    };
-
-    const settleResolve = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve();
-    };
-
-    const settleReject = (error: Error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-
-    const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
-      if (isMatrixReadySyncState(state)) {
-        settleResolve();
-        return;
-      }
-      if (isMatrixAccessTokenInvalidatedError(error)) {
-        settleReject(error instanceof Error ? error : new Error("Matrix access token invalidated"));
-        return;
-      }
-      if (isMatrixTerminalSyncState(state)) {
-        settleReject(
-          new Error(
-            error instanceof Error && error.message
-              ? error.message
-              : `Matrix sync entered ${state} during startup`,
-          ),
-        );
-      }
-    };
-
-    const onUnexpectedError = (error: Error) => {
-      settleReject(error);
-    };
-
-    const onAbort = () => {
-      settleReject(createMatrixStartupAbortError());
-    };
-
-    params.emitter.on("sync.state", onSyncState);
-    params.emitter.on("sync.unexpected_error", onUnexpectedError);
-    if (abortSignal?.aborted) {
-      onAbort();
+  const ready = createDeferred();
+  const settle = (error?: Error) => {
+    if (error) {
+      ready.reject(error);
+    } else {
+      ready.resolve();
+    }
+  };
+  const onSyncState = (state: MatrixSyncState, _prevState: string | null, error?: unknown) => {
+    if (isMatrixReadySyncState(state)) {
+      settle();
       return;
     }
-    abortSignal?.addEventListener("abort", onAbort, { once: true });
-    timeoutId = setTimeout(() => {
-      settleReject(
-        new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`),
+    if (isMatrixAccessTokenInvalidatedError(error)) {
+      settle(error instanceof Error ? error : new Error("Matrix access token invalidated"));
+      return;
+    }
+    if (isMatrixTerminalSyncState(state)) {
+      settle(
+        new Error(
+          error instanceof Error && error.message
+            ? error.message
+            : `Matrix sync entered ${state} during startup`,
+        ),
       );
-    }, timeoutMs);
-    timeoutId.unref?.();
-  });
+    }
+  };
+  params.emitter.on("sync.state", onSyncState);
+  params.emitter.on("sync.unexpected_error", settle);
+  try {
+    if (params.abortSignal?.aborted) {
+      throw createMatrixStartupAbortError();
+    }
+    await raceWithTimeout(
+      ready.promise,
+      timeoutMs,
+      () => {
+        throw new Error(`Matrix client did not reach a ready sync state within ${timeoutMs}ms`);
+      },
+      {
+        ref: false,
+        signal: params.abortSignal,
+        onAbort: () => {
+          throw createMatrixStartupAbortError();
+        },
+      },
+    );
+  } finally {
+    params.emitter.off("sync.state", onSyncState);
+    params.emitter.off("sync.unexpected_error", settle);
+  }
 }

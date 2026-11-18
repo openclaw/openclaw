@@ -1,63 +1,65 @@
-/** Reads ACP session status from the runtime and reconciles persisted identity metadata. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntimeStatus } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import { resolveManagerRuntimeCapabilities } from "./manager.runtime-controls.js";
-import { createSupersededActorError } from "./manager.runtime-handle-ensure.js";
 import type {
   AcpSessionStatus,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
 } from "./manager.types.js";
-import { requireReadySessionMeta } from "./manager.utils.js";
+import { assertCurrentAcpActor, requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
-/** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
 export async function runManagerGetSessionStatus(params: {
+  assertActive?: () => void;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
   signal?: AbortSignal;
   throwIfAborted: (signal?: AbortSignal) => void;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   isCurrentActor?: () => boolean;
 }): Promise<AcpSessionStatus> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.throwIfAborted(params.signal);
-  const resolution = params.resolveSession({
+  const assertCurrent = () => {
+    assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
+    params.assertActive?.();
+    params.throwIfAborted(params.signal);
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCurrent,
   });
+  assertCurrent();
   const resolvedMeta = requireReadySessionMeta(resolution);
   const {
     runtime,
-    handle: ensuredHandle,
+    handle,
     meta: initialMeta,
   } = await params.ensureRuntimeHandle({
+    assertActive: params.assertActive,
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     meta: resolvedMeta,
     isCurrentActor,
   });
-  let handle = ensuredHandle;
+  params.assertActive?.();
   const capabilities = await resolveManagerRuntimeCapabilities({ runtime, handle });
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   let runtimeStatus: AcpRuntimeStatus | undefined;
   if (runtime.getStatus) {
     runtimeStatus = await withAcpRuntimeErrorBoundary({
       run: async () => {
         params.throwIfAborted(params.signal);
+        params.assertActive?.();
         const status = await runtime.getStatus!({
           handle,
           ...(params.signal ? { signal: params.signal } : {}),
@@ -69,9 +71,7 @@ export async function runManagerGetSessionStatus(params: {
       fallbackMessage: "Could not read ACP runtime status.",
     });
   }
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
+  assertCurrentAcpActor(isCurrentActor(), params.sessionKey);
   const reconciledSession = await params.reconcileRuntimeSessionIdentifiers({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -83,21 +83,19 @@ export async function runManagerGetSessionStatus(params: {
     failOnStatusError: true,
     isCurrentActor,
   });
-  handle = reconciledSession.handle;
   const meta = reconciledSession.meta;
-  runtimeStatus = reconciledSession.runtimeStatus;
   const identity = resolveSessionIdentityFromMeta(meta);
   return {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
-    backend: handle.backend || meta.backend,
+    backend: reconciledSession.handle.backend || meta.backend,
     agent: meta.agent,
     ...(identity ? { identity } : {}),
     state: meta.state,
     mode: meta.mode,
     runtimeOptions: resolveRuntimeOptionsFromMeta(meta),
     capabilities,
-    runtimeStatus,
+    runtimeStatus: reconciledSession.runtimeStatus,
     lastActivityAt: meta.lastActivityAt,
     lastError: meta.lastError,
   };

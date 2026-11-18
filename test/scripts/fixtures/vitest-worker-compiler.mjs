@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance as processPerformance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
+import { isMainThread } from "node:worker_threads";
 import { hashVitestWorkerArtifact } from "../../../scripts/lib/vitest-worker-artifacts.mts";
 
 // Lifecycle fixtures publish real immutable files without compiling unrelated runtime code.
@@ -36,20 +38,29 @@ export async function runWorkerFixtureCompiler(directory, input, receipt) {
   const declaration = fileURLToPath(
     new URL("../../../src/infra/runtime-process-entrypoints.ts", import.meta.url),
   );
+  const metadata = fileURLToPath(
+    new URL("../../../src/infra/runtime-process-manifest.ts", import.meta.url),
+  );
   const declarationSource = fs.readFileSync(declaration, "utf8");
-  const compiledDeclaration = process.versions.bun
-    ? new Bun.Transpiler({ loader: "ts" }).transformSync(declarationSource)
-    : (await import("node:module")).stripTypeScriptTypes(declarationSource);
+  const metadataSource = fs.readFileSync(metadata, "utf8");
+  const transpile = process.versions.bun
+    ? (source) => new Bun.Transpiler({ loader: "ts" }).transformSync(source)
+    : (await import("node:module")).stripTypeScriptTypes;
   const workerSource = fs.readFileSync(input);
   const manifest = writeWorkerFixtureManifest(
     directory,
     {
       [declaration]: declarationSource,
+      [metadata]: metadataSource,
       [input]: workerSource,
     },
     {
       // Preserve the actual declaration policy and hash the same bytes used for output.
-      "infra/runtime-process-entrypoints.js": compiledDeclaration,
+      "infra/runtime-process-entrypoints.js": transpile(declarationSource).replace(
+        "./runtime-process-manifest.ts",
+        "./runtime-process-manifest.js",
+      ),
+      "infra/runtime-process-manifest.js": transpile(metadataSource),
       [runtimeProcessEntrypoints.sqliteReadOnly.distWorkerPath]: workerSource,
     },
   );
@@ -57,6 +68,9 @@ export async function runWorkerFixtureCompiler(directory, input, receipt) {
     receipt,
     JSON.stringify({
       pid: process.pid,
+      // A compiler call must not mint a new identity within a reused process.
+      processStartTime: processPerformance.timeOrigin,
+      isMainThread,
       directory,
       inputs: Object.keys(manifest.inputs).length,
       outputs: Object.keys(manifest.outputs).length,

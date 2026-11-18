@@ -57,9 +57,12 @@ ensure_cleanup_smoke_node_options() {
 ensure_cleanup_smoke_node_options
 
 echo "==> Build"
-if ! pnpm build >/tmp/openclaw-cleanup-build.log 2>&1; then
+build_exit=0
+pnpm build >/tmp/openclaw-cleanup-build.log 2>&1 || build_exit="$?"
+grep '^::warning ' /tmp/openclaw-cleanup-build.log || true
+if [[ "$build_exit" -ne 0 ]]; then
   print_log_tail /tmp/openclaw-cleanup-build.log
-  exit 1
+  exit "$build_exit"
 fi
 
 echo "==> Seed state"

@@ -18,12 +18,11 @@ export function attachOutboundDeliveryCommitHook<T extends OutboundDeliveryResul
   result: T,
   hook?: OutboundDeliveryCommitHook,
 ): T {
-  if (!hook) {
-    return result;
+  if (hook) {
+    const hooks = outboundDeliveryCommitHooks.get(result) ?? [];
+    hooks.push(hook);
+    outboundDeliveryCommitHooks.set(result, hooks);
   }
-  const hooks = outboundDeliveryCommitHooks.get(result) ?? [];
-  hooks.push(hook);
-  outboundDeliveryCommitHooks.set(result, hooks);
   return result;
 }
 

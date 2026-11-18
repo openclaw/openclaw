@@ -11,10 +11,10 @@ public struct ArtifactBuildInfo: Equatable, Sendable {
         infoDictionary: [String: Any],
         versionKeys: [String] = ["CFBundleShortVersionString"])
     {
-        self.version = versionKeys.lazy.compactMap { Self.nonEmptyString(infoDictionary[$0]) }.first ?? "dev"
-        self.build = Self.nonEmptyString(infoDictionary["CFBundleVersion"]) ?? ""
-        self.gitCommit = Self.validGitCommit(Self.nonEmptyString(infoDictionary["OpenClawGitCommit"]))
-        let buildTimestamp = Self.nonEmptyString(infoDictionary["OpenClawBuildTimestamp"])
+        self.version = versionKeys.lazy.compactMap { (infoDictionary[$0] as? String)?.trimmedNonEmpty }.first ?? "dev"
+        self.build = (infoDictionary["CFBundleVersion"] as? String)?.trimmedNonEmpty ?? ""
+        self.gitCommit = Self.validGitCommit((infoDictionary["OpenClawGitCommit"] as? String)?.trimmedNonEmpty)
+        let buildTimestamp = (infoDictionary["OpenClawBuildTimestamp"] as? String)?.trimmedNonEmpty
         self.builtAt = buildTimestamp.flatMap(Self.parseBuildTimestamp)
         self.buildTimestamp = self.builtAt == nil ? nil : buildTimestamp
     }
@@ -53,12 +53,6 @@ public struct ArtifactBuildInfo: Equatable, Sendable {
             "Commit \(self.gitCommit ?? "Unavailable")",
             "Built \(self.buildTimestamp ?? "Unavailable")",
         ].joined(separator: "\n")
-    }
-
-    private static func nonEmptyString(_ value: Any?) -> String? {
-        guard let value = value as? String else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func validGitCommit(_ value: String?) -> String? {

@@ -32,6 +32,8 @@ export type ChannelProgressDraftCompositorParams = {
   entry: StreamingCompatEntry | null | undefined;
   /** Prepared items own display; raw callbacks retain diagnostic bookkeeping only. */
   preparedItems?: boolean;
+  /** Keep one public operation/task status when the rolling tool log is hidden. */
+  showWorkStatus?: boolean;
   mode: StreamingMode;
   active: boolean;
   seed: string;
@@ -57,6 +59,10 @@ export type ChannelProgressDraftCompositorParams = {
   shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
   reasoningLinePrefix?: string;
   commentaryLinePrefix?: string;
+  /** Prefix tool rows with their text glyph (`🛠️ Exec`); default plain. */
+  toolIcons?: boolean;
+  /** Compact consecutive keyed, prepared tool invocations in status-only progress mode. */
+  compactToolRuns?: boolean;
   reasoningGate?: boolean;
   commentaryItalics?: boolean;
   now?: () => number;
@@ -64,4 +70,17 @@ export type ChannelProgressDraftCompositorParams = {
   clearTimeoutFn?: typeof clearTimeout;
   /** Channel-specific formatter policy; event/lifecycle ownership remains in the compositor. */
   buildProgressEventLine?: ChannelProgressDraftEventLineBuilder;
+};
+
+export type ChannelProgressDraftNoteOptions = {
+  toolName?: string;
+  startImmediately?: boolean;
+  flush?: boolean;
+  /**
+   * The line renders the open reasoning itself (a channel projecting
+   * `mergeReasoningProgress` into its own rows), so admitting it must not close
+   * the reasoning burst the way admitted work does, and a quiet draft stores it
+   * like the approvals it keeps.
+   */
+  reasoningLine?: boolean;
 };

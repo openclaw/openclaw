@@ -99,9 +99,25 @@ read_when:
 
 **Forwarded-header evidence overrides loopback locality for local-direct fallback.** If a request arrives on loopback but carries a `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header, that evidence disqualifies it from local-direct password fallback and device-identity gating, even though it still fails trusted-proxy auth as loopback.
 
+The same restriction always applies to Tailscale identity headers. While OpenClaw ID
+is on (`gateway.openclawId.enabled`), it also applies to Cloudflare Access identity
+headers, `Remote-User`, `X-Remote-User`, and the configured `userHeader` or
+`requiredHeaders`: an identity-only request without a usable forwarded client
+address is rejected, not treated as the local operator. This protects OpenClaw
+ID's local-only linking; see [access coexistence](/gateway/remote#openclaw-id-alongside-existing-access).
+With OpenClaw ID off, those headers do not change loopback locality.
+
 `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 
-Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
+Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers. `openclaw gateway status` selects this local password automatically when no `--url` override is supplied, including with `--json`. For browser access, omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin` as the default, or configure an explicit list that overrides it.
+
+Browser OAuth sign-in can use the HTTPS origin from `gateway.publicOrigin` on a
+trusted-proxy-authenticated connection even when the proxy rewrites `Host` to an
+internal Gateway address. The browser must still pass the configured origin
+policy, and operator MCP sign-in requires administrator access. An additional
+allowlisted origin alone does not qualify as an OAuth callback address.
+
+Update and restart health checks can also reuse the local CLI's existing paired device credentials when no shared credential is configured. These checks read existing identity and token state without creating an identity or saving replacement credentials.
 </Warning>
 
 ### Configuration reference
@@ -145,6 +161,136 @@ Run `openclaw configure --section gateway` and select **Trusted Proxy**. Enterin
 
 When reconfiguring an existing trusted-proxy setup, the prompt defaults to the existing `allowLoopback` opt-in. Choosing **No** revokes it. If no entered address or range matches a loopback source, the wizard leaves the existing value unchanged. Same-mode reconfiguration also preserves `deviceAutoApprove` verbatim; device enrollment policy is not changed by this prompt. Switching from another auth mode does not restore dormant trusted-proxy opt-ins.
 
+With live configuration reload enabled, changes to `gateway.trustedProxies`,
+`gateway.allowRealIpFallback`, `gateway.auth.allowTailscale`,
+`gateway.auth.identityScopes`, and `gateway.auth.trustedProxy` apply without a
+Gateway restart. Transport policy changes require clients to reconnect while
+preserving accepted runs and queued inputs whose access grants are unchanged.
+This includes proxy headers, OIDC mapping, device auto-approval, and trusted proxy
+addresses. Removing a connected identity from `allowUsers`, disabling its auth
+method, or changing its own identity-scope grant still revokes accepted work.
+Restoring the grant does not revive revoked work. Identity-scope edits for other
+identities leave existing connections and work unchanged; clients without verified
+operator identities also ignore those edits. HTTP requests and plugin auth cookies
+do not use identity-scope grants and are unaffected by those scope edits.
+A configuration writer receives its accepted result before its connection closes.
+Pending handshakes and HTTP requests recheck the policy applicable to their authority
+after asynchronous waits.
+
+## Enterprise browser delegation
+
+OpenClaw Enterprise (OCE) can authorize each browser request without copying its
+user roster into `allowUsers`. When native browser access is enabled for an
+OCE-managed Agent, OCE automatically configures `gateway.auth.trustedProxy`,
+prepares a private credential for each Agent revision, and mounts its file only
+in the Gateway. No manual OpenClaw configuration is required. The following
+example shows the generated settings:
+
+```json5
+{
+  userHeader: "x-occ-identity",
+  delegation: {
+    credentialFile: "/var/run/openclaw/browser-delegation/browser-key",
+  },
+}
+```
+
+The file contains 32 random bytes encoded as 64 lowercase hexadecimal characters,
+with an optional final newline. The proxy sends that value in
+`x-occ-browser-key`, the verified subject in `x-occ-identity`, and exactly
+`operator.admin` or `operator.sessions.write` in `x-openclaw-scopes`. Existing
+trusted-source, required-header, and browser-origin checks still apply. Ingress
+must strip client-supplied headers; only the private OCE browser route may assert
+a reserved OCE subject and revision credential.
+
+The `oce` authority and `oce:v1:` subject prefix are fixed protocol values, not
+configuration settings. The subject contains 64 lowercase hexadecimal characters
+derived by OCE from its Installation and Principal. It resolves to a durable Gateway-local
+profile through an external identity binding, separate from email aliases.
+Native linking and merges cannot change that binding. An OCE account with
+multiple linked sign-in methods keeps one profile. Display-name changes do not
+change identity. Retain Gateway storage to retain profiles and attribution.
+
+Delegated scopes are both the initial grant and the maximum authority. Native
+roles and session-sharing rules can narrow them. Static `identityScopes`, device
+grants, and `deviceAutoApprove` cannot widen them; delegated connections never
+enroll devices or issue device tokens or ambient plugin-auth cookies. Session-only operators can read their own
+profile and use authorized sessions, but cannot invoke administrative methods.
+Separate profiles do not isolate Agent tools, files, or credentials.
+
+Missing credentials, invalid reserved subjects, unsupported scope values, and
+profile-store failures refuse access. Reserved claims cannot fall back to
+password, token, device, or other ingress authentication. Static non-OCE users
+retain the normal trusted-proxy behavior. OCE checks its live session and Agent
+permissions; the Gateway checks its own live profile and authorization policy.
+Credential-file replacement or removal invalidates admitted grants when the
+one-second credential-file poll observes the change. Reconnect with a current grant;
+restoring a previous key does not revive old connections.
+
+## Organization co-author defaults
+
+Optionally import a commit-credit name/email pair from your existing identity-aware
+proxy. This works with authenticated profiles that have no verified GitHub account.
+It preserves the principal from `userHeader`; credit fields never grant access,
+create sign-in aliases, or establish GitHub account ownership.
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-authenticated-subject",
+        gitCoauthor: {
+          nameHeader: "x-coauthor-name",
+          emailHeader: "x-coauthor-email",
+          emailVerifiedHeader: "x-coauthor-email-verified",
+        },
+      },
+    },
+  },
+}
+```
+
+Keep your existing proxy trust, allowlist, origin, and scope configuration alongside
+this example. Header names are case-insensitive HTTP field names. Both name and
+email must be present and valid. If configured, `emailVerifiedHeader` must contain
+exactly `true`; omit that setting only when your organization accepts the proxy's
+email assertion without a separate verification claim.
+
+For Keycloak with OAuth2 Proxy:
+
+1. Populate each user's first name, last name, and email. Configure client scopes
+   or protocol mappers to emit `name`, `email`, and, when required, `email_verified`.
+   Dedicated administrator-managed commit-name/email claims are also suitable.
+2. Configure OAuth2 Proxy to overwrite the three configured upstream headers from
+   those authenticated claims on HTTP requests and WebSocket upgrades. Strip any
+   client-supplied copies. Keep the existing issuer-qualified subject as the
+   authenticated principal; email is not an authorization input.
+3. Configure the matching `gitCoauthor` header names in OpenClaw and sign in again.
+   Profile shows the imported organization pair read-only.
+4. Each person explicitly enables **Git co-author credit** before their supplied
+   address is published in commit history. Importing claims does not enable it.
+
+Successful profile admission refreshes the organization pair. Missing, malformed,
+partial, or unverified configured claims clear that pair. Unchanged claims do not
+invalidate pending credit. Removing the mapping stops using stored organization
+defaults and leaves the existing GitHub fallback. Profile does not offer manual
+name/email entry or per-user identity overrides. Imported details are bound to the
+configured principal and credit header mapping. A replacement mapping withholds
+old details until the next successful sign-in and requires renewed disclosure
+consent. A stale Profile page cannot enable a pair it has not observed; it refreshes
+the details and asks for a new choice. Later email updates under the same mapping
+retain the profile-wide credit preference.
+
+Organization defaults use one protected metadata slot outside the 128-key user
+preference allowance. Importing them does not consume a user preference slot or
+block sign-in at that limit.
+
+These are organization-supplied credit details. An `email_verified` claim reflects
+the provider's email-verification policy, not proof of a GitHub account. See
+[Git co-author credit](/concepts/user-model#gateway-profile-and-github-credit).
+
 ## Per-identity scope grants
 
 Use `gateway.auth.identityScopes` to give selected verified users additional
@@ -175,6 +321,13 @@ scopes, then applies an explicit `x-openclaw-scopes` connection cap.
 These grants are session-only. They do not create or update device pairing
 records and do not trigger device scope-upgrade requests. Token, password, and
 no-auth connections do not carry a verified identity and never receive a grant.
+
+Each connection receiving additional identity scopes emits an `info` security
+audit record with the verified identity, added scopes, authentication method,
+and connection id. Reconnects retain their own records so the log can account
+for every application of the grant. Keep `logging.level` at `info` or more
+verbose to retain these records; applying a configured session grant is not a
+warning. This connection log is separate from the [activity audit ledger](/gateway/audit).
 
 ## Automatic device approval
 
@@ -219,6 +372,10 @@ Scope implications:
 - If methods fail with `missing scope` after a successful WebSocket connect, reload so the browser pairs its device identity, or approve the pending device request. See [Control UI insecure HTTP](/web/control-ui/connect-and-pair#insecure-http).
 
 Reverse-proxy scope capping: if your proxy sends `x-openclaw-scopes` on the Control UI WebSocket upgrade request, OpenClaw caps device enrollment or upgrade requests and the final union of device-authorized and identity-granted session scopes. This header does not grant scopes; it only narrows authority. When `deviceAutoApprove.enabled` is true, the cap also limits the persistent device grant written by [automatic device approval](#automatic-device-approval).
+
+The cap honors operator scope implications. For example, an `operator.write`
+grant with an `operator.read` header retains read access without write access,
+whether or not the grant also lists the redundant `operator.read` scope.
 
 Implications:
 
@@ -436,18 +593,14 @@ If startup fails with an error like `gateway auth mode is trusted-proxy, but a s
 - Remove the shared token when using trusted-proxy mode, or
 - Switch `gateway.auth.mode` to `"token"` if you intend token-based auth.
 
-Loopback trusted-proxy identity headers still fail closed: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
+Loopback trusted-proxy identity headers are still rejected by default: same-host callers are not silently authenticated as proxy users. Internal OpenClaw callers that bypass the proxy may authenticate with `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` instead. Token fallback remains intentionally unsupported in trusted-proxy mode.
 
 ## Restrict a separate Gateway to one owner
 
-Use a [separate Gateway cell](/gateway/multi-tenant-hosting) when one owner needs a
+Use a [separate Gateway](/gateway/security/trust-model) when one owner needs a
 different trust boundary. A separate workspace, model picker filter, or Gateway
 process under the same OS user does not isolate its credentials and state from
 other agents running as that user.
-
-Fleet-managed cells currently use token authentication. This trusted-proxy
-procedure requires an independently provisioned cell; do not overwrite Fleet's
-managed auth configuration.
 
 The identity-aware proxy must reject every other user **before forwarding any HTTP
 request or WebSocket upgrade**. Bind that policy to a verified immutable identity,
@@ -463,9 +616,9 @@ WebSocket authentication paths. Existing connections also require explicit
 revocation or disconnection. Enforce the owner restriction at the proxy for all
 routes, including plugin routes, and do not create an unprotected node route.
 
-For a proxy-only cell, omit both Gateway token and password configuration and
+For a proxy-only Gateway, omit both Gateway token and password configuration and
 their environment variables. Keep `allowLoopback: false` when the proxy has a
-separate network identity. The provider credential inside the cell authenticates
+separate network identity. The provider credential inside the Gateway authenticates
 the workload to its provider; it does not authenticate the human using the
 Gateway. The host administrator remains trusted.
 
@@ -475,11 +628,11 @@ Before enabling trusted-proxy auth, verify:
 
 - [ ] **Proxy is the only path**: The Gateway port is firewalled from everything except your proxy.
 - [ ] **trustedProxies is minimal**: Only your actual proxy IPs, not entire subnets.
-- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth fails closed for loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
+- [ ] **Loopback proxy source is deliberate**: trusted-proxy auth rejects loopback-source requests unless `gateway.auth.trustedProxy.allowLoopback` is explicitly enabled for a same-host proxy.
 - [ ] **Proxy strips headers**: Your proxy overwrites (not appends) `x-forwarded-*` headers from clients.
 - [ ] **Client IP is attributable**: The proxy always rebuilds `X-Forwarded-For` with the original non-loopback client address.
 - [ ] **TLS termination**: Your proxy handles TLS; users connect via HTTPS.
-- [ ] **allowedOrigins is explicit**: Non-loopback Control UI uses explicit `gateway.controlUi.allowedOrigins`.
+- [ ] **Browser origins are configured**: Non-loopback Control UI uses `gateway.publicOrigin` with `gateway.controlUi.allowedOrigins` omitted, or an explicit allowlist.
 - [ ] **allowUsers is set** (recommended): Restrict to known users rather than allowing anyone authenticated.
 - [ ] **No mixed token config**: Do not set both `gateway.auth.token` and `gateway.auth.mode: "trusted-proxy"`.
 - [ ] **Local password fallback is private**: If you configure `gateway.auth.password` for internal direct callers, keep the Gateway port firewalled so non-proxy remote clients cannot reach it directly.
@@ -535,7 +688,7 @@ A Gateway token cannot replace proxy authentication. Do not send identity header
 
   </Accordion>
   <Accordion title="trusted_proxy_local_interface_source / trusted_proxy_local_interface_check_failed">
-    The request's source IP matched one of the Gateway host's own non-loopback network interface addresses (not the proxy), a guard against spoofed same-host traffic on tailnets or Docker bridge networks. `..._check_failed` means interface discovery itself errored, so OpenClaw fails closed.
+    The request's source IP matched one of the Gateway host's own non-loopback network interface addresses (not the proxy), a guard against spoofed same-host traffic on tailnets or Docker bridge networks. `..._check_failed` means interface discovery itself errored, so OpenClaw rejects the request.
 
     Check:
 

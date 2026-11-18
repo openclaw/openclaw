@@ -46,6 +46,28 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
+## Unexpected Gateway exits
+
+A supervisor can restart a crashed Gateway so quickly that current health looks
+normal. Run `openclaw gateway status` to inspect its last ten recorded crashes,
+or `openclaw doctor` for recent and repeated-crash findings. The next startup
+also logs `previous Gateway run ended unexpectedly`, with any known signal or
+exit status, last-known uptime, and previous version.
+
+Compare the recorded start/detection interval with the supervisor journal and
+Gateway logs. `cause unknown` means no matching exit evidence was available; it
+does not identify an out-of-memory event, a signal, or a runtime defect. A clean
+deployment or update handoff does not create a crash record.
+
+Systemd and launchd installations already restart unexpected process exits.
+Their restart throttles and crash-loop limits still apply; the macOS app stops
+after repeated fast failures. The Windows child supervisor retries a crash up
+to three times after one, two, and four seconds, resetting that budget after a
+run survives for a minute. Scheduled Tasks also retain their own bounded restart
+policy. Unsupervised foreground runs
+remain under the operator's control. See [unexpected exit records](/gateway/restart-recovery#unexpected-exits)
+for retention and readiness behavior.
+
 ## macOS gateway silently stops responding, then resumes when you touch the dashboard
 
 Use when channels (Telegram, WhatsApp, etc.) on a macOS host go quiet for minutes to hours at a time, and the gateway appears to come back the moment you open the Control UI, SSH in, or otherwise interact with the host. There is usually no obvious symptom in `openclaw status` because by the time you look the gateway is alive again.
@@ -97,6 +119,16 @@ Related:
 - [macOS platform notes](/platforms/macos)
 - [Logging](/logging)
 - [Doctor](/gateway/doctor)
+
+## macOS LAN commands fail with No route to host
+
+When the Gateway runs but LAN commands fail with `EHOSTUNREACH` while the same
+operation works in Terminal, check the service runtime's **Local Network**
+permission. A LaunchAgent can have different access from Terminal, and Doctor
+does not currently diagnose that permission. Follow [Local Network access for
+the Gateway](/platforms/mac/permissions#local-network-access-for-the-gateway),
+then retry through the Gateway. Routing, firewall, and device failures can produce
+the same error.
 
 ## macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
 
@@ -194,6 +226,76 @@ Related:
 - [Doctor](/gateway/doctor)
 - [Gateway CLI](/cli/gateway)
 
+## Native aborts on Linux (SIGABRT)
+
+`malloc(): invalid next->prev_inuse (unsorted)` followed by systemd
+`status=6/ABRT` indicates detected native heap corruption. It does not identify
+the corrupting code, and it is different from a kernel OOM kill. A JavaScript
+signal handler or stability bundle cannot reliably capture a native `abort()`.
+Arrange OS core capture **before** another failure.
+
+Startup logs include `native runtime` (PID, platform, architecture, Node, V8,
+libuv, OpenSSL and SQLite versions) and `worker startup state` (tracked Worker
+count, starts/retirements by script, and shared compute admission counters).
+These are startup facts, not a snapshot of the moment of failure. Retain them
+with the crash timestamp, journal, exact OpenClaw build and Node executable.
+
+For a systemd system service, substitute the installed unit name below. For a
+user service, use `systemctl --user` without `sudo`; its hard core limit cannot
+exceed the user manager's inherited limit.
+
+```bash
+sudo systemctl edit openclaw-gateway.service
+# Add this drop-in:
+# [Service]
+# LimitCORE=infinity
+
+sudo systemctl daemon-reload
+sudo systemctl show openclaw-gateway.service -p LimitCORE -p MainPID
+sysctl kernel.core_pattern
+```
+
+Apply the limit at the next operator-coordinated service restart. Then check
+`/proc/<gateway-pid>/limits` for the running process's `Max core file size`;
+changing the unit does not change an already running process's limit.
+
+Choose the capture backend indicated by `kernel.core_pattern`:
+
+- **systemd-coredump:** verify that the distribution's handler is installed and
+  enabled. Inspect `coredump.conf` storage and size limits; a multi-gigabyte
+  Gateway needs enough disk space and `ProcessSizeMax`/`ExternalSizeMax` to keep
+  its core. After a crash, use `sudo coredumpctl info <crashed-pid>` and
+  `sudo coredumpctl debug <crashed-pid>`.
+- **Apport:** inspect `/var/log/apport.log` and `/var/crash`. An existing report
+  for the same Node executable/user can suppress a later report. Archive that
+  exact stale `.crash` report outside `/var/crash` in a root-only directory,
+  then clear any matching stale sidecars according to the distribution's
+  Apport procedure. Do not erase unrelated reports. Verify Apport is enabled
+  and actually accepts the next report; `code=dumped` alone does not prove a
+  core was saved.
+- **Direct core files:** if the installed handler cannot retain this crash,
+  an administrator can temporarily replace it with a private absolute path:
+
+  ```bash
+  # Record the old value so it can be restored after the investigation.
+  sysctl kernel.core_pattern
+  sudo install -d -m 0700 -o <gateway-user> -g <gateway-group> /var/lib/openclaw-cores
+  sudo sysctl -w 'kernel.core_pattern=/var/lib/openclaw-cores/core.%e.%p.%t'
+  ```
+
+  `core_pattern` is host-wide: this replaces capture for other processes too.
+  Check that the directory is writable by the Gateway service user and accessible
+  inside any service filesystem sandbox. Restore the previous pattern after
+  capture. This temporary `sysctl` setting does not survive reboot.
+
+Validate the chosen backend with a disposable process under equivalent service
+limits and identity, never by aborting the live Gateway. Open a captured core
+with the **matching** Node binary and debug symbols (`gdb /path/to/node
+/path/to/core` for direct files), then run `thread apply all bt`. Preserve all
+thread stacks: the aborting thread can be detecting damage caused elsewhere.
+Core files contain process memory, including credentials and message content;
+keep them private and share only reviewed, redacted evidence.
+
 ## Gateway exits during high memory use
 
 Use when the Gateway disappears under load, the supervisor reports an OOM-style restart, or logs show `memory pressure: level=critical`.
@@ -218,7 +320,7 @@ Common signatures:
 - `reason=rss_growth` → the RSS floor kept rising across consecutive sampling windows. Check the latest logs for a large import, runaway tool output, repeated retries, or a batch of queued agent work.
 - Critical memory pressure appears in logs but no bundle exists → capture `openclaw gateway diagnostics export` after the event for the available operational evidence. Pressure events do not automatically write bundles.
 
-On Node, an administrator can also [sample allocations](/gateway/diagnostics#sampling-heap-profile) with `openclaw gateway call diagnostics.heapProfile --timeout 30000`. This captures current allocation activity, not a past spike or all native memory. Older bundles remain readable with `openclaw gateway stability --bundle latest`.
+An administrator can also [sample allocations](/gateway/diagnostics#sampling-heap-profile) with `openclaw gateway call diagnostics.heapProfile --timeout 30000` on Node or OpenClaw's Bun runtime. This captures current allocation activity, not a past spike or all native memory. Older bundles remain readable with `openclaw gateway stability --bundle latest`.
 
 Review the sanitized diagnostics export before attaching it to a bug report; avoid copying raw logs.
 

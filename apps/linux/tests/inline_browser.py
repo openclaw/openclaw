@@ -316,6 +316,45 @@ class GatewayFixture(ThreadingHTTPServer):
                 "GetConnectionUnixProcessID", GLib.Variant("(s)", (service,)),
             )[0]
 
+        def click_menu(service, path):
+            interface = "com.canonical.dbusmenu"
+            for attempt in range(2):
+                try:
+                    pending_menus, count = [0], 0
+                    while pending_menus:
+                        parent = pending_menus.pop()
+                        call(service, path, interface, "AboutToShow", GLib.Variant("(i)", (parent,)))
+                        if parent:
+                            call(service, path, interface, "Event", GLib.Variant(
+                                "(isvu)", (parent, "opened", GLib.Variant("i", 0), 0),
+                            ))
+                        _, layout = call(service, path, interface, "GetLayout", GLib.Variant(
+                            "(iias)", (parent, 1, ["label", "enabled", "visible", "children-display"]),
+                        ))
+                        for item_id, properties, children in layout[2]:
+                            count += 1
+                            if count > 200:
+                                raise RuntimeError("Native menu exceeded 200 entries")
+                            if properties.get("label", "").replace("_", "") == label:
+                                if not properties.get("enabled", True) or not properties.get("visible", True):
+                                    raise RuntimeError(f"{label} menu item is unavailable")
+                                if owner(service) != app.pid:
+                                    raise RuntimeError(f"{label} menu owner changed")
+                                call(service, path, interface, "Event", GLib.Variant(
+                                    "(isvu)", (item_id, "clicked", GLib.Variant("i", 0), 0),
+                                ))
+                                return True
+                            if children or properties.get("children-display") == "submenu":
+                                pending_menus.append(item_id)
+                    return False
+                except GLib.Error as error:
+                    # A replaced submenu can reject an ID before dispatching its
+                    # event. Re-read once; never repeat an accepted click.
+                    if attempt or Gio.DBusError.get_remote_error(error) != (
+                        "org.gtk.GDBus.UnmappedGError.Quark._LIBDBUSMENU_2dGLIB.Code0"
+                    ):
+                        raise
+
         names = call(
             "org.freedesktop.DBus", "/org/freedesktop/DBus",
             "org.freedesktop.DBus", "ListNames",
@@ -346,27 +385,8 @@ class GatewayFixture(ThreadingHTTPServer):
                 raise RuntimeError("Native menu introspection exceeded its byte bound")
             node = ElementTree.fromstring(xml)
             if any(item.get("name") == "com.canonical.dbusmenu" for item in node.findall("interface")):
-                _, layout = call(
-                    service, path, "com.canonical.dbusmenu", "GetLayout",
-                    GLib.Variant("(iias)", (0, -1, ["label", "enabled", "visible"])),
-                )
-                items, count = [layout], 0
-                while items:
-                    item_id, properties, children = items.pop()
-                    count += 1
-                    if count > 200:
-                        raise RuntimeError("Native menu exceeded 200 entries")
-                    if properties.get("label", "").replace("_", "") == label:
-                        if not properties.get("enabled", True) or not properties.get("visible", True):
-                            raise RuntimeError(f"{label} menu item is unavailable")
-                        if owner(service) != app.pid:
-                            raise RuntimeError(f"{label} menu owner changed")
-                        call(
-                            service, path, "com.canonical.dbusmenu", "Event",
-                            GLib.Variant("(isvu)", (item_id, "clicked", GLib.Variant("i", 0), 0)),
-                        )
-                        return
-                    items.extend(children)
+                if click_menu(service, path):
+                    return
             pending.extend((service, path.rstrip("/") + "/" + child.attrib["name"])
                            for child in node.findall("node"))
         raise RuntimeError(f"Task app did not export the {label} menu")
@@ -378,6 +398,7 @@ class GatewayFixture(ThreadingHTTPServer):
             # WebKit 2.52 exposes "button"; older supported WebKit uses "push button".
             button = wait(label, ("button", "push button"))
             component = button.get_component_iface()
+            component.scroll_to(Atspi.ScrollType.ANYWHERE)
             rect = component.get_extents(Atspi.CoordType.SCREEN)
             if rect.width <= 0 or rect.height <= 0:
                 raise RuntimeError("Native fixture button has no screen bounds")

@@ -6,10 +6,6 @@ import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-c
 import type { AgentMessage } from "./runtime/index.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
-function parseCompactionUsageTimestamp(value: unknown): number | null {
-  return parseDateFirstTimestampMs(value) ?? null;
-}
-
 export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends AgentMessage>(
   messages: TMessage[],
   options: {
@@ -25,14 +21,12 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
     return messages;
   }
 
-  const latestCompactionTimestamp = parseCompactionUsageTimestamp(
-    (messages[latestCompactionSummaryIndex] as { timestamp?: unknown } | undefined)?.timestamp,
+  const latestCompactionTimestamp = parseDateFirstTimestampMs(
+    messages[latestCompactionSummaryIndex]?.timestamp,
   );
   let out = messages;
   for (let i = 0; i < messages.length; i += 1) {
-    const candidate = messages[i] as
-      | (AgentMessage & { usage?: unknown; timestamp?: unknown })
-      | undefined;
+    const candidate = messages[i];
     if (
       candidate?.role !== "assistant" ||
       !candidate.usage ||
@@ -41,10 +35,10 @@ export function stripStaleAssistantUsageBeforeLatestCompaction<TMessage extends 
       continue;
     }
 
-    const messageTimestamp = parseCompactionUsageTimestamp(candidate.timestamp);
+    const messageTimestamp = parseDateFirstTimestampMs(candidate.timestamp);
     const stale =
       !hasCompactionSummary ||
-      (latestCompactionTimestamp !== null && messageTimestamp !== null
+      (latestCompactionTimestamp !== undefined && messageTimestamp !== undefined
         ? messageTimestamp <= latestCompactionTimestamp
         : i < latestCompactionSummaryIndex);
     if (!stale) {

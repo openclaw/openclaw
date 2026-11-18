@@ -16,7 +16,7 @@ Plaintext still works. SecretRefs are opt-in per credential.
 </Note>
 
 <Warning>
-Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast radius once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
+Plaintext credentials remain agent-readable when they sit in files the agent can inspect, including `openclaw.json`, `.env`, retired auth-profile JSON archives, or generated `agents/*/agent/models.json` files. SecretRefs reduce that local credential exposure once every supported credential is migrated and `openclaw secrets audit --check` reports no plaintext residue.
 </Warning>
 
 This page is an index. Secrets management is documented on five pages, one per reader job.
@@ -74,9 +74,9 @@ page that now holds the content.
 - <a id="exec-provider" />[Exec provider](/gateway/secrets/secretref-contract#exec-provider)
 - <a id="store-provider" />[Store provider](/gateway/secrets/secretref-contract#store-provider)
 - <a id="1password" />[1Password](/gateway/secrets/integration-examples#1password)
-- <a id="bitwarden-secrets-manager-openclawverbatim568end" />[Bitwarden Secrets Manager (`bws`)](/gateway/secrets/integration-examples#bitwarden-secrets-manager-openclawverbatim229end)
+- <a id="bitwarden-secrets-manager-openclawverbatim568end" />[Bitwarden Secrets Manager (`bws`)](/gateway/secrets/integration-examples#bitwarden-secrets-manager-bws)
 - <a id="hashicorp-vault-cli" />[HashiCorp Vault CLI](/gateway/secrets/integration-examples#hashicorp-vault-cli)
-- <a id="password-store-openclawverbatim579end" />[password-store (`pass`)](/gateway/secrets/integration-examples#password-store-openclawverbatim240end)
+- <a id="password-store-openclawverbatim579end" />[password-store (`pass`)](/gateway/secrets/integration-examples#password-store-pass)
 - <a id="sops" />[sops](/gateway/secrets/integration-examples#sops)
 - <a id="strict-command-paths" />[Strict command paths](/gateway/secrets/operations#strict-command-paths)
 - <a id="read-only-command-paths" />[Read-only command paths](/gateway/secrets/operations#read-only-command-paths)
@@ -98,4 +98,4 @@ page that now holds the content.
 - [Security](/gateway/security) - security posture
 - [Configuration reference](/gateway/configuration-reference) - where each secrets and env setting is documented
 - [Ask user](/tools/ask-user) - asking the operator a non-secret question; never answer it with a credential, use the masked `secrets` tool for those
-- [Auth credential semantics](/auth-credential-semantics) - the canonical rules for auth profile ordering and runtime credential resolution
+- [Auth credential semantics](/auth-credential-semantics) - the shared rules for auth profile ordering and runtime credential resolution

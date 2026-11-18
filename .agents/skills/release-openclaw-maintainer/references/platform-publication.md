@@ -1,10 +1,23 @@
 # Native release platforms
 
+## Decoupling
+
+Successful plugin npm publication precedes core npm. ClawHub runs
+independently from its existing dispatch point and does not gate core, GitHub
+finalization, main closeout, or the retrospective PR. Native app publication
+(macOS, Windows, Linux, Android) runs in parallel and never gates npm: a native
+failure is classified and fixed in parallel, not a reason to re-cut or re-run
+npm validation. Each native lane starts as soon as its own prerequisites
+exist, alongside npm publication rather than queued behind it: macOS from the
+tag and exact source; the Linux and Windows publishers from
+`finalize_github_release`, which they require.
+
 Apps are independent publication tasks. They do not block npm, Docker, GitHub
 release finalization, or stable main closeout. Record pending platforms
 explicitly and call each complete only after its assets and updater evidence
-verify. Beta skips native publication unless requested; extended-stable never
-inherits these platforms.
+verify. Beta automatically requests Gateway MSIX prereleases and Store
+Development-flight delivery; other native publication remains opt-in.
+Extended-stable never inherits these platforms.
 
 ## macOS
 
@@ -18,6 +31,22 @@ validation, signing/notarization preflight, and promotion. Use `$release-private
 for credential topology. A smoke-test artifact with ad-hoc signing proves no
 release readiness. Real publish reuses the successful notarized preflight and
 validation for the same tag/source SHA.
+
+Start the macOS validate and preflight lanes as soon as the tag and exact source
+are available. Follow the [validation owner](validation.md) for prerequisites;
+the real publish reuses the successful preflight and validation.
+
+The real publish (`openclaw-macos-publish.yml` in `openclaw/releases`) attaches
+assets to the GitHub release whether it is still a draft or public. Let the
+selected publisher activate the release after its required checks; do not
+make a draft public to bypass a failed gate. See
+[publication recovery](publication-recovery.md). A re-dispatched preflight for the same tag
+and source resumes every variant from its newest checkpoint without rebuilding;
+`ignore_checkpoints=true` forces a rebuild and `resume_notarization_run_id`,
+`resume_notarization_run_attempt`, `resume_notarization_variant` only pin one
+specific run. The appcast lands as an auto-opened PR
+`chore(release): update appcast for <version>` that must be merged; macOS is
+not complete until it is. Record preflight/publish run ids in the handoff.
 
 For mac-only packaging/signing/workflow fixes after npm is published, preserve
 the original tag and use `source_ref=release/YYYY.M.PATCH` plus
@@ -50,11 +79,11 @@ publication, not proof that the Linux app shipped; follow its `Linux App Release
 builder and verify the AppImage, `.deb`, signed `latest.json`, and
 `SHA256SUMS.linux-app.txt` before reporting Linux complete.
 
-The website resolves desktop download assets at build time. After Linux assets
-publish, rebuild `openclaw.ai` through its existing deployment owner and verify
-the deployed Apps card shows the intended version and both download URLs resolve
-to that tag's assets. Published GitHub assets alone do not complete the website
-download handoff.
+A successful request is reused even if its independent builder later fails;
+recover the builder rather than expecting a core publication retry to rebuild it.
+
+After Linux assets publish, complete the [website download handoff](#website).
+Published GitHub assets alone do not complete the website's build-time links.
 
 For independent recovery, dispatch `Linux App Release Request` from `main` with
 the same `tag`. A default Linux-only retry reuses verified complete assets;
@@ -69,12 +98,40 @@ advances the fixed `linux-stable` canonical manifest only forward, and mirrors
 it to the current latest release. Asset completeness and unfinished channel
 publication are separate: retrying complete public assets verifies and reuses
 their bytes and identities, then completes only the remaining metadata work.
+When Windows companion publication is enabled (see below), the signed Windows
+updater manifest exists only in the building run until published, so a publication interrupted before `latest-windows.json` recovers by
+rerunning that run's publish job (it passes its signed inputs and refuses any
+byte mismatch); a fresh request reuses public bytes and cannot recreate it.
+
+The immutable publication's asset inventory stays strict for the AppImage,
+`.deb`, and `SHA256SUMS.linux-app.txt`. A non-Linux companion it records (the
+Windows `.exe` or desktop-test macOS bundles) may be withdrawn by deleting the
+release asset; status and stable closeout then report it as
+`withdrawnCompanionAssets` while the immutable checksum file keeps its row. A
+companion that is still present must match its recorded id, size, and digest.
+
+Windows Tauri companion publication is temporarily disabled by
+`WINDOWS_COMPANION_RELEASE: "false"` in `.github/workflows/linux-app-release.yml`:
+release tags were shipping unplanned Windows installers from sources without
+Windows local Gateway support. Until it is deliberately re-enabled, regular
+releases build, sign, and publish only the AppImage, `.deb`, and
+`SHA256SUMS.linux-app.txt` (a 3-asset Linux publication). Expect no
+`OpenClaw-<version>-windows-x86_64.exe`, `latest-windows.json`, or
+`windows-stable` update; treat any as unplanned and withdraw it. Opt-in
+desktop-test requests still attach their test Windows installer but publish
+no `windows-stable` channel. Re-enable by setting the switch to `"true"` in a
+reviewed `main` PR before dispatching the request. This switch does not
+affect the Windows Hub lane below.
 
 An authorized Linux publication creates the `linux-stable` control release as
 prerelease/non-latest when absent; ordinary PR validation never initializes it.
 This tooling does not change shipped updater or
 download URLs. Keep client cutover and signed installed-client migration under
 separate approval; never claim local helper tests or unsigned packages prove it.
+
+Creating `linux-stable` requires the release-owner GitHub App's contents and
+workflows permissions; `GITHUB_TOKEN` is insufficient. For an approved client
+migration, compare versions using the shipped old updater's comparator.
 
 Core finalization does not depend on canonical Linux metadata. After successful
 finalization/readback, a bounded detached mirror-only request uses the original
@@ -85,15 +142,89 @@ post-build publisher share serialization; Linux builds use a separate queue.
 Each write revalidates the active executing writer and original parent attempt
 after preparatory reads, including after a deletion and before its replacement.
 
+Public readback of API-confirmed metadata allows up to 120 seconds of scheduled
+backoff for GitHub CDN convergence. Downloads and API checks add their own time.
+Bundles and assets without an API digest remain fail-fast. On exhaustion, retry
+readback, not uploads or builds.
+
 Verify both canonical and legacy endpoints after publication, including when a
 newer Gateway release appeared during the Linux build. If canonical metadata is
 missing after an interrupted deletion, normal publication refuses recovery.
-Use the explicit owner reconciliation procedure in
-`docs/reference/RELEASING.md` under **Linux companion publication**: preserve the
+Have the release owner reconcile it explicitly: preserve the
 last verified Linux floor and all intervening publication evidence, exclude
 other writers, revalidate release/source/inventory and immutable bytes, and
 read back both endpoints. Version/hash inputs or current Gateway `latest` alone
 cannot establish forward order. Stop on ambiguous history.
+
+## Windows Gateway MSIX
+
+Regular stable publication to npm `latest` and beta publication to npm `beta`
+request `Windows Gateway Release Request` after GitHub activation, through both
+`OpenClaw Release Publish` and `OpenClaw Release Button`. Alpha and extended-stable
+do not request Gateway MSIX publication.
+
+For beta, the detached request dispatches `gateway-msix.yml` from packaging
+`main` with `release_channel=beta`, `signing_mode=official`,
+`publish_release=true`, the exact published `gateway_version`, and its signed
+tag's full source SHA as `openclaw_ref`. It does not follow the moving npm beta
+selector or need a Store credential. The packaging
+workflow owns source and artifact authorization, installed sideload upgrade
+proof, protected Azure signing, and permanent x64, ARM64, and bundle assets as
+GitHub prereleases, never Latest. After that build and publication succeed, core
+requests Store **Development** delivery through the central publisher. The
+packaging workflow must support these beta inputs and retain the Store bundle
+and witness on `main` before this automation is enabled.
+
+For stable, the detached request builds the exact signed Gateway source in
+`openclaw/openclaw-windows-packaging`, checks both the payload and the independently
+selected MSIX release identity, then requests `windows-store-publish.yml` on
+`openclaw/releases` `main` for Store **Production** delivery. No sideload signing
+or packaging GitHub release is requested for stable.
+
+Both lanes wait for the exact packaging-main build, check
+`openclaw-source-resolution/source-resolution.json`, and require the current
+API `run_attempt` artifacts `openclaw-gateway-msix-store-submission-<attempt>` and
+`store-release-source-<attempt>/store-source.json`. The snapshot must match the
+published signed source, version, release identity, and channel; beta uses
+`signingMode=official`, stable uses `signingMode=store`. The witness must bind that
+run, attempt, packaging commit, channel, `v<upstream>-msix.N` identity, exact Store
+bundle name, and SHA-256. Old runs without the witness are ineligible. Core does
+not download the Store bundle; the central publisher owns byte/hash verification.
+The central dispatch is `{product: gateway, run_id: <build>, channel: development
+| production, automatic: true}`; beta never targets Production.
+
+The release GitHub App must be installed on core, packaging, and releases with
+Actions write and Contents read for both channels. The existing
+`GH_APP_PRIVATE_KEY` supplies the scoped installation tokens; no PAT is needed.
+The central publisher owns source run/attempt,
+artifact, and bundle-hash validation, Store credentials, and the
+`microsoft-store-gateway` environment requiring release-manager approval for
+**both** destinations. It also owns the configured Development flight and the
+operational activation flag for automatic Development requests. A disabled flag
+is a recorded non-delivery outcome, not proof that a beta reached the flight.
+Core has no Store credential, flight GUID, or second activation policy. Central
+workflow and publisher code require release-manager review.
+
+Enable only after [packaging beta support](https://github.com/openclaw/openclaw-windows-packaging/pull/246),
+[current-attempt Store artifacts](https://github.com/openclaw/openclaw-windows-packaging/pull/247),
+[packaging's request-only cutover](https://github.com/openclaw/openclaw-windows-packaging/pull/212),
+and the [central publisher](https://github.com/openclaw/releases/pull/48) plus its
+administrative setup are ready. Configure central
+protection and exclusive Store federation and revoke the old repository's Store
+federation. Cut updated protected release tooling for both core release entry
+points; merging core alone does not update an existing frozen tooling cut.
+
+A successful core request means the central publisher was dispatched, not that
+approval or flight/Production delivery succeeded. Follow the linked releases run
+for activation status, release-manager approval, and its Store commit receipt;
+certification and delivery availability need separate verification. Core/npm
+publication does not wait for MSIX builds, approval, or Store acceptance. The
+detached request waits up to 45 minutes for packaging within its 55-minute job
+timeout. On timeout, follow that retained build without starting another one.
+Repeated publication reuses the original request, including failed requests.
+Recover its retained packaging build and central Store run IDs rather than
+rerunning the entire request or starting a duplicate after an ambiguous dispatch.
+Evidence is retained for 90 days.
 
 ## Windows Hub
 
@@ -101,14 +232,45 @@ The optional parent inputs `windows_node_tag` and
 `windows_node_installer_digests` are supplied together. The source tag must be
 exact and non-prerelease, with candidate-approved digests. The detached Windows
 child runs after GitHub finalization; failure does not keep the release drafted.
-To attach later or recover promotion:
+To attach later or recover promotion, use the original publisher's attested
+`windows-release-approval-<run-id>-<attempt>/approval.json`. Its `release` object
+supplies `parentRunId`, `parentRunAttempt`, `toolingRef`, and `releaseTag` for the
+variables below. The child binds its executing ref and SHA to that approval; the
+attested target is checked against the original signed tag object.
+Keep the original tooling ref; dispatching from current `main` does not recover
+a protected-tag publisher's approval.
+
+The approval must come from a publisher containing this Windows approval
+contract and remain within its 30-day artifact retention. Missing or expired
+approvals cannot be reconstructed from current tooling. If Windows was selected
+originally, reuse the exact source tag and digests. If it was omitted, explicit
+recovery selects the pinned installers under the Windows writer's `npm-release`
+environment approval without republishing npm. Complete that environment review
+before expecting uploads; cancelled or superseded publisher attempts are refused.
+
+With release-owner publication authority:
 
 ```bash
-gh workflow run windows-node-release.yml --repo openclaw/openclaw --ref main \
-  -f tag=vYYYY.M.PATCH \
+ghx workflow run windows-node-release.yml --repo openclaw/openclaw --ref "$RELEASE_TOOLING_REF" \
+  -f tag="$RELEASE_TAG" \
   -f windows_node_tag=vX.Y.Z \
-  -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}'
+  -f expected_installer_digests='{"OpenClawCompanion-Setup-x64.exe":"sha256:<approved-x64-sha256>","OpenClawCompanion-Setup-arm64.exe":"sha256:<approved-arm64-sha256>"}' \
+  -f release_publish_run_id="$RELEASE_PUBLISH_RUN_ID" \
+  -f release_publish_run_attempt="$RELEASE_PUBLISH_RUN_ATTEMPT" \
+  -F direct_release_recovery=true
 ```
+
+A failed-writer retry reuses its successful validation artifact by ID. After
+that artifact's seven-day retention, rerun validation with the still-valid
+original approval.
+
+Windows promotion uploads the two installers and checksum manifest sequentially,
+rechecking current authority before each upload; these writes are not atomic.
+Cancellation is asynchronous, so an in-flight upload may complete and previously
+uploaded assets remain published. After interruption, reconcile the actual asset
+names and digests against the approved bytes before retrying with a still-valid
+original publisher approval. A superseded publisher attempt remains denied;
+replaying its old approval does not authorize recovery.
 
 Verify canonical x64/arm64 installer assets and
 `OpenClawCompanion-SHA256SUMS.txt`, expected Foundation Authenticode signer, and
@@ -122,3 +284,32 @@ verify a `latest` redirect before relying on it.
 Pin the train before tagging under [preparation](preparation.md). Approval,
 build and publication remain independent; record a skipped or failed Android
 child without masking npm/GitHub results.
+
+## Website
+
+`openclaw/openclaw.ai` owns deployment and build-time companion download links.
+After macOS, Linux, or Windows assets publish, use its existing **Companion
+Downloads (deployed)** workflow, not an empty commit or a direct Vercel CLI deploy:
+
+```bash
+gh workflow run companion-downloads-deployed.yml --repo openclaw/openclaw.ai --ref main
+```
+
+This is a deployment-capable operation: use it only under release/deployment
+authority. The operator needs GitHub permission to dispatch that site's workflow.
+The project owner separately configures a production `main` Vercel Deploy Hook
+and stores its URL as the site's `VERCEL_COMPANION_DEPLOY_HOOK` repository secret.
+The workflow uses that credential; the operator does not need a Vercel CLI token.
+A CLI permission denial therefore does not establish that this route is unavailable.
+Follow the site's [deployment instructions](https://github.com/openclaw/openclaw.ai#companion-downloads)
+for setup and read-only download checks; never print or copy the hook URL into a PR.
+
+The workflow skips deployment when production is already current. Otherwise it
+requests one rebuild and verifies both `/` and `/install/`, the expected site
+source SHA in `/site-release.json`, and the real download responses. Record the
+workflow run and its terminal result, not just dispatch acknowledgement. Preview
+and deployment-status checks remain read-only.
+
+Missing-hook failures require project-owner setup, not broader CLI privileges.
+If a requested deployment times out or site `main` advances, inspect its outcome
+before retrying. Do not republish the apps or edit website content to trigger a build.

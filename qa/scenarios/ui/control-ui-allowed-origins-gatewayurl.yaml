@@ -23,8 +23,8 @@ scenario:
     - docs/gateway/trusted-proxy-auth.md
   codeRefs:
     - ui/src/e2e/control-ui-auth-transports.e2e.test.ts
-    - ui/src/components/gateway-url-confirmation.ts
-    - ui/src/components/login-gate.ts
+    - ui/src/components/solid/gateway-url-confirmation.tsx
+    - ui/src/components/login-gate-solid.tsx
     - src/gateway/origin-check.ts
     - src/gateway/server/ws-connection/connect-admission.ts
   execution:

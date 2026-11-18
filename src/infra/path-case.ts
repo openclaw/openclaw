@@ -1,8 +1,8 @@
 // Shares path-local case observations and keeps OpenClaw's fallback policy.
 import type { Stats } from "node:fs";
-import { probePathCaseInsensitiveSync } from "./fs-safe-advanced.js";
+import { probePathCaseInsensitiveSync } from "@openclaw/fs-safe/advanced";
 
-export { probePathCaseInsensitiveSync as tryResolvePathCaseInsensitive } from "./fs-safe-advanced.js";
+export { probePathCaseInsensitiveSync as tryResolvePathCaseInsensitive } from "@openclaw/fs-safe/advanced";
 
 export function swapAsciiCase(value: string): string {
   return value.replace(/[A-Za-z]/g, (char) => {

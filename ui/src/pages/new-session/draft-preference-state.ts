@@ -2,12 +2,12 @@ import { USER_PREFS_ENTRY_LIMIT } from "../../../../packages/gateway-protocol/sr
 import type { ApplicationContext } from "../../app/context.ts";
 import { saveUserPreferences } from "../../app/user-prefs-cache.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import * as catalog from "./catalog-target.ts";
-import type { NewSessionRouteData } from "./location.ts";
+import type { DraftPreferenceOptions } from "./draft-gateway-contract.ts";
+import { isNewSessionCatalogTarget, type NewSessionRouteData } from "./location.ts";
 import {
   decodeIdentityPreferences,
   encodeIdentityPreferences,
@@ -19,7 +19,7 @@ import {
   type NewSessionPreference,
 } from "./preferences.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 export type SubmittedWorktreePreference = NewSessionPreference & {
   // Fresh drafts know the stored override; recovery only retains the effective create input.
@@ -44,11 +44,10 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { selection: object; write: Promise<void> };
 type PreferenceWrites = {
-  agents: Map<string, PreferenceWriter>;
+  agents: Map<string, { write: Promise<void> }>;
   revision: object;
-  listeners: Set<(agentId: string, preference: NewSessionPreference) => void>;
+  listeners: Set<(agentId: string, preference: NewSessionPreference, consumed: boolean) => void>;
 };
 
 export class DraftPreferenceState {
@@ -64,8 +63,33 @@ export class DraftPreferenceState {
 
   constructor(
     private readonly read: () => DraftPreferenceSnapshot,
-    private readonly callbacks: { requestUpdate: () => void; onAdoptAgentDefaults: () => void },
+    private readonly callbacks: DraftPreferenceOptions & {
+      changed: () => void;
+      onAdoptAgentDefaults: () => void;
+    },
   ) {}
+
+  static forChat(context: ApplicationContext, changed: () => void): DraftPreferenceState {
+    return new DraftPreferenceState(
+      () => {
+        const gateway = context.gateway;
+        const snapshot = gateway.snapshot;
+        return {
+          source: gateway,
+          client: snapshot.client,
+          gatewayUrl: gateway.connection.gatewayUrl,
+          recoveryScope: snapshot.hello?.auth?.recoveryScope ?? "",
+          bootId: snapshot.hello?.server?.bootId ?? "",
+          connected: snapshot.phase === "connected",
+          connectionEpoch: 0,
+          data: undefined,
+          pendingPlacementSessionKey: "",
+          agentsHydrated: true,
+        };
+      },
+      { changed, onAdoptAgentDefaults: () => {} },
+    );
+  }
 
   get loading(): boolean {
     return this.preferenceModeValue === "loading";
@@ -95,7 +119,7 @@ export class DraftPreferenceState {
     const { client, connected, recoveryScope, profileId } = scope;
     if (connected) {
       const listeners = this.preferenceWrites(gateway).listeners;
-      const listener = (agentId: string, preference: NewSessionPreference) => {
+      const listener = (agentId: string, preference: NewSessionPreference, consumed: boolean) => {
         const snapshot = gateway.snapshot;
         if (
           this.preferenceScope !== scope ||
@@ -106,7 +130,11 @@ export class DraftPreferenceState {
           return;
         }
         this.identityPreferences = { ...this.identityPreferences, [agentId]: preference };
-        this.adoptPreferences();
+        if (consumed) {
+          this.adoptPreferences();
+        } else {
+          this.callbacks.changed();
+        }
       };
       listeners.add(listener);
       this.stopPreferencePublication = () => listeners.delete(listener);
@@ -133,21 +161,33 @@ export class DraftPreferenceState {
     if (this.read().agentsHydrated) {
       this.callbacks.onAdoptAgentDefaults();
     }
-    this.callbacks.requestUpdate();
+    this.callbacks.changed();
   }
 
   readPreference(agentId: string): NewSessionPreference | null {
     const snapshot = this.read();
     if (
-      catalog.isTarget(snapshot.data) ||
+      isNewSessionCatalogTarget(snapshot.data) ||
       snapshot.data?.group ||
       snapshot.pendingPlacementSessionKey
     ) {
       return null;
     }
-    return this.preferenceModeValue === "remote"
-      ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
-      : loadNewSessionPreference(this.read().gatewayUrl, agentId);
+    const ordinary =
+      this.preferenceModeValue === "remote"
+        ? (this.identityPreferences[normalizeAgentId(agentId)] ?? null)
+        : loadNewSessionPreference(snapshot.gatewayUrl, agentId);
+    if (this.callbacks.preferenceScope !== "palette") {
+      return ordinary;
+    }
+    const palette = this.callbacks.readPalettePreference?.();
+    // Name is one-use input belonging to the foreground draft, not a default
+    // the lightweight launcher can silently borrow or consume.
+    return {
+      ...ordinary,
+      ...(palette?.agentId === normalizeAgentId(agentId) ? palette.selection : {}),
+      worktreeName: "",
+    };
   }
 
   private preferenceWrites(source: ApplicationContext["gateway"]): PreferenceWrites {
@@ -167,13 +207,13 @@ export class DraftPreferenceState {
     return this.preparePreferenceWrite(agentId, workspace, { worktreeName: "" }, expected);
   }
 
-  persistPreference(agentId: string, workspace: string, patch: NewSessionPreference) {
+  persistPreference(agentId: string, workspace: string | undefined, patch: NewSessionPreference) {
     return this.preparePreferenceWrite(agentId, workspace, patch)?.();
   }
 
   private preparePreferenceWrite(
     agentIdValue: string,
-    workspace: string,
+    workspace: string | undefined,
     patch: NewSessionPreference,
     expected?: SubmittedWorktreePreference,
   ): ((consume?: () => void) => void | Promise<void>) | undefined {
@@ -181,11 +221,8 @@ export class DraftPreferenceState {
       this.read();
     const accepted = expected !== undefined;
     const persist =
-      !catalog.isTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
-    if (!persist && !accepted) {
-      return undefined;
-    }
-    if (!source) {
+      !isNewSessionCatalogTarget(data) && !data?.group && (accepted || !pendingPlacementSessionKey);
+    if ((!persist && !accepted) || !source) {
       return undefined;
     }
     const scope = this.preferenceScope;
@@ -195,10 +232,9 @@ export class DraftPreferenceState {
     const writes = this.preferenceWrites(source);
     let writer = writes.agents.get(agentId);
     if (!writer) {
-      writer = { selection: {}, write: Promise.resolve() };
+      writer = { write: Promise.resolve() };
       writes.agents.set(agentId, writer);
     }
-    const capturedSelection = writer.selection;
     const ownsConnection = () =>
       Boolean(
         client &&
@@ -210,7 +246,9 @@ export class DraftPreferenceState {
         source.snapshot.hello?.server?.bootId === bootId &&
         source.snapshot.selfUser?.id === profileId,
       );
-    const nextPatch = accepted ? patch : { workspace, ...patch };
+    const nextPatch = accepted
+      ? patch
+      : { ...(workspace === undefined ? {} : { workspace }), ...patch };
     const matchSubmitted = (current: NewSessionPreference | null | undefined) => {
       if (!expected) {
         return "match";
@@ -220,7 +258,7 @@ export class DraftPreferenceState {
         current.worktreeName !== expected.worktreeName ||
         current.worktree !== true ||
         (current.workspace ?? workspace) !== workspace ||
-        resolveNewSessionFolderPreference(current, workspace).folder !== expected.folder ||
+        resolveNewSessionFolderPreference(current, workspace ?? "").folder !== expected.folder ||
         (current.projectId ?? "") !== (expected.projectId ?? "")
       ) {
         return "superseded";
@@ -235,24 +273,15 @@ export class DraftPreferenceState {
       return (current.baseRef ?? "") === (expected.baseRef ?? "") ? "match" : "superseded";
     };
     return async (consume) => {
-      if (accepted && (!ownsConnection() || writer.selection !== capturedSelection)) {
+      if (accepted && !ownsConnection()) {
         return;
       }
-      // Model controls share persistence, but do not replace the submitted checkout intent.
-      const changesPlacement = Object.keys(patch).some(
-        (field) => !["model", "agentRuntime", "thinkingLevel"].includes(field),
-      );
-      const selection = changesPlacement ? {} : writer.selection;
-      writer.selection = selection;
       consume?.();
       if (!persist) {
         return;
       }
-      const isCurrent = () =>
-        accepted
-          ? ownsConnection() && writer.selection === selection
-          : ownsConnection() && this.preferenceScope === scope;
-      // A disconnected controller must still fence work admitted to its Gateway queue.
+      const isCurrent = () => ownsConnection() && (accepted || this.preferenceScope === scope);
+      // A disconnected preference owner must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {
         if (queued) {
@@ -294,8 +323,10 @@ export class DraftPreferenceState {
                   Object.keys(entries).map((key) => [key, current[key] ?? null]),
                 ),
               });
-              // A newer selection cannot undo a clear that already committed.
-              if (accepted ? !ownsConnection() : !isCurrent()) {
+              // Route disposal cannot undo a committed value. Surviving projections
+              // receive it without adopting another draft’s unsubmitted choices.
+              // Uncommitted retries still belong to the initiating draft.
+              if (!ownsConnection() || (result.status !== "ok" && !isCurrent())) {
                 return undefined;
               }
               if (result.status === "conflict") {
@@ -311,15 +342,18 @@ export class DraftPreferenceState {
               }
               next = loadNewSessionPreference(gatewayUrl, agentId) ?? {};
             }
-            if (accepted) {
-              writes.revision = {};
-              for (const listener of writes.listeners) {
-                listener(agentId, next);
-              }
+            writes.revision = {};
+            for (const listener of writes.listeners) {
+              listener(agentId, next, accepted);
             }
             if (current && this.preferenceScope === scope) {
               this.identityPreferences = { ...this.identityPreferences, [agentId]: next };
-              this.callbacks.requestUpdate();
+              if (this.callbacks.preferenceScope === "palette") {
+                // The palette may have reopened while its own model save was pending.
+                this.adoptPreferences();
+              } else {
+                this.callbacks.changed();
+              }
             }
             return true;
           }
@@ -333,6 +367,7 @@ export class DraftPreferenceState {
       writer.write = pending.then((confirmed) => {
         if (confirmed === false && isCurrent()) {
           showToast({
+            severity: "error",
             message: t(
               accepted
                 ? "newSession.worktreeNameClearUnconfirmed"
@@ -423,7 +458,7 @@ export class DraftPreferenceState {
     } catch {
       if (this.preferenceScope === params.scope) {
         this.preferenceModeValue = conflicts > 0 ? "remote" : "local";
-        this.callbacks.requestUpdate();
+        this.callbacks.changed();
       }
     }
   }

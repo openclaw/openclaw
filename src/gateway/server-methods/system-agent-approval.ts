@@ -1,6 +1,7 @@
 // Owns delegated system-agent authorization and exact-proposal completion.
 import { randomUUID } from "node:crypto";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
 import {
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
@@ -15,7 +16,17 @@ import {
 } from "../../infra/system-agent-approvals.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  DelegatedChangeApprovalRequiredError,
+  describeDelegatedChangePolicyApproval,
+} from "../../system-agent/delegated-change-policy.js";
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
+import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
+import {
+  getSystemAgentTemplateGateway,
+  withSystemAgentTemplateGateway,
+} from "../../system-agent/template-gateway.js";
+import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
 import type { AgentRuntimeDelegatedAuthority } from "../agent-runtime-identity-token.js";
 import { ApprovalObserverClosedError } from "../exec-approval-lifecycle.js";
 import { sameWorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -57,7 +68,7 @@ async function retireSystemAgentProposal(
     if (pending?.proposalHash === proposalHash) {
       // Retire the exact local owner before closing its record; storage failure cannot retain it.
       session.pendingApproval = undefined;
-      manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+      await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
     }
   } finally {
     await session.engine.resolveOperatorApproval(null, proposalHash, undefined, "cancelled");
@@ -73,8 +84,8 @@ async function reconcileSystemAgentApproval(
   if (!pending) {
     return undefined;
   }
-  const closed = manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
-  const snapshot = manager?.getSnapshot(pending.id);
+  const closed = await manager?.forceDenyIfRuntimeAuthorityClosed(pending.id);
+  const snapshot = await manager?.getSnapshot(pending.id);
   if (
     !closed &&
     snapshot &&
@@ -119,6 +130,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
     turnSourceThreadId?: string | number;
   };
 }): Promise<DelegatedProposalResolver> {
+  const templateGateway = getSystemAgentTemplateGateway();
   const callerIdentity = getGatewayToolCallerIdentity();
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
@@ -156,7 +168,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
   const assertLiveApprovalAuthority = () => {
     if (!isAuthorityActive() || params.sessions.get(params.sessionId) !== params.session) {
       throw new Error(
-        "OpenClaw change cancelled: system-agent approval authority is no longer active. Retry the request if it is still needed.",
+        `${SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.cancelled} The system-agent approval authority is no longer active.`,
       );
     }
   };
@@ -197,27 +209,42 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       const applyDecision = async (
         decision: ExecApprovalDecision | null,
         terminalStatus?: "expired" | "cancelled",
+        automatic = false,
       ) => {
         if (decision && decision !== "deny") {
           assertLiveApprovalAuthority();
         }
-        return await params.session.engine.resolveOperatorApproval(
-          decision,
-          proposal.hash,
-          assertLiveApprovalAuthority,
-          terminalStatus,
+        return await withSystemAgentTemplateGateway(templateGateway, () =>
+          params.session.engine.resolveOperatorApproval(
+            decision,
+            proposal.hash,
+            () => {
+              assertLiveApprovalAuthority();
+              if (automatic) {
+                callerIdentity!.assertAutoApproveChangesCurrent!();
+              }
+            },
+            terminalStatus,
+          ),
         );
       };
       const resolveCorrection = async (
         reply: NonNullable<Awaited<ReturnType<typeof applyDecision>>>,
       ): Promise<Awaited<ReturnType<DelegatedProposalResolver>> | undefined> => {
+        const correction = params.session.engine.getPendingOperatorProposal();
+        const pluginCapabilityContinuation =
+          proposal.operation.kind === "plugin-install" &&
+          correction?.operation.kind === "plugin-install" &&
+          correction.operation.spec === proposal.operation.spec &&
+          Boolean(correction.operation.capabilityReview);
         if (
           proposal.operation.kind !== "config-set" &&
-          proposal.operation.kind !== "config-set-ref"
+          proposal.operation.kind !== "config-unset" &&
+          proposal.operation.kind !== "config-set-ref" &&
+          !pluginCapabilityContinuation
         ) {
           return undefined;
         }
-        const correction = params.session.engine.getPendingOperatorProposal();
         if (reply.applied === true || !correction) {
           return undefined;
         }
@@ -226,7 +253,9 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         if (corrective || !active) {
           await retireSystemAgentProposal(params.session, manager, correction.hash);
           const notice = active
-            ? "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request."
+            ? pluginCapabilityContinuation
+              ? "The plugin changed during capability review. No plugin change was committed; ask again here to review the current plugin."
+              : "OpenClaw repair stopped after one corrective attempt. Check the current settings before making a new request."
             : "OpenClaw correction cancelled because its approval authority ended. Check the current settings before making a new request.";
           params.session.engine.noteAssistantMessage(notice);
           return { kind: "completed", reply: { ...reply, text: `${reply.text}\n\n${notice}` } };
@@ -242,8 +271,24 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       };
       // Only a fresh proposal belongs to this input. An existing operator request
       // stays bound to its original decision, even if this caller has Full Access.
-      if (callerIdentity?.fullPermission === true) {
-        const reply = await applyDecision("allow-once");
+      let automatic = false;
+      let approvalReason = describeDelegatedChangePolicyApproval(
+        proposal.operation,
+        selectLiveRuntimeConfig(),
+      );
+      if (!approvalReason && callerIdentity?.assertAutoApproveChangesCurrent) {
+        try {
+          callerIdentity.assertAutoApproveChangesCurrent();
+          automatic = callerIdentity.fullPermission !== false;
+        } catch (error) {
+          if (error instanceof DelegatedChangeApprovalRequiredError) {
+            approvalReason = error.message;
+          }
+          // A retired automatic grant may still request an exact human decision.
+        }
+      }
+      if (automatic) {
+        const reply = await applyDecision("allow-once", undefined, true);
         if (!reply) {
           throw new Error("OpenClaw change is no longer pending. Retry the request.");
         }
@@ -252,7 +297,11 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (!manager) {
         throw new Error("OpenClaw approval registry unavailable");
       }
-      const description = describeSystemAgentPersistentOperation(proposal.operation);
+      const operationDescription =
+        proposal.description ?? describeSystemAgentPersistentOperation(proposal.operation);
+      const description = approvalReason
+        ? `${operationDescription}\n\n${approvalReason}`
+        : operationDescription;
       const request: SystemAgentApprovalRequestPayload = {
         title: "OpenClaw change",
         description,
@@ -281,12 +330,12 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         completion: completion.promise,
       };
       const cancelledReply = {
-        text: "OpenClaw change cancelled. No change. Retry the request if it is still needed.",
+        text: SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.cancelled,
         action: "none" as const,
         applied: false,
       };
       const failedReply = {
-        text: "OpenClaw change failed to complete. Check the current settings and OpenClaw status before retrying.",
+        text: SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES.failed,
         action: "none" as const,
         applied: false,
       };
@@ -300,7 +349,7 @@ export async function prepareDelegatedSystemAgentApproval(params: {
       if (callerIdentity?.approvalSignals?.length) {
         record.approvalSignals = callerIdentity.approvalSignals;
       }
-      void manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
+      await manager.register(record, SYSTEM_AGENT_APPROVAL_TIMEOUT_MS);
       const requestEvent = buildRequestedApprovalEvent(record, "system-agent");
       const publishApplicationResult = (
         decision: ExecApprovalDecision,
@@ -321,6 +370,13 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           event: resolvedEvent,
         });
         params.context.approvalEvents?.publishResolved("system-agent", resolvedEvent);
+        void params.context
+          .forwardSystemAgentApprovalResolved?.(resolvedEvent)
+          .catch((error: unknown) => {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat resolution failed: ${String(error)}`,
+            );
+          });
       };
       void handlePendingApprovalRequest({
         manager,
@@ -331,7 +387,20 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         requestEvent,
         twoPhase: true,
         approvalKind: "system-agent",
-        deliverRequest: () => false,
+        // Native cards own their channels; the forwarder answers every other
+        // requesting chat with a `/approve` fallback, so the user can decide in chat.
+        deliverRequest: async () => {
+          try {
+            return (
+              (await params.context.forwardSystemAgentApprovalRequest?.(requestEvent)) ?? false
+            );
+          } catch (error) {
+            params.context.logGateway?.error?.(
+              `OpenClaw approval chat delivery failed: ${String(error)}`,
+            );
+            return false;
+          }
+        },
         keepPendingWithoutRoute: true,
         requireDeliveryRoute: false,
         afterDecision: async (decision) => {
@@ -345,6 +414,15 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                   ) {
                     return { reply: cancelledReply, correction: undefined };
                   }
+                  const transcript = createSystemAgentTranscriptStore({
+                    assertCurrent: () => {
+                      if (params.sessions.get(params.sessionId) !== params.session) {
+                        throw new Error(
+                          "OpenClaw approval session changed during audit persistence",
+                        );
+                      }
+                    },
+                  });
                   let historyStart = params.session.engine.historyLength();
                   const terminalStatus =
                     record.status === "expired"
@@ -369,7 +447,11 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                     params.session.engine.noteAssistantMessage(failedReply.text);
                     return { reply: failedReply, correction: undefined };
                   } finally {
-                    persistSystemAgentEngineHistory(params.session.engine, historyStart);
+                    await persistSystemAgentEngineHistory(
+                      params.session.engine,
+                      historyStart,
+                      transcript,
+                    );
                   }
                 }),
               "system-agent:task",
@@ -380,7 +462,15 @@ export async function prepareDelegatedSystemAgentApproval(params: {
                 : (correction?.reply ?? reply),
             );
             if (decision) {
-              const applicationStatus = reply?.applied === true ? "applied" : "not-applied";
+              // A capability review continues this same installation. Settle the
+              // source card with its final result, not a false interim failure.
+              const finalReply =
+                proposal.operation.kind === "plugin-install" && correction?.kind === "approval"
+                  ? await correction.completion
+                  : correction?.kind === "completed"
+                    ? correction.reply
+                    : reply;
+              const applicationStatus = finalReply?.applied === true ? "applied" : "not-applied";
               publishApplicationResult(decision, applicationStatus);
             }
           } catch (error) {

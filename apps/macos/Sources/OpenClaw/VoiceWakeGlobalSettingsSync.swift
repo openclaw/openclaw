@@ -45,17 +45,14 @@ final class VoiceWakeGlobalSettingsSync {
     }
 
     private func refreshFromGateway(delivery: GatewayConnection.PushDelivery) async {
-        do {
-            let data = try await self.gateway.request(
-                method: GatewayConnection.Method.voicewakeGet.rawValue,
-                params: nil,
-                ifCurrentServerLease: delivery.serverLease)
-            guard !Task.isCancelled, delivery.isCurrent else { return }
-            let payload = try JSONDecoder().decode(VoiceWakePayload.self, from: data)
-            AppStateStore.shared.applyGlobalVoiceWakeTriggers(payload.triggers)
-        } catch {
-            // Best-effort only.
-        }
+        guard let data = try? await self.gateway.request(
+            method: GatewayConnection.Method.voicewakeGet.rawValue,
+            params: nil,
+            ifCurrentServerLease: delivery.serverLease),
+            !Task.isCancelled, delivery.isCurrent,
+            let payload = try? JSONDecoder().decode(VoiceWakePayload.self, from: data)
+        else { return }
+        AppStateStore.shared.applyGlobalVoiceWakeTriggers(payload.triggers)
     }
 
     func handle(push: GatewayPush) {

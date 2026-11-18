@@ -9,7 +9,7 @@ import { scanSkillContent } from "./scanner.js";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 // Skills are instructions an agent executes on the maintainer's own machine, so a critical
-// scanner pattern here (pipe-to-shell installs, secret exfiltration, prompt injection) is a
+// scanner pattern here (pipe-to-shell installs, literal secrets, secret exfiltration) is a
 // shipped defect, not a proposal-time warning the workshop scanner would catch first.
 const CORE_SKILL_ROOTS = [".agents/skills", "skills", "custodian-skills"] as const;
 

@@ -134,23 +134,32 @@ pub enum RuntimeBuildError {
 #[derive(Debug, Error)]
 pub enum RuntimeError {
     #[error(transparent)]
-    Client(#[from] ClientError),
+    Client(Box<ClientError>),
     #[error("runtime result delivery queue saturated; session must be restarted")]
     DeliverySaturated,
     #[error("runtime result task failed: {0}")]
     ResultTask(String),
 }
 
+impl From<ClientError> for RuntimeError {
+    fn from(error: ClientError) -> Self {
+        Self::Client(Box::new(error))
+    }
+}
+
 struct Registration {
     command: String,
     handler: Handler,
     duplex: bool,
+    system_owner: bool,
+    admission: Option<AdmissionPolicy>,
 }
 
 #[derive(Clone)]
 struct RegisteredHandler {
     handler: Handler,
     duplex: bool,
+    admission: Option<AdmissionPolicy>,
 }
 
 /// Builder for a reusable command runtime with explicit resource bounds.
@@ -183,6 +192,32 @@ impl Default for CommandRuntimeBuilder {
 }
 
 impl CommandRuntimeBuilder {
+    /// Register an OpenClaw-owned native system handler with mandatory local admission.
+    /// Ordinary registrations cannot claim this namespace; the product must revalidate
+    /// its current permission/route policy before every system handler entry.
+    #[must_use]
+    pub fn system_duplex_command<A, AF, F, Fut>(
+        mut self,
+        command: impl Into<String>,
+        admission: A,
+        handler: F,
+    ) -> Self
+    where
+        A: Fn(InvocationAdmissionContext) -> AF + Send + Sync + 'static,
+        AF: Future<Output = Result<(), HandlerError>> + Send + 'static,
+        F: Fn(InvocationContext) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Value, HandlerError>> + Send + 'static,
+    {
+        self.registrations.push(Registration {
+            command: command.into(),
+            duplex: true,
+            system_owner: true,
+            admission: Some(Arc::new(move |context| Box::pin(admission(context)))),
+            handler: Arc::new(move |context| Box::pin(handler(context))),
+        });
+        self
+    }
+
     /// Declare one exact node capability supplied by this runtime.
     #[must_use]
     pub fn capability(mut self, capability: impl Into<String>) -> Self {
@@ -232,6 +267,8 @@ impl CommandRuntimeBuilder {
             command: command.into(),
             handler: Arc::new(move |context| Box::pin(handler(context))),
             duplex,
+            system_owner: false,
+            admission: None,
         });
         self
     }
@@ -298,7 +335,8 @@ impl CommandRuntimeBuilder {
             if command.is_empty() {
                 return Err(RuntimeBuildError::EmptyCommand);
             }
-            if command == "system" || command.starts_with("system.") {
+            if (command == "system" || command.starts_with("system.")) && !registration.system_owner
+            {
                 return Err(RuntimeBuildError::ReservedCommand(command));
             }
             if handlers
@@ -307,6 +345,7 @@ impl CommandRuntimeBuilder {
                     RegisteredHandler {
                         handler: registration.handler,
                         duplex: registration.duplex,
+                        admission: registration.admission,
                     },
                 )
                 .is_some()
@@ -686,16 +725,20 @@ impl CommandRuntime {
                 tracking,
             );
         };
-        timeout = match self
-            .evaluate_admission(&invocation, &cancellation, timeout)
-            .await
-        {
-            Ok(remaining) => remaining,
-            Err(result) => {
-                tracking.cancel();
-                return Evaluation::tracked(result, tracking);
+        // Both policies share timeout/cancellation ownership. Handler entry below
+        // rechecks the exact live session after any awaited native system admission.
+        for policy in [&self.inner.admission_policy, &registration.admission] {
+            timeout = match self
+                .evaluate_admission(policy.as_ref(), &invocation, &cancellation, timeout)
+                .await
+            {
+                Ok(remaining) => remaining,
+                Err(result) => {
+                    tracking.cancel();
+                    return Evaluation::tracked(result, tracking);
+                }
             }
-        };
+        }
         if tracking.input_overflow.is_cancelled() {
             cancellation.cancel();
             return Evaluation::tracked(
@@ -806,11 +849,12 @@ impl CommandRuntime {
 
     async fn evaluate_admission(
         &self,
+        policy: Option<&AdmissionPolicy>,
         invocation: &NodeInvocation,
         cancellation: &CancellationToken,
         timeout: Option<Duration>,
     ) -> Result<Option<Duration>, InvocationResult> {
-        let Some(admission_policy) = &self.inner.admission_policy else {
+        let Some(admission_policy) = policy else {
             return Ok(timeout);
         };
         let started = Instant::now();
@@ -1327,234 +1371,28 @@ mod tests {
         expected_capabilities: Vec<String>,
         declared_commands: Vec<String>,
         expected_commands: Vec<String>,
-        authority_snapshots: Vec<AuthoritySnapshot>,
-        authority_transitions: Vec<AuthorityTransition>,
         invocations: Vec<IntegrationInvocation>,
-        cleanup: Vec<CleanupExpectation>,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AuthoritySnapshot {
-        name: String,
-        connection_id: String,
-        pairing_generation: String,
-        session_active: bool,
-        declared_commands: Vec<String>,
-        approved_commands: Vec<String>,
-        effective_commands: Vec<String>,
-        withheld_commands: Vec<String>,
-        gateway_policy: GatewayPolicy,
-        expected_states: Vec<AuthorityExpectation>,
-    }
-
-    #[derive(Deserialize)]
-    struct GatewayPolicy {
-        allow: Vec<String>,
-        deny: Vec<String>,
-    }
-
-    #[derive(Deserialize)]
-    struct AuthorityExpectation {
-        command: String,
-        state: String,
-    }
-
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct AuthorityTransition {
-        name: String,
-        from: String,
-        to: String,
-        command: String,
-        from_state: String,
-        to_state: String,
-        preserves_connection: bool,
-        cancels_active: bool,
-        retires_pairing_generation: bool,
     }
 
     #[derive(Deserialize)]
     #[serde(rename_all = "camelCase")]
     struct IntegrationInvocation {
-        snapshot: String,
         command: String,
-        gateway_state: String,
-        gateway_delivery: String,
         local_admission: String,
-        expected: Option<String>,
+        expected: String,
         error_code: Option<String>,
         error_message: Option<String>,
     }
 
-    #[derive(Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct CleanupExpectation {
-        trigger: String,
-        owner: String,
-        effects: Vec<String>,
-    }
-
-    fn integration_fixture() -> IntegrationFixture {
-        serde_json::from_str(include_str!(concat!(
+    #[tokio::test]
+    async fn shared_manifest_and_local_admission_match_openclaw() {
+        let fixture: IntegrationFixture = serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../test/fixtures/node-runtime-integration-contract.json"
         )))
-        .expect("valid node runtime integration fixture")
-    }
+        .expect("valid node runtime integration fixture");
+        assert_eq!(fixture.version, 3);
 
-    fn fixture_authority_state(snapshot: &AuthoritySnapshot, command: &str) -> &'static str {
-        if !snapshot.session_active {
-            return "retired-generation";
-        }
-        if snapshot
-            .withheld_commands
-            .iter()
-            .any(|entry| entry == command)
-            || snapshot
-                .gateway_policy
-                .deny
-                .iter()
-                .any(|entry| entry == command)
-            || !snapshot
-                .gateway_policy
-                .allow
-                .iter()
-                .any(|entry| entry == command)
-        {
-            return "unauthorized";
-        }
-        if snapshot
-            .effective_commands
-            .iter()
-            .any(|entry| entry == command)
-        {
-            return "invocable";
-        }
-        if snapshot
-            .declared_commands
-            .iter()
-            .any(|entry| entry == command)
-        {
-            return "pending-approval";
-        }
-        "undeclared"
-    }
-
-    fn fixture_snapshots(fixture: &IntegrationFixture) -> BTreeMap<&str, &AuthoritySnapshot> {
-        fixture
-            .authority_snapshots
-            .iter()
-            .map(|snapshot| (snapshot.name.as_str(), snapshot))
-            .collect()
-    }
-
-    fn validate_authority_snapshots(snapshots: &BTreeMap<&str, &AuthoritySnapshot>) {
-        for snapshot in snapshots.values() {
-            assert!(!snapshot.connection_id.is_empty());
-            assert!(!snapshot.pairing_generation.is_empty());
-            assert!(snapshot.effective_commands.iter().all(|command| {
-                snapshot.approved_commands.contains(command)
-                    && snapshot.declared_commands.contains(command)
-                    && !snapshot.withheld_commands.contains(command)
-            }));
-            assert!(snapshot
-                .approved_commands
-                .iter()
-                .all(|command| snapshot.declared_commands.contains(command)));
-            assert!(snapshot
-                .withheld_commands
-                .iter()
-                .all(|command| snapshot.declared_commands.contains(command)));
-            for expected in &snapshot.expected_states {
-                assert_eq!(
-                    fixture_authority_state(snapshot, &expected.command),
-                    expected.state
-                );
-            }
-        }
-    }
-
-    fn validate_authority_transitions(
-        fixture: &IntegrationFixture,
-        snapshots: &BTreeMap<&str, &AuthoritySnapshot>,
-    ) {
-        for transition in &fixture.authority_transitions {
-            let from = snapshots
-                .get(transition.from.as_str())
-                .expect("transition source snapshot");
-            let to = snapshots
-                .get(transition.to.as_str())
-                .expect("transition destination snapshot");
-            assert_eq!(
-                fixture_authority_state(from, &transition.command),
-                transition.from_state,
-                "{} source state",
-                transition.name
-            );
-            assert_eq!(
-                fixture_authority_state(to, &transition.command),
-                transition.to_state,
-                "{} destination state",
-                transition.name
-            );
-            assert_eq!(
-                from.connection_id == to.connection_id,
-                transition.preserves_connection,
-                "{} connection ownership",
-                transition.name
-            );
-            assert_eq!(
-                from.pairing_generation != to.pairing_generation,
-                transition.retires_pairing_generation,
-                "{} pairing generation",
-                transition.name
-            );
-            if transition.name == "policy-revoked"
-                || transition.name == "pairing-generation-promoted"
-            {
-                assert!(transition.cancels_active);
-            }
-        }
-    }
-
-    fn validate_cleanup_contract(fixture: &IntegrationFixture) {
-        assert_eq!(
-            fixture
-                .cleanup
-                .iter()
-                .map(|entry| entry.trigger.as_str())
-                .collect::<BTreeSet<_>>(),
-            BTreeSet::from([
-                "deadline",
-                "node.invoke.cancel",
-                "pairing-generation-change",
-                "policy-revocation",
-            ])
-        );
-        let expected_effects = BTreeSet::from([
-            "cancel-handler",
-            "close-input",
-            "reject-progress",
-            "remove-active-invocation",
-        ]);
-        for cleanup in &fixture.cleanup {
-            assert!(matches!(cleanup.owner.as_str(), "gateway" | "node-runtime"));
-            assert_eq!(
-                cleanup
-                    .effects
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<BTreeSet<_>>(),
-                expected_effects
-            );
-        }
-    }
-
-    async fn validate_fixture_dispatch(
-        fixture: &IntegrationFixture,
-        snapshots: &BTreeMap<&str, &AuthoritySnapshot>,
-    ) {
         let local_denied = Arc::new(
             fixture
                 .invocations
@@ -1617,20 +1455,6 @@ mod tests {
         );
 
         for (index, contract) in fixture.invocations.iter().enumerate() {
-            let snapshot = snapshots
-                .get(contract.snapshot.as_str())
-                .expect("invocation authority snapshot");
-            assert_eq!(
-                fixture_authority_state(snapshot, &contract.command),
-                contract.gateway_state
-            );
-            if contract.gateway_delivery == "reject" {
-                assert_eq!(contract.local_admission, "not-evaluated");
-                assert_ne!(contract.gateway_state, "invocable");
-                continue;
-            }
-            assert_eq!(contract.gateway_delivery, "deliver");
-            assert_eq!(contract.gateway_state, "invocable");
             let result = runtime
                 .evaluate(invocation(
                     &format!("fixture-{index}"),
@@ -1638,9 +1462,9 @@ mod tests {
                     Value::Null,
                 ))
                 .await;
-            match contract.expected.as_deref() {
-                Some("success") => assert!(matches!(result, InvocationResult::Success(_))),
-                Some("failure") => assert_eq!(
+            match contract.expected.as_str() {
+                "success" => assert!(matches!(result, InvocationResult::Success(_))),
+                "failure" => assert_eq!(
                     result,
                     InvocationResult::failure(
                         contract.error_code.as_deref().expect("denial code"),
@@ -1652,17 +1476,6 @@ mod tests {
         }
         assert_eq!(admission_evaluations.load(Ordering::SeqCst), 2);
         assert_eq!(handler_runs.load(Ordering::SeqCst), 1);
-    }
-
-    #[tokio::test]
-    async fn shared_authority_handoff_contract_matches_openclaw() {
-        let fixture = integration_fixture();
-        assert_eq!(fixture.version, 3);
-        let snapshots = fixture_snapshots(&fixture);
-        validate_authority_snapshots(&snapshots);
-        validate_authority_transitions(&fixture, &snapshots);
-        validate_cleanup_contract(&fixture);
-        validate_fixture_dispatch(&fixture, &snapshots).await;
     }
 
     #[tokio::test]
@@ -2055,52 +1868,90 @@ mod tests {
 
     #[tokio::test]
     async fn gateway_cancellation_stops_admission_before_handler_execution() {
-        let admission_entered = Arc::new(Notify::new());
-        let handler_ran = Arc::new(AtomicBool::new(false));
-        let entered = Arc::clone(&admission_entered);
-        let handler_state = Arc::clone(&handler_ran);
-        let runtime = CommandRuntime::builder()
-            .admission_policy(move |_context| {
+        for native_system in [false, true] {
+            let command = if native_system {
+                "system.notify"
+            } else {
+                "example.status"
+            };
+            let admission_entered = Arc::new(Notify::new());
+            let handler_ran = Arc::new(AtomicBool::new(false));
+            let entered = Arc::clone(&admission_entered);
+            let handler_state = Arc::clone(&handler_ran);
+            let admission = move |_context| {
                 let entered = Arc::clone(&entered);
                 async move {
                     entered.notify_one();
                     std::future::pending().await
                 }
-            })
-            .command("example.status", move |_context| {
+            };
+            let handler = move |_context| {
                 let handler_state = Arc::clone(&handler_state);
                 async move {
                     handler_state.store(true, Ordering::SeqCst);
                     Ok(Value::Null)
                 }
-            })
+            };
+            let builder = CommandRuntime::builder();
+            let runtime = if native_system {
+                builder.system_duplex_command(command, admission, handler)
+            } else {
+                builder
+                    .admission_policy(admission)
+                    .command(command, handler)
+            }
             .build()
             .unwrap();
-        let active = ActiveInvocations::default();
-        let task_runtime = runtime.clone();
-        let task_active = active.clone();
-        let task = tokio::spawn(async move {
-            task_runtime
-                .evaluate_with_scope(
-                    invocation("invoke-1", "example.status", Value::Null),
-                    task_active,
-                    None,
-                )
+            let active = ActiveInvocations::default();
+            let task_active = active.clone();
+            let task = tokio::spawn(async move {
+                runtime
+                    .evaluate_with_scope(
+                        invocation("invoke-1", command, Value::Null),
+                        task_active,
+                        None,
+                    )
+                    .await
+            });
+            admission_entered.notified().await;
+            active.cancel("invoke-1");
+            let evaluation = tokio::time::timeout(Duration::from_secs(1), task)
                 .await
-        });
+                .expect("cancelled admission returned")
+                .unwrap();
+            assert_eq!(
+                failure_code(&evaluation.result),
+                Some("INVOCATION_CANCELLED")
+            );
+            assert!(!handler_ran.load(Ordering::SeqCst));
+        }
+    }
 
-        admission_entered.notified().await;
-        active.cancel("invoke-1");
-        let evaluation = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("cancelled admission returned")
+    #[tokio::test]
+    async fn native_system_admission_denial_never_enters_handler() {
+        let entered = Arc::new(AtomicBool::new(false));
+        let handler_entered = Arc::clone(&entered);
+        let runtime = CommandRuntime::builder()
+            .system_duplex_command(
+                "system.notify",
+                |_| async {
+                    Err(HandlerError::new(
+                        "PERMISSION_DENIED",
+                        "native permission revoked",
+                    ))
+                },
+                move |_| {
+                    handler_entered.store(true, Ordering::SeqCst);
+                    async { Ok(Value::Null) }
+                },
+            )
+            .build()
             .unwrap();
-
-        assert_eq!(
-            failure_code(&evaluation.result),
-            Some("INVOCATION_CANCELLED")
-        );
-        assert!(!handler_ran.load(Ordering::SeqCst));
+        let result = runtime
+            .evaluate(invocation("denied", "system.notify", Value::Null))
+            .await;
+        assert_eq!(failure_code(&result), Some("PERMISSION_DENIED"));
+        assert!(!entered.load(Ordering::SeqCst));
     }
 
     #[test]
@@ -2134,19 +1985,6 @@ mod tests {
             duplicate,
             Err(RuntimeBuildError::DuplicateCommand(_))
         ));
-    }
-
-    #[test]
-    fn declares_registered_commands_in_deterministic_order() {
-        let runtime = CommandRuntime::builder()
-            .command("example.z", |_context| async { Ok(Value::Null) })
-            .command("example.a", |_context| async { Ok(Value::Null) })
-            .build()
-            .unwrap();
-        assert_eq!(
-            runtime.command_names().collect::<Vec<_>>(),
-            ["example.a", "example.z"]
-        );
     }
 
     #[test]

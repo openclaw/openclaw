@@ -1,28 +1,61 @@
-/**
- * Shared Express middleware for Browser control routes, including auth marking,
- * JSON parsing, abort signals, and mutation CSRF checks.
- */
-import type { Express, Request } from "express";
+import type { Express, NextFunction, Request, Response } from "express";
 import express from "express";
-import { browserMutationGuardMiddleware } from "./csrf.js";
-import { isAuthorizedBrowserRequest } from "./http-auth.js";
+import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserControlAuth } from "./control-auth.js";
+import { firstHeader, isAuthorizedBrowserRequest } from "./http-auth.js";
 
-const BROWSER_AUTH_VERIFIED_FLAG = "__openclawBrowserAuthVerified";
+const authenticatedRequests = new WeakSet<Request>();
 
-type BrowserAuthMarkedRequest = Request & {
-  [BROWSER_AUTH_VERIFIED_FLAG]?: boolean;
-};
+function isMutatingMethod(method: string): boolean {
+  const m = (method || "").trim().toUpperCase();
+  return m === "POST" || m === "PUT" || m === "PATCH" || m === "DELETE";
+}
 
-/** Returns whether Browser auth middleware already verified this request. */
+/** Return true when a request should be rejected as browser-originated CSRF. */
+function shouldRejectBrowserMutation(params: {
+  method: string;
+  origin?: string;
+  referer?: string;
+  secFetchSite?: string;
+}): boolean {
+  if (!isMutatingMethod(params.method)) {
+    return false;
+  }
+
+  // Strong signal when present: browser says this is cross-site.
+  // Avoid being overly clever with "same-site" since localhost vs 127.0.0.1 may differ.
+  const secFetchSite = normalizeLowercaseStringOrEmpty(params.secFetchSite);
+  if (secFetchSite === "cross-site") {
+    return true;
+  }
+
+  // Non-browser clients (curl/undici/Node) typically send no Origin/Referer.
+  const source = (params.origin ?? "").trim() || (params.referer ?? "").trim();
+  return source ? !isLoopbackHost(URL.parse(source.trim())?.hostname ?? "") : false;
+}
+
+/** Reject browser-control mutation requests from unsafe cross-site contexts. */
+function browserMutationGuardMiddleware(req: Request, res: Response, next: NextFunction): void {
+  if (
+    shouldRejectBrowserMutation({
+      method: req.method,
+      origin: firstHeader(req.headers.origin),
+      referer: firstHeader(req.headers.referer),
+      secFetchSite: firstHeader(req.headers["sec-fetch-site"]),
+    })
+  ) {
+    res.status(403).send("Forbidden");
+    return;
+  }
+
+  next();
+}
+
 export function hasVerifiedBrowserAuth(req: Request): boolean {
-  return (req as BrowserAuthMarkedRequest)[BROWSER_AUTH_VERIFIED_FLAG] === true;
+  return authenticatedRequests.has(req);
 }
 
-function markVerifiedBrowserAuth(req: Request) {
-  (req as BrowserAuthMarkedRequest)[BROWSER_AUTH_VERIFIED_FLAG] = true;
-}
-
-/** Installs common Browser control-server middleware. */
 export function installBrowserCommonMiddleware(app: Express) {
   app.use((req, res, next) => {
     const ctrl = new AbortController();
@@ -41,21 +74,17 @@ export function installBrowserCommonMiddleware(app: Express) {
     });
     next();
   });
-  app.use(browserMutationGuardMiddleware());
+  app.use(browserMutationGuardMiddleware);
   app.use(express.json({ limit: "1mb" }));
 }
 
-/** Installs optional token/password auth for Browser control-server requests. */
-export function installBrowserAuthMiddleware(
-  app: Express,
-  auth: { token?: string; password?: string },
-) {
+export function installBrowserAuthMiddleware(app: Express, auth: BrowserControlAuth) {
   if (!auth.token && !auth.password) {
     return;
   }
   app.use((req, res, next) => {
     if (isAuthorizedBrowserRequest(req, auth)) {
-      markVerifiedBrowserAuth(req);
+      authenticatedRequests.add(req);
       return next();
     }
     res.status(401).send("Unauthorized");

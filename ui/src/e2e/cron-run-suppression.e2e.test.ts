@@ -1,9 +1,15 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { CronJob, CronRunLogEntry } from "../api/types.ts";
+import type { CronJob, CronRunsResult } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture, createCronRunsResult } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  cronSidebarFeatureMethods,
+  openAutomation,
+  openAutomationActivity,
+} from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron recorded delivery suppression",
@@ -25,7 +31,7 @@ suite.define(() => {
       delivery: { mode: "announce", channel: "last", bestEffort: true },
       state: {},
     };
-    const entries: CronRunLogEntry[] = [
+    const entries: CronRunsResult["entries"] = [
       {
         ts: 4_000,
         jobId: job.id,
@@ -55,8 +61,10 @@ suite.define(() => {
         const pageErrors: string[] = [];
         page.on("pageerror", (error) => pageErrors.push(error.message));
         const gateway = await installMockGateway(page, {
+          featureMethods: cronSidebarFeatureMethods,
           methodResponses: {
-            "cron.list": {
+            "cron.get": job,
+            "cron.list": cronListResponseFixture({
               jobs: [job],
               snapshotRevision: "delivery-history-proof",
               total: 1,
@@ -64,29 +72,18 @@ suite.define(() => {
               limit: 50,
               nextOffset: null,
               hasMore: false,
-            },
-            "cron.runs": {
-              entries,
-              total: entries.length,
-              offset: 0,
-              limit: 50,
-              nextOffset: null,
-              hasMore: false,
-            },
+            }),
+            "cron.runs": createCronRunsResult(entries),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: 1 },
           },
         });
         const response = await page.goto(`${suite.server.baseUrl}cron`);
         expect(response?.status()).toBe(200);
-        await page.locator('[data-test-id="cron-list-tab-activity"]').click();
+        await openAutomationActivity(page);
 
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
-            await page.locator('[data-test-id="cron-tab-all"]').click();
-            await page
-              .locator(`[data-test-id="cron-row-${job.id}"] .cron-table__name-text`)
-              .click();
-            await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+            await openAutomation(page, job.id);
           }
           await expect
             .poll(async () =>
@@ -103,7 +100,8 @@ suite.define(() => {
           const suppressed = runs.nth(0);
           const failedDelivery = runs.nth(1);
           for (const run of [suppressed, failedDelivery]) {
-            expect(await run.locator(".cron-run-entry__title").textContent()).toContain("OK");
+            const title = await run.locator(".cron-run-entry__title").textContent();
+            expect(title).toContain("Completed");
             expect(await run.locator(".cron-run-entry__facts").textContent()).toContain(
               "Not delivered",
             );

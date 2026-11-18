@@ -1,29 +1,11 @@
 // Codex tests cover image payload sanitizer plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  invalidInlineImageText,
-  sanitizeCodexHistoryImagePayloads,
-  sanitizeInlineImageDataUrl,
-} from "./image-payload-sanitizer.js";
+import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 const PNG_1X1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4nGNgYAAAAAMAASsJTYQAAAAASUVORK5CYII=";
 
 describe("Codex app-server image payload sanitizer", () => {
-  it("drops malformed data URL image payloads", () => {
-    expect(sanitizeInlineImageDataUrl("data:image/jpeg;base64,not base64!")).toBeUndefined();
-  });
-
-  it("canonicalizes valid data URL images with sniffed MIME type", () => {
-    expect(sanitizeInlineImageDataUrl(`data:image/jpeg;base64,\n${PNG_1X1}`)).toBe(
-      `data:image/png;base64,${PNG_1X1}`,
-    );
-  });
-
-  it("formats the text replacement used for invalid images", () => {
-    expect(invalidInlineImageText("codex user input")).toContain("invalid inline image data");
-  });
-
   it("reuses unchanged history including canonical images and unknown nested values", () => {
     const history = Object.freeze([
       Object.freeze({
@@ -46,7 +28,10 @@ describe("Codex app-server image payload sanitizer", () => {
     {
       name: "invalid image",
       image: { type: "image", mimeType: "image/jpeg", data: "not base64!" },
-      expected: { type: "text", text: invalidInlineImageText("history") },
+      expected: {
+        type: "text",
+        text: "[history] omitted image payload: invalid inline image data",
+      },
     },
     {
       name: "normalized image",
@@ -56,7 +41,10 @@ describe("Codex app-server image payload sanitizer", () => {
     {
       name: "invalid inputImage",
       image: { type: "inputImage", imageUrl: "data:image/png;base64,invalid!" },
-      expected: { type: "inputText", text: invalidInlineImageText("history") },
+      expected: {
+        type: "inputText",
+        text: "[history] omitted image payload: invalid inline image data",
+      },
     },
     {
       name: "normalized inputImage",
@@ -66,7 +54,10 @@ describe("Codex app-server image payload sanitizer", () => {
     {
       name: "invalid input_image",
       image: { type: "input_image", image_url: "data:image/png;base64,invalid!" },
-      expected: { type: "input_text", text: invalidInlineImageText("history") },
+      expected: {
+        type: "input_text",
+        text: "[history] omitted image payload: invalid inline image data",
+      },
     },
     {
       name: "normalized input_image",

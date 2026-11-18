@@ -6,6 +6,7 @@ import {
   SKILL_LIBRARY_MAX_FILE_BYTES,
   SKILL_LIBRARY_MAX_FILES,
 } from "../../packages/gateway-protocol/src/schema/skill-library.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { SKILL_LIBRARY_MAX_TREE_ENTRIES } from "../skills/library/bundle.js";
 import {
   pluginSkillFileFromBytes,
@@ -22,14 +23,19 @@ import {
 
 /** A release inventory supplies both the declared boundary and exact hashes; no archive or install. */
 export async function fetchClawHubPluginSkill(
-  params: Pick<
-    ClawHubRequestParams,
-    "baseUrl" | "token" | "skipAuth" | "timeoutMs" | "fetchImpl"
-  > & { packageName: string; version: string; skillName: string },
+  params: Pick<ClawHubRequestParams, "baseUrl" | "token" | "skipAuth" | "timeoutMs"> & {
+    packageName: string;
+    version: string;
+    skillName: string;
+    path?: string;
+  },
 ): Promise<PluginsSkillsReadResult> {
-  // One read must fit the modal request budget, including all file bodies.
-  const deadline = Date.now() + (params.timeoutMs ?? 30_000);
-  const remainingMs = () => Math.max(1, deadline - Date.now());
+  // Inventory plus one selected body share the request budget; never prefetch siblings.
+  if (params.path !== undefined) {
+    validatePluginSkillPath(params.path);
+  }
+  const deadline = monotonicNow() + (params.timeoutMs ?? 30_000);
+  const remainingMs = () => Math.max(1, deadline - monotonicNow());
   const basePath = `/api/v1/packages/${encodeURIComponent(params.packageName)}`;
   const value = await fetchClawHubJson<unknown>({
     ...params,
@@ -100,6 +106,10 @@ export async function fetchClawHubPluginSkill(
   ) {
     throw new Error("ClawHub skill inventory is incomplete or ambiguous.");
   }
+  const selectedPath = params.path ?? entryPath;
+  if (!files.some((file) => file.path === selectedPath)) {
+    throw new Error("Plugin skill file not found.");
+  }
   const directories = new Set(
     files.flatMap((file) => {
       const parts = file.path.split("/");
@@ -127,12 +137,17 @@ export async function fetchClawHubPluginSkill(
       result.files.push({ path: file.path, sizeBytes: file.size, status: "too-large" });
       continue;
     }
-    if (Date.now() >= deadline) {
+    // Charge the complete eligible inventory in deterministic order so selections
+    // cannot evade the aggregate bundle limit. Only the chosen body is transferred.
+    totalBytes += file.size;
+    if (file.path !== selectedPath) {
+      result.files.push({ path: file.path, sizeBytes: file.size, status: "deferred" });
+      continue;
+    }
+    if (monotonicNow() >= deadline) {
       result.files.push({ path: file.path, sizeBytes: file.size, status: "unavailable" });
       continue;
     }
-    // Reserve advertised bytes even for failed reads, keeping the entire operation bounded.
-    totalBytes += file.size;
     try {
       const read = await withClawHubResponse(
         {

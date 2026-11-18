@@ -2,6 +2,7 @@ package ai.openclaw.app.chat
 
 import ai.openclaw.app.NodeApp
 import ai.openclaw.app.NodeForegroundService
+import ai.openclaw.app.gateway.GatewayErrorDetails
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestOutcomeUnknown
 import ai.openclaw.app.gateway.GatewayRequestRejected
@@ -928,6 +929,53 @@ class ChatControllerOutboxTest {
     }
 
   @Test
+  fun restartAdmissionRejectionResumesTheSameSendAfterReconnect() {
+    for (liveSend in listOf(false, true)) {
+      outboxTest {
+        val chat = controller()
+        gateway.online = liveSend
+        chat.load("main")
+        advanceUntilIdle()
+        gateway.sendFailureAfterDispatch =
+          GatewayRequestRejected(
+            GatewaySession.ErrorShape(
+              code = "UNAVAILABLE",
+              message = "Gateway is restarting",
+              details =
+                GatewayErrorDetails(
+                  code = null,
+                  canRetryWithDeviceToken = false,
+                  recommendedNextStep = null,
+                  reason = "gateway-restarting",
+                  retryable = true,
+                ),
+            ),
+          )
+        chat.sendMessageAwaitAcceptance(message = "survive the restart", thinkingLevel = "off", attachments = emptyList())
+        if (!liveSend) {
+          gateway.online = true
+          chat.handleGatewayEvent("health", null)
+        }
+        advanceUntilIdle()
+
+        val queued = chat.outboxItems.value.single()
+        assertEquals(ChatOutboxStatus.Queued, queued.status)
+        assertEquals(0, queued.retryCount)
+        assertEquals(listOf(queued.id), gateway.sentIdempotencyKeys)
+        assertFalse(chat.healthOk.value)
+
+        gateway.sendFailureAfterDispatch = null
+        chat.handleGatewayEvent("health", null)
+        advanceUntilIdle()
+
+        assertEquals(listOf(queued.id, queued.id), gateway.sentIdempotencyKeys)
+        assertTrue(chat.outboxItems.value.isEmpty())
+        assertEquals(1, chat.messages.value.count { it.idempotencyKey == "${queued.id}:user" })
+      }
+    }
+  }
+
+  @Test
   fun transmittedGatewayRejectionNeverReplaysUntilExplicitRetryAcrossRestart() =
     outboxTest {
       val processJob = SupervisorJob()
@@ -1563,6 +1611,9 @@ class ChatControllerOutboxTest {
       val loaded = outbox.loadAttachments(queued.id)
       assertTrue(imageBytes.contentEquals(loaded[0].bytes))
       assertTrue(voiceBytes.contentEquals(loaded[1].bytes))
+      // The queued bubble's thumbnail reads the stored photo; audio never feeds an image preview.
+      assertTrue(imageBytes.contentEquals(chat.loadOutboxImagePreview(queued.attachments[0])))
+      assertNull(chat.loadOutboxImagePreview(queued.attachments[1]))
 
       // Reconnect flushes the attachment payload with the captured metadata.
       gateway.online = true
@@ -1873,7 +1924,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "captured main turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -1913,7 +1964,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "already projected turn",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -1949,7 +2000,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "return after ack",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -1984,7 +2035,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "hidden accepted turn",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -2016,7 +2067,7 @@ class ChatControllerOutboxTest {
       advanceUntilIdle()
 
       assertTrue(
-        chat.sendMessageForOwnerAwaitAcceptance(
+        chat.sendMessageAwaitAcceptance(
           message = "visible then hidden turn",
           thinkingLevel = "off",
           attachments = emptyList(),
@@ -2231,7 +2282,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "same owner turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -2286,7 +2337,7 @@ class ChatControllerOutboxTest {
         val attachment = OutgoingAttachment(type = "image", mimeType = "image/png", fileName = "reply.png", base64 = "AQIDBA==")
         val send =
           async(start = CoroutineStart.LAZY) {
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "reply after settings",
               thinkingLevel = "off",
               attachments = listOf(attachment),
@@ -2377,7 +2428,7 @@ class ChatControllerOutboxTest {
         val attachment = OutgoingAttachment(type = "image", mimeType = "image/png", fileName = "reply.png", base64 = "AQIDBA==")
         val send =
           async(start = CoroutineStart.LAZY) {
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "reply after history",
               thinkingLevel = "off",
               attachments = listOf(attachment),
@@ -2458,7 +2509,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "old agent turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -2500,7 +2551,7 @@ class ChatControllerOutboxTest {
       val send =
         launch {
           accepted =
-            chat.sendMessageForOwnerAwaitAcceptance(
+            chat.sendMessageAwaitAcceptance(
               message = "flush-owned turn",
               thinkingLevel = "off",
               attachments = emptyList(),
@@ -2539,7 +2590,7 @@ class ChatControllerOutboxTest {
 
       val send =
         async {
-          chat.sendMessageForOwnerAwaitAcceptance(
+          chat.sendMessageAwaitAcceptance(
             message = "captured owner",
             thinkingLevel = "off",
             attachments = emptyList(),
@@ -3001,7 +3052,7 @@ class ChatControllerOutboxTest {
       runCurrent()
       chat.setThinkingLevel("off")
 
-      chat.sendMessage(message = "waits for recovery", thinkingLevel = "off", attachments = emptyList())
+      val send = async { chat.sendMessageAwaitAcceptance(message = "waits for recovery", thinkingLevel = "off", attachments = emptyList()) }
       runCurrent()
       try {
         // The row is journaled but must not be claimed 'sending' while the unscoped recovery
@@ -3012,6 +3063,7 @@ class ChatControllerOutboxTest {
       } finally {
         recoveryGate.complete(Unit)
       }
+      assertTrue(send.await())
       advanceUntilIdle()
       assertEquals(listOf("waits for recovery"), gateway.sentMessages)
       assertTrue(outbox.rows().isEmpty())

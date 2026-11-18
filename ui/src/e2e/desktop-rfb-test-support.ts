@@ -1,20 +1,5 @@
-import { deflateSync } from "node:zlib";
 import type { Locator, Page } from "playwright";
 import type { DesktopClient } from "../components/desktop/desktop-client.ts";
-
-export function createRfbClipboardProvide(format: 1 | 2): number[] {
-  const text = Buffer.from("Clipboard continuity: Café Ω\0");
-  const payload = Buffer.alloc(4 + text.length);
-  payload.writeUInt32BE(text.length);
-  text.copy(payload, 4);
-  const compressed = deflateSync(payload);
-  const message = Buffer.alloc(12 + compressed.length);
-  message[0] = 3; // ServerCutText, extended Provide with a zlib-compressed format payload.
-  message.writeInt32BE(-(4 + compressed.length), 4);
-  message.writeUInt32BE(0x10000000 | format, 8);
-  compressed.copy(message, 12);
-  return [...message];
-}
 
 export function createRfbRawFrame(): number[] {
   const width = 96;
@@ -207,10 +192,12 @@ export async function installScriptedRfbServer(
     });
     window.WebSocket = RoutedSocket as unknown as typeof WebSocket;
     (
-      window as typeof window & { triggerDesktopRfbDisconnect?: (reason: string) => void }
-    ).triggerDesktopRfbDisconnect = (reason) => {
+      window as typeof window & {
+        triggerDesktopRfbDisconnect?: (reason: string, code?: number) => void;
+      }
+    ).triggerDesktopRfbDisconnect = (reason, code = 1006) => {
       for (const socket of sockets) {
-        socket.close(1006, reason);
+        socket.close(code, reason);
       }
     };
     (window as typeof window & { desktopRfbEvents?: () => string[] }).desktopRfbEvents = () => [
@@ -266,13 +253,15 @@ export async function installScriptedRfbServer(
           ).desktopRfbSend?.(messages),
         chunks,
       ),
-    disconnect: (reason: string) =>
+    disconnect: (reason: string, code = 1006) =>
       page.evaluate(
-        (message) =>
+        ({ message, closeCode }) =>
           (
-            window as typeof window & { triggerDesktopRfbDisconnect?: (reason: string) => void }
-          ).triggerDesktopRfbDisconnect?.(message),
-        reason,
+            window as typeof window & {
+              triggerDesktopRfbDisconnect?: (reason: string, code?: number) => void;
+            }
+          ).triggerDesktopRfbDisconnect?.(message, closeCode),
+        { message: reason, closeCode: code },
       ),
     events: () =>
       page.evaluate(

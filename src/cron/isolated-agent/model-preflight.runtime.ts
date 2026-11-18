@@ -1,13 +1,20 @@
 /** Preflights local model-provider endpoints before scheduled cron runner startup. */
+import { once } from "node:events";
+import net from "node:net";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isLocalProviderBaseUrl } from "../../agents/model-provider-local.js";
 import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
+import { isManagedProxyActive } from "../../infra/net/fetch-guard.js";
+import { shouldUseEnvHttpProxyForUrl } from "../../infra/net/proxy-env.js";
+import { resolvePinnedHostnameWithPolicy } from "../../infra/net/ssrf.js";
+import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 
 const PREFLIGHT_CACHE_TTL_MS = 5 * 60_000;
 const PREFLIGHT_TIMEOUT_MS = 2_500;
@@ -58,41 +65,9 @@ function resolveProviderConfig(
   return Object.entries(providers).find(([key]) => normalizeProviderId(key) === normalized)?.[1];
 }
 
-function normalizeBaseUrl(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim().replace(/\/+$/, "");
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizeProbeApi(providerConfig: ModelProviderConfig): PreflightApi | undefined {
   const api = normalizeLowercaseStringOrEmpty(providerConfig.api);
   return api === "ollama" || api === "openai-completions" ? api : undefined;
-}
-
-function buildProbeUrl(api: PreflightApi, baseUrl: string): string {
-  if (api === "ollama") {
-    return `${baseUrl}/api/tags`;
-  }
-  return `${baseUrl}/models`;
-}
-
-function buildLocalProviderSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return {
-      // Local-provider probes intentionally allow private hosts, but only the
-      // exact hostname from the configured provider base URL.
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
-    return undefined;
-  }
 }
 
 function readErrorProperty(error: unknown, key: "cause" | "code" | "message" | "name"): unknown {
@@ -123,31 +98,21 @@ function collectPreflightErrorCauseChain(error: unknown): unknown[] {
   return chain;
 }
 
-function formatPreflightError(error: unknown): string {
-  const causeChain = collectPreflightErrorCauseChain(error);
-  const causeDetails = formatErrorMessageWithCode(error);
-  // fetchWithSsrFGuard propagates only its owned deadline as TimeoutError.
-  const classified = causeChain.some(
+function isPreflightTimeout(error: unknown): boolean {
+  // The probe-owned deadline also survives inside an AbortError cause.
+  return collectPreflightErrorCauseChain(error).some(
     (candidate) => readErrorProperty(candidate, "name") === "TimeoutError",
-  )
+  );
+}
+
+function formatPreflightError(error: unknown): string {
+  const causeDetails = formatErrorMessageWithCode(error);
+  const classified = isPreflightTimeout(error)
     ? `Local provider preflight exceeded its configured ${PREFLIGHT_TIMEOUT_MS}ms deadline | ${causeDetails}`
     : causeDetails;
   return classified.length <= MAX_PREFLIGHT_ERROR_CHARS
     ? classified
     : `${truncateUtf16Safe(classified, MAX_PREFLIGHT_ERROR_CHARS - 1)}…`;
-}
-
-function formatUnavailableReason(params: {
-  provider: string;
-  model: string;
-  baseUrl: string;
-  error: unknown;
-}): string {
-  return [
-    `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
-    `The candidate is unavailable for this run; OpenClaw will retry its provider preflight on a later scheduled run.`,
-    `Last error: ${formatPreflightError(params.error)}`,
-  ].join(" ");
 }
 
 function buildUnavailableResult(params: {
@@ -162,38 +127,47 @@ function buildUnavailableResult(params: {
     model: params.model,
     baseUrl: params.baseUrl,
     retryAfterMs: PREFLIGHT_CACHE_TTL_MS,
-    reason: formatUnavailableReason({
-      provider: params.provider,
-      model: params.model,
-      baseUrl: params.baseUrl,
-      error: params.error,
-    }),
+    reason: [
+      `This automation uses ${params.provider}/${params.model} but the local provider preflight failed at ${params.baseUrl}.`,
+      `Start the local provider or correct its configured endpoint; OpenClaw will retry its provider preflight on a later scheduled run.`,
+      `Last error: ${formatPreflightError(params.error)}`,
+    ].join(" "),
   };
 }
 
-async function probeLocalProviderEndpoint(params: {
-  api: PreflightApi;
-  baseUrl: string;
-}): Promise<void> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: buildProbeUrl(params.api, params.baseUrl),
-    init: { method: "GET" },
-    policy: buildLocalProviderSsrFPolicy(params.baseUrl),
+async function probeLocalProviderEndpoint(baseUrl: string): Promise<void> {
+  const url = new URL(baseUrl);
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error(`Unsupported local provider protocol: ${url.protocol}`);
+  }
+  const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: PREFLIGHT_TIMEOUT_MS,
-    auditContext: "cron-model-provider-preflight",
+    operation: "cron-model-provider-preflight",
+    url: baseUrl,
   });
   try {
-    // Any HTTP response means the local endpoint is alive. Auth/model errors
-    // still belong to the normal model runner where fallback and diagnostics
-    // have the full provider context.
-    void response.status;
-  } finally {
-    // Captured responses can tee their body, so awaiting branch cancellation
-    // would hang the cron probe; start cancellation before closing the agent.
-    if (!response.bodyUsed) {
-      void response.body?.cancel().catch(() => undefined);
+    const pinned = await resolvePinnedHostnameWithPolicy(url.hostname, {
+      policy: { hostnameAllowlist: [url.hostname], allowPrivateNetwork: true },
+      signal,
+    });
+    const socket = net.connect({
+      host: pinned.hostname,
+      port: Number(url.port || (url.protocol === "https:" ? 443 : 80)),
+      lookup: pinned.lookup,
+    });
+    const closed = new Promise<void>((resolve) => {
+      socket.once("close", () => resolve());
+    });
+    try {
+      // Reachability needs no HTTP request or credentials. TLS, auth, and model
+      // errors belong to inference, which has the complete provider context.
+      await once(socket, "connect", { signal });
+    } finally {
+      socket.destroy();
+      await closed;
     }
-    await release();
+  } finally {
+    cleanup();
   }
 }
 
@@ -208,11 +182,16 @@ export async function preflightCronModelProvider(params: {
   if (!providerConfig) {
     return { status: "available" };
   }
-  const baseUrl = normalizeBaseUrl(providerConfig.baseUrl);
+  const baseUrl = normalizeOptionalString(providerConfig.baseUrl)?.replace(/\/+$/, "");
   const api = normalizeProbeApi(providerConfig);
-  if (!baseUrl || !api || !isLocalProviderBaseUrl(baseUrl)) {
-    // Remote/cloud providers should fail in the model runner, not in this cron
-    // reachability preflight.
+  if (
+    !baseUrl ||
+    !api ||
+    !isLocalProviderBaseUrl(baseUrl) ||
+    (isManagedProxyActive() && shouldUseEnvHttpProxyForUrl(baseUrl))
+  ) {
+    // Inference owns remote and proxy-routed connectivity; a direct local
+    // socket cannot establish whether a managed proxy can reach its target.
     return { status: "available" };
   }
 
@@ -235,12 +214,14 @@ export async function preflightCronModelProvider(params: {
 
   let result: EndpointPreflightResult;
   try {
-    await probeLocalProviderEndpoint({ api, baseUrl });
+    await probeLocalProviderEndpoint(baseUrl);
     result = { status: "available" };
   } catch (error) {
     result = { status: "unavailable", error };
   }
-  preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  if (result.status === "available" || !isPreflightTimeout(result.error)) {
+    preflightCache.set(cacheKey, { checkedAtMs: nowMs, result });
+  }
   if (result.status === "available") {
     return { status: "available" };
   }

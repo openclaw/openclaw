@@ -3,6 +3,17 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 const DISCORD_RESPONSE_BODY_SUMMARY_MAX_CHARS = 240;
 
+export function parseDiscordHttpErrorBody(raw: string): unknown {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { message: truncateUtf16Safe(raw, 200) };
+  }
+}
+
 export function summarizeDiscordResponseBody(
   body: string,
   opts: { emptyText?: string } = {},
@@ -24,18 +35,9 @@ export function summarizeDiscordResponseBody(
 }
 
 export function isDiscordHtmlResponseBody(body: string, contentType?: string | null): boolean {
-  return (
-    /\bhtml\b/i.test(contentType ?? "") ||
-    /^\s*<!doctype\s+html\b/i.test(body) ||
-    /^\s*<html\b/i.test(body)
-  );
+  return /\bhtml\b/i.test(contentType ?? "") || /^\s*(?:<!doctype\s+html\b|<html\b)/i.test(body);
 }
 
 export function isDiscordRateLimitResponseBody(body: string): boolean {
-  const normalized = body.toLowerCase();
-  return (
-    normalized.includes("error 1015") ||
-    normalized.includes("cloudflare") ||
-    normalized.includes("rate limit")
-  );
+  return /error 1015|cloudflare|rate limit/i.test(body);
 }

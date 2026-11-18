@@ -1,11 +1,13 @@
 // Canonical Gateway-backed cron inventory and exact-ID/name lookup.
 import { randomUUID } from "node:crypto";
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   CronListPageOptions,
   CronListPageResult,
 } from "../../cron/service/list-page-types.js";
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
 import { createCronAmbiguousNameError } from "./shared.js";
@@ -18,10 +20,7 @@ type GatewayCronListPage = Partial<CronListPageResult> & {
   deliveryPreviews?: Record<string, CronDeliveryPreview>;
 };
 
-type GatewayCronJobInventory = GatewayCronListPage & {
-  jobs: CronJob[];
-  deliveryPreviews?: Record<string, CronDeliveryPreview>;
-};
+type GatewayCronJobInventory = GatewayCronListPage & { jobs: CronJob[] };
 
 /** Recognize the explicit protocol-v4 capability boundary, not transport failures. */
 export function isUnknownCronGetMethodError(error: unknown): error is Error {
@@ -39,6 +38,7 @@ export async function listCronJobsFromGateway(
   filters: Pick<CronListPageOptions, "includeDisabled" | "agentId" | "query">,
   options: { allowLegacyUnversionedPagination?: boolean } = {},
 ): Promise<GatewayCronJobInventory> {
+  const signal = getAsyncWorkSignal();
   let allowLegacyUnversionedPagination = options.allowLegacyUnversionedPagination === true;
   for (let restart = 0; restart <= CRON_LIST_MAX_SNAPSHOT_RESTARTS; restart += 1) {
     let offset = 0;
@@ -51,11 +51,17 @@ export async function listCronJobsFromGateway(
     const deliveryPreviews: Record<string, CronDeliveryPreview> = {};
 
     for (let pageNumber = 0; pageNumber < CRON_LIST_MAX_PAGES; pageNumber += 1) {
-      const page = (await callGatewayFromCli("cron.list", opts, {
-        ...filters,
-        limit: CRON_LIST_PAGE_SIZE,
-        offset,
-      })) as GatewayCronListPage | null;
+      signal?.throwIfAborted();
+      const page = (await callGatewayFromCli(
+        "cron.list",
+        opts,
+        {
+          ...filters,
+          limit: CRON_LIST_PAGE_SIZE,
+          offset,
+        },
+        { signal },
+      )) as GatewayCronListPage | null;
 
       const hasCanonicalMetadata =
         page !== null &&
@@ -71,19 +77,11 @@ export async function listCronJobsFromGateway(
         page.jobs.length > CRON_LIST_PAGE_SIZE ||
         (page.snapshotRevision !== undefined &&
           (typeof page.snapshotRevision !== "string" || page.snapshotRevision.length === 0)) ||
-        (page.total !== undefined &&
-          (typeof page.total !== "number" ||
-            !Number.isSafeInteger(page.total) ||
-            page.total < 0)) ||
+        (page.total !== undefined && asSafeIntegerInRange(page.total, { min: 0 }) === undefined) ||
         (page.offset !== undefined &&
-          (typeof page.offset !== "number" ||
-            !Number.isSafeInteger(page.offset) ||
-            page.offset < 0)) ||
+          asSafeIntegerInRange(page.offset, { min: 0 }) === undefined) ||
         (page.limit !== undefined &&
-          (typeof page.limit !== "number" ||
-            !Number.isSafeInteger(page.limit) ||
-            page.limit < 1 ||
-            page.limit > CRON_LIST_PAGE_SIZE ||
+          (asSafeIntegerInRange(page.limit, { min: 1, max: CRON_LIST_PAGE_SIZE }) === undefined ||
             page.jobs.length > page.limit)) ||
         (page.hasMore !== undefined && typeof page.hasMore !== "boolean") ||
         (hasCanonicalMetadata &&
@@ -128,7 +126,7 @@ export async function listCronJobsFromGateway(
         // a fresh nonempty ID avoids colliding with actual scheduled jobs.
         const probeJobId = probeJob?.id ?? randomUUID();
         try {
-          await callGatewayFromCli("cron.get", opts, { id: probeJobId });
+          await callGatewayFromCli("cron.get", opts, { id: probeJobId }, { signal });
         } catch (error) {
           if (isUnknownCronGetMethodError(error)) {
             // Only an explicitly unsupported cron.get identifies a shipped v4
@@ -163,10 +161,6 @@ export async function listCronJobsFromGateway(
           ...firstPage,
           jobs,
           ...(Object.keys(deliveryPreviews).length > 0 ? { deliveryPreviews } : {}),
-          ...(total !== undefined ? { total } : {}),
-          ...(snapshotRevision !== undefined ? { snapshotRevision } : {}),
-          ...(firstPage.offset !== undefined ? { offset: firstPage.offset } : {}),
-          ...(firstPage.limit !== undefined ? { limit: firstPage.limit } : {}),
           ...(firstPage.hasMore !== undefined ? { hasMore: false, nextOffset: null } : {}),
         };
       }
@@ -184,9 +178,6 @@ export async function listCronJobsFromGateway(
 
     if (!snapshotChanged) {
       throw new Error("cron.list pagination exceeded maximum pages while looking up automation");
-    }
-    if (restart === CRON_LIST_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly while reading automations");
     }
   }
 
@@ -212,9 +203,11 @@ export async function findCronJobByIdOrName(
   idOrName: string,
   options: { includeDeliveryPreview?: boolean } = {},
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
+  const signal = getAsyncWorkSignal();
   let allowLegacyUnversionedPagination = false;
   try {
-    const directJob = (await callGatewayFromCli("cron.get", opts, { id: idOrName })) as
+    signal?.throwIfAborted();
+    const directJob = (await callGatewayFromCli("cron.get", opts, { id: idOrName }, { signal })) as
       | CronJob
       | undefined;
     if (directJob?.id === idOrName) {

@@ -2,15 +2,16 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PreparedModelRuntimeLeaseOptions } from "../agents/prepared-model-runtime.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ImageDescriptionRequest } from "./provider-types.js";
 
 export const API_KEY_FIELD = ["api", "Key"].join("") as "apiKey";
 const REQUIRE_API_KEY_FIELD = ["require", "ApiKey"].join("");
-export const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
+const SET_RUNTIME_API_KEY_FIELD = ["setRuntime", "ApiKey"].join("");
 
 const imageRuntimeMocks = vi.hoisted(() => ({
   completeMock: vi.fn(),
-  ensureOpenClawModelsJsonMock: vi.fn(async () => {}),
   getApiKeyForModelMock: vi.fn(
     async (): Promise<{
       apiKey: string;
@@ -33,18 +34,15 @@ const imageRuntimeMocks = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
-  prepareProviderDynamicModelMock: vi.fn(async () => {}),
   prepareProviderRuntimeAuthMock: vi.fn(),
   acquireAgentRunPreparedModelRuntimeMock: vi.fn(),
   releasePreparedModelRuntimeMock: vi.fn(async () => {}),
   resolveModelAsyncMock: vi.fn(),
-  resolveModelWithRegistryMock: vi.fn(),
   shouldPreferProviderRuntimeResolvedModelMock: vi.fn(() => false),
   unwrapSecretSentinelsForProviderEgressMock: vi.fn((value: string) => value),
 }));
 const {
   completeMock,
-  ensureOpenClawModelsJsonMock,
   getApiKeyForModelMock,
   resolveApiKeyForProviderCoreMock,
   requireApiKeyMock,
@@ -52,22 +50,14 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
-  prepareProviderDynamicModelMock,
   prepareProviderRuntimeAuthMock,
   acquireAgentRunPreparedModelRuntimeMock,
   releasePreparedModelRuntimeMock,
   resolveModelAsyncMock,
-  resolveModelWithRegistryMock,
   shouldPreferProviderRuntimeResolvedModelMock,
   unwrapSecretSentinelsForProviderEgressMock,
 } = imageRuntimeMocks;
 export const preparedAuthStorage = { [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock };
-
-export type ResolveModelWithRegistryTestParams = {
-  modelRegistry: { find: (provider: string, modelId: string) => unknown };
-  provider: string;
-  modelId: string;
-};
 
 vi.mock("../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -76,13 +66,6 @@ vi.mock("../llm/stream.js", async () => {
     complete: completeMock,
   };
 });
-
-vi.mock("../agents/models-config.js", async () => ({
-  ...(await vi.importActual<typeof import("../agents/models-config.js")>(
-    "../agents/models-config.js",
-  )),
-  ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
-}));
 
 vi.mock("../agents/model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
@@ -106,13 +89,6 @@ vi.mock("../agents/provider-secret-egress.js", async () => ({
   unwrapSecretSentinelsForProviderEgress: unwrapSecretSentinelsForProviderEgressMock,
 }));
 
-vi.mock("../agents/agent-model-discovery.js", () => ({
-  discoverAuthStorage: () => ({
-    [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
-  }),
-  discoverModels: discoverModelsMock,
-}));
-
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: acquireAgentRunPreparedModelRuntimeMock,
 }));
@@ -121,7 +97,6 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
   ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
     "../plugins/provider-runtime.js",
   )),
-  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
   shouldPreferProviderRuntimeResolvedModel: shouldPreferProviderRuntimeResolvedModelMock,
 }));
 
@@ -190,6 +165,7 @@ export function installImageRuntimeTestHooks({
               modelRegistry: {},
             }),
           },
+          run: <T>(run: () => T): T => run(),
           [Symbol.asyncDispose]: releasePreparedModelRuntimeMock,
         };
       },
@@ -217,24 +193,14 @@ export function installImageRuntimeTestHooks({
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
-    resolveModelWithRegistryMock.mockImplementation(
-      // Per-case discovery overrides must reach model dispatch.
-      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
-        modelRegistry.find(provider, modelId),
-    );
     resolveModelAsyncMock.mockImplementation(
-      async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) => {
+      async (provider: string, modelId: string, agentDir?: string) => {
         const authStorage = {
           [SET_RUNTIME_API_KEY_FIELD]: setRuntimeApiKeyMock,
         };
-        const modelRegistry = discoverModelsMock(authStorage, agentDir);
-        const model = resolveModelWithRegistryMock({
-          provider,
-          modelId,
-          modelRegistry,
-          cfg,
-          agentDir,
-        });
+        const modelRegistry: { find: (provider: string, modelId: string) => unknown } =
+          discoverModelsMock(authStorage, agentDir);
+        const model = modelRegistry.find(provider, modelId);
         return { authStorage, model, modelRegistry };
       },
     );
@@ -257,3 +223,32 @@ export function installImageRuntimeTestHooks({
 }
 
 export { imageRuntimeMocks, imageTestFetchWithSsrFGuardMock };
+
+export function imageRequestDefaults(): Omit<ImageDescriptionRequest, "provider" | "model"> {
+  return {
+    cfg: {},
+    agentDir: "/tmp/openclaw-agent",
+    buffer: Buffer.from("png-bytes"),
+    fileName: "image.png",
+    mime: "image/png",
+    timeoutMs: 1000,
+  };
+}
+
+export function imageCompletion(api: string, provider: string, model: string, text: string) {
+  return {
+    role: "assistant",
+    api,
+    provider,
+    model,
+    stopReason: "stop",
+    timestamp: Date.now(),
+    content: [{ type: "text", text }],
+  };
+}
+
+export function mockImageModel(model: Pick<Model, "provider" | "id"> & Partial<Model>) {
+  discoverModelsMock.mockReturnValue({
+    find: vi.fn(() => ({ input: ["text", "image"], ...model })),
+  });
+}

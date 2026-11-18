@@ -1,41 +1,149 @@
-import type { BrowserPanelTab, BrowserRequestClient } from "./browser-client.ts";
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import type { BrowserRequestClient } from "./browser-client.ts";
 import { isBrowserScreencastUnsupportedError, requestBrowserScreencast } from "./browser-client.ts";
 import type {
-  BrowserPanelControllerHost,
-  BrowserPanelOperationOwnership,
+  BrowserPanelHost,
+  BrowserPanelOperations,
 } from "./browser-panel-operation-ownership.ts";
-import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
-import {
-  BrowserScreencastClient,
-  type BrowserScreencastFrame,
-  type BrowserScreencastMeta,
-} from "./browser-screencast-client.ts";
+import type { BrowserPanelStateWriter } from "./browser-panel-state.ts";
+import { loadBrowserPanelImage } from "./browser-panel-surface.ts";
 import { browserRouteKey } from "./browser-target.ts";
 
-const FIRST_FRAME_TIMEOUT_MS = 1500;
+type BrowserScreencastMeta = { url: string; title: string };
+type BrowserScreencastFrame = {
+  blob: Blob;
+  url: string;
+  cssWidth: number;
+  cssHeight: number;
+};
+
+type BrowserScreencastOptions = {
+  gatewayUrl: string;
+  wsPath: string;
+  onReady: (meta: BrowserScreencastMeta & { targetId: string }) => void;
+  onMeta: (meta: BrowserScreencastMeta) => void;
+  onFrame: (frame: BrowserScreencastFrame) => void;
+  onClose: (detail: { code: number; reason: string }) => void;
+};
+
+class BrowserScreencastClient {
+  private readonly socket: WebSocket;
+  private readonly events = new AbortController();
+  private closed = false;
+
+  constructor(private readonly options: BrowserScreencastOptions) {
+    this.socket = new WebSocket(resolveGatewayWebSocketUrl(options.wsPath, options.gatewayUrl));
+    this.socket.binaryType = "arraybuffer";
+    const listenerOptions = { signal: this.events.signal };
+    listen(this.socket, "message", (event) => this.receive(event.data), listenerOptions);
+    listen(this.socket, "close", ({ code, reason }) => this.finish(code, reason), listenerOptions);
+    listen(
+      this.socket,
+      "error",
+      () => {
+        this.finish(1006, "");
+        this.socket.close();
+      },
+      listenerOptions,
+    );
+  }
+
+  close(): void {
+    this.closed = true;
+    this.events.abort();
+    this.socket.close();
+  }
+
+  private finish(code: number, reason: string): void {
+    if (this.closed) {
+      return;
+    }
+    this.closed = true;
+    this.events.abort();
+    this.options.onClose({ code, reason });
+  }
+
+  private receive(data: unknown): void {
+    if (this.closed) {
+      return;
+    }
+    try {
+      if (typeof data === "string") {
+        const message = asRecord(JSON.parse(data));
+        if (message?.type === "error") {
+          this.finish(1011, "");
+          this.socket.close();
+          return;
+        }
+        if (typeof message?.url !== "string" || typeof message.title !== "string") {
+          throw new Error("Invalid screencast metadata");
+        }
+        if (message.type === "ready" && typeof message.targetId === "string") {
+          this.options.onReady({
+            targetId: message.targetId,
+            url: message.url,
+            title: message.title,
+          });
+        } else if (message.type === "meta") {
+          this.options.onMeta({ url: message.url, title: message.title });
+        } else {
+          throw new Error("Invalid screencast message");
+        }
+        return;
+      }
+      if (!(data instanceof ArrayBuffer) || data.byteLength < 5) {
+        throw new Error("Invalid screencast frame");
+      }
+      const headerLength = new DataView(data).getUint32(0);
+      if (headerLength === 0 || headerLength >= data.byteLength - 4) {
+        throw new Error("Invalid screencast header length");
+      }
+      const header = asRecord(
+        JSON.parse(new TextDecoder().decode(new Uint8Array(data, 4, headerLength))),
+      );
+      if (
+        typeof header?.url !== "string" ||
+        typeof header.cssWidth !== "number" ||
+        !Number.isFinite(header.cssWidth) ||
+        header.cssWidth <= 0 ||
+        typeof header.cssHeight !== "number" ||
+        !Number.isFinite(header.cssHeight) ||
+        header.cssHeight <= 0
+      ) {
+        throw new Error("Invalid screencast dimensions");
+      }
+      this.options.onFrame({
+        blob: new Blob([new Uint8Array(data, 4 + headerLength)], { type: "image/jpeg" }),
+        url: header.url,
+        cssWidth: header.cssWidth,
+        cssHeight: header.cssHeight,
+      });
+    } catch {
+      this.finish(1002, "");
+      this.socket.close();
+    }
+  }
+}
+
 const RETRY_DELAY_MS = 10_000;
 const RESIZE_RESTART_DEBOUNCE_MS = 500;
 
-type StreamState = {
-  activeTargetId: string | null;
-  view: BrowserPanelView | null;
-  tabs: BrowserPanelTab[];
-  urlDraft: string;
-  loading: boolean;
-};
-
-interface BrowserPanelStreamHost extends StreamState {
-  readonly host: BrowserPanelControllerHost;
+interface BrowserPanelStreamHost extends BrowserPanelStateWriter<
+  "activeTargetId" | "view" | "tabs" | "loading"
+> {
+  readonly host: BrowserPanelHost;
   readonly mode: "interact" | "annotate" | "inspect";
+  readonly input: { elements: { stage?: HTMLElement; viewport?: HTMLElement } };
   readonly operations: Pick<
-    BrowserPanelOperationOwnership,
-    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "markNavigationReconciled"
+    BrowserPanelOperations,
+    "epoch" | "route" | "isLive" | "hasPendingCapture" | "capturedTabs" | "forgetNavigation"
   >;
-  readonly urlDraftEditing: boolean;
   readonly observedViewportSize: { width: number; height: number } | null;
-  setState<Key extends keyof StreamState>(key: Key, value: StreamState[Key]): void;
+  syncUrlDraft(url: string): void;
   clearUnavailableView(): boolean;
-  scheduleViewportSync(): void;
   refreshView(targetId: string): Promise<void>;
   refreshAll(): Promise<void>;
 }
@@ -49,6 +157,7 @@ type Attempt = {
   width: number;
   live: boolean;
   connection?: BrowserScreencastClient;
+  controller: AbortController;
   firstFrame: Promise<boolean>;
   settle: (received: boolean) => void;
   metadata?: BrowserScreencastMeta;
@@ -61,7 +170,7 @@ type Attempt = {
 export class BrowserPanelStream {
   private attempt?: Attempt;
   frameRevision = 0;
-  private scope?: { client: BrowserPanelControllerHost["client"]; route: string };
+  private scope?: { client: BrowserPanelHost["client"]; route: string };
   private unsupported = false;
   private readonly lastFailures = new Map<string, number>();
   private objectUrl?: string;
@@ -69,7 +178,6 @@ export class BrowserPanelStream {
   private resizeTimer?: ReturnType<typeof setTimeout>;
   private recoveryTimer?: ReturnType<typeof setTimeout>;
   private recovery?: Recovery;
-  private viewportSyncPending = false;
   private readonly retiringUrls = new Set<string>();
 
   constructor(private readonly host: BrowserPanelStreamHost) {}
@@ -89,8 +197,7 @@ export class BrowserPanelStream {
   }
 
   private dimensions() {
-    const stage = this.host.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-    const viewport = this.host.host.renderRoot.querySelector<HTMLElement>(".bp-viewport");
+    const { stage, viewport } = this.host.input.elements;
     const width =
       stage?.clientWidth || viewport?.clientWidth || this.host.observedViewportSize?.width || 1280;
     const height = viewport?.clientHeight || this.host.observedViewportSize?.height || width;
@@ -121,20 +228,25 @@ export class BrowserPanelStream {
     }
     this.close(false);
     const dimensions = this.dimensions();
-    let settle!: Attempt["settle"];
-    const firstFrame = new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), FIRST_FRAME_TIMEOUT_MS);
-      settle = (received) => {
-        clearTimeout(timeout);
-        resolve(received);
-      };
-    });
+    const { promise: firstFrame, resolve } = Promise.withResolvers<boolean>();
+    const timeout = setTimeout(() => {
+      if (this.current(attempt)) {
+        this.recover(attempt);
+      } else if (this.attempt === attempt) {
+        this.close(false);
+      }
+    }, DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS);
+    const settle = (received: boolean) => {
+      clearTimeout(timeout);
+      resolve(received);
+    };
     const attempt: Attempt = {
       targetId,
       client,
       epoch,
       width: dimensions.width,
       live: false,
+      controller: new AbortController(),
       firstFrame,
       settle,
       decoding: false,
@@ -150,16 +262,17 @@ export class BrowserPanelStream {
     dimensions: { maxWidth: number; maxHeight: number },
   ): Promise<void> {
     try {
-      const response = await requestBrowserScreencast(attempt.client, {
-        targetId: attempt.targetId,
-        ...dimensions,
-      });
+      const wsPath = await requestBrowserScreencast(
+        attempt.client,
+        { targetId: attempt.targetId, ...dimensions },
+        { signal: attempt.controller.signal },
+      );
       if (!this.current(attempt)) {
         return;
       }
       attempt.connection = new BrowserScreencastClient({
         gatewayUrl: this.host.host.client!.gatewayUrl,
-        wsPath: response.wsPath,
+        wsPath,
         onReady: ({ url, title }) => this.updateMetadata(attempt, { url, title }),
         onMeta: (meta) => this.updateMetadata(attempt, meta),
         onFrame: (frame) => {
@@ -270,9 +383,7 @@ export class BrowserPanelStream {
           : tab,
       ),
     );
-    if (!this.host.urlDraftEditing) {
-      this.host.setState("urlDraft", metadata.url);
-    }
+    this.host.syncUrlDraft(metadata.url);
   }
 
   flushPendingFrame(): void {
@@ -281,7 +392,7 @@ export class BrowserPanelStream {
     if (attempt && this.current(attempt) && !attempt.decoding) {
       void this.decodeFrames(attempt);
     }
-    this.restartAfterResize();
+    this.resize();
   }
 
   private async decodeFrames(attempt: Attempt): Promise<void> {
@@ -340,20 +451,8 @@ export class BrowserPanelStream {
             ? { browserTab: { ...this.host.operations.route, targetId: attempt.targetId } }
             : {}),
         });
-        this.host.operations.markNavigationReconciled(attempt.client, attempt.targetId);
-        if (!this.host.urlDraftEditing) {
-          this.host.setState("urlDraft", frame.url);
-        }
-        if (
-          this.host.observedViewportSize &&
-          (Math.abs(frame.cssWidth - this.host.observedViewportSize.width) > 1 ||
-            Math.abs(frame.cssHeight - this.host.observedViewportSize.height) > 1) &&
-          !this.viewportSyncPending
-        ) {
-          // The sync is debounced; a repainting page must not keep postponing it.
-          this.viewportSyncPending = true;
-          this.host.scheduleViewportSync();
-        }
+        this.host.operations.forgetNavigation(attempt.client, attempt.targetId);
+        this.host.syncUrlDraft(frame.url);
         if (!attempt.presented) {
           attempt.presented = true;
           this.host.setState("loading", false);
@@ -370,17 +469,11 @@ export class BrowserPanelStream {
     }
   }
 
-  resize(): void {
-    // The debounced viewport sync just ran; later mismatched frames may schedule again.
-    this.viewportSyncPending = false;
-    this.restartAfterResize();
-  }
-
   private resized(attempt: Attempt): boolean {
     return Math.abs(this.dimensions().width - attempt.width) / attempt.width > 0.3;
   }
 
-  private restartAfterResize(): void {
+  resize(): void {
     const attempt = this.attempt;
     if (!attempt || !this.current(attempt) || !this.resized(attempt)) {
       return;
@@ -427,10 +520,9 @@ export class BrowserPanelStream {
     this.recovery = undefined;
     clearTimeout(this.resizeTimer);
     this.resizeTimer = undefined;
-    // Invalidation cancels the pending sync timer; the next stream must be able to schedule one.
-    this.viewportSyncPending = false;
     const attempt = this.attempt;
     this.attempt = undefined;
+    attempt?.controller.abort();
     attempt?.settle(false);
     attempt?.connection?.close();
     for (const url of [

@@ -1,16 +1,13 @@
-/** Shared bundle MCP catalog, runtime, and manager types. */
 import type {
   CallToolResult,
   GetPromptResult,
   ListResourceTemplatesResult,
   ListToolsResult,
 } from "@modelcontextprotocol/sdk/types.js";
-import type { TSchema } from "typebox";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
-import type { McpCodexToolApprovalMode, McpServerToolFilterConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
-import type { McpCodexToolAnnotations } from "./mcp-codex-tool-approval.js";
+import type { McpToolCatalog, McpToolCatalogDiagnostic } from "./agent-bundle-mcp-catalog.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 export type SessionMcpConfigReload = {
@@ -27,61 +24,6 @@ export type BundleMcpToolRuntime = {
   diagnostics?: readonly McpToolCatalogDiagnostic[];
   restrictAppTools?: (tools: readonly AnyAgentTool[]) => void;
   dispose: () => Promise<void>;
-};
-
-/** Catalog metadata for one configured MCP server. */
-export type McpServerCatalog = {
-  serverName: string;
-  safeServerName?: string;
-  launchSummary: string;
-  toolCount: number;
-  resources?: {
-    listChanged?: boolean;
-  };
-  prompts?: {
-    listChanged?: boolean;
-  };
-  tools?: {
-    listChanged?: boolean;
-    filteredCount?: number;
-  };
-  requestTimeoutMs?: number;
-  supportsParallelToolCalls?: boolean;
-  toolFilter?: McpServerToolFilterConfig;
-  deniedToolNames?: string[];
-  codexApprovalMode?: McpCodexToolApprovalMode;
-};
-
-/** MCP tool entry after server-name sanitization and schema normalization. */
-export type McpCatalogTool = {
-  serverName: string;
-  safeServerName: string;
-  toolName: string;
-  title?: string;
-  description?: string;
-  inputSchema: TSchema;
-  fallbackDescription: string;
-  uiResourceUri?: string;
-  uiVisibility?: Array<"app" | "model">;
-  /** Listed by the server but excluded from OpenClaw's callable tool catalog. */
-  excludedFromOpenClawCatalog?: true;
-  deniedBySession?: true;
-  codexAnnotations?: McpCodexToolAnnotations;
-  /** Trusted requester OAuth sign-in bootstrap; never dispatches into the server's tools. */
-  oauthConnectBootstrap?: true;
-};
-
-/** Complete tool catalog for a session-scoped MCP runtime. */
-export type McpToolCatalog = {
-  version: number;
-  generatedAt: number;
-  servers: Record<string, McpServerCatalog>;
-  tools: McpCatalogTool[];
-  /** Complete raw catalog used to project policy into native MCP clients. */
-  policyTools?: McpCatalogTool[];
-  /** Listed tools hidden only by the session override, retained for read-only inventory. */
-  sessionDeniedTools?: McpCatalogTool[];
-  diagnostics?: readonly McpToolCatalogDiagnostic[];
 };
 
 /** Transient requester sign-in surface kept outside the remembered live catalog. */
@@ -104,15 +46,9 @@ export type PreparedNativeMcpPolicy = {
   servers: Record<string, PreparedNativeMcpServerPolicy>;
 };
 
-export type McpToolCatalogDiagnostic = {
-  serverName: string;
-  safeServerName: string;
-  launchSummary: string;
-  message: string;
-};
-
 export type McpRequestOptions = {
   failureBackoff?: "track" | "ignore";
+  _meta?: Record<string, unknown>;
 };
 
 /** Trusted requester identity used to scope per-user MCP connections. */
@@ -122,8 +58,12 @@ export type SessionMcpRequesterScope = {
   messageChannel?: string;
 };
 
+/** Supplied only by the authenticated Gateway profile owner, never inferred from a channel sender. */
+export type McpAppRequesterIdentity = { kind: "gateway-profile"; profileId: string };
+
 /** Live MCP runtime bound to one session/workspace. */
 export type SessionMcpRuntime = {
+  appRequester?: McpAppRequesterIdentity;
   sessionId: string;
   sessionKey?: string;
   workspaceDir: string;
@@ -133,14 +73,16 @@ export type SessionMcpRuntime = {
   requesterScope?: SessionMcpRequesterScope;
   requesterConnect?: RequesterMcpConnect;
   /**
-   * True when the named server's connection is requester-scoped. App views for
-   * such servers stay fail-closed: views outlive the requester-authenticated
-   * run and the gateway view boundary carries no requester identity.
+   * True when the named server's connection is requester-scoped. App producers
+   * require an explicit Gateway-profile mapping before minting a private view.
+   * Transport sender ids must never be used as Gateway profile identities.
    */
   isRequesterScopedServer?: (serverName: string) => boolean;
+  /** True only when the existing server transport can read files on this host. */
+  canReadLocalFiles?: (serverName: string) => boolean;
   mcpAppsEnabled?: boolean;
-  /** Latest non-persisted App context, owned by the exact live view that supplied it. */
-  pendingMcpAppModelContext?: { owner: object; text: string; leased?: boolean };
+  /** Native adapter proves its exact thread/client binding is still current. */
+  assertOwnerCurrent?: () => void;
   /** Blocks a deferred-retirement view from restoring context across reset. */
   mcpAppModelContextRevoked?: boolean;
   createdAt: number;
@@ -156,7 +98,12 @@ export type SessionMcpRuntime = {
   /** Returns the configured request timeout for a server from the connected session, without touching the catalog. */
   getServerRequestTimeoutMs?: (serverName: string) => number | undefined;
   markUsed: () => void;
-  callTool: (serverName: string, toolName: string, input: unknown) => Promise<CallToolResult>;
+  callTool: (
+    serverName: string,
+    toolName: string,
+    input: unknown,
+    options?: { _meta?: Record<string, unknown>; assertCurrent?: () => void },
+  ) => Promise<CallToolResult>;
   listTools?: (serverName: string, params?: { cursor?: string }) => Promise<ListToolsResult>;
   listResources?: (serverName: string, options?: McpRequestOptions) => Promise<unknown>;
   readResource?: (serverName: string, uri: string, options?: McpRequestOptions) => Promise<unknown>;
@@ -194,6 +141,7 @@ export type SessionMcpRuntimeManager = {
   acquire: (params: {
     sessionId: string;
     sessionKey?: string;
+    agentId?: string;
     workspaceDir: string;
     agentDir?: string;
     cfg?: OpenClawConfig;
@@ -221,20 +169,23 @@ export type SessionMcpRuntimeManager = {
     catalog: McpToolCatalog,
   ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
-  bindSessionKey: (sessionKey: string, sessionId: string) => void;
   resolveSessionId: (sessionKey: string) => string | undefined;
   /** Looks up an existing runtime only; must not create runtimes or connect transports. */
   peekSession: (params: {
     sessionId?: string;
     sessionKey?: string;
   }) => SessionMcpRuntime | undefined;
+  captureSessionRetirement: (params: {
+    sessionId?: string;
+    sessionKey?: string;
+  }) => { sessionId: string; retire: (assertCurrent: () => void) => Promise<void> } | undefined;
   disposeSession: (sessionId: string) => Promise<void>;
   /** Required retirement stays armed when a stopping run creates or reuses a runtime. */
   deferRetirement: (sessionId: string, opts?: { retainAcrossReuse?: boolean }) => boolean;
   completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
   reloadConfig: (params: SessionMcpConfigReload) => Promise<void>;
   disposeAll: () => Promise<void>;
-  sweepIdleRuntimes: () => Promise<number>;
+  sweepIdleRuntimes: () => Promise<void>;
   listSessionIds: () => string[];
   /** All managed cache keys (session ids and requester composite keys). */
   listRuntimeKeys: () => string[];

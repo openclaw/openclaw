@@ -1,7 +1,17 @@
 import http from "node:http";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import {
+  readMcpFixtureMessage,
+  replyMcpFixtureResult,
+} from "./agent-bundle-mcp-lifecycle.test-support.js";
 
-export async function startCatalogRecoveryMcpServer(label: string) {
+export async function startCatalogRecoveryMcpServer(
+  label: string,
+  options: { holdTermination?: Promise<void> } = {},
+) {
+  const terminationStarted = createDeferred();
+  let terminationCount = 0;
   let sessionGeneration = 0;
   let listCount = 0;
   let maxActiveLists = 0;
@@ -9,50 +19,63 @@ export async function startCatalogRecoveryMcpServer(label: string) {
   let callReceived = createDeferred();
   const recoveryListStarted = createDeferred();
   const pendingLists: Array<{
-    id: string | number;
+    id?: string | number;
     response: http.ServerResponse;
     sessionId: string;
   }> = [];
+  const replyList = (
+    response: http.ServerResponse,
+    id: string | number | undefined,
+    sessionId: string,
+  ) => {
+    response.setHeader("mcp-session-id", sessionId);
+    replyMcpFixtureResult(
+      response,
+      { id },
+      {
+        tools: [
+          {
+            name: "probe",
+            inputSchema: { type: "object" },
+            outputSchema: {
+              type: "object",
+              properties: { revision: { const: sessionId } },
+              required: ["revision"],
+            },
+          },
+        ],
+      },
+    );
+  };
   const server = http.createServer((request, response) => {
-    if (request.method === "GET") {
-      response.writeHead(405).end();
-      return;
-    }
     if (request.method === "DELETE") {
-      response.writeHead(204).end();
+      terminationCount += 1;
+      terminationStarted.resolve();
+      if (options.holdTermination) {
+        void options.holdTermination.then(
+          () => response.writeHead(204).end(),
+          () => response.writeHead(500).end(),
+        );
+      } else {
+        response.writeHead(204).end();
+      }
       return;
     }
     if (request.method !== "POST") {
       response.writeHead(405).end();
       return;
     }
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk) => {
-      body += chunk;
-    });
-    request.on("end", () => {
-      const message = JSON.parse(body) as {
-        id: string | number;
-        method: string;
-        params?: { protocolVersion?: string };
-      };
+    void (async () => {
+      const message = await readMcpFixtureMessage(request);
       if (message.method === "initialize") {
         sessionGeneration += 1;
         const sessionId = `${label}-${sessionGeneration}`;
-        response.setHeader("content-type", "application/json");
         response.setHeader("mcp-session-id", sessionId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-              capabilities: { tools: {} },
-              serverInfo: { name: label, version: "1.0.0" },
-            },
-          }),
-        );
+        replyMcpFixtureResult(response, message, {
+          protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: label, version: "1.0.0" },
+        });
         return;
       }
       if (message.method === "notifications/initialized") {
@@ -67,58 +90,30 @@ export async function startCatalogRecoveryMcpServer(label: string) {
         if (hangCalls) {
           return;
         }
-        response.setHeader("content-type", "application/json");
         response.setHeader("mcp-session-id", sessionId);
-        response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: message.id,
-            result: {
-              content: [],
-              structuredContent: { revision: sessionId },
-            },
-          }),
-        );
+        replyMcpFixtureResult(response, message, {
+          content: [],
+          structuredContent: { revision: sessionId },
+        });
         return;
       }
       if (message.method === "tools/list") {
         listCount += 1;
         if (listCount === 1) {
-          response.setHeader("content-type", "application/json");
-          response.setHeader("mcp-session-id", sessionId);
-          response.writeHead(200).end(
-            JSON.stringify({
-              jsonrpc: "2.0",
-              id: message.id,
-              result: {
-                tools: [
-                  {
-                    name: "probe",
-                    inputSchema: { type: "object" },
-                    outputSchema: {
-                      type: "object",
-                      properties: { revision: { const: sessionId } },
-                      required: ["revision"],
-                    },
-                  },
-                ],
-              },
-            }),
-          );
+          replyList(response, message.id, sessionId);
           return;
         }
         pendingLists.push({ id: message.id, response, sessionId });
         maxActiveLists = Math.max(maxActiveLists, pendingLists.length);
         recoveryListStarted.resolve();
       }
-    });
+    })();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address() as { port: number };
+  const listener = await reserveTestPortListener({ offsets: [0], createListener: () => server });
   return {
-    url: `http://127.0.0.1:${address.port}/mcp`,
+    url: `http://127.0.0.1:${listener.claim.port}/mcp`,
+    terminationStarted: terminationStarted.promise,
+    terminationCount: () => terminationCount,
     nextCall: () => callReceived.promise,
     recoveryListStarted: recoveryListStarted.promise,
     maxActiveLists: () => maxActiveLists,
@@ -127,34 +122,16 @@ export async function startCatalogRecoveryMcpServer(label: string) {
     },
     releaseLists: () => {
       for (const pending of pendingLists.splice(0)) {
-        pending.response.setHeader("content-type", "application/json");
-        pending.response.setHeader("mcp-session-id", pending.sessionId);
-        pending.response.writeHead(200).end(
-          JSON.stringify({
-            jsonrpc: "2.0",
-            id: pending.id,
-            result: {
-              tools: [
-                {
-                  name: "probe",
-                  inputSchema: { type: "object" },
-                  outputSchema: {
-                    type: "object",
-                    properties: { revision: { const: pending.sessionId } },
-                    required: ["revision"],
-                  },
-                },
-              ],
-            },
-          }),
-        );
+        replyList(pending.response, pending.id, pending.sessionId);
       }
     },
     close: async () => {
       server.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
+      try {
+        await listener.releaseListener();
+      } finally {
+        await listener.claim.release();
+      }
     },
   };
 }

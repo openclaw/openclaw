@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { LegacyAuditFileCheckpoint } from "./state-migrations.audit-checkpoints.js";
 
 type AuditRecoveryRestoreJournal = {
-  schemaVersion: 6;
+  schemaVersion: 6 | 7;
   rawBase64: string;
   scrubPatternBase64: string;
   target: Pick<LegacyAuditFileCheckpoint, "dev" | "ino" | "size">;
@@ -31,8 +31,11 @@ export function serializeAuditRecoveryRestoreJournal(params: {
   scrubPattern: Buffer;
   target: AuditRecoveryRestoreJournal["target"];
 }): string {
+  if (!isExactJournalIdentity(params.target.dev) || !isExactJournalIdentity(params.target.ino)) {
+    throw new Error("invalid legacy audit recovery restore identity");
+  }
   const journal: AuditRecoveryRestoreJournal = {
-    schemaVersion: 6,
+    schemaVersion: 7,
     rawBase64: params.rawBytes.toString("base64"),
     scrubPatternBase64: params.scrubPattern.toString("base64"),
     target: params.target,
@@ -40,15 +43,23 @@ export function serializeAuditRecoveryRestoreJournal(params: {
   return `${JSON.stringify(journal)}\n`;
 }
 
+function isExactJournalIdentity(value: unknown): value is string {
+  return typeof value === "string" && /^(0|-?[1-9][0-9]*)$/u.test(value);
+}
+
 export function parseAuditRecoveryRestoreJournal(raw: string): ParsedAuditRecoveryRestoreJournal {
   const parsed = JSON.parse(raw) as Partial<AuditRecoveryRestoreJournal>;
+  const isPersistedIdentity = (value: unknown) =>
+    parsed.schemaVersion === 6
+      ? typeof value === "number" && Number.isInteger(value)
+      : isExactJournalIdentity(value);
   if (
-    parsed.schemaVersion !== 6 ||
+    (parsed.schemaVersion !== 6 && parsed.schemaVersion !== 7) ||
     typeof parsed.rawBase64 !== "string" ||
     typeof parsed.scrubPatternBase64 !== "string" ||
     !parsed.target ||
-    typeof parsed.target.dev !== "number" ||
-    typeof parsed.target.ino !== "number" ||
+    !isPersistedIdentity(parsed.target.dev) ||
+    !isPersistedIdentity(parsed.target.ino) ||
     typeof parsed.target.size !== "number"
   ) {
     throw new Error("invalid legacy audit recovery restore journal");
@@ -123,39 +134,27 @@ export function auditRecoveryStateMatchesJournal(params: {
   if (current.length < original.length) {
     return false;
   }
-  if (progress.direction === "scrubbing") {
-    return (
-      current
-        .subarray(0, progress.committedBytes)
-        .equals(scrubbed.subarray(0, progress.committedBytes)) &&
-      auditRecoveryTransitionMatches(
-        current,
-        original,
-        scrubbed,
-        progress.committedBytes,
-        progress.pendingEnd,
-      ) &&
-      current
-        .subarray(progress.pendingEnd, original.length)
-        .equals(original.subarray(progress.pendingEnd))
-    );
-  }
+  const scrubbing = progress.direction === "scrubbing";
+  const desired = scrubbing ? scrubbed : original;
+  const previous = scrubbing ? original : scrubbed;
+  const previousEnd = scrubbing ? original.length : progress.extentBytes;
   return (
     current
       .subarray(0, progress.committedBytes)
-      .equals(original.subarray(0, progress.committedBytes)) &&
+      .equals(desired.subarray(0, progress.committedBytes)) &&
     auditRecoveryTransitionMatches(
       current,
-      scrubbed,
-      original,
+      previous,
+      desired,
       progress.committedBytes,
       progress.pendingEnd,
     ) &&
     current
-      .subarray(progress.pendingEnd, progress.extentBytes)
-      .equals(scrubbed.subarray(progress.pendingEnd, progress.extentBytes)) &&
-    current
-      .subarray(progress.extentBytes, original.length)
-      .equals(original.subarray(progress.extentBytes))
+      .subarray(progress.pendingEnd, previousEnd)
+      .equals(previous.subarray(progress.pendingEnd, previousEnd)) &&
+    (scrubbing ||
+      current
+        .subarray(progress.extentBytes, original.length)
+        .equals(original.subarray(progress.extentBytes)))
   );
 }

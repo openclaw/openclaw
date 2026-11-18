@@ -3,7 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
+import {
+  ensureOpenClawExtensionAlias,
+  writeRuntimeModuleWrapper,
+} from "./lib/bundled-plugin-sdk-alias.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import type { PrepareBundledPluginRuntime } from "./lib/runtime-artifact-contract.js";
@@ -14,7 +17,6 @@ import {
 import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 type SymlinkType = Parameters<typeof fs.symlinkSync>[2];
-type PluginSdkFileParams = { pluginSdkDir: string; repoRoot: string };
 
 function relativeSymlinkTarget(sourcePath: string, targetPath: string) {
   const relativeTarget = path.relative(path.dirname(targetPath), sourcePath);
@@ -92,146 +94,6 @@ function symlinkPath(
   ensureSymlink(relativeSymlinkTarget(sourcePath, finalPath), targetPath, type, sourcePath);
 }
 
-function writeJsonFile(targetPath: string, value: unknown) {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  fs.writeFileSync(targetPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
-  "codex-mcp-projection.js",
-  "codex-session-transcript-runtime.js",
-  "qa-channel.js",
-  "qa-channel-protocol.js",
-  "qa-lab.js",
-  "qa-runtime.js",
-  "ssrf-runtime-internal.js",
-];
-
-function tryReadJsonFile(targetPath: string): unknown {
-  try {
-    return JSON.parse(fs.readFileSync(targetPath, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
-
-function isSafePluginSdkSubpathSegment(subpath: string) {
-  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(subpath);
-}
-
-function readPrivateLocalOnlyPluginSdkDistFileNames(repoRoot: string) {
-  const privateFileNames = new Set(PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK);
-  const subpaths = tryReadJsonFile(
-    path.join(repoRoot, "scripts", "lib", "plugin-sdk-private-local-only-subpaths.json"),
-  );
-  if (!Array.isArray(subpaths)) {
-    return privateFileNames;
-  }
-  for (const subpath of subpaths) {
-    if (typeof subpath === "string" && isSafePluginSdkSubpathSegment(subpath)) {
-      privateFileNames.add(`${subpath}.js`);
-    }
-  }
-  return privateFileNames;
-}
-
-function collectLegacyPublicPluginSdkDistFileNames(params: PluginSdkFileParams) {
-  const privateFileNames = readPrivateLocalOnlyPluginSdkDistFileNames(params.repoRoot);
-  const fileNames = new Set<string>();
-  for (const dirent of fs.readdirSync(params.pluginSdkDir, { withFileTypes: true })) {
-    if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
-      continue;
-    }
-    if (privateFileNames.has(dirent.name)) {
-      continue;
-    }
-    fileNames.add(dirent.name);
-  }
-  return fileNames.size > 0 ? fileNames : undefined;
-}
-
-function readPublicPluginSdkDistFileNames(params: PluginSdkFileParams) {
-  const packageJson = tryReadJsonFile(path.join(params.repoRoot, "package.json"));
-  if (!isRecord(packageJson)) {
-    return collectLegacyPublicPluginSdkDistFileNames(params);
-  }
-  const packageExports = packageJson.exports;
-  if (!isRecord(packageExports)) {
-    return collectLegacyPublicPluginSdkDistFileNames(params);
-  }
-
-  const fileNames = new Set<string>();
-  for (const exportKey of Object.keys(packageExports)) {
-    if (!exportKey.startsWith("./plugin-sdk/")) {
-      continue;
-    }
-    const subpath = exportKey.slice("./plugin-sdk/".length);
-    if (isSafePluginSdkSubpathSegment(subpath)) {
-      fileNames.add(`${subpath}.js`);
-    }
-  }
-
-  return fileNames.size > 0 ? fileNames : collectLegacyPublicPluginSdkDistFileNames(params);
-}
-
-function buildRuntimePluginSdkPackageExports(
-  publicDistFileNames: Set<string> | undefined,
-): Record<string, string> {
-  if (!publicDistFileNames) {
-    return {};
-  }
-
-  const sortedFileNames = [...publicDistFileNames].toSorted((left, right) =>
-    left.localeCompare(right),
-  );
-  return Object.fromEntries(
-    sortedFileNames.map((fileName) => {
-      const subpath = fileName.slice(0, -".js".length);
-      return [`./plugin-sdk/${subpath}`, `./plugin-sdk/${fileName}`];
-    }),
-  );
-}
-
-function ensureOpenClawExtensionAlias(params: {
-  distExtensionsRoot: string;
-  repoRoot: string;
-  aliasDir?: string;
-}) {
-  const pluginSdkDir = path.join(params.repoRoot, "dist", "plugin-sdk");
-  if (!fs.existsSync(pluginSdkDir)) {
-    return;
-  }
-
-  const publicDistFileNames = readPublicPluginSdkDistFileNames({
-    repoRoot: params.repoRoot,
-    pluginSdkDir,
-  });
-  const finalAliasDir = path.join(params.distExtensionsRoot, "node_modules", "openclaw");
-  const aliasDir = params.aliasDir ?? finalAliasDir;
-  const pluginSdkAliasPath = path.join(aliasDir, "plugin-sdk");
-  fs.mkdirSync(aliasDir, { recursive: true });
-  writeJsonFile(path.join(aliasDir, "package.json"), {
-    name: "openclaw",
-    type: "module",
-    exports: buildRuntimePluginSdkPackageExports(publicDistFileNames),
-  });
-  removePathIfExists(pluginSdkAliasPath);
-  fs.mkdirSync(pluginSdkAliasPath, { recursive: true });
-  for (const dirent of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
-    if (!dirent.isFile() || path.extname(dirent.name) !== ".js") {
-      continue;
-    }
-    if (publicDistFileNames && !publicDistFileNames.has(dirent.name)) {
-      continue;
-    }
-    writeRuntimeModuleWrapper(
-      path.join(pluginSdkDir, dirent.name),
-      path.join(pluginSdkAliasPath, dirent.name),
-      path.join(finalAliasDir, "plugin-sdk", dirent.name),
-    );
-  }
-}
-
 function shouldWrapRuntimeJsFile(sourcePath: string) {
   return path.extname(sourcePath) === ".js";
 }
@@ -251,47 +113,14 @@ function isPathOrNestedPath(relativePath: string, nestedPath: string) {
 function shouldCopyRuntimeFile(relativePath: string) {
   return (
     isBundledSkillRuntimePath(relativePath) ||
+    // The overview reader requires regular package-owned files rather than staging links.
+    isPathOrNestedPath(relativePath, "README.md") ||
     isPathOrNestedPath(relativePath, "package.json") ||
     isPathOrNestedPath(relativePath, "openclaw.plugin.json") ||
     isPathOrNestedPath(relativePath, ".codex-plugin/plugin.json") ||
     isPathOrNestedPath(relativePath, ".claude-plugin/plugin.json") ||
     isPathOrNestedPath(relativePath, ".cursor-plugin/plugin.json") ||
     isPathOrNestedPath(relativePath, "SKILL.md")
-  );
-}
-
-function hasDefaultExport(sourcePath: string) {
-  const text = fs.readFileSync(sourcePath, "utf8");
-  return /\bexport\s+default\b/u.test(text) || /\bas\s+default\b/u.test(text);
-}
-
-function writeRuntimeModuleWrapper(sourcePath: string, targetPath: string, finalPath = targetPath) {
-  const specifier = relativeSymlinkTarget(sourcePath, finalPath).replace(/\\/g, "/");
-  const normalizedSpecifier = specifier.startsWith(".") ? specifier : `./${specifier}`;
-  const defaultForwarder = hasDefaultExport(sourcePath)
-    ? [
-        `import defaultModule from ${JSON.stringify(normalizedSpecifier)};`,
-        `let defaultExport = defaultModule;`,
-        `for (let index = 0; index < 4 && defaultExport && typeof defaultExport === "object" && "default" in defaultExport; index += 1) {`,
-        `  defaultExport = defaultExport.default;`,
-        `}`,
-      ]
-    : [
-        `import * as module from ${JSON.stringify(normalizedSpecifier)};`,
-        `let defaultExport = "default" in module ? module.default : module;`,
-        `for (let index = 0; index < 4 && defaultExport && typeof defaultExport === "object" && "default" in defaultExport; index += 1) {`,
-        `  defaultExport = defaultExport.default;`,
-        `}`,
-      ];
-  fs.writeFileSync(
-    targetPath,
-    [
-      `export * from ${JSON.stringify(normalizedSpecifier)};`,
-      ...defaultForwarder,
-      "export { defaultExport as default };",
-      "",
-    ].join("\n"),
-    "utf8",
   );
 }
 
@@ -585,5 +414,6 @@ export const prepareBundledPluginRuntime: PrepareBundledPluginRuntime = (params)
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
   await withDistArtifactOwnership(process.cwd(), async () => stageBundledPluginRuntime());
 }

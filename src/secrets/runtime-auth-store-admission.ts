@@ -1,3 +1,4 @@
+import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
 import {
   AuthProfileMigrationRequiredError,
   markAuthProfileMigrationRequired,
@@ -7,8 +8,10 @@ import {
   resolveAuthProfileDatabasePath,
 } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db-registry.js";
+import { readAgentDatabaseReadAdmissionRefusal } from "../state/agent-database-admission.js";
+import { getOrLoadAgentDeletionJournalStatus } from "../state/agent-deletion-journal-status.js";
+import { isSameOpenClawAgentDatabasePath } from "../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../utils.js";
 import type { DegradedSecretOwner } from "./runtime-degraded-state.js";
 
@@ -26,7 +29,7 @@ function yieldToEventLoop(): Promise<void> {
 export async function loadAdmittedAuthStores(params: {
   agentDirs: readonly string[];
   env: NodeJS.ProcessEnv;
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
+  loadAuthStore: (agentDir?: string) => AuthProfileStore | Promise<AuthProfileStore>;
   allowUnavailable: boolean;
 }): Promise<{
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
@@ -35,19 +38,34 @@ export async function loadAdmittedAuthStores(params: {
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   const degradedOwners: DegradedSecretOwner[] = [];
   let processed = 0;
+  const statePath = resolveOpenClawStateSqlitePath(params.env);
   for (const agentDir of params.agentDirs) {
     processed += 1;
     if (processed > 1 && processed % AUTH_STORE_LOAD_YIELD_BATCH_SIZE === 1) {
       await yieldToEventLoop();
     }
     const databasePath = resolveAuthProfileDatabasePath(agentDir);
-    const refusal = readAgentDatabaseAdmissionRefusal(resolveAuthProfileDatabaseOwnerId(agentDir), {
+    const agentId = resolveAuthProfileDatabaseOwnerId(agentDir);
+    const isDeleted = () => {
+      const status = getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined);
+      return status === "pending" || status === "complete";
+    };
+    // A concurrent roster write can still name an owner whose deletion already committed.
+    // Never reopen or publish its credentials while the deletion owner retires its readers.
+    if (isDeleted()) {
+      continue;
+    }
+    const refusal = readAgentDatabaseReadAdmissionRefusal(agentId, {
       env: params.env,
     });
     if (
       refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, databasePath))
     ) {
       // The admission owner keeps this store unavailable, including cached credentials.
+      // Pending preparation resolves its secrets before publishing successful admission.
+      if (refusal.code === "agent-database-inspection-pending") {
+        continue;
+      }
       degradedOwners.push({
         ownerKind: "route",
         ownerId: shortenHomePath(databasePath),
@@ -60,8 +78,17 @@ export async function loadAdmittedAuthStores(params: {
       continue;
     }
     try {
-      authStores.push({ agentDir, store: structuredClone(params.loadAuthStore(agentDir)) });
+      const source = await params.loadAuthStore(agentDir);
+      if (isDeleted()) {
+        continue;
+      }
+      const store = structuredClone(source);
+      copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
+      authStores.push({ agentDir, store });
     } catch (error) {
+      if (isDeleted()) {
+        continue;
+      }
       if (!(error instanceof AuthProfileMigrationRequiredError) || !params.allowUnavailable) {
         throw error;
       }

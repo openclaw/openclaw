@@ -11,7 +11,10 @@ export function rebalanceRuntimeTestJobs(
     prepareRecipient,
   }: {
     cost: (groups: NodeTestShardGroup[]) => number;
-    admits: (groups: NodeTestShardGroup[]) => boolean;
+    admits: (
+      groups: NodeTestShardGroup[],
+      seconds?: (groups: NodeTestShardGroup[]) => number,
+    ) => boolean;
     runnerRank: (job: Pick<CompactNodeTestShard, "runner">) => number;
     prepareRecipient: (job: CompactNodeTestShard) => NodeTestShardGroup[] | undefined;
   },
@@ -57,7 +60,7 @@ export function rebalanceRuntimeTestJobs(
         // When the retained donor dominates both choices, keep more receiver
         // headroom instead of selecting whichever job happened to appear first.
         if (
-          admits(combined) &&
+          admits(combined, () => recipientSeconds) &&
           (!best ||
             maximum < best.maximum ||
             (maximum === best.maximum &&

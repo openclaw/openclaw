@@ -1,24 +1,25 @@
+import {
+  createAgentHarnessAttemptDeadlineController,
+  type AgentHarnessAttemptTimeout,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createAgentHarnessToolExecutionRegistry } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   closeCodexStartupClientBestEffort,
   interruptCodexTurnAndWaitBestEffort,
 } from "./attempt-client-cleanup.js";
-import {
-  createCodexAttemptDeadlineController,
-  type CodexAttemptTimeout,
-} from "./attempt-deadlines.js";
 import { createCodexSteeringQueue } from "./attempt-steering.js";
 import type { AttemptSettlementWarning } from "./attempt-terminal.js";
+import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import {
   resolveCodexNativeHookRelayTtlMs,
   CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
 } from "./native-hook-relay.js";
 import type { CodexServerNotification, CodexDynamicToolCallParams } from "./protocol.js";
-import type { CodexAttemptResources } from "./run-attempt-resources.js";
-import { createCodexDynamicToolExecutionRegistry } from "./run-attempt-tools.js";
+import type { StartedCodexAttemptResources } from "./run-attempt-start.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
@@ -28,6 +29,7 @@ class CodexAttemptState {
   rateLimitsRevisionBeforeLastTurnStart?: number;
   completed = false;
   abortCleanup = Promise.resolve();
+  nativeCancellationConfirmed = false;
   pluginRuntimeRefreshStop?: Promise<void>;
   // Only completed native cleanup can advance this state to confirmed.
   permissionChangeRestart?: "requested" | "confirmed";
@@ -36,11 +38,12 @@ class CodexAttemptState {
   // App-server collapses user interrupts and replacements to "interrupted";
   // this marker remains the user-interrupt hint until Codex exposes abortReason.
   sawCodexInterruptMarker = false;
-  timeout?: CodexAttemptTimeout;
+  timeout?: AgentHarnessAttemptTimeout;
   // Only the correlated completed-answer deadline fills this slot.
   settlementWarning?: AttemptSettlementWarning;
   // Finalization fills this slot while its transcript mirror is pending.
   pendingSettlementStage?: string;
+  readRetainedNativeCommands?: () => ReadonlyMap<string, string>;
   clientClosedPromptError?: string;
   clientClosedDiagnostic?: string;
   clientClosedAbort = false;
@@ -60,7 +63,7 @@ class CodexAttemptState {
   currentTurnHadNonTerminalDynamicToolResult = false;
 }
 
-export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
+export function createCodexAttemptTurnState(resources: StartedCodexAttemptResources) {
   const {
     prompt,
     state: resourceState,
@@ -76,7 +79,10 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   // One execution promise per call id prevents duplicate delivery from
   // repeating non-idempotent computer input while the attempt remains active.
-  const openClawDynamicToolExecutions = createCodexDynamicToolExecutionRegistry();
+  const openClawDynamicToolExecutions = createAgentHarnessToolExecutionRegistry<
+    Pick<CodexDynamicToolCallParams, "threadId" | "turnId" | "callId">,
+    CodexDynamicToolRuntimeResponse
+  >((call) => [call.threadId, call.turnId, call.callId]);
   const activeTurnItemIds = new Set<string>();
   const turnIdRef: { current?: string } = {};
   const userInputBridgeRef: { current?: ReturnType<typeof createCodexUserInputBridge> } = {};
@@ -92,7 +98,7 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
   };
   const interruptTurn = async (
     turnId: string,
-    completionOptions?: { locallyCompleted?: boolean; timeoutMs?: number },
+    completionOptions?: { locallyCompleted?: boolean },
   ) => {
     if (completionOptions?.locallyCompleted) {
       state.localCompletionRequested = true;
@@ -100,10 +106,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     const completed = await interruptCodexTurnAndWaitBestEffort(resourceState.client, {
       threadId: resourceState.thread.threadId,
       turnId,
-      timeoutMs: completionOptions?.timeoutMs,
     });
     if (!completed) {
       await closeCodexStartupClientBestEffort(resourceState.client);
+    } else if (turnId) {
+      state.nativeCancellationConfirmed = true;
     }
     return completed;
   };
@@ -166,9 +173,11 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
       reason: `codex_app_server:${reason}`,
     });
   };
-  const deadlines = createCodexAttemptDeadlineController({
+  const deadlines = createAgentHarnessAttemptDeadlineController({
     startedAtMs: connection.attemptStartedAt,
+    startedAtMonotonicMs: connection.attemptStartedAtMonotonicMs,
     timeoutMs: params.timeoutMs,
+    settlementTimeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
     signal: runAbortController.signal,
     onDeadlineChanged: params.onAttemptDeadlineChanged,
     onTimeout: (timeout) => {
@@ -176,7 +185,13 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
         state.pendingSettlementStage ??
         projectorRef.current?.settlement.pendingStage ??
         "notification_queue";
-      if (timeout.kind === "settlement" && projectorRef.current?.recoverCompletedAnswer()) {
+      if (
+        timeout.kind === "settlement" &&
+        projectorRef.current?.recoverCompletedAnswer(
+          prompt.context.attemptTools.toolBridge.telemetry,
+          { readRetainedNativeCommands: state.readRetainedNativeCommands },
+        )
+      ) {
         state.settlementWarning = {
           pendingStage,
           elapsedMs: timeout.elapsedMs,
@@ -227,7 +242,6 @@ export function createCodexAttemptTurnState(resources: CodexAttemptResources) {
     steeringQueueRef,
     completeTurn,
     interruptTurn,
-    renewNativeHookRelayForTurnProgress,
     noteProgress,
     deadlines,
   };

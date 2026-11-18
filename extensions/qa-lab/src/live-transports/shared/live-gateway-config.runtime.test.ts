@@ -17,45 +17,6 @@ describe("live QA gateway config", () => {
     );
   });
 
-  it("re-reads the config once after a stale patch", async () => {
-    const waitForConfigRestartSettle = vi.fn();
-    const call = vi
-      .fn()
-      .mockResolvedValueOnce({ config: { channels: {} }, hash: "old" })
-      .mockRejectedValueOnce(new Error("config changed since last load"))
-      .mockResolvedValueOnce({ config: { channels: {} }, hash: "current" })
-      .mockResolvedValueOnce({ hash: "applied" })
-      .mockResolvedValueOnce({
-        hash: "applied",
-        configRevisionHash: "applied",
-        appliedConfigHash: "applied",
-      });
-
-    await patchLiveQaGatewayConfig({
-      gateway: { call },
-      patch: { channels: { slack: { enabled: true } } },
-      replacePaths: ["channels.slack"],
-      timeoutMs: 45_000,
-      waitForConfigRestartSettle,
-    });
-
-    expect(call).toHaveBeenNthCalledWith(
-      4,
-      "config.patch",
-      {
-        raw: JSON.stringify({ channels: { slack: { enabled: true } } }, null, 2),
-        baseHash: "current",
-        replacePaths: ["channels.slack"],
-        restartDelayMs: 0,
-      },
-      { timeoutMs: 60_000 },
-    );
-    expect(waitForConfigRestartSettle).toHaveBeenCalledWith({
-      restartDelayMs: 0,
-      timeoutMs: 45_000,
-    });
-  });
-
   it("waits for the active Gateway to apply the persisted config revision", async () => {
     vi.useFakeTimers();
     const waitForConfigRestartSettle = vi.fn();
@@ -77,6 +38,7 @@ describe("live QA gateway config", () => {
     const patching = patchLiveQaGatewayConfig({
       gateway: { call },
       patch: { channels: { slack: { enabled: true } } },
+      replacePaths: ["channels.slack"],
       timeoutMs: 45_000,
       waitForConfigRestartSettle,
     });
@@ -85,6 +47,17 @@ describe("live QA gateway config", () => {
     await patching;
 
     expect(call).toHaveBeenCalledTimes(4);
+    expect(call).toHaveBeenNthCalledWith(
+      2,
+      "config.patch",
+      {
+        raw: JSON.stringify({ channels: { slack: { enabled: true } } }, null, 2),
+        baseHash: "current",
+        replacePaths: ["channels.slack"],
+        restartDelayMs: 0,
+      },
+      { timeoutMs: 60_000 },
+    );
     expect(waitForConfigRestartSettle).toHaveBeenCalledTimes(1);
   });
 

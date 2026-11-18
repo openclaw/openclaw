@@ -3,6 +3,30 @@ import { vi } from "vitest";
 import type { ChannelMessageActionContext } from "../runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
+const results = vi.hoisted(() => ({
+  poll: {
+    eventId: "evt-poll-vote",
+    roomId: "!room:example",
+    pollId: "$poll",
+    answerIds: ["a1", "a2"],
+    labels: ["Pizza", "Sushi"],
+    maxSelections: 2,
+  },
+  profile: {
+    accountId: "ops",
+    displayName: "Ops Bot",
+    avatarUrl: "mxc://example/avatar",
+    profile: {
+      displayNameUpdated: true,
+      avatarUpdated: true,
+      resolvedAvatarUrl: "mxc://example/avatar",
+      uploadedAvatarSource: null,
+      convertedAvatarFromHttp: false,
+    },
+    configPath: "channels.matrix.accounts.ops",
+  },
+}));
+
 const mocks = vi.hoisted(() => ({
   voteMatrixPoll: vi.fn(),
   reactMatrixMessage: vi.fn(),
@@ -29,29 +53,37 @@ vi.mock("./matrix/read-policy.js", () => ({
   withAuthorizedMatrixReadTarget: mocks.withAuthorizedMatrixReadTarget,
 }));
 
-vi.mock("./matrix/actions.js", () => {
-  return {
-    deleteMatrixMessage: mocks.deleteMatrixMessage,
-    editMatrixMessage: mocks.editMatrixMessage,
-    getMatrixMemberInfo: mocks.getMatrixMemberInfo,
-    getMatrixRoomInfo: mocks.getMatrixRoomInfo,
-    listMatrixEmojis: mocks.listMatrixEmojis,
-    listMatrixReactions: mocks.listMatrixReactions,
-    pinMatrixMessage: mocks.pinMatrixMessage,
-    unpinMatrixMessage: mocks.unpinMatrixMessage,
-    listMatrixPins: mocks.listMatrixPins,
-    removeMatrixReactions: mocks.removeMatrixReactions,
-    readMatrixMessage: mocks.readMatrixMessage,
-    readMatrixMessages: mocks.readMatrixMessages,
-    sendMatrixMessage: mocks.sendMatrixMessage,
-    voteMatrixPoll: mocks.voteMatrixPoll,
-    listMatrixVerifications: mocks.listMatrixVerifications,
-  };
-});
+vi.mock("./matrix/actions/messages.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./matrix/actions/messages.js")>()),
+  deleteMatrixMessage: mocks.deleteMatrixMessage,
+  editMatrixMessage: mocks.editMatrixMessage,
+  readMatrixMessage: mocks.readMatrixMessage,
+  readMatrixMessages: mocks.readMatrixMessages,
+}));
+vi.mock("./matrix/actions/room.js", () => ({
+  getMatrixMemberInfo: mocks.getMatrixMemberInfo,
+  getMatrixRoomInfo: mocks.getMatrixRoomInfo,
+}));
+vi.mock("./matrix/actions/reactions.js", () => ({
+  listMatrixEmojis: mocks.listMatrixEmojis,
+  listMatrixReactions: mocks.listMatrixReactions,
+  removeMatrixReactions: mocks.removeMatrixReactions,
+}));
+vi.mock("./matrix/actions/pins.js", () => ({
+  pinMatrixMessage: mocks.pinMatrixMessage,
+  unpinMatrixMessage: mocks.unpinMatrixMessage,
+  listMatrixPins: mocks.listMatrixPins,
+}));
+vi.mock("./matrix/actions/polls.js", () => ({ voteMatrixPoll: mocks.voteMatrixPoll }));
+vi.mock("./matrix/actions/verification.js", () => ({
+  listMatrixVerifications: mocks.listMatrixVerifications,
+}));
 
-vi.mock("./matrix/send.js", () => {
+vi.mock("./matrix/send.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./matrix/send.js")>()),
     reactMatrixMessage: mocks.reactMatrixMessage,
+    sendMessageMatrix: mocks.sendMatrixMessage,
   };
 });
 
@@ -61,6 +93,8 @@ vi.mock("./profile-update.js", () => ({
 
 // Load the adapter only after its lower-operation and read-policy mocks are registered.
 const { matrixMessageActions } = await import("./actions.js");
+
+export const matrixActionResults = results;
 
 export function getMatrixActionMocks() {
   return mocks;

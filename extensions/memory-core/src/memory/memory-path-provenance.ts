@@ -1,4 +1,3 @@
-// Memory Core plugin module classifies indexed workspace paths by provenance owner.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
@@ -66,7 +65,9 @@ export async function resolveMemoryPathClassification(params: {
     return { curatedRoot, originClass: "system" };
   }
   const isWorkspaceMemory =
-    curatedRoot || (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
+    curatedRoot ||
+    /^users\/[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}\/USER\.md$/.test(relativePath) ||
+    (segments[0] === "memory" && segments.at(-1)?.endsWith(".md") === true);
   const recorded = isWorkspaceMemory
     ? await readMemoryArtifactProvenance({
         workspaceDir: params.workspaceDir,

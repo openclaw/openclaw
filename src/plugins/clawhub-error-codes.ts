@@ -23,6 +23,29 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
 export type ClawHubInstallErrorCode =
   (typeof CLAWHUB_INSTALL_ERROR_CODE)[keyof typeof CLAWHUB_INSTALL_ERROR_CODE];
 
+export type ClawHubInstallFailure = {
+  ok: false;
+  error: string;
+  code?: ClawHubInstallErrorCode;
+  warning?: string;
+  version?: string;
+};
+
+export function buildClawHubInstallFailure(
+  error: string,
+  code?: ClawHubInstallErrorCode,
+  warning?: string,
+  version?: string,
+): ClawHubInstallFailure {
+  return {
+    ok: false,
+    error,
+    ...(code ? { code } : {}),
+    ...(warning ? { warning } : {}),
+    ...(version ? { version } : {}),
+  };
+}
+
 /**
  * Detects ClawHub failures caused by a target that is not published, as opposed
  * to a broken install. Channel-aware installs use this to widen the selector

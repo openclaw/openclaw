@@ -1,8 +1,6 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
-// Diagnostic payload helpers emit structured diagnostic events with normalized fields.
 import { emitInternalDiagnosticEvent as emitDiagnosticEvent } from "../infra/diagnostic-events.js";
 
-// Diagnostic helpers for oversized payload decisions across channels/providers.
 type LargePayloadBase = {
   surface: string;
   bytes?: number;

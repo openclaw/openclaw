@@ -23,6 +23,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -35,6 +36,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModelStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -81,6 +83,46 @@ class GatewaySettingsScreenTest {
           }
         },
       ).around(composeRule)
+
+  @Test
+  fun gatewayMetricUsesLocalOverrideAndRestoresConnectedServerName() {
+    showGateway(connected = true)
+    capture("default-gateway-metric")
+    composeRule.onNodeWithText("OpenClaw Gateway").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertTrue(prefs.gatewayRegistry.rename("manual|127.0.0.1|18789", "My gateway"))
+    }
+    composeRule.onAllNodesWithText("My gateway").assertCountEquals(2)
+    composeRule.onNodeWithText("OpenClaw Gateway").assertDoesNotExist()
+    composeRule.runOnIdle {
+      assertTrue(prefs.gatewayRegistry.rename("manual|127.0.0.1|18789", ""))
+    }
+    composeRule.onNodeWithText("OpenClaw Gateway").assertIsDisplayed()
+  }
+
+  @Test
+  fun unchangedRenameSaveStillFollowsAutomaticNameUpdates() {
+    showGateway()
+    val original =
+      prefs.gatewayRegistry.entries.value
+        .single()
+    composeRule.onNodeWithText("Rename").performScrollTo().performClick()
+    capture("unchanged-rename-dialog", dialog = true)
+    composeRule.onNodeWithText("Save").performClick()
+    composeRule.waitUntil { composeRule.onAllNodesWithText("Rename gateway").fetchSemanticsNodes().isEmpty() }
+    composeRule.runOnIdle {
+      prefs.gatewayRegistry.upsert(original.copy(name = "Updated discovery name"))
+    }
+    capture("automatic-name-refresh")
+    composeRule.onNodeWithText("Updated discovery name").assertIsDisplayed()
+    composeRule.runOnIdle {
+      assertNull(
+        prefs.gatewayRegistry.entries.value
+          .single()
+          .localName,
+      )
+    }
+  }
 
   @Test
   fun connectionActionsAndSavedGatewaysPrecedeCollapsedTechnicalDetails() {
@@ -206,17 +248,20 @@ class GatewaySettingsScreenTest {
     }
   }
 
-  private fun capture(name: String) {
+  private fun capture(
+    name: String,
+    dialog: Boolean = false,
+  ) {
     val directory = File("build/outputs/gateway-settings-proof", UUID.randomUUID().toString())
     check(directory.mkdirs())
-    val image = composeRule.onRoot().captureToImage().asAndroidBitmap()
+    val image = (if (dialog) composeRule.onNode(isDialog()) else composeRule.onRoot()).captureToImage().asAndroidBitmap()
     assertTrue("Capture must include the full nonzero screen", image.width >= 360 && image.height >= 700)
     val file = File(directory, "$name.png")
     file.outputStream().use { assertTrue(image.compress(Bitmap.CompressFormat.PNG, 100, it)) }
     println("Gateway settings proof: " + file.absolutePath)
   }
 
-  private fun showGateway() {
+  private fun showGateway(connected: Boolean = false) {
     app = RuntimeEnvironment.getApplication() as NodeApp
     previousRuntime = app.peekRuntime()
     prefs = SecurePrefs(app, app.getSharedPreferences("gateway-settings-${UUID.randomUUID()}", Context.MODE_PRIVATE))
@@ -233,7 +278,11 @@ class GatewaySettingsScreenTest {
       ),
     )
     runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
-    runtime.disconnect()
+    if (connected) {
+      prefs.gatewayRegistry.setActive("manual|127.0.0.1|18789")
+    } else {
+      runtime.disconnect()
+    }
     bindNodeRuntimeTestFixture(app, runtime)
     model = MainViewModel(app, prefs, SavedStateHandle()).also { models.put("gateway", it) }
     composeRule.setContent { ClawDesignTheme { SettingsDetailScreen(model, SettingsRoute.Gateway, onBack = {}) } }

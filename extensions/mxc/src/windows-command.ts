@@ -1,6 +1,3 @@
-// Windows command-line construction and cmd.exe quoting for the MXC
-// ProcessContainer backend.
-//
 // Security note: `command` and `args` originate from the agent/tool layer and
 // are embedded into MXC's `process.commandLine`, which MXC passes to
 // CreateProcessInSandbox -> cmd.exe *inside* the AppContainer sandbox. They

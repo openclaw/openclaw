@@ -1,3 +1,8 @@
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
+import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -5,12 +10,20 @@ import { createDeferredCore } from "../shared/deferred.js";
 /** Owns received work and connection cleanup until this Gateway generation settles. */
 export class GatewayConnectionWork extends AsyncWorkScope {
   private readonly spawnBroker = getSpawnBroker();
+  private readonly installationContext = { installation: getGatewayServiceInstallation() };
+  private readonly runWithReadOnlyWorkers = captureSqliteReadOnlyWorkerScope();
   private readonly connections = new Set<() => void>();
   private failure: { error: unknown } | undefined;
 
   override track<T>(run: () => T | Promise<T>): Promise<T> {
-    // Socket callbacks retain this Gateway's transport without borrowing startup admission.
-    return runWithSpawnBroker(this.spawnBroker, () => super.track(run));
+    // Socket callbacks retain host facts and workers, never startup or requester authority.
+    return runWithSpawnBroker(this.spawnBroker, () =>
+      super.track(() =>
+        this.runWithReadOnlyWorkers(() =>
+          withGatewayServiceInstallation(this.installationContext, run),
+        ),
+      ),
+    );
   }
 
   trackCleanup(run: () => Promise<void>): Promise<void> {

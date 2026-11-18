@@ -1,4 +1,4 @@
-const TLS_SECRET_FIELDS = ["ca", "cert", "key", "passphrase"] as const;
+export const TLS_SECRET_FIELDS = ["ca", "cert", "key", "passphrase"] as const;
 
 // Runtime collects direct TLS before proxy TLS; the public registry retains the opposite order.
 export const PROVIDER_REQUEST_SECRET_FIELD_GROUPS = [

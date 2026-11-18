@@ -1,0 +1,66 @@
+import { listen } from "../lib/reactive/listener.ts";
+import type { ApplicationGateway } from "./gateway.ts";
+import { hasOperatorReadAccess } from "./operator-access.ts";
+
+const REPORT_INTERVAL_MS = 30_000;
+const INPUT_EVENTS = ["keydown", "pointerdown", "pointermove", "wheel", "touchstart"] as const;
+// Document lifetime, not socket lifetime: tab recovery must not look like a new visit.
+const visitedDocuments = new WeakSet<Document>();
+
+/** Reports interaction without sampling input content or treating liveness as activity. */
+export function startGatewayPresenceActivity(
+  gateway: Pick<ApplicationGateway, "snapshot" | "subscribe">,
+  documentTarget: Document,
+): () => void {
+  let disposed = false;
+  let lastReportedAt = -Infinity;
+  let pending = false;
+  const report = () => {
+    const { client, phase } = gateway.snapshot;
+    if (
+      disposed ||
+      pending ||
+      !client ||
+      phase !== "connected" ||
+      !hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null) ||
+      documentTarget.visibilityState !== "visible"
+    ) {
+      return;
+    }
+    const now = performance.now();
+    if (now - lastReportedAt < REPORT_INTERVAL_MS) {
+      return;
+    }
+    lastReportedAt = now;
+    pending = true;
+    // Presence is advisory. Drop a failed sample; retries or trailing timers would
+    // manufacture a later interaction. New input may report again after settlement.
+    const settled = () => {
+      pending = false;
+    };
+    void client.request("presence.activity", {}).then(settled, settled);
+  };
+  const onReady = () => {
+    if (gateway.snapshot.phase !== "connected" || visitedDocuments.has(documentTarget)) {
+      return;
+    }
+    // A hidden initial connection consumes the visit too; becoming visible is not input.
+    visitedDocuments.add(documentTarget);
+    report();
+  };
+  const onInput = (event: Event) => {
+    if (event.isTrusted) {
+      report();
+    }
+  };
+  const stops = INPUT_EVENTS.map((event) =>
+    listen(documentTarget, event, onInput, { capture: true, passive: true }),
+  );
+  // Consume the document's first connection once; mounting views must not count as visits.
+  stops.push(gateway.subscribe(onReady));
+  onReady();
+  return () => {
+    disposed = true;
+    stops.forEach((stop) => stop());
+  };
+}

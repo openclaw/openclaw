@@ -69,9 +69,9 @@ for (const bridge of process.argv.slice(1)) {
   const { resolveNodeRunner } = await import(pathToFileURL(bridge).href);
   const original = process.execPath;
   assert.equal(resolveNodeRunner(), original);
-  for (const name of ["node", "NODE.EXE", "bun"]) {
+  for (const name of ["node", "NODE.EXE", "bun", "app-runtime"]) {
     Object.defineProperty(process, "execPath", { value: path.join(path.dirname(original), name), configurable: true });
-    assert.equal(resolveNodeRunner(), name === "bun" ? "node" : process.execPath);
+    assert.equal(resolveNodeRunner(), name === "node" || name === "NODE.EXE" ? process.execPath : "node");
   }
   Object.defineProperty(process, "execPath", { value: original, configurable: true });
 }

@@ -1,4 +1,3 @@
-// Openai provider module implements model/runtime integration.
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
 import { OPENAI_DEFAULT_AUDIO_TRANSCRIPTION_MODEL } from "./default-models.js";
 
@@ -22,5 +21,9 @@ export const openaiMediaUnderstandingProvider: MediaUnderstandingProvider = {
   async transcribeAudioWithContext(context) {
     const { transcribeOpenAiAudioWithContext } = await import("./audio-transcription.js");
     return transcribeOpenAiAudioWithContext(context);
+  },
+  async isAudioConfigured(context) {
+    const { isOpenAiAudioConfigured } = await import("./audio-transcription.js");
+    return isOpenAiAudioConfigured(context);
   },
 };

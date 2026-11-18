@@ -1,33 +1,18 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { describeControlFailure } from "./app-server/capabilities.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
-import type { CodexCommandDepsOverride } from "./command-handlers.js";
+import type { CodexCommandOptions } from "./commands.js";
 
-type CodexCommandOptions = {
-  pluginConfig?: unknown;
-  resolvePluginConfig?: () => unknown;
-  deps: CodexCommandDepsOverride;
-};
+const loadCommandHandlers = createLazyRuntimeModule(() => import("./command-handlers.js"));
 
-type CodexSubcommandHandler = (
-  ctx: PluginCommandContext,
-  options: CodexCommandOptions,
-) => Promise<PluginCommandResult>;
-
-type CodexCommandInternalOptions = CodexCommandOptions & {
-  loadSubcommandHandler?: () => Promise<CodexSubcommandHandler>;
-};
-
-/** Dispatches a `/codex` command to the lazily loaded handler. */
 export async function handleCodexCommand(
   ctx: PluginCommandContext,
-  options: CodexCommandInternalOptions,
+  options: CodexCommandOptions,
 ): Promise<PluginCommandResult> {
-  const { loadSubcommandHandler, resolvePluginConfig, ...subcommandOptions } = options;
+  const { resolvePluginConfig, ...subcommandOptions } = options;
   try {
-    const handleCodexSubcommand = loadSubcommandHandler
-      ? await loadSubcommandHandler()
-      : await loadDefaultCodexSubcommandHandler();
+    const { handleCodexSubcommand } = await loadCommandHandlers();
     return await handleCodexSubcommand(ctx, {
       ...subcommandOptions,
       pluginConfig: resolvePluginConfig?.() ?? subcommandOptions.pluginConfig,
@@ -37,9 +22,4 @@ export async function handleCodexCommand(
       text: `Codex command failed: ${formatCodexDisplayText(describeControlFailure(error))}`,
     };
   }
-}
-
-async function loadDefaultCodexSubcommandHandler(): Promise<CodexSubcommandHandler> {
-  const { handleCodexSubcommand } = await import("./command-handlers.js");
-  return handleCodexSubcommand;
 }

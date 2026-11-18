@@ -1,38 +1,65 @@
-// Msteams tests cover channel plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
-import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { isImplicitSameChatApprovalAuthorization } from "openclaw/plugin-sdk/approval-auth-runtime";
+import {
+  createDirectoryTestRuntime,
+  expectDirectorySurface,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { MSTeamsConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MSTeamsConfigSchema } from "../config-api.js";
-import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
+import type { RuntimeEnv } from "../runtime-api.js";
+import { resolveMSTeamsAccount } from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
-import { msTeamsApprovalCapability } from "./approval-native.js";
+import { collectMSTeamsSecurityWarnings } from "./channel-config.js";
 import { msteamsPlugin } from "./channel.js";
 import { msteamsSetupPlugin } from "./channel.setup.js";
+import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 
-function createConfiguredMSTeamsCfg(): OpenClawConfig {
+const probeMSTeamsMock = vi.hoisted(() => vi.fn());
+const monitorMSTeamsProviderMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./monitor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./monitor.js")>()),
+  monitorMSTeamsProvider: monitorMSTeamsProviderMock,
+}));
+
+vi.mock("./channel.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./channel.runtime.js")>();
   return {
-    channels: {
-      msteams: {
-        appId: "app-id",
-        appPassword: "secret",
-        tenantId: "tenant-id",
-      },
+    ...actual,
+    msTeamsChannelRuntime: {
+      ...actual.msTeamsChannelRuntime,
+      probeMSTeams: probeMSTeamsMock,
     },
   };
+});
+
+function teams(msteams: MSTeamsConfig): OpenClawConfig {
+  return { channels: { msteams } };
+}
+function createConfiguredMSTeamsCfg(overrides: MSTeamsConfig = {}): OpenClawConfig {
+  return teams({ appId: "app-id", appPassword: "secret", tenantId: "tenant-id", ...overrides });
+}
+function namedAccount(overrides: MSTeamsConfig = {}, root: MSTeamsConfig = {}, key = "support") {
+  return teams({
+    enabled: true,
+    tenantId: "tenant-id",
+    ...root,
+    accounts: {
+      [key]: {
+        appId: "support-app-id",
+        appPassword: "support-secret",
+        webhook: { path: "/hooks/3979" },
+        ...overrides,
+      },
+    },
+  });
 }
 
 describe("msteamsPlugin.security.collectWarnings", () => {
   it("records an intentional open groupPolicy as a non-blocking posture advisory", async () => {
-    const cfg = {
-      channels: {
-        msteams: {
-          groupPolicy: "open",
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = teams({ groupPolicy: "open" });
     const account = msteamsPlugin.config.resolveAccount(cfg, "default");
 
     expect(await msteamsPlugin.security?.collectWarnings?.({ cfg, account })).toEqual([
@@ -50,68 +77,97 @@ describe("msteamsPlugin.security.collectWarnings", () => {
 describe("msteamsPlugin", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("distinguishes users from channel and group conversations", () => {
-    const infer = msteamsPlugin.messaging?.inferTargetChatType;
-    const ownerId = "00000000-0000-0000-0000-000000000001";
-    expect(infer?.({ to: ownerId })).toBe("direct");
-    expect(infer?.({ to: "19:channel@thread.tacv2" })).toBe("channel");
-    expect(infer?.({ to: "19:group@thread.v2" })).toBe("group");
-    expect(
-      msteamsPlugin.messaging?.resolveOutboundSessionRoute?.({
-        cfg: {},
-        agentId: "main",
-        target: ownerId,
-      }),
-    ).toMatchObject({ chatType: "direct" });
-  });
+  it.each(["teams"])(
+    "recognizes %s-prefixed user IDs without claiming display names",
+    (provider) => {
+      const messaging = msteamsPlugin.messaging;
+      const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
+      const target = `${provider}:user:${aadUserId}`;
 
-  it("shares setup and directory contracts with the lightweight artifacts", () => {
-    expect(msteamsSetupPlugin.meta).toEqual(msteamsPlugin.meta);
-    expect(msteamsPlugin.capabilities).toBe(msteamsSetupPlugin.capabilities);
-    expect(msteamsPlugin.reload).toBe(msteamsSetupPlugin.reload);
-    expect(msteamsPlugin.configSchema).toBe(msteamsSetupPlugin.configSchema);
+      expect(messaging?.targetResolver?.looksLikeId?.(target)).toBe(true);
+      expect(messaging?.normalizeTarget?.(target)).toBe(`user:${aadUserId}`);
+      expect(messaging?.targetResolver?.looksLikeId?.(`${provider}:user:Jane Doe`)).toBe(false);
+    },
+  );
 
-    for (const key of [
-      "listAccountIds",
-      "resolveAccount",
-      "defaultAccountId",
-      "setAccountEnabled",
-      "deleteAccount",
-      "resolveAllowFrom",
-      "formatAllowFrom",
-      "resolveDefaultTo",
-    ] as const) {
-      expect(msteamsSetupPlugin.config[key]).toBe(msteamsPlugin.config[key]);
-    }
+  it.each([
+    { webhookPath: "", info: "18789/api/messages", warning: undefined },
+    { webhookPath: "/ready", info: undefined, warning: "reserved for Gateway checks" },
+  ])(
+    "classifies Doctor webhook guidance for $webhookPath",
+    async ({ webhookPath, info, warning }) => {
+      const cfg: OpenClawConfig = { channels: { msteams: { webhook: { path: webhookPath } } } };
+      const result = await msteamsPlugin.doctor?.runConfigSequence?.({
+        cfg,
+        env: {},
+        shouldRepair: false,
+      });
+      expect(result?.changeNotes).toEqual([]);
+      expect(result?.infoNotes ?? []).toEqual(info ? [expect.stringContaining(info)] : []);
+      expect(result?.warningNotes).toEqual(warning ? [expect.stringContaining(warning)] : []);
+    },
+  );
 
-    expect(msteamsPlugin.directory?.self).toBe(msteamsDirectoryContractPlugin.directory.self);
-    expect(msteamsPlugin.directory?.listPeers).toBe(
-      msteamsDirectoryContractPlugin.directory.listPeers,
-    );
-    expect(msteamsPlugin.directory?.listGroups).toBe(
-      msteamsDirectoryContractPlugin.directory.listGroups,
-    );
-  });
-
-  it("declares its implemented group and reaction capabilities", () => {
-    expect(msteamsSetupPlugin.capabilities.chatTypes).toContain("group");
-    expect(msteamsSetupPlugin.capabilities.reactions).toBe(true);
-  });
-
-  it("preserves the default account and allowlist across runtime and setup", () => {
+  it("reports each enabled Doctor route with the authored recovery and compatibility paths", async () => {
+    const support = {
+      appId: "support-app",
+      webhook: { path: "/healthz" },
+      legacyWebhook: { port: 3979 },
+    };
     const cfg: OpenClawConfig = {
       channels: {
         msteams: {
-          ...createConfiguredMSTeamsCfg().channels?.msteams,
-          allowFrom: ["OWNER", "  Team.Member  "],
-          defaultTo: "19:team@thread.tacv2",
+          legacyWebhook: { port: 3978 },
+          accounts: {
+            Default: { appId: "default-app", webhook: { path: "/api/default" } },
+            "Support Team": support,
+            sibling: { appId: "sibling-app" },
+            disabled: { enabled: false, webhook: { path: "/ready" } },
+          },
         },
       },
     };
+    const result = await msteamsPlugin.doctor?.runConfigSequence?.({
+      cfg,
+      env: {},
+      shouldRepair: false,
+    });
+    expect(result?.changeNotes).toEqual([]);
+    expect(result?.warningNotes).toEqual([
+      expect.stringContaining(
+        "Set channels.msteams.accounts.Support Team.webhook.path to /api/messages/support-team",
+      ),
+    ]);
+    expect(result?.warningNotes?.[0]).toContain(
+      "before removing channels.msteams.accounts.Support Team.legacyWebhook",
+    );
+    expect(result?.infoNotes).toEqual([
+      expect.stringContaining("remove the channels.msteams.legacyWebhook pin"),
+      expect.stringContaining(
+        "Microsoft Teams (sibling) webhooks use Gateway port 18789/api/messages/sibling; no compatibility listener",
+      ),
+    ]);
+    support.webhook.path = "/api/messages/support-team";
+    const repaired = await msteamsPlugin.doctor?.runConfigSequence?.({
+      cfg,
+      env: {},
+      shouldRepair: false,
+    });
+    expect(repaired?.warningNotes).toEqual([]);
+    expect(repaired?.infoNotes).toContainEqual(
+      expect.stringContaining("Gateway port 18789/api/messages/support-team"),
+    );
+  });
+
+  it("preserves the default account and allowlist across runtime and setup", () => {
+    const cfg = createConfiguredMSTeamsCfg({
+      allowFrom: ["OWNER", "  Team.Member  "],
+      defaultTo: "19:team@thread.tacv2",
+    });
 
     for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
       expect(plugin.config.defaultAccountId?.(cfg)).toBe("default");
-      expect(plugin.config.resolveAccount(cfg, "ignored")).toEqual({
+      expect(plugin.config.resolveAccount(cfg, "default")).toMatchObject({
         accountId: "default",
         enabled: true,
         configured: true,
@@ -134,434 +190,473 @@ describe("msteamsPlugin", () => {
     }
   });
 
-  it.each([
-    {
-      label: "configured certificate",
-      configuredPath: "/private/msteams-unavailable-configured.pem",
-      envPath: undefined,
-      diagnosticPath: "channels.msteams.certificatePath",
-    },
-    {
-      label: "environment certificate",
-      configuredPath: "   ",
-      envPath: "/private/msteams-unavailable-env.pem",
-      diagnosticPath: "env.MSTEAMS_CERTIFICATE_PATH",
-    },
-  ])("degrades an unavailable $label without exposing its filesystem path", async (selection) => {
-    if (selection.envPath) {
-      vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", selection.envPath);
-    }
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          appId: "app-id",
-          tenantId: "tenant-id",
-          authType: "federated",
-          certificatePath: selection.configuredPath,
-        },
-      },
-    };
-
-    for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
-      const account = plugin.config.resolveAccount(cfg, "default");
-      expect(account).toMatchObject({
-        configured: true,
-        tokenStatus: "configured_unavailable",
-        credentialDiagnostics: [
-          {
-            code: "CREDENTIAL_FILE_UNAVAILABLE",
-            path: selection.diagnosticPath,
-            reason: "not-found",
-          },
-        ],
-      });
-      expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(
-        selection.envPath ?? selection.configuredPath,
-      );
-      expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
-      expect(plugin.config.describeAccount?.(account, cfg)).toMatchObject({
-        configured: true,
-        tokenStatus: "configured_unavailable",
-      });
-    }
-
-    const account = msteamsPlugin.config.resolveAccount(cfg, "default");
-    expect(await msteamsPlugin.status?.buildAccountSnapshot?.({ account, cfg })).toMatchObject({
-      configured: true,
-      tokenStatus: "configured_unavailable",
-    });
-  });
-
-  it("does not fall back from a selected unavailable configured certificate to an env file", async () => {
+  it("degrades an unavailable configured certificate without exposing its filesystem path", async () => {
     await withTempDir("msteams-certificate-precedence-", async (tempDir) => {
-      const envCertificate = path.join(tempDir, "env-cert.pem");
-      fs.writeFileSync(envCertificate, "available-certificate", "utf8");
-      vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", envCertificate);
-      const cfg: OpenClawConfig = {
-        channels: {
-          msteams: {
-            appId: "app-id",
-            tenantId: "tenant-id",
-            authType: "federated",
-            certificatePath: "/private/msteams-selected-missing.pem",
-          },
-        },
-      };
+      const fallback = path.join(tempDir, "env-cert.pem");
+      fs.writeFileSync(fallback, "available-certificate", "utf8");
+      vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", fallback);
+      const configuredPath = "/private/msteams-unavailable-configured.pem";
+      const cfg = teams({
+        appId: "app-id",
+        tenantId: "tenant-id",
+        authType: "federated",
+        certificatePath: configuredPath,
+      });
 
-      expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
+      for (const plugin of [msteamsPlugin, msteamsSetupPlugin]) {
+        const account = plugin.config.resolveAccount(cfg, "default");
+        expect(account).toMatchObject({
+          configured: true,
+          tokenStatus: "configured_unavailable",
+          credentialDiagnostics: [
+            {
+              code: "CREDENTIAL_FILE_UNAVAILABLE",
+              path: "channels.msteams.certificatePath",
+              reason: "not-found",
+            },
+          ],
+        });
+        expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(configuredPath);
+        expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
+        expect(plugin.config.describeAccount?.(account, cfg)).toMatchObject({
+          configured: true,
+          tokenStatus: "configured_unavailable",
+        });
+      }
+
+      expect(msteamsPlugin.actions?.describeMessageTool?.({ cfg })).toEqual({
+        actions: [],
+        capabilities: [],
+        schema: null,
+      });
+
+      const account = msteamsPlugin.config.resolveAccount(cfg, "default");
+      expect(await msteamsPlugin.status?.buildAccountSnapshot?.({ account, cfg })).toMatchObject({
         configured: true,
         tokenStatus: "configured_unavailable",
-        credentialDiagnostics: [
-          { code: "CREDENTIAL_FILE_UNAVAILABLE", path: "channels.msteams.certificatePath" },
-        ],
       });
     });
   });
+});
 
-  it("does not inspect an unavailable certificate when managed identity is selected", () => {
-    const cfg: OpenClawConfig = {
-      channels: {
-        msteams: {
-          appId: "app-id",
-          tenantId: "tenant-id",
-          authType: "federated",
-          certificatePath: "/private/msteams-unused-missing-certificate.pem",
-          useManagedIdentity: true,
-        },
-      },
-    };
+describe("msteamsPlugin.approvalCapability", () => {
+  const ownerId = "123e4567-e89b-12d3-a456-426614174000";
+  const otherUserId = "22222222-2222-4222-8222-222222222222";
 
-    expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toEqual({
-      accountId: "default",
-      enabled: true,
-      configured: true,
-      tokenStatus: "available",
+  function authorizeApproval(
+    allowFrom: string[],
+    senderId: string,
+    approvalKind: "exec" | "plugin" | "system-agent" = "exec",
+  ) {
+    return msteamsPlugin.approvalCapability?.authorizeActorActionAsync?.({
+      cfg: { channels: { msteams: { allowFrom } } },
+      senderId,
+      action: "approve",
+      approvalKind,
     });
-  });
+  }
 
-  it.skipIf(process.platform === "win32")(
-    "preserves the existing symlink-friendly certificate file policy",
-    async () => {
-      await withTempDir("msteams-certificate-symlink-", async (tempDir) => {
-        const certificate = path.join(tempDir, "certificate.pem");
-        const symlink = path.join(tempDir, "certificate-link.pem");
-        fs.writeFileSync(certificate, "available-certificate", "utf8");
-        fs.symlinkSync(certificate, symlink);
-        const cfg: OpenClawConfig = {
-          channels: {
-            msteams: {
-              appId: "app-id",
-              tenantId: "tenant-id",
-              authType: "federated",
-              certificatePath: symlink,
-            },
-          },
-        };
-
-        expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
-          configured: true,
-          tokenStatus: "available",
-        });
+  it.each(["system-agent"] as const)(
+    "authorizes only the configured owner for %s after normalizing an AAD principal",
+    async (approvalKind) => {
+      const allowFrom = [`MSTEAMS:USER:${ownerId.toUpperCase()}`];
+      expect(await authorizeApproval(allowFrom, ownerId, approvalKind)).toEqual({
+        authorized: true,
+      });
+      expect(await authorizeApproval(allowFrom, otherUserId, approvalKind)).toMatchObject({
+        authorized: false,
       });
     },
   );
 
-  it("exposes native approval delivery without replacing existing approval authorization", () => {
-    const authorization = {
-      cfg: createConfiguredMSTeamsCfg(),
-      senderId: "40a1a0ed-4ff2-4164-a219-55518990c197",
-      action: "approve",
-      approvalKind: "exec",
-    } as const;
-
-    expect(msteamsPlugin.approvalCapability).toBe(msTeamsApprovalCapability);
-    expect(msteamsPlugin.approvalCapability?.authorizeActorAction?.(authorization)).toEqual(
-      msTeamsApprovalAuth.authorizeActorAction?.(authorization),
-    );
-    expect(msteamsPlugin.approvalCapability?.nativeRuntime?.eventKinds).toEqual([
-      "exec",
-      "plugin",
-      "system-agent",
-    ]);
+  it("preserves implicit same-chat authorization when no approvers are configured", async () => {
+    const result = await authorizeApproval([], ownerId);
+    expect(result).toEqual({ authorized: true });
+    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(true);
   });
 
-  it("advertises legacy and group-management message-tool actions together", () => {
-    const actions = msteamsPlugin.actions?.describeMessageTool?.({
-      cfg: createConfiguredMSTeamsCfg(),
-    })?.actions;
-
-    expect(actions).toEqual([
-      "upload-file",
-      "poll",
-      "edit",
-      "delete",
-      "pin",
-      "unpin",
-      "list-pins",
-      "read",
-      "react",
-      "reactions",
-      "search",
-      "member-info",
-      "channel-list",
-      "channel-info",
-      "addParticipant",
-      "removeParticipant",
-      "renameGroup",
-    ]);
-  });
-
-  it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
-    const monitorModule = await import("./index.js");
-    const monitor = vi.spyOn(monitorModule, "monitorMSTeamsProvider").mockResolvedValue({
-      app: null,
-      shutdown: async () => {},
-    });
-    const register = vi.fn(() => ({ dispose: vi.fn() }));
-    const controller = new AbortController();
-    const cfg: OpenClawConfig = {
-      ...createConfiguredMSTeamsCfg(),
-      approvals: { exec: { enabled: true } },
-      channels: {
-        msteams: {
-          ...createConfiguredMSTeamsCfg().channels?.msteams,
-          allowFrom: ["40a1a0ed-4ff2-4164-a219-55518990c197"],
-        },
-      },
-    };
-    const startAccount = async (config: OpenClawConfig) =>
-      await msteamsPlugin.gateway?.startAccount?.({
-        cfg: config,
-        accountId: "default",
-        account: msteamsPlugin.config.resolveAccount(config, "default"),
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        abortSignal: controller.signal,
-        getStatus: () => ({ accountId: "default" }),
-        setStatus: vi.fn(),
-        channelRuntime: {
-          runtimeContexts: {
-            register,
-            get: () => undefined,
-            watch: () => () => {},
-          },
-        },
-      });
-
-    try {
-      await startAccount(cfg);
-
-      expect(register).toHaveBeenCalledWith({
-        channelId: "msteams",
-        accountId: "default",
-        capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
-        context: {},
-        abortSignal: controller.signal,
-      });
-      expect(register.mock.invocationCallOrder[0]).toBeLessThan(
-        monitor.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-      );
-
-      await startAccount({ ...cfg, approvals: { exec: { enabled: false } } });
-
-      expect(register).toHaveBeenCalledOnce();
-      expect(monitor).toHaveBeenCalledTimes(2);
-    } finally {
-      controller.abort();
-      monitor.mockRestore();
-    }
-  });
-
-  it("reuses the shared Teams target-id matcher for explicit targets", () => {
-    const looksLikeId = msteamsPlugin.messaging?.targetResolver?.looksLikeId;
-
-    expect(looksLikeId?.("29:1a2b3c4d5e6f")).toBe(true);
-    expect(looksLikeId?.("a:1bfPersonalChat")).toBe(true);
-    expect(looksLikeId?.("user:Jane Doe")).toBe(false);
-  });
-
-  it("recognizes provider-prefixed explicit targets without claiming display names", () => {
-    const messaging = msteamsPlugin.messaging;
-    const aadUserId = "40a1a0ed-4ff2-4164-a219-55518990c197";
-
+  it("does not authorize a conversation id as an approval principal", async () => {
     expect(
-      ["teams", "msteams"].map((provider) => {
-        const target = `${provider}:user:${aadUserId}`;
-        return {
-          explicit: messaging?.targetResolver?.looksLikeId?.(target),
-          normalized: messaging?.normalizeTarget?.(target),
-        };
-      }),
-    ).toEqual([
-      { explicit: true, normalized: `user:${aadUserId}` },
-      { explicit: true, normalized: `user:${aadUserId}` },
+      await authorizeApproval([ownerId, `msteams:conversation:${otherUserId}`], otherUserId),
+    ).toMatchObject({ authorized: false });
+  });
+});
+
+const graphChannel = "19:channel@thread.tacv2";
+const graphTarget = `11111111-1111-1111-1111-111111111111/${graphChannel}`;
+const extract = msteamsPlugin.actions!.extractToolSendResult!;
+describe("Teams delivery reconciliation", () => {
+  it.each([
+    { conversationId: "19:channel@thread.tacv2" },
+    { receipt: { parts: [{ raw: { conversationId: "19:channel@thread.tacv2" } }] } },
+  ])("recovers the authoritative conversation from %j", (result) => {
+    expect(
+      extract({ result: { details: { result } }, send: { to: graphTarget, threadId: "root" } }),
+    ).toEqual({ to: "conversation:19:channel@thread.tacv2" });
+  });
+
+  it.each([
+    undefined,
+    { details: { result: {} } },
+    { details: { result: { receipt: { raw: [{}] } } } },
+  ])("rejects a result without an authoritative conversation: %j", (result) => {
+    expect(extract({ result, send: { to: graphTarget, threadId: "root" } })).toBeNull();
+  });
+});
+
+const msteamsDirectoryAdapter = msteamsPlugin.directory;
+
+describe("msteams directory", () => {
+  const runtimeEnv = createDirectoryTestRuntime() satisfies RuntimeEnv;
+  const directorySelf = msteamsDirectoryAdapter!.self!;
+
+  afterEach(() => {
+    probeMSTeamsMock.mockReset();
+    monitorMSTeamsProviderMock.mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  describe("self()", () => {
+    it("returns bot identity when credentials are configured", async () => {
+      const cfg = createConfiguredMSTeamsCfg({
+        appId: "test-app-id-1234",
+        tenantId: "tenant-id-5678",
+      });
+
+      const result = await directorySelf({ cfg, runtime: runtimeEnv });
+      expect(result).toEqual({ kind: "user", id: "test-app-id-1234", name: "test-app-id-1234" });
+    });
+
+    it("returns null when credentials are not configured", async () => {
+      vi.stubEnv("MSTEAMS_APP_ID", "");
+      vi.stubEnv("MSTEAMS_APP_PASSWORD", "");
+      vi.stubEnv("MSTEAMS_TENANT_ID", "");
+      const cfg = { channels: {} } satisfies OpenClawConfig;
+      const result = await directorySelf({ cfg, runtime: runtimeEnv });
+      expect(result).toBeNull();
+    });
+  });
+
+  it("lists peers and groups from config", async () => {
+    const cfg = teams({
+      allowFrom: [" alice ", " user:Bob "],
+      dms: { " carol ": {}, "user:bob": {} },
+      teams: { team1: { channels: { "conversation:chan1": {}, chan2: {} } } },
+    });
+
+    const directory = expectDirectorySurface(msteamsDirectoryAdapter);
+
+    const peers = await directory.listPeers({ cfg, runtime: runtimeEnv });
+    expect(peers).toStrictEqual([
+      { kind: "user", id: "user:alice" },
+      { kind: "user", id: "user:Bob" },
+      { kind: "user", id: "user:carol" },
+      { kind: "user", id: "user:bob" },
     ]);
-    expect(messaging?.targetResolver?.looksLikeId?.("teams:user:Jane Doe")).toBe(false);
-    expect(messaging?.targetResolver?.looksLikeId?.("msteams:user:Jane Doe")).toBe(false);
+
+    const groups = await directory.listGroups({ cfg, runtime: runtimeEnv });
+    expect(groups).toStrictEqual([
+      { kind: "group", id: "conversation:chan1" },
+      { kind: "group", id: "conversation:chan2" },
+    ]);
   });
 });
 
-describe("msteams config schema", () => {
-  it("defaults groupPolicy to allowlist", () => {
-    const res = MSTeamsConfigSchema.safeParse({});
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.groupPolicy).toBe("allowlist");
-    }
-  });
-
-  it("accepts historyLimit", () => {
-    const res = MSTeamsConfigSchema.safeParse({ historyLimit: 4 });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.historyLimit).toBe(4);
-    }
-  });
-
-  it("accepts the opt-in Graph media fallback", () => {
-    const res = MSTeamsConfigSchema.safeParse({ graphMediaFallback: true });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.graphMediaFallback).toBe(true);
-    }
-  });
-
-  it("accepts replyStyle at global/team/channel levels", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      replyStyle: "top-level",
-      teams: {
-        team123: {
-          replyStyle: "thread",
-          channels: {
-            chan456: { replyStyle: "top-level" },
-          },
-        },
-      },
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.replyStyle).toBe("top-level");
-      expect(res.data.teams?.team123?.replyStyle).toBe("thread");
-      expect(res.data.teams?.team123?.channels?.chan456?.replyStyle).toBe("top-level");
-    }
-  });
-
-  it("accepts Teams SDK cloud and serviceUrl configuration", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "USGovDoD",
-      serviceUrl: "https://smba.infra.dod.teams.microsoft.us/teams",
-    });
-
-    expect(res.success).toBe(true);
-    if (res.success) {
-      expect(res.data.cloud).toBe("USGovDoD");
-      expect(res.data.serviceUrl).toBe("https://smba.infra.dod.teams.microsoft.us/teams");
-    }
-  });
-
-  it("rejects unsupported Teams serviceUrl hosts", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "USGovDoD",
-      serviceUrl: "https://dod.example.mil/teams",
-    });
-
-    expect(res.success).toBe(false);
-  });
-
-  it("accepts China cloud without a configured global serviceUrl", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "China",
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("accepts Azure China Bot Framework serviceUrl hosts", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "China",
-      serviceUrl: "https://msteams.botframework.azure.cn/teams",
-    });
-
-    expect(res.success).toBe(true);
-  });
-
-  it("rejects non-China serviceUrl hosts when China cloud is configured", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "China",
-      serviceUrl: "https://smba.trafficmanager.net/teams",
-    });
-
-    expect(res.success).toBe(false);
-  });
-
-  it("rejects Azure China Bot Framework serviceUrl hosts without China cloud", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      serviceUrl: "https://msteams.botframework.azure.cn/teams",
-    });
-
-    expect(res.success).toBe(false);
-  });
-
-  it("requires serviceUrl with non-public Teams clouds", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      cloud: "USGov",
-    });
-
-    expect(res.success).toBe(false);
-  });
-
-  it("rejects invalid replyStyle", () => {
-    const res = MSTeamsConfigSchema.safeParse({
-      replyStyle: "nope",
-    });
-
-    expect(res.success).toBe(false);
-  });
-});
-
-describe("msTeamsApprovalAuth", () => {
-  const ownerId = "123e4567-e89b-12d3-a456-426614174000";
-  const otherUserId = "22222222-2222-4222-8222-222222222222";
-
-  function authorizeApproval(allowFrom: string[], senderId: string) {
-    return msTeamsApprovalAuth.authorizeActorAction({
-      cfg: { channels: { msteams: { allowFrom } } },
-      senderId,
-      action: "approve",
-      approvalKind: "exec",
+describe("msteams session route", () => {
+  function route(
+    target: string,
+    extra: Partial<Parameters<typeof resolveMSTeamsOutboundSessionRoute>[0]> = {},
+  ) {
+    return resolveMSTeamsOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target,
+      ...extra,
     });
   }
-
-  it.each([
-    ["bare", ownerId],
-    ["user-prefixed", `user:${ownerId}`],
-    ["provider-prefixed", `msteams:user:${ownerId}`],
-    ["provider-prefixed bare", `teams:${ownerId}`],
-    ["uppercase", `MSTEAMS:USER:${ownerId.toUpperCase()}`],
-  ])("authorizes only the configured owner for %s AAD object IDs", (_label, allowFrom) => {
-    expect(authorizeApproval([allowFrom], ownerId)).toEqual({ authorized: true });
-    expect(authorizeApproval([allowFrom], otherUserId)).toMatchObject({ authorized: false });
+  it("does not claim display-name user targets as canonical sessions", () => {
+    expect(
+      route("msteams:user:Alice Example", {
+        resolvedTarget: { to: "user:Alice Example", kind: "user", source: "directory" },
+      })?.recipientSessionExact,
+    ).toBe(false);
   });
 
-  it.each([
-    ["conversation", `conversation:${otherUserId}`],
-    ["provider-prefixed conversation", `msteams:conversation:${otherUserId}`],
-    ["chat", `chat:${otherUserId}`],
-    ["email", "owner@example.com"],
-    ["display name", "Owner Display"],
-    ["access group", "accessGroup:operators"],
-    ["wildcard", "*"],
-    ["braced UUID", `{${otherUserId}}`],
-  ])("does not treat %s entries as stable approval principals", (_label, invalidPrincipal) => {
-    expect(authorizeApproval([ownerId, invalidPrincipal], otherUserId)).toMatchObject({
-      authorized: false,
+  it("builds channel routes for thread conversations and strips suffix metadata", () => {
+    expect(route("teams:19:abc123@thread.tacv2;messageid=42")).toEqual(
+      expect.objectContaining({
+        peer: { kind: "channel", id: "19:abc123@thread.tacv2" },
+        from: "msteams:channel:19:abc123@thread.tacv2",
+        to: "conversation:19:abc123@thread.tacv2",
+        sessionKey: "agent:main:msteams:channel:19:abc123@thread.tacv2:thread:42",
+        threadId: "42",
+        recipientSessionExact: true,
+      }),
+    );
+  });
+
+  it("does not claim an exact channel session without its thread root", () => {
+    expect(route("teams:19:abc123@thread.tacv2")).toMatchObject({
+      sessionKey: "agent:main:msteams:channel:19:abc123@thread.tacv2",
+      recipientSessionExact: false,
     });
   });
 
-  it("preserves implicit same-chat fallback for display-name-only allowlists", () => {
-    expect(authorizeApproval(["Owner Display"], "attacker-aad")).toEqual({ authorized: true });
+  it("returns group routes for non-user, non-channel conversations", () => {
+    expect(route("msteams:conversation:19:groupchat")).toEqual(
+      expect.objectContaining({
+        peer: { kind: "group", id: "19:groupchat" },
+        from: "msteams:group:19:groupchat",
+        to: "conversation:19:groupchat",
+        recipientSessionExact: false,
+      }),
+    );
+  });
+
+  it("returns null when the target cannot be normalized", () => {
+    expect(route("msteams:")).toBeNull();
+  });
+});
+
+describe("Teams named-account integration", () => {
+  afterEach(() => {
+    probeMSTeamsMock.mockReset();
+    monitorMSTeamsProviderMock.mockReset();
+    vi.unstubAllEnvs();
+  });
+  it("does not resolve named-account SecretRefs while collecting group-policy warnings", () => {
+    const cfg = namedAccount(
+      {
+        appPassword: { source: "env", provider: "default", id: "SUPPORT_MSTEAMS_SECRET" },
+        groupPolicy: "open",
+        webhook: undefined,
+      },
+      { groupPolicy: "allowlist", enabled: undefined },
+    );
+
+    expect(collectMSTeamsSecurityWarnings({ cfg, accountId: "support" })).toEqual([
+      '- MS Teams[support] groups: groupPolicy="open" allows any member to trigger (mention-gated). Set channels.msteams.accounts.support.groupPolicy="allowlist" + channels.msteams.accounts.support.groupAllowFrom to restrict senders.',
+    ]);
+  });
+
+  it("reports unavailable named-account certificates without default-account fallback", () => {
+    vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", "/private/msteams-default-env.pem");
+    const cfg = namedAccount(
+      {
+        appPassword: undefined,
+        authType: "federated",
+        certificatePath: "/private/msteams-support-missing.pem",
+      },
+      { enabled: undefined },
+    );
+
+    const account = msteamsPlugin.config.resolveAccount(cfg, "support");
+    expect(account).toMatchObject({
+      accountId: "support",
+      configured: true,
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.msteams.accounts.support.certificatePath",
+          reason: "not-found",
+        },
+      ],
+    });
+    expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(
+      "/private/msteams-support-missing.pem",
+    );
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({ cfg, accountId: "support" })?.actions,
+    ).toEqual([]);
+  });
+
+  it("uses account-scoped Teams credentials for message-tool discovery", () => {
+    const cfg = namedAccount();
+
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "default",
+      })?.actions,
+    ).toEqual([]);
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "support",
+      })?.actions,
+    ).toContain("upload-file");
+  });
+
+  it("probes the resolved named account config", async () => {
+    const cfg = namedAccount();
+    const account = msteamsPlugin.config.resolveAccount(cfg, "support");
+    probeMSTeamsMock.mockResolvedValueOnce({ ok: true, appId: "support-app-id" });
+
+    await msteamsPlugin.status?.probeAccount?.({ cfg, account, timeoutMs: 1_000 });
+
+    expect(probeMSTeamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "support-app-id",
+        appPassword: "support-secret",
+        tenantId: "tenant-id",
+        webhook: { path: "/hooks/3979" },
+      }),
+      { accountId: "support" },
+    );
+  });
+
+  it("evaluates group-policy warnings for the requested account", async () => {
+    const cfg = namedAccount(
+      { tenantId: "tenant-id", groupPolicy: "open" },
+      { enabled: undefined, tenantId: undefined, groupPolicy: "allowlist" },
+    );
+    const account = msteamsPlugin.config.resolveAccount(cfg, "support");
+
+    const findings = await msteamsPlugin.security?.collectWarnings?.({
+      cfg,
+      accountId: "support",
+      account,
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "channels.msteams.groups.open",
+        severity: "warn",
+        title: "MS Teams security warning",
+        detail: expect.stringMatching(
+          /MS Teams\[support\].*channels\.msteams\.accounts\.support\.groupPolicy.*channels\.msteams\.accounts\.support\.groupAllowFrom/,
+        ),
+      }),
+    ]);
+    expect(
+      await msteamsPlugin.security?.collectWarnings?.({
+        cfg,
+        accountId: "default",
+        account: msteamsPlugin.config.resolveAccount(cfg, "default"),
+      }),
+    ).toEqual([]);
+
+    const defaultOverrideCfg = teams({
+      accounts: {
+        Default: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          tenantId: "tenant-id",
+          groupPolicy: "open",
+        },
+      },
+    });
+    const defaultFindings = await msteamsPlugin.security?.collectWarnings?.({
+      cfg: defaultOverrideCfg,
+      accountId: "default",
+      account: msteamsPlugin.config.resolveAccount(defaultOverrideCfg, "default"),
+    });
+    expect(defaultFindings).toEqual([
+      expect.objectContaining({
+        detail: expect.stringMatching(
+          /channels\.msteams\.accounts\.Default\.groupPolicy.*channels\.msteams\.accounts\.Default\.groupAllowFrom/,
+        ),
+      }),
+    ]);
+  });
+
+  it("does not advertise message tools for disabled or unconfigured named accounts", () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "env-app-id");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "env-secret");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "env-tenant-id");
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          tenantId: "tenant-id",
+          accounts: {
+            disabled: {
+              enabled: false,
+              appId: "disabled-app-id",
+              appPassword: "disabled-secret",
+              webhook: { path: "/hooks/3979" },
+            },
+            unconfigured: {
+              appId: "unconfigured-app-id",
+              webhook: { path: "/hooks/3980" },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "disabled",
+      })?.actions,
+    ).toEqual([]);
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "unconfigured",
+      })?.actions,
+    ).toEqual([]);
+  });
+  it("starts display-style account ids under their canonical runtime identity", async () => {
+    const cfg = namedAccount({}, {}, "Support Bot");
+    const setStatus = vi.fn();
+    monitorMSTeamsProviderMock.mockImplementationOnce(
+      async (params: Parameters<typeof import("./monitor.js").monitorMSTeamsProvider>[0]) => {
+        params.statusSink?.({ running: true });
+      },
+    );
+
+    await msteamsPlugin.gateway?.startAccount?.({
+      cfg,
+      accountId: "Support Bot",
+      account: resolveMSTeamsAccount({ cfg, accountId: "Support Bot" }),
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code): never => {
+          throw new Error(String(code));
+        },
+      },
+      abortSignal: new AbortController().signal,
+      getStatus: () => ({ accountId: "Support Bot" }),
+      setStatus,
+    });
+
+    expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ accountId: "support-bot" }));
+    expect(monitorMSTeamsProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "support-bot",
+        msteamsCfg: expect.objectContaining({
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { path: "/hooks/3979" },
+        }),
+      }),
+    );
+  });
+
+  it("uses account-scoped approvers for named Teams accounts", () => {
+    const rootApprover = "123e4567-e89b-12d3-a456-426614174000";
+    const supportApprover = "223e4567-e89b-12d3-a456-426614174000";
+    const cfg = namedAccount(
+      { allowFrom: [`user:${supportApprover}`] },
+      { allowFrom: [`user:${rootApprover}`], enabled: undefined, tenantId: undefined },
+    );
+
+    const authorize = (senderId: string) =>
+      msTeamsApprovalAuth.authorizeActorAction({
+        cfg,
+        accountId: "support",
+        senderId,
+        action: "approve",
+        approvalKind: "exec",
+      });
+    expect(authorize(supportApprover)).toEqual({ authorized: true });
+    expect(authorize(rootApprover)).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve exec requests on Microsoft Teams.",
+    });
   });
 });

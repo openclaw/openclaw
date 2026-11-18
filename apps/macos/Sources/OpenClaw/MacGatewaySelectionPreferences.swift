@@ -12,7 +12,7 @@ final class MacGatewaySelectionPreferences {
     }
 
     var profileID: String? {
-        self.defaults.string(forKey: Self.profileKey)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
+        self.defaults.string(forKey: Self.profileKey)?.nonEmpty
     }
 
     var target: DashboardGatewayTarget {

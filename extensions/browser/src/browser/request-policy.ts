@@ -1,6 +1,3 @@
-/**
- * Request policy helpers for profile-aware Browser control server routes.
- */
 import {
   asNullableRecord,
   normalizeOptionalString,
@@ -33,7 +30,6 @@ export function normalizeBrowserRequestPath(value: string): string {
   return withLeadingSlash.replace(/\/+$/, "");
 }
 
-/** Returns true when a control request mutates persistent browser profile state. */
 export function isPersistentBrowserProfileMutation(method: string, path: string): boolean {
   const normalizedPath = normalizeBrowserRequestPath(path);
   if (
@@ -48,33 +44,22 @@ export function isPersistentBrowserProfileMutation(method: string, path: string)
 }
 
 /**
- * Returns true for the system-profile cookie import route. Import must run where
- * the user's Keychain lives, so it is exempt from the host-local persistent
- * mutation block while remaining blocked over a node proxy.
- */
-function isBrowserSystemProfileImport(method: string, path: string): boolean {
-  return method === "POST" && normalizeBrowserRequestPath(path) === "/profiles/import";
-}
-
-/**
  * Returns true for routes that only make sense on the host that owns the local
  * Keychain and Chrome-family profiles: system-profile listing and import. These
  * must be dispatched host-local and never proxied to a browser node.
  */
 export function isBrowserHostLocalRoute(method: string, path: string): boolean {
-  if (isBrowserSystemProfileImport(method, path)) {
-    return true;
-  }
   const normalizedPath = normalizeBrowserRequestPath(path);
   return (
     (method === "GET" &&
       (normalizedPath === "/system-profiles" ||
         normalizedPath === "/system-profile-import/status")) ||
-    (method === "POST" && normalizedPath === "/system-profile-import/dismiss")
+    (method === "POST" &&
+      (normalizedPath === "/profiles/import" ||
+        normalizedPath === "/system-profile-import/dismiss"))
   );
 }
 
-/** Resolves the requested profile from query, body, or route defaults. */
 export function resolveRequestedBrowserProfile(
   params: BrowserRequestProfileParams,
 ): string | undefined {

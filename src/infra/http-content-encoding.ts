@@ -3,15 +3,11 @@ export type HttpRepresentationEncoding = HttpContentEncoding | "identity";
 
 const HTTP_QVALUE_PATTERN = /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/;
 
-function normalizedAcceptEncoding(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? value.join(",") : (value ?? "");
-}
-
 export function resolveHttpContentEncodings(
   header: string | string[] | undefined,
   availableEncodings: ReadonlySet<HttpContentEncoding>,
 ): HttpRepresentationEncoding[] {
-  const acceptEncoding = normalizedAcceptEncoding(header);
+  const acceptEncoding = Array.isArray(header) ? header.join(",") : (header ?? "");
   if (!acceptEncoding.trim()) {
     return ["identity"];
   }
@@ -24,16 +20,12 @@ export function resolveHttpContentEncodings(
     }
     const qualityParam = rawParams.find((param) => param.trim().toLowerCase().startsWith("q="));
     const qualityText = qualityParam?.trim().slice(2);
-    const parsedQuality =
+    const quality =
       qualityText === undefined
         ? 1
         : HTTP_QVALUE_PATTERN.test(qualityText)
           ? Number(qualityText)
-          : Number.NaN;
-    const quality =
-      Number.isFinite(parsedQuality) && parsedQuality >= 0 && parsedQuality <= 1
-        ? parsedQuality
-        : 0;
+          : 0;
     qualities.set(name, Math.max(qualities.get(name) ?? 0, quality));
   }
 

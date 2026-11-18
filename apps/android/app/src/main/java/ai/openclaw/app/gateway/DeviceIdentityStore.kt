@@ -5,8 +5,17 @@ import android.content.Context
 import android.util.Base64
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import okio.ByteString.Companion.toByteString
+import org.bouncycastle.asn1.DEROctetString
+import org.bouncycastle.asn1.pkcs.PrivateKeyInfo
+import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
+import org.bouncycastle.crypto.params.Ed25519KeyGenerationParameters
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
+import org.bouncycastle.crypto.util.PrivateKeyInfoFactory
 import java.io.File
-import java.security.MessageDigest
+import java.security.SecureRandom
 
 /** Persistent Ed25519 identity used to register this Android node with gateways. */
 @Serializable
@@ -35,21 +44,16 @@ class DeviceIdentityStore private constructor(
     cachedIdentity?.let { return it }
     migrateLegacyIdentity()
     val existing = load()
-    if (existing != null) {
-      val derived = deriveDeviceId(existing.publicKeyRawBase64)
-      if (derived != null && derived != existing.deviceId) {
-        val updated = existing.copy(deviceId = derived)
-        save(updated)
-        cachedIdentity = updated
-        return updated
+    val derived = existing?.let { deriveDeviceId(it.publicKeyRawBase64) }
+    val identity =
+      when {
+        existing == null -> generate()
+        derived != null && derived != existing.deviceId -> existing.copy(deviceId = derived)
+        else -> existing
       }
-      cachedIdentity = existing
-      return existing
-    }
-    val fresh = generate()
-    save(fresh)
-    cachedIdentity = fresh
-    return fresh
+    if (identity !== existing) save(identity)
+    cachedIdentity = identity
+    return identity
   }
 
   /** Signs gateway connect payload text with the persisted Ed25519 private key. */
@@ -60,20 +64,9 @@ class DeviceIdentityStore private constructor(
     try {
       // Use BC lightweight API directly; R8 can break JCA provider registration.
       val privateKeyBytes = Base64.decode(identity.privateKeyPkcs8Base64, Base64.DEFAULT)
-      val pkInfo =
-        org.bouncycastle.asn1.pkcs.PrivateKeyInfo
-          .getInstance(privateKeyBytes)
-      val parsed = pkInfo.parsePrivateKey()
-      val rawPrivate =
-        org.bouncycastle.asn1.DEROctetString
-          .getInstance(parsed)
-          .octets
-      val privateKey =
-        org.bouncycastle.crypto.params
-          .Ed25519PrivateKeyParameters(rawPrivate, 0)
-      val signer =
-        org.bouncycastle.crypto.signers
-          .Ed25519Signer()
+      val rawPrivate = DEROctetString.getInstance(PrivateKeyInfo.getInstance(privateKeyBytes).parsePrivateKey()).octets
+      val privateKey = Ed25519PrivateKeyParameters(rawPrivate, 0)
+      val signer = Ed25519Signer()
       signer.init(true, privateKey)
       val payloadBytes = payload.toByteArray(Charsets.UTF_8)
       signer.update(payloadBytes, 0, payloadBytes.size)
@@ -91,13 +84,9 @@ class DeviceIdentityStore private constructor(
   ): Boolean =
     try {
       val rawPublicKey = Base64.decode(identity.publicKeyRawBase64, Base64.DEFAULT)
-      val pubKey =
-        org.bouncycastle.crypto.params
-          .Ed25519PublicKeyParameters(rawPublicKey, 0)
+      val pubKey = Ed25519PublicKeyParameters(rawPublicKey, 0)
       val sigBytes = base64UrlDecode(signatureBase64Url)
-      val verifier =
-        org.bouncycastle.crypto.signers
-          .Ed25519Signer()
+      val verifier = Ed25519Signer()
       verifier.init(false, pubKey)
       val payloadBytes = payload.toByteArray(Charsets.UTF_8)
       verifier.update(payloadBytes, 0, payloadBytes.size)
@@ -128,28 +117,17 @@ class DeviceIdentityStore private constructor(
   private fun load(): DeviceIdentity? = readIdentity(prefs.getString(identityKey))
 
   private fun readIdentity(raw: String?): DeviceIdentity? {
-    return try {
-      if (raw == null) return null
-      val decoded = json.decodeFromString(DeviceIdentity.serializer(), raw)
-      if (decoded.deviceId.isBlank() ||
-        decoded.publicKeyRawBase64.isBlank() ||
-        decoded.privateKeyPkcs8Base64.isBlank()
-      ) {
-        null
-      } else {
-        decoded
+    if (raw == null) return null
+    return runCatching {
+      json.decodeFromString(DeviceIdentity.serializer(), raw).takeIf {
+        it.deviceId.isNotBlank() && it.publicKeyRawBase64.isNotBlank() && it.privateKeyPkcs8Base64.isNotBlank()
       }
-    } catch (_: Throwable) {
-      null
-    }
+    }.getOrNull()
   }
 
   private fun migrateLegacyIdentity() {
     if (!legacyIdentityFile.exists()) return
-    val legacy =
-      runCatching { legacyIdentityFile.readText(Charsets.UTF_8) }
-        .getOrNull()
-        ?.let(::readIdentity)
+    val legacy = readIdentity(runCatching { legacyIdentityFile.readText(Charsets.UTF_8) }.getOrNull())
     if (legacy == null) {
       legacyIdentityFile.delete()
       return
@@ -173,24 +151,16 @@ class DeviceIdentityStore private constructor(
 
   private fun generate(): DeviceIdentity {
     // Use BC lightweight API directly to avoid JCA provider issues with R8.
-    val kpGen =
-      org.bouncycastle.crypto.generators
-        .Ed25519KeyPairGenerator()
-    kpGen.init(
-      org.bouncycastle.crypto.params
-        .Ed25519KeyGenerationParameters(java.security.SecureRandom()),
-    )
+    val kpGen = Ed25519KeyPairGenerator()
+    kpGen.init(Ed25519KeyGenerationParameters(SecureRandom()))
     val kp = kpGen.generateKeyPair()
-    val pubKey = kp.public as org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
-    val privKey = kp.private as org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
-    val rawPublic = pubKey.encoded // 32 bytes
-    val deviceId = sha256Hex(rawPublic)
+    val pubKey = kp.public as Ed25519PublicKeyParameters
+    val privKey = kp.private as Ed25519PrivateKeyParameters
+    val rawPublic = pubKey.encoded
+    val deviceId = rawPublic.toByteString().sha256().hex()
     // Store private key as PKCS8 so signPayload can parse the same persisted
     // shape after app restarts and upgrades.
-    val privKeyInfo =
-      org.bouncycastle.crypto.util.PrivateKeyInfoFactory
-        .createPrivateKeyInfo(privKey)
-    val pkcs8Bytes = privKeyInfo.encoded
+    val pkcs8Bytes = PrivateKeyInfoFactory.createPrivateKeyInfo(privKey).encoded
     return DeviceIdentity(
       deviceId = deviceId,
       publicKeyRawBase64 = Base64.encodeToString(rawPublic, Base64.NO_WRAP),
@@ -203,22 +173,10 @@ class DeviceIdentityStore private constructor(
   private fun deriveDeviceId(publicKeyRawBase64: String): String? =
     try {
       val raw = Base64.decode(publicKeyRawBase64, Base64.DEFAULT)
-      sha256Hex(raw)
+      raw.toByteString().sha256().hex()
     } catch (_: Throwable) {
       null
     }
-
-  private fun sha256Hex(data: ByteArray): String {
-    val digest = MessageDigest.getInstance("SHA-256").digest(data)
-    val out = CharArray(digest.size * 2)
-    var i = 0
-    for (byte in digest) {
-      val v = byte.toInt() and 0xff
-      out[i++] = HEX[v ushr 4]
-      out[i++] = HEX[v and 0x0f]
-    }
-    return String(out)
-  }
 
   private fun base64UrlEncode(data: ByteArray): String =
     Base64.encodeToString(
@@ -228,7 +186,6 @@ class DeviceIdentityStore private constructor(
 
   companion object {
     private const val identityKey = "device.identity"
-    private val HEX = "0123456789abcdef".toCharArray()
 
     internal fun withPrefs(
       context: Context,

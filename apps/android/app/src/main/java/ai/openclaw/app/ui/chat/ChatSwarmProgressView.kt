@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -31,7 +30,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -72,7 +70,12 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
       modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
       verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+      FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        itemVerticalAlignment = Alignment.CenterVertically,
+      ) {
         Text(
           text = group.label,
           style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
@@ -89,9 +92,7 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
             ),
           color = ClawTheme.colors.textMuted,
           style = ClawTheme.type.caption,
-          maxLines = 1,
         )
-        Spacer(Modifier.weight(1f))
       }
       group.narrator?.let { narrator ->
         Text(
@@ -141,7 +142,7 @@ private fun ChatSwarmGroupCard(group: ChatSwarmGroup) {
 
 @Composable
 private fun ChatSwarmDotView(dot: ChatSwarmDot) {
-  val description = verbatimText("${dot.label}: ${nativeString(dot.status.label)}").resolveNativeTextResource()
+  val description = verbatimText("${dot.label}: ${nativeString(dot.status.name)}").resolveNativeTextResource()
   when (dot.status) {
     ChatSwarmDotStatus.Queued -> {
       val color = ClawTheme.colors.textMuted
@@ -150,12 +151,12 @@ private fun ChatSwarmDotView(dot: ChatSwarmDot) {
       }
     }
 
-    ChatSwarmDotStatus.Running -> {
-      StatusDot(ClawTheme.colors.primary, description)
-    }
-
-    ChatSwarmDotStatus.Done -> {
-      StatusDot(ClawTheme.colors.success, description)
+    ChatSwarmDotStatus.Running, ChatSwarmDotStatus.Done -> {
+      Surface(
+        modifier = Modifier.size(9.dp).semantics { contentDescription = description },
+        shape = CircleShape,
+        color = if (dot.status == ChatSwarmDotStatus.Running) ClawTheme.colors.primary else ClawTheme.colors.success,
+      ) {}
     }
 
     ChatSwarmDotStatus.Failed -> {
@@ -169,16 +170,4 @@ private fun ChatSwarmDotView(dot: ChatSwarmDot) {
       )
     }
   }
-}
-
-@Composable
-private fun StatusDot(
-  color: Color,
-  description: String,
-) {
-  Surface(
-    modifier = Modifier.size(9.dp).semantics { contentDescription = description },
-    shape = CircleShape,
-    color = color,
-  ) {}
 }

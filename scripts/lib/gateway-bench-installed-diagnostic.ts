@@ -118,11 +118,26 @@ export async function collectInstalledCpuProfile(
     profile.samples.every((id) => nodeIds.has(id)),
     "CPU sample references an unknown node",
   );
+  // Native profiles choose their own epoch and may end at the last sample.
+  // Validate the preload's observations within its own clock domains.
   assert.ok(
-    attachment.attachedMonotonicUs >= profile.startTime &&
-      attachment.exitedMonotonicUs <= profile.endTime,
-    "Preload monotonic calibration does not fit the native profile clock",
+    attachment.exitedMonotonicUs >= attachment.attachedMonotonicUs,
+    "Preload monotonic interval ends before attachment",
   );
+  let previousMonotonicUs = attachment.attachedMonotonicUs;
+  let previousPerformanceMs = attachment.attachedPerformanceMs;
+  for (const phase of attachment.phases) {
+    assert.ok(
+      phase.monotonicUs >= previousMonotonicUs && phase.monotonicUs <= attachment.exitedMonotonicUs,
+      "Startup phase leaves the preload monotonic interval or moves backwards",
+    );
+    assert.ok(
+      phase.performanceMs >= previousPerformanceMs,
+      "Startup phase performance clock moves backwards",
+    );
+    previousMonotonicUs = phase.monotonicUs;
+    previousPerformanceMs = phase.performanceMs;
+  }
   return {
     directory: capture.directory,
     attachmentPath: capture.attachmentPath,
@@ -134,5 +149,11 @@ export async function collectInstalledCpuProfile(
     endTimeUs: profile.endTime,
     samples: profile.samples.length,
     negativeTimeDeltas: profile.timeDeltas.filter((delta) => delta < 0).length,
+    clockDomains: {
+      controller: { pid: process.pid, source: "process.hrtime.bigint", unit: "microseconds" },
+      gateway: { pid: attachment.pid, source: "process.hrtime.bigint", unit: "microseconds" },
+      nativeProfile: { origin: "runtime-defined", unit: "microseconds" },
+      alignment: "not-established",
+    },
   };
 }

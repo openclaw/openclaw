@@ -24,7 +24,7 @@ export function createExtensionCodexAppServerToolsVitestConfig(
       dir: "extensions",
       env,
       exclude: databaseWorkerExtensionTestFiles,
-      fileParallelism: false,
+      isolate: true,
       name: "extension-codex-app-server-tools",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],

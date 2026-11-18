@@ -3,9 +3,9 @@ set -euo pipefail
 
 readonly SUT_USER="openclaw-sut"
 readonly RUNNER_USER="openclaw-bench"
-readonly NODE_VERSION="24.19.0"
-readonly NODE_SHA256="14b342e71204f811bde6153be8e04b62aef63c236fef92b55f9c83154b409647"
-readonly PNPM_VERSION="11.15.1"
+readonly NODE_VERSION="24.22.1"
+readonly NODE_SHA256="6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6"
+readonly PNPM_VERSION="12.15.0"
 readonly OCM_BINARY="/opt/openclaw-performance/ocm"
 readonly CRABBOX_COMMIT="8ba71f913bbe57285ae29af45ef0d8ec6712477d"
 readonly MAX_ARTIFACT_FILES=256
@@ -70,6 +70,7 @@ as_sut() {
     GIT_CONFIG_GLOBAL=/dev/null \
     GIT_CONFIG_SYSTEM=/dev/null \
     GIT_TERMINAL_PROMPT=0 \
+    pnpm_config_pm_on_fail=ignore \
     CI=1 \
     OPENCLAW_SKIP_CHANNELS=1 \
     OPENCLAW_SKIP_CRON=1 \
@@ -93,6 +94,7 @@ candidate_environment() {
     "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u "$SUT_USER")/bus" \
     "PATH=/home/${SUT_USER}/.local/node_modules/.bin:/opt/node-v${NODE_VERSION}/bin:/opt/openclaw-performance:/usr/bin:/bin" \
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0 \
+    pnpm_config_pm_on_fail=ignore \
     CI=1 OPENCLAW_SKIP_CHANNELS=1 OPENCLAW_SKIP_CRON=1
 }
 
@@ -455,7 +457,6 @@ source_cli_probes() (
   fi
   as_candidate tee "$gateway_config" >/dev/null <<EOF
 {
-  "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
   "browser": { "enabled": false },
   ${catalog_refresh_config}
   "update": { "checkOnStart": false },

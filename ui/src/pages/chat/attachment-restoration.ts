@@ -4,10 +4,7 @@ import { generateUUID } from "../../lib/uuid.ts";
 
 /** Restores durable first-turn payloads into visible, locked composer chips. */
 export function restoreChatApiAttachments(attachments?: readonly unknown[]): ChatAttachment[] {
-  if (!attachments?.length) {
-    return [];
-  }
-  return attachments.flatMap((value) => {
+  return (attachments ?? []).flatMap((value) => {
     const attachment = asOptionalObjectRecord(value);
     if (!attachment) {
       return [];

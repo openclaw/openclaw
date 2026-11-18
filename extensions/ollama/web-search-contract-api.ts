@@ -1,4 +1,3 @@
-// Ollama API module exposes the plugin public contract.
 import {
   createWebSearchProviderContractFields,
   type WebSearchProviderPlugin,

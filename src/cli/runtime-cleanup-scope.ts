@@ -1,16 +1,35 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import "../plugins/plugin-source-capture-context.js";
 import type { AgentHarness } from "../agents/harness/types.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { closePostgresPool } from "../infra/postgres-sync/pool-state.js";
+import { NATIVE_WORKER_LIFETIMES_KEY } from "../infra/worker-native-lifecycle.types.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import {
+  resetGlobalSingletonLifecycleState,
+  resolveGlobalSingleton,
+} from "../shared/global-singleton.js";
+import { SKILLS_DISCOVERY_KEY } from "../skills/types.js";
+import { STATE_DATABASE_LIFECYCLE_KEY } from "../state/openclaw-state-db-contract.js";
 import { CliPluginInvocationResources } from "./plugin-invocation-resources.js";
-import { installCliSignalExitHandlers } from "./signal-exit-barrier.js";
+import {
+  installCliSignalExitHandlers,
+  registerSignalExitGate,
+  withGatewayStartupSignalOwner,
+} from "./signal-exit-barrier.js";
 
 export type CliHarnessCleanup = {
+  scheduler: GatewayScheduler;
   harnesses: Map<AgentHarness, () => Promise<void>>;
   registries: Set<PluginRegistry>;
+  /** Captured before dispatch so source replacement cannot invalidate cleanup. */
+  closeSkillsWatchers: () => Promise<void>;
   pluginResources?: CliPluginInvocationResources;
+  /** Executable routing stays available until admitted command work has settled. */
+  releaseManagedProxy?: () => Promise<void>;
 };
 
 // Entry modules must stay runtime-free. Only executable bootstraps grant this scope;
@@ -39,46 +58,92 @@ export async function retainCliProcessJobUntilExit(): Promise<void> {
   if (process.platform !== "win32" || !hasCliProcessScope()) {
     return;
   }
-  const [{ default: koffi }, { retainWindowsProcessJobUntilExit }] = await Promise.all([
-    import("koffi"),
-    import("../process/supervisor/service-child-windows-job-native.js"),
-  ]);
-  retainWindowsProcessJobUntilExit(koffi);
+  const { retainWindowsProcessJobUntilExit } =
+    await import("../process/supervisor/service-child-windows-job-native.js");
+  retainWindowsProcessJobUntilExit();
 }
 
-export function withCliCommandCleanup<T>(
+export async function withCliCommandCleanup<T>(
   gatewayRun: boolean,
-  run: (cleanup?: CliHarnessCleanup) => T,
-): T {
+  run: (cleanup?: CliHarnessCleanup) => T | Promise<T>,
+): Promise<T> {
   if (gatewayRun) {
     // Gateway owns its process lifetime; borrowed calls must not inherit CLI ownership.
-    return scope.run(undefined, () => run());
+    // The executable still needs a stop owner until its run loop installs one.
+    const executable = scope.getStore() === "process";
+    return scope.run(undefined, () => (executable ? withGatewayStartupSignalOwner(run) : run()));
   }
   if (scope.getStore() !== "process") {
     return run();
   }
+  const { GatewayScheduler } = await import("../infra/gateway-scheduler.js");
+  // Registered owner callbacks survive package replacement without loading dormant runtimes.
+  const { runCliDisposerAfterPending } = await import("./runtime-cleanup.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
   pluginResources.adopt({ release: async () => releaseSignals() });
-  const sdkResourceHost = new LegacyPluginSdkResourceHost();
+  const sdkResourceHost = new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
+  const scheduler = new GatewayScheduler();
+  sdkResourceHost.bindScheduler(scheduler);
   pluginResources.adopt({ release: () => sdkResourceHost.close() });
+  pluginResources.adopt({ release: () => scheduler.stop() });
   const cleanup: CliHarnessCleanup = {
+    scheduler,
     harnesses: new Map(),
     registries: new Set(),
+    closeSkillsWatchers: () => resetGlobalSingletonLifecycleState(SKILLS_DISCOVERY_KEY),
     pluginResources,
   };
-  return sdkResourceHost.run(() => scope.run(cleanup, () => run(cleanup)));
+  const finished = createDeferredCore();
+  const releaseExitGate = registerSignalExitGate(finished.promise, (signal, reason) => {
+    const cause = signal ?? reason;
+    pluginResources.beginClose(
+      new DOMException(`CLI stopping${cause ? ` (${cause})` : ""}`, "AbortError"),
+    );
+    void scheduler.stop();
+  });
+  try {
+    return await sdkResourceHost.run(() =>
+      scope.run(cleanup, async () => {
+        try {
+          return await run(cleanup);
+        } finally {
+          // Owned shutdown runs before this drain; expired disposers keep their recorded outcome.
+          await runCliDisposerAfterPending("shared-state", async () => {
+            await resetGlobalSingletonLifecycleState(STATE_DATABASE_LIFECYCLE_KEY);
+            await resetGlobalSingletonLifecycleState(NATIVE_WORKER_LIFETIMES_KEY);
+            await closePostgresPool();
+          });
+        }
+      }),
+    );
+  } finally {
+    releaseExitGate();
+    finished.resolve();
+  }
 }
 
 export function retainCliRegistryHarnesses(
   registry: PluginRegistry,
   dispose: (harness: AgentHarness) => Promise<void>,
+  retain: () => (() => void | Promise<void>) | undefined,
 ): void {
   const current = scope.getStore();
   if (!current || current === "process") {
     return;
   }
   for (const { harness } of registry.agentHarnesses) {
+    if (!current.registries.has(registry)) {
+      // Retain physical custody for terminal teardown, not ordinary invocation authority.
+      const release = retain();
+      if (release) {
+        current.pluginResources?.adopt({
+          release: async () => {
+            await release();
+          },
+        });
+      }
+    }
     current.registries.add(registry);
     if (!current.harnesses.has(harness)) {
       // Preserve request facts as well as the exact registry binding after helpers unwind.

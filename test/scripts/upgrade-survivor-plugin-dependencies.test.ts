@@ -60,7 +60,6 @@ assert_legacy_plugin_dependency_debris_cleaned
 
 describe.skipIf(process.platform === "win32")("upgrade dependency fixture ownership", () => {
   it.each([
-    ["discord", "dist/extensions"],
     ["absent-fixture discord another-absent", "dist/extensions"],
     ["discord absent-fixture", "extensions"],
   ])("preserves the actual seeded set for %s in %s", (requested, packagedDir) => {

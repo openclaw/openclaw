@@ -3,6 +3,7 @@ import os
 import Testing
 @testable import OpenClaw
 
+@Suite(.testWaitLimit)
 struct CoalescingFSEventsWatcherTests {
     @Test(arguments: [false, true])
     func `stop discards coalesced events and a new stream can notify`(restartImmediately: Bool) async throws {
@@ -33,7 +34,8 @@ struct CoalescingFSEventsWatcherTests {
         watcher.start()
         defer { watcher.stop() }
         try "first".write(to: file, atomically: false, encoding: .utf8)
-        let sawEvent = await self.wait(for: accepted)
+        try await accepted.wait("accepted file event")
+        let sawEvent = !Task.isCancelled
         try #require(sawEvent)
         #expect(notifications.withLock { $0 } == 0)
 
@@ -51,7 +53,8 @@ struct CoalescingFSEventsWatcherTests {
         }
         enabled.withLock { $0 = true }
         try "second write".write(to: file, atomically: false, encoding: .utf8)
-        let sawNotification = await self.wait(for: delivered)
+        try await delivered.wait("coalesced notification")
+        let sawNotification = !Task.isCancelled
         #expect(sawNotification)
     }
 
@@ -66,26 +69,7 @@ struct CoalescingFSEventsWatcherTests {
         watcher?.start()
         watcher = nil
         defer { releasedWatcher?.stop() }
-        let deadline = ContinuousClock.now + .seconds(1)
-        while releasedWatcher != nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(10))
-        }
+        try await TestWait.state("released file watcher") { releasedWatcher == nil }
         #expect(releasedWatcher == nil)
-    }
-
-    private func wait(for gate: AsyncTestGate) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await gate.wait()
-                return !Task.isCancelled
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(3))
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
     }
 }

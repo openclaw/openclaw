@@ -1,11 +1,9 @@
 import { t } from "../i18n/index.ts";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 
-type ConfigSectionMeta = {
-  label: string;
-  description: string;
-};
+registerSettingsEnglish();
 
-function createSectionMeta(key: string): ConfigSectionMeta {
+function createSectionMeta(key: string) {
   return {
     get label() {
       return t(`configForm.sections.${key}.label`);
@@ -17,7 +15,7 @@ function createSectionMeta(key: string): ConfigSectionMeta {
 }
 
 // Getters keep shared metadata responsive to runtime locale changes.
-export const SECTION_META: Record<string, ConfigSectionMeta> = {
+export const SECTION_META: Record<string, { label: string; description?: string }> = {
   env: createSectionMeta("env"),
   update: createSectionMeta("update"),
   agents: createSectionMeta("agents"),
@@ -48,6 +46,9 @@ export const SECTION_META: Record<string, ConfigSectionMeta> = {
   diagnostics: createSectionMeta("diagnostics"),
   cli: createSectionMeta("cli"),
   secrets: createSectionMeta("secrets"),
+  get security() {
+    return { label: t("quickSettings.security.title") };
+  },
   acp: createSectionMeta("acp"),
   mcp: createSectionMeta("mcp"),
 };

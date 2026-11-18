@@ -1,39 +1,122 @@
-import { AsyncLocalStorage } from "node:async_hooks";
+import type {
+  DiagnosticToolAwaiting,
+  SessionControllerWatchdogAttempt,
+} from "../sessions/session-controller.watchdog.types.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type DiagnosticToolExecutionLiveness = Readonly<{ deadlineAtMs?: number }>;
+export type DiagnosticToolExecutionLiveness = Readonly<{
+  deadlineAtMs?: number;
+  awaiting?: readonly DiagnosticToolAwaiting[];
+}>;
 export const TOOL_EXECUTION_LIVENESS_METADATA_KEY = "toolExecutionLiveness";
+
+// Released runtime chunks still call this carrier while their invocations drain.
+type ToolExecutionDeadlineOwner = ((deadlineAtMs: number | undefined) => void) & {
+  register?: (deadlineAtMs: number) => () => void;
+  awaiting?: (read: () => readonly DiagnosticToolAwaiting[]) => () => void;
+  observeChild?: (view: DiagnosticToolExecutionLiveness) => void;
+};
+
+const noop = () => {};
+
+// Socket frames retain this carrier, never the closed invocation's lexical scope.
+function createDeadlineCarrier(record: ToolExecutionDeadlineOwner) {
+  let current: ToolExecutionDeadlineOwner | undefined = record;
+  const carrier: ToolExecutionDeadlineOwner = (deadline) => current?.(deadline);
+  carrier.register = (deadline) => current?.register?.(deadline) ?? noop;
+  carrier.awaiting = (read) => current?.awaiting?.(read) ?? noop;
+  carrier.observeChild = (view) => current?.observeChild?.(view);
+  return {
+    carrier,
+    close() {
+      current = undefined;
+    },
+  };
+}
 
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.diagnosticToolExecutionLiveness"),
   () => ({
-    context: new AsyncLocalStorage<(deadlineAtMs: number | undefined) => void>(),
+    context: new AsyncContext<ToolExecutionDeadlineOwner>(Symbol("toolExecutionDeadline")),
     events: new WeakMap<object, DiagnosticToolExecutionLiveness>(),
   }),
 );
 
 /** The invocation owns the reference; only its execution owner supplies a deadline. */
-export function createDiagnosticToolExecutionLiveness(signal?: AbortSignal) {
+export function createDiagnosticToolExecutionLiveness(
+  signal?: AbortSignal,
+  ownedTool?: { attempt: SessionControllerWatchdogAttempt; toolCallId: string; toolName: string },
+  observeChild?: (view: DiagnosticToolExecutionLiveness) => void,
+) {
   let active = true;
   let deadlineAtMs: number | undefined;
+  const waits = new Map<object, number>();
+  let readAwaiting: (() => readonly DiagnosticToolAwaiting[]) | undefined;
   const view: DiagnosticToolExecutionLiveness = Object.freeze({
+    get awaiting() {
+      return active && !signal?.aborted ? readAwaiting?.() : undefined;
+    },
     get deadlineAtMs() {
-      return signal?.aborted ? undefined : deadlineAtMs;
+      if (signal?.aborted) {
+        return undefined;
+      }
+      let latestDeadline = deadlineAtMs;
+      for (const deadline of waits.values()) {
+        latestDeadline = Math.max(latestDeadline ?? deadline, deadline);
+      }
+      return latestDeadline;
     },
   });
-  const record = (deadline: number | undefined) => {
+  const finishOwnedTool = ownedTool?.attempt.beginTool({
+    toolCallId: ownedTool.toolCallId,
+    toolName: ownedTool.toolName,
+    get deadlineAtMs() {
+      return view.deadlineAtMs;
+    },
+    get awaiting() {
+      return view.awaiting;
+    },
+  });
+  const record: ToolExecutionDeadlineOwner = (deadline) => {
     if (active && !signal?.aborted) {
       deadlineAtMs = deadline;
     }
   };
+  record.register = (deadline) => {
+    const wait = {};
+    if (active && !signal?.aborted && Number.isFinite(deadline)) {
+      waits.set(wait, deadline);
+    }
+    return () => {
+      waits.delete(wait);
+    };
+  };
+  record.awaiting = (read) => {
+    if (active && !signal?.aborted) {
+      readAwaiting = read;
+    }
+    return () => {
+      if (readAwaiting === read) {
+        readAwaiting = undefined;
+      }
+    };
+  };
+  record.observeChild = observeChild;
+  state.context.getStore()?.observeChild?.(view);
+  const carrier = createDeadlineCarrier(record);
   return {
     view,
     run<T>(execute: () => T): T {
-      return state.context.run(record, execute);
+      return state.context.run(carrier.carrier, execute);
     },
-    close() {
+    close(completed = false) {
+      finishOwnedTool?.(completed && !signal?.aborted);
       active = false;
-      // The queued terminal retires the marker. Preserve its fixed allowance
+      readAwaiting = undefined;
+      carrier.close();
+      waits.clear();
+      // The queued terminal retires the marker. Preserve exec's fixed allowance
       // until then, without letting a retained callback extend it.
     },
   };
@@ -41,6 +124,19 @@ export function createDiagnosticToolExecutionLiveness(signal?: AbortSignal) {
 
 export function recordDiagnosticToolExecutionDeadline(deadlineAtMs: number | undefined): void {
   state.context.getStore()?.(deadlineAtMs);
+}
+
+/** The execution owner supplies only its current, bounded structural wait state. */
+export function captureDiagnosticToolExecutionAwaiting() {
+  const carrier = state.context.getStore();
+  return (read: () => readonly DiagnosticToolAwaiting[]) => carrier?.awaiting?.(read);
+}
+
+/** The enforced response wait owns this allowance, independently of overlapping waits. */
+export function registerDiagnosticToolExecutionDeadline(
+  deadlineAtMs: number,
+): (() => void) | undefined {
+  return state.context.getStore()?.register?.(deadlineAtMs);
 }
 
 /** Keep the live reference out of the cloned, plugin-facing event payload. */

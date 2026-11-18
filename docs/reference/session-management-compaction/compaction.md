@@ -25,6 +25,8 @@ Embedded OpenClaw compaction uses the provider's compaction thinking preference,
 
 Each summarization request uses one primary format. Safeguard history summaries use its structured checkpoint format, while split-turn prefixes use the prefix format. Operator focus and identifier-preservation guidance remain additional instructions; they do not add a competing set of required headings.
 
+When safeguard compaction updates a previous summary or summarizes older history, its main summary request also includes preserved recent turns and split-turn progress from the prepared window. The instructions require explicit corrections and observed results to update the main decisions and task status, not just appear in an appended context section. Superseded facts may remain as labeled history or verbatim excerpts; they must not remain competing current decisions.
+
 Branch-navigation summaries budget the text actually sent for summarization,
 including bounded tool output, instructions, and output headroom. An older
 summary cannot override that budget. If visible branch history cannot fit,
@@ -32,13 +34,11 @@ summarization reports a failure instead of claiming there was no content.
 
 AGENTS.md section reinjection after compaction remains opt-in via `agents.defaults.compaction.postCompactionSections`. Plugins can add other prompt context through `before_prompt_build`.
 
-### Chunk boundaries and tool pairing
+### Summary input and tool pairing
 
-When splitting a long transcript into compaction chunks, OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries:
+The compaction cut point keeps assistant tool calls paired with their matching `toolResult` entries: if the cut would land between a call and its result, OpenClaw moves it so the pair stays together in the retained tail.
 
-- If the token-share split would land between a tool call and its result, OpenClaw shifts the boundary to the assistant tool-call message instead of separating the pair.
-- If a trailing tool-result block would otherwise push the chunk over target, OpenClaw preserves that pending tool block and keeps the unsummarized tail intact.
-- Aborted/error tool-call blocks do not hold a pending split open.
+The older history before the cut is summarized in one request whose conversation input is bounded (see [Compaction](/concepts/compaction#how-it-works)). When that history is larger than the bound, the summarizer receives a sample: the newest messages verbatim, older user messages, the oldest messages and evenly spaced runs of the rest, with each gap marked by its size. A sampled tool result may be shown without its call, so it names the call that produced it, for example `[Tool result of exec(cmd="npm test")]`. Results are matched to calls of the same assistant turn by occurrence, so a repeated call ID never borrows a label from an earlier, unanswered call.
 
 ## When auto-compaction happens
 
@@ -48,15 +48,33 @@ The built-in OpenClaw runtime has three scheduling paths:
 
    One provider shape is terminal rather than compaction-recoverable. When the refusal states a single request larger than the provider's entire token limit - Groq answers an oversized request with an HTTP 413 naming TPM and stating `Limit <n>, Requested <m>` - no bucket state can admit it. Compaction budgets against the model's context window rather than that per-request ceiling, and its own summarization request is refused by the same ceiling, so it can only spend further calls that cannot succeed. OpenClaw surfaces the reset guidance immediately instead of compacting, adopting a successor transcript, or retrying. Ordinary TPM throttling, which states a requested size within the limit, stays a rate limit and keeps its normal backoff.
 
-2. **Usage-based maintenance**: replies and direct commands using OpenClaw's managed loop check projected usage before inference. Required memory checkpointing precedes compaction at or above the active model window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. Successful Gateway commands using that loop also schedule optional maintenance after delivering their completed reply; one-shot local commands skip that optional work. Generic CLI backends retain their existing host compaction before delivery, and native backends retain their own compaction policy. The memory-flush soft margin does not lower the blocking threshold. Disabling memory flush does not disable compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second post-turn compaction when the completed run already compacted.
-3. **Session-internal threshold maintenance**: default-mode sessions can also compact when actual context usage exceeds the model window minus the session reserve. Safeguard mode disables this competing session-internal path and leaves proactive scheduling to the maintenance owner above.
+2. **Usage-based maintenance**: replies and direct commands using OpenClaw's managed loop check projected usage before inference. Required memory checkpointing precedes compaction at the smaller of 75% of the active window and the window minus the selected compaction reserve, subject to an applicable server compaction threshold floor. Successful Gateway commands using that loop also schedule optional maintenance after delivering their completed reply; one-shot local commands skip that optional work. Generic CLI backends retain their existing host compaction before delivery, and native backends retain their own compaction policy. The memory-flush soft margin does not lower the blocking threshold. Disabling memory flush does not disable compaction. Direct-command maintenance respects `compaction.enabled: false` and skips a second post-turn compaction when the completed run already compacted.
+3. **Session-internal threshold maintenance**: default-mode sessions can also compact when actual context usage exceeds the smaller of 75% of the active window and the window minus the session reserve. Safeguard mode disables this competing session-internal path and leaves proactive scheduling to the maintenance owner above.
+
+The threshold is independent of the summary reserve: a 1M window starts
+client maintenance at 750,000 tokens without
+reserving a 250,000-token summary.
 
 The persisted `contextBudgetStatus` is a pre-prompt pressure estimate, not an execution command. Completed direct commands, normal replies, and queued follow-up replies record it when the runtime supplies one. `/status` can show this estimate, marked with `~` and `est`, when fresh token usage is unavailable. Compaction and session resets invalidate old estimates; a completed run without a diagnostic clears the previous one unless that run preserves the session's model state (for example, a heartbeat). Its `route` and `shouldCompact` fields can report pressure while the provider attempt is still admitted. Use completed compaction counts and transcript entries to verify that compaction actually happened.
 
 Two additional guards run outside these paths:
 
-- **Preflight local compaction**: set `agents.defaults.compaction.maxActiveTranscriptBytes` to a positive byte threshold (bytes or a string like `"20mb"`) to trigger local compaction before opening the next run once the active transcript reaches that size. Normal semantic compaction still runs. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Unset or `0` disables the guard.
-- **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add a tool-loop guard. After a tool result is appended and before the next model call, OpenClaw estimates prompt pressure using the same preflight budget logic used at turn start. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
+- **Transcript byte guard**: `agents.defaults.compaction.maxActiveTranscriptBytes` accepts positive bytes or a size string such as `"20mb"`; unset or `0` disables it. It triggers built-in preflight compaction but only bounds [fresh-thread seeds for Codex app-server](/plugins/codex-harness-runtime/compaction).
+- **Mid-turn precheck**: set `agents.defaults.compaction.midTurnPrecheck.enabled: true` (default `false`) to add an estimated-pressure threshold with compaction headroom. After a tool result is appended and before the next model call, OpenClaw checks the actual provider-bound tool-result projection. It reuses the previous call’s reported prompt and completion occupancy, including opaque reasoning, when the request prefix, system prompt, tools, and model are unchanged. Matching assistant fragments are counted once; only new tool results and other appended content are estimated. Retained completion usage keeps opaque reasoning covered after context changes. Missing usage or changed context keeps the conservative estimate; the preflight budget and recovery thresholds remain unchanged. If context no longer fits, the guard does not compact inline - it raises a structured mid-turn precheck signal, stops the current prompt submission, and lets the outer run loop use the existing recovery path (truncate oversized tool results when that is enough, or trigger the configured compaction mode and retry). Works with both `default` and `safeguard` compaction modes, including provider-backed safeguard compaction. Independent of `maxActiveTranscriptBytes`: the byte-size guard runs before a turn opens, mid-turn precheck runs later, after new tool results are appended.
+
+  Messages steered into the active run after a tool result are included in this check. If that added context exceeds the budget, a settled tool batch can compact and continue without replaying the tool.
+
+OpenAI-compatible Chat Completions output caps also reuse matching measurements within a tool continuation, after provider-specific tool-call ID normalization. A new user turn, missing usage, or changed request prefix keeps the conservative estimate; the previous turn's token count does not automatically replace that estimate.
+
+Independently of the optional soft precheck, every embedded provider request must
+fit its full context window. Between tool rounds, measured occupancy at the
+client maintenance threshold also enters recovery. The hard check uses the
+prepared provider-bound projection and adds only pending content to a matching
+previous response's usage; it does not add a compaction reserve to the hard
+window. Text tool results use the same CJK-aware character estimate as other
+text, with dense encoded-data accounting. The hard check uses nominal occupancy;
+compaction planning retains its separate safety margin. Deferring threshold maintenance does not disable
+hard admission. Recovery still requires settled, replay-safe tool work.
 
 ## Compaction settings
 
@@ -87,34 +105,42 @@ replacement also cancel stale work. Accepted compaction commits remain accounted
 for, and an unlimited command timeout remains unlimited. One-shot local commands using OpenClaw's managed loop
 record an intentional skip without marking a memory flush successful.
 
+A newly created isolated sub-agent skips transcript-based compaction estimation
+before its first turn when its in-process launch carries the committed creation
+fact. Forked and resumed children keep normal preflight maintenance. Later turns
+use the child's current transcript and counters; the creation fact is not retained
+as an empty-transcript cache.
+
 Set `enabled: false` to disable threshold-driven auto-compaction inside the embedded agent runtime and direct-command post-turn maintenance. OpenClaw's reply preflight and overflow-recovery compaction paths remain available, and manual `/compact` continues to work.
 
 Manual `/compact` uses `agents.defaults.compaction.keepRecentTokens` (default: `20000`) and keeps that recent-tail cut point.
 
-OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Branch/restore checkpoint actions use a returned successor when present; legacy pre-compaction checkpoint files remain readable while referenced.
+OpenClaw adopts an explicit successor identity returned by a context engine. The built-in SQLite compactor keeps the current session identity. Compaction summaries and token savings remain in transcript history; ordinary session forking remains available.
 
-Recovery follows the active successor's tool-result projections and timeout state.
-A checkpoint branch or restore preserves its selected model and workspace and
-follows the normal creator and isolation rules. It starts without the source run's writer claim,
-native CLI binding, pending delivery, or recovery work. Starting a checkpoint
-branch does not interrupt its source conversation.
+Compaction checkpoint browsing, branching, and restoration are no longer available. OpenClaw does not create new checkpoint metadata or snapshot files. Existing transcript generations and files are not deleted by this change. A read-only legacy metadata reader preserves historical token measurements and existing cleanup protections while older records still refer to those transcripts. Removing that reader requires a separately approved migration that preserves those facts; this removal changes no retention policy or database schema version.
 
 ## Pluggable compaction providers
 
-Plugins register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in `summarizeInStages` pipeline.
+Plugins register a compaction provider via `registerCompactionProvider()` on the plugin API. When `agents.defaults.compaction.provider` is set to a registered provider id, the safeguard extension delegates summarization to that provider instead of the built-in summary request.
 
 - `provider`: id of a registered compaction provider plugin. Leave unset for default LLM summarization. Setting a `provider` forces `mode: "safeguard"`.
 - Providers receive the same compaction instructions and identifier-preservation policy as the built-in path, and the safeguard still preserves recent-turn and split-turn suffix context after provider output.
+- Safeguard recovery stays within the latest reset or compaction replay window, even when retained messages precede the stored compaction marker. Older transcript entries remain stored but are not sent to the summarizer again.
 - Built-in safeguard summarization re-distills prior summaries with new messages instead of preserving the full previous summary verbatim.
-- Safeguard mode enables built-in summary quality audits by default. After final budgeting, the retained generated body must contain the required headings, and the exact artifact to be persisted must retain pending asks and exact identifiers. Corrective attempts stay within `qualityGuard.maxRetries`; exhaustion or a corrective generation failure cancels before append and leaves the original transcript authoritative. Set `qualityGuard.enabled: false` to skip this behavior. Configured compaction-provider output remains outside the built-in audit loop.
+- Safeguard mode enables built-in summary quality audits by default. It checks the finalized summary's structure, pending asks, and exact identifiers, with at most `qualityGuard.maxRetries` corrective attempts. Exhausted audits or infeasible retention commit the best available generated summary marked `details.qualityDegraded`, keeping the session compactable. The attempt with the fewest audit violations wins; ties keep the earlier attempt. Required-fact retention becomes best-effort: older details, identifiers, and pending requests may be lost. A corrective generation failure reuses an earlier summary when available; an initial generation, model-resolution, or credentials failure leaves the original history authoritative. Automatic summary timeouts also have a separate fallback when no earlier summary can be reused (see [Auto-compaction](/concepts/compaction#auto-compaction)). Set `qualityGuard.enabled: false` to skip the audit. Configured compaction-provider output remains outside the built-in audit loop.
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically. Provider-local failures, including timeouts, stay in that guarded fallback and use the built-in quality audit when enabled. Abort/timeout signals the caller explicitly triggered are re-thrown, not swallowed, so cancellation is always respected.
 
 Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 
 ## User-visible surfaces
 
-- `/status` in any chat session
+- `/status` in any chat session, including a degraded-summary indicator when recorded
 - `openclaw status` (CLI)
 - `openclaw sessions` / `openclaw sessions --json`
 - Gateway logs (`pnpm gateway:watch` or `openclaw logs --follow`): `embedded run auto-compaction start` + `complete`
 - Verbose mode: `🧹 Auto-compaction complete` plus the compaction count
+
+A degraded summary always produces a visible warning, even with `notifyUser: false`.
+It names the possible loss of older details, identifiers, or pending requests and
+suggests `/new` or a larger model. The transcript's `details.qualityDegraded` field
+is durable; `reasonCode=quality_guard_degraded_fallback` in logs is diagnostic only.

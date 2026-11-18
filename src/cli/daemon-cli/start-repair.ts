@@ -14,13 +14,15 @@ import {
   resolveBunRuntimeInfo,
   resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
-import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
+import {
+  withDaemonRuntimePinMigration,
+  readDaemonRuntimePin,
+} from "../../daemon/runtime-pin-state.js";
 import {
   assertServiceDefinitionWritable,
   hasGatewayServiceEnvironmentDifference,
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceCommand,
-  type GatewayServiceEnv,
 } from "../../daemon/service-types.js";
 import type {
   GatewayService,
@@ -147,12 +149,7 @@ export function repairLoadedGatewayServiceForStart(
 ): Promise<GatewayServiceRepairResult<"started">>;
 export async function repairLoadedGatewayServiceForStart(
   params: GatewayServiceRepairParams & { action?: "restart" | "start" },
-): Promise<{
-  result: "restarted" | "started";
-  message: string;
-  warnings?: string[];
-  loaded: boolean;
-}> {
+): Promise<GatewayServiceRepairResult<"restarted" | "started">> {
   assertGatewayServiceMutationAllowed("repair the gateway service");
   // Repair can persist a generated token; check definition authority before planning it.
   const capability = await params.service
@@ -165,6 +162,11 @@ export async function repairLoadedGatewayServiceForStart(
     hasGatewayServiceLauncherOverride(params.state.command) ||
     hasGatewayServiceEnvironmentDifference(params.state.command, GATEWAY_TARGET_ENV_KEYS)
   ) {
+    if (process.platform === "win32") {
+      throw new Error(
+        "Refusing to repair the managed Gateway service because an operator-owned Scheduled Task override changes its command, working directory, or Gateway target environment. Inspect the task's registered action and working directory in Task Scheduler, then resolve the override before retrying.",
+      );
+    }
     const unitName = path.basename(params.state.command?.sourcePath ?? "<unit>");
     throw new Error(
       `Refusing to repair the managed Gateway service because a systemd drop-in overrides its command, working directory, or Gateway target environment. Inspect the unit with \`systemctl --user cat ${unitName}\`, then update or remove the operator-owned drop-in before retrying.`,
@@ -188,22 +190,27 @@ export async function repairLoadedGatewayServiceForStart(
     existingServiceEnv: existingEnvironment,
   });
   const wrapperPath = await resolveOpenClawWrapperPath(installEnv[OPENCLAW_WRAPPER_ENV_KEY]);
-  const pinSnapshot = readDaemonRuntimePin(
-    { kind: "gateway", env: installEnv },
-    params.state.command,
+  const pinSnapshot = await withDaemonRuntimePinMigration(installEnv, () =>
+    readDaemonRuntimePin({ kind: "gateway", env: installEnv }, params.state.command),
   );
   const pinnedRuntime = wrapperPath ? undefined : pinSnapshot.pin?.path;
-  const installedRuntime = resolveGatewayDaemonRuntime(
-    pinnedRuntime ? [pinnedRuntime] : managedCommand?.programArguments,
-  );
+  const installedRuntime =
+    (!wrapperPath && pinSnapshot.pin?.runtime) ||
+    resolveGatewayDaemonRuntime(pinnedRuntime ? [pinnedRuntime] : managedCommand?.programArguments);
   if (!wrapperPath) {
     await resolvePinnedDaemonRuntimePath(pinnedRuntime, installedRuntime, installEnv);
   }
   const installedRuntimePath =
-    installedRuntime === "bun" ? (pinnedRuntime ?? managedCommand?.programArguments[0]) : undefined;
-  const runtimeInfo = installedRuntimePath
-    ? await resolveBunRuntimeInfo(installedRuntimePath)
-    : undefined;
+    installedRuntime === "bun" || installedRuntime === "standalone"
+      ? (pinnedRuntime ?? managedCommand?.programArguments[0])
+      : undefined;
+  if (installedRuntime === "standalone" && !pinnedRuntime) {
+    await resolvePinnedDaemonRuntimePath(installedRuntimePath, "standalone", installEnv);
+  }
+  const runtimeInfo =
+    installedRuntimePath && installedRuntime === "bun"
+      ? await resolveBunRuntimeInfo(installedRuntimePath)
+      : undefined;
   if (runtimeInfo?.status === "probe-failed") {
     throw runtimeInfo.error;
   }
@@ -211,11 +218,12 @@ export async function repairLoadedGatewayServiceForStart(
   if (runtimeInfo?.status === "unsupported" && runtimeInfo.sqliteSelectionError) {
     throw new Error(runtimeInfo.sqliteSelectionError);
   }
-  const runtime = pinnedRuntime
-    ? installedRuntime
-    : runtimeInfo?.status === "supported"
-      ? "bun"
-      : "node";
+  const runtime =
+    pinnedRuntime || installedRuntime === "standalone"
+      ? installedRuntime
+      : runtimeInfo?.status === "supported"
+        ? "bun"
+        : "node";
 
   const tokenResolution = await resolveGatewayInstallToken({
     config: cfg,
@@ -242,7 +250,7 @@ export async function repairLoadedGatewayServiceForStart(
       env: installEnv,
       port,
       runtime,
-      runtimePath: runtime === "bun" ? installedRuntimePath : undefined,
+      runtimePath: runtime === "bun" || runtime === "standalone" ? installedRuntimePath : undefined,
       pinnedRuntimePath: pinSnapshot.pin?.path,
       wrapperPath,
       existingCommand: params.state.command,
@@ -259,7 +267,7 @@ export async function repairLoadedGatewayServiceForStart(
 
   await params.service.install({
     runtimePinUpdate: { expected: pinSnapshot, pin: pinSnapshot.pin },
-    env: installEnv as GatewayServiceEnv,
+    env: installEnv,
     stdout: params.stdout,
     warn: params.warn,
     programArguments,

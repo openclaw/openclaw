@@ -1,67 +1,64 @@
-import { enqueueKeyedTask } from "../../plugin-sdk/keyed-async-queue.js";
-import { createDeferredCore } from "../../shared/deferred.js";
-import { OAUTH_REFRESH_CALL_TIMEOUT_MS } from "./constants.js";
-import { observeOAuthRefreshSettlement } from "./oauth-refresh-fence.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import type { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import { isExactOAuthCredential } from "./oauth-refresh-fence.js";
+import type { OAuthCredential } from "./types.js";
 
+export type OAuthRefreshCohort = {
+  assertNoFailure(authPath: string, credential: OAuthCredential): void;
+  fail(authPath: string, credential: OAuthCredential, error: OAuthRefreshFailureError): void;
+};
+
+/** Serialize refreshes while sharing a settled transient failure only with waiting admissions. */
 export function createOAuthRefreshQueue() {
-  const tails = new Map<string, Promise<void>>();
-  const pending = new Map<string, Set<Promise<void>>>();
-  const keyFor = (provider: string, profileId: string) => `${provider}\u0000${profileId}`;
+  type Admission = OAuthRefreshCohort & { pending: number; retire(): void };
+  const queue = new KeyedAsyncQueue();
+  const cohorts = new Map<string, Admission>();
+
   return {
     enqueue<T>(
       provider: string,
       profileId: string,
-      task: (trackSettlement: (settlement: Promise<unknown>) => void) => Promise<T>,
-    ): Promise<T> {
-      const key = keyFor(provider, profileId);
-      const finished = createDeferredCore();
-      const active = pending.get(key) ?? new Set<Promise<void>>();
-      active.add(finished.promise);
-      pending.set(key, active);
-      let settlement: Promise<void> | undefined;
-      const request = enqueueKeyedTask({
-        tails,
-        key,
-        // The task registers durable work before its caller-facing promise settles.
-        task: () =>
-          task((work) => {
-            settlement = work.then(
-              () => undefined,
-              () => undefined,
-            );
-          }),
-      });
-      void request
-        .then(
-          () => settlement,
-          () => settlement,
-        )
-        .then(() => {
-          active.delete(finished.promise);
-          if (active.size === 0) {
-            pending.delete(key);
+      task: (cohort: OAuthRefreshCohort) => Promise<T>,
+    ) {
+      const key = `${provider}\u0000${profileId}`;
+      let cohort = cohorts.get(key);
+      if (!cohort) {
+        const failures = new Map<
+          string,
+          { credential: OAuthCredential; error: OAuthRefreshFailureError }
+        >();
+        const admitted: Admission = {
+          pending: 0,
+          assertNoFailure(authPath, credential) {
+            const failure = failures.get(authPath);
+            if (failure && isExactOAuthCredential(credential, failure.credential)) {
+              throw failure.error;
+            }
+          },
+          fail(authPath, credential, error) {
+            // Retire immediately so later admissions can retry. Existing waiters
+            // retain this exact owner/generation failure until their queue tasks settle.
+            failures.set(authPath, { credential, error });
+            admitted.retire();
+          },
+          retire() {
+            if (cohorts.get(key) === admitted) {
+              cohorts.delete(key);
+            }
+          },
+        };
+        cohorts.set(key, admitted);
+        cohort = admitted;
+      }
+      const admitted = cohort;
+      admitted.pending++;
+      return queue.enqueue(key, () => task(admitted), {
+        onSettle() {
+          if (--admitted.pending === 0) {
+            admitted.retire();
           }
-          finished.resolve();
-        });
-      return request;
-    },
-    async waitForActive(provider: string, profileId?: string): Promise<void> {
-      const key = profileId ? keyFor(provider, profileId) : undefined;
-      const active: Promise<void>[] = [];
-      for (const [queuedKey, work] of pending) {
-        if (key ? queuedKey === key : queuedKey.startsWith(`${provider}\u0000`)) {
-          active.push(...work);
-        }
-      }
-      if (active.length === 0) {
-        return;
-      }
-      // Join this snapshot of work; the subsequent credential read owns the outcome.
-      await observeOAuthRefreshSettlement(
-        `modelSelection(${provider})`,
-        OAUTH_REFRESH_CALL_TIMEOUT_MS,
-        Promise.all(active),
-      );
+        },
+      });
     },
   };
 }

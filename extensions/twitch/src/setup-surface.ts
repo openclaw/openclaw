@@ -1,14 +1,10 @@
 import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-id";
 import { createChannelDmPolicy } from "openclaw/plugin-sdk/channel-dm-policy";
-/**
- * Twitch setup wizard surface for CLI setup.
- */
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import { getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   formatDocsLink,
   type ChannelSetupAdapter,
-  type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
@@ -16,8 +12,8 @@ import {
   patchTopLevelChannelConfigSection,
   createSetupTranslator,
   setSetupChannelEnabled,
+  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_ACCOUNT_ID,
   getAccountConfig,
@@ -32,6 +28,11 @@ import { isAccountConfigured } from "./utils/twitch.js";
 const channel = "twitch" as const;
 const t = createSetupTranslator();
 const INVALID_ACCOUNT_ID_MESSAGE = "Invalid Twitch account id";
+const requiredAccountPrompts = {
+  username: "wizard.twitch.botUsernamePrompt",
+  clientId: "wizard.twitch.clientIdPrompt",
+  channel: "wizard.twitch.channelJoinPrompt",
+} as const;
 
 function normalizeRequestedSetupAccountId(accountId: string): string {
   const normalized = normalizeOptionalAccountId(accountId);
@@ -56,9 +57,7 @@ export function setTwitchAccount(
   account: Partial<TwitchAccountConfig>,
   accountId: string = resolveSetupAccountId(cfg),
 ): OpenClawConfig {
-  const resolvedAccountId = accountId.trim()
-    ? normalizeRequestedSetupAccountId(accountId)
-    : resolveSetupAccountId(cfg);
+  const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
   const existing = getAccountConfig(cfg, resolvedAccountId);
   const merged: TwitchAccountConfig = {
     username: account.username ?? existing?.username ?? "",
@@ -88,100 +87,18 @@ export function setTwitchAccount(
   });
 }
 
-async function noteTwitchSetupHelp(prompter: WizardPrompter): Promise<void> {
-  await prompter.note(
-    [
-      t("wizard.twitch.helpRequiresBot"),
-      t("wizard.twitch.helpCreateApp"),
-      t("wizard.twitch.helpGenerateToken"),
-      t("wizard.twitch.helpTokenTools"),
-      t("wizard.twitch.helpCopyToken"),
-      t("wizard.twitch.helpEnvVars"),
-      `Docs: ${formatDocsLink("/channels/twitch", "channels/twitch")}`,
-    ].join("\n"),
-    t("wizard.twitch.setupTitle"),
-  );
-}
-
-export async function promptToken(
-  prompter: WizardPrompter,
-  account: TwitchAccountConfig | null,
-): Promise<string> {
-  const existingToken = account?.accessToken ?? "";
-
-  if (existingToken) {
-    const keepToken = await prompter.confirm({
-      message: t("wizard.twitch.accessTokenKeep"),
-      initialValue: true,
-    });
-    if (keepToken) {
-      return existingToken;
-    }
-  }
-
-  return (
-    await prompter.text({
-      message: t("wizard.twitch.oauthTokenPrompt"),
-      sensitive: true,
-      validate: (value) => {
-        const raw = value?.trim() ?? "";
-        if (!raw) {
-          return "Required";
-        }
-        if (!raw.startsWith("oauth:")) {
-          return "Token should start with 'oauth:'";
-        }
-        return undefined;
-      },
-    })
-  ).trim();
-}
-
 async function promptRequiredTwitchAccountValue(
   prompter: WizardPrompter,
-  message: string,
-  initialValue: string | undefined,
+  account: TwitchAccountConfig | null,
+  key: keyof typeof requiredAccountPrompts,
 ): Promise<string> {
   return (
     await prompter.text({
-      message,
-      initialValue: initialValue ?? "",
+      message: t(requiredAccountPrompts[key]),
+      initialValue: account?.[key] ?? "",
       validate: (value) => (value?.trim() ? undefined : "Required"),
     })
   ).trim();
-}
-
-export async function promptUsername(
-  prompter: WizardPrompter,
-  account: TwitchAccountConfig | null,
-): Promise<string> {
-  return await promptRequiredTwitchAccountValue(
-    prompter,
-    t("wizard.twitch.botUsernamePrompt"),
-    account?.username,
-  );
-}
-
-export async function promptClientId(
-  prompter: WizardPrompter,
-  account: TwitchAccountConfig | null,
-): Promise<string> {
-  return await promptRequiredTwitchAccountValue(
-    prompter,
-    t("wizard.twitch.clientIdPrompt"),
-    account?.clientId,
-  );
-}
-
-export async function promptChannelName(
-  prompter: WizardPrompter,
-  account: TwitchAccountConfig | null,
-): Promise<string> {
-  return await promptRequiredTwitchAccountValue(
-    prompter,
-    t("wizard.twitch.channelJoinPrompt"),
-    account?.channel,
-  );
 }
 
 async function promptRefreshCredential(params: {
@@ -208,90 +125,26 @@ async function promptRefreshCredential(params: {
   return value.trim() || undefined;
 }
 
-export async function promptRefreshTokenSetup(
-  prompter: WizardPrompter,
-  account: TwitchAccountConfig | null,
-): Promise<{ clientSecret?: string; refreshToken?: string }> {
-  const useRefresh = await prompter.confirm({
-    message: t("wizard.twitch.refreshTokenPrompt"),
-    initialValue: Boolean(account?.clientSecret && account?.refreshToken),
-  });
-
-  if (!useRefresh) {
-    return {};
+function resolveTwitchGroupPolicy(
+  cfg: OpenClawConfig,
+  accountId?: string,
+): "open" | "allowlist" | "disabled" {
+  const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
+  if (!account) {
+    return "disabled";
   }
-
-  const clientSecret = await promptRefreshCredential({
-    prompter,
-    existingValue: account?.clientSecret,
-    keepMessage: t("wizard.twitch.clientSecretKeep"),
-    inputMessage: t("wizard.twitch.clientSecretPrompt"),
-  });
-  const refreshToken = await promptRefreshCredential({
-    prompter,
-    existingValue: account?.refreshToken,
-    keepMessage: t("wizard.twitch.refreshTokenKeep"),
-    inputMessage: t("wizard.twitch.refreshTokenInputPrompt"),
-  });
-
-  return { clientSecret, refreshToken };
+  if (account.allowFrom !== undefined) {
+    return account.allowFrom.length > 0 ? "allowlist" : "disabled";
+  }
+  if (account.allowedRoles?.length) {
+    return account.allowedRoles.includes("all") ? "open" : "allowlist";
+  }
+  return "open";
 }
 
-export async function configureWithEnvToken(
+function setTwitchGroupPolicy(
   cfg: OpenClawConfig,
-  prompter: WizardPrompter,
-  account: TwitchAccountConfig | null,
-  envToken: string,
-  forceAllowFrom: boolean,
-  dmPolicy: ChannelSetupDmPolicy,
-  accountId: string = resolveSetupAccountId(cfg),
-): Promise<{ cfg: OpenClawConfig } | null> {
-  const resolvedAccountId = accountId.trim()
-    ? normalizeRequestedSetupAccountId(accountId)
-    : resolveSetupAccountId(cfg);
-  if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
-    return null;
-  }
-
-  const useEnv = await prompter.confirm({
-    message: t("wizard.twitch.envPrompt"),
-    initialValue: true,
-  });
-  if (!useEnv) {
-    return null;
-  }
-
-  const username = await promptUsername(prompter, account);
-  const clientId = await promptClientId(prompter, account);
-
-  const cfgWithAccount = setTwitchAccount(
-    cfg,
-    {
-      username,
-      clientId,
-      accessToken: envToken,
-      enabled: true,
-    },
-    resolvedAccountId,
-  );
-
-  if (forceAllowFrom && dmPolicy.promptAllowFrom) {
-    return {
-      cfg: await dmPolicy.promptAllowFrom({
-        cfg: cfgWithAccount,
-        prompter,
-        accountId: resolvedAccountId,
-      }),
-    };
-  }
-
-  return { cfg: cfgWithAccount };
-}
-
-function setTwitchAccessControl(
-  cfg: OpenClawConfig,
-  allowedRoles: TwitchRole[],
-  requireMention: boolean,
+  policy: "open" | "allowlist" | "disabled",
   accountId?: string,
 ): OpenClawConfig {
   const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
@@ -300,39 +153,45 @@ function setTwitchAccessControl(
     return cfg;
   }
 
-  return setTwitchAccount(
-    cfg,
-    {
-      ...account,
-      allowedRoles,
-      requireMention,
-    },
-    resolvedAccountId,
-  );
-}
-
-function resolveTwitchGroupPolicy(
-  cfg: OpenClawConfig,
-  accountId?: string,
-): "open" | "allowlist" | "disabled" {
-  const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
-  if (account?.allowedRoles?.includes("all")) {
-    return "open";
-  }
-  if (account?.allowedRoles?.includes("moderator")) {
-    return "allowlist";
-  }
-  return "disabled";
-}
-
-function setTwitchGroupPolicy(
-  cfg: OpenClawConfig,
-  policy: "open" | "allowlist" | "disabled",
-  accountId?: string,
-): OpenClawConfig {
   const allowedRoles: TwitchRole[] =
     policy === "open" ? ["all"] : policy === "allowlist" ? ["moderator", "vip"] : [];
-  return setTwitchAccessControl(cfg, allowedRoles, true, accountId);
+  const patch: Partial<TwitchAccountConfig> = { allowedRoles, requireMention: true };
+  if (policy === "disabled") {
+    patch.allowFrom = [];
+  } else if (policy === "allowlist" && account.allowFrom?.length) {
+    patch.allowFrom = account.allowFrom;
+  }
+
+  const twitch = cfg.channels?.twitch;
+  if (
+    resolvedAccountId === DEFAULT_ACCOUNT_ID &&
+    typeof twitch?.username === "string" &&
+    twitch.username
+  ) {
+    return patchTopLevelChannelConfigSection({
+      cfg,
+      channel,
+      enabled: true,
+      clearFields: patch.allowFrom === undefined ? ["allowFrom"] : undefined,
+      patch,
+    });
+  }
+
+  const nextAccount = { ...account, ...patch };
+  if (patch.allowFrom === undefined) {
+    delete nextAccount.allowFrom;
+  }
+  return patchTopLevelChannelConfigSection({
+    cfg,
+    channel,
+    enabled: true,
+    patch: {
+      accounts: {
+        ...twitch?.accounts,
+        [resolvedAccountId]: nextAccount,
+      },
+    },
+  });
 }
 
 const twitchDmPolicy = createChannelDmPolicy({
@@ -366,8 +225,17 @@ const twitchDmPolicy = createChannelDmPolicy({
       policy === "open" ? ["all"] : policy === "allowlist" ? [] : ["moderator"];
     return { allowedRoles };
   },
-  applyPatch: ({ cfg, account, patch }) =>
-    setTwitchAccessControl(cfg, patch.allowedRoles as TwitchRole[], true, account.accountId),
+  applyPatch: ({ cfg, account, patch }) => {
+    const accountId = resolveSetupAccountId(cfg, account.accountId);
+    const existing = getAccountConfig(cfg, accountId);
+    return existing
+      ? setTwitchAccount(
+          cfg,
+          { ...existing, allowedRoles: patch.allowedRoles as TwitchRole[], requireMention: true },
+          accountId,
+        )
+      : cfg;
+  },
   promptAllowFrom: async ({ cfg, prompter, accountId }) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
     const account = getAccountConfig(cfg, resolvedAccountId);
@@ -379,12 +247,12 @@ const twitchDmPolicy = createChannelDmPolicy({
       initialValue: existingAllowFrom[0] || undefined,
     });
 
-    const allowFrom = normalizeStringEntries((entry ?? "").split(/[\n,;]+/g));
+    const allowFrom = splitSetupEntries(entry ?? "");
 
     return setTwitchAccount(
       cfg,
       {
-        ...(account ?? undefined),
+        ...account,
         allowFrom,
       },
       resolvedAccountId,
@@ -403,7 +271,7 @@ const twitchGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
   },
   updatePrompt: ({ cfg, accountId }) => {
     const account = getAccountConfig(cfg, resolveSetupAccountId(cfg, accountId));
-    return Boolean(account?.allowedRoles?.length || account?.allowFrom?.length);
+    return Boolean(account?.allowedRoles?.length || account?.allowFrom !== undefined);
   },
   setPolicy: ({ cfg, accountId, policy }) => setTwitchGroupPolicy(cfg, policy, accountId),
   resolveAllowlist: async () => [],
@@ -462,31 +330,132 @@ export const twitchSetupWizard: ChannelSetupWizard = {
     const account = getAccountConfig(cfg, accountId);
 
     if (!account || !isAccountConfigured(account)) {
-      await noteTwitchSetupHelp(prompter);
+      await prompter.note(
+        [
+          t("wizard.twitch.helpRequiresBot"),
+          t("wizard.twitch.helpCreateApp"),
+          t("wizard.twitch.helpGenerateToken"),
+          t("wizard.twitch.helpTokenTools"),
+          t("wizard.twitch.helpCopyToken"),
+          t("wizard.twitch.helpEnvVars"),
+          `Docs: ${formatDocsLink("/channels/twitch", "channels/twitch")}`,
+        ].join("\n"),
+        t("wizard.twitch.setupTitle"),
+      );
     }
 
     const envToken = process.env.OPENCLAW_TWITCH_ACCESS_TOKEN?.trim();
 
     if (accountId === DEFAULT_ACCOUNT_ID && envToken && !account?.accessToken) {
-      const envResult = await configureWithEnvToken(
-        cfg,
-        prompter,
-        account,
-        envToken,
-        forceAllowFrom,
-        twitchDmPolicy,
-        accountId,
-      );
+      async function configureWithEnvToken(): Promise<{ cfg: OpenClawConfig } | null> {
+        const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
+        if (resolvedAccountId !== DEFAULT_ACCOUNT_ID) {
+          return null;
+        }
+
+        const useEnv = await prompter.confirm({
+          message: t("wizard.twitch.envPrompt"),
+          initialValue: true,
+        });
+        if (!useEnv) {
+          return null;
+        }
+
+        const username = await promptRequiredTwitchAccountValue(prompter, account, "username");
+        const clientId = await promptRequiredTwitchAccountValue(prompter, account, "clientId");
+
+        const cfgWithAccount = setTwitchAccount(
+          cfg,
+          {
+            username,
+            clientId,
+            accessToken: envToken,
+            enabled: true,
+          },
+          resolvedAccountId,
+        );
+
+        if (forceAllowFrom && twitchDmPolicy.promptAllowFrom) {
+          return {
+            cfg: await twitchDmPolicy.promptAllowFrom({
+              cfg: cfgWithAccount,
+              prompter,
+              accountId: resolvedAccountId,
+            }),
+          };
+        }
+
+        return { cfg: cfgWithAccount };
+      }
+      const envResult = await configureWithEnvToken();
       if (envResult) {
         return envResult;
       }
     }
 
-    const username = await promptUsername(prompter, account);
-    const token = await promptToken(prompter, account);
-    const clientId = await promptClientId(prompter, account);
-    const channelName = await promptChannelName(prompter, account);
-    const { clientSecret, refreshToken } = await promptRefreshTokenSetup(prompter, account);
+    async function promptToken(): Promise<string> {
+      const existingToken = account?.accessToken ?? "";
+
+      if (existingToken) {
+        const keepToken = await prompter.confirm({
+          message: t("wizard.twitch.accessTokenKeep"),
+          initialValue: true,
+        });
+        if (keepToken) {
+          return existingToken;
+        }
+      }
+
+      return (
+        await prompter.text({
+          message: t("wizard.twitch.oauthTokenPrompt"),
+          sensitive: true,
+          validate: (value) => {
+            const raw = value?.trim() ?? "";
+            if (!raw) {
+              return "Required";
+            }
+            if (!raw.startsWith("oauth:")) {
+              return "Token should start with 'oauth:'";
+            }
+            return undefined;
+          },
+        })
+      ).trim();
+    }
+    async function promptRefreshTokenSetup(): Promise<{
+      clientSecret?: string;
+      refreshToken?: string;
+    }> {
+      const useRefresh = await prompter.confirm({
+        message: t("wizard.twitch.refreshTokenPrompt"),
+        initialValue: Boolean(account?.clientSecret && account?.refreshToken),
+      });
+
+      if (!useRefresh) {
+        return {};
+      }
+
+      const clientSecret = await promptRefreshCredential({
+        prompter,
+        existingValue: account?.clientSecret,
+        keepMessage: t("wizard.twitch.clientSecretKeep"),
+        inputMessage: t("wizard.twitch.clientSecretPrompt"),
+      });
+      const refreshToken = await promptRefreshCredential({
+        prompter,
+        existingValue: account?.refreshToken,
+        keepMessage: t("wizard.twitch.refreshTokenKeep"),
+        inputMessage: t("wizard.twitch.refreshTokenInputPrompt"),
+      });
+
+      return { clientSecret, refreshToken };
+    }
+    const username = await promptRequiredTwitchAccountValue(prompter, account, "username");
+    const token = await promptToken();
+    const clientId = await promptRequiredTwitchAccountValue(prompter, account, "clientId");
+    const channelName = await promptRequiredTwitchAccountValue(prompter, account, "channel");
+    const { clientSecret, refreshToken } = await promptRefreshTokenSetup();
 
     const cfgWithAccount = setTwitchAccount(
       cfg,

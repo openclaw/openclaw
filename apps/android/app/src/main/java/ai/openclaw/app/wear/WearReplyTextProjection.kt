@@ -11,23 +11,27 @@ import kotlinx.serialization.json.contentOrNull
 
 internal fun wearReplyText(source: JsonObject): String =
   when (val content = source["content"]) {
+    is JsonPrimitive -> content.contentOrNull.orEmpty()
+    is JsonArray -> content.mapNotNull { it.replyPartText(includeNonText = false) }.joinToString("\n")
+    else -> ""
+  }
+
+private fun JsonElement.replyPartText(includeNonText: Boolean): String? =
+  when (this) {
     is JsonPrimitive -> {
-      content.contentOrNull.orEmpty()
+      contentOrNull
     }
 
-    is JsonArray -> {
-      content
-        .mapNotNull { part ->
-          when (part) {
-            is JsonPrimitive -> part.contentOrNull
-            is JsonObject -> if (part["type"] == null || part["type"] == JsonPrimitive("text")) (part["text"] as? JsonPrimitive)?.contentOrNull else null
-            else -> null
-          }
-        }.joinToString("\n")
+    is JsonObject -> {
+      if (includeNonText || this["type"] == null || this["type"] == JsonPrimitive("text")) {
+        (this["text"] as? JsonPrimitive)?.contentOrNull
+      } else {
+        null
+      }
     }
 
     else -> {
-      ""
+      null
     }
   }
 
@@ -45,13 +49,7 @@ internal fun wearReplyIsTruncated(
   val content = source["content"]
   val texts =
     if (content is JsonArray) {
-      content.mapNotNull {
-        when (it) {
-          is JsonPrimitive -> it.contentOrNull
-          is JsonObject -> (it["text"] as? JsonPrimitive)?.contentOrNull
-          else -> null
-        }
-      }
+      content.mapNotNull { it.replyPartText(includeNonText = true) }
     } else {
       listOf(wearReplyText(source))
     }

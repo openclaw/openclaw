@@ -1,75 +1,58 @@
 import { FsSafeError, root as openFsRoot } from "./fs-safe.js";
-import {
-  readPackageDistContentInventoryIfPresent,
-  type PackageDistContentInventoryEntry,
-} from "./package-dist-inventory.js";
+import { readPackageDistContentInventoryIfPresent } from "./package-dist-inventory.js";
 import {
   fileModesHaveSameExecutableSemantics,
   inspectLocalOverrideTarget,
   probeLocalOverrideTarget,
   resolveLocalOverrideTopologyPath,
   resolveSafePackagePath,
+  type LocalPackageOverrideChange,
+  type LocalPackageOverrideConflictReason,
   type LocalPackageOverridesPlan,
   type LocalPackageOverridesResult,
 } from "./package-local-overrides-shared.js";
-
-function buildCurrentInventoryMap(entries: PackageDistContentInventoryEntry[] | null) {
-  return new Map((entries ?? []).map((entry) => [entry.path, entry]));
-}
 
 export async function preflightLocalOverrides(params: {
   packageRoot: string;
   realPackageRoot: string;
   plan: LocalPackageOverridesPlan;
 }): Promise<LocalPackageOverridesResult["conflicts"]> {
-  const nextInventory = buildCurrentInventoryMap(
-    await readPackageDistContentInventoryIfPresent(params.packageRoot),
+  const nextInventory = new Map(
+    ((await readPackageDistContentInventoryIfPresent(params.packageRoot)) ?? []).map((entry) => [
+      entry.path,
+      entry,
+    ]),
   );
   const packageFs = await openFsRoot(params.packageRoot, {
     hardlinks: "reject",
-    nonBlockingRead: true,
     symlinks: "reject",
   });
-  const conflicts: LocalPackageOverridesResult["conflicts"] = [];
-  for (const change of params.plan.changes) {
+  const inspectChange = async (
+    change: LocalPackageOverrideChange,
+  ): Promise<LocalPackageOverrideConflictReason | undefined> => {
     const targetPath = resolveSafePackagePath(params.packageRoot, change.path);
     const nextEntry = nextInventory.get(change.path);
     const targetProbe = await probeLocalOverrideTarget(targetPath);
     if (targetProbe.status === "error") {
-      conflicts.push({ path: change.path, reason: "target-inspection-failed" });
-      continue;
+      return "target-inspection-failed";
     }
     if (change.kind === "added") {
-      if (nextEntry || targetProbe.status !== "missing") {
-        conflicts.push({ path: change.path, reason: "target-exists" });
-      }
-      continue;
-    }
-    if (!change.baseline) {
-      conflicts.push({ path: change.path, reason: "target-missing" });
-      continue;
+      return nextEntry || targetProbe.status !== "missing" ? "target-exists" : undefined;
     }
     if (targetProbe.status === "blocked") {
-      conflicts.push({ path: change.path, reason: "target-changed" });
-      continue;
+      return "target-changed";
     }
     if (!nextEntry || targetProbe.status === "missing") {
       if (change.kind === "deleted" && targetProbe.status === "missing") {
-        continue;
+        return undefined;
       }
-      conflicts.push({
-        path: change.path,
-        reason: nextEntry && targetProbe.status === "missing" ? "target-missing" : "target-changed",
-      });
-      continue;
+      return nextEntry && targetProbe.status === "missing" ? "target-missing" : "target-changed";
     }
     if (!targetProbe.safeFile) {
-      conflicts.push({ path: change.path, reason: "target-changed" });
-      continue;
+      return "target-changed";
     }
     if (targetProbe.hardlinked) {
-      conflicts.push({ path: change.path, reason: "target-hardlinked" });
-      continue;
+      return "target-hardlinked";
     }
     let targetInspection: { mode: number; sha256: string };
     try {
@@ -80,14 +63,9 @@ export async function preflightLocalOverrides(params: {
         expectedSize: nextEntry.size,
       });
     } catch (error) {
-      conflicts.push({
-        path: change.path,
-        reason:
-          error instanceof FsSafeError && error.code === "too-large"
-            ? "target-changed"
-            : "target-inspection-failed",
-      });
-      continue;
+      return error instanceof FsSafeError && error.code === "too-large"
+        ? "target-changed"
+        : "target-inspection-failed";
     }
     if (
       nextEntry.sha256 !== change.baseline.sha256 ||
@@ -95,7 +73,15 @@ export async function preflightLocalOverrides(params: {
       !fileModesHaveSameExecutableSemantics(nextEntry.mode, change.baseline.mode) ||
       !fileModesHaveSameExecutableSemantics(targetInspection.mode, nextEntry.mode)
     ) {
-      conflicts.push({ path: change.path, reason: "target-changed" });
+      return "target-changed";
+    }
+    return undefined;
+  };
+  const conflicts: LocalPackageOverridesResult["conflicts"] = [];
+  for (const change of params.plan.changes) {
+    const reason = await inspectChange(change);
+    if (reason) {
+      conflicts.push({ path: change.path, reason });
     }
   }
   const conflictingPaths = new Set(conflicts.map((conflict) => conflict.path));
@@ -124,12 +110,8 @@ export async function preflightLocalOverrides(params: {
   }
   if (topologyResolutionFailed) {
     for (const change of params.plan.changes) {
-      if (conflictingPaths.has(change.path)) {
-        continue;
-      }
       conflicts.push({ path: change.path, reason: "target-inspection-failed" });
     }
-    return conflicts;
   }
   return conflicts;
 }

@@ -1,8 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
-import { runNodeScript } from "../../test/helpers/run-node-script.js";
-import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { runRetentionNodeScript } from "../../test/helpers/run-node-script.js";
 import {
   codeModeDescriptionRetentionEntrypoint,
   codeModeRetentionEntrypoint,
@@ -10,30 +8,24 @@ import {
 
 it.for([
   {
-    name: "releases completed tool inputs while a real guest remains parked",
+    name: "releases completed inputs and frontier waits across 2,000 calls with a pending sibling",
     entrypoint: codeModeRetentionEntrypoint,
-    expected: { completedInputReleased: true, pendingInputPreserved: true },
+    expected: {
+      completedInputReleased: true,
+      pendingInputPreserved: true,
+      frontierReactionsBounded: true,
+    },
   },
   {
-    name: "releases obsolete session wrappers while live descriptions remain synchronized",
+    name: "releases obsolete session wrappers and their extension runners",
     entrypoint: codeModeDescriptionRetentionEntrypoint,
-    expected: { obsoleteWrappersReleased: true, liveDescriptionsSynchronized: true },
+    expected: { obsoleteWrappersReleased: true },
   },
 ])("$name", { timeout: 30_000 }, async ({ entrypoint, expected }, { signal }) => {
-  const result = await runNodeScript(
-    [
-      "--expose-gc",
-      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(entrypoint), resolveTestNodeExecPath()),
-    ],
-    { ...process.env, NODE_OPTIONS: "", TSX_DISABLE_CACHE: "1" },
-    15_000,
-    {
-      cwd: fileURLToPath(new URL("../../", import.meta.url)),
-      signal,
-      maxBuffer: 64 * 1024,
-      requireProcessTreeExit: process.platform !== "win32",
-    },
-  );
+  const result = await runRetentionNodeScript(entrypoint, {
+    cwd: fileURLToPath(new URL("../../", import.meta.url)),
+    signal,
+  });
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
   expect(JSON.parse(result.stdout)).toEqual(expected);

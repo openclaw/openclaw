@@ -144,11 +144,9 @@ function resolveBundledArtifactRelativePath(
   return relativeSource.replace(/\.[^.]+$/u, extension);
 }
 
-function resolvePackageLocalDistRuntimeArtifact(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-}): string | null {
+function resolvePackageLocalDistRuntimeArtifact(
+  params: Pick<PluginRuntimeArtifactSelectionParams, "source" | "rootDir" | "origin">,
+): string | null {
   const relativeSource = path.relative(params.rootDir, params.source);
   if (
     !isTypeScriptPackageEntry(relativeSource) ||
@@ -175,7 +173,7 @@ function resolvePreferredBundledRootArtifactFromCanonicalPaths(params: {
   source: string;
   rootDir: string;
   packageManifest?: OpenClawPackageManifest;
-}): { source: string; rootDir: string } {
+}): PluginRuntimeArtifact {
   const { rootDir, source } = params;
   const sourceExternal = params.packageManifest?.build?.bundledDist === false;
   const extensionsDir = path.dirname(rootDir);
@@ -219,7 +217,7 @@ export function resolvePreferredBundledRootArtifact(params: {
   source: string;
   rootDir: string;
   packageManifest?: OpenClawPackageManifest;
-}): { source: string; rootDir: string } {
+}): PluginRuntimeArtifact {
   const artifacts = getPluginCacheRoot(params.rootDir).runtimeArtifacts;
   const key = JSON.stringify([
     "bundled-root",
@@ -240,14 +238,9 @@ export function resolvePreferredBundledRootArtifact(params: {
 }
 
 /** Applies source, package-local, and root-build preference without runtime memo state. */
-function resolvePreferredBuiltRuntimeArtifact(params: {
-  source: string;
-  rootDir: string;
-  origin: PluginOrigin;
-  preferBuiltPluginArtifacts: boolean;
-  sourcePreferred?: boolean;
-  packageManifest?: OpenClawPackageManifest;
-}): { source: string; rootDir: string } {
+function resolvePreferredBuiltRuntimeArtifact(
+  params: PluginRuntimeArtifactSelectionParams,
+): PluginRuntimeArtifact {
   // The stateful resolver canonicalizes both paths before memo-key construction.
   const { rootDir, source } = params;
   if (!params.preferBuiltPluginArtifacts || params.sourcePreferred) {

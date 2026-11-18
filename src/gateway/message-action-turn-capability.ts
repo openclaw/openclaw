@@ -3,9 +3,20 @@ import { randomBytes } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { InternalChannelThreadingToolContext } from "../channels/threading-tool-context-internal.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import {
+  readUserTurnPromptReactionSource,
+  getUserTurnTranscriptAdmissionOwner,
+  type CurrentPromptReaction,
+  type UserTurnPromptReactionSource,
+} from "../sessions/user-turn-transcript-admission.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -21,9 +32,21 @@ const CAPABILITY_COMPLETION_GRACE_MS = 60_000;
 /** Host-only scheduled grant; never serialized or passed to channel plugins. */
 type ScheduledMessageActionAuthority = {
   policy: ScheduledToolPolicyContext;
-  assertCurrent: () => void;
-  assertSourceCurrent?: () => void;
+  assertCurrent: SessionSourceAssertion;
+  assertSourceCurrent?: SessionSourceAssertion;
   channelRequester?: CronAuthenticatedChannelRequester;
+};
+
+/** Host-only delivery restriction; carries no channel, requester, or source privilege. */
+type MessageActionDeliveryAttempt = {
+  beforeAttempt: () => Promise<void>;
+  assertCurrent: SessionSourceAssertion;
+};
+
+type PromptReactionBinding = {
+  source: UserTurnPromptReactionSource;
+  recorder: UserTurnTranscriptRecorder;
+  react: CurrentPromptReaction;
 };
 
 /** Private handoff from authenticated dashboard admission to the exact reply run. */
@@ -32,6 +55,7 @@ export type DashboardMessageReadAdmission = Readonly<{
   runId: string;
   sessionKey: string;
   sessionId?: string;
+  prepare?: () => Promise<void>;
   assertCurrent: () => void;
 }>;
 
@@ -41,6 +65,8 @@ export type MessageActionAuthorization = {
   toolContext?: InternalChannelThreadingToolContext;
   /** @internal Redeemed from the process-local turn capability. */
   scheduled?: ScheduledMessageActionAuthority;
+  /** @internal Restricts writes independently of scheduled authorization. */
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   /** @internal Redeemed only by the host; never serialized or passed to plugins. */
   assertDashboardReadCurrent?: () => void;
 };
@@ -92,7 +118,10 @@ type MessageActionTurnCapability = AgentRuntimeMessageActionContext & {
   runId: string;
   sessionKey: string;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   assertDashboardReadCurrent?: () => void;
+  currentPromptReaction?: CurrentPromptReaction;
+  promptReactionBinding?: PromptReactionBinding;
 };
 
 const capabilitiesByToken = new Map<string, MessageActionTurnCapability>();
@@ -162,15 +191,12 @@ function copyToolContext(
   };
 }
 
-function sweepExpiredMessageActionTurnCapabilities(nowMs: number = Date.now()): number {
-  let removed = 0;
+function sweepExpiredMessageActionTurnCapabilities(nowMs: number): void {
   for (const [token, capability] of capabilitiesByToken) {
     if (nowMs >= capability.expiresAtMs) {
       capabilitiesByToken.delete(token);
-      removed += 1;
     }
   }
-  return removed;
 }
 
 /**
@@ -190,7 +216,12 @@ export function mintMessageActionTurnCapability(params: {
   requesterSenderE164?: string;
   toolContext?: InternalChannelThreadingToolContext;
   scheduled?: ScheduledMessageActionAuthority;
+  deliveryAttempt?: MessageActionDeliveryAttempt;
   assertDashboardReadCurrent?: () => void;
+  promptReactionSource?: {
+    source: UserTurnPromptReactionSource;
+    recorder: UserTurnTranscriptRecorder;
+  };
   expiresWithRun?: boolean;
   ttlMs?: number;
   nowMs?: number;
@@ -223,6 +254,11 @@ export function mintMessageActionTurnCapability(params: {
     requesterSenderE164: normalizeOptionalString(params.requesterSenderE164),
     toolContext: copyToolContext(params.toolContext),
   };
+  const assertActive = () => {
+    if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
+      throw new Error("message action turn capability is no longer active");
+    }
+  };
   const scheduled = params.scheduled;
   if (scheduled) {
     const assertSourceCurrent = scheduled.assertSourceCurrent;
@@ -231,34 +267,75 @@ export function mintMessageActionTurnCapability(params: {
       ...(scheduled.channelRequester
         ? { channelRequester: structuredClone(scheduled.channelRequester) }
         : {}),
-      assertCurrent: () => {
-        if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
-          throw new Error("message action turn capability is no longer active");
-        }
-        scheduled.assertCurrent();
-      },
+      assertCurrent: composeSessionSourceAssertion([scheduled.assertCurrent], (assertSource) => {
+        assertActive();
+        assertSource();
+      }),
       ...(assertSourceCurrent
         ? {
-            assertSourceCurrent: () => {
-              if (
-                capabilitiesByToken.get(token) !== capability ||
-                Date.now() >= capability.expiresAtMs
-              ) {
-                throw new Error("message action turn capability is no longer active");
-              }
-              assertSourceCurrent();
-            },
+            assertSourceCurrent: composeSessionSourceAssertion(
+              [assertSourceCurrent],
+              (assertSource) => {
+                assertActive();
+                assertSource();
+              },
+            ),
           }
         : {}),
+    };
+  }
+  const deliveryAttempt = params.deliveryAttempt;
+  if (deliveryAttempt) {
+    capability.deliveryAttempt = {
+      assertCurrent: composeSessionSourceAssertion(
+        [deliveryAttempt.assertCurrent],
+        (assertSource) => {
+          assertActive();
+          assertSource();
+        },
+      ),
+      beforeAttempt: async () => {
+        assertActive();
+        deliveryAttempt.assertCurrent();
+        await deliveryAttempt.beforeAttempt();
+        assertActive();
+        deliveryAttempt.assertCurrent();
+      },
     };
   }
   const assertDashboardReadCurrent = params.assertDashboardReadCurrent;
   if (assertDashboardReadCurrent) {
     capability.assertDashboardReadCurrent = () => {
-      if (capabilitiesByToken.get(token) !== capability || Date.now() >= capability.expiresAtMs) {
-        throw new Error("message action turn capability is no longer active");
-      }
+      assertActive();
       assertDashboardReadCurrent();
+    };
+  }
+  const promptSource = params.promptReactionSource;
+  if (
+    promptSource &&
+    promptSource.source.agentId === agentId &&
+    promptSource.source.sessionKey === sessionKey &&
+    readUserTurnPromptReactionSource(promptSource.recorder) === promptSource.source
+  ) {
+    capability.promptReactionBinding = {
+      ...promptSource,
+      react: promptSource.source.createReaction(promptSource.recorder),
+    };
+    capability.currentPromptReaction = (input) => {
+      const binding = capability.promptReactionBinding;
+      if (!binding) {
+        throw new Error("Current prompt has no admitted WebChat reaction source.");
+      }
+      const assertCurrent = () => {
+        assertActive();
+        binding.source.assertCurrent();
+        input.assertCurrent();
+        if (capability.promptReactionBinding !== binding) {
+          throw new Error("Current WebChat prompt changed before reaction mutation.");
+        }
+      };
+      assertCurrent();
+      return binding.react({ ...input, assertCurrent });
     };
   }
   capabilitiesByToken.set(token, capability);
@@ -319,11 +396,7 @@ function copyMessageActionTurnContext(
     expiresAtMs: capability.expiresAtMs,
     sessionId: capability.sessionId,
     sourceReplySessionKey: capability.sourceReplySessionKey,
-    requesterAccountId: capability.requesterAccountId,
-    requesterSenderId: capability.requesterSenderId,
-    requesterSenderName: capability.requesterSenderName,
-    requesterSenderUsername: capability.requesterSenderUsername,
-    requesterSenderE164: capability.requesterSenderE164,
+    ...selectMessageActionRequesterIdentity(capability),
     toolContext: copyToolContext(capability.toolContext),
   };
 }
@@ -337,9 +410,60 @@ export function resolveMessageActionTurnAuthorization(
     ? {
         ...copyMessageActionTurnContext(capability),
         scheduled: capability.scheduled,
+        deliveryAttempt: capability.deliveryAttempt,
         assertDashboardReadCurrent: capability.assertDashboardReadCurrent,
       }
     : undefined;
+}
+
+/** Publish only after the runtime has committed and consumed this exact user input. */
+export function advanceMessageActionPrompt(params: {
+  runId?: string;
+  agentId?: string;
+  sessionKey?: string;
+  sessionId: string;
+  recorder?: UserTurnTranscriptRecorder;
+}): void {
+  if (!params.runId || !params.agentId || !params.sessionKey) {
+    return;
+  }
+  const source = readUserTurnPromptReactionSource(params.recorder);
+  const receipt =
+    params.recorder && getUserTurnTranscriptAdmissionOwner(params.recorder)?.receipt();
+  for (const [token, capability] of capabilitiesByToken) {
+    if (
+      !capability.currentPromptReaction ||
+      !resolveStoredMessageActionTurnCapability({
+        token,
+        agentId: params.agentId,
+        runId: params.runId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+      })
+    ) {
+      continue;
+    }
+    // A new non-WebChat input must not leave the previous prompt target current.
+    if (capability.promptReactionBinding?.recorder === params.recorder) {
+      continue;
+    }
+    capability.promptReactionBinding =
+      source &&
+      params.recorder &&
+      receipt &&
+      receipt.sessionId === params.sessionId &&
+      source.agentId === capability.agentId &&
+      source.sessionKey === capability.sessionKey
+        ? { source, recorder: params.recorder, react: source.createReaction(params.recorder) }
+        : undefined;
+  }
+}
+
+/** Current-prompt callbacks never enter channel authorization or serialized runtime context. */
+export function resolveCurrentPromptReaction(
+  params: MessageActionTurnCapabilityLookup,
+): CurrentPromptReaction | undefined {
+  return resolveStoredMessageActionTurnCapability(params)?.currentPromptReaction;
 }
 
 export function revokeMessageActionTurnCapability(token: string | undefined): boolean {

@@ -1,14 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
-  prepareSqliteQuerySync,
-  prepareSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   canonicalSessionValidationQuery,
@@ -20,7 +18,7 @@ import {
   type CanonicalSessionValidationRow,
 } from "./session-canonical-row.js";
 
-type ValidationDatabase = { agentId: string; db: DatabaseSync };
+type ValidationDatabase = { agentId: string; db: EngineConnection };
 type PendingDatabase = Pick<DB, "session_nodes" | "session_canonical_validation_pending">;
 
 export type CanonicalSessionValidationBatch = {
@@ -85,10 +83,10 @@ export function readPendingCanonicalSessionValidationBatch(
   ) {
     throw new Error("Canonical validation batch limits must be positive safe integers");
   }
-  if (!hasCanonicalSessionValidationProjection(database)) {
-    return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
-  }
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
+    if (!hasCanonicalSessionValidationProjection(database)) {
+      return { mainKey: "main", rows: [], absentKeys: [], hasMore: false, oversizedRows: 0 };
+    }
     const mainKey = readCanonicalSessionMainKey(database);
     const db = getNodeSqliteKysely<PendingDatabase>(database.db);
     const candidates = executeSqliteQuerySync(
@@ -99,7 +97,7 @@ export function readPendingCanonicalSessionValidationBatch(
         .select("pending.session_key")
         .select(
           // kysely-allow-raw: bound native TEXT bytes before materializing saved prompt payloads.
-          sql<number>`length(CAST(pending.session_key AS BLOB)) + coalesce(length(CAST(node.entry_json AS BLOB)), 0) + coalesce(length(CAST(node.current_session_id AS BLOB)), 0) * 2 + coalesce(length(CAST(node.parent_session_key AS BLOB)), 0) + coalesce(length(CAST(node.spawned_by AS BLOB)), 0) + coalesce(length(CAST(node.fork_source_session_key AS BLOB)), 0)`.as(
+          sql<number>`octet_length(pending.session_key) + coalesce(octet_length(node.entry_json), 0) + coalesce(octet_length(node.current_session_id), 0) * 2 + coalesce(octet_length(node.parent_session_key), 0) + coalesce(octet_length(node.spawned_by), 0) + coalesce(octet_length(node.fork_source_session_key), 0)`.as(
             "bytes",
           ),
         )
@@ -125,7 +123,7 @@ export function readPendingCanonicalSessionValidationBatch(
     const rows = keys.length
       ? executeSqliteQuerySync(
           database.db,
-          canonicalSessionValidationQuery(database, { fullEntries: true }).where(
+          canonicalSessionValidationQuery(database).where(
             "session_nodes.session_key",
             "in",
             sqliteStringSet(keys),
@@ -149,7 +147,7 @@ export function validateCanonicalSessionValidationBatch(
 ): ValidatedCanonicalSessionValidationBatch {
   const rows = batch.rows.map((row) => {
     const snapshot = { ...row };
-    validateCanonicalSessionRow(snapshot, batch.mainKey);
+    validateCanonicalSessionRow(snapshot);
     return Object.freeze(snapshot);
   });
   const validated: ValidatedCanonicalSessionValidationBatch = {
@@ -198,7 +196,7 @@ export function compareAndCertifyCanonicalSessionValidationBatch(
   const current = new Map(
     executeSqliteQuerySync(
       database.db,
-      canonicalSessionValidationQuery(database, { fullEntries: true }).where(
+      canonicalSessionValidationQuery(database).where(
         "session_nodes.session_key",
         "in",
         sqliteStringSet(keys),
@@ -220,71 +218,4 @@ export function compareAndCertifyCanonicalSessionValidationBatch(
       .where("session_key", "in", sqliteStringSet(certifiedKeys)),
   );
   return Number(result.numAffectedRows ?? 0n);
-}
-
-function prepareCanonicalWriterQueries(database: ValidationDatabase) {
-  const db = getNodeSqliteKysely<PendingDatabase>(database.db);
-  return {
-    pending: prepareSqliteQueryTakeFirstSync<string, { session_key: string }>(
-      database.db,
-      (parameter) =>
-        db
-          .selectFrom("session_canonical_validation_pending")
-          .select("session_key")
-          .where(
-            "session_key",
-            "=",
-            parameter((key) => key),
-          ),
-    ),
-    row: prepareSqliteQueryTakeFirstSync<string, CanonicalSessionValidationRow>(
-      database.db,
-      (parameter) =>
-        canonicalSessionValidationQuery(database).where(
-          "session_nodes.session_key",
-          "=",
-          parameter((key) => key),
-        ),
-    ),
-    certify: prepareSqliteQuerySync<string>(database.db, (parameter) =>
-      db.deleteFrom("session_canonical_validation_pending").where(
-        "session_key",
-        "=",
-        parameter((key) => key),
-      ),
-    ),
-  };
-}
-
-// Retain compiled shapes only; fresh bindings and native statement lifecycle stay with the executor.
-const canonicalWriterQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareCanonicalWriterQueries>
->();
-
-/** Canonical writers certify their final row within their existing transaction. */
-export function certifyCanonicalSessionValidationRow(
-  database: ValidationDatabase,
-  sessionKey: string,
-): void {
-  // Low-level autocommit callers leave invalidation work for the readiness owner.
-  if (!database.db.isTransaction || !hasCanonicalSessionValidationProjection(database)) {
-    return;
-  }
-  let queries = canonicalWriterQueries.get(database.db);
-  if (!queries) {
-    queries = prepareCanonicalWriterQueries(database);
-    canonicalWriterQueries.set(database.db, queries);
-  }
-  const pending = queries.pending(sessionKey);
-  if (!pending) {
-    return;
-  }
-  // Validate stored metadata after native TEXT binding; saved prompts are not canonical inputs.
-  const row = queries.row(pending.session_key);
-  if (row) {
-    validateCanonicalSessionRow(row, readCanonicalSessionMainKey(database));
-  }
-  // The row was just reread and validated without yielding under the same reservation.
-  queries.certify(pending.session_key);
 }

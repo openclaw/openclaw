@@ -7,24 +7,8 @@ const DEFAULT_WINDOW_MS = 60_000;
 const DEFAULT_MAX_HITS = 5;
 const CLEANUP_INTERVAL_MS = 120_000;
 
-type ConversationWindow = {
-  timestamps: number[];
-};
-
-type LoopRateLimiter = {
-  /** Returns true if this conversation has exceeded the rate limit. */
-  isRateLimited: (conversationKey: string) => boolean;
-  /** Record an inbound message for a conversation. */
-  record: (conversationKey: string) => void;
-};
-
-export function createLoopRateLimiter(opts?: {
-  windowMs?: number;
-  maxHits?: number;
-}): LoopRateLimiter {
-  const windowMs = opts?.windowMs ?? DEFAULT_WINDOW_MS;
-  const maxHits = opts?.maxHits ?? DEFAULT_MAX_HITS;
-  const conversations = new Map<string, ConversationWindow>();
+export function createLoopRateLimiter() {
+  const conversations = new Map<string, number[]>();
   let lastCleanup = Date.now();
 
   function cleanup() {
@@ -33,12 +17,12 @@ export function createLoopRateLimiter(opts?: {
       return;
     }
     lastCleanup = now;
-    for (const [key, win] of conversations.entries()) {
-      const recent = win.timestamps.filter((ts) => now - ts <= windowMs);
+    for (const [key, timestamps] of conversations.entries()) {
+      const recent = timestamps.filter((ts) => now - ts <= DEFAULT_WINDOW_MS);
       if (recent.length === 0) {
         conversations.delete(key);
       } else {
-        win.timestamps = recent;
+        conversations.set(key, recent);
       }
     }
   }
@@ -46,24 +30,24 @@ export function createLoopRateLimiter(opts?: {
   return {
     record(conversationKey: string) {
       cleanup();
-      let win = conversations.get(conversationKey);
-      if (!win) {
-        win = { timestamps: [] };
-        conversations.set(conversationKey, win);
+      let timestamps = conversations.get(conversationKey);
+      if (!timestamps) {
+        timestamps = [];
+        conversations.set(conversationKey, timestamps);
       }
-      win.timestamps.push(Date.now());
+      timestamps.push(Date.now());
     },
 
     isRateLimited(conversationKey: string): boolean {
       cleanup();
-      const win = conversations.get(conversationKey);
-      if (!win) {
+      const timestamps = conversations.get(conversationKey);
+      if (!timestamps) {
         return false;
       }
       const now = Date.now();
-      const recent = win.timestamps.filter((ts) => now - ts <= windowMs);
-      win.timestamps = recent;
-      return recent.length >= maxHits;
+      const recent = timestamps.filter((ts) => now - ts <= DEFAULT_WINDOW_MS);
+      conversations.set(conversationKey, recent);
+      return recent.length >= DEFAULT_MAX_HITS;
     },
   };
 }

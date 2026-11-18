@@ -1,25 +1,36 @@
-import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeTranscriptHydrations } from "../../../test/helpers/transcript-hydration-observer.js";
+import type * as ConfigRuntime from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import {
   createAssistant,
-  createAssistantResultStream,
   testModel,
 } from "../sessions/agent-session-loop-correctness.test-support.js";
-import type { ProviderConfigInput } from "../sessions/model-registry.js";
+import { sessionManagerReadTranscriptBranch } from "../sessions/session-manager-view-types.js";
+import {
+  createDelegateCompactionFixture,
+  type DelegateFixtureOptions,
+} from "./compact.delegate.test-support.js";
 import {
   applyExtraParamsToAgentMock,
+  buildConfiguredAgentSystemPromptMock,
+  buildEmbeddedExtensionFactoriesMock,
   hookRunner,
   limitHistoryTurnsMock,
   loadCompactHooksHarness,
   resetCompactHooksHarnessMocks,
   resolveContextEngineMock,
   resolveModelMock,
+  triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
+import type * as CompactionHooks from "./compaction-hooks.js";
+import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
 const { requestPreparedCompaction } = vi.hoisted(() => ({
   requestPreparedCompaction:
@@ -31,16 +42,24 @@ vi.mock("@openclaw/ai/transports", async (importOriginal) => ({
 }));
 
 let delegate: typeof import("../../context-engine/delegate.js").delegateCompactionToRuntime;
-let compactQueued: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
+let compactQueued: Awaited<
+  ReturnType<typeof loadCompactHooksHarness>
+>["compactEmbeddedAgentSession"];
 let sessions: typeof import("../sessions/index.js");
 let accessor: typeof import("../../config/sessions/session-accessor.js");
 let databases: typeof import("../../state/openclaw-agent-db.js");
 let streamResolution: typeof import("./stream-resolution.js");
 let replay: typeof import("../openai-transport-stream.test-support.js").testing;
 let accounting: typeof import("./run/compaction-accounting-bridge.js");
+let compactionHooks: typeof CompactionHooks;
+let configRuntime: typeof ConfigRuntime;
+let requestBudgets: typeof import("../sessions/compaction/request-budget.js");
+let pressure: typeof import("./run/preemptive-compaction.js");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
+    await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
+    configRuntime.clearRuntimeConfigSnapshot();
     cleanup();
   }),
 );
@@ -69,6 +88,10 @@ beforeAll(async () => {
     streamResolution,
     { testing: replay },
     accounting,
+    compactionHooks,
+    configRuntime,
+    requestBudgets,
+    pressure,
   ] = await Promise.all([
     import("../../context-engine/delegate.js"),
     import("../sessions/index.js"),
@@ -77,6 +100,10 @@ beforeAll(async () => {
     import("./stream-resolution.js"),
     import("../openai-transport-stream.test-support.js"),
     import("./run/compaction-accounting-bridge.js"),
+    import("./compaction-hooks.js"),
+    import("../../config/runtime-snapshot.js"),
+    import("../sessions/compaction/request-budget.js"),
+    import("./run/preemptive-compaction.js"),
   ]);
 });
 
@@ -87,6 +114,9 @@ beforeEach(async () => {
     await vi.importActual<typeof import("../agent-scope.js")>("../agent-scope.js");
   const scope = await import("../agent-scope.js");
   vi.mocked(scope.listAgentEntries).mockImplementation(actualScope.listAgentEntries);
+  vi.mocked(scope.listAgentEntriesWithSource).mockImplementation(
+    actualScope.listAgentEntriesWithSource,
+  );
   vi.mocked(scope.resolveSessionAgentId).mockImplementation(actualScope.resolveSessionAgentId);
   vi.mocked(scope.resolveSessionAgentIds).mockImplementation(actualScope.resolveSessionAgentIds);
   requestPreparedCompaction.mockReset();
@@ -96,105 +126,432 @@ beforeEach(async () => {
   );
 });
 
-async function createFixture(operation: "summary" | "endpoint", globalAlias = false) {
-  const target = {
-    agentId: globalAlias ? "marketing" : "main",
-    sessionId: "compaction-session",
-    sessionKey: globalAlias ? "global" : "agent:main:compaction-session",
-    storePath: join(workspaceDir, "alternate", "openclaw-agent.sqlite"),
-  };
-  const configuredStore = join(workspaceDir, "configured", "openclaw-agent.sqlite");
-  await accessor.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-  // The same physical id in another store must not redirect partial-target resolution.
-  const decoy = { ...target, storePath: configuredStore };
-  await accessor.upsertSessionEntryCore(decoy, { sessionId: target.sessionId, updatedAt: 1 });
-  const decoyManager = sessions.SessionManager.open(decoy, workspaceDir);
-  decoyManager.appendMessage({ role: "user", content: "Unrelated store history", timestamp: 1 });
-  decoyManager.flushPendingPersistence();
-  const sessionManager = sessions.SessionManager.open(target, workspaceDir);
-  sessionManager.appendModelChange(model.provider, model.id);
-  sessionManager.appendThinkingLevelChange("off");
-  for (const content of [
-    "Review the deployment checklist.",
-    "Compare the remaining options.",
-    "Keep the rollout notes.",
-  ]) {
-    sessionManager.appendMessage({ role: "user", content, timestamp: 1 });
-    sessionManager.appendMessage(
-      createAssistant(model, [{ type: "text", text: `Recorded: ${content}` }]),
-    );
-  }
-  sessionManager.flushPendingPersistence();
-  const originalMessages = sessionManager.buildSessionContext().messages;
-  const originalEntries = sessionManager.getEntries();
-  const stream = vi.fn<NonNullable<ProviderConfigInput["streamSimple"]>>((activeModel) =>
-    createAssistantResultStream(createAssistant(activeModel, [{ type: "text", text: summary }])),
-  );
-  const authStorage = sessions.AuthStorage.inMemory();
-  authStorage.setRuntimeApiKey(model.provider, "test-api-key");
-  const modelRegistry = sessions.ModelRegistry.inMemory(authStorage);
-  modelRegistry.registerProvider(model.provider, { api: model.api, streamSimple: stream });
-  resolveModelMock.mockImplementation((provider = model.provider, modelId = model.id) => ({
-    logicalRef: { provider, model: modelId },
-    model,
-    error: null,
-    authStorage,
-    modelRegistry,
-  }));
-  vi.mocked(streamResolution.resolveEmbeddedAgentStream).mockReturnValue({
-    streamFn: stream,
-    strategy: "session-custom",
-  });
-  applyExtraParamsToAgentMock.mockReturnValue({
-    effectiveExtraParams: { responsesCompactEndpoint: operation === "endpoint" },
-  });
-  requestPreparedCompaction.mockResolvedValue({
-    item: { type: "compaction", id: "cmp_fixture", encrypted_content: "opaque-fixture" },
-    output: [{ type: "compaction", id: "cmp_fixture", encrypted_content: "opaque-fixture" }],
-    historyMode: "compacted-prefix",
-    usage: { input_tokens: 1_000, output_tokens: 200 },
-    model,
-    replayMetadata: replay.buildOpenAIResponsesReasoningReplayMetadata(model, {
-      sessionId: target.sessionId,
-    }),
-  });
-  const runtimeContext = {
-    workspaceDir,
-    provider: model.provider,
-    model: model.id,
-    trigger: "manual",
-    thinkLevel: "off",
-    config: {
-      session: { store: configuredStore },
-      agents: {
-        ownership: "explicit",
-        list: [{ id: "main" }, { id: "marketing" }],
-        defaults: { compaction: { mode: "default", keepRecentTokens: 1, postIndexSync: "off" } },
-      },
+function createFixture(
+  operation: "summary" | "endpoint",
+  globalAlias = false,
+  options: DelegateFixtureOptions = {},
+) {
+  return createDelegateCompactionFixture(
+    {
+      workspaceDir,
+      sessions,
+      accessor,
+      model,
+      summary,
+      resolveModelMock,
+      streamResolution,
+      applyExtraParamsToAgentMock,
+      requestPreparedCompaction,
+      replay,
+      configRuntime,
+      accounting,
     },
-  } satisfies ContextEngineRuntimeContext & { config: OpenClawConfig };
-  const recordUsage = vi.fn();
-  const recordCompaction = vi.fn();
-  accounting.attachCompactionAccountingRecorder(runtimeContext, { recordUsage, recordCompaction });
-  return {
-    target,
-    decoy,
-    originalEntries,
-    originalMessages,
-    runtimeContext,
-    stream,
-    recordUsage,
-    recordCompaction,
-  };
+    operation,
+    globalAlias,
+    options,
+  );
 }
 
 describe("direct compactor through the context-engine delegate", () => {
+  it.each(["plain", "custom", "metadata"] as const)(
+    "keeps full-history preparation in the native reader for default safeguard maintenance (shape=%s)",
+    async (shape) => {
+      const fixture = await createFixture("summary", false, {
+        liveOutputChars: 100_000,
+        projectedCustomHistory: shape === "custom",
+        retainedCacheMetadata: shape === "metadata",
+      });
+      const actualExtensions =
+        await vi.importActual<typeof import("./extensions.js")>("./extensions.js");
+      buildEmbeddedExtensionFactoriesMock.mockImplementationOnce(
+        actualExtensions.buildEmbeddedExtensionFactories,
+      );
+      const inputConfig: OpenClawConfig = {
+        ...fixture.runtimeContext.config,
+        agents: {
+          ...fixture.runtimeContext.config.agents,
+          defaults: {
+            ...fixture.runtimeContext.config.agents.defaults,
+            models: {
+              [model.provider + "/" + model.id]: { params: { responsesCompactEndpoint: false } },
+            },
+            compaction: {
+              keepRecentTokens: 1,
+              recentTurnsPreserve: 0,
+              postIndexSync: "off",
+              qualityGuard: { enabled: false },
+            },
+          },
+        },
+      };
+      // Exercise new-config defaults, not the SDK opt-out selected by an unnormalized config.
+      const { applyCompactionDefaults } = await import("../../config/defaults.js");
+      const config = applyCompactionDefaults(inputConfig);
+      expect(inputConfig.agents?.defaults?.compaction?.mode).toBeUndefined();
+      expect(config.agents?.defaults?.compaction?.mode).toBe("safeguard");
+      configRuntime.setRuntimeConfigSnapshot(config);
+      const manager = await sessions.SessionManager.openAsync(fixture.target, workspaceDir);
+      await manager.appendCustomEntryAsync("model-snapshot", {
+        timestamp: 1,
+        provider: model.provider,
+        modelApi: model.api,
+        modelId: model.id,
+      });
+      const runtimeContext = { ...fixture.runtimeContext, trigger: "budget" as const, config };
+      accounting.attachCompactionAccountingRecorder(runtimeContext, {
+        recordUsage: fixture.recordUsage,
+        recordCompaction: fixture.recordCompaction,
+      });
+      const { historyLane, sessionStoreLane } =
+        await import("../../config/sessions/session-transcript-worker-resources.js");
+      let hydratedBytes = 0;
+      const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
+        const run = pool.run.bind(pool);
+        return vi.spyOn(pool, "run").mockImplementation((input, options) => {
+          let compactionRead = false;
+          const receive = options.onRequest;
+          return run(
+            async () => {
+              const request = typeof input === "function" ? await input() : input;
+              compactionRead =
+                request.kind === "transcript-hydration" &&
+                Boolean(request.limits && "compaction" in request.limits);
+              return request;
+            },
+            {
+              ...options,
+              ...(receive
+                ? {
+                    onRequest: async (value, context) => {
+                      if (compactionRead && fixture.stream.mock.calls.length === 0) {
+                        // The paired reader owns this chunk envelope; count bytes, never content.
+                        const chunk =
+                          value as import("../../config/sessions/session-transcript-hydration.types.js").SessionTranscriptHydrationChunk;
+                        if (chunk.kind === "transcript-hydration-chunk") {
+                          hydratedBytes += chunk.frames.reduce(
+                            (total, frame) => total + frame.data.byteLength,
+                            0,
+                          );
+                        }
+                      }
+                      return await receive(value, context);
+                    },
+                  }
+                : {}),
+            },
+          );
+        });
+      });
+      try {
+        const result = await delegate({
+          ...fixture.delegateParams,
+          runtimeContext,
+          force: true,
+          currentTokenCount: model.contextWindow * 2,
+        });
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+        // The complete >300k summarized window must not be prepared on the host.
+        // A retained metadata tail and postcommit reload retain their own channel.
+        expect(hydratedBytes).toBeLessThan(192 * 1024);
+        expect(fixture.stream).toHaveBeenCalled();
+        if (shape === "custom") {
+          expect(JSON.stringify(fixture.stream.mock.calls[0]?.[1])).toContain(
+            "A visible contextual finding:",
+          );
+        }
+        expect(fixture.recordUsage.mock.calls.length).toBe(fixture.stream.mock.calls.length);
+        expect(requestPreparedCompaction).not.toHaveBeenCalled();
+        expect(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
+        expect(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
+      } finally {
+        spies.forEach((spy) => spy.mockRestore());
+      }
+      await databases.closeOpenClawAgentDatabasesAsync();
+      const restored = await sessions.SessionManager.openAsync(fixture.target, workspaceDir);
+      expect(restored.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
+      for (const entry of fixture.originalEntries) {
+        expect(restored.getEntries()).toContainEqual(entry);
+      }
+      if (shape === "metadata") {
+        const { readCacheTtlCheckpoint } = await import("./cache-ttl-checkpoint.js");
+        const expected = readCacheTtlCheckpoint(fixture.originalEntries);
+        expect(JSON.stringify(expected).length).toBeGreaterThan(160_000);
+        expect(readCacheTtlCheckpoint(restored.getToolResultProjectionEntries())).toEqual(expected);
+      }
+    },
+  );
+
   it.each([
-    { operation: "summary", partial: false, threadId: "thread-route" },
+    ...(
+      [
+        { limit: "at-boundary", enabled: true, explicit: undefined, expected: "transcript_bytes" },
+        { limit: "above-boundary", enabled: true, explicit: undefined, expected: undefined },
+        { limit: "zero", enabled: true, explicit: undefined, expected: undefined },
+        { limit: "at-boundary", enabled: false, explicit: undefined, expected: undefined },
+        { limit: "at-boundary", enabled: true, explicit: "tokens", expected: "tokens" },
+        {
+          limit: "at-boundary",
+          enabled: true,
+          explicit: "transcript_bytes",
+          expected: "transcript_bytes",
+        },
+        { limit: "no-config", enabled: true, explicit: undefined, expected: undefined },
+        { limit: "no-limit", enabled: true, explicit: undefined, expected: undefined },
+        { limit: "invalid", enabled: true, explicit: undefined, expected: undefined },
+      ] as const
+    ).map((row) => Object.assign(row, { trigger: "manual" as const })),
+    {
+      limit: "at-boundary",
+      enabled: true,
+      explicit: "tokens",
+      expected: "tokens",
+      trigger: "budget",
+    },
+  ] as const)(
+    "passes honest queued byte pressure (trigger=$trigger, limit=$limit, enabled=$enabled, explicit=$explicit)",
+    async ({ trigger, limit, enabled, explicit, expected }) => {
+      const fixture = await createFixture("summary");
+      const { readSessionTranscriptAccountingAsync } =
+        await import("../../gateway/session-transcript-readers.js");
+      const snapshot = await readSessionTranscriptAccountingAsync(fixture.target, {
+        includeByteSize: true,
+        includeUsage: false,
+      });
+      expect(snapshot.byteSize).toBeGreaterThan(0);
+      if (snapshot.byteSize === undefined) {
+        throw new Error("Fixture must have measured active transcript bytes");
+      }
+      const maxActiveTranscriptBytes =
+        limit === "zero"
+          ? 0
+          : limit === "no-limit"
+            ? undefined
+            : limit === "invalid"
+              ? "invalid"
+              : `${snapshot.byteSize + (limit === "above-boundary" ? 1 : 0)}b`;
+      const backend = vi.fn<ContextEngine["compact"]>(async () => ({
+        ok: true,
+        compacted: false,
+      }));
+      resolveContextEngineMock.mockResolvedValueOnce({
+        info: { ownsCompaction: true },
+        compact: backend,
+      });
+      const result = await compactQueued({
+        ...fixture.queuedParams,
+        config:
+          limit === "no-config"
+            ? undefined
+            : {
+                ...fixture.runtimeContext.config,
+                agents: {
+                  ...fixture.runtimeContext.config.agents,
+                  defaults: { compaction: { enabled, maxActiveTranscriptBytes } },
+                },
+              },
+        trigger,
+        preflightCompactionTrigger: explicit,
+      });
+      expect(result).toMatchObject({ ok: true, compacted: false });
+      expect(backend).toHaveBeenCalledOnce();
+      expect(backend.mock.calls[0]?.[0].runtimeContext).toMatchObject({
+        trigger,
+        preflightCompactionTrigger: expected,
+      });
+      expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
+        fixture.originalEntries,
+      );
+    },
+  );
+
+  it.each([
+    { operation: "summary", ownsCompaction: false, prepared: false },
+    { operation: "endpoint", ownsCompaction: false, prepared: false },
+    { operation: "summary", ownsCompaction: true, prepared: false },
+    { operation: "endpoint", ownsCompaction: true, prepared: false },
+    { operation: "summary", ownsCompaction: false, prepared: true },
+  ] as const)(
+    "runs one queued delegated $operation lifecycle (ownsCompaction=$ownsCompaction, prepared=$prepared)",
+    async ({ operation, ownsCompaction, prepared }) => {
+      const fixture = await createFixture(operation);
+      const backend = vi.fn<ContextEngine["compact"]>(delegate);
+      const info = {
+        id: prepared ? "legacy" : "fixture",
+        name: "Compaction fixture",
+        ownsCompaction,
+      } satisfies ContextEngine["info"];
+      resolveContextEngineMock.mockResolvedValueOnce({
+        info,
+        compact: backend,
+      });
+      const sessionManagerCore = await import("../sessions/session-manager-core.js");
+      const { persistCompactionBoundaryWithSessionEntryAsync } =
+        await import("../../config/sessions/session-accessor.sqlite-compaction-runtime.js");
+      const preparation = prepared
+        ? await sessions.SessionManager[sessionManagerCore.sessionManagerOpenCompaction](
+            fixture.target,
+          )
+        : undefined;
+      const persistBoundary = vi.fn(
+        async (
+          append: import("../sessions/session-compaction-persistence.js").PreparedCompactionAppend,
+        ) =>
+          persistCompactionBoundaryWithSessionEntryAsync(append.scope, {
+            prepared: append,
+            tokensAfter: append.event.tokensAfter,
+            transcriptByteCompactionLatch: null,
+          }),
+      );
+      const effects = vi.spyOn(compactionHooks, "runPostCompactionSideEffects");
+      try {
+        const result = await compactQueued(
+          fixture.queuedParams,
+          preparation?.runtimeEntry
+            ? {
+                preparedSession: { ...preparation, entry: preparation.runtimeEntry },
+                withCompactionPersistenceAsync: persistBoundary,
+              }
+            : undefined,
+        );
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+        expect(backend).toHaveBeenCalledOnce();
+        expect.soft(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
+        expect.soft(hookRunner.runAfterCompaction).toHaveBeenCalledOnce();
+        expect.soft(effects).toHaveBeenCalledOnce();
+        // Native session events still carry real transcript metrics even when
+        // the queued host owns plugin callbacks and post-compaction refresh.
+        expect(triggerInternalHookMock.mock.calls.map(([event]) => event)).toEqual([
+          expect.objectContaining({ action: "compact:before" }),
+          expect.objectContaining({ action: "compact:after" }),
+        ]);
+        if (prepared) {
+          expect(persistBoundary).toHaveBeenCalledOnce();
+          const { readSessionEntryReadOnlyInWorker } =
+            await import("../../config/sessions/session-entry-read-runtime.js");
+          expect(await readSessionEntryReadOnlyInWorker(fixture.target)).toMatchObject({
+            compactionCount: 1,
+          });
+        }
+        const manager = sessions.SessionManager.open(fixture.target);
+        if (operation === "summary") {
+          expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(
+            1,
+          );
+          for (const entry of fixture.originalEntries) {
+            expect(manager.getEntries()).toContainEqual(entry);
+          }
+        } else {
+          expect(manager.buildSessionContext().messages.at(-1)).toMatchObject({
+            providerReplay: { data: "opaque-fixture", compactedWindow: { state: "ready" } },
+          });
+        }
+        expect(sessions.SessionManager.open(fixture.decoy).buildSessionContext().messages).toEqual([
+          { role: "user", content: "Unrelated store history", timestamp: 1 },
+        ]);
+      } finally {
+        effects.mockRestore();
+      }
+    },
+  );
+
+  it.each([
+    { budget: "absent", pendingPrompt: "" },
+    { budget: "foreground with pending input", pendingPrompt: "Unrecorded request. ".repeat(500) },
+  ])(
+    "records server checkpoint pressure with $budget budget",
+    async ({ budget, pendingPrompt }) => {
+      const fixture = await createFixture("endpoint");
+      const compactorPrompt = "Summarize the deployment discussion.";
+      buildConfiguredAgentSystemPromptMock.mockResolvedValue(compactorPrompt);
+      const requestBudget = requestBudgets.createCompactionRequestBudget({
+        contextWindow: model.contextWindow,
+        reserveTokens: 16_384,
+        systemPrompt: "Help the operator deploy safely using the available tools.",
+        tools: [
+          {
+            name: "lookup_deployment",
+            description: "Available deployment target and its constraints. ".repeat(500),
+            parameters: { type: "object", properties: { target: { type: "string" } } },
+          },
+        ],
+        pendingPrompt,
+      });
+      const hasBudget = budget !== "absent";
+      accounting.attachCompactionAccountingRecorder(fixture.runtimeContext, {
+        ...(hasBudget ? { requestBudget } : {}),
+        recordUsage: fixture.recordUsage,
+        recordCompaction: fixture.recordCompaction,
+      });
+      const manager = sessions.SessionManager.open(fixture.target, workspaceDir);
+      const retainedUsers = manager
+        .buildSessionContext()
+        .messages.filter((message) => message.role === "user")
+        .map((message) => {
+          if (typeof message.content !== "string") {
+            throw new Error("Expected plain-text fixture input");
+          }
+          return {
+            type: "message" as const,
+            role: "user" as const,
+            content: [{ type: "input_text" as const, text: message.content }],
+          };
+        });
+      const checkpoint = {
+        type: "compaction" as const,
+        id: "cmp_budget",
+        encrypted_content: "opaque",
+      };
+      const output = [...retainedUsers, checkpoint];
+      requestPreparedCompaction.mockImplementationOnce(
+        async (_stream, requestModel, _context, options) => ({
+          item: checkpoint,
+          output,
+          historyMode: "retained-users",
+          usage: { input_tokens: 30_000, output_tokens: 200 },
+          model: requestModel,
+          replayMetadata: replay.buildOpenAIResponsesReasoningReplayMetadata(requestModel, options),
+        }),
+      );
+
+      const result = await delegate(fixture.delegateParams);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      expect(result.result?.details).toMatchObject({ compactionKind: "server-endpoint" });
+      await databases.closeOpenClawAgentDatabasesAsync();
+      databases.closeOpenClawAgentDatabasesForTest();
+      const messages = sessions.SessionManager.open(fixture.target).buildSessionContext().messages;
+      const endpointCall = requestPreparedCompaction.mock.calls[0]!;
+      const replayContext = {
+        model: endpointCall[1],
+        sessionId: endpointCall[3].sessionId,
+        authProfileId: endpointCall[3].authProfileId,
+        enabled: true,
+      };
+      const replayHistory =
+        pressure.estimateLlmBoundaryTokenPressure({ messages, prompt: "", replay: replayContext }) -
+        pressure.estimateRenderedLlmBoundaryTokenPressure({ prompt: "" });
+      const expected = hasBudget
+        ? requestBudget.fixedTokens + replayHistory
+        : pressure.estimateLlmBoundaryTokenPressure({
+            messages,
+            systemPrompt: compactorPrompt,
+            prompt: "",
+            replay: replayContext,
+          });
+      expect(requestBudget.fixedTokens).toBeGreaterThan(5_000);
+      expect(result.result?.tokensAfter).toBe(expected);
+      expect(fixture.recordCompaction).toHaveBeenCalledExactlyOnceWith({
+        tokensBefore: 30_000,
+        tokensAfter: expected,
+        compactionKind: "server-endpoint",
+      });
+      expect(requestPreparedCompaction).toHaveBeenCalledOnce();
+      expect(fixture.stream).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
     { operation: "summary", partial: true, threadId: 0 },
     { operation: "endpoint", partial: false, threadId: 0 },
-    { operation: "endpoint", partial: true, threadId: "thread-route" },
-    { operation: "summary", partial: false, threadId: undefined },
   ] as const)(
     "returns durable $operation identity (partial=$partial, thread=$threadId)",
     async ({ operation, partial, threadId }) => {
@@ -207,13 +564,21 @@ describe("direct compactor through the context-engine delegate", () => {
         expectedLifecycleRevision: "caller-private-revision",
         unrelatedCapability: "caller-private-capability",
       };
-      const result = await delegate({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-        sessionTarget,
-        runtimeContext: fixture.runtimeContext,
+      const sql = observeHostDataSql();
+      hookRunner.runBeforeCompaction.mockImplementationOnce(async () => {
+        sql.restore();
+        return undefined;
       });
+      const result = await delegate({
+        ...fixture.delegateParams,
+        sessionTarget,
+      }).finally(sql.restore);
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      expect(
+        sql.queries.filter(
+          (query) => /\bselect\b/i.test(query) && /\btranscript_events\b/i.test(query),
+        ),
+      ).toEqual([]);
       const returned = result.result?.sessionTarget;
       expect(returned).toEqual({ ...target, ...(threadId !== undefined ? { threadId } : {}) });
       expect(result.result).not.toHaveProperty("sessionFile");
@@ -226,6 +591,7 @@ describe("direct compactor through the context-engine delegate", () => {
         throw new Error("Compactor must return its complete resolved identity");
       }
       // Close the actual DB handles before observing the returned identity and history.
+      await databases.closeOpenClawAgentDatabasesAsync();
       databases.closeOpenClawAgentDatabasesForTest();
       const reopened = sessions.SessionManager.open({
         agentId: returned.agentId,
@@ -239,15 +605,6 @@ describe("direct compactor through the context-engine delegate", () => {
       if (operation === "summary") {
         expect(result.result?.summary).toContain(summary);
         expect(reopened.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(1);
-        expect(accessor.loadSessionEntry(target)?.compactionCheckpoints).toEqual([
-          expect.objectContaining({
-            sessionId: target.sessionId,
-            sessionKey: target.sessionKey,
-            summary: result.result?.summary,
-            preCompaction: expect.objectContaining({ sessionId: target.sessionId }),
-            postCompaction: expect.objectContaining({ sessionId: target.sessionId }),
-          }),
-        ]);
         const firstKeptIndex = fixture.originalEntries.findIndex(
           (entry) => entry.id === result.result?.firstKeptEntryId,
         );
@@ -280,7 +637,8 @@ describe("direct compactor through the context-engine delegate", () => {
       expect(sessions.SessionManager.open(fixture.decoy).buildSessionContext().messages).toEqual([
         { role: "user", content: "Unrelated store history", timestamp: 1 },
       ]);
-      expect(accessor.loadSessionEntry(fixture.decoy)?.compactionCheckpoints).toBeUndefined();
+      expect(accessor.loadSessionEntry(target)).not.toHaveProperty("compactionCheckpoints");
+      expect(accessor.loadSessionEntry(fixture.decoy)).not.toHaveProperty("compactionCheckpoints");
     },
   );
 
@@ -330,10 +688,8 @@ describe("direct compactor through the context-engine delegate", () => {
         });
       }
       const pending = delegate({
-        sessionId: fixture.target.sessionId,
-        sessionKey: fixture.target.sessionKey,
+        ...fixture.delegateParams,
         sessionTarget: { ...fixture.target, threadId: 0 },
-        runtimeContext: fixture.runtimeContext,
         abortSignal: controller.signal,
       });
       await started.promise;
@@ -342,6 +698,7 @@ describe("direct compactor through the context-engine delegate", () => {
       await stopped.promise;
       expect(result).toMatchObject({ ok: false, compacted: false });
       expect(result.result).toBeUndefined();
+      await databases.closeOpenClawAgentDatabasesAsync();
       databases.closeOpenClawAgentDatabasesForTest();
       const reopened = sessions.SessionManager.open(fixture.target);
       expect(reopened.getSessionId()).toBe(fixture.target.sessionId);
@@ -349,6 +706,148 @@ describe("direct compactor through the context-engine delegate", () => {
       expect(reopened.buildSessionContext().messages).toEqual(fixture.originalMessages);
       expect(fixture.recordCompaction).not.toHaveBeenCalled();
       expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["abort", "owner-replaced"] as const)(
+    "discards a hydrated compaction transcript after %s before publication",
+    async (transition) => {
+      const fixture = await createFixture("summary");
+      const { historyLane } =
+        await import("../../config/sessions/session-transcript-worker-resources.js");
+      const { withSessionTranscriptWriteAssertion } =
+        await import("../../config/sessions/transcript-write-context.js");
+      const hydrationGate = createEnteredGate();
+      const controller = new AbortController();
+      let current = true;
+      const reason = new Error("compaction preparation no longer current");
+      const run = historyLane.pool.run.bind(historyLane.pool);
+      const read = vi.spyOn(historyLane.pool, "run").mockImplementation((input, options) => {
+        let hydration = false;
+        return run(async () => {
+          const request = typeof input === "function" ? await input() : input;
+          hydration = request.kind === "transcript-hydration";
+          return request;
+        }, options).then(async (snapshot) => {
+          if (hydration) {
+            read.mockRestore();
+            await hydrationGate.wait();
+          }
+          return snapshot;
+        });
+      });
+      const pending = withSessionTranscriptWriteAssertion(
+        fixture.target,
+        () => {
+          if (!current) {
+            throw reason;
+          }
+        },
+        () =>
+          delegate({
+            ...fixture.delegateParams,
+            abortSignal: controller.signal,
+          }),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          hydrationGate.entered,
+          pending,
+          "Compaction completed before the native hydration reply",
+        );
+        if (transition === "abort") {
+          controller.abort(reason);
+        } else {
+          current = false;
+        }
+        hydrationGate.release();
+        expect(await pending).toMatchObject({ ok: false, compacted: false });
+        expect(fixture.stream).not.toHaveBeenCalled();
+        expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+        expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
+        expect(fixture.recordCompaction).not.toHaveBeenCalled();
+        await databases.closeOpenClawAgentDatabasesAsync();
+        databases.closeOpenClawAgentDatabasesForTest();
+        expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
+          fixture.originalEntries,
+        );
+      } finally {
+        hydrationGate.release();
+        read.mockRestore();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
+  it.each(["manual", "budget"] as const)(
+    "compacts complete current context through %s without hydrating obsolete history",
+    async (trigger) => {
+      const marker = "Earlier work: the first rollout plan was approved and shipped.";
+      // The prior summary alone exceeds a 32k foreground model's 256 KB replay
+      // cap, but fits this fixture's 128k summarizer. Keep it and every live turn.
+      const previousSummary = `${marker} ${"Detail. ".repeat(40_000)}`;
+      const fixture = await createFixture("summary", false, {
+        archivedTurns: 40,
+        previousSummary,
+        liveOutputChars: 500_000,
+      });
+      await accessor.upsertSessionEntryCore(fixture.target, { contextTokens: 32_000 });
+      resolveContextEngineMock.mockResolvedValueOnce({
+        info: { ownsCompaction: false },
+        compact: vi.fn<ContextEngine["compact"]>(delegate),
+      });
+      const observed = await observeTranscriptHydrations();
+      try {
+        let preparedSession: PreparedCompactionSession | undefined;
+        if (trigger === "manual") {
+          const { prepareGatewaySessionCompaction } =
+            await import("../../gateway/server-methods/sessions-compaction-runner.js");
+          const { isOwnedTranscriptPayload } =
+            await import("../../config/sessions/transcript-json.js");
+          const entry = accessor.loadSessionEntry(fixture.target);
+          if (!entry) {
+            throw new Error("expected the compaction fixture session");
+          }
+          const prepared = await prepareGatewaySessionCompaction({
+            agentId: fixture.target.agentId,
+            cfg: fixture.runtimeContext.config,
+            entry,
+            sessionId: fixture.target.sessionId,
+            sessionKey: fixture.target.sessionKey,
+            sessionStoreKey: fixture.target.sessionKey,
+            storePath: fixture.target.storePath,
+          });
+          preparedSession = prepared.preparedSession;
+          const branch =
+            preparedSession?.sessionManager[sessionManagerReadTranscriptBranch]() ?? [];
+          expect(branch).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "compaction", summary: previousSummary }),
+            ]),
+          );
+          const messages = branch.filter((event) => event.type === "message");
+          expect(messages).toHaveLength(7);
+          expect(messages.every(({ message }) => isOwnedTranscriptPayload(message))).toBe(true);
+        }
+        const result = await compactQueued(
+          { ...fixture.queuedParams, trigger, contextTokenBudget: 32_000 },
+          preparedSession ? { preparedSession } : undefined,
+        );
+        expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
+      } finally {
+        observed.restore();
+      }
+      // Header, retained request, full summary, and all six current message entries.
+      expect(observed.hydrations[0]).toMatchObject({ kind: "streamed-bounded", events: 9 });
+      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThan(80);
+      const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
+      expect(requests.some((request) => request.includes(marker))).toBe(true);
+      expect(requests.join("\n")).not.toContain("Archived request");
+      const manager = sessions.SessionManager.open(fixture.target);
+      expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(2);
+      for (const entry of fixture.originalEntries) {
+        expect(manager.getEntries()).toContainEqual(entry);
+      }
     },
   );
 
@@ -365,6 +864,7 @@ describe("direct compactor through the context-engine delegate", () => {
     expect(fixture.stream).not.toHaveBeenCalled();
     expect(resolveModelMock).not.toHaveBeenCalled();
     expect(hookRunner.runBeforeCompaction).not.toHaveBeenCalled();
+    await databases.closeOpenClawAgentDatabasesAsync();
     databases.closeOpenClawAgentDatabasesForTest();
     expect(sessions.SessionManager.open(fixture.target).getEntries()).toEqual(
       fixture.originalEntries,
@@ -374,26 +874,27 @@ describe("direct compactor through the context-engine delegate", () => {
     ]);
   });
 
-  it.each(["summary", "endpoint"] as const)(
-    "keeps queued manual %s compaction countable when cancellation follows its commit during a post-compaction hook",
-    async (operation) => {
+  it.each([
+    { operation: "summary", ownsCompaction: false },
+    { operation: "endpoint", ownsCompaction: false },
+    { operation: "summary", ownsCompaction: true },
+    { operation: "endpoint", ownsCompaction: true },
+  ] as const)(
+    "keeps queued manual $operation compaction countable when cancellation follows its commit during a post-compaction hook (ownsCompaction=$ownsCompaction)",
+    async ({ operation, ownsCompaction }) => {
       const fixture = await createFixture(operation);
-      const { markRuntimeCompactionDelegate } =
-        await import("../../context-engine/compaction-watchdog.js");
       const { incrementCompactionCount } =
         await import("../../auto-reply/reply/session-updates.js");
       const backend = vi.fn<ContextEngine["compact"]>(delegate);
-      markRuntimeCompactionDelegate(backend);
       resolveContextEngineMock.mockResolvedValueOnce({
-        info: { ownsCompaction: false },
+        info: { ownsCompaction },
         compact: backend,
       });
       const expectedSession = accessor.loadSessionEntry(fixture.target);
       if (!expectedSession) {
         throw new Error("expected the queued compaction's persisted session");
       }
-      const hookEntered = createDeferred();
-      const releaseHook = createDeferred();
+      const hookGate = createEnteredGate();
       const expectCommittedTranscript = () => {
         const manager = sessions.SessionManager.open(fixture.target);
         if (operation === "summary") {
@@ -414,29 +915,19 @@ describe("direct compactor through the context-engine delegate", () => {
       };
       hookRunner.runAfterCompaction.mockImplementationOnce(async () => {
         expectCommittedTranscript();
-        hookEntered.resolve();
-        await releaseHook.promise;
+        await hookGate.wait();
       });
       const controller = new AbortController();
       const work = new AsyncWorkScope();
       const pending = work.run(() =>
         compactQueued({
-          ...fixture.target,
-          sessionTarget: fixture.target,
-          sessionFile: fixture.target.sessionKey,
-          workspaceDir,
-          config: fixture.runtimeContext.config,
-          provider: model.provider,
-          model: model.id,
-          agentHarnessId: "openclaw",
-          trigger: "manual",
+          ...fixture.queuedParams,
           abortSignal: controller.signal,
-          enqueue: async (task) => await task(),
         }),
       );
       try {
         await Promise.race([
-          hookEntered.promise,
+          hookGate.entered,
           pending.then((result) => {
             throw new Error(
               `Queued compaction returned before its post-commit hook: ${JSON.stringify(result)}`,
@@ -444,6 +935,9 @@ describe("direct compactor through the context-engine delegate", () => {
           }),
         ]);
         controller.abort(new Error("caller stopped after compaction committed"));
+        // Host-owned hooks are awaited rather than cancelled. Finish the hook
+        // after abort so the committed result can settle through either owner.
+        hookGate.release();
         const result = await pending;
         expect.soft(result).toMatchObject({
           ok: true,
@@ -471,7 +965,7 @@ describe("direct compactor through the context-engine delegate", () => {
           { role: "user", content: "Unrelated store history", timestamp: 1 },
         ]);
       } finally {
-        releaseHook.resolve();
+        hookGate.release();
         await pending.catch(() => undefined);
         await work.drain();
       }

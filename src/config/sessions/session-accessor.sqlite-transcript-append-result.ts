@@ -1,11 +1,24 @@
+import type { Result } from "@openclaw/normalization-core/result";
 import type {
-  appendTranscriptEventSnapshotSync,
+  TranscriptAppendRefusal,
   TranscriptEventAppendResult,
+  TranscriptMessageWriteSnapshot,
   TranscriptWriteSnapshot,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-contract.js";
+
+export function isTranscriptMessageAppendCurrentTail(
+  snapshot: TranscriptMessageWriteSnapshot<unknown>,
+): boolean {
+  return (
+    snapshot.result !== undefined &&
+    snapshot.visibleTail.generation !== null &&
+    snapshot.visibleTail.generation === snapshot.after.generation &&
+    snapshot.visibleTail.entryId === snapshot.result.messageId
+  );
+}
 
 export function requireTranscriptEventAppendSnapshot(
-  result: ReturnType<typeof appendTranscriptEventSnapshotSync>,
+  result: Result<TranscriptWriteSnapshot<TranscriptEventAppendResult>, TranscriptAppendRefusal>,
   message: string,
 ): TranscriptWriteSnapshot<Extract<TranscriptEventAppendResult, { appended: true }>> {
   if (result.ok && result.value.result.appended) {

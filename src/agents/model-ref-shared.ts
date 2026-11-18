@@ -96,7 +96,7 @@ export function createConfiguredProviderCatalogModelIdNormalizer(
     );
 }
 
-type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
+export type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
   allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
 };
@@ -145,7 +145,11 @@ export function legacyModelKey(provider: string, model: string): string | null {
   return rawKey === canonicalKey ? null : rawKey;
 }
 
-function parseStaticModelRef(raw: string, defaultProvider: string): ModelRef | null {
+/** Resolve an allowlist entry to a canonical provider/model key. */
+export function resolveStaticAllowlistModelKey(
+  raw: string,
+  defaultProvider: string,
+): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
@@ -157,22 +161,7 @@ function parseStaticModelRef(raw: string, defaultProvider: string): ModelRef | n
     return null;
   }
   const provider = normalizeProviderId(providerRaw);
-  return {
-    provider,
-    model: normalizeStaticProviderModelId(provider, modelRaw),
-  };
-}
-
-/** Resolve an allowlist entry to a canonical provider/model key. */
-export function resolveStaticAllowlistModelKey(
-  raw: string,
-  defaultProvider: string,
-): string | null {
-  const parsed = parseStaticModelRef(raw, defaultProvider);
-  if (!parsed) {
-    return null;
-  }
-  return modelKey(parsed.provider, parsed.model);
+  return modelKey(provider, normalizeStaticProviderModelId(provider, modelRaw));
 }
 
 /** Preserve literal provider/model refs that already include a provider prefix twice. */

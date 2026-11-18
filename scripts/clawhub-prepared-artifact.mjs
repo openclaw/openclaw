@@ -15,7 +15,9 @@ import { isDeepStrictEqual, parseArgs } from "node:util";
 import {
   CLAWHUB_CHILD_WORKFLOW,
   readPackedClawHubTransaction,
+  resolvePackedClawHubArtifactDir,
 } from "./clawhub-parent-authorization.mjs";
+import { authenticateOriginalPackedClawHubSource } from "./clawhub-postpublish.mjs";
 import {
   downloadExactActionsArtifactArchive,
   inspectActionsArtifactZipWithPolicy,
@@ -24,6 +26,11 @@ import {
   validateActionsArtifactProducerJob,
 } from "./lib/actions-artifact-archive.mjs";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { resolveOpenClawClawHubPackageFamily } from "./lib/clawhub-package-family.mjs";
+import {
+  classifyClawHubPublication,
+  isPreparedClawHubTrustedPublisher,
+} from "./lib/clawhub-publication-state.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { runReleaseToolingGh, verifyReleaseToolingIdentity } from "./release-tooling-identity.mjs";
 
@@ -35,8 +42,7 @@ const MAX_PACKAGE_ZIP_BYTES = 130 * 1024 * 1024;
 const SHA = /^[a-f0-9]{40}$/u;
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ARTIFACT = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/u;
-const VERSION =
-  /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-(?:alpha|beta)\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
+const VERSION = /^[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(?:-beta\.[1-9][0-9]*|-[1-9][0-9]*)?$/u;
 const PRODUCER_KEYS =
   "repository runId runAttempt workflowPath workflowEvent workflowHeadBranch workflowSha".split(
     " ",
@@ -120,6 +126,9 @@ function validateDescriptor(value, toolingSha) {
   return value;
 }
 function selectionEntry(entry) {
+  if (entry.version?.includes("-alpha.") || entry.publishTag === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   matches(entry.packageName, /^@openclaw\/[a-z0-9][a-z0-9._-]*$/u, "Prepared ClawHub package name");
   matches(
     entry.packageDir,
@@ -127,7 +136,7 @@ function selectionEntry(entry) {
     "Prepared ClawHub package directory",
   );
   matches(entry.version, VERSION, "Prepared ClawHub package version");
-  matches(entry.publishTag, /^(alpha|beta|latest)$/u, "Prepared ClawHub publication tag");
+  matches(entry.publishTag, /^(beta|latest)$/u, "Prepared ClawHub publication tag");
   return pick(entry, ["packageName", "packageDir", "version", "publishTag"]);
 }
 function validatePackage(entry) {
@@ -306,20 +315,65 @@ export async function downloadPreparedClawHubRelease(options) {
   }
   return manifest;
 }
-export function isPreparedClawHubTrustedPublisher(publisher) {
-  return (
-    publisher?.provider === "github-actions" &&
-    publisher?.repository === REPOSITORY &&
-    publisher?.workflowFilename === "plugin-clawhub-release.yml" &&
-    publisher?.environment == null
-  );
-}
-
-async function preparedPackageIsPublished(entry, fetchImpl) {
+async function preparedPackagePublication(entry, fetchImpl, requireAbsent = false) {
   const packageUrl = `https://clawhub.ai/api/v1/packages/${encodeURIComponent(entry.packageName)}`;
   const publisherRepair =
     "Complete bootstrap or trusted-publisher repair through the existing Plugin ClawHub New owner before preparing again.";
   const signal = AbortSignal.timeout(30_000);
+  const versionUrl = `${packageUrl}/versions/${encodeURIComponent(entry.version)}`;
+  let publication;
+  if (requireAbsent) {
+    const response = await fetchImpl(`${versionUrl}/publication`, { signal, redirect: "error" });
+    if (response.status !== 200) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(
+        `Original ClawHub authoritative publication read returned HTTP ${response.status}.`,
+      );
+    }
+    publication = classifyClawHubPublication(
+      JSON.parse(
+        await readBoundedResponseText(response, "Original ClawHub publication", 64 * 1024, {
+          signal,
+        }),
+      ),
+      { name: entry.packageName, version: entry.version },
+    );
+    if (publication?.state !== "absent") {
+      throw new Error(
+        `Original ClawHub publication is not absent: ${entry.packageName} (${publication?.state ?? "unknown"}).`,
+      );
+    }
+  }
+  for (const suffix of requireAbsent ? [] : ["/publication", ""]) {
+    const response = await fetchImpl(`${versionUrl}${suffix}`, { signal });
+    if (response.status === 200 && suffix) {
+      publication = classifyClawHubPublication(
+        JSON.parse(
+          await readBoundedResponseText(response, "Prepared ClawHub publication", 64 * 1024, {
+            signal,
+          }),
+        ),
+        { name: entry.packageName, version: entry.version },
+      );
+      if (publication) {
+        break;
+      }
+    } else {
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status !== 200 && response.status !== 404) {
+        throw new Error(
+          `Cannot resolve prepared ClawHub version ${entry.packageName}@${entry.version}: HTTP ${response.status}.`,
+        );
+      }
+      if (!suffix) {
+        publication = { state: response.status === 200 ? "published" : "absent" };
+        break;
+      }
+    }
+  }
+  if (publication.state === "pending" || publication.state === "failed") {
+    return publication;
+  }
   const publisherResponse = await fetchImpl(`${packageUrl}/trusted-publisher`, { signal });
   if (!publisherResponse.ok) {
     await publisherResponse.body?.cancel().catch(() => undefined);
@@ -340,32 +394,199 @@ async function preparedPackageIsPublished(entry, fetchImpl) {
       `Prepared ClawHub trusted publisher is missing or mismatched for ${entry.packageName}. ${publisherRepair}`,
     );
   }
-  const response = await fetchImpl(`${packageUrl}/versions/${encodeURIComponent(entry.version)}`, {
-    signal,
-  });
-  await response.body?.cancel().catch(() => undefined);
-  if (response.status === 404) {
-    return false;
-  }
-  if (response.status === 200) {
-    return true;
-  }
-  throw new Error(
-    `Cannot resolve prepared ClawHub version ${entry.packageName}@${entry.version}: HTTP ${response.status}.`,
-  );
+  return publication;
 }
+
+const ORIGINAL_PACKED_KIND = "openclaw-clawhub-original-packed";
+function isOriginalPacked(descriptor) {
+  return descriptor?.kind === ORIGINAL_PACKED_KIND;
+}
+async function originalPackedSource(options) {
+  const { descriptor, env = process.env } = options;
+  exactKeys(descriptor, ["kind", "request"], "Original ClawHub descriptor");
+  same(descriptor.kind, ORIGINAL_PACKED_KIND, "Original ClawHub descriptor kind");
+  exactKeys(descriptor.request, ["ref", "inputs"], "Original ClawHub request");
+  same(descriptor.request.ref, env.GITHUB_REF_NAME, "Original ClawHub request ref");
+  const source = await authenticateOriginalPackedClawHubSource({
+    event: descriptor.request,
+    actualEvent: options.event,
+    env,
+    fetchImpl: options.fetchImpl,
+    runGh:
+      options.runGh ??
+      (options.runGhJson
+        ? (args) => JSON.stringify(options.runGhJson(args[1].replace(`repos/${REPOSITORY}/`, "")))
+        : undefined),
+    evidenceClient: options.evidenceClient,
+  });
+  if (source) {
+    if (options.candidateSha !== undefined) {
+      same(source.identity.candidateSha, options.candidateSha, "Original ClawHub candidate SHA");
+    }
+    if (options.toolingSha !== undefined) {
+      same(env.GITHUB_WORKFLOW_SHA, options.toolingSha, "Original ClawHub current tooling SHA");
+    }
+    if (options.selectionMode !== undefined) {
+      const names = source.packages.map((entry) => entry.name).toSorted();
+      const requested =
+        typeof options.plugins === "string"
+          ? options.plugins
+              .split(/[,\s]+/u)
+              .filter(Boolean)
+              .toSorted()
+          : (options.plugins ?? []).toSorted();
+      if (options.selectionMode === "selected") {
+        same(requested, names, "Original ClawHub selected packages");
+      } else if (
+        options.selectionMode !== "all-publishable" ||
+        requested.length ||
+        descriptor.request.inputs.plugins
+      ) {
+        throw new Error("Original ClawHub selection mode mismatch.");
+      }
+    }
+  }
+  return source;
+}
+
+// The FRV projection authenticates names/versions, not directories. Read the
+// immutable admitted source rather than guessing a directory from a package name.
+function originalSourcePackage(file) {
+  if (
+    file.encoding !== "base64" ||
+    typeof file.content !== "string" ||
+    !Number.isSafeInteger(file.size) ||
+    file.size > MAX_MANIFEST_BYTES
+  ) {
+    throw new Error("Original ClawHub source package metadata is invalid.");
+  }
+  return JSON.parse(Buffer.from(file.content, "base64").toString("utf8"));
+}
+function originalPackageDirectories(source, runGhJson) {
+  const root = runGhJson(`git/trees/${source.identity.candidateSha}`);
+  const extensions = root.tree?.filter(
+    (entry) => entry.path === "extensions" && entry.type === "tree",
+  );
+  if (root.truncated || extensions?.length !== 1) {
+    throw new Error("Original ClawHub source extensions tree is missing or ambiguous.");
+  }
+  const tree = runGhJson(`git/trees/${extensions[0].sha}`);
+  if (tree.truncated || !Array.isArray(tree.tree)) {
+    throw new Error("Original ClawHub source directory inventory is incomplete.");
+  }
+  const result = new Map();
+  // Never expand nested source/test trees: the full extensions inventory exceeds
+  // the GitHub transport bound. Non-package directories remain valid siblings.
+  for (const directory of tree.tree.filter(
+    (entry) => entry.type === "tree" && /^[a-z0-9][a-z0-9._-]*$/u.test(entry.path),
+  )) {
+    const children = runGhJson(`git/trees/${directory.sha}`);
+    if (children.truncated || !Array.isArray(children.tree)) {
+      throw new Error("Original ClawHub source directory inventory is incomplete.");
+    }
+    const files = children.tree.filter((entry) => entry.path === "package.json");
+    if (files.length === 0) {
+      continue;
+    }
+    if (files.length !== 1 || files[0].type !== "blob" || files[0].mode !== "100644") {
+      throw new Error("Original ClawHub source package is not a regular file.");
+    }
+    const packageDir = `extensions/${directory.path}`;
+    const manifest = originalSourcePackage(
+      runGhJson(`contents/${packageDir}/package.json?ref=${source.identity.candidateSha}`),
+    );
+    if (result.has(manifest.name)) {
+      throw new Error("Original ClawHub source package names are ambiguous.");
+    }
+    result.set(manifest.name, packageDir);
+  }
+  return result;
+}
+function originalPreparedEntry(entry, source, packageDir) {
+  const artifact = source.artifacts.find((item) => item.name === entry.artifactName);
+  return {
+    ...selectionEntry({
+      packageName: entry.name,
+      packageDir,
+      version: entry.version,
+      publishTag: entry.version.includes("-beta.") ? "beta" : "latest",
+    }),
+    artifactId: artifact.id,
+    artifactName: artifact.name,
+    artifactDigest: artifact.digest,
+    artifactSizeBytes: artifact.size_in_bytes,
+    tarballSha256: entry.artifactSha256,
+    tarballSizeBytes: entry.artifactSize,
+    inventoryDigest: entry.inventoryDigest,
+  };
+}
+export async function createOriginalPackedClawHubDescriptor(options) {
+  const descriptor = { kind: ORIGINAL_PACKED_KIND, request: options.request };
+  const source = await originalPackedSource({ ...options, descriptor });
+  if (!source) {
+    return null;
+  }
+  await checkOriginalAbsent(source, options.fetchImpl ?? fetch);
+  return descriptor;
+}
+async function checkOriginalAbsent(source, fetchImpl) {
+  for (const entry of source.packages) {
+    await preparedPackagePublication(
+      { packageName: entry.name, version: entry.version },
+      fetchImpl,
+      true,
+    );
+  }
+}
+export async function checkOriginalPackedClawHubAbsent(options) {
+  const source = await originalPackedSource(options);
+  if (!source) {
+    throw new Error(
+      "Original ClawHub publisher was attempted; use recovery, not initial publication.",
+    );
+  }
+  await checkOriginalAbsent(source, options.fetchImpl ?? fetch);
+  return { state: "absent" };
+}
+
 export async function resolvePreparedClawHubMatrix(options) {
+  if (isOriginalPacked(options.descriptor)) {
+    const source = await originalPackedSource(options);
+    if (!source) {
+      throw new Error(
+        "Original ClawHub publisher was attempted; use recovery, not initial publication.",
+      );
+    }
+    const directories = originalPackageDirectories(source, options.runGhJson ?? api);
+    const matrix = [];
+    for (const transaction of source.packages) {
+      const entry = originalPreparedEntry(transaction, source, directories.get(transaction.name));
+      const publication = await preparedPackagePublication(entry, options.fetchImpl ?? fetch, true);
+      matrix.push({
+        ...selectionEntry(entry),
+        artifactName: entry.artifactName,
+        alreadyPublished: false,
+        family: resolveOpenClawClawHubPackageFamily(entry.packageName),
+        publication,
+        prepared: entry,
+      });
+    }
+    return matrix;
+  }
   const manifest = await downloadPreparedClawHubRelease(options);
   const matrix = [];
   for (let index = 0; index < manifest.packages.length; index += 8) {
     const entries = await Promise.allSettled(
-      manifest.packages.slice(index, index + 8).map(async (entry) =>
-        Object.assign(selectionEntry(entry), {
+      manifest.packages.slice(index, index + 8).map(async (entry) => {
+        const publication = await preparedPackagePublication(entry, options.fetchImpl ?? fetch);
+        return Object.assign(selectionEntry(entry), {
           artifactName: entry.artifactName,
-          alreadyPublished: await preparedPackageIsPublished(entry, options.fetchImpl ?? fetch),
+          alreadyPublished: publication.state === "published",
+          family: resolveOpenClawClawHubPackageFamily(entry.packageName),
+          publication,
           prepared: entry,
-        }),
-      ),
+        });
+      }),
     );
     for (const result of entries) {
       if (result.status === "fulfilled") {
@@ -379,16 +600,6 @@ export async function resolvePreparedClawHubMatrix(options) {
   }
   return matrix;
 }
-function expectedTransaction(entry, artifactName) {
-  return {
-    name: entry.packageName,
-    version: entry.version,
-    inventoryDigest: entry.inventoryDigest,
-    artifactName,
-    artifactSha256: entry.tarballSha256,
-    artifactSize: entry.tarballSizeBytes,
-  };
-}
 function verifyRestoredPackage(directory, entry, artifactName) {
   const actual = readPackedClawHubTransaction({
     artifactDir: directory,
@@ -398,64 +609,108 @@ function verifyRestoredPackage(directory, entry, artifactName) {
   });
   same(
     actual,
-    expectedTransaction(entry, artifactName),
+    {
+      name: entry.packageName,
+      version: entry.version,
+      inventoryDigest: entry.inventoryDigest,
+      artifactName,
+      artifactSha256: entry.tarballSha256,
+      artifactSize: entry.tarballSizeBytes,
+    },
     "Restored ClawHub package bytes and inventory",
   );
 }
 export async function restorePreparedClawHubPackage(options) {
   const { descriptor, entry, outputDir, token, fetchImpl, runGhJson = api } = options;
-  validateDescriptor(descriptor, options.toolingSha);
-  validatePackage(entry);
+  const original = isOriginalPacked(descriptor);
+  let originalSource;
+  if (original) {
+    originalSource = await originalPackedSource(options);
+    const transaction = originalSource?.packages.find((item) => item.name === entry.packageName);
+    if (!transaction) {
+      throw new Error("Original ClawHub package is not selected by the authenticated request.");
+    }
+    selectionEntry(entry);
+    const manifest = originalSourcePackage(
+      runGhJson(
+        `contents/${entry.packageDir}/package.json?ref=${originalSource.identity.candidateSha}`,
+      ),
+    );
+    same(manifest.name, transaction.name, "Original ClawHub source package directory");
+    same(
+      entry,
+      originalPreparedEntry(transaction, originalSource, entry.packageDir),
+      "Original ClawHub prepared entry",
+    );
+    await preparedPackagePublication(entry, fetchImpl ?? fetch, true);
+  } else {
+    validateDescriptor(descriptor, options.toolingSha);
+    validatePackage(entry);
+  }
   const artifactName = options.artifactName ?? entry.artifactName;
   matches(artifactName, ARTIFACT, "Restored ClawHub artifact name");
-  verifyProducerTooling(descriptor, runGhJson);
+  if (!original) {
+    verifyProducerTooling(descriptor, runGhJson);
+  }
   const source = { ...pick(descriptor, PRODUCER_KEYS), ...pick(entry, ARTIFACT_KEYS) };
   mkdirSync(dirname(outputDir), { recursive: true });
-  const { archiveBytes } = await downloadBoundArtifact({
-    descriptor: source,
-    token,
-    fetchImpl,
-    runGhJson,
-    archivePath: options.archivePath,
-    maxBytes: MAX_PACKAGE_ZIP_BYTES,
-  });
+  const { archiveBytes } = original
+    ? await downloadExactActionsArtifactArchive({
+        expected: {
+          ...entry,
+          repository: REPOSITORY,
+          runId: originalSource.child.id,
+          workflowSha: originalSource.child.head_sha,
+          artifactExpiresAt: originalSource.artifacts.find((item) => item.id === entry.artifactId)
+            .expires_at,
+        },
+        token,
+        fetchImpl,
+        archivePath: options.archivePath,
+        maxArchiveBytes: MAX_PACKAGE_ZIP_BYTES,
+        retryAttempts: 1,
+      })
+    : await downloadBoundArtifact({
+        descriptor: source,
+        token,
+        fetchImpl,
+        runGhJson,
+        archivePath: options.archivePath,
+        maxBytes: MAX_PACKAGE_ZIP_BYTES,
+      });
   const files = inspectActionsArtifactZipWithPolicy(archiveBytes, {
-    expectedEntries: [entry.tarballName],
+    ...(original
+      ? {
+          minEntries: 1,
+          maxEntries: 1,
+          allowPath: (name) => /^[A-Za-z0-9][A-Za-z0-9._-]*\.tgz$/u.test(name),
+        }
+      : { expectedEntries: [entry.tarballName] }),
     maxArchiveBytes: MAX_PACKAGE_ZIP_BYTES,
     maxExpandedBytes: MAX_PACKAGE_BYTES,
     maxEntryBytes: () => MAX_PACKAGE_BYTES,
   });
+  const tarballName = original ? files.keys().next().value : entry.tarballName;
   // Publish only after a complete, checked transfer. A failed download never
   // leaves a tarball in the directory consumed by the upload/publication step.
-  let existing;
-  try {
-    existing = lstatSync(outputDir);
-  } catch (error) {
-    if (!error || typeof error !== "object" || error.code !== "ENOENT") {
-      throw error;
-    }
-  }
+  const existing = lstatSync(outputDir, { throwIfNoEntry: false });
   if (existing) {
     if (!existing.isDirectory() || existing.isSymbolicLink()) {
       throw new Error("Restored ClawHub output must be a regular directory.");
     }
     verifyRestoredPackage(outputDir, entry, artifactName);
-    return {
-      packageName: entry.packageName,
-      tarballSha256: entry.tarballSha256,
-      inventoryDigest: entry.inventoryDigest,
-    };
-  }
-  const staging = mkdtempSync(`${outputDir}.download-`);
-  try {
-    writeFileSync(join(staging, entry.tarballName), files.get(entry.tarballName), {
-      flag: "wx",
-      mode: 0o600,
-    });
-    verifyRestoredPackage(staging, entry, artifactName);
-    renameSync(staging, outputDir);
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
+  } else {
+    const staging = mkdtempSync(`${outputDir}.download-`);
+    try {
+      writeFileSync(join(staging, tarballName), files.get(tarballName), {
+        flag: "wx",
+        mode: 0o600,
+      });
+      verifyRestoredPackage(staging, entry, artifactName);
+      renameSync(staging, outputDir);
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
+    }
   }
   return {
     packageName: entry.packageName,
@@ -505,7 +760,11 @@ export function createPreparedClawHubManifest({
       workflowRun: workflowRunForProducer(workflowRun, producer),
     });
     validateActionsArtifactProducerJob({ expected, workflowJobs });
-    const artifactDir = join(directory, entry.artifactName);
+    const artifactDir = resolvePackedClawHubArtifactDir({
+      directory,
+      artifactName: entry.artifactName,
+      matrixSize: matrix.length,
+    });
     const transaction = readPackedClawHubTransaction({
       artifactDir,
       artifactName: entry.artifactName,
@@ -564,7 +823,7 @@ async function main() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: Object.fromEntries(
-      ["descriptor", "matrix", "directory", "output", "package"].map((key) => [
+      ["descriptor", "matrix", "directory", "output", "package", "request"].map((key) => [
         key,
         { type: "string" },
       ]),
@@ -572,7 +831,19 @@ async function main() {
   });
   const env = process.env;
   let result;
-  if (positionals[0] === "seal") {
+  if (positionals[0] === "original") {
+    result = await createOriginalPackedClawHubDescriptor({
+      request: readJson(values.request),
+      env,
+      candidateSha: env.TARGET_SHA,
+    });
+  } else if (positionals[0] === "check-absent") {
+    result = await checkOriginalPackedClawHubAbsent({
+      descriptor: readJson(values.descriptor),
+      env,
+      candidateSha: env.TARGET_SHA,
+    });
+  } else if (positionals[0] === "seal") {
     const producer = validateProducer({
       repository: env.GITHUB_REPOSITORY,
       runId: Number(env.GITHUB_RUN_ID),
@@ -628,12 +899,15 @@ async function main() {
       descriptor: readJson(values.descriptor),
       entry: selected.prepared,
       artifactName: selected.artifactName,
+      candidateSha: env.TARGET_SHA,
+      selectionMode: env.PUBLISH_SCOPE,
+      plugins: env.RELEASE_PLUGINS,
       toolingSha: env.GITHUB_WORKFLOW_SHA,
       outputDir: values.directory,
       token: env.GH_TOKEN,
     });
   } else {
-    throw new Error("Expected seal, resolve, or restore.");
+    throw new Error("Expected original, check-absent, seal, resolve, or restore.");
   }
   if (values.output) {
     mkdirSync(dirname(values.output), { recursive: true });

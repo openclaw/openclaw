@@ -3,13 +3,6 @@ import type { ImageCompressionModelPolicy } from "../media/web-media.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 
-type ResolveModelAsync = (typeof import("./embedded-agent-runner/model.js"))["resolveModelAsync"];
-
-const resolveModelAsyncDefault: ResolveModelAsync = async (...args) => {
-  const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
-  return await resolveModelAsync(...args);
-};
-
 /** Resolves the authoritative image limits for one selected provider/model. */
 export async function resolveImageCompressionModelPolicy(params: {
   cfg?: OpenClawConfig;
@@ -18,19 +11,20 @@ export async function resolveImageCompressionModelPolicy(params: {
   agentDir?: string;
   workspaceDir?: string;
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  deps?: { resolveModelAsync?: ResolveModelAsync };
+  abortSignal?: AbortSignal;
 }): Promise<ImageCompressionModelPolicy> {
-  const resolveModelAsync = params.deps?.resolveModelAsync ?? resolveModelAsyncDefault;
   async function resolvePolicyWithHooks(
     skipProviderRuntimeHooks: boolean,
   ): Promise<ImageCompressionModelPolicy> {
     try {
+      const { resolveModelAsync } = await import("./embedded-agent-runner/model.js");
       const resolved = await resolveModelAsync(
         params.provider,
         params.model,
         params.agentDir,
         params.cfg,
         {
+          abortSignal: params.abortSignal,
           allowBundledStaticCatalogFallback: true,
           skipProviderRuntimeHooks,
           skipAgentDiscovery: true,
@@ -43,6 +37,7 @@ export async function resolveImageCompressionModelPolicy(params: {
       // SAFETY: model resolution preserves provider runtime fields on its narrower Model result.
       return (resolved.model as ProviderRuntimeModel | undefined)?.mediaInput?.image ?? {};
     } catch {
+      params.abortSignal?.throwIfAborted();
       return {};
     }
   }

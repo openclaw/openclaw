@@ -1,6 +1,6 @@
 import { createChannelApprovalAuth } from "openclaw/plugin-sdk/approval-auth-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { OpenClawConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { normalizeMSTeamsMessagingTarget } from "./resolve-allowlist.js";
 
 const MSTEAMS_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -13,14 +13,10 @@ function normalizeMSTeamsApproverId(value: string | number): string | undefined 
   return id && MSTEAMS_ID_RE.test(id) ? id : undefined;
 }
 
-function resolveMSTeamsChannelConfig(cfg: OpenClawConfig) {
-  return cfg.channels?.msteams;
-}
-
 const msTeamsApproval = createChannelApprovalAuth({
   channelLabel: "Microsoft Teams",
-  resolveInputs: ({ cfg }) => {
-    const channel = resolveMSTeamsChannelConfig(cfg);
+  resolveInputs: ({ cfg, accountId }) => {
+    const channel = resolveMSTeamsAccountConfig(cfg, accountId);
     return { allowFrom: channel?.allowFrom, defaultTo: channel?.defaultTo };
   },
   normalizeApprover: normalizeMSTeamsApproverId,
@@ -34,4 +30,21 @@ const msTeamsApproval = createChannelApprovalAuth({
 });
 
 export const getMSTeamsApprovalApprovers = msTeamsApproval.resolveApprovers;
-export const msTeamsApprovalAuth = msTeamsApproval.approvalAuth;
+export const msTeamsApprovalAuth: typeof msTeamsApproval.approvalAuth = {
+  authorizeActorAction(params) {
+    const channel = params.cfg.channels?.msteams;
+    if (
+      !channel ||
+      channel.enabled === false ||
+      resolveMSTeamsAccountConfig(params.cfg, params.accountId).enabled === false
+    ) {
+      return {
+        authorized: false,
+        reason: "Microsoft Teams approval account is disabled or unavailable.",
+      };
+    }
+    // Gateway settlement calls this owner again with current config. Return the
+    // shared result intact so empty-approver same-chat authorization keeps its marker.
+    return msTeamsApproval.approvalAuth.authorizeActorAction(params);
+  },
+};

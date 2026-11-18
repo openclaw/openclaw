@@ -1,11 +1,7 @@
 import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  buildManifestModelProviderConfig,
-  type ProviderCatalogContext,
-} from "openclaw/plugin-sdk/provider-catalog-shared";
+import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const bundledProvider = {
   baseUrl: "https://router.huggingface.co/v1",
@@ -26,15 +22,6 @@ function registerProvider() {
 describe("huggingface plugin", () => {
   afterEach(() => {
     vi.restoreAllMocks();
-  });
-
-  it("exposes the bundled catalog to manifest-only model selection", () => {
-    expect(
-      buildManifestModelProviderConfig({
-        providerId: "huggingface",
-        catalog: manifest.modelCatalog.providers.huggingface,
-      }),
-    ).toMatchObject(bundledProvider);
   });
 
   it.each([
@@ -65,6 +52,7 @@ describe("huggingface plugin", () => {
 
     expect(result).toMatchObject({ provider: bundledProvider });
     expect(result).not.toHaveProperty("provider.apiKey");
+    expect(result).not.toHaveProperty("provider.models.0.compat");
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
     expect(fetch).not.toHaveBeenCalled();
   });

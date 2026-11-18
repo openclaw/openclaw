@@ -1,15 +1,23 @@
+import { detectAndLoadAgentHarnessPromptImages } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   streamSimple,
   type AssistantMessage,
   type Context,
   type Model,
-  type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
+import { createSolidPngBuffer, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
+import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import {
+  createLiveValueTool,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import basetenPlugin from "./index.js";
 import {
@@ -60,22 +68,6 @@ function asLiveModel(model: ModelDefinitionConfig) {
   } as Model<"openai-completions">;
 }
 
-function liveProbeTool(): Tool {
-  return {
-    name: "live_probe",
-    description: "Return the supplied value.",
-    parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`Inkling did not call the live probe: ${message.stopReason}`);
-  }
-  return toolCall;
-}
-
 describeLive("Baseten plugin live", () => {
   it(
     "discovers and completes through every Baseten Model API",
@@ -103,13 +95,7 @@ describeLive("Baseten plugin live", () => {
             throw new Error("Baseten provider did not register a stream wrapper");
           }
           const context: Context = {
-            messages: [
-              {
-                role: "user",
-                content: "Say hello in one word.",
-                timestamp: Date.now(),
-              },
-            ],
+            messages: [makeUserMessage("Say hello in one word.", Date.now())],
           };
           let payload: Record<string, unknown> | undefined;
           let stream = await wrappedStream(asLiveModel(model), context, {
@@ -151,17 +137,17 @@ describeLive("Baseten plugin live", () => {
     20 * 60_000,
   );
 
-  it("runs an Inkling tool call through OpenClaw's completions transport", async () => {
+  it("runs the default model's tool call through OpenClaw's completions transport", async () => {
     const provider = await registerSingleProviderPlugin(basetenPlugin);
     const catalog = await runLiveBasetenCatalog(provider);
-    const inkling = catalog.models.find((model) => model.id === BASETEN_DEFAULT_MODEL_ID);
-    if (!inkling) {
-      throw new Error("Baseten live catalog did not include Inkling");
+    const defaultModel = catalog.models.find((model) => model.id === BASETEN_DEFAULT_MODEL_ID);
+    if (!defaultModel) {
+      throw new Error(`Baseten live catalog did not include ${BASETEN_DEFAULT_MODEL_ID}`);
     }
 
     const wrappedStream = provider.wrapStreamFn?.({
       provider: "baseten",
-      modelId: inkling.id,
+      modelId: defaultModel.id,
       thinkingLevel: "low",
       streamFn: streamSimple,
     } as never);
@@ -170,17 +156,11 @@ describeLive("Baseten plugin live", () => {
     }
     let payload: Record<string, unknown> | undefined;
     const stream = await wrappedStream(
-      asLiveModel(inkling),
+      asLiveModel(defaultModel),
       {
         systemPrompt: "Call the requested function exactly once.",
-        messages: [
-          {
-            role: "user",
-            content: "Call live_probe with value exactly inkling.",
-            timestamp: Date.now(),
-          },
-        ],
-        tools: [liveProbeTool()],
+        messages: [makeUserMessage("Call live_probe with value exactly inkling.", Date.now())],
+        tools: [createLiveValueTool("live_probe")],
       },
       {
         apiKey: LIVE_VALUE,
@@ -197,19 +177,84 @@ describeLive("Baseten plugin live", () => {
     );
     const response = await stream.result();
     if (response.stopReason === "error") {
-      throw new Error(response.errorMessage || "Inkling live tool call failed");
+      throw new Error(response.errorMessage || "Baseten default model tool call failed");
     }
     expect(payload?.reasoning_effort).toBe("low");
-    const toolCall = requireToolCall(response);
+    expect(payload?.max_tokens).toBe(256);
+    const toolCall = requireLiveToolCall(
+      response,
+      "Baseten default model did not call the live probe: ",
+    );
     expect(toolCall).toMatchObject({ name: "live_probe", arguments: { value: "inkling" } });
+  }, 120_000);
+
+  it("recognizes an image through registered preparation and the default model", async () => {
+    const provider = await registerSingleProviderPlugin(basetenPlugin);
+    const catalog = await runLiveBasetenCatalog(provider);
+    const definition = catalog.models.find((model) => model.id === BASETEN_DEFAULT_MODEL_ID);
+    if (!definition) {
+      throw new Error(`Baseten live catalog did not include ${BASETEN_DEFAULT_MODEL_ID}`);
+    }
+    const model = asLiveModel(definition);
+    const bytes = createSolidPngBuffer(96, 96, { r: 0, g: 255, b: 0 });
+    const prompt = "Look at the image and name its basic color. Reply with one uppercase word.";
+    const prepared = await detectAndLoadAgentHarnessPromptImages({
+      prompt,
+      workspaceDir: process.cwd(),
+      model,
+      existingImages: [{ type: "image", mimeType: "image/png", data: bytes.toString("base64") }],
+    });
+    expect(prepared.images).toHaveLength(1);
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "baseten",
+      modelId: model.id,
+      model,
+      thinkingLevel: "low",
+      streamFn: streamSimple,
+    });
+    if (!wrapped) {
+      throw new Error("Baseten provider did not register its stream wrapper");
+    }
+    let payload: Record<string, unknown> | undefined;
+    const stream = await wrapped(
+      model,
+      {
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: prompt }, ...prepared.images],
+            timestamp: Date.now(),
+          },
+        ],
+      },
+      {
+        apiKey: LIVE_VALUE,
+        maxTokens: 256,
+        reasoning: "low",
+        onPayload: (value) => {
+          payload = value as Record<string, unknown>;
+        },
+      },
+    );
+    const response = await stream.result();
+    const text = extractNonEmptyAssistantText(response.content).trim();
+    if (response.stopReason === "error") {
+      throw new Error(response.errorMessage || "Baseten image recognition failed");
+    }
+    expect(payload?.reasoning_effort).toBe("low");
+    expect(payload?.max_tokens).toBe(256);
+    expect(JSON.stringify(payload?.messages ?? [])).toContain(prepared.images[0]!.data);
+    expect(text).toBe("GREEN");
   }, 120_000);
 
   it("accepts a DeepSeek V4 replay after a cross-provider tool call", async () => {
     const provider = await registerSingleProviderPlugin(basetenPlugin);
     const catalog = await runLiveBasetenCatalog(provider);
-    const deepseek = catalog.models.find((model) => model.id === "deepseek-ai/DeepSeek-V4-Pro");
+    const deepseek = catalog.models.find(
+      (model) => model.id === "deepseek-ai/DeepSeek-V4-Pro-0813",
+    );
     if (!deepseek) {
-      throw new Error("Baseten live catalog did not include DeepSeek V4 Pro");
+      throw new Error("Baseten live catalog did not include DeepSeek V4 Pro 0813");
     }
 
     const toolCallId = "call_baseten_live_replay_1";
@@ -242,28 +287,14 @@ describeLive("Baseten plugin live", () => {
                 arguments: { value: "replay" },
               },
             ],
-            usage: {
-              input: 0,
-              output: 0,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 0,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createZeroUsageFixture(),
             stopReason: "toolUse",
             timestamp: Date.now() - 2,
           } as AssistantMessage,
-          {
-            role: "toolResult",
-            toolCallId,
-            toolName: "live_probe",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
+          makeTextToolResult(toolCallId, "live_probe", "ok", false, Date.now() - 1),
           { role: "user", content: "Reply with exactly ok.", timestamp: Date.now() },
         ],
-        tools: [liveProbeTool()],
+        tools: [createLiveValueTool("live_probe")],
       },
       {
         apiKey: LIVE_VALUE,
@@ -280,8 +311,14 @@ describeLive("Baseten plugin live", () => {
     }
 
     const messages = payload?.messages;
+    expect(payload).toMatchObject({
+      model: "deepseek-ai/DeepSeek-V4-Pro-0813",
+      max_tokens: 512,
+      reasoning_effort: "high",
+      thinking: { type: "enabled" },
+    });
     expect(Array.isArray(messages)).toBe(true);
     expect((messages as Array<Record<string, unknown>>)[1]?.reasoning_content).toBe("");
-    expect(response.content.length).toBeGreaterThan(0);
+    expect(extractNonEmptyAssistantText(response.content).trim()).toBe("ok");
   }, 120_000);
 });

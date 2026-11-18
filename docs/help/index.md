@@ -14,6 +14,10 @@ Fastest path to unstuck, by symptom:
 - [Gateway troubleshooting](/gateway/troubleshooting) - gateway-specific issues
 - [Doctor](/gateway/doctor) - `openclaw doctor`: health checks, config migrations, repair steps
 
+## Support
+
+For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). Start with the self-service guides above, or see [Get support](/help/support) for what to include and where to report bugs or security issues.
+
 ## FAQ
 
 - [FAQ](/help/faq) - day-to-day concepts and operational questions

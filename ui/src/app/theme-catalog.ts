@@ -4,84 +4,147 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/themes.ts";
 import {
   isBuiltinThemeId,
-  parseThemeDefinition,
+  resolveThemeBranding,
+  type ThemeBranding,
   type ThemeColorMode,
   type ThemeDescriptor,
 } from "../../../packages/gateway-protocol/src/theme.ts";
-import type { ImportedCustomTheme } from "./custom-theme.ts";
+import { formatUiError } from "../lib/format-error.ts";
+import { ThemeValidationError, type ImportedCustomTheme } from "./custom-theme.ts";
 import type { ApplicationGateway } from "./gateway.ts";
 import { normalizeThemePalette } from "./theme-palette.ts";
 import type { ThemeName } from "./theme.ts";
 
 export type ThemeCatalogSnapshot = {
   themes: readonly ThemeDescriptor[];
-  error: string | null;
+  palettes?: ReadonlyMap<string, CatalogTheme["palette"]>;
+  error: Error | string | null;
   unavailableId?: string;
+  read?: {
+    scope: object;
+    result: Promise<ThemeCatalogSnapshot | undefined>;
+  };
 };
 
 export type CatalogTheme = {
+  branding: ThemeBranding;
   mode?: ThemeColorMode;
   palette: Pick<ImportedCustomTheme, "light" | "dark">;
 };
 
 /** Connection-scoped projection; profile preferences remain the selection owner. */
-export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => void) {
+export function createThemeCatalog(
+  gateway: ApplicationGateway,
+  onChange: () => void,
+  onRead?: () => void,
+) {
   let snapshot: ThemeCatalogSnapshot = { themes: [], error: null };
   let ownerScope = gateway.connection.gatewayUrl;
   let ownerClient = gateway.snapshot.client;
   let ownerProfile = gateway.snapshot.selfUser?.id;
   let ownerConnected = gateway.snapshot.phase === "connected";
-  let generation = 0;
   let disposed = false;
   const definitions = new Map<string, CatalogTheme>();
+  const definitionErrors = new Map<string, Error | string>();
   const requested = new Set<string>();
+  let readScope = {};
+  let retired = Promise.withResolvers<void>();
+  let catalogRead: Promise<void> | undefined;
+  const definitionReads = new Map<ThemeName, Promise<void>>();
+  const reads = new Map<ThemeName, NonNullable<ThemeCatalogSnapshot["read"]>>();
+  const retireReads = () => {
+    retired.resolve();
+    retired = Promise.withResolvers<void>();
+    readScope = {};
+    catalogRead = undefined;
+    definitionReads.clear();
+    reads.clear();
+  };
+  const readSnapshot = (theme: ThemeName): ThemeCatalogSnapshot => {
+    const error =
+      snapshot.error ??
+      definitionErrors.get(theme) ??
+      definitionErrors.values().next().value ??
+      null;
+    return {
+      ...snapshot,
+      error,
+      palettes: new Map(Array.from(definitions, ([id, value]) => [id, value.palette])),
+    };
+  };
 
-  const remainsCurrent = (request: number) =>
+  const remainsCurrent = (client: ApplicationGateway["snapshot"]["client"], profile?: string) =>
     !disposed &&
-    request === generation &&
     gateway.snapshot.phase === "connected" &&
-    gateway.snapshot.client === ownerClient &&
-    gateway.snapshot.selfUser?.id === ownerProfile;
+    gateway.snapshot.client === client &&
+    gateway.snapshot.selfUser?.id === profile;
 
   const rememberDefinition = (result: ThemesGetResult) => {
-    const definition = parseThemeDefinition(result.definition);
+    const definition = result.definition;
+    const artwork = result.theme.source === "plugin" ? result.theme.artwork : undefined;
     const light = definition?.light ?? definition?.dark;
     const dark = definition?.dark ?? definition?.light;
     if (definition && light && dark) {
+      definitionErrors.delete(result.theme.id);
       definitions.set(result.theme.id, {
+        branding: { ...resolveThemeBranding(definition), ...(artwork ? { artwork } : {}) },
         mode: !definition.light ? "dark" : !definition.dark ? "light" : undefined,
         palette: {
           light: normalizeThemePalette("light", light, undefined),
           dark: normalizeThemePalette("dark", dark, undefined),
         },
       });
+      requested.add(result.theme.id);
+      reads.clear();
     }
   };
 
-  const refresh = async () => {
+  const refresh = () => {
     const client = gateway.snapshot.client;
     if (disposed || gateway.snapshot.phase !== "connected" || !client) {
-      return;
+      return undefined;
     }
     ownerClient = client;
     ownerProfile = gateway.snapshot.selfUser?.id;
-    const request = ++generation;
+    const profile = ownerProfile;
     requested.clear();
-    try {
-      const result = await client.request<ThemesListResult>("themes.list", {});
-      if (!remainsCurrent(request)) {
-        return;
-      }
-      definitions.clear();
-      rememberDefinition(result);
-      snapshot = { themes: result.themes, error: null, unavailableId: result.current.requestedId };
-      onChange();
-    } catch (error) {
-      if (remainsCurrent(request)) {
-        snapshot = { ...snapshot, error: error instanceof Error ? error.message : String(error) };
+    definitionErrors.clear();
+    definitionReads.clear();
+    const operation = (async () => {
+      try {
+        const result = await client.request<ThemesListResult>("themes.list", {});
+        if (!remainsCurrent(client, profile)) {
+          return;
+        }
+        const available = new Set<string>(result.themes.map((theme) => theme.id));
+        for (const entries of [definitions, definitionErrors]) {
+          for (const id of entries.keys()) {
+            if (!available.has(id)) {
+              entries.delete(id);
+            }
+          }
+        }
+        rememberDefinition(result);
+        snapshot = {
+          themes: result.themes,
+          error: null,
+          unavailableId: result.current.requestedId,
+        };
         onChange();
+      } catch (error) {
+        if (remainsCurrent(client, profile)) {
+          snapshot = {
+            ...snapshot,
+            error: error instanceof ThemeValidationError ? error : formatUiError(error),
+          };
+          onChange();
+        }
       }
-    }
+    })();
+    catalogRead = operation;
+    reads.clear();
+    onRead?.();
+    return operation;
   };
 
   const ensureDefinition = (id: ThemeName) => {
@@ -89,7 +152,6 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     if (
       id === "custom" ||
       isBuiltinThemeId(id) ||
-      definitions.has(id) ||
       requested.has(id) ||
       !snapshot.themes.some((theme) => theme.id === id) ||
       gateway.snapshot.phase !== "connected" ||
@@ -98,39 +160,45 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
       return;
     }
     requested.add(id);
-    const request = generation;
-    void client.request<ThemesGetResult>("themes.get", { id }).then(
+    const profile = gateway.snapshot.selfUser?.id;
+    const operation = client.request<ThemesGetResult>("themes.get", { id }).then(
       (result) => {
-        if (!remainsCurrent(request)) {
+        if (!remainsCurrent(client, profile)) {
           return;
         }
         rememberDefinition(result);
         onChange();
       },
       (error: unknown) => {
-        if (remainsCurrent(request)) {
-          snapshot = {
-            ...snapshot,
-            error: error instanceof Error ? error.message : String(error),
-          };
+        if (remainsCurrent(client, profile)) {
+          definitionErrors.set(
+            id,
+            error instanceof ThemeValidationError ? error : formatUiError(error),
+          );
+          reads.clear();
           onChange();
         }
       },
     );
+    definitionReads.set(id, operation);
+    reads.delete(id);
+    onRead?.();
   };
 
   const clear = () => {
     definitions.clear();
+    definitionErrors.clear();
     requested.clear();
     snapshot = { themes: [], error: null };
     onChange();
   };
+  // Retire profile-scoped catalog data immediately when connection ownership changes.
   const stopGateway = gateway.subscribe(() => {
     const connected = gateway.snapshot.phase === "connected";
     const scopeChanged = gateway.connection.gatewayUrl !== ownerScope;
     if (!connected) {
       if (ownerConnected || scopeChanged) {
-        generation += 1;
+        retireReads();
       }
       ownerConnected = false;
       if (scopeChanged) {
@@ -147,7 +215,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
       gateway.snapshot.client !== ownerClient ||
       gateway.snapshot.selfUser?.id !== ownerProfile
     ) {
-      generation += 1;
+      retireReads();
       const profileChanged = gateway.snapshot.selfUser?.id !== ownerProfile;
       ownerConnected = true;
       ownerScope = gateway.connection.gatewayUrl;
@@ -160,9 +228,10 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     }
   });
   const stopEvents = gateway.subscribeEvents((event) => {
-    if (event.event === "plugins.changed") {
-      void refresh();
-    } else if (event.event === "users.prefs.changed" && gateway.snapshot.selfUser?.id) {
+    if (
+      event.event === "plugins.changed" ||
+      (event.event === "users.prefs.changed" && gateway.snapshot.selfUser?.id)
+    ) {
       void refresh();
     }
   });
@@ -177,8 +246,30 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
   }
 
   return {
-    get snapshot() {
-      return snapshot;
+    snapshot(theme: ThemeName): ThemeCatalogSnapshot {
+      // Appearance needs every card's palette, not just the selected theme.
+      // Reuse the selection cache and its connection/profile invalidation.
+      for (const entry of snapshot.themes) {
+        ensureDefinition(entry.id);
+      }
+      const value = readSnapshot(theme);
+      if (!catalogRead && !definitionReads.has(theme)) {
+        return value;
+      }
+      let read = reads.get(theme);
+      if (!read) {
+        const scope = readScope;
+        read = {
+          scope,
+          // A held previous selection must not delay the current palette.
+          result: Promise.race([
+            Promise.all([catalogRead, definitionReads.get(theme)]),
+            retired.promise,
+          ]).then(() => (!disposed && scope === readScope ? readSnapshot(theme) : undefined)),
+        };
+        reads.set(theme, read);
+      }
+      return { ...value, read };
     },
     theme(id: ThemeName) {
       ensureDefinition(id);
@@ -187,10 +278,11 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     refresh,
     dispose() {
       disposed = true;
-      generation += 1;
+      retireReads();
       stopGateway();
       stopEvents();
       definitions.clear();
+      definitionErrors.clear();
     },
   };
 }

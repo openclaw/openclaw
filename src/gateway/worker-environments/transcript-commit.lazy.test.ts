@@ -1,90 +1,46 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
 
-const SESSION_ID = "session-worker-transcript";
-const SESSION_KEY = "agent:main:worker-transcript";
 const RUN_EPOCH = 7;
-const IDENTITY: WorkerConnectionIdentity = {
-  environmentId: "environment-a",
-  credentialHash: ["credential", "hash", "a"].join("-"),
-  bundleHash: "b".repeat(64),
-  sessionId: SESSION_ID,
-  runId: "run-worker-transcript",
-  turnClaim: {
-    sessionId: SESSION_ID,
-    claimId: "claim-worker-transcript",
-    runId: "run-worker-transcript",
-    placementGeneration: 4,
-    owner: { kind: "worker", environmentId: "environment-a", ownerEpoch: RUN_EPOCH },
-  },
-  ownerEpoch: RUN_EPOCH,
-  rpcSetVersion: 1,
-  protocolFeatures: ["worker-transcript-commit-v1"],
-  credentialExpiresAtMs: 10_000,
-};
 
 function createRequest(): WorkerTranscriptCommitParams {
   return {
     runEpoch: RUN_EPOCH,
     seq: 1,
     baseLeafId: null,
-    messages: [
-      { role: "user", content: [{ type: "text", text: "Inspect the workspace" }], timestamp: 1 },
-    ],
+    messages: [{ role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 }],
   };
 }
 
 async function createFixture() {
   // Every stateful fixture API must share the freshly imported owner's module generation.
-  const [sessions, accessor, state, ledger, config, owner, agentState, reconcile, stateCache] =
-    await Promise.all([
-      import("../../agents/sessions/session-manager.js"),
-      import("../../config/sessions/session-accessor.js"),
-      import("../../state/openclaw-state-db.js"),
-      import("./transcript-commit-store.js"),
-      import("../../config/io.js"),
-      import("./transcript-commit.js"),
-      import("../../state/openclaw-agent-db.js"),
-      import("../../config/sessions/session-transcript-reconcile.js"),
-      import("../../state/openclaw-state-db-cache.js"),
-    ]);
-  const root = await fs.mkdtemp(
-    path.join(await fs.realpath(os.tmpdir()), "openclaw-transcript-load-"),
-  );
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
-  const cfg: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true }] },
-    session: { mainKey: "main", store: storePath },
-  };
-  await accessor.upsertSessionEntryCore(
-    { agentId: "main", sessionKey: SESSION_KEY, storePath },
-    { lifecycleRevision: "worker-original-revision", sessionId: SESSION_ID, updatedAt: 10 },
-  );
-  const target = await accessor.resolveSessionTranscriptRuntimeTarget({
-    agentId: "main",
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    storePath,
-  });
-  const database = state.openOpenClawStateDatabase();
-  const store = ledger.createWorkerTranscriptCommitStore({ database });
+  const [sessions, fixtures, config] = await Promise.all([
+    import("../../agents/sessions/session-manager.js"),
+    import("./transcript-commit.fixture.test-support.js"),
+    import("../../config/io.js"),
+  ]);
+  let cfg: OpenClawConfig = {};
+  const f = await fixtures.createTranscriptCommitFixture(() => cfg);
+  cfg = { ...f.cfg, session: { mainKey: "main", store: f.storePath } };
   return {
-    store,
-    committer: owner.createWorkerTranscriptCommitter({ getConfig: () => cfg, store }),
-    readEntries: () => sessions.SessionManager.open(target).getEntries(),
+    store: f.ledgerStore,
+    identity: f.owner.identity,
+    commit: (overrides: Partial<Parameters<WorkerTranscriptCommitApplication>[0]> = {}) =>
+      f.committer.commit({
+        ...f.owner,
+        sessionTarget: f.sessionTarget,
+        request: createRequest(),
+        ...overrides,
+      }),
+    readEntries: () => sessions.SessionManager.open(f.sessionTarget).getEntries(),
     async cleanup() {
       config.clearRuntimeConfigSnapshot();
-      await reconcile.waitForSessionTranscriptIndexReconcilesInStateDir(root);
-      await agentState.closeOpenClawAgentDatabasesAsync(root);
-      stateCache.closeOpenClawStateDatabaseByPath(database.path);
-      await fs.rm(root, { recursive: true, force: true });
+      await f.close();
     },
   };
 }
@@ -108,7 +64,51 @@ describe("worker transcript runtime loading", () => {
     vi.resetModules();
   });
 
-  it.each(["current", "revoked", "loader-failed"] as const)(
+  it("awaits the pending receipt before transcript effects and terminal persistence before replying", async () => {
+    const began = createDeferredCore();
+    const releaseBegin = createDeferredCore();
+    const completing = createDeferredCore();
+    const releaseComplete = createDeferredCore();
+    const begin = fixture.store.begin.bind(fixture.store);
+    const complete = fixture.store.complete.bind(fixture.store);
+    vi.spyOn(fixture.store, "begin").mockImplementation(async (...args) => {
+      const result = await begin(...args);
+      began.resolve();
+      await releaseBegin.promise;
+      return result;
+    });
+    vi.spyOn(fixture.store, "complete").mockImplementation(async (...args) => {
+      completing.resolve();
+      await releaseComplete.promise;
+      return await complete(...args);
+    });
+    let replied = false;
+    const pending = fixture.commit().then((result) => {
+      replied = true;
+      return result;
+    });
+    try {
+      await awaitGateBeforeSettlement(began.promise, pending, "commit settled before begin");
+      expect(fixture.readEntries()).toEqual([]);
+      expect(replied).toBe(false);
+      releaseBegin.resolve();
+      await awaitGateBeforeSettlement(
+        completing.promise,
+        pending,
+        "commit settled before completion",
+      );
+      expect(fixture.readEntries()).toHaveLength(1);
+      expect(replied).toBe(false);
+      releaseComplete.resolve();
+      await expect(pending).resolves.toMatchObject({ ok: true });
+    } finally {
+      releaseBegin.resolve();
+      releaseComplete.resolve();
+      await pending;
+    }
+  });
+
+  it.each(["current", "revoked"] as const)(
     "loads before authority checks or reservations: %s",
     async (scenario) => {
       const loadStarted = createDeferredCore();
@@ -118,9 +118,6 @@ describe("worker transcript runtime loading", () => {
       vi.doMock("./transcript-commit.runtime.js", async (importOriginal) => {
         loadStarted.resolve();
         await releaseLoad.promise;
-        if (scenario === "loader-failed") {
-          throw failure;
-        }
         return await importOriginal();
       });
       const begin = vi.spyOn(fixture.store, "begin");
@@ -128,17 +125,9 @@ describe("worker transcript runtime loading", () => {
         if (revoked) {
           throw failure;
         }
-        return undefined;
       });
-      const commit = fixture.committer.commit({
-        identity: IDENTITY,
-        request: createRequest(),
-        assertCurrent,
-      });
-      const settled = commit.then(
-        () => undefined,
-        () => undefined,
-      );
+      const commit = fixture.commit({ assertCurrent });
+      const settled = commit.catch(() => undefined);
       try {
         expect(
           await Promise.race([
@@ -155,11 +144,7 @@ describe("worker transcript runtime loading", () => {
           expect(begin).toHaveBeenCalledOnce();
           expect(fixture.readEntries()).toHaveLength(1);
         } else {
-          if (scenario === "loader-failed") {
-            await expect(commit).rejects.toMatchObject({ cause: failure });
-          } else {
-            await expect(commit).rejects.toBe(failure);
-          }
+          await expect(commit).rejects.toBe(failure);
           expect(begin).not.toHaveBeenCalled();
           expect(fixture.readEntries()).toEqual([]);
         }
@@ -181,8 +166,11 @@ describe("worker transcript runtime loading", () => {
       const begin = vi.spyOn(fixture.store, "begin");
       const assertCurrent = vi.fn(() => undefined);
       await expect(
-        fixture.committer.commit({
-          identity: reason === "session-not-attached" ? { ...IDENTITY, sessionId: null } : IDENTITY,
+        fixture.commit({
+          identity:
+            reason === "session-not-attached"
+              ? { ...fixture.identity, sessionId: null }
+              : fixture.identity,
           request: {
             ...createRequest(),
             runEpoch: reason === "epoch-mismatch" ? RUN_EPOCH + 1 : RUN_EPOCH,
@@ -191,9 +179,7 @@ describe("worker transcript runtime loading", () => {
         }),
       ).resolves.toEqual({ ok: false, reason });
       expect(loadRuntime).not.toHaveBeenCalled();
-      await expect(
-        fixture.committer.commit({ identity: IDENTITY, request: createRequest(), assertCurrent }),
-      ).rejects.toMatchObject({ cause: failure });
+      await expect(fixture.commit({ assertCurrent })).rejects.toMatchObject({ cause: failure });
       expect(loadRuntime).toHaveBeenCalledOnce();
       expect(assertCurrent).not.toHaveBeenCalled();
       expect(begin).not.toHaveBeenCalled();

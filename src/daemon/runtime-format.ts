@@ -1,4 +1,4 @@
-/** Formats daemon runtime state into compact status lines for CLI output. */
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import { getSystemdCgroupHygieneSummary, type GatewayServiceRuntime } from "./service-runtime.js";
 
@@ -8,19 +8,6 @@ export function formatServiceLabel(label: string, runtime?: GatewayServiceRuntim
   }
   return runtime?.systemd?.scope ? `systemd ${runtime.systemd.scope}` : label;
 }
-
-type ServiceRuntimeLike = {
-  status?: string;
-  state?: string;
-  subState?: string;
-  pid?: number;
-  lastExitStatus?: number;
-  lastExitReason?: string;
-  lastRunResult?: string;
-  lastRunTime?: string;
-  detail?: string;
-  systemd?: { killMode?: string; tasksCurrent?: number; memoryCurrent?: number };
-};
 
 // Windows and systemd expose signal exits as numeric status codes.
 const SIGNAL_NAMES_BY_STATUS = new Map<number, string>([
@@ -38,37 +25,24 @@ function formatLastExitStatus(status: number): string {
   return signalName ? `last exit ${status} (${signalName})` : `last exit ${status}`;
 }
 
-export function formatRuntimeStatus(runtime: ServiceRuntimeLike | undefined): string | null {
+export function formatRuntimeStatus(runtime: GatewayServiceRuntime | undefined): string | null {
   if (!runtime) {
     return null;
   }
-  const details: string[] = [];
-  if (runtime.subState) {
-    details.push(`sub ${runtime.subState}`);
-  }
-  if (runtime.lastExitStatus !== undefined) {
-    details.push(formatLastExitStatus(runtime.lastExitStatus));
-  }
-  if (runtime.lastExitReason) {
-    details.push(`reason ${runtime.lastExitReason}`);
-  }
-  if (runtime.lastRunResult) {
-    details.push(`last run ${runtime.lastRunResult}`);
-  }
-  if (runtime.lastRunTime) {
-    details.push(`last run time ${runtime.lastRunTime}`);
-  }
   const cgroupSummary = getSystemdCgroupHygieneSummary(runtime.systemd);
-  if (cgroupSummary) {
-    details.push(cgroupSummary);
-  }
-  if (runtime.detail) {
-    details.push(runtime.detail);
-  }
+  const details = [
+    runtime.subState ? terminalText`sub ${runtime.subState}` : undefined,
+    runtime.lastExitStatus !== undefined ? formatLastExitStatus(runtime.lastExitStatus) : undefined,
+    runtime.lastExitReason ? terminalText`reason ${runtime.lastExitReason}` : undefined,
+    runtime.lastRunResult ? terminalText`last run ${runtime.lastRunResult}` : undefined,
+    runtime.lastRunTime ? terminalText`last run time ${runtime.lastRunTime}` : undefined,
+    cgroupSummary ? terminalText`${cgroupSummary}` : cgroupSummary,
+    runtime.detail ? terminalText`${runtime.detail.replace(/\s+/g, " ").trim()}` : runtime.detail,
+  ].filter((detail): detail is string => Boolean(detail));
   return formatRuntimeStatusWithDetails({
-    status: runtime.status,
+    status: runtime.status ? terminalText`${runtime.status}` : runtime.status,
     pid: runtime.pid,
-    state: runtime.state,
+    state: runtime.state ? terminalText`${runtime.state}` : runtime.state,
     details,
   });
 }

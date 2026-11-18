@@ -2,13 +2,19 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { Root } from "@openclaw/fs-safe";
+import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { pathMayExistSync } from "./path-existence.js";
+import {
+  moveLegacyMigrationFileNoReplace,
+  recoverLegacyMigrationLinkedMove,
+} from "./state-migrations.no-replace-move.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 /** The stable source identity every doctor-owned import verifies before cleanup. */
 export type LegacyMigrationSourceSnapshot = {
   buffer: Buffer;
-  dev: number;
-  ino: number;
+  dev: bigint;
+  ino: bigint;
   mtimeMs: number;
   raw: string;
   sha256: string;
@@ -68,13 +74,35 @@ export class LegacyMigrationSourceClaim<
     return await this.params.readSnapshot(claimed ? this.claimPath : this.sourcePath);
   }
 
+  async verify(snapshot: TSnapshot, mismatchMessage: string, claimed = false): Promise<TSnapshot> {
+    const current = await this.read(claimed);
+    if (!legacyMigrationSourceSnapshotsMatch(current, snapshot)) {
+      throw new Error(mismatchMessage);
+    }
+    return current;
+  }
+
+  /** Roll back a link publication interrupted before its source name was removed. */
+  async recoverLinkedMove(): Promise<void> {
+    await recoverLegacyMigrationLinkedMove(
+      this.params.stateRoot,
+      this.sourceRelativePath,
+      this.claimRelativePath,
+    );
+  }
+
   async recover(conflictMessage: string): Promise<void> {
+    await this.recoverLinkedMove();
     if (!(await this.exists(true))) {
       return;
     }
     const claimed = await this.read(true);
     if (!(await this.exists())) {
-      await this.params.stateRoot.move(this.claimRelativePath, this.sourceRelativePath);
+      await moveLegacyMigrationFileNoReplace(
+        this.params.stateRoot,
+        this.claimRelativePath,
+        this.sourceRelativePath,
+      );
       return;
     }
     if (!legacyMigrationSourceContentMatches(claimed, await this.read())) {
@@ -85,13 +113,18 @@ export class LegacyMigrationSourceClaim<
 
   async restore(): Promise<string | null> {
     try {
+      await this.recoverLinkedMove();
       if (!(await this.exists(true))) {
         return null;
       }
       if (await this.exists()) {
         return `source path already exists: ${this.sourcePath}`;
       }
-      await this.params.stateRoot.move(this.claimRelativePath, this.sourceRelativePath);
+      await moveLegacyMigrationFileNoReplace(
+        this.params.stateRoot,
+        this.claimRelativePath,
+        this.sourceRelativePath,
+      );
       return null;
     } catch (error) {
       return this.params.formatError?.(error) ?? String(error);
@@ -104,12 +137,36 @@ export class LegacyMigrationSourceClaim<
     beforeClaim?: () => void;
   }): Promise<TSnapshot> {
     params.beforeClaim?.();
-    await this.params.stateRoot.move(this.sourceRelativePath, this.claimRelativePath);
-    const claimed = await this.read(true);
-    if (!legacyMigrationSourceSnapshotsMatch(claimed, params.snapshot)) {
-      throw new Error(params.mismatchMessage);
+    await moveLegacyMigrationFileNoReplace(
+      this.params.stateRoot,
+      this.sourceRelativePath,
+      this.claimRelativePath,
+    );
+    return await this.verify(params.snapshot, params.mismatchMessage, true);
+  }
+
+  /** Drain both receipt-retired names through the caller's safe reader before removing them. */
+  async removeRetiredSources(params: {
+    readSnapshot?: (sourcePath: string) => Promise<LegacyMigrationSourceIdentity>;
+    removeSource?: (sourcePath: string) => Promise<void> | void;
+  }): Promise<number> {
+    let removed = 0;
+    for (const claimed of [false, true]) {
+      if (!(await this.exists(claimed))) {
+        continue;
+      }
+      const sourcePath = claimed ? this.claimPath : this.sourcePath;
+      await (params.readSnapshot ?? this.params.readSnapshot)(sourcePath);
+      if (params.removeSource) {
+        await params.removeSource(sourcePath);
+      } else {
+        await this.params.stateRoot.remove(
+          claimed ? this.claimRelativePath : this.sourceRelativePath,
+        );
+      }
+      removed += 1;
     }
-    return claimed;
+    return removed;
   }
 
   async remove(
@@ -163,14 +220,15 @@ export async function claimLegacyMigrationSourceClaims<
   TSnapshot extends LegacyMigrationSourceIdentity,
 >(
   claims: readonly { claim: LegacyMigrationSourceClaim<TSnapshot>; snapshot: TSnapshot }[],
-  params: { beforeClaim?: () => void; mismatchMessage: string },
+  beforeClaim?: () => void,
 ): Promise<void> {
-  params.beforeClaim?.();
+  beforeClaim?.();
+  const mismatchMessage = "legacy Web Push source changed before doctor could claim it";
   const claimed: LegacyMigrationSourceClaim<TSnapshot>[] = [];
   try {
     for (const { claim, snapshot } of claims) {
       claimed.push(claim);
-      await claim.claim({ snapshot, mismatchMessage: params.mismatchMessage });
+      await claim.claim({ snapshot, mismatchMessage });
     }
   } catch (error) {
     const restoreErrors = await restoreLegacyMigrationSourceClaims(claimed);
@@ -222,61 +280,47 @@ export async function readLegacyMigrationSourceSnapshot(params: {
     resolveLegacyMigrationRelativePath(params.stateDir, params.sourcePath, params.label),
     { hardlinks: "reject", maxBytes: params.maxBytes, symlinks: "reject" },
   );
-  if (!opened.stat.isFile() || opened.stat.size !== opened.buffer.byteLength) {
-    throw new Error(`legacy ${params.label} source is not a stable regular file`);
-  }
-  const raw = opened.buffer.toString("utf8");
+  // Recovery compares text fingerprints before domain parsing can validate the bytes.
+  const raw = params.hashDecodedText
+    ? decodeUtf8Input(
+        opened.buffer,
+        `Back up legacy ${params.label} source ${params.sourcePath}, replace it with a corrected copy, and retry Doctor; the input`,
+      )
+    : opened.buffer.toString("utf8");
   return {
     buffer: opened.buffer,
-    dev: opened.stat.dev,
-    ino: opened.stat.ino,
+    dev: opened.exactIdentity.dev,
+    ino: opened.exactIdentity.ino,
     mtimeMs: opened.stat.mtimeMs,
     raw,
     sha256: createHash("sha256")
       .update(params.hashDecodedText ? raw : opened.buffer)
       .digest("hex"),
-    size: opened.stat.size,
+    size: opened.buffer.byteLength,
     sourcePath: params.sourcePath,
   };
 }
 
-/** Pin synchronous legacy files before and after parsing; never follow new links. */
+/** Read admitted legacy bytes; claim and cleanup owners verify the retained snapshot. */
 export function readLegacyMigrationSourceSnapshotSync(params: {
   sourcePath: string;
   label: string;
   followSymlinks?: boolean;
   maxBytes?: number;
 }): LegacyMigrationSourceSnapshot {
-  const stat = params.followSymlinks ? fs.statSync : fs.lstatSync;
-  const before = stat(params.sourcePath);
-  if (!before.isFile() || (!params.followSymlinks && before.isSymbolicLink())) {
-    throw new Error(
-      `legacy ${params.label} source is not a regular${params.followSymlinks ? "" : " non-symlink"} file`,
-    );
-  }
-  if (params.maxBytes !== undefined && before.size > params.maxBytes) {
-    throw new Error(`legacy ${params.label} source exceeds the metadata size limit`);
-  }
-  const raw = fs.readFileSync(params.sourcePath, "utf8");
-  const after = stat(params.sourcePath);
-  if (
-    !after.isFile() ||
-    (!params.followSymlinks && after.isSymbolicLink()) ||
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    before.size !== after.size ||
-    before.mtimeMs !== after.mtimeMs
-  ) {
-    throw new Error(`legacy ${params.label} source changed while doctor was reading it`);
-  }
+  const { buffer, stat, exactIdentity } = readRegularFileSync({
+    filePath: params.followSymlinks ? fs.realpathSync(params.sourcePath) : params.sourcePath,
+    maxBytes: params.maxBytes,
+  });
+  const raw = buffer.toString("utf8");
   return {
-    buffer: Buffer.from(raw),
-    dev: after.dev,
-    ino: after.ino,
-    mtimeMs: after.mtimeMs,
+    buffer,
+    dev: exactIdentity.dev,
+    ino: exactIdentity.ino,
+    mtimeMs: stat.mtimeMs,
     raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
-    size: after.size,
+    sha256: createHash("sha256").update(buffer).digest("hex"),
+    size: buffer.byteLength,
     sourcePath: params.sourcePath,
   };
 }
@@ -305,8 +349,8 @@ export function claimAndRemoveLegacyMigrationSource(params: {
   snapshot: LegacyMigrationSourceSnapshot;
   label: string;
   followSymlinks?: boolean;
-  maxBytes?: number;
   beforeClaim?: () => void;
+  beforeRestore?: () => void;
   removeSource?: (sourcePath: string) => void;
 }): void {
   params.beforeClaim?.();
@@ -320,12 +364,13 @@ export function claimAndRemoveLegacyMigrationSource(params: {
     (params.removeSource ?? fs.unlinkSync)(claimPath);
   } catch (error) {
     let restoreFailure = "";
-    if (fs.existsSync(claimPath) && !fs.existsSync(params.sourcePath)) {
-      try {
+    try {
+      params.beforeRestore?.();
+      if (fs.existsSync(claimPath) && !fs.existsSync(params.sourcePath)) {
         fs.renameSync(claimPath, params.sourcePath);
-      } catch (restoreError) {
-        restoreFailure = `; the claimed source remains at ${claimPath} because restore also failed: ${String(restoreError)}`;
       }
+    } catch (restoreError) {
+      restoreFailure = `; could not restore the claimed source at ${claimPath}: ${String(restoreError)}`;
     }
     throw new Error(`${String(error)}${restoreFailure}`, { cause: error });
   }

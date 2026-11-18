@@ -3,7 +3,14 @@ import { runPrCiSweeper } from "../../scripts/github/pr-ci-sweeper.mjs";
 import { NOW, context, fakeGithub, pr, recordingCore } from "./pr-ci-sweeper.test-support.js";
 
 describe("runPrCiSweeper", () => {
-  it("closes and reopens a dropped-CI PR without spending budget on stale heads", async () => {
+  it.each([
+    { name: "missing CI", ciRuns: [], reason: "ci-run-missing" },
+    {
+      name: "startup-failed CI",
+      ciRuns: [{ conclusion: "startup_failure" }],
+      reason: "ci-startup-failure",
+    },
+  ])("recovers $name without spending budget on stale heads", async ({ ciRuns, reason }) => {
     const dropped = Array.from({ length: 11 }, (_, index) => ({
       ...pr(),
       number: 200 + index,
@@ -18,8 +25,12 @@ describe("runPrCiSweeper", () => {
           [candidate, { ...candidate, head: { sha: "f".repeat(40) } }],
         ]),
     );
-    const { github, calls } = fakeGithub({ prs: dropped, runsBySha: {}, pullsGetByNumber });
-    const { core: loggedCore, logs } = recordingCore();
+    const { github, calls } = fakeGithub({
+      prs: dropped,
+      runsBySha: Object.fromEntries(dropped.map((candidate) => [candidate.head.sha, ciRuns])),
+      pullsGetByNumber,
+    });
+    const { core: loggedCore, logs, warnings } = recordingCore();
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const operation = runPrCiSweeper({
@@ -56,7 +67,7 @@ describe("runPrCiSweeper", () => {
         number: 210,
         sha: "0a".repeat(6),
         action: "refire",
-        reason: "ci-run-missing",
+        reason,
       });
       expect(
         calls.filter((call) => call.method === "pulls.update").map((call) => call.args),
@@ -65,6 +76,10 @@ describe("runPrCiSweeper", () => {
         { owner: "openclaw", repo: "openclaw", pull_number: 210, state: "open" },
       ]);
       expect(logs.at(-1)).toContain("1 re-fire");
+      expect(warnings).toEqual([
+        `pr-ci-sweeper: re-firing CI for #210 (${reason}; GitHub startup recovery)`,
+      ]);
+      expect(calls.filter((call) => call.method === "actions.reRunWorkflow")).toEqual([]);
     } finally {
       vi.useRealTimers();
     }

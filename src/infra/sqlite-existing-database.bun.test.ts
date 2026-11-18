@@ -1,0 +1,38 @@
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+
+const temp = useAutoCleanupTempDirTracker(afterEach);
+
+it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1")(
+  "lets a Bun update executor commit after its rollback-journal snapshots",
+  () => {
+    const home = temp.make("existing-sqlite-bun-");
+    const result = spawnSync(
+      process.env.BUN_BIN ?? "bun",
+      [
+        "--no-install",
+        "--conditions=openclaw-custom",
+        fileURLToPath(new URL("./sqlite-existing-database.bun.test-support.ts", import.meta.url)),
+        home,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 60_000,
+        env: {
+          PATH: process.env.PATH,
+          SystemRoot: process.env.SystemRoot,
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: home,
+          OPENCLAW_STATE_DIR: path.join(home, "state"),
+        },
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+  },
+);

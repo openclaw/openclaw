@@ -1,18 +1,21 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
+import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatGuardianNotice, ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 import type { CompactionStatus, RunOutputUsage } from "./tool-stream-contract.ts";
+
+registerChatMessageMetadataEnglish();
+
+registerChatComposerEnglish();
 
 type WorkingProgress = {
   key: string;
   runId: string | null;
   startedAt: number;
 };
-
-type WorkingProgressCache = WorkingProgress;
 
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
@@ -32,66 +35,64 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
-const workingProgressBySession = new Map<string, WorkingProgressCache>();
+// Retain presentation timing only within the transcript cache's session window.
+// Evicted sessions reconstruct timing from available activity and observe idle anew.
+const workingProgressBySession = new Map<string, WorkingProgress>();
+const idleObservedAtBySession = new Map<string, number>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  const item = {
+    kind: "notice" as const,
+    key: notice.key,
+    icon: "shieldCheck" as const,
+    timestamp: notice.timestamp,
+  };
+  if (notice.permissionMissing) {
+    return { ...item, text: "", permissionMissing: notice.permissionMissing };
+  }
   if (notice.source === "system") {
     return {
-      kind: "notice",
-      key: notice.key,
+      ...item,
       icon: "cpu",
       label: t("common.system"),
       text: notice.message ?? "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "approved") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.approvedSummary", { action }),
       text: "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "warning") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
       text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
+    ...item,
     label: t("chat.systemNotice.guardian.deniedLabel"),
     text: t("chat.systemNotice.guardian.deniedSummary", {
       action,
       risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
       rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
     }),
-    timestamp: notice.timestamp,
     tone: "danger",
   };
 }
@@ -104,13 +105,17 @@ export function buildCompactionDividerItem(
 ): Extract<ChatItem, { kind: "divider" }> {
   const tokensBefore = marker.tokensBefore;
   const tokensAfter = marker.tokensAfter;
-  const tokensSaved =
+  const metric =
     typeof tokensBefore === "number" &&
     Number.isFinite(tokensBefore) &&
     typeof tokensAfter === "number" &&
     Number.isFinite(tokensAfter) &&
+    tokensAfter >= 0 &&
     tokensBefore > tokensAfter
-      ? Math.floor(tokensBefore - tokensAfter)
+      ? t("chat.compaction.savedTokensWithPercent", {
+          count: formatCompactTokenCount(Math.floor(tokensBefore - tokensAfter)),
+          percent: String(Math.round(((tokensBefore - tokensAfter) / tokensBefore) * 1_000) / 10),
+        })
       : null;
   return {
     kind: "divider",
@@ -122,22 +127,7 @@ export function buildCompactionDividerItem(
       phase === "active" ? "chat.composer.compactingContext" : "chat.composer.contextCompacted",
     ),
     compaction: phase,
-    ...(tokensSaved === null
-      ? {}
-      : {
-          metric: t("chat.compaction.savedTokens", {
-            count: formatCompactTokenCount(tokensSaved),
-          }),
-        }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-          action: {
-            kind: "session-checkpoints" as const,
-            label: t("chat.compaction.openCheckpoints"),
-          },
-        }
-      : {}),
+    ...(metric === null ? {} : { metric }),
     timestamp,
   };
 }
@@ -173,7 +163,7 @@ export function isQueuedSendInlineState(item: ChatQueueItem): boolean {
     queuedSendStarted(item) &&
     !item.localCommandName &&
     (item.sendState === "failed" ||
-      item.sendState === "unconfirmed" ||
+      item.sendState === "held" ||
       item.sendState === "waiting-reconnect" ||
       (item.sendState === "waiting-idle" && Boolean(item.sendError)))
   );
@@ -204,12 +194,20 @@ export function resolveWorkingProgress(
     pendingSends.find((item) => item.sendState === "submitting" || item.sendState === "sending") ??
     pendingSends[0];
   const queuedRunId = queuedProgress?.sendRunId ?? queuedProgress?.pendingRunId;
-  const segmentRunId = streamSegments
+  const idleObservedAt = runId
+    ? undefined
+    : getSessionCacheValue(idleObservedAtBySession, sessionKey);
+  const observedSinceIdle = (at: unknown) =>
+    idleObservedAt === undefined || (typeof at === "number" && at > idleObservedAt);
+  const currentSegments = streamSegments.filter((segment) => observedSinceIdle(segment.ts));
+  const toolProgress = toolMessages
+    .map(asRecord)
+    .filter((message) => observedSinceIdle(message?.["__openclawToolStreamReceivedAt"]));
+  const segmentRunId = currentSegments
     .map((segment) => segment.runId)
     .findLast(
       (candidate): candidate is string => typeof candidate === "string" && candidate.length > 0,
     );
-  const toolProgress = toolMessages.map(asRecord);
   const toolRunId = toolProgress
     .map((message) => message?.runId)
     .findLast(
@@ -237,7 +235,7 @@ export function resolveWorkingProgress(
       )
       // Send performance fields use performance.now(); the elapsed timer renders against Date.now().
       .map((item) => item.createdAt),
-    ...streamSegments
+    ...currentSegments
       .filter((segment) => !explicitRunId || segment.runId === explicitRunId)
       .map((segment) => segment.ts),
     ...toolProgress
@@ -251,7 +249,7 @@ export function resolveWorkingProgress(
       sessionKey,
       explicitRunId ?? `anonymous-${++anonymousWorkingProgressId}`,
     ])}`;
-  workingProgressBySession.set(sessionKey, {
+  setSessionCacheValue(workingProgressBySession, sessionKey, {
     key,
     runId: explicitRunId ?? compatibleCached?.runId ?? null,
     startedAt,
@@ -261,73 +259,27 @@ export function resolveWorkingProgress(
 
 export function clearWorkingProgress(sessionKey: string): void {
   workingProgressBySession.delete(sessionKey);
+  setSessionCacheValue(idleObservedAtBySession, sessionKey, Date.now());
 }
 
 export function resetWorkingProgress(): void {
   workingProgressBySession.clear();
+  idleObservedAtBySession.clear();
   anonymousWorkingProgressId = 0;
 }
 
-export type TurnRecap = { runtimeMs: number; outputTokens: number | null };
-
-// The pane owns one watched run. Session-wide usage is a different fact and
-// may still describe the previous response when the terminal row arrives.
-export type TurnRecapWatch = {
-  sessionKey: string;
-  agentId: string | null;
-  gatewayClient: GatewayBrowserClient | null;
-  runId: string;
-  recap: TurnRecap | null;
-};
-
-export function resolveTurnRecap(
-  host: { turnRecapWatch: TurnRecapWatch | null },
-  params: {
-    sessionKey: string;
-    agentId?: string | null;
-    gatewayClient?: GatewayBrowserClient | null;
-    indicator?: { runId?: string };
-    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
-    usageByRun?: ReadonlyMap<string, RunOutputUsage>;
-  },
-): (TurnRecap & { runId: string }) | null {
-  const { sessionKey, agentId = null, gatewayClient = null, indicator, row, usageByRun } = params;
-  let watch = host.turnRecapWatch;
-  if (
-    watch?.sessionKey !== sessionKey ||
-    watch.agentId !== agentId ||
-    watch.gatewayClient !== gatewayClient
-  ) {
-    watch = null;
-  }
-  if (indicator) {
-    const runId = indicator.runId;
-    if (!runId) {
-      host.turnRecapWatch = null;
+/** Output tokens across the runs of one answer; null unless every run has reported. */
+export function sumRunOutputTokens(
+  usageByRun: ReadonlyMap<string, RunOutputUsage> | undefined,
+  runIds: readonly string[],
+): number | null {
+  let total = 0;
+  for (const runId of runIds) {
+    const usage = usageByRun?.get(runId);
+    if (!usage || usage.outputTokens === null) {
       return null;
     }
-    if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
-    }
+    total += usage.outputTokens;
   }
-  host.turnRecapWatch = watch;
-  if (!watch) {
-    return null;
-  }
-  const outputTokens =
-    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
-  if (row?.lastRunId === watch.runId) {
-    const runtimeMs = row.runtimeMs;
-    if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      watch.recap = { runtimeMs, outputTokens };
-    } else if (row.status && row.status !== "done") {
-      watch.recap = null;
-    }
-  }
-  // Usage can arrive after terminal presentation. Keep accepting facts for
-  // this exact run without borrowing another run's session-row counters.
-  if (watch.recap && watch.recap.outputTokens !== outputTokens) {
-    watch.recap = { ...watch.recap, outputTokens };
-  }
-  return indicator || !watch.recap ? null : { ...watch.recap, runId: watch.runId };
+  return runIds.length > 0 ? total : null;
 }

@@ -1,3 +1,4 @@
+import type { UpdateRecovery } from "../infra/update-recovery.js";
 import type { NodeVersionManager } from "./version-manager-path.js";
 
 export type UpdateRecoveryStep =
@@ -77,9 +78,23 @@ export const UPDATE_FOREIGN_DESTINATION_REASON = "global-install-foreign-destina
 export const UPDATE_GLOBAL_PERMISSION_REASON = "global-install-permission-denied";
 export const UPDATE_ENVIRONMENT_FAILURE_REASONS: ReadonlySet<string> = new Set([
   "node-runtime-preflight",
+  "preflight-node-runtime-incompatible",
+  "source-artifact-ownership",
   UPDATE_GLOBAL_PERMISSION_REASON,
   UPDATE_FOREIGN_DESTINATION_REASON,
 ]);
+
+// Host prerequisites refused before the update changed anything; the message says what to fix.
+const UPDATE_PREREQUISITE_REFUSAL_REASONS: ReadonlySet<string> = new Set([
+  "preflight-node-runtime-incompatible",
+  "git-version-unsupported",
+  "preflight-insufficient-space",
+  "snapshot-capacity-insufficient",
+]);
+
+export function isUpdatePrerequisiteRefusal(reason: string | null | undefined): boolean {
+  return Boolean(reason && UPDATE_PREREQUISITE_REFUSAL_REASONS.has(reason));
+}
 
 export function formatUpdateActivationTimeoutGuidance(
   command: (value: string) => string = (value) => value,
@@ -89,7 +104,7 @@ export function formatUpdateActivationTimeoutGuidance(
 
 export const UPDATE_INSTALL_SKIP_GUIDANCE: Readonly<Record<string, string>> = {
   "external-supervisor-update-required":
-    "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The Control UI and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
+    "This Gateway is managed by an external supervisor. Use your server or deployment's update workflow to update OpenClaw and restart the Gateway. The OpenClaw app and `openclaw update` cannot update this installation. No package changes or Gateway restart were attempted.",
   "container-image-install":
     "Pull or build the target Docker/container image, then redeploy it with the same state/config mounts. No package changes or Gateway restart were attempted.",
   "unmanaged-package-install":
@@ -98,51 +113,11 @@ export const UPDATE_INSTALL_SKIP_GUIDANCE: Readonly<Record<string, string>> = {
     "Run `openclaw update` through this install's npm, pnpm, or Bun global launcher. No package changes or Gateway restart were attempted.",
 };
 
-export const SKIPPED_UPDATE_OUTCOMES: Readonly<Record<string, "pending" | "noop">> = {
-  "managed-service-handoff-started": "pending",
-  "restart-health-pending": "pending",
-  "already-current": "noop",
-  "gateway-readiness-unverified": "noop",
-  "managed-service-handoff-already-running": "noop",
-  "managed-service-handoff-cancelled": "noop",
-  "container-image-install": "noop",
-  "unmanaged-package-install": "noop",
-  "package-update-requires-cli": "noop",
-  "external-supervisor-update-required": "noop",
-  "update-ledger-busy": "noop",
-};
-
-/** A skipped update can be a handoff, an intentional no-op, or a failed attempt. */
-export function classifyUpdateOutcome(outcome: {
-  status?: string;
-  reason?: string;
-}): "succeeded" | "pending" | "noop" | "failed" | undefined {
-  if (outcome.status === "ok") {
-    return "succeeded";
-  }
-  if (outcome.status === "error") {
-    return "failed";
-  }
-  if (outcome.status !== "skipped") {
-    return undefined;
-  }
-  return outcome.reason !== undefined && Object.hasOwn(SKIPPED_UPDATE_OUTCOMES, outcome.reason)
-    ? SKIPPED_UPDATE_OUTCOMES[outcome.reason]
-    : "failed";
-}
-
-/** Ledger refusals can be failed attempts even when no update work started. */
-export function isReportableUpdateRun(run: { status: string; reason: string | null }): boolean {
-  if (run.status === "failed" || run.status === "rolled-back") {
-    return true;
-  }
-  // These are intentional CLI ledger outcomes, not failed update attempts.
-  // Reuse the result owner's classification for all other skipped outcomes.
+/** The restored package and its running service have both passed verification. */
+export function isVerifiedUpdateRollback(result: { recovery?: UpdateRecovery }): boolean {
   return (
-    run.status === "skipped" &&
-    run.reason !== null &&
-    run.reason !== "dry-run" &&
-    run.reason !== "cancelled" &&
-    classifyUpdateOutcome({ status: run.status, reason: run.reason }) === "failed"
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === "healthy"
   );
 }

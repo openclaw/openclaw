@@ -11,11 +11,13 @@ import {
   directSessionReq,
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
+import { disposeSessionReadContexts } from "./sessions-read-cache.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
+afterEach(async () => {
+  await disposeSessionReadContexts();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = undefined;
@@ -38,7 +40,7 @@ test("sessions.create starts an owned empty workspace without reading the agent 
   );
 
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const owned = managedWorktrees.findLiveByOwner("session", key);
+  const owned = await managedWorktrees.findLiveByOwner("session", key);
   expect(owned).toBeDefined();
   try {
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
@@ -53,7 +55,7 @@ test("sessions.create starts an owned empty workspace without reading the agent 
     const replay = await directSessionReq("sessions.create", params, controlUiClient);
 
     expect(replay.ok, JSON.stringify(replay.error)).toBe(true);
-    expect(managedWorktrees.findLiveByOwner("session", key)?.id).toBe(owned!.id);
+    expect((await managedWorktrees.findLiveByOwner("session", key))?.id).toBe(owned!.id);
     expect(await fs.readFile(path.join(owned!.path, "result.txt"), "utf8")).toBe("Keep this work.");
   } finally {
     if (owned) {

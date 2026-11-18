@@ -1,13 +1,18 @@
-// Bundled health checks define built-in doctor checks for runtime readiness.
 import { asOptionalObjectRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
+import type {
+  ExplainToolAvailabilityParams,
+  ToolAvailabilityReport,
+} from "../agents/tool-availability-explanation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateEntry,
+} from "../plugin-state/plugin-state-store.js";
 import { normalizePluginId, normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
-import {
-  loadBundledPluginManifestRegistry,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import type { InspectEmbeddingProviderSetup } from "../plugins/provider-policy-surface.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
@@ -19,6 +24,7 @@ import {
 import { describePluginAvailabilityFailure } from "../plugins/runtime-degraded-state.js";
 import { collectConfiguredWorkerProviderIds } from "../plugins/worker-provider-config.js";
 import { listBundledWorkerProviderOwners } from "../plugins/worker-provider-manifest.js";
+import type { SetupSecretMigrationInspection } from "../secrets/setup-secret-migration.js";
 import { getHealthCheck, registerHealthCheck } from "./health-check-registry.js";
 import type { HealthFinding } from "./health-checks.js";
 
@@ -28,6 +34,15 @@ type EmbeddingProviderSetupInspectionResult =
 
 // Bridges bundled plugin doctor checks into the core health registry.
 type BundledHealthApi = {
+  probeCodexWorkspaceWriteSandbox?: (params: {
+    cfg: OpenClawConfig;
+    env?: NodeJS.ProcessEnv;
+  }) => Promise<
+    | { status: "ok"; command: string }
+    | { status: "skipped"; reason: string }
+    | { status: "denied"; command: string; denial: string }
+    | { status: "inconclusive"; command?: string; reason: string }
+  >;
   registerCodexManagedAppServerDoctorChecks?: (host: {
     getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
@@ -45,12 +60,28 @@ type BundledHealthApi = {
     memoryCoreActive: boolean;
   }) => void;
   registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
+  registerOpenAIDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
+    registerHealthCheck: typeof registerHealthCheck;
+  }) => void;
+  registerSkillWorkshopDoctorChecks?: (host: {
+    getHealthCheck: typeof getHealthCheck;
+    registerHealthCheck: typeof registerHealthCheck;
+    explainToolAvailability: (
+      params: ExplainToolAvailabilityParams,
+    ) => Promise<ToolAvailabilityReport>;
+  }) => void;
 };
 
 type WorkerProviderHealthApi = {
   registerWorkerProviderDoctorChecks?: (host: {
     getHealthCheck: typeof getHealthCheck;
     registerHealthCheck: typeof registerHealthCheck;
+    listPluginStateEntries: <T>(options: OpenKeyedStoreOptions) => Promise<PluginStateEntry<T>[]>;
+    inspectSetupSecrets: (
+      names: readonly string[],
+      env?: NodeJS.ProcessEnv,
+    ) => Promise<SetupSecretMigrationInspection[]>;
   }) => void;
 };
 
@@ -72,31 +103,17 @@ type BundledHealthCheckParams = {
   ) => Promise<T>;
 };
 
-function defineHealthCheckRegistration(
-  register: (
-    params: BundledHealthCheckParams,
-    registerCheck: typeof registerHealthCheck,
-  ) => HealthFinding[] | void,
-  updateReadiness?: "post-plugin",
-) {
-  // Owners retain callback and check identities when refreshing their registration state.
-  // Declare phase ownership before loading their implementation, then carry it onto each check.
-  const registerCheck = updateReadiness
-    ? (check: Parameters<typeof registerHealthCheck>[0]) =>
-        registerHealthCheck(Object.assign(check, { updateReadiness }))
-    : registerHealthCheck;
-  return {
-    updateReadiness,
-    register: (params: BundledHealthCheckParams) => register(params, registerCheck),
-  };
-}
-
-const HEALTH_CHECK_REGISTRATIONS = [
-  defineHealthCheckRegistration(registerMemoryCoreHealthChecks, "post-plugin"),
-  defineHealthCheckRegistration(registerCodexHealthChecks),
-  defineHealthCheckRegistration(registerPolicyHealthChecks),
-  defineHealthCheckRegistration(registerCuaHealthChecks),
-  defineHealthCheckRegistration(registerBundledWorkerProviderHealthChecks),
+const HEALTH_CHECK_REGISTRATIONS: readonly ((
+  params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+) => HealthFinding[] | void)[] = [
+  registerMemoryCoreHealthChecks,
+  registerCodexHealthChecks,
+  registerPolicyHealthChecks,
+  registerOpenAIHealthChecks,
+  registerCuaHealthChecks,
+  registerSkillWorkshopHealthChecks,
+  registerBundledWorkerProviderHealthChecks,
 ];
 
 function loadMemoryCoreHealthApi(): BundledHealthApi {
@@ -140,17 +157,13 @@ export function resolveBundledHealthCheckPluginStateMode(
 export function registerBundledHealthChecks(
   params: BundledHealthCheckParams & { updateReadiness?: "post-plugin" },
 ): HealthFinding[] {
-  const findings: HealthFinding[] = [];
-  for (const registration of HEALTH_CHECK_REGISTRATIONS) {
-    if (
-      params.updateReadiness !== undefined &&
-      registration.updateReadiness !== params.updateReadiness
-    ) {
-      continue;
-    }
-    findings.push(...(registration.register(params) ?? []));
+  // Plugin-owned checks never gate an update; their findings surface after restart.
+  if (params.updateReadiness !== undefined) {
+    return [];
   }
-  return findings;
+  return HEALTH_CHECK_REGISTRATIONS.flatMap(
+    (register) => register(params, registerHealthCheck) ?? [],
+  );
 }
 
 function registerMemoryCoreHealthChecks(
@@ -184,6 +197,76 @@ function registerMemoryCoreHealthChecks(
   });
 }
 
+type CodexHealthApiSelection =
+  | { status: "not-configured" }
+  | { status: "unavailable"; reason: string; reportAvailability: boolean }
+  | {
+      status: "available";
+      api: Pick<
+        BundledHealthApi,
+        "registerCodexManagedAppServerDoctorChecks" | "probeCodexWorkspaceWriteSandbox"
+      >;
+    };
+
+export function resolveCodexHealthApi(
+  params: Pick<BundledHealthCheckParams, "cfg" | "cwd" | "env">,
+): CodexHealthApiSelection {
+  if (!shouldRegisterCodexManagedHealth(params.cfg)) {
+    return { status: "not-configured" };
+  }
+  const unavailable = (reason: string, reportAvailability = true): CodexHealthApiSelection => ({
+    status: "unavailable",
+    reason,
+    reportAvailability,
+  });
+  const env = params.env ?? process.env;
+  const registry = loadPluginManifestRegistryForPluginRegistry({
+    config: params.cfg,
+    workspaceDir: params.cwd,
+    env,
+    pluginIds: ["codex"],
+  });
+  const owner = registry.plugins.find((plugin) => plugin.id === "codex");
+  if (!owner) {
+    // Implicit preferences may use OpenClaw while plugin provisioning is deferred.
+    const requiredRuntimes = collectConfiguredAgentHarnessRuntimes(params.cfg, {
+      includeImplicitRuntimePreferences: false,
+    });
+    if (!requiredRuntimes.includes("codex")) {
+      return { status: "not-configured" };
+    }
+    return unavailable(
+      "The configured Codex plugin was not found. Install it with openclaw plugins install @openclaw/codex.",
+    );
+  }
+  // Doctor must inspect the selected runtime's artifact, including official external installs.
+  // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
+  if (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true) {
+    return unavailable(
+      "The selected Codex plugin is not a bundled or verified official installation. Run openclaw plugins inspect codex --runtime --json to inspect its source; install the official plugin with openclaw plugins install @openclaw/codex.",
+    );
+  }
+  // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
+  // Only load an advertised surface; a broken declaration must still fail visibly.
+  if (owner.doctorHealthChecks !== true) {
+    return unavailable("The selected Codex plugin does not advertise Doctor health checks.", false);
+  }
+  try {
+    return {
+      status: "available",
+      api: loadPluginPublicArtifactModuleSync({
+        pluginRoot: owner.rootDir,
+        artifactBasename: "api.js",
+        origin: owner.origin === "bundled" ? "bundled" : "global",
+      }),
+    };
+  } catch {
+    return unavailable(
+      "The selected Codex plugin declares Doctor health checks but its health API could not be loaded. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
+    );
+  }
+}
+
 function registerCodexHealthChecks(
   params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
@@ -194,60 +277,22 @@ function registerCodexHealthChecks(
       ...describePluginAvailabilityFailure("codex", detail),
     },
   ];
-  const env = params.env ?? process.env;
-  if (shouldRegisterCodexManagedHealth(params.cfg)) {
-    const registry = loadPluginManifestRegistryForPluginRegistry({
-      config: params.cfg,
-      workspaceDir: params.cwd,
-      env,
-      pluginIds: ["codex"],
-    });
-    const owner = registry.plugins.find((plugin) => plugin.id === "codex");
-    if (!owner) {
-      // Implicit preferences may use OpenClaw while plugin provisioning is deferred.
-      const requiredRuntimes = collectConfiguredAgentHarnessRuntimes(params.cfg, {
-        includeImplicitRuntimePreferences: false,
-      });
-      if (!requiredRuntimes.includes("codex")) {
-        return [];
-      }
-      return unavailable(
-        "The configured Codex plugin was not found. Install it with openclaw plugins install @openclaw/codex.",
-      );
-    }
-    // Doctor must inspect the selected runtime's artifact, including official external installs.
-    // A bundled-first lookup can inspect a different version or bypass the selected owner's trust.
-    if (owner.origin !== "bundled" && owner.trustedOfficialInstall !== true) {
-      return unavailable(
-        "The selected Codex plugin is not a bundled or verified official installation. Run openclaw plugins inspect codex --runtime --json to inspect its source; install the official plugin with openclaw plugins install @openclaw/codex.",
-      );
-    }
-    // Retained stable plugins can predate health APIs while an upgrade awaits capability consent.
-    // Only load an advertised surface; a broken declaration must still fail visibly.
-    if (owner.doctorHealthChecks === true) {
-      let api: Pick<BundledHealthApi, "registerCodexManagedAppServerDoctorChecks">;
-      try {
-        api = loadPluginPublicArtifactModuleSync({
-          pluginRoot: owner.rootDir,
-          artifactBasename: "api.js",
-          origin: owner.origin === "bundled" ? "bundled" : "global",
-        });
-      } catch {
-        return unavailable(
-          "The selected Codex plugin declares Doctor health checks but its health API could not be loaded. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
-        );
-      }
-      if (typeof api.registerCodexManagedAppServerDoctorChecks !== "function") {
-        return unavailable(
-          "The selected Codex plugin's Doctor health checks are incomplete. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
-        );
-      }
-      api.registerCodexManagedAppServerDoctorChecks({
-        getHealthCheck,
-        registerHealthCheck: registerCheck,
-      });
-    }
+  const selected = resolveCodexHealthApi(params);
+  if (selected.status === "not-configured") {
+    return [];
   }
+  if (selected.status === "unavailable") {
+    return selected.reportAvailability ? unavailable(selected.reason) : [];
+  }
+  if (typeof selected.api.registerCodexManagedAppServerDoctorChecks !== "function") {
+    return unavailable(
+      "The selected Codex plugin's Doctor health checks are incomplete. Run openclaw plugins inspect codex --runtime --json for details, or openclaw triage for repair help.",
+    );
+  }
+  selected.api.registerCodexManagedAppServerDoctorChecks({
+    getHealthCheck,
+    registerHealthCheck: registerCheck,
+  });
   return [];
 }
 
@@ -255,12 +300,43 @@ function registerPolicyHealthChecks(
   params: BundledHealthCheckParams,
   registerCheck: typeof registerHealthCheck,
 ): void {
-  if (shouldRegisterPolicyHealth(params)) {
+  if (shouldRegisterPolicyHealth(params.cfg)) {
     loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
       dirName: "policy",
       artifactBasename: "api.js",
     }).registerPolicyDoctorChecks?.({ registerHealthCheck: registerCheck });
   }
+}
+
+function registerOpenAIHealthChecks(
+  _params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  // Inspect retained model references even when no OpenAI runtime is active.
+  loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
+    dirName: "openai",
+    artifactBasename: "doctor-health-api.js",
+  }).registerOpenAIDoctorChecks?.({ getHealthCheck, registerHealthCheck: registerCheck });
+}
+
+function registerSkillWorkshopHealthChecks(
+  _params: BundledHealthCheckParams,
+  registerCheck: typeof registerHealthCheck,
+): void {
+  // Registered even while the plugin is disabled: the check reports that plugin switch. A
+  // package without the plugin has no Workshop tool to diagnose, so a missing artifact is skipped.
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync<BundledHealthApi>({
+    dirName: "skill-workshop",
+    artifactCandidates: ["doctor-health-api.js"],
+  })?.registerSkillWorkshopDoctorChecks?.({
+    getHealthCheck,
+    registerHealthCheck: registerCheck,
+    async explainToolAvailability(params) {
+      const { explainToolAvailability } =
+        await import("../agents/tool-availability-explanation.js");
+      return await explainToolAvailability(params);
+    },
+  });
 }
 
 function registerCuaHealthChecks(
@@ -295,12 +371,25 @@ function registerBundledWorkerProviderHealthChecks(
     })?.registerWorkerProviderDoctorChecks?.({
       getHealthCheck,
       registerHealthCheck: registerCheck,
+      async inspectSetupSecrets(names, inspectionEnv) {
+        const { inspectSetupSecretMigration } =
+          await import("../secrets/setup-secret-migration.js");
+        return inspectSetupSecretMigration({ names, env: inspectionEnv ?? env });
+      },
+      async listPluginStateEntries<T>(options: OpenKeyedStoreOptions) {
+        const { createPluginStateKeyedStore } =
+          await import("../plugin-state/plugin-state-store.js");
+        return createPluginStateKeyedStore<T>(pluginId, options).entries();
+      },
     });
   }
 }
 
 function shouldRegisterCodexManagedHealth(cfg: OpenClawConfig): boolean {
-  if (!collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")) {
+  if (
+    cfg.plugins?.entries?.codex?.enabled !== true &&
+    !collectConfiguredAgentHarnessRuntimes(cfg).includes("codex")
+  ) {
     return false;
   }
   return passesManifestOwnerBasePolicy({
@@ -340,8 +429,8 @@ function shouldRegisterPluginHealth(cfg: OpenClawConfig, pluginId: string): bool
   });
 }
 
-function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string }): boolean {
-  const entry = params.cfg.plugins?.entries?.policy;
+function shouldRegisterPolicyHealth(cfg: OpenClawConfig): boolean {
+  const entry = cfg.plugins?.entries?.policy;
   const config = readRecord(entry?.config) ?? {};
   if (entry === undefined || entry.enabled === false || config.enabled === false) {
     return false;
@@ -350,7 +439,7 @@ function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string 
   if (
     !passesManifestOwnerBasePolicy({
       plugin: { id: "policy" },
-      normalizedConfig: normalizePluginsConfig(params.cfg.plugins),
+      normalizedConfig: normalizePluginsConfig(cfg.plugins),
     })
   ) {
     return false;

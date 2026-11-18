@@ -1,4 +1,54 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { TelegramChannelConfig } from "./bot.config.test-support.js";
+
+export const openDirect = (): TelegramChannelConfig => ({ dmPolicy: "open", allowFrom: ["*"] });
+
+export function groupCallbackConfig(): TelegramChannelConfig {
+  return {
+    dmPolicy: "open",
+    capabilities: { inlineButtons: "group" },
+    groupPolicy: "open",
+    groups: { "*": { requireMention: false } },
+  };
+}
+export function questionCallbackConfig(): TelegramChannelConfig {
+  return {
+    ...groupCallbackConfig(),
+    allowFrom: ["9"],
+    capabilities: { inlineButtons: "all" },
+    groups: { "*": { requireMention: false, allowFrom: ["9"] } },
+  };
+}
+
+export const ada = { id: 9, is_bot: false, first_name: "Ada", username: "ada_bot" };
+export const botIdentity = {
+  id: 999,
+  is_bot: true,
+  first_name: "OpenClaw",
+  username: "openclaw_bot",
+};
+export function inboundMessage(overrides: Record<string, unknown> = {}) {
+  return {
+    chat: { id: 7, type: "private" },
+    from: ada,
+    message_id: 103,
+    date: 1736380800,
+    ...overrides,
+  };
+}
+
+export function photoReply(chat: Record<string, unknown>) {
+  return inboundMessage({
+    chat,
+    message_id: 101,
+    date: 1736380700,
+    from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+    text: "Done, here is the image",
+    photo: [
+      { file_id: "generated-photo-1", file_unique_id: "generated-photo-u1", width: 1, height: 1 },
+    ],
+  });
+}
 
 export function createReplyPhotoMessage(text: string) {
   return {
@@ -21,9 +71,7 @@ export type TelegramTestMiddleware = (
   next: () => Promise<void>,
 ) => Promise<void> | void;
 
-type MiddlewareUseSpy = {
-  mock: { calls: unknown[][] };
-};
+type MiddlewareUseSpy = { mock: { calls: unknown[][] } };
 
 type ChannelInboundModule = typeof import("openclaw/plugin-sdk/channel-inbound");
 type ChannelInboundRunParams = Parameters<ChannelInboundModule["runChannelInboundEvent"]>[0];
@@ -31,18 +79,25 @@ type BufferedReplyDispatcher =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 
 export function makeTelegramKeyedStoreTestMock<Value>(
-  overrides: Partial<PluginStateKeyedStore<Value>> = {},
-): PluginStateKeyedStore<Value> {
+  overrides: Partial<PluginStateKeyedStore<Value, 2>> = {},
+): PluginStateKeyedStore<Value, 2> {
   const unexpectedCall = async (operation: string): Promise<never> => {
     throw new Error(`unexpected Telegram keyed-store ${operation} call`);
   };
   return {
+    observe: () => unexpectedCall("observe"),
+    compareAndApply: () => unexpectedCall("compareAndApply"),
     register: () => unexpectedCall("register"),
     registerIfAbsent: () => unexpectedCall("registerIfAbsent"),
     lookup: () => unexpectedCall("lookup"),
+    lookupMany: () => unexpectedCall("lookupMany"),
     consume: () => unexpectedCall("consume"),
     delete: () => unexpectedCall("delete"),
+    deleteIfEqual: () => unexpectedCall("deleteIfEqual"),
     entries: () => unexpectedCall("entries"),
+    entriesInKeyRange: () => unexpectedCall("entriesInKeyRange"),
+    moveEntriesFrom: () => unexpectedCall("moveEntriesFrom"),
+    count: () => unexpectedCall("count"),
     clear: () => unexpectedCall("clear"),
     ...overrides,
   };
@@ -127,24 +182,6 @@ export function createTelegramCallbackContext(params: {
   };
 }
 
-export function createTelegramReactionContext(params: {
-  updateId: number;
-  reaction?: Record<string, unknown>;
-}): TelegramTestContext {
-  return {
-    update: { update_id: params.updateId },
-    messageReaction: {
-      chat: { id: 1234, type: "private" },
-      message_id: 42,
-      user: { id: 9, first_name: "Ada" },
-      date: 1_736_380_800,
-      old_reaction: [],
-      new_reaction: [{ type: "emoji", emoji: "👍" }],
-      ...params.reaction,
-    },
-  };
-}
-
 export async function runTelegramTestMiddlewareChain(
   middlewareUseSpy: MiddlewareUseSpy,
   ctx: TelegramTestContext,
@@ -160,11 +197,7 @@ export async function runTelegramTestMiddlewareChain(
     }
     index = nextIndex;
     const middleware = middlewares[nextIndex];
-    if (!middleware) {
-      await finalHandler(ctx);
-      return;
-    }
-    await middleware(ctx, async () => dispatch(nextIndex + 1));
+    await (middleware ? middleware(ctx, async () => dispatch(nextIndex + 1)) : finalHandler(ctx));
   };
   await dispatch(0);
 }

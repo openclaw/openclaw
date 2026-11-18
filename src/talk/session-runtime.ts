@@ -1,32 +1,20 @@
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import {
   buildRealtimeVoiceAgentControlSpeechMessage,
   REALTIME_VOICE_AGENT_CONTROL_FAILURE_MESSAGE,
 } from "./agent-run-control-shared.js";
+import type { RealtimeVoiceBridgeCreateRequest } from "./provider-contexts.js";
 import type { InternalRealtimeVoiceProviderCapabilities } from "./provider-internal.js";
 import type {
   RealtimeVoiceBridge,
-  RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceAudioClearReason,
-  RealtimeVoiceAudioFormat,
   RealtimeVoiceBargeInOptions,
-  RealtimeVoiceCloseOptions,
-  RealtimeVoiceCloseReason,
-  RealtimeVoiceBridgeEvent,
-  RealtimeVoiceProviderConfig,
-  RealtimeVoiceResponseOutcome,
-  RealtimeVoiceRole,
-  RealtimeVoiceTool,
   RealtimeVoiceToolCallEvent,
-  RealtimeVoiceToolResultOptions,
 } from "./provider-types.js";
 import { resolveRealtimeVoiceBargeIn } from "./realtime-session-policy.js";
 
-/**
- * Transport-facing audio target used by realtime voice bridge sessions.
- */
 export type RealtimeVoiceAudioSink = {
   isOpen?: () => boolean;
   sendAudio: RealtimeVoiceBridgeCallbacks["onAudio"];
@@ -38,54 +26,32 @@ export type RealtimeVoiceAudioSink = {
 /**
  * Controls how provider playback marks are bridged to transports that may or may not ack marks.
  */
-export type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
+type RealtimeVoiceMarkStrategy = "transport" | "ack-immediately" | "ignore";
 
 /**
  * Stable session facade handed to gateway code and provider tool callbacks.
  */
-export type RealtimeVoiceBridgeSession = {
+export type RealtimeVoiceBridgeSession = Pick<
+  RealtimeVoiceBridge,
+  "acknowledgeMark" | "close" | "connect" | "sendAudio" | "setMediaTimestamp" | "submitToolResult"
+> & {
   bridge: RealtimeVoiceBridge;
   readonly capabilities?: InternalRealtimeVoiceProviderCapabilities;
-  acknowledgeMark(markName?: string): void;
-  close(options?: RealtimeVoiceCloseOptions): void | Promise<void>;
-  connect(): Promise<void>;
-  sendAudio(audio: Buffer): void;
   sendUserMessage(text: string): void;
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void;
-  setMediaTimestamp(ts: number): void;
-  submitToolResult(
-    callId: string,
-    result: unknown,
-    options?: RealtimeVoiceToolResultOptions,
-  ): void | Promise<void>;
   triggerGreeting(instructions?: string): void;
 };
 
-/**
- * Provider bridge inputs plus transport callbacks for one realtime voice session.
- */
-export type RealtimeVoiceBridgeSessionParams = {
+export type RealtimeVoiceBridgeSessionParams = Omit<
+  RealtimeVoiceBridgeCreateRequest,
+  "onAudio" | "onClearAudio" | "onMark" | "getPlaybackState" | "onToolCall" | "onReady"
+> & {
   provider: RealtimeVoiceProviderPlugin;
   capabilities?: InternalRealtimeVoiceProviderCapabilities;
-  cfg?: OpenClawConfig;
-  /** Host-selected agent scope for provider auth and agent-owned bridge state. */
-  agentId?: string;
-  providerConfig: RealtimeVoiceProviderConfig;
-  audioFormat?: RealtimeVoiceAudioFormat;
   audioSink: RealtimeVoiceAudioSink;
-  instructions?: string;
-  language?: string;
   initialGreetingInstructions?: string;
-  autoRespondToAudio?: boolean;
-  interruptResponseOnInputAudio?: boolean;
   markStrategy?: RealtimeVoiceMarkStrategy;
   triggerGreetingOnReady?: boolean;
-  tools?: RealtimeVoiceTool[];
-  runAgentConsult?: RealtimeVoiceAgentConsultRunner;
-  onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
-  handleDelegationInput?: RealtimeVoiceBridgeCallbacks["handleDelegationInput"];
-  onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
-  onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   /** Admit a host-requested response before the provider can complete it synchronously. */
   onResponseRequest?: () => void;
   onToolCall?: (
@@ -93,15 +59,10 @@ export type RealtimeVoiceBridgeSessionParams = {
     session: RealtimeVoiceBridgeSession,
   ) => void | Promise<void>;
   onReady?: (session: RealtimeVoiceBridgeSession) => void;
-  onError?: (error: Error) => void;
-  onClose?: (reason: RealtimeVoiceCloseReason) => void;
 };
 
 type RealtimeVoiceSessionPhase = "admitting" | "provider-terminal" | "closing" | "disposed";
 
-/**
- * Creates a realtime voice bridge session and wires provider events to the configured audio sink.
- */
 export function createRealtimeVoiceBridgeSession(
   params: RealtimeVoiceBridgeSessionParams,
 ): RealtimeVoiceBridgeSession {
@@ -242,16 +203,8 @@ export function createRealtimeVoiceBridgeSession(
       // An error callback is the terminal boundary for provider callback failures.
     }
   };
-  const bridge = params.provider.createBridge({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    providerConfig: params.providerConfig,
-    audioFormat: params.audioFormat,
-    instructions: params.instructions,
-    language: params.language,
-    autoRespondToAudio: params.autoRespondToAudio,
-    interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
-    tools: params.tools,
+  const bridgeCallbacks: RealtimeVoiceBridgeCallbacks &
+    Pick<RealtimeVoiceBridgeCreateRequest, "runAgentConsult"> = {
     ...(runAgentConsult
       ? {
           runAgentConsult: async (request) => {
@@ -316,9 +269,10 @@ export function createRealtimeVoiceBridgeSession(
         }
       }
     },
-    onTranscript: (role, text, isFinal) => {
+    onTranscript: (...args) => {
+      const isFinal = args[2];
       if (isAdmitting() || (phase === "closing" && isFinal)) {
-        params.onTranscript?.(role, text, isFinal);
+        params.onTranscript?.(...args);
       }
     },
     ...(handleDelegationInput
@@ -392,6 +346,20 @@ export function createRealtimeVoiceBridgeSession(
       closeReported = true;
       params.onClose?.(reason);
     },
+  };
+  // Only callbacks re-enter the transport plugin. Request data stays plain because providers
+  // pass it to core config and worker boundaries, which structured-clone it.
+  const bridge = params.provider.createBridge({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    providerConfig: params.providerConfig,
+    audioFormat: params.audioFormat,
+    instructions: params.instructions,
+    language: params.language,
+    autoRespondToAudio: params.autoRespondToAudio,
+    interruptResponseOnInputAudio: params.interruptResponseOnInputAudio,
+    tools: params.tools,
+    ...wrapCurrentPluginInstance(bridgeCallbacks),
   });
   bridgeRef.current = bridge;
 

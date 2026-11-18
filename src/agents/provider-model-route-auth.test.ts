@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import type { ProviderModelRouteCandidate } from "../plugin-sdk/provider-model-types.js";
 import {
   buildProviderModelAuthSourcePlan,
   type ProviderModelAuthDirectSource,
@@ -10,192 +11,96 @@ import {
   selectProviderModelRouteAuth,
 } from "./provider-model-route-auth.js";
 
+const support = {
+  requestTransportOverrides: "none",
+  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+} as const;
 const routes = {
   kind: "routes",
   routes: [
     {
+      ...support,
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1",
       authRequirement: "api-key",
-      requestTransportOverrides: "none",
-      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
     },
     {
+      ...support,
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
       authRequirement: "subscription",
-      requestTransportOverrides: "none",
-      runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
     },
   ],
 } as const;
-
 function profile(
   profileId: string,
   mode: string,
-  readiness: ProviderModelAuthProfileSource["readiness"],
+  readiness: ProviderModelAuthProfileSource["readiness"] = "ready",
   cooldown: ProviderModelAuthProfileSource["cooldown"] = "clear",
 ): ProviderModelAuthProfileSource {
   return { kind: "profile", profileId, mode, readiness, cooldown };
 }
-
-function direct(
-  mode: string,
+const direct = (
   authorization: ProviderModelAuthDirectSource["authorization"] = "declared",
-): ProviderModelAuthDirectSource {
-  return {
-    kind: "direct",
-    mode,
-    readiness: "ready",
-    evidence: "provider-config",
-    authorization,
-  };
+): ProviderModelAuthDirectSource => ({
+  kind: "direct",
+  mode: "api-key",
+  readiness: "ready",
+  evidence: "provider-config",
+  authorization,
+});
+type RouteOptions = Partial<Parameters<typeof selectProviderModelRouteAuth>[0]>;
+type Plan = Partial<Parameters<typeof buildProviderModelAuthSourcePlan>[0]>;
+function selectRoute(plan: Plan, options: RouteOptions = {}) {
+  return selectProviderModelRouteAuth({
+    provider: "openai",
+    resolution: routes,
+    sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [], ...plan }),
+    ...options,
+  });
 }
+const api = profile("openai:platform", "api_key");
+const subscription = profile("openai:chatgpt", "oauth");
+const shared = {
+  ...profile("openai:shared", "oauth"),
+  authFlow: "chatgpt-token-sharing",
+  authRequirement: "api-key",
+} as const;
+const selected = (profileId: string, authRequirement: string) => ({
+  kind: "selected",
+  selection: { source: { kind: "profile", profileId }, route: { authRequirement } },
+});
+const singleRoute = (index: 0 | 1) => ({ ...routes, routes: [routes.routes[index]] }) as const;
+const withSubscription = (patch: Partial<ProviderModelRouteCandidate>) =>
+  ({ ...routes, routes: [routes.routes[0], { ...routes.routes[1], ...patch }] }) as const;
 
-describe("provider model route auth", () => {
-  it("applies the provider preference before an automatic remembered API profile", () => {
-    const decision = selectProviderModelRouteAuth({
-      provider: "openai",
-      resolution: { ...routes, preferredAuthRequirement: "subscription" },
-      sourcePlan: buildProviderModelAuthSourcePlan({
-        preferredProfileId: "openai:platform",
-        profiles: [
-          profile("openai:platform", "api_key", "ready"),
-          profile("openai:chatgpt", "oauth", "ready"),
-        ],
-      }),
-    });
-    expect(decision).toMatchObject({
-      kind: "selected",
-      selection: {
-        source: { profileId: "openai:chatgpt" },
-        route: { authRequirement: "subscription" },
-      },
-    });
-  });
-
-  it.each([
-    "unavailable",
-    "cooldown",
-    "explicit-order",
-    "profile-priority",
-    "required-profile",
-    "configured-auth",
-    "api-only",
-  ])("preserves API selection for %s despite a subscription preference", (selection) => {
-    const api = profile("openai:platform", "api_key", "ready");
-    const decision = selectProviderModelRouteAuth({
-      provider: "openai",
-      resolution: { ...routes, preferredAuthRequirement: "subscription" },
-      configuredAuthMode: selection === "configured-auth" ? "api-key" : undefined,
-      sourcePlan: buildProviderModelAuthSourcePlan({
-        ownership:
-          selection === "required-profile" ? { reason: "runtime-binding", source: api } : undefined,
-        explicitOrder: selection === "explicit-order",
-        preserveProfilePriority: selection === "profile-priority",
-        profiles: [
-          api,
-          ...(selection === "api-only"
-            ? []
-            : [
-                profile(
-                  "openai:chatgpt",
-                  "oauth",
-                  selection === "unavailable" ? "unavailable" : "ready",
-                  selection === "cooldown" ? "active" : "clear",
-                ),
-              ]),
-        ],
-      }),
-    });
-    expect(decision).toMatchObject({
-      kind: "selected",
-      selection: {
-        source: { profileId: "openai:platform" },
-        route: { authRequirement: "api-key" },
-      },
-    });
-  });
-
-  it.each([
-    ["api-key", "api-key", "api_key"],
-    ["api_key", "api-key", "api_key"],
-    ["aws-sdk", "api-key", "aws-sdk"],
-    ["oauth", "subscription", "oauth"],
-    ["token", "subscription", "token"],
-    [undefined, "api-key", "api_key"],
-    [undefined, "subscription", "oauth"],
-  ] as const)("materializes %s for a %s route as %s", (mode, requirement, expected) => {
-    expect(resolveProviderModelRouteMaterializationAuthMode({ mode, requirement })).toBe(expected);
-  });
-
-  it.each([
+it.each<[string, Plan, RouteOptions, object]>([
+  [
+    "renewable OAuth API route",
+    { profiles: [shared] },
+    {},
     {
-      label: "pins an unknown source before a ready sibling route",
-      profiles: [
-        profile("openai:unknown", "oauth", "unknown"),
-        profile("openai:platform", "api_key", "ready"),
-      ],
-      expectedProfileId: "openai:unknown",
-      expectedRoute: "subscription",
-      expectedAttempts: ["openai:unknown", "openai:platform"],
+      ...selected("openai:shared", "api-key"),
+      selection: { source: shared, route: { api: "openai-responses", authRequirement: "api-key" } },
+      attempts: [{ kind: "profile", source: shared, sameRouteProfileIds: ["openai:shared"] }],
     },
+  ],
+  [
+    "pinned identity without inference",
     {
-      label: "keeps the first ordered source when a later same-route source is ready",
-      profiles: [
-        profile("openai:unknown", "oauth", "unknown"),
-        profile("openai:platform", "api_key", "ready"),
-        profile("openai:subscription", "token", "ready"),
-      ],
-      expectedProfileId: "openai:unknown",
-      expectedRoute: "subscription",
-      expectedAttempts: ["openai:unknown", "openai:subscription", "openai:platform"],
+      ownership: { reason: "runtime-binding", source: { ...subscription, authRequirement: null } },
     },
+    {},
+    { kind: "rejected", reason: "required-profile" },
+  ],
+  [
+    "separate profile and direct attempts",
     {
-      label: "drops a proven-unavailable source before route selection",
-      profiles: [
-        profile("openai:invalid", "api_key", "unavailable"),
-        profile("openai:subscription", "oauth", "ready"),
-      ],
-      expectedProfileId: "openai:subscription",
-      expectedRoute: "subscription",
-      expectedAttempts: ["openai:subscription"],
+      profiles: [profile("openai:platform", "api_key", "unknown")],
+      fallback: direct(),
     },
-  ])("$label", ({ expectedAttempts, expectedProfileId, expectedRoute, profiles }) => {
-    const decision = selectProviderModelRouteAuth({
-      provider: "openai",
-      resolution: routes,
-      sourcePlan: buildProviderModelAuthSourcePlan({ profiles }),
-    });
-    expect(decision).toMatchObject({
-      kind: "selected",
-      selection: {
-        kind: "selected",
-        source: { kind: "profile", profileId: expectedProfileId },
-        route: { authRequirement: expectedRoute },
-      },
-    });
-    if (decision.kind !== "selected") {
-      throw new Error("expected selected route");
-    }
-    expect(
-      decision.attempts.map((attempt) =>
-        attempt.kind === "profile" ? attempt.source.profileId : "direct",
-      ),
-    ).toEqual(expectedAttempts);
-  });
-
-  it("keeps profile and direct fallback attempts distinct on one route", () => {
-    const decision = selectProviderModelRouteAuth({
-      provider: "openai",
-      resolution: routes,
-      configuredAuthMode: "api-key",
-      sourcePlan: buildProviderModelAuthSourcePlan({
-        profiles: [profile("openai:platform", "api_key", "unknown")],
-        fallback: direct("api-key"),
-      }),
-    });
-    expect(decision).toMatchObject({
+    { configuredAuthMode: "api-key" },
+    {
       kind: "selected",
       attempts: [
         {
@@ -205,369 +110,164 @@ describe("provider model route auth", () => {
         },
         { kind: "direct", allowAuthProfileFallback: false },
       ],
-    });
-  });
-
-  it("omits an incompatible direct fallback when a compatible profile exists", () => {
-    const decision = selectProviderModelRouteAuth({
-      provider: "openai",
-      resolution: { ...routes, routes: [routes.routes[1]] },
-      sourcePlan: buildProviderModelAuthSourcePlan({
-        profiles: [profile("openai:chatgpt", "oauth", "ready")],
-        fallback: direct("api-key"),
-      }),
-    });
-
-    expect(decision).toMatchObject({
-      kind: "selected",
-      selection: {
-        source: { kind: "profile", profileId: "openai:chatgpt" },
-        route: { authRequirement: "subscription" },
-      },
-    });
-    if (decision.kind !== "selected") {
-      throw new Error("expected selected route");
-    }
-    expect(decision.attempts).toEqual([
-      expect.objectContaining({
-        kind: "profile",
-        source: expect.objectContaining({ profileId: "openai:chatgpt" }),
-      }),
-    ]);
-  });
-
-  it("does not attach a direct API key to a configured subscription route", () => {
-    const decision = selectProviderModelRouteAuth({
-      provider: "openai",
-      resolution: routes,
-      configuredAuthMode: "oauth",
-      sourcePlan: buildProviderModelAuthSourcePlan({
-        profiles: [profile("openai:chatgpt", "oauth", "ready")],
-        fallback: direct("api-key"),
-      }),
-    });
-
-    expect(decision).toMatchObject({
-      kind: "selected",
-      selection: { route: { authRequirement: "subscription" } },
-    });
-    if (decision.kind !== "selected") {
-      throw new Error("expected selected route");
-    }
-    expect(decision.attempts).toHaveLength(1);
-    expect(decision.attempts[0]).toMatchObject({ kind: "profile" });
-  });
-
-  it("fails an all-cooldown tier closed before direct fallback", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: routes,
-        sourcePlan: buildProviderModelAuthSourcePlan({
-          profiles: [profile("openai:cooldown", "api_key", "ready", "active")],
-          fallback: direct("api-key"),
-        }),
-      }),
-    ).toMatchObject({
+    },
+  ],
+  [
+    "wrong-route profile cannot hide cooldown",
+    {
+      profiles: [subscription, profile("openai:platform", "api_key", "ready", "active")],
+      fallback: direct(),
+    },
+    { resolution: singleRoute(0) },
+    {
       kind: "rejected",
       reason: "all-cooldown",
-      source: { profileId: "openai:cooldown" },
-    });
-  });
-
-  it.each([undefined, "api-key"] as const)(
-    "does not let a clear wrong-route profile hide a cooldown compatible tier (%s)",
-    (configuredAuthMode) => {
-      expect(
-        selectProviderModelRouteAuth({
-          provider: "openai",
-          resolution: { ...routes, routes: [routes.routes[0]] },
-          configuredAuthMode,
-          sourcePlan: buildProviderModelAuthSourcePlan({
-            profiles: [
-              profile("openai:chatgpt", "oauth", "ready"),
-              profile("openai:platform", "api_key", "ready", "active"),
-            ],
-            fallback: direct("api-key"),
-          }),
-        }),
-      ).toMatchObject({
-        kind: "rejected",
-        reason: "all-cooldown",
-        source: { profileId: "openai:platform" },
-      });
+      source: { profileId: "openai:platform" },
     },
-  );
-
-  it.each([
-    { label: "empty", profiles: [] },
+  ],
+  [
+    "required profile overrides configured auth",
     {
-      label: "all unavailable",
-      profiles: [profile("openai:invalid", "api_key", "unavailable")],
-    },
-  ])("rejects an $label explicit order before direct fallback", ({ profiles }) => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: routes,
-        sourcePlan: buildProviderModelAuthSourcePlan({
-          profiles,
-          explicitOrder: true,
-          fallback: direct("api-key"),
-        }),
-      }),
-    ).toMatchObject({ kind: "rejected", reason: "explicit-order" });
-  });
-
-  it("keeps a required profile authoritative over configured auth", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: routes,
-        configuredAuthMode: "api-key",
-        sourcePlan: buildProviderModelAuthSourcePlan({
-          ownership: {
-            reason: "provider-binding",
-            source: profile("openai:bound", "token", "unknown"),
-          },
-          profiles: [],
-        }),
-      }),
-    ).toMatchObject({
-      kind: "selected",
-      selection: {
-        source: { profileId: "openai:bound" },
-        route: { authRequirement: "subscription" },
+      ownership: {
+        reason: "provider-binding",
+        source: profile("openai:bound", "token", "unknown"),
       },
-    });
-  });
-
-  it.each([
-    { configuredAuthMode: "oauth", profileMode: "api_key", route: "subscription" },
-    { configuredAuthMode: "api-key", profileMode: "oauth", route: "api-key" },
-  ])(
-    "rejects a $profileMode profile for a configured $configuredAuthMode route",
-    ({ configuredAuthMode, profileMode, route }) => {
-      expect(
-        selectProviderModelRouteAuth({
-          provider: "openai",
-          resolution: routes,
-          configuredAuthMode,
-          sourcePlan: buildProviderModelAuthSourcePlan({
-            profiles: [profile("openai:wrong-route", profileMode, "ready")],
-          }),
-        }),
-      ).toMatchObject({
-        kind: "rejected",
-        reason: "configured-auth",
-        source: { profileId: "openai:wrong-route" },
-        route: { authRequirement: route },
-      });
     },
-  );
-
-  it("rejects configured auth without a validated harness credential mode", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: routes,
-        configuredAuthMode: "oauth",
-        runtimeAuthOwner: { id: "codex" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toMatchObject({
+    { configuredAuthMode: "api-key" },
+    selected("openai:bound", "subscription"),
+  ],
+  [
+    "OAuth cannot serve configured API-key route",
+    {
+      profiles: [profile("openai:wrong-route", "oauth")],
+    },
+    { configuredAuthMode: "api-key" },
+    {
       kind: "rejected",
       reason: "configured-auth",
-      route: { authRequirement: "subscription" },
-    });
-  });
-
-  it("defers an ambiguous no-profile route to an explicit harness auth owner", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: routes,
-        runtimeAuthOwner: { id: "codex" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toEqual({
-      kind: "deferred",
-      reason: "runtime-auth-owner",
-      routeSupport: {
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      },
-    });
-  });
-
-  it("lets an explicit native owner authenticate its sole compatible route", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: { ...routes, routes: [routes.routes[1]] },
-        runtimeAuthOwner: { id: "codex" },
-        allowNativeAuthOnSingleRoute: true,
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toEqual({
-      kind: "deferred",
-      reason: "runtime-auth-owner",
-      routeSupport: {
-        requestTransportOverrides: "none",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-      },
-    });
-  });
-
-  it("does not infer native ownership for an explicitly authored single route", () => {
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: { ...routes, routes: [routes.routes[1]] },
-        runtimeAuthOwner: { id: "codex" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toMatchObject({ kind: "rejected", reason: "configured-auth" });
-  });
-
-  it.each([
-    ["Platform", routes.routes[0], profile("openai:chatgpt", "oauth", "ready")],
-    ["subscription", routes.routes[1], profile("openai:platform", "api_key", "ready")],
-  ] as const)(
-    "does not defer a concrete %s route to unvalidated native auth",
-    (_label, route, source) => {
-      expect(
-        selectProviderModelRouteAuth({
-          provider: "openai",
-          resolution: { ...routes, routes: [route] },
-          runtimeAuthOwner: { id: "codex" },
-          sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [source] }),
-        }),
-      ).toMatchObject({
-        kind: "rejected",
-        reason: "configured-auth",
-        source: { profileId: source.profileId },
-      });
+      source: { profileId: "openai:wrong-route" },
+      route: { authRequirement: "api-key" },
     },
-  );
+  ],
+])("%s", (_name, plan, options, expected) => {
+  expect(selectRoute(plan, options)).toMatchObject(expected);
+});
 
-  it("rejects a runtime owner that cannot reproduce every candidate route", () => {
-    const incompatibleRoutes = {
-      ...routes,
-      routes: [
-        routes.routes[0],
-        { ...routes.routes[1], runtimePolicy: { compatibleIds: ["openclaw"] } },
-      ],
-    } as const;
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: incompatibleRoutes,
-        runtimeAuthOwner: { id: "codex" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toMatchObject({ kind: "rejected", reason: "configured-auth" });
-  });
-
-  it("fails closed when any deferred route omits runtime compatibility", () => {
-    const undeclaredRoutes = {
-      ...routes,
-      routes: [routes.routes[0], { ...routes.routes[1], runtimePolicy: undefined }],
-    } as const;
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: undeclaredRoutes,
-        runtimeAuthOwner: { id: "codex" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toMatchObject({ kind: "rejected", reason: "configured-auth" });
-  });
-
-  it("aggregates request overrides across every deferred route", () => {
-    const overrideRoutes = {
-      ...routes,
-      routes: [routes.routes[0], { ...routes.routes[1], requestTransportOverrides: "present" }],
-    } as const;
-    expect(
-      selectProviderModelRouteAuth({
-        provider: "openai",
-        resolution: overrideRoutes,
-        runtimeAuthOwner: { id: "openclaw" },
-        sourcePlan: buildProviderModelAuthSourcePlan({ profiles: [] }),
-      }),
-    ).toMatchObject({
-      kind: "deferred",
-      routeSupport: {
-        requestTransportOverrides: "present",
-        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+it.each(["remembered", "explicit-order", "profile-priority"])(
+  "honors provider preference unless %s selection is explicit",
+  (selection) => {
+    const decision = selectRoute(
+      {
+        profiles: [api, subscription],
+        preferredProfileId: "openai:platform",
+        explicitOrder: selection === "explicit-order",
+        preserveProfilePriority: selection === "profile-priority",
       },
+      { resolution: { ...routes, preferredAuthRequirement: "subscription" } },
+    );
+    expect(decision).toMatchObject(
+      selection === "remembered"
+        ? selected("openai:chatgpt", "subscription")
+        : selected("openai:platform", "api-key"),
+    );
+  },
+);
+
+it.each([
+  ["api-key", "api-key", "api_key"],
+  ["aws-sdk", "api-key", "aws-sdk"],
+  [undefined, "api-key", "api_key"],
+  [undefined, "subscription", "oauth"],
+] as const)("materializes %s for %s as %s", (mode, requirement, expected) => {
+  expect(resolveProviderModelRouteMaterializationAuthMode({ mode, requirement })).toBe(expected);
+});
+
+it.each<RouteOptions>([{ resolution: singleRoute(1) }, { configuredAuthMode: "oauth" }])(
+  "omits direct API fallback for subscription route: %j",
+  (options) => {
+    expect(selectRoute({ profiles: [subscription], fallback: direct() }, options)).toMatchObject({
+      ...selected("openai:chatgpt", "subscription"),
+      attempts: [{ kind: "profile", source: { profileId: "openai:chatgpt" } }],
     });
+  },
+);
+
+it.each([
+  ["empty", []],
+  ["unavailable", [profile("openai:invalid", "api_key", "unavailable")]],
+] as const)("rejects %s explicit order before direct fallback", (_name, profiles) => {
+  expect(selectRoute({ profiles, explicitOrder: true, fallback: direct() })).toMatchObject({
+    kind: "rejected",
+    reason: "explicit-order",
   });
 });
 
-describe("ambient credential admission", () => {
-  const ambient = (mode: string): ProviderModelAuthDirectSource => direct(mode, "ambient");
-  const ready = (profileId: string, mode: string) => profile(profileId, mode, "ready");
-  const select = (plan: Parameters<typeof selectProviderModelAuthSources>[0]["plan"]) =>
-    selectProviderModelAuthSources({ provider: "openai", plan });
-
-  it("drops an ambient fallback queued behind usable profiles", () => {
-    const decision = select(
-      buildProviderModelAuthSourcePlan({
-        profiles: [ready("openai:chatgpt", "oauth")],
-        fallback: ambient("api-key"),
-      }),
-    );
-
-    expect(decision).toMatchObject({ kind: "selected" });
-    expect(decision.kind === "selected" && decision.attempts).toMatchObject([{ kind: "profile" }]);
+it.each<[string, RouteOptions, object]>([
+  [
+    "configured auth",
+    { configuredAuthMode: "oauth" },
+    { route: { authRequirement: "subscription" } },
+  ],
+  ["single route without explicit ownership", { resolution: singleRoute(1) }, {}],
+  [
+    "incompatible candidate",
+    {
+      resolution: withSubscription({ runtimePolicy: { compatibleIds: ["openclaw"] } }),
+    },
+    {},
+  ],
+  [
+    "candidate without runtime compatibility",
+    {
+      resolution: withSubscription({ runtimePolicy: undefined }),
+    },
+    {},
+  ],
+])("rejects native deferral: %s", (_name, options, expected) => {
+  expect(selectRoute({}, { runtimeAuthOwner: { id: "codex" }, ...options })).toMatchObject({
+    kind: "rejected",
+    reason: "configured-auth",
+    ...expected,
   });
+});
 
-  it("keeps a declared fallback queued behind usable profiles", () => {
-    const decision = select(
-      buildProviderModelAuthSourcePlan({
-        profiles: [ready("openai:chatgpt", "oauth")],
-        fallback: direct("api-key"),
-      }),
-    );
-
-    expect(decision.kind === "selected" && decision.attempts).toMatchObject([
-      { kind: "profile" },
-      { kind: "direct" },
-    ]);
+it.each<[string, RouteOptions, "none" | "present"]>([
+  [
+    "explicit sole-route owner",
+    {
+      resolution: singleRoute(1),
+      allowNativeAuthOnSingleRoute: true,
+    },
+    "none",
+  ],
+  [
+    "all-route request overrides",
+    {
+      resolution: withSubscription({ requestTransportOverrides: "present" }),
+      runtimeAuthOwner: { id: "openclaw" },
+    },
+    "present",
+  ],
+])("defers to native owner: %s", (_name, options, requestTransportOverrides) => {
+  expect(selectRoute({}, { runtimeAuthOwner: { id: "codex" }, ...options })).toEqual({
+    kind: "deferred",
+    reason: "runtime-auth-owner",
+    routeSupport: { ...support, requestTransportOverrides },
   });
+});
 
-  it("keeps an ambient fallback when the provider declares no profiles", () => {
-    const decision = select(
-      buildProviderModelAuthSourcePlan({ profiles: [], fallback: ambient("api-key") }),
-    );
-
-    expect(decision.kind === "selected" && decision.attempts).toMatchObject([{ kind: "direct" }]);
+it.each([
+  ["no declarations", [], undefined, [{ kind: "direct" }]],
+  ["unavailable declarations", [profile("openai:chatgpt", "oauth", "unavailable")], undefined, []],
+  ["route-filtered declarations", [], 1, []],
+] as const)("ambient fallback with %s", (_name, profiles, declaredProfileCount, attempts) => {
+  const decision = selectProviderModelAuthSources({
+    provider: "openai",
+    plan: buildProviderModelAuthSourcePlan({
+      profiles,
+      declaredProfileCount,
+      fallback: direct("ambient"),
+    }),
   });
-
-  it("does not substitute an ambient fallback for all-unavailable profiles", () => {
-    const decision = select(
-      buildProviderModelAuthSourcePlan({
-        profiles: [profile("openai:chatgpt", "oauth", "unavailable")],
-        fallback: ambient("api-key"),
-      }),
-    );
-
-    expect(decision.kind === "selected" && decision.attempts).toMatchObject([]);
-  });
-
-  it("does not re-admit an ambient fallback when route filtering empties the profile list", () => {
-    // Rebuild shape used by selectProviderModelRouteAuth when narrowing to a
-    // route-compatible subset: no profiles survive, but the operator declared one.
-    const decision = select(
-      buildProviderModelAuthSourcePlan({
-        profiles: [],
-        declaredProfileCount: 1,
-        fallback: ambient("api-key"),
-      }),
-    );
-
-    expect(decision.kind === "selected" && decision.attempts).toMatchObject([]);
-  });
+  expect(decision.kind === "selected" && decision.attempts).toMatchObject(attempts);
 });

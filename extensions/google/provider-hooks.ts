@@ -1,4 +1,3 @@
-// Google provider module implements model/runtime integration.
 import type {
   ProviderFailoverErrorContext,
   ProviderWrapStreamFnContext,
@@ -6,36 +5,14 @@ import type {
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { createPayloadPatchStreamWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripGoogleProviderPrefix } from "./model-id.js";
-import { resolveGoogleThinkingProfile } from "./provider-policy.js";
+import {
+  isGoogleVertexBaseUrl,
+  resolveGoogleServiceTier,
+  resolveGoogleThinkingProfile,
+} from "./provider-policy.js";
 import { sanitizeGoogleThinkingPayload } from "./thinking-api.js";
-
-// Google-family gRPC status codes stay with the shared Gemini provider hook.
-function classifyGoogleFailoverCode(code: string | undefined) {
-  switch (code?.trim().toUpperCase()) {
-    case "UNAVAILABLE":
-      return "overloaded" as const;
-    case "DEADLINE_EXCEEDED":
-      return "timeout" as const;
-    case "INTERNAL":
-      return "server_error" as const;
-    default:
-      return undefined;
-  }
-}
-
-function wrapGoogleThinkingStream(ctx: ProviderWrapStreamFnContext) {
-  return createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
-    if (model.api !== "google-generative-ai" && model.api !== "google-vertex") {
-      return;
-    }
-    sanitizeGoogleThinkingPayload({
-      payload,
-      modelId: stripGoogleProviderPrefix(model.id).replace(/^models\//u, ""),
-      thinkingLevel: ctx.thinkingLevel,
-    });
-  });
-}
 
 export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   ...buildProviderReplayFamilyHooks({
@@ -43,7 +20,44 @@ export const GOOGLE_GEMINI_PROVIDER_HOOKS = {
   }),
   ...buildProviderToolCompatFamilyHooks("gemini"),
   resolveThinkingProfile: resolveGoogleThinkingProfile,
-  wrapStreamFn: wrapGoogleThinkingStream,
-  classifyFailoverReason: ({ code }: ProviderFailoverErrorContext) =>
-    classifyGoogleFailoverCode(code),
+  wrapStreamFn: (ctx: ProviderWrapStreamFnContext) =>
+    createPayloadPatchStreamWrapper(ctx.streamFn, ({ payload, model }) => {
+      if (
+        model.api !== "google-generative-ai" &&
+        model.api !== "google-vertex" &&
+        model.api !== "google-interactions"
+      ) {
+        return;
+      }
+      if (model.api === "google-generative-ai" || model.api === "google-vertex") {
+        sanitizeGoogleThinkingPayload({
+          payload,
+          modelId: stripGoogleProviderPrefix(model.id).replace(/^models\//u, ""),
+          thinkingLevel: ctx.thinkingLevel,
+        });
+      }
+      if (
+        model.api === "google-interactions" &&
+        normalizeLowercaseStringOrEmpty(model.provider) === "google" &&
+        !isGoogleVertexBaseUrl(model.baseUrl)
+      ) {
+        const serviceTier = resolveGoogleServiceTier(ctx.extraParams);
+        if (serviceTier) {
+          payload.service_tier = serviceTier;
+        }
+      }
+    }),
+  // Google-family gRPC status codes stay with the shared Gemini provider hook.
+  classifyFailoverReason: ({ code }: ProviderFailoverErrorContext) => {
+    switch (code?.trim().toUpperCase()) {
+      case "UNAVAILABLE":
+        return "overloaded" as const;
+      case "DEADLINE_EXCEEDED":
+        return "timeout" as const;
+      case "INTERNAL":
+        return "server_error" as const;
+      default:
+        return undefined;
+    }
+  },
 };

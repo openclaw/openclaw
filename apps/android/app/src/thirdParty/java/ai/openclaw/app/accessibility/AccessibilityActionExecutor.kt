@@ -13,19 +13,23 @@ import kotlin.coroutines.resume
 private const val GESTURE_RESULT_TIMEOUT_MS = 10_000L
 
 sealed interface MobileUiAction {
+  sealed interface NodeAction : MobileUiAction {
+    val ref: String
+  }
+
   data class Activate(
-    val ref: String,
-  ) : MobileUiAction
+    override val ref: String,
+  ) : NodeAction
 
   data class SetText(
-    val ref: String,
+    override val ref: String,
     val text: String,
-  ) : MobileUiAction
+  ) : NodeAction
 
   data class Scroll(
-    val ref: String,
+    override val ref: String,
     val direction: ScrollDirection,
-  ) : MobileUiAction
+  ) : NodeAction
 
   data class Tap(
     val x: Int,
@@ -49,16 +53,21 @@ sealed interface MobileUiAction {
   ) : MobileUiAction
 }
 
-enum class ScrollDirection {
-  Forward,
-  Backward,
+enum class ScrollDirection(
+  val actionId: Int,
+  val actionName: String,
+) {
+  Forward(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD, "scroll_forward"),
+  Backward(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD, "scroll_backward"),
 }
 
-enum class GlobalActionName {
-  Back,
-  Home,
-  Recents,
-  Notifications,
+enum class GlobalActionName(
+  val actionId: Int,
+) {
+  Back(AccessibilityService.GLOBAL_ACTION_BACK),
+  Home(AccessibilityService.GLOBAL_ACTION_HOME),
+  Recents(AccessibilityService.GLOBAL_ACTION_RECENTS),
+  Notifications(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS),
 }
 
 enum class ActionOutcomeCode(
@@ -170,39 +179,19 @@ class AccessibilityActionExecutor internal constructor(
       when (action) {
         is MobileUiAction.Tap,
         is MobileUiAction.Swipe,
-        -> coordinateGesturePreflight(service)?.let { return it }
+        -> actionPreflight(service, coordinates = true)?.let { return it }
 
         // Node actions use per-node refresh() for freshness; UI epoch gates only blind coordinates.
         // Do not add an epoch check here: unrelated changes/app switches would break valid act flows.
-        is MobileUiAction.Activate,
-        is MobileUiAction.SetText,
-        is MobileUiAction.Scroll,
-        -> nodeActionPackagePreflight(service)?.let { return it }
+        is MobileUiAction.NodeAction -> actionPreflight(service, coordinates = false)?.let { return it }
 
-        is MobileUiAction.GlobalAction,
-        is MobileUiAction.Wait,
-        -> Unit
+        is MobileUiAction.Wait -> Unit
       }
     }
 
     return when (action) {
-      is MobileUiAction.Activate -> {
-        synchronized(generationLock) {
-          performNodeAction(
-            snapshotId = snapshotId,
-            ref = action.ref,
-            actionId = AccessibilityNodeInfo.ACTION_CLICK,
-            actionName = "activate",
-          )
-        }
-      }
-
-      is MobileUiAction.SetText -> {
-        synchronized(generationLock) { setText(snapshotId, action) }
-      }
-
-      is MobileUiAction.Scroll -> {
-        synchronized(generationLock) { scroll(snapshotId, action) }
+      is MobileUiAction.NodeAction -> {
+        synchronized(generationLock) { performNodeAction(snapshotId, action) }
       }
 
       is MobileUiAction.Tap -> {
@@ -221,10 +210,6 @@ class AccessibilityActionExecutor internal constructor(
               .getOrElse { return ActionResult(ActionOutcomeCode.ActionRejected, "Invalid swipe gesture") }
           dispatchGesture(service, gesture)
         }
-      }
-
-      is MobileUiAction.GlobalAction -> {
-        performGlobalAction(service, action.name)
       }
 
       is MobileUiAction.Wait -> {
@@ -251,16 +236,23 @@ class AccessibilityActionExecutor internal constructor(
     capture.nodesByRef.values.forEach(AccessibilityNodeInfo::recycle)
   }
 
-  private fun coordinateGesturePreflight(service: OpenClawAccessibilityService): ActionResult? {
+  private fun actionPreflight(
+    service: OpenClawAccessibilityService,
+    coordinates: Boolean,
+  ): ActionResult? {
     val expectedPackage = generation.packageName
     val currentPackage = foregroundPackageProvider(service)
     if (expectedPackage == null || currentPackage == null || expectedPackage != currentPackage) {
       return ActionResult(
         ActionOutcomeCode.PackageChanged,
-        "Active package cannot be verified against the snapshot; re-observe before coordinate actions",
+        if (coordinates) {
+          "Active package cannot be verified against the snapshot; re-observe before coordinate actions"
+        } else {
+          "Active package cannot be verified against the snapshot; re-observe before node actions"
+        },
       )
     }
-    if (uiEpochProvider() > generation.uiEpoch) {
+    if (coordinates && uiEpochProvider() > generation.uiEpoch) {
       return ActionResult(
         ActionOutcomeCode.TargetStale,
         "UI changed since observe; re-observe before coordinate actions",
@@ -269,40 +261,30 @@ class AccessibilityActionExecutor internal constructor(
     return null
   }
 
-  private fun nodeActionPackagePreflight(service: OpenClawAccessibilityService): ActionResult? {
-    val expectedPackage = generation.packageName
-    val currentPackage = foregroundPackageProvider(service)
-    if (expectedPackage == null || currentPackage == null || expectedPackage != currentPackage) {
-      return ActionResult(
-        ActionOutcomeCode.PackageChanged,
-        "Active package cannot be verified against the snapshot; re-observe before node actions",
-      )
-    }
-    return null
-  }
-
   private fun performNodeAction(
     snapshotId: String,
-    ref: String,
-    actionId: Int,
-    actionName: String,
-    arguments: Bundle? = null,
-    validateRefreshedNode: ((AccessibilityNodeInfo) -> ActionResult?)? = null,
+    action: MobileUiAction.NodeAction,
   ): ActionResult {
-    val node =
-      when (val target = generation.resolve(snapshotId, ref)) {
-        is GenerationTarget.Found -> {
-          target.value
-        }
-
-        GenerationTarget.Stale -> {
-          return ActionResult(ActionOutcomeCode.TargetStale, "Node $ref is not in the current snapshot")
-        }
+    val (actionId, actionName) =
+      when (action) {
+        is MobileUiAction.Activate -> AccessibilityNodeInfo.ACTION_CLICK to "activate"
+        is MobileUiAction.SetText -> AccessibilityNodeInfo.ACTION_SET_TEXT to "set_text"
+        is MobileUiAction.Scroll -> action.direction.actionId to action.direction.actionName
       }
+    val arguments =
+      (action as? MobileUiAction.SetText)?.let {
+        Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, it.text) }
+      }
+    val ref = action.ref
+    val node =
+      generation.resolve(snapshotId, ref)
+        ?: return ActionResult(ActionOutcomeCode.TargetStale, "Node $ref is not in the current snapshot")
     if (!runCatching { node.refresh() }.getOrDefault(false)) {
       return ActionResult(ActionOutcomeCode.TargetNotFound, "Node $ref is no longer available")
     }
-    validateRefreshedNode?.invoke(node)?.let { return it }
+    if (actionId == AccessibilityNodeInfo.ACTION_SET_TEXT && shouldRedactText(node.isPassword, node.isEditable, node.inputType)) {
+      return ActionResult(ActionOutcomeCode.SecureContent, "Text entry into password fields is refused")
+    }
     if (node.actionList.none { it.id == actionId }) {
       return ActionResult(ActionOutcomeCode.ActionNotSupported, "Node $ref does not advertise $actionName")
     }
@@ -312,41 +294,6 @@ class AccessibilityActionExecutor internal constructor(
     } else {
       ActionResult(ActionOutcomeCode.ActionRejected, "Android rejected $actionName for node $ref")
     }
-  }
-
-  private fun setText(
-    snapshotId: String,
-    action: MobileUiAction.SetText,
-  ): ActionResult {
-    val arguments =
-      Bundle().apply {
-        putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, action.text)
-      }
-    return performNodeAction(
-      snapshotId = snapshotId,
-      ref = action.ref,
-      actionId = AccessibilityNodeInfo.ACTION_SET_TEXT,
-      actionName = "set_text",
-      arguments = arguments,
-    ) { node ->
-      if (shouldRedactText(node.isPassword, node.isEditable, node.inputType)) {
-        ActionResult(ActionOutcomeCode.SecureContent, "Text entry into password fields is refused")
-      } else {
-        null
-      }
-    }
-  }
-
-  private fun scroll(
-    snapshotId: String,
-    action: MobileUiAction.Scroll,
-  ): ActionResult {
-    val (actionId, actionName) =
-      when (action.direction) {
-        ScrollDirection.Forward -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD to "scroll_forward"
-        ScrollDirection.Backward -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD to "scroll_backward"
-      }
-    return performNodeAction(snapshotId, action.ref, actionId, actionName)
   }
 
   private suspend fun dispatchGesture(
@@ -380,20 +327,12 @@ class AccessibilityActionExecutor internal constructor(
   private fun performGlobalAction(
     service: OpenClawAccessibilityService,
     name: GlobalActionName,
-  ): ActionResult {
-    val actionId =
-      when (name) {
-        GlobalActionName.Back -> AccessibilityService.GLOBAL_ACTION_BACK
-        GlobalActionName.Home -> AccessibilityService.GLOBAL_ACTION_HOME
-        GlobalActionName.Recents -> AccessibilityService.GLOBAL_ACTION_RECENTS
-        GlobalActionName.Notifications -> AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS
-      }
-    return if (runCatching { service.performGlobalAction(actionId) }.getOrDefault(false)) {
+  ): ActionResult =
+    if (runCatching { service.performGlobalAction(name.actionId) }.getOrDefault(false)) {
       ActionResult(ActionOutcomeCode.Completed)
     } else {
       ActionResult(ActionOutcomeCode.ActionRejected, "Android rejected global action ${name.name.lowercase()}")
     }
-  }
 }
 
 internal class SnapshotGenerationStore<T>(
@@ -428,10 +367,7 @@ internal class SnapshotGenerationStore<T>(
   fun resolve(
     snapshotId: String,
     ref: String,
-  ): GenerationTarget<T> {
-    if (!matches(snapshotId)) return GenerationTarget.Stale
-    return values[ref]?.let { value -> GenerationTarget.Found(value) } ?: GenerationTarget.Stale
-  }
+  ): T? = if (matches(snapshotId)) values[ref] else null
 
   fun clear() {
     values.values.forEach(release)
@@ -443,33 +379,20 @@ internal class SnapshotGenerationStore<T>(
   }
 }
 
-internal sealed interface GenerationTarget<out T> {
-  data class Found<T>(
-    val value: T,
-  ) : GenerationTarget<T>
-
-  data object Stale : GenerationTarget<Nothing>
-}
+private fun Path.gesture(durationMs: Long): GestureDescription =
+  GestureDescription
+    .Builder()
+    .addStroke(GestureDescription.StrokeDescription(this, 0, durationMs))
+    .build()
 
 private fun tapGesture(
   x: Int,
   y: Int,
-): GestureDescription {
-  val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
-  return GestureDescription
-    .Builder()
-    .addStroke(GestureDescription.StrokeDescription(path, 0, 1))
-    .build()
-}
+): GestureDescription = Path().apply { moveTo(x.toFloat(), y.toFloat()) }.gesture(1)
 
-private fun swipeGesture(action: MobileUiAction.Swipe): GestureDescription {
-  val path =
-    Path().apply {
+private fun swipeGesture(action: MobileUiAction.Swipe): GestureDescription =
+  Path()
+    .apply {
       moveTo(action.x1.toFloat(), action.y1.toFloat())
       lineTo(action.x2.toFloat(), action.y2.toFloat())
-    }
-  return GestureDescription
-    .Builder()
-    .addStroke(GestureDescription.StrokeDescription(path, 0, action.durationMs))
-    .build()
-}
+    }.gesture(action.durationMs)

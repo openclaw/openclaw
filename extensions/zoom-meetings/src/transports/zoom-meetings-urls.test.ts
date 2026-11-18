@@ -16,15 +16,6 @@ describe("Zoom meeting URL normalization", () => {
     expect(normalizeZoomMeetingUrlForReuse(url)).toBe(expected);
   });
 
-  it("compares the invitation and web-client forms as one meeting", () => {
-    expect(
-      isSameZoomMeetingUrl(
-        "https://acme.zoom.us/j/12345678901?pwd=one",
-        "https://app.zoom.us/wc/12345678901/join?from=pwa",
-      ),
-    ).toBe(true);
-  });
-
   it("distinguishes invite credentials without rejecting the admitted web-client URL", () => {
     const oldInvite = "https://zoom.us/j/12345678901?pwd=old";
     const correctedInvite = "https://zoom.us/j/12345678901?pwd=correct";

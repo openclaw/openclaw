@@ -3,7 +3,7 @@ import os
 import Testing
 @testable import OpenClaw
 
-@Suite(.serialized) struct CanvasFileWatcherTests {
+@Suite(.serialized, .testWaitLimit) struct CanvasFileWatcherTests {
     @Test func `detects in place file writes`() async throws {
         let dir = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -15,7 +15,8 @@ import Testing
         let watcher = CanvasFileWatcher(url: dir) {
             fired.open()
         }
-        watcher.start()
+        watcher.startEventStream()
+        watcher.setPollingEnabled(true)
         defer { watcher.stop() }
 
         // Modify the file in-place (no rename). Directory vnode watching missed this.
@@ -24,7 +25,8 @@ import Testing
         try handle.write(contentsOf: Data(" world".utf8))
         try handle.close()
 
-        let observedChange = await self.wait(for: fired)
+        try await fired.wait("file write callback")
+        let observedChange = !Task.isCancelled
         #expect(observedChange)
     }
 
@@ -44,10 +46,9 @@ import Testing
                 stopped.open()
             }
             if eventsEnabled {
-                watcher?.start()
-            } else {
-                watcher?.setPollingEnabled(true)
+                watcher?.startEventStream()
             }
+            watcher?.setPollingEnabled(true)
         }
         defer {
             let watcher = owner.withLock { current in
@@ -58,7 +59,8 @@ import Testing
         }
 
         try "changed".write(to: dir.appendingPathComponent("index.html"), atomically: false, encoding: .utf8)
-        let stoppedFromCallback = await self.wait(for: stopped)
+        try await stopped.wait("watcher stop callback")
+        let stoppedFromCallback = !Task.isCancelled
         #expect(stoppedFromCallback)
     }
 
@@ -86,28 +88,14 @@ import Testing
                 completed.open()
             }
         }
-        watcher.start()
+        watcher.startEventStream()
+        watcher.setPollingEnabled(true)
         defer { watcher.stop() }
 
         try "changed".write(to: dir.appendingPathComponent("index.html"), atomically: false, encoding: .utf8)
-        let sawBothCallbacks = await self.wait(for: completed)
+        try await completed.wait("both watcher callbacks")
+        let sawBothCallbacks = !Task.isCancelled
         #expect(sawBothCallbacks)
         #expect(callbacks.withLock { !$0.overlapped })
-    }
-
-    private func wait(for gate: AsyncTestGate) async -> Bool {
-        await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await gate.wait()
-                return !Task.isCancelled
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(2))
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
     }
 }

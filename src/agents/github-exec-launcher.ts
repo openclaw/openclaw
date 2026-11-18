@@ -6,7 +6,7 @@ import {
 // The shell bootstrap captures stdout privately; it must never become tool output.
 // Keep this entrypoint free of runtime logging, worker IPC and credential caching.
 async function resolveCredential() {
-  const token = await readGitHubExecToken(process.argv[2] ?? "");
+  const token = await readGitHubExecToken(process.argv[2] ?? "", process.argv[3]);
   process.stdout.write(token);
 }
 

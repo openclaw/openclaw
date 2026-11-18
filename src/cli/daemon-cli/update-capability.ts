@@ -7,6 +7,9 @@ export async function writeGatewayServiceUpdateCapability(): Promise<void> {
       updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
       targetRootBinding: true,
       definitionBackup: true,
+      retainedOwnerBinding: true,
+      originalDefinitionBinding: true,
+      originalRuntimePinBinding: true,
     }),
   );
   // The parent closes stdin only after binding this child's PID and start identity.

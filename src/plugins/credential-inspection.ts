@@ -7,11 +7,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 
-/** Projection only: never call a secret resolver or return a literal from sourceConfig. */
+/** Never resolve references; authored literals require the explicit administrator reveal flow. */
 export function inspectPluginCredentialValue(
   config: OpenClawConfig,
   descriptor: PluginCredentialDescriptor,
   env: NodeJS.ProcessEnv,
+  reveal = false,
 ): PluginCredentialInspection {
   let value: unknown = config;
   for (const segment of descriptor.path) {
@@ -32,7 +33,7 @@ export function inspectPluginCredentialValue(
     return { kind: "reference", ref, unresolved: hasUnresolvedConfigPath(config, path) };
   }
   if (typeof value === "string" && value.length) {
-    return { kind: "literal" };
+    return { kind: "literal", ...(reveal ? { value } : {}) };
   }
   if (value !== undefined && value !== "") {
     return { kind: "invalid" };

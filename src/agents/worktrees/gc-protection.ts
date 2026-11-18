@@ -1,0 +1,100 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import { inspectManagedWorktreeCheckout } from "./checkout-inspection.js";
+import { deferWorktreeGcRecord, type WorktreeCleanupOwnerPolicy } from "./gc-removal.js";
+import type { createWorktreeGcPrefilter } from "./git-lock.js";
+import { worktreeGcRevision } from "./registry-read.kernel.js";
+import { deferFailedWorktreeRemoval, worktreeCleanupProtection } from "./registry-retirement.js";
+import type { ManagedWorktreeRecord } from "./types.js";
+
+export type WorktreeCleanupDeferrals = Map<
+  string,
+  { revision: string; fingerprint: string | null }
+>;
+
+export async function autoRemovalProtectionReason(
+  record: ManagedWorktreeRecord,
+  prefilter: ReturnType<typeof createWorktreeGcPrefilter>,
+  hasLiveLease: (id: string) => boolean,
+  context: {
+    env: NodeJS.ProcessEnv;
+    getConfig: () => OpenClawConfig;
+    signal?: AbortSignal;
+    beforeRun?: () => void;
+    now: number;
+    deferrals: WorktreeCleanupDeferrals;
+  },
+  policy: WorktreeCleanupOwnerPolicy = {},
+): Promise<string | undefined> {
+  if (
+    record.ownerId !== undefined &&
+    policy.readOwnerState?.(record.ownerKind, record.ownerId) === "active"
+  ) {
+    return "owner is active";
+  }
+  if (hasLiveLease(record.id)) {
+    return "run lease is active";
+  }
+  if (record.gcRetry) {
+    // Do not walk or fingerprint a checkout whose last attempt exhausted its budget.
+    // The registry revision invalidates this receipt when its owner changes.
+    const protection = worktreeCleanupProtection(record, context.now, policy.retryDeferred);
+    if (protection) {
+      return protection;
+    }
+    if (policy.retryDeferred) {
+      await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
+    }
+  } else {
+    const revision = worktreeGcRevision(record);
+    const previous = context.deferrals.get(record.id);
+    const fingerprint =
+      record.gcProtection || !previous
+        ? await runGitWorkerOperation(
+            { type: "worktree.cleanup-fingerprint", input: { checkoutPath: record.path } },
+            { signal: context.signal, assertCurrent: context.beforeRun },
+          )
+        : previous.fingerprint;
+    context.deferrals.set(record.id, { revision, fingerprint });
+    if (record.gcProtection) {
+      // The registry already admitted this receipt at the current revision.
+      // A snapshot saved during removal can supersede this service's old observation.
+      if (
+        !policy.retryDeferred &&
+        (!previous || previous.revision !== revision || previous.fingerprint === fingerprint)
+      ) {
+        return record.gcProtection;
+      }
+      await deferWorktreeGcRecord(context.env, record, null, context.beforeRun);
+    }
+  }
+  const protection = await prefilter(record);
+  if (protection !== undefined) {
+    if (protection === "branch-moved") {
+      await deferWorktreeGcRecord(context.env, record, protection, context.beforeRun);
+    }
+    return protection;
+  }
+  const provisioned = await inspectManagedWorktreeCheckout(record, "provisioned", context);
+  if (provisioned.retainedReason !== undefined) {
+    return `provisioned checkout state is ${provisioned.retainedReason}`;
+  }
+  const nested = await inspectManagedWorktreeCheckout(record, "nested-repository", context);
+  if (nested.retainedReason !== undefined) {
+    const reason =
+      "Checkout preserved: nested-repository; automatic retries stopped; inspect the inner repository, then run openclaw worktrees gc --retry-deferred";
+    await deferFailedWorktreeRemoval({
+      env: context.env,
+      id: record.id,
+      stage: "nested-repository",
+      reason,
+      elapsedMs: 0,
+      now: context.now,
+      previousAttempts: record.gcRetry?.attempts ?? 0,
+      observed: record,
+      assertCurrent: () => context.beforeRun?.(),
+    });
+    return reason;
+  }
+  return undefined;
+}

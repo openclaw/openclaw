@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { iterateGraphemes, visibleWidth } from "./ansi.js";
+import { resolveNoteOutput } from "./note-output.js";
 import { stylePromptTitle } from "./prompt-style.js";
 
 const MIN_NOTE_COLUMNS = 80;
@@ -9,22 +10,10 @@ const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
 const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
-  if (!value) {
-    return false;
-  }
   const normalized = normalizeLowercaseStringOrEmpty(value);
-  if (!normalized) {
-    return false;
-  }
-  return normalized !== "0" && normalized !== "false" && normalized !== "off";
-}
-
-function isCopySensitiveToken(word: string): boolean {
-  if (word.includes("/") || word.includes("\\")) {
-    return true;
-  }
-  // Preserve common file-like tokens (for example administrators_authorized_keys).
-  return word.includes("_") && FILE_LIKE_RE.test(word);
+  return (
+    Boolean(normalized) && normalized !== "0" && normalized !== "false" && normalized !== "off"
+  );
 }
 
 function wrapLine(line: string, maxWidth: number): string[] {
@@ -42,15 +31,19 @@ function wrapLine(line: string, maxWidth: number): string[] {
 
   // Printable ASCII width equals length; reuse that fact for every word and candidate.
   const isPrintableAscii = /^[\u0020-\u007E]*$/.test(content);
-  const words = content.split(/\s+/).filter(Boolean);
+  let wordEnd = 0;
   const lines: string[] = [];
   let current = "";
   let prefix = firstPrefix;
   let available = firstWidth;
 
-  for (const word of words) {
+  for (const wordMatch of content.matchAll(/\S+/g)) {
+    const word = wordMatch[0];
+    const whitespace = content.slice(wordEnd, wordMatch.index);
+    const separator = /^ +$/.test(whitespace) ? whitespace : " ";
+    wordEnd = wordMatch.index + word.length;
     if (current) {
-      const candidate = `${current} ${word}`;
+      const candidate = `${current}${separator}${word}`;
       if ((isPrintableAscii ? candidate.length : visibleWidth(candidate)) <= available) {
         current = candidate;
         continue;
@@ -61,9 +54,12 @@ function wrapLine(line: string, maxWidth: number): string[] {
       available = nextWidth;
     }
 
+    // Preserve common file-like tokens (for example administrators_authorized_keys).
     if (
       (isPrintableAscii ? word.length : visibleWidth(word)) > available &&
-      !isCopySensitiveToken(word)
+      !word.includes("/") &&
+      !word.includes("\\") &&
+      !(word.includes("_") && FILE_LIKE_RE.test(word))
     ) {
       // Measure whole graphemes in visible columns so CJK/emoji do not overflow.
       // Keep this word's initial budget for all fragments, even when the next prefix differs.
@@ -88,7 +84,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
     current = word;
   }
 
-  if (current || words.length === 0) {
+  if (current || lines.length === 0) {
     lines.push(prefix + current);
   }
 
@@ -98,9 +94,6 @@ function wrapLine(line: string, maxWidth: number): string[] {
 function coerceNoteMessage(message: unknown): string {
   if (typeof message === "string") {
     return message;
-  }
-  if (message == null) {
-    return "";
   }
   if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
     return String(message);
@@ -170,7 +163,7 @@ export function noteToStream(
 }
 
 export function note(message: unknown, title?: string) {
-  noteToStream(message, title, process.stdout);
+  noteToStream(message, title, resolveNoteOutput());
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

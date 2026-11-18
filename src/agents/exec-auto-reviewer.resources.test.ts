@@ -1,10 +1,9 @@
 import fs from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -16,18 +15,17 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import * as modelResolution from "./embedded-agent-runner/model.js";
+import { input } from "./exec-auto-review.test-support.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 import { acquireSimpleCompletionModelForAgent } from "./simple-completion-runtime.js";
-
-// The reviewed command is input data only; this fixture never dispatches it.
-const input = {
-  command: "git status",
-  host: "gateway" as const,
-  reason: "approval-required" as const,
-  analysis: { parsed: true, allowlistMatched: false, inlineEval: false },
-};
+import {
+  completionChunk,
+  completionConfig,
+  completionModelDefinition,
+  startCompletionServer,
+} from "./simple-completion.test-support.js";
 
 it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)(
   "retains the exec reviewer model through %s",
@@ -36,6 +34,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       // Restore this probe when transformed Fetch bodies forward cancellation under Bun.
       testContext.skip();
     }
+    const timesOut = mode === "late-preparation" || mode === "callback-tail";
     const roots = createSyncSuiteTempRootTracker("exec-reviewer-resources");
     const root = fs.realpathSync(roots.makeTempDir());
     fs.mkdirSync(path.join(root, "provider"));
@@ -58,48 +57,33 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
-        `data: ${JSON.stringify({ id: "review", object: "chat.completion.chunk", model: "reviewer", choices: [{ index: 0, delta: { content: JSON.stringify({ decision: "ask", risk: "low", rationale: "fixture" }) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+        completionChunk(
+          JSON.stringify({ decision: "ask", risk: "low", rationale: "fixture" }),
+          "reviewer",
+        ),
       );
     };
-    const server = createServer((_request, response) => {
+    const server = await startCompletionServer((_request, response) => {
       requests.push(response);
       arrived.resolve();
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Fixture server has no TCP port");
-    }
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: root, model: `${fixture.providerId}/reviewer` } },
-      models: {
-        providers: {
-          [fixture.providerId]: {
-            api: "openai-completions",
-            apiKey: "fixture-only",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
-            models: [
-              {
-                id: "reviewer",
-                name: "Reviewer",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-            ],
-          },
+    const cfg = completionConfig(
+      fixture.providerId,
+      {
+        api: "openai-completions",
+        apiKey: "fixture-only",
+        baseUrl: server.baseUrl,
+        models: [completionModelDefinition({ id: "reviewer", name: "Reviewer" })],
+      },
+      {
+        agents: { defaults: { workspace: root, model: `${fixture.providerId}/reviewer` } },
+        plugins: {
+          load: { paths: [fixture.rootDir] },
+          slots: { memory: "none" },
+          entries: { [fixture.pluginId]: { enabled: true } },
         },
       },
-      plugins: {
-        load: { paths: [fixture.rootDir] },
-        slots: { memory: "none" },
-        entries: { [fixture.pluginId]: { enabled: true } },
-      },
-    };
+    );
     try {
       await withEnvAsync(
         {
@@ -109,7 +93,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
         },
         async () => {
           const parent = new AsyncWorkScope();
-          const create = vi.spyOn(ModelRegistry, "create");
+          const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const realResolve = modelResolution.resolveModelAsync;
           const resolver = vi.spyOn(modelResolution, "resolveModelAsync");
           let transportSpy: { mockRestore(): void } | undefined;
@@ -153,7 +137,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             const realFetch = globalThis.fetch;
             fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
               const response = await realFetch(...args);
-              if (!response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+              if (!response.url.startsWith(`${server.origin}/`)) {
                 return response;
               }
               const reader = response.body?.getReader();
@@ -183,26 +167,33 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               );
             });
           }
-          const acquire = () =>
-            acquireSimpleCompletionModelForAgent({
+          const acquire = async () => {
+            const prepared = await acquireSimpleCompletionModelForAgent({
               cfg,
               agentId: "main",
               allowMissingApiKeyModes: ["aws-sdk"],
             });
+            if ("error" in prepared) {
+              throw new Error("Fixture preparation failed");
+            }
+            return prepared;
+          };
           try {
             const reviewer = createModelExecAutoReviewer({
               cfg,
               agentId: "main",
               reviewer: { timeoutMs: 5000 },
             });
+            if (timesOut) {
+              vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            }
             first = parent.track(() => reviewer(input));
             const started = mode === "late-preparation" ? heldWorkStarted.promise : arrived.promise;
-            await Promise.race([
+            await awaitGateBeforeSettlement(
               started,
-              first.then(() => {
-                throw new Error("Reviewer settled before fixture boundary");
-              }),
-            ]);
+              first,
+              "Reviewer settled before fixture boundary",
+            );
             const builds = create.mock.calls.length;
             expect(builds).toBeGreaterThan(0);
             if (mode === "callback-tail" || mode === "cancel-tail") {
@@ -210,7 +201,13 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               await heldWorkStarted.promise;
             }
             if (mode !== "overlap") {
+              if (timesOut) {
+                await vi.advanceTimersByTimeAsync(5000);
+              }
               const decision = await first;
+              if (timesOut) {
+                vi.useRealTimers();
+              }
               // Only project the public decision; prepared objects include runtime environment data.
               expect(decision).toMatchObject({
                 decision: "ask",
@@ -224,9 +221,6 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               });
             }
             const second = await acquire();
-            if ("error" in second) {
-              throw new Error("Second fixture preparation failed");
-            }
             try {
               expect.soft(create.mock.calls.length).toBe(builds);
               if (mode !== "overlap") {
@@ -246,15 +240,15 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               expect(requests.length).toBe(0);
             }
             const after = await acquire();
-            if ("error" in after) {
-              throw new Error("Final fixture preparation failed");
-            }
             try {
               expect(create.mock.calls.length).toBe(builds + 1);
             } finally {
               await after[Symbol.asyncDispose]();
             }
           } finally {
+            if (timesOut) {
+              vi.useRealTimers();
+            }
             finishWork.resolve();
             requests.forEach(finish);
             await first?.catch(() => {});
@@ -272,10 +266,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
         },
       );
     } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
       roots.cleanup();
     }
   },

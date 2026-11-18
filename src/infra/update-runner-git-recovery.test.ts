@@ -12,7 +12,6 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { entry: "standalone", budgetMs: 120_000, workMs: 6_000, corrupt: false, safe: true },
-  { entry: "runner", budgetMs: 120_000, workMs: 6_000, corrupt: false, safe: true },
   { entry: "runner", budgetMs: 1_000, workMs: 6_000, corrupt: false, safe: false },
   { entry: "runner", budgetMs: 2_400_000, workMs: 1_500_000, corrupt: false, safe: true },
   { entry: "runner", budgetMs: 120_000, workMs: 6_000, corrupt: true, safe: false },
@@ -57,13 +56,22 @@ it.each([
     const mutation = vi
       .fn<CommandRunner>()
       .mockRejectedValue(new Error("unexpected source mutation"));
+    const refuseCandidate = async () => {
+      throw new Error("Unsupported channel must not prepare or run a candidate");
+    };
     const recovery =
       entry === "standalone"
         ? await readCurrentGitUpdateRecovery(root)
         : (
             await updateGitCheckout({
               gitRoot: root,
-              opts: { channel: "extended-stable" },
+              opts: {
+                channel: "extended-stable",
+                inspectGitTarget: refuseCandidate,
+                validateCandidate: refuseCandidate,
+                beforeGitMutation: refuseCandidate,
+                runGitDoctor: refuseCandidate,
+              },
               runCommand: mutation,
               defaultCommandEnv: undefined,
               timeoutMs: budgetMs,

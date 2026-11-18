@@ -3,39 +3,26 @@ import {
   stripTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import type { CronJob } from "../types.js";
 
-/**
- * Picks the session-key identity used to resolve a cron delivery's outbound route.
- *
- * An isolated run does not carry its bound source conversation's namespace.
- * Reuse only a canonical conversation belonging to the same agent, actual
- * delivery provider, and destination; otherwise jobs can adopt another peer's
- * conversation or thread.
- */
+/** Only a matching conversation may supply provider-specific routing context. */
 export function selectCronRouteCurrentSessionKey(
-  job: CronJob,
-  agentSessionKey: string,
+  sessionKey: string | undefined,
+  agentId: string,
   deliveryProvider: string,
   deliveryTarget: string,
-): string {
-  const bound = (job.sessionKey ?? "").trim();
-  const parsedBound = parseAgentSessionKey(bound);
-  const parsedRun = parseAgentSessionKey(agentSessionKey);
-  if (!parsedBound || !parsedRun || parsedBound.agentId !== parsedRun.agentId) {
-    return agentSessionKey;
+): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed || parsed.agentId !== agentId) {
+    return undefined;
   }
-  const conversation = /^([^:]+):(direct|group|channel):([^:]+)(?::thread:[^:]+)?$/i.exec(
-    parsedBound.rest,
+  const conversation = /^([^:]+):(direct|group|channel):([^:]+)(?::(?:thread|topic):.+)?$/i.exec(
+    parsed.rest,
   );
-  const targetPeerId = stripOutboundTargetKindPrefix(
+  const peerId = stripOutboundTargetKindPrefix(
     stripTargetProviderPrefix(deliveryTarget, deliveryProvider),
   );
-  if (
-    conversation?.[1]?.toLowerCase() !== deliveryProvider.trim().toLowerCase() ||
-    conversation[3] !== targetPeerId
-  ) {
-    return agentSessionKey;
-  }
-  return bound;
+  return conversation?.[1]?.toLowerCase() === deliveryProvider.toLowerCase() &&
+    conversation[3] === peerId
+    ? sessionKey
+    : undefined;
 }

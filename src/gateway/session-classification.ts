@@ -19,10 +19,27 @@ import {
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
 
+/** Presentation only: new custody has a creation stamp; deployed rows have reserved keys. */
+export function isGitHubPublicationTaskSession(
+  key: string,
+  entry?: { createdVia?: string; createdSurface?: string; parentSessionKey?: string },
+): boolean {
+  return Boolean(
+    entry?.createdSurface === "github-publication" ||
+    (entry?.createdVia === "spawn" &&
+      entry.parentSessionKey &&
+      // Stable checkout IDs and the earlier per-invocation UUIDv8 IDs both persist.
+      /^agent:[^:]+:dashboard:(?:github-publication-[a-f0-9]{32}|github-[a-f0-9]{8}-[a-f0-9]{4}-8[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$/iu.test(
+        key,
+      )),
+  );
+}
+
 const BACKGROUND_CLASSIFICATIONS = new Set<SessionClassification>([
   "acp",
   "cron",
   "dreaming",
+  "github-publication",
   "harness",
   "heartbeat",
   "hook",
@@ -36,45 +53,35 @@ type GatewaySessionClassification = {
   accountId?: string;
   peerKind?: SessionPeerKind;
   isMain: boolean;
+  isDock: boolean;
   // Classification only: this does not change session visibility, sharing,
   // retention, or authorization semantics.
   isBackground: boolean;
 };
 
+const SESSION_CLASSIFICATION_PREFIXES: readonly (readonly [string, SessionClassification])[] = [
+  ["dashboard:", "dashboard"],
+  ["tui-", "tui"],
+  ["explicit:", "explicit"],
+  ["hook:", "hook"],
+  ["node-", "node"],
+  ["node:", "node"],
+  ["harness:", "harness"],
+  ["voice:", "voice"],
+  ["dreaming-narrative-", "dreaming"],
+  ["boot:", "system"],
+  ["internal-session-effects:", "system"],
+];
+
 function classifyRest(rest: string): SessionClassification {
   const normalized = normalizeLowercaseStringOrEmpty(rest);
-  if (normalized.startsWith("dashboard:")) {
-    return "dashboard";
-  }
-  if (normalized.startsWith("tui-")) {
-    return "tui";
-  }
-  if (normalized.startsWith("explicit:")) {
-    return "explicit";
-  }
-  if (normalized.startsWith("hook:")) {
-    return "hook";
-  }
-  if (normalized.startsWith("node-") || normalized.startsWith("node:")) {
-    return "node";
-  }
-  if (normalized.startsWith("harness:")) {
-    return "harness";
-  }
-  if (normalized.startsWith("voice:")) {
-    return "voice";
-  }
-  if (normalized.startsWith("dreaming-narrative-")) {
-    return "dreaming";
-  }
-  if (
-    normalized === "boot" ||
-    normalized.startsWith("boot:") ||
-    normalized.startsWith("internal-session-effects:")
-  ) {
+  if (normalized === "boot") {
     return "system";
   }
-  return "custom";
+  return (
+    SESSION_CLASSIFICATION_PREFIXES.find(([prefix]) => normalized.startsWith(prefix))?.[1] ??
+    "custom"
+  );
 }
 
 /**
@@ -115,6 +122,8 @@ export function sessionClassificationForRow(
     classification = "heartbeat";
   } else if (isMain) {
     classification = "main";
+  } else if (isGitHubPublicationTaskSession(canonicalKey, entry)) {
+    classification = "github-publication";
   } else if (isSubagentSessionKey(canonicalKey)) {
     classification = "subagent";
   } else if (isAcpSessionKey(canonicalKey)) {
@@ -129,11 +138,7 @@ export function sessionClassificationForRow(
     classification = "channel";
   } else if (hasDirectPeer) {
     classification = "direct";
-  } else if (
-    entry?.chatType === "direct" ||
-    entry?.chatType === "group" ||
-    entry?.chatType === "channel"
-  ) {
+  } else if (entry?.chatType === "group" || entry?.chatType === "channel") {
     classification = entry.chatType;
   } else {
     classification = classifyRest(rest);
@@ -147,6 +152,7 @@ export function sessionClassificationForRow(
     ...(route?.accountId ? { accountId: route.accountId } : {}),
     ...(peerKind ? { peerKind } : {}),
     isMain,
+    isDock: entry?.createdSurface === "plugin-dock",
     isBackground: BACKGROUND_CLASSIFICATIONS.has(classification),
   };
 }

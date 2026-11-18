@@ -2,16 +2,12 @@ import AppKit
 import Foundation
 import OpenClawIPC
 import OpenClawKit
-import OSLog
 
 @MainActor
 final class CanvasManager {
     static let shared = CanvasManager()
 
-    private static let logger = Logger(subsystem: "ai.openclaw", category: "CanvasManager")
-
     private var panelController: CanvasWindowController?
-    private var panelSessionKey: String?
 
     private init() {}
 
@@ -30,12 +26,6 @@ final class CanvasManager {
         path: String? = nil,
         placement: CanvasPlacement? = nil) throws -> String
     {
-        Self.logger.debug(
-            """
-            show session=\(sessionKey, privacy: .public) \
-            hasTarget=\(path != nil) \
-            placement=\(placement != nil)
-            """)
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let normalizedTarget = path?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -45,29 +35,20 @@ final class CanvasManager {
 
         if !ensured.created {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
-            controller.applyPreferredPlacement(placement)
-
-            // Existing session: only navigate when an explicit target was provided.
-            if let normalizedTarget {
-                controller.load(target: normalizedTarget)
-            }
-
-            self.refreshDebugStatus()
-            return controller.directoryPath
         }
-
-        controller.applyPreferredPlacement(placement)
-
-        // New session: default to the local document root.
-        controller.showCanvas(path: normalizedTarget ?? "/")
+        controller.preferredPlacement = placement
+        if ensured.created {
+            controller.showCanvas(path: normalizedTarget ?? "/")
+        } else if let normalizedTarget {
+            controller.load(target: normalizedTarget)
+        }
         self.refreshDebugStatus()
-
         return controller.directoryPath
     }
 
     func hide(sessionKey: String) {
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard self.panelSessionKey == session else { return }
+        guard self.panelController?.sessionKey == session else { return }
         self.panelController?.hideCanvas()
     }
 
@@ -118,29 +99,22 @@ final class CanvasManager {
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let controller = panelController, panelSessionKey == session {
-            Self.logger.debug("ensureController reuse existing session=\(session, privacy: .public)")
-            controller.onVisibilityChanged = { [weak self] visible in
-                self?.onPanelVisibilityChanged?(visible)
-            }
+        if let controller = panelController, controller.sessionKey == session {
             return (controller, false)
         }
 
-        Self.logger.debug("ensureController creating new session=\(session, privacy: .public)")
         self.panelController?.close()
         self.panelController = nil
-        self.panelSessionKey = nil
 
         try FileManager().createDirectory(at: Self.canvasRoot, withIntermediateDirectories: true)
         let controller = try CanvasWindowController(
             sessionKey: session,
             root: Self.canvasRoot,
-            presentation: .panel(anchorProvider: anchorProvider))
+            anchorProvider: anchorProvider)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
         self.panelController = controller
-        self.panelSessionKey = session
         return (controller, true)
     }
 }

@@ -31,10 +31,7 @@ export function getSubagentDepthFromEntryLookup(
 
   const depthFromStore = (key: string): number | undefined => {
     const normalizedKey = normalizeOptionalString(key);
-    if (!normalizedKey) {
-      return undefined;
-    }
-    if (visited.has(normalizedKey)) {
+    if (!normalizedKey || visited.has(normalizedKey)) {
       return undefined;
     }
     visited.add(normalizedKey);
@@ -51,12 +48,7 @@ export function getSubagentDepthFromEntryLookup(
       return undefined;
     }
 
-    const parentDepth = depthFromStore(parentKey);
-    if (parentDepth !== undefined) {
-      return parentDepth + 1;
-    }
-
-    return getSubagentDepth(parentKey) + 1;
+    return (depthFromStore(parentKey) ?? getSubagentDepth(parentKey)) + 1;
   };
 
   return depthFromStore(raw) ?? fallbackDepth;

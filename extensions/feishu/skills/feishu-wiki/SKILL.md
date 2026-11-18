@@ -14,7 +14,7 @@ From `https://example.feishu.cn/wiki/ABC123def`, use `ABC123def` as `token`. Tre
 
 - Use `spaces` to enumerate accessible knowledge spaces and `nodes` for a space or parent node.
 - Continue pagination with the returned `page_token` while `has_more` is true, keeping the same space and parent.
-- Use `search` when the user provides a query but not an exact node.
+- Search is unavailable. Use `nodes` to browse a known space or parent, or `get` when the user provides a wiki token.
 - Use `get` to resolve a wiki token to its `node_token`, `obj_token`, and `obj_type`.
 
 ## Create and organize

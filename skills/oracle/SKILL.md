@@ -111,9 +111,9 @@ Oracle starts with **zero** project knowledge. Assume the model cannot infer you
 - Constraints ("don't change X", "must keep public API", etc).
 - Desired output ("return patch plan + tests", "give 3 options with tradeoffs").
 
-## Safety
+## Attachments
 
-- Don't attach secrets by default (`.env`, key files, auth tokens). Redact aggressively; share only what's required.
+- Leave `.env`, key files, and auth tokens out of attachments unless the user asks to include them.
 
 ## "Exhaustive prompt" restoration pattern
 

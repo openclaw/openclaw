@@ -1,4 +1,3 @@
-// Control UI module implements open external url behavior.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 const DATA_URL_PREFIX = "data:";
@@ -46,26 +45,18 @@ export function resolveSafeExternalUrl(
     return null;
   }
 
-  try {
-    const parsed = new URL(candidate, baseHref);
-    return ALLOWED_EXTERNAL_PROTOCOLS.has(normalizeLowercaseStringOrEmpty(parsed.protocol))
-      ? parsed.toString()
-      : null;
-  } catch {
-    return null;
-  }
+  const parsed = URL.parse(candidate, baseHref);
+  return parsed && ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
 }
 
-type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
-  baseHref?: string;
-};
-
+/** Reserves an opener-isolated window during user activation for later navigation. */
 export function reserveExternalWindowForDeferredNavigation(
-  opts: { popup?: boolean } = {},
+  opts: { popup?: boolean | string } = {},
 ): WindowProxy | null {
+  const features = typeof opts.popup === "string" ? opts.popup : opts.popup ? "popup" : undefined;
   // Reserve while user activation is live, then detach the opener before any
   // caller-controlled URL can be loaded into the new browsing context.
-  const opened = window.open("about:blank", "_blank", opts.popup ? "popup" : undefined);
+  const opened = window.open("about:blank", "_blank", features);
   if (opened) {
     opened.opener = null;
   }
@@ -74,10 +65,9 @@ export function reserveExternalWindowForDeferredNavigation(
 
 export function openExternalUrlSafe(
   rawUrl: string,
-  opts: OpenExternalUrlSafeOptions = {},
+  opts: ResolveSafeExternalUrlOptions = {},
 ): WindowProxy | null {
-  const baseHref = opts.baseHref ?? window.location.href;
-  const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, opts);
+  const safeUrl = resolveSafeExternalUrl(rawUrl, window.location.href, opts);
   if (!safeUrl) {
     return null;
   }

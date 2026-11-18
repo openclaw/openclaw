@@ -64,10 +64,6 @@ function hashOpaqueCallback(domain: "model" | "provider", ...values: string[]): 
     .digest("base64url");
 }
 
-/**
- * Parse a model callback_data string into a structured object.
- * Returns null if the data doesn't match a known pattern.
- */
 export function parseModelCallbackData(data: string): ParsedModelCallback | null {
   const trimmed = data.trim();
   const opaqueModelMatch = trimmed.match(/^mdl1~m:([A-Za-z0-9_-]{43})$/);
@@ -85,7 +81,6 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     return { type: trimmed === CALLBACK_PREFIX.providers ? "providers" : "back" };
   }
 
-  // mdl_list_{provider}_{page}
   const listMatch = trimmed.match(/^mdl_list_([a-z0-9_.-]+)_(\d+)$/i);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
@@ -95,13 +90,11 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
     }
   }
 
-  // mdl_sel/{model} (legacy providerless input)
   const compactModel = trimmed.match(/^mdl_sel\/(.+)$/)?.[1];
   if (compactModel) {
     return { type: "select", model: compactModel };
   }
 
-  // mdl_sel_{provider/model}
   const [, provider, model] = trimmed.match(/^mdl_sel_([^/]+)\/(.+)$/) ?? [];
   return provider && model ? { type: "select", provider, model } : null;
 }
@@ -173,23 +166,6 @@ export function resolveModelListCallback(params: {
     : undefined;
 }
 
-function isCurrentModelSelection(params: {
-  currentModel?: string;
-  provider: string;
-  model: string;
-}): boolean {
-  const currentModel = params.currentModel?.trim();
-  if (!currentModel) {
-    return false;
-  }
-  return currentModel.includes("/")
-    ? currentModel === `${params.provider}/${params.model}`
-    : currentModel === params.model;
-}
-
-/**
- * Build provider selection keyboard with 2 providers per row.
- */
 export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   const rows: ButtonRow[] = [];
   for (const [index, provider] of providers.entries()) {
@@ -201,11 +177,23 @@ export function buildProviderKeyboard(providers: ProviderInfo[]): ButtonRow[] {
   return rows;
 }
 
-/**
- * Build model list keyboard with pagination and back button.
- */
+export function buildPaginationRow(
+  currentPage: number,
+  totalPages: number,
+  callbackData: (page: number | null) => string,
+): ButtonRow {
+  return [
+    { page: currentPage - 1, text: "◀ Prev", show: currentPage > 1 },
+    { page: null, text: `${currentPage}/${totalPages}`, show: true },
+    { page: currentPage + 1, text: "Next ▶", show: currentPage < totalPages },
+  ]
+    .filter(({ show }) => show)
+    .map(({ page, text }) => ({ text, callback_data: callbackData(page) }));
+}
+
 export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
   const { provider, models, currentModel, currentPage, totalPages, modelNames } = params;
+  const currentSelection = currentModel?.trim() ?? "";
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
 
   if (models.length === 0) {
@@ -214,17 +202,21 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
 
   const rows: ButtonRow[] = [];
 
-  // Calculate page slice
   const startIndex = (currentPage - 1) * pageSize;
   const endIndex = Math.min(startIndex + pageSize, models.length);
   const pageModels = models.slice(startIndex, endIndex);
 
   for (const model of pageModels) {
     const callbackData = buildModelSelectionCallbackData({ provider, model });
-    const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
+    const isCurrentModel =
+      currentSelection.length > 0 &&
+      currentSelection === (currentSelection.includes("/") ? `${provider}/${model}` : model);
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
     const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
-    const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
+    const displayText =
+      displayLabel.length <= MODEL_BUTTON_LABEL_MAX_LENGTH
+        ? displayLabel
+        : `…${sliceUtf16Safe(displayLabel, -(MODEL_BUTTON_LABEL_MAX_LENGTH - 1))}`;
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -235,65 +227,27 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     ]);
   }
 
-  // Pagination row
   if (totalPages > 1) {
-    const paginationRow: ButtonRow = [];
-
-    if (currentPage > 1) {
-      paginationRow.push({
-        text: "◀ Prev",
-        callback_data: buildProviderListCallbackData(provider, currentPage - 1),
-      });
-    }
-
-    paginationRow.push({
-      text: `${currentPage}/${totalPages}`,
-      callback_data: buildProviderListCallbackData(provider, currentPage), // noop
-    });
-
-    if (currentPage < totalPages) {
-      paginationRow.push({
-        text: "Next ▶",
-        callback_data: buildProviderListCallbackData(provider, currentPage + 1),
-      });
-    }
-
-    rows.push(paginationRow);
+    rows.push(
+      buildPaginationRow(currentPage, totalPages, (page) =>
+        buildProviderListCallbackData(provider, page ?? currentPage),
+      ),
+    );
   }
 
-  // Back button
   rows.push([{ text: "<< Back", callback_data: CALLBACK_PREFIX.back }]);
 
   return rows;
 }
 
-/**
- * Build "Browse providers" button for /model summary.
- */
 export function buildBrowseProvidersButton(): ButtonRow[] {
   return [[{ text: "Browse providers", callback_data: CALLBACK_PREFIX.providers }]];
 }
 
-/**
- * Truncate a model label for display, preserving its end if too long.
- */
-function truncateModelLabel(modelLabel: string, maxLen: number): string {
-  if (modelLabel.length <= maxLen) {
-    return modelLabel;
-  }
-  return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
-}
-
-/**
- * Get page size for model list pagination.
- */
 export function getModelsPageSize(): number {
   return MODELS_PAGE_SIZE;
 }
 
-/**
- * Calculate total pages for a model list.
- */
 export function calculateTotalPages(totalModels: number, pageSize?: number): number {
   const size = pageSize ?? MODELS_PAGE_SIZE;
   return size > 0 ? Math.ceil(totalModels / size) : 1;

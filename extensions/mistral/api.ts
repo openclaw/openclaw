@@ -1,3 +1,4 @@
+import { MISTRAL_MODEL_TRANSPORT_PATCH } from "openclaw/plugin-sdk/provider-model-shared";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMistralReasoningEffortMap } from "./provider-policy-api.js";
 
@@ -15,21 +16,9 @@ export {
   MISTRAL_MEDIUM_3_5_ID,
 } from "./provider-policy-api.js";
 
-export const MISTRAL_MODEL_TRANSPORT_PATCH = {
-  supportsStore: false,
-  supportsPromptCacheKey: true,
-  supportsLongCacheRetention: false,
-  maxTokensField: "max_tokens",
-} as const;
+export { MISTRAL_MODEL_TRANSPORT_PATCH };
 
-export function resolveMistralCompatPatch(model: { id?: string }): {
-  supportsStore: boolean;
-  supportsPromptCacheKey: boolean;
-  supportsLongCacheRetention: boolean;
-  supportsReasoningEffort: boolean;
-  maxTokensField: "max_tokens";
-  reasoningEffortMap?: Record<string, string>;
-} {
+export function resolveMistralCompatPatch(model: { id?: string }) {
   const reasoningEffortMap = resolveMistralReasoningEffortMap(model.id);
   return {
     ...MISTRAL_MODEL_TRANSPORT_PATCH,

@@ -1,18 +1,24 @@
 // Runs the repository check lanes selected by CLI arguments.
 import { performance } from "node:perf_hooks";
-import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
+import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mts";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
-type CheckCommand = { name: string; args: string[] };
+type CheckCommand = { name: string; args: string[]; usesBase?: boolean };
 type RunManagedCheck = (options: { args: string[]; bin: string }) => Promise<number>;
 
 export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "conflict markers", args: ["check:no-conflict-markers"] },
   { name: "script TypeScript erasability", args: ["check:script-erasability"] },
-  { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"] },
-  { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"] },
+  { name: "line-cap growth ratchet", args: ["check:line-cap-ratchet"], usesBase: true },
+  { name: "SQLite worker ratchet", args: ["check:database-worker-ratchet"], usesBase: true },
+  { name: "SQLite dialect ratchet", args: ["check:database-dialect-ratchet"], usesBase: true },
+  { name: "max-lines suppression ratchet", args: ["check:max-lines-ratchet"], usesBase: true },
+  { name: "assertion SAFETY comment ratchet", args: ["check:assertion-safety"], usesBase: true },
+  { name: "test timeout race ratchet", args: ["check:test-timeout-race-ratchet"], usesBase: true },
+  { name: "first-party mock export ratchet", args: ["check:test-mock-exports"], usesBase: true },
   { name: "changelog attributions", args: ["check:changelog-attributions"] },
+  { name: "AGENTS.md bootstrap size", args: ["check:agents-md-size"] },
   { name: "database-first legacy-store guard", args: ["check:database-first-legacy-stores"] },
   { name: "doctor deprecation registry", args: ["check:doctor-deprecation-registry"] },
   {
@@ -39,16 +45,15 @@ export const PREFLIGHT_CHECKS: CheckCommand[] = [
   { name: "package patch guard", args: ["deps:patches:check"] },
 ];
 
-/**
- * Returns command usage text for the aggregate check runner.
- */
 export function usage() {
   return [
-    "Usage: node --import tsx scripts/check.mts [--timed] [--include-architecture] [--include-test-types]",
+    "Usage: node --import tsx scripts/check.mts [--base <ref>] [--stage <name>] [--timed] [--include-architecture] [--include-test-types]",
     "",
     "Runs the local check graph: guard preflights, typecheck, lint, and policy guards.",
     "",
     "Options:",
+    "  --base <ref>            Compare ratchets against the fork with this Git ref.",
+    "  --stage <name>          Select preflight, typecheck, lint, or policy (repeatable).",
     "  --timed                 Print timing summary even when checks pass.",
     "  --include-architecture  Run architecture import-cycle checks instead of runtime cycles.",
     "  --include-test-types    Typecheck production and test sources.",
@@ -56,14 +61,20 @@ export function usage() {
   ].join("\n");
 }
 
-/**
- * Parses aggregate check runner arguments.
- */
 function parseCheckArgs(argv: string[]) {
   return parseFlagArgs(
     argv,
-    { help: false, includeArchitecture: false, includeTestTypes: false, timed: false },
+    {
+      base: "",
+      help: false,
+      includeArchitecture: false,
+      includeTestTypes: false,
+      stages: [] as string[],
+      timed: false,
+    },
     [
+      stringFlag("--base", "base", { rejectShortOptions: true }),
+      stringListFlag("--stage", "stages", { rejectShortOptions: true }),
       booleanFlag("--timed", "timed", true, { repeatable: true }),
       booleanFlag("--include-architecture", "includeArchitecture", true, { repeatable: true }),
       booleanFlag("--include-test-types", "includeTestTypes", true, { repeatable: true }),
@@ -79,9 +90,6 @@ function parseCheckArgs(argv: string[]) {
   );
 }
 
-/**
- * Runs selected repository check lanes.
- */
 export async function main(argv = process.argv.slice(2)) {
   let args;
   try {
@@ -89,11 +97,6 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 2;
-    return;
-  }
-  if (args.help) {
-    console.log(usage());
-    process.exitCode = 0;
     return;
   }
 
@@ -122,11 +125,17 @@ export async function main(argv = process.argv.slice(2)) {
 
   const stages = [
     {
+      key: "preflight",
       name: "preflight guards",
       parallel: true,
-      commands: PREFLIGHT_CHECKS,
+      commands: PREFLIGHT_CHECKS.map((command) =>
+        command.usesBase && args.base
+          ? { name: command.name, args: [...command.args, "--base", args.base] }
+          : command,
+      ),
     },
     {
+      key: "typecheck",
       name: "typecheck",
       parallel: false,
       commands: args.includeTestTypes
@@ -138,24 +147,43 @@ export async function main(argv = process.argv.slice(2)) {
           ],
     },
     {
+      key: "lint",
       name: "lint",
       parallel: false,
       commands: [
-        { name: "lint", args: ["lint"] },
+        { name: "lint", args: ["lint", ...(args.base ? ["--base", args.base] : [])] },
         { name: "format", args: ["format:check"] },
       ],
     },
     {
+      key: "policy",
       name: "policy guards",
       parallel: true,
       commands: tailChecks,
     },
   ];
 
+  const selected = new Set(args.stages);
+  const unknown = args.stages.find((key) => !stages.some((stage) => stage.key === key));
+  if (unknown !== undefined) {
+    console.error(`unknown stage: ${unknown}\n\n${usage()}`);
+    process.exitCode = 2;
+    return;
+  }
+
+  if (args.help) {
+    console.log(usage());
+    process.exitCode = 0;
+    return;
+  }
+
   const timings = [];
   let exitCode = 0;
 
   for (const stage of stages) {
+    if (selected.size > 0 && !selected.has(stage.key)) {
+      continue;
+    }
     console.error(`\n[check] ${stage.name}`);
     const results = stage.parallel
       ? await Promise.all(stage.commands.map((command) => runCommand(command)))
@@ -188,9 +216,6 @@ async function runSerial(commands: CheckCommand[]) {
   return results;
 }
 
-/**
- * Runs one managed check command and returns timing/status details.
- */
 export async function runCommand(
   command: CheckCommand,
   runManagedCommandImpl: RunManagedCheck = runManagedCommand,

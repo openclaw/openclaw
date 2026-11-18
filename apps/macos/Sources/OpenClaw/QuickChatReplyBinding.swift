@@ -4,13 +4,15 @@ import OpenClawChatUI
 @MainActor
 @Observable
 final class QuickChatReplyBinding {
-    typealias ViewModelFactory = @MainActor (QuickChatRoutingTarget) -> OpenClawChatViewModel
+    typealias ViewModelFactory = @MainActor (OpenClawChatSessionTarget) -> OpenClawChatViewModel
 
-    private(set) var route: QuickChatRoutingTarget?
+    private(set) var route: OpenClawChatSessionTarget?
+    private(set) var isExpanded = false
     private(set) var viewModel: OpenClawChatViewModel?
     private(set) var isPastingReply = false
     private(set) var pasteStatusMessage: String?
-    @ObservationIgnored private var preparedRoute: QuickChatRoutingTarget?
+    private(set) var disclosureRevision: UInt64 = 0
+    @ObservationIgnored private var preparedRoute: OpenClawChatSessionTarget?
 
     @ObservationIgnored private let viewModelFactory: ViewModelFactory
 
@@ -18,34 +20,39 @@ final class QuickChatReplyBinding {
         self.viewModelFactory = viewModelFactory
     }
 
-    /// Starts the transport consumer before the send is dispatched so no early
-    /// delta/final frame is missed; the reply area stays hidden until show(route:).
-    /// Accepted tradeoff: construction does not synchronously install the transport
-    /// subscription (scheduler-scale gap). Deltas carry full snapshots, the shared
-    /// view model self-heals from them, and history bootstrap recovers committed
-    /// turns — so only a turn completing within a runloop tick could be lost, which
-    /// is not a real production state and does not justify a readiness handshake in
-    /// the shared chat kit.
-    func prepare(route: QuickChatRoutingTarget) {
-        guard self.preparedRoute != route || self.viewModel == nil else { return }
+    /// Prepare the reply consumer before dispatch while keeping it hidden until show(route:).
+    /// Subscription starts asynchronously; full snapshots and history bootstrap recover earlier turns.
+    func prepare(route: OpenClawChatSessionTarget) {
+        guard self.preparedRoute != route else { return }
         self.preparedRoute = route
         self.viewModel = self.viewModelFactory(route)
     }
 
-    func show(route: QuickChatRoutingTarget) {
+    func show(route: OpenClawChatSessionTarget) {
         self.prepare(route: route)
         self.route = route
+        self.isExpanded = true
+        self.disclosureRevision &+= 1
     }
 
-    func rebindIfActive(route: QuickChatRoutingTarget) {
-        // Only a VISIBLE reply rebinds; hidden prepared state from a failed send must
-        // not be promoted into an expanded transcript by a later target change.
-        guard self.route != nil else { return }
+    func rebindIfActive(route: OpenClawChatSessionTarget) {
+        // A target change retires hidden context without expanding the conversation.
+        guard self.isExpanded else {
+            if self.preparedRoute != route { self.clear() }
+            return
+        }
         self.show(route: route)
     }
 
+    func hide() {
+        self.isExpanded = false
+        self.disclosureRevision &+= 1
+    }
+
     func clear() {
+        self.disclosureRevision &+= 1
         self.route = nil
+        self.isExpanded = false
         self.preparedRoute = nil
         self.viewModel = nil
         self.isPastingReply = false
@@ -64,7 +71,7 @@ final class QuickChatReplyBinding {
         self.pasteStatusMessage = message
     }
 
-    private static func makeViewModel(route: QuickChatRoutingTarget) -> OpenClawChatViewModel {
+    static func makeViewModel(route: OpenClawChatSessionTarget) -> OpenClawChatViewModel {
         let transport = MacGatewayChatTransport(defaultGlobalAgentID: route.agentID)
         return OpenClawChatViewModel(
             sessionKey: route.sessionKey,

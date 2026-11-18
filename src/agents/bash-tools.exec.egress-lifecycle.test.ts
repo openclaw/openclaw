@@ -2,9 +2,16 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createServer, type Server } from "node:https";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import { drainSystemEvents, peekSystemEventEntries } from "../infra/system-events.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { generateLocalProxyLeaf } from "../proxy-capture/ca.js";
 import {
@@ -24,13 +31,23 @@ import {
   prepareAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "./admitted-run-context.js";
-import { deleteSession } from "./bash-process-registry.js";
+import { deleteSession, getFinishedSession } from "./bash-process-registry.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { fullGatewayExec, runningSession } from "./bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { collectTextContentBlocks } from "./content-blocks.js";
+import * as sessionSlug from "./session-slug.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
+
+// mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
+vi.mock("../auto-reply/dispatch.js", async () => {
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
+  return createDeferredExecDispatchMock("completion");
+});
 
 const sessionKey = "agent:probe:egress-lifecycle";
 let state: OpenClawTestState;
@@ -40,6 +57,7 @@ let target: string;
 let config: OpenClawConfig;
 const admissions: PreparedAgentRunAdmission[] = [];
 const processIds: string[] = [];
+const completions: sessionEvents.SessionEventReceipt[] = [];
 
 function quote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
@@ -80,14 +98,14 @@ async function createInvocation(runId: string) {
   });
   admissions.push(admission);
   const admitted = await admission.admit("gateway");
-  const caller = createAdmittedGatewayToolCallerIdentity({
-    admittedRunContext: admitted,
-    agentId: "probe",
-    sessionKey,
-  });
-  if (!caller) {
-    throw new Error("Expected an admitted caller");
-  }
+  const caller = expectDefined(
+    createAdmittedGatewayToolCallerIdentity({
+      admittedRunContext: admitted,
+      agentId: "probe",
+      sessionKey,
+    }),
+    "admitted caller",
+  );
   const exec = createExecTool({
     config,
     agentId: "probe",
@@ -96,9 +114,7 @@ async function createInvocation(runId: string) {
     runId,
     operationalRunInstance: admitted.operationalRunInstance,
     trigger: "cron",
-    host: "gateway",
-    security: "full",
-    ask: "off",
+    ...fullGatewayExec,
     cwd: state.workspaceDir,
     notifyOnExit: true,
     allowBackground: true,
@@ -117,16 +133,17 @@ async function createInvocation(runId: string) {
 
 type Invocation = Awaited<ReturnType<typeof createInvocation>>;
 
+function hasExitEvent(sessionId: string): boolean {
+  return peekSystemEventEntries(sessionKey).some(
+    (event) => event.contextKey === `exec:${sessionId}`,
+  );
+}
+
 async function waitForOutput(owner: Invocation, sessionId: string, text: string) {
   await vi.waitFor(
     async () => {
       const result = await owner.process({ action: "log", sessionId });
-      expect(
-        result.content
-          .filter((part) => part.type === "text")
-          .map((part) => part.text)
-          .join("\n"),
-      ).toContain(text);
+      expect(collectTextContentBlocks(result.content).join("\n")).toContain(text);
     },
     { timeout: 10_000 },
   );
@@ -140,10 +157,7 @@ async function startWatcher(owner: Invocation, label: string, timeoutSeconds = 3
     background: true,
     timeoutSeconds,
   });
-  if (result.details.status !== "running") {
-    throw new Error(`Expected a background watcher: ${JSON.stringify(result.details)}`);
-  }
-  const sessionId = result.details.sessionId;
+  const { sessionId } = runningSession(result.details);
   processIds.push(sessionId);
   await waitForOutput(owner, sessionId, "READY");
   return {
@@ -192,10 +206,25 @@ beforeEach(async () => {
       entries: { probe: { workspace: state.workspaceDir } },
     },
     plugins: { enabled: false },
-    tools: { exec: { host: "gateway", security: "full", ask: "off" } },
+    tools: { exec: fullGatewayExec },
     secrets: { egressProxy: { enabled: true } },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
+  await replaceSessionEntry(
+    { agentId: "probe", sessionKey },
+    {
+      sessionId: "egress-origin",
+      lifecycleRevision: "egress-origin-revision",
+      updatedAt: Date.now(),
+    },
+  );
+  const enqueue = sessionEvents.enqueueSessionEventForHost;
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((...args) => {
+    const receipt = enqueue(...args);
+    completions.push(receipt);
+    return receipt;
+  });
   // A real child retains its inherited proxy environment across caller turns.
   await state.writeText(
     "watcher.cjs",
@@ -239,6 +268,9 @@ afterEach(async () => {
     deleteSession(sessionId);
   }
   drainSystemEvents(sessionKey);
+  await Promise.all(completions.splice(0).map((receipt) => receipt.settled));
+  vi.restoreAllMocks();
+  clearRuntimeConfigSnapshot();
   if (proxy) {
     clearSecretEgressProxy(proxy);
     await proxy.stop();
@@ -254,9 +286,14 @@ afterEach(async () => {
 
 describe.skipIf(process.platform === "win32")("background exec egress lifetime", () => {
   it("survives turn closure and revokes same-turn commands independently on kill and exit", async () => {
+    vi.spyOn(sessionSlug, "createSessionSlug")
+      .mockReturnValueOnce("oceanic-atlas")
+      .mockReturnValueOnce("oceanic-basil");
     const first = await createInvocation("egress-first");
     const killed = await startWatcher(first, "killed");
     const survivor = await startWatcher(first, "survivor");
+    expect(survivor.sessionId).not.toBe(killed.sessionId);
+    expect(survivor.sessionId.slice(0, 8)).toBe(killed.sessionId.slice(0, 8));
     await killed.request(first, "before-close");
     first.admission.close();
 
@@ -268,17 +305,23 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     await later.process({ action: "kill", sessionId: killed.sessionId });
     await expect(requestWithGrant(killed.grant)).resolves.toBe(407);
     await survivor.request(later, "sibling-after-kill");
-    await survivor.exit();
     await vi.waitFor(
-      () => {
-        expect(
-          peekSystemEvents(sessionKey).some((text) =>
-            text.includes(survivor.sessionId.slice(0, 8)),
-          ),
-        ).toBe(true);
-      },
+      () =>
+        expect(getFinishedSession(killed.sessionId)).toMatchObject({
+          exitReason: "manual-cancel",
+          terminalStatus: "failed",
+        }),
       { timeout: 10_000 },
     );
+    // Observe settlement before polling can acknowledge an unwanted notification.
+    expect(hasExitEvent(killed.sessionId)).toBe(false);
+    const running = await later.process({ action: "poll", sessionId: survivor.sessionId });
+    expect(running.details).toMatchObject({ status: "running" });
+    expect(hasExitEvent(survivor.sessionId)).toBe(false);
+    await survivor.exit();
+    await vi.waitFor(() => expect(hasExitEvent(survivor.sessionId)).toBe(true), {
+      timeout: 10_000,
+    });
     const exited = await later.process({ action: "poll", sessionId: survivor.sessionId });
     expect(exited.details).toMatchObject({ status: "completed", exitCode: 0 });
     await expect(requestWithGrant(survivor.grant)).resolves.toBe(407);
@@ -288,14 +331,9 @@ describe.skipIf(process.platform === "win32")("background exec egress lifetime",
     const owner = await createInvocation("egress-timeout");
     const watcher = await startWatcher(owner, "timeout", 3);
     await watcher.request(owner, "before-timeout");
-    await vi.waitFor(
-      () => {
-        expect(
-          peekSystemEvents(sessionKey).some((text) => text.includes(watcher.sessionId.slice(0, 8))),
-        ).toBe(true);
-      },
-      { timeout: 10_000 },
-    );
+    await vi.waitFor(() => expect(hasExitEvent(watcher.sessionId)).toBe(true), {
+      timeout: 10_000,
+    });
     const result = await owner.process({ action: "poll", sessionId: watcher.sessionId });
     expect(result.details).toMatchObject({ status: "failed", exitReason: "overall-timeout" });
     await expect(requestWithGrant(watcher.grant)).resolves.toBe(407);

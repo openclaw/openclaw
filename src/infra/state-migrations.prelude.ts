@@ -5,6 +5,7 @@ import { resolveAllAgentSessionStoreCandidateTargetsSync } from "../config/sessi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { normalizeDatabasePath } from "./sqlite-worker-identity.js";
 import type {
   AgentDatabaseMigrationTarget,
   PreparedAgentDatabaseMigrationDiscovery,
@@ -17,32 +18,37 @@ import {
   resolveLegacyProfileWorkspaceMigrationPaths,
   resolvePendingLegacyProfileWorkspaceMigrationPaths,
 } from "./state-migrations.state-dir.js";
-import { migrateHistoricalTranscriptDirectives } from "./state-migrations.transcript-directives.js";
 import type {
   LegacyStateMigrationEndpoint,
+  LegacyStateMigrationInvocationPurpose,
   LegacyStateMigrationMode,
   LegacyStateMigrationStep,
 } from "./state-migrations.types.js";
 
 export function buildUnresolvedBlockedPreludeSteps(
   mode: LegacyStateMigrationMode,
+  invocationPurpose: LegacyStateMigrationInvocationPurpose,
 ): LegacyStateMigrationStep[] {
-  const ids =
-    mode === "automatic"
-      ? ["transcript-directives"]
-      : [
+  const ids = [
+    ...(mode === "doctor"
+      ? [
+          "session-entry-state-preparation",
           "media-persistence",
-          "transcript-directives",
-          "profile-workspace",
-          "plugin-migration-preparation",
-          "orphan-session-keys",
-        ];
+          "session-entry-state",
+          "cold-navigation",
+        ]
+      : []),
+    ...(invocationPurpose === "doctor" ? ["transcript-directives"] : []),
+    ...(mode === "doctor"
+      ? ["profile-workspace", "plugin-migration-preparation", "orphan-session-keys"]
+      : []),
+  ];
   return ids.map((id) => ({
     id,
     phase: "shared",
     source: [],
     target: [],
-    requiredness: "conditional",
+    requiredness: id.startsWith("session-entry-state") ? "required" : "conditional",
     reversibility: "checkpoint-required",
     run: () => ({ changes: [], warnings: [] }),
   }));
@@ -86,6 +92,36 @@ export function createConfigMigrationSources(
   );
 }
 
+export function createAgentTargetDiscoveryStep(params: {
+  configPath: string;
+  configIncludedPaths: readonly string[];
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
+  run: LegacyStateMigrationStep["run"];
+  refusal?: PreparedLegacyStateMigrationStep["refusal"];
+}): LegacyStateMigrationStep {
+  return {
+    id: "agent-migration-targets",
+    phase: "shared",
+    source: [
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
+      {
+        kind: "sqlite",
+        path: resolveOpenClawStateSqlitePath({
+          ...params.env,
+          OPENCLAW_STATE_DIR: params.stateDir,
+        }),
+      },
+      { kind: "path", path: path.join(params.stateDir, "agents") },
+    ],
+    target: [],
+    requiredness: "required",
+    reversibility: "not-applicable",
+    ...(params.refusal ? { refusal: params.refusal } : {}),
+    run: params.run,
+  };
+}
+
 export function inspectOrphanSessionStoreEndpoints(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -123,6 +159,7 @@ export function inspectOrphanSessionStoreEndpoints(params: {
 
 export function buildLegacyStateMigrationPreludeSteps(params: {
   mode: LegacyStateMigrationMode;
+  invocationPurpose: LegacyStateMigrationInvocationPurpose;
   config: OpenClawConfig;
   configPath: string;
   configIncludedPaths: readonly string[];
@@ -131,6 +168,8 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   homedir: () => string;
   agentDatabaseTargets: readonly { agentId: string; path: string }[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+  integrityCheck?: "quick" | "full";
+  inspectedSessionEntryPaths?: readonly string[];
   orphanSessionStores?: ReturnType<typeof inspectOrphanSessionStoreEndpoints>;
   pluginSessionStoreAgentIds: readonly string[];
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
@@ -152,6 +191,17 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       path: databasePath,
     })),
   ]);
+  const entryStateChanges = (repaired: number) =>
+    repaired > 0 ? [`Canonicalized entry state for ${repaired} durable session row(s).`] : [];
+  // Only a deferred update inspection reports warnings; Doctor --fix completes it later.
+  const entryStateResult = (report: { repaired: number; warnings?: string[] }) => ({
+    changes: entryStateChanges(report.repaired),
+    warnings: report.warnings ?? [],
+    ...(report.warnings
+      ? { warningDisposition: "recoverable" as const, outcome: "deferred" as const }
+      : {}),
+  });
+
   const sharedStep = (
     id: string,
     source: LegacyStateMigrationEndpoint[],
@@ -166,6 +216,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
     target,
     requiredness,
     reversibility: "checkpoint-required",
+    collectNotices: id === "profile-workspace",
     ...(refusal ? { refusal } : {}),
     run,
   });
@@ -173,34 +224,157 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
     configuredAgentDatabaseTargets: params.agentDatabaseTargets,
     env: stateEnv,
     preparedDiscovery: params.agentDatabaseMigrationDiscovery,
+    integrityCheck: params.integrityCheck,
   };
-  let preparedTargets: readonly AgentDatabaseMigrationTarget[] | undefined;
+  let preparedRepairTargets: readonly AgentDatabaseMigrationTarget[] | undefined =
+    params.mode === "doctor" ? [] : undefined;
+  let admittedNavigationTargets: readonly AgentDatabaseMigrationTarget[] = [];
+  let inspectedEntryStatePaths = new Set<string>();
+  let mediaEntryStatePreparationError: Error | undefined;
+  const versionMigrationPaths = new Set(
+    params.agentDatabaseMigrationDiscovery?.versionMigrations?.map((migration) => migration.path),
+  );
+  // Preflight already inspected these targets; version-migrated targets keep their repair path.
+  inspectedEntryStatePaths = new Set(
+    params.inspectedSessionEntryPaths?.filter((pathname) => !versionMigrationPaths.has(pathname)),
+  );
   const steps: LegacyStateMigrationStep[] = [];
   if (params.mode === "doctor") {
     steps.push(
+      sharedStep(
+        "session-entry-state-preparation",
+        agentPersistence,
+        agentPersistence,
+        async () => {
+          const { repairLegacySessionEntryStates } =
+            await import("../commands/doctor-session-delivery-state.js");
+          const report = await repairLegacySessionEntryStates({
+            apply: true,
+            cfg: params.config,
+            env: stateEnv,
+            deferToMediaPreparation: true,
+            excludedDatabasePaths: new Set([...versionMigrationPaths, ...inspectedEntryStatePaths]),
+            integrityCheck: params.integrityCheck,
+            ...(params.agentDatabaseMigrationDiscovery
+              ? {
+                  registeredDatabases:
+                    params.agentDatabaseMigrationDiscovery.registeredAgentDatabases,
+                }
+              : {}),
+            onInspectedTargets: (targets) => {
+              for (const target of targets) {
+                inspectedEntryStatePaths.add(target.canonicalPath);
+              }
+            },
+          });
+          return entryStateResult(report);
+        },
+        undefined,
+        "required",
+      ),
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
-          onPreparedTargets: (targets) => {
-            preparedTargets = targets;
+          isSessionEntryStatePrepared: (target) =>
+            inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
+          prepareSessionEntryState: async (target) => {
+            try {
+              const { repairLegacySessionEntryStates } =
+                await import("../commands/doctor-session-delivery-state.js");
+              const report = await repairLegacySessionEntryStates({
+                apply: true,
+                cfg: params.config,
+                env: stateEnv,
+                integrityCheck: params.integrityCheck,
+                targets: [
+                  { agentId: target.agentId, storePath: target.path, sqlitePath: target.path },
+                ],
+                onInspectedTargets: (targets) => {
+                  for (const inspected of targets) {
+                    inspectedEntryStatePaths.add(inspected.canonicalPath);
+                  }
+                },
+              });
+              return {
+                // A deferred inspection leaves this target's media migration deferred too.
+                completed: !report.warnings,
+                changes: entryStateChanges(report.repaired),
+              };
+            } catch (error) {
+              mediaEntryStatePreparationError ??=
+                error instanceof Error ? error : new Error(String(error));
+              return { completed: false, changes: [] };
+            }
+          },
+          onAdmittedTargets: (targets) => {
+            admittedNavigationTargets = targets;
+          },
+          onPreparedRepairTargets: (targets) => {
+            preparedRepairTargets = targets;
           },
         }),
       ),
+      sharedStep(
+        "session-entry-state",
+        agentPersistence,
+        agentPersistence,
+        async () => {
+          if (mediaEntryStatePreparationError) {
+            throw mediaEntryStatePreparationError;
+          }
+          const { repairLegacySessionEntryStates } =
+            await import("../commands/doctor-session-delivery-state.js");
+          const report = await repairLegacySessionEntryStates({
+            apply: true,
+            cfg: params.config,
+            env: stateEnv,
+            integrityCheck: params.integrityCheck,
+            targets: preparedRepairTargets
+              ?.filter(
+                (target) => !inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
+              )
+              .map((target) => ({
+                agentId: target.agentId,
+                storePath: target.path,
+                sqlitePath: target.path,
+              })),
+          });
+          return entryStateResult(report);
+        },
+        undefined,
+        "required",
+      ),
+      sharedStep("cold-navigation", agentPersistence, agentPersistence, async () => {
+        const { migrateSessionColdNavigation } =
+          await import("./state-migrations.cold-navigation.js");
+        return await migrateSessionColdNavigation({
+          ...agentMigrationOptions,
+          preparedTargets: admittedNavigationTargets,
+        });
+      }),
     );
   }
-  steps.push(
-    sharedStep("transcript-directives", agentPersistence, agentPersistence, () =>
-      migrateHistoricalTranscriptDirectives({ ...agentMigrationOptions, preparedTargets }),
-    ),
-  );
+  if (params.invocationPurpose === "doctor") {
+    steps.push(
+      sharedStep("transcript-directives", agentPersistence, agentPersistence, async () => {
+        const { migrateHistoricalTranscriptDirectives } =
+          await import("./state-migrations.transcript-directives.js");
+        return await migrateHistoricalTranscriptDirectives({
+          ...agentMigrationOptions,
+          preparedTargets: preparedRepairTargets,
+        });
+      }),
+    );
+  }
   if (params.mode !== "doctor") {
     return steps;
   }
+  const profileParams = { config: params.config, env: params.env, homedir: params.homedir };
   const profileWorkspace = (
     params.readOnlyPlanning
       ? resolveLegacyProfileWorkspaceMigrationPaths
       : resolvePendingLegacyProfileWorkspaceMigrationPaths
-  )({ env: params.env, homedir: params.homedir });
+  )(profileParams);
   const profileRefusal =
     profileWorkspace && params.readOnlyPlanning
       ? {
@@ -214,7 +388,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       "profile-workspace",
       profileWorkspace ? [{ kind: "path", path: profileWorkspace.source }] : [],
       profileWorkspace ? [{ kind: "path", path: profileWorkspace.target }] : [],
-      () => migrateLegacyProfileWorkspace({ env: params.env, homedir: params.homedir }),
+      () => migrateLegacyProfileWorkspace(profileParams),
       profileRefusal,
       profileWorkspace ? "conditional" : "not-required",
     ),
@@ -226,7 +400,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   if (!orphanSessionStores) {
     // Early failures still close this stable step; its sources are prepared after prerequisites.
     steps.push(
-      ...buildUnresolvedBlockedPreludeSteps(params.mode).filter(
+      ...buildUnresolvedBlockedPreludeSteps(params.mode, params.invocationPurpose).filter(
         (step) => step.id === "orphan-session-keys",
       ),
     );

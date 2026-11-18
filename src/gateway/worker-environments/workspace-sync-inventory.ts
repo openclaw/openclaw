@@ -1,11 +1,14 @@
-import { spawn } from "node:child_process";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { gitReadOnlyEnvironment } from "../../infra/git-exec.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { STAGED_INPUT_GIT_PATHSPEC } from "../../media/staged-inputs.js";
 import { killProcessTree } from "../../process/kill-tree.js";
+import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { spawnProcessToFile } from "../../process/spawn-to-file.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import type { WorkspaceInventoryWriteCommand } from "./workspace-inventory-computation.js";
 import { workspaceInventoryError } from "./workspace-inventory-error.js";
@@ -47,7 +50,7 @@ async function writeInventory(
       ),
       onInventoryChunk: async (bytes, context) => {
         context.signal.throwIfAborted();
-        await output.writeFile(bytes);
+        await output.writeFile(bytes, { signal: context.signal });
         context.signal.throwIfAborted();
       },
     });
@@ -87,33 +90,52 @@ export async function runWorkspaceInventoryCommandToFile(params: {
   if (!command) {
     throw new Error("Worker workspace command requires an executable");
   }
-  const output = await fs.open(params.outputPath, "wx", 0o600);
   let input: FileHandle | undefined;
   let stderr = "";
   let timer: ReturnType<typeof setTimeout> | undefined;
   let terminationTimer: ReturnType<typeof setTimeout> | undefined;
   let abort: (() => void) | undefined;
   let abortedCommand = false;
+  let timedOut = false;
   let outputError: Error | undefined;
-  let outputBytes = 0;
-  let outputWrite = Promise.resolve();
+  let inputWrite = Promise.resolve();
   try {
     input = params.inputPath ? await fs.open(params.inputPath, "r") : undefined;
     params.signal.throwIfAborted();
-    const boundedOutput = params.maxOutputBytes !== undefined;
-    const child = spawn(command, args, {
-      env: params.baseEnv ?? workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv,
-      stdio: [input?.fd ?? "ignore", boundedOutput ? "pipe" : output.fd, "pipe"],
-      ...(process.platform !== "win32" ? { detached: true } : {}),
-      windowsHide: true,
-    });
-    const childStderr = child.stderr;
-    if (!childStderr) {
-      throw new Error("Worker workspace command has no stderr pipe");
-    }
-    childStderr.setEncoding("utf8");
-    childStderr.on("data", (chunk: string) => {
-      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
+    const env = params.baseEnv ?? workerSshCommandOptions({ timeoutMs: params.timeoutMs }).baseEnv;
+    const { child, output } = await withGitProcessOperation(
+      "workspace.inventory",
+      () =>
+        spawnProcessToFile(
+          command,
+          args,
+          {
+            env: command === "git" ? gitReadOnlyEnvironment(args, env) : env,
+            stdio: [input ? "pipe" : "ignore", "pipe", "pipe"],
+            ...(process.platform !== "win32" ? { detached: true } : {}),
+            windowsHide: true,
+          },
+          { path: params.outputPath, maxBytes: params.maxOutputBytes },
+          (launch) => {
+            params.signal.throwIfAborted();
+            if (timedOut) {
+              throw new Error(
+                `Worker workspace file enumeration failed: timed out after ${params.timeoutMs}ms`,
+              );
+            }
+            return launch();
+          },
+        ),
+      "default",
+    );
+    const outputWrite = output.catch((error: unknown) => {
+      outputError = hasNodeErrorCode(error, "ERR_PROCESS_OUTPUT_LIMIT")
+        ? workspaceInventoryError(
+            `Cloud workspace pack exceeds the ${params.maxOutputBytes} byte limit`,
+          )
+        : error instanceof Error
+          ? error
+          : new Error(String(error));
     });
     const result = await new Promise<{ code: number | null; error?: Error }>((resolve) => {
       let settled = false;
@@ -147,43 +169,32 @@ export async function runWorkspaceInventoryCommandToFile(params: {
           } else {
             child.kill("SIGKILL");
           }
-          childStderr.destroy();
+          child.stderr?.destroy();
+          child.stdout?.destroy();
           finish({ code: child.exitCode });
-        }, COMMAND_KILL_GRACE_MS + 1_000);
-        terminationTimer.unref?.();
+        }, COMMAND_KILL_GRACE_MS + 1_000).unref();
       };
-      if (boundedOutput) {
-        const childStdout = child.stdout;
-        if (!childStdout) {
-          finish({ code: null, error: new Error("Worker workspace command has no stdout pipe") });
-          return;
-        }
-        childStdout.on("data", (value: Buffer | Uint8Array) => {
-          const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-          outputBytes += chunk.byteLength;
-          if (outputBytes > params.maxOutputBytes!) {
-            outputError = workspaceInventoryError(
-              `Cloud workspace pack exceeds the ${params.maxOutputBytes} byte limit`,
-            );
-            terminate();
-            return;
-          }
-          childStdout.pause();
-          outputWrite = outputWrite
-            .then(async () => {
-              await output.writeFile(chunk);
-              childStdout.resume();
-            })
-            .catch((error: unknown) => {
+      child.once("spawn", () => {
+        const childStderr = child.stderr!;
+        childStderr.setEncoding("utf8");
+        childStderr.on("data", (chunk: string) => {
+          stderr = sliceUtf16Safe(`${stderr}${chunk}`, -STDERR_LIMIT);
+        });
+        if (input) {
+          const source = input.createReadStream({ autoClose: false });
+          child.once("close", () => source.destroy());
+          inputWrite = pipeline(source, child.stdin!).catch((error: unknown) => {
+            // Early stdin closure belongs to the child's exit outcome.
+            if (
+              !hasNodeErrorCode(error, "EPIPE") &&
+              !hasNodeErrorCode(error, "ERR_STREAM_PREMATURE_CLOSE")
+            ) {
               outputError = error instanceof Error ? error : new Error(String(error));
               terminate();
-            });
-        });
-        childStdout.once("error", (error) => {
-          outputError = error;
-          terminate();
-        });
-      }
+            }
+          });
+        }
+      });
       child.once("error", (error) => finish({ code: null, error }));
       child.once("close", (code) => finish({ code }));
       abort = () => {
@@ -193,13 +204,15 @@ export async function runWorkspaceInventoryCommandToFile(params: {
         terminate();
       };
       params.signal.addEventListener("abort", abort, { once: true });
-      timer = setTimeout(terminate, params.timeoutMs);
-      timer.unref?.();
+      timer = setTimeout(() => {
+        timedOut = !terminationStarted && child.exitCode === null && child.signalCode === null;
+        terminate();
+      }, params.timeoutMs).unref();
       if (params.signal.aborted) {
         abort();
       }
     });
-    await outputWrite;
+    await Promise.all([outputWrite, inputWrite]);
     if (outputError) {
       throw outputError;
     }
@@ -209,10 +222,11 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (abortedCommand) {
       params.signal.throwIfAborted();
     }
-    if (result.code !== 0) {
+    if (result.code !== 0 || timedOut) {
+      const detail = timedOut ? `timed out after ${params.timeoutMs}ms` : stderr.trim();
       throw new Error(
-        stderr.trim()
-          ? `Worker workspace file enumeration failed: ${stderr.trim()}`
+        detail
+          ? `Worker workspace file enumeration failed: ${detail}`
           : "Worker workspace file enumeration failed",
       );
     }
@@ -223,7 +237,6 @@ export async function runWorkspaceInventoryCommandToFile(params: {
     if (abort) {
       params.signal.removeEventListener("abort", abort);
     }
-    await output.close();
     await input?.close();
   }
 }
@@ -252,23 +265,15 @@ export async function createWorkspaceGitTransferList(params: {
   const ignoredPath = path.join(params.temporaryDirectory, "ignored");
   const selectedPath = path.join(params.temporaryDirectory, "selected");
   const outputPath = path.join(params.temporaryDirectory, "transfer-list");
+  const listFiles = (args: string[], destination: string) =>
+    runWorkspaceInventoryCommandToFile({
+      argv: ["git", "-C", params.gitRoot, "ls-files", "--full-name", ...args],
+      outputPath: destination,
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
+    });
   await fs.mkdir(params.temporaryDirectory, { mode: 0o700 });
-  await runWorkspaceInventoryCommandToFile({
-    argv: [
-      "git",
-      "-C",
-      params.gitRoot,
-      "ls-files",
-      "--full-name",
-      "--cached",
-      "--others",
-      "--exclude-standard",
-      "-z",
-    ],
-    outputPath: eligiblePath,
-    signal: params.signal,
-    timeoutMs: params.timeoutMs,
-  });
+  await listFiles(["--cached", "--others", "--exclude-standard", "-z"], eligiblePath);
   const worktreeIncludePath = path.join(params.gitRoot, ".worktreeinclude");
   const worktreeInclude = await fs.lstat(worktreeIncludePath).catch((error: unknown) => {
     if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
@@ -279,40 +284,21 @@ export async function createWorkspaceGitTransferList(params: {
   const hasWorktreeInclude = worktreeInclude?.isFile() === true;
   await settleWorkspaceInventoryCommands(
     [
-      runWorkspaceInventoryCommandToFile({
-        argv: [
-          "git",
-          "-C",
-          params.gitRoot,
-          "ls-files",
-          "--full-name",
+      listFiles(
+        [
           "--others",
           "--ignored",
           "--exclude-standard",
           "-z",
           ...(hasWorktreeInclude ? [] : ["--", STAGED_INPUT_GIT_PATHSPEC]),
         ],
-        outputPath: ignoredPath,
-        signal: params.signal,
-        timeoutMs: params.timeoutMs,
-      }),
+        ignoredPath,
+      ),
       hasWorktreeInclude
-        ? runWorkspaceInventoryCommandToFile({
-            argv: [
-              "git",
-              "-C",
-              params.gitRoot,
-              "ls-files",
-              "--full-name",
-              "--others",
-              "--ignored",
-              `--exclude-from=${worktreeIncludePath}`,
-              "-z",
-            ],
-            outputPath: selectedPath,
-            signal: params.signal,
-            timeoutMs: params.timeoutMs,
-          })
+        ? listFiles(
+            ["--others", "--ignored", `--exclude-from=${worktreeIncludePath}`, "-z"],
+            selectedPath,
+          )
         : fs.writeFile(selectedPath, "", { mode: 0o600 }),
     ],
     params.signal,

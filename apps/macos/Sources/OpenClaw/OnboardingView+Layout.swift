@@ -2,23 +2,16 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow hands off to the dashboard as soon as AI connects.
-    var usesCompactHero: Bool {
-        false
-    }
-
     var body: some View {
         GeometryReader { windowGeometry in
-            let contentHeight = self.contentHeight(for: windowGeometry.size.height)
+            let contentHeight = Self.contentHeight(for: windowGeometry.size.height)
             VStack(spacing: 0) {
-                // Chat-heavy pages shrink the mascot so the content gets the room.
                 GlowingOpenClawIcon(
-                    size: self.heroSize,
+                    size: 130,
                     mood: self.mascotMood,
                     accessory: self.mascotAccessory)
-                    .offset(y: self.usesCompactHero ? 4 : 10)
-                    .frame(height: self.heroFrameHeight)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
+                    .offset(y: 10)
+                    .frame(height: 145)
 
                 GeometryReader { _ in
                     HStack(spacing: 0) {
@@ -35,7 +28,6 @@ extension OnboardingView {
                     .clipped()
                 }
                 .frame(height: contentHeight)
-                .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
 
                 Spacer(minLength: 0)
                 self.navigationBar
@@ -48,6 +40,9 @@ extension OnboardingView {
             minHeight: Self.minimumWindowHeight,
             maxHeight: .infinity)
         .background(Color(NSColor.windowBackgroundColor))
+        .sheet(isPresented: self.$showOpenClawID) {
+            OnboardingOpenClawIDView(model: self.openClawID)
+        }
         .onAppear {
             self.onboardingDidAppear()
         }
@@ -57,8 +52,9 @@ extension OnboardingView {
         .onChange(of: state.connectionMode) { _, _ in
             self.handleConnectionModeChange()
         }
-        .onChange(of: cliInstalled) { _, installed in
+        .onChange(of: cliInstalled) { previous, installed in
             guard installed else { return }
+            self.preservePageAfterCLIReadiness(wasInstalled: previous)
             self.updateMonitoring(for: self.activePageIndex)
         }
         .onChange(of: GatewayProcessManager.shared.status) { _, status in
@@ -69,7 +65,6 @@ extension OnboardingView {
         }
         .task {
             await self.refreshCLIStatus()
-            self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
         .task {
             await self.configuredGatewayProbe.consumeReconnects {
@@ -81,8 +76,8 @@ extension OnboardingView {
     @discardableResult
     func onboardingDidAppear() -> Task<Void, Never>? {
         onboardingVisible = true
-        currentPage = 0
-        updateMonitoring(for: 0)
+        currentPage = pageOrder.firstIndex(of: initialPage.rawValue) ?? 0
+        updateMonitoring(for: self.activePageIndex)
         // App launch may have connected and emitted its snapshot before this
         // view subscribed. Always inspect the selected route once on appear.
         return self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent, knownVisible: true)
@@ -90,29 +85,23 @@ extension OnboardingView {
 
     func onboardingDidDisappear() {
         onboardingVisible = false
-        configuredGatewayProbe.invalidate()
-        // Queued detection can otherwise proceed into a mutating activation
-        // after the window or its selected route has gone away.
-        aiSetup.resetForGatewayChange(clearPendingHandoff: false)
+        self.resetGatewayBoundAIState()
         stopDiscovery()
     }
 
     func activePageIndex(for pageCursor: Int) -> Int {
         guard !pageOrder.isEmpty else { return 0 }
-        let clamped = min(max(0, pageCursor), pageOrder.count - 1)
+        let clamped = Self.visiblePageCursor(pageCursor, pageCount: pageOrder.count)
         return pageOrder[clamped]
     }
 
     func reconcilePageForModeChange(previousActivePageIndex: Int) {
-        if let exact = pageOrder.firstIndex(of: previousActivePageIndex) {
-            withAnimation { self.currentPage = exact }
-            return
+        let page = pageOrder.firstIndex(of: previousActivePageIndex) ??
+            pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) ??
+            max(0, pageOrder.count - 1)
+        withAnimation {
+            self.currentPage = page
         }
-        if let next = pageOrder.firstIndex(where: { $0 > previousActivePageIndex }) {
-            withAnimation { self.currentPage = next }
-            return
-        }
-        withAnimation { self.currentPage = max(0, self.pageOrder.count - 1) }
     }
 
     func handleConnectionModeChange(updatePageMonitoring: ((Int) -> Void)? = nil) {
@@ -121,17 +110,14 @@ extension OnboardingView {
         self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
         Task { await self.refreshCLIStatus() }
         self.returnToInferenceSetupIfNeeded()
-        if let updatePageMonitoring {
-            updatePageMonitoring(self.activePageIndex)
-            self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
-            return
-        }
         // A mode swap can keep the same page cursor, so its onChange hook may not restart AI setup.
-        updateMonitoring(for: self.activePageIndex)
+        (updatePageMonitoring ?? self.updateMonitoring(for:))(self.activePageIndex)
         self.probeConfiguredGatewayForDashboard(intent: self.aiSetup.automaticSetupIntent)
     }
 
     func resetGatewayBoundAIState() {
+        self.openClawID.cancel()
+        self.showOpenClawID = false
         configuredGatewayProbe.invalidate()
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
@@ -326,43 +312,33 @@ extension OnboardingView {
         pageOrder: [Int],
         aiPageIndex: Int) -> Int
     {
-        guard let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex),
-              currentPage >= aiPageCursor
-        else {
-            return currentPage
-        }
-        return aiPageCursor
+        let aiPageCursor = pageOrder.firstIndex(of: aiPageIndex) ?? currentPage
+        return min(currentPage, aiPageCursor)
     }
 
     var navigationBar: some View {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
+        let findLockIndex = pageOrder.firstIndex(of: findPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
-        let remoteGatewayDecision = Self.remoteGatewayAdvanceDecision(
-            connectionMode: state.connectionMode,
-            activePageIndex: self.activePageIndex,
-            connectionPageIndex: connectionPageIndex,
-            authIssue: remoteAuthIssue,
-            probeState: remoteProbeState,
-            input: remoteGatewayProbeInput)
+        let remoteGatewayDecision = self.findPageAdvanceDecision
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
-                Button(action: {}, label: {
-                    Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
-                })
-                .buttonStyle(.plain)
-                .opacity(0)
-                .disabled(true)
+                Color.clear
+                    .frame(width: 32, height: 32)
+                    .accessibilityHidden(true)
 
                 if self.currentPage > 0 {
                     Button(action: self.handleBack, label: {
                         Label("Back", systemImage: "chevron.left")
                             .labelStyle(.iconOnly)
+                            .frame(width: 32, height: 32)
+                            .contentShape(Rectangle())
                     })
                     .buttonStyle(.plain)
                     .foregroundColor(.secondary)
                     .opacity(0.8)
-                    .disabled(self.installingCLI || self.aiSetup.isBusy)
+                    .disabled(self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy)
                     .transition(.opacity.combined(with: .scale(scale: 0.9)))
                 }
             }
@@ -370,13 +346,11 @@ extension OnboardingView {
 
             Spacer()
 
-            HStack(spacing: 8) {
+            HStack(spacing: 0) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isInstallLocked = (self.installingCLI || self.aiSetup.isBusy) &&
+                    let isInstallLocked = (self.installingCLI || self.updatingGatewayHosting || self.aiSetup.isBusy) &&
                         index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
-                        index > (connectionLockIndex ?? 0)
-                    let isRemoteGatewayLocked = !remoteGatewayDecision.canAdvance &&
                         index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
@@ -385,16 +359,23 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isRemoteGatewayLocked || isCLILocked ||
-                        isAILocked
+                    let isFindLocked = findLockIndex != nil &&
+                        (!self.canAdvanceFromFind || !remoteGatewayDecision.canAdvance) &&
+                        index > (findLockIndex ?? 0)
+                    let isLocked = isInstallLocked || isConnectionLocked || isFindLocked || isCLILocked || isAILocked
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
                         Circle()
                             .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
                             .frame(width: 8, height: 8)
+                            .frame(width: 28, height: 28)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(self.navigationTitle(for: self.pageOrder[index]))
+                    .accessibilityAddTraits(index == self.currentPage ? .isSelected : [])
+                    .help(self.navigationTitle(for: self.pageOrder[index]))
                     .disabled(isLocked)
                     .opacity(isLocked ? 0.3 : 1)
                 }
@@ -414,6 +395,19 @@ extension OnboardingView {
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
         .frame(minHeight: 60, alignment: .bottom)
+    }
+
+    private func navigationTitle(for pageIndex: Int) -> LocalizedStringKey {
+        switch pageIndex {
+        case self.connectionPageIndex: "Where should your assistant run?"
+        case self.findPageIndex: "Find your OpenClaw"
+        case self.reachabilityPageIndex: "Reach it from anywhere?"
+        case self.cliPageIndex: "Getting things ready"
+        case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
+            ? "Connect your AI" : "Authenticate with your Gateway"
+        case self.readyPageIndex: "You’re all set!"
+        default: "Welcome to OpenClaw"
+        }
     }
 
     func onboardingPage(@ViewBuilder _ content: @escaping () -> some View) -> some View {
@@ -449,32 +443,12 @@ extension OnboardingView {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
-    func featureRow(title: String, subtitle: String, systemImage: String) -> some View {
-        self.featureRowContent(title: title, subtitle: subtitle, systemImage: systemImage)
-    }
-
-    func featureActionRow(
+    func featureRow(
         title: String,
         subtitle: String,
         systemImage: String,
-        buttonTitle: String,
-        action: @escaping () -> Void) -> some View
-    {
-        self.featureRowContent(
-            title: title,
-            subtitle: subtitle,
-            systemImage: systemImage,
-            action: AnyView(
-                Button(buttonTitle, action: action)
-                    .buttonStyle(.link)
-                    .padding(.top, 2)))
-    }
-
-    private func featureRowContent(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        action: AnyView? = nil) -> some View
+        buttonTitle: String? = nil,
+        action: (() -> Void)? = nil) -> some View
     {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
@@ -486,8 +460,10 @@ extension OnboardingView {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                if let action {
-                    action
+                if let buttonTitle, let action {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.link)
+                        .padding(.top, 2)
                 }
             }
             Spacer(minLength: 0)

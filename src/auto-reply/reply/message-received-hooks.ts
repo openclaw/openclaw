@@ -1,4 +1,5 @@
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
+import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import {
   deriveInboundMessageHookContext,
   toInternalMessageReceivedContext,
@@ -7,9 +8,6 @@ import {
 } from "../../hooks/message-hook-mappers.js";
 import type { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { FinalizedMsgContext } from "../templating.js";
-import { createInternalHookEvent, triggerInternalHook } from "./dispatch-from-config.runtime.js";
-
-type MessageReceivedHookContext = ReturnType<typeof deriveInboundMessageHookContext>;
 
 /** Emit observation hooks once for an accepted inbound turn, independent of reply dispatch. */
 export function emitMessageReceivedHooks(params: {
@@ -17,7 +15,7 @@ export function emitMessageReceivedHooks(params: {
   hookRunner: ReturnType<typeof getGlobalHookRunner>;
   sessionKey: string | undefined;
   timestamp?: number;
-  buildContext?: () => MessageReceivedHookContext;
+  buildContext?: () => ReturnType<typeof deriveInboundMessageHookContext>;
 }): void {
   if (params.ctx.SuppressMessageReceivedHooks === true) {
     return;

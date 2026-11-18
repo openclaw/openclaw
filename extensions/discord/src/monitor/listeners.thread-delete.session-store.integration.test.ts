@@ -1,4 +1,3 @@
-// Discord integration tests drive thread deletion through the real session store.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ChannelType, type GatewayThreadDeleteDispatchData } from "discord-api-types/v10";
@@ -19,39 +18,28 @@ describe("DiscordThreadDeleteListener session-store integration", () => {
   it("deletes matching sessions from every configured agent store", async () => {
     await withStateDirEnv("openclaw-discord-thread-delete-", async ({ tempRoot, stateDir }) => {
       // macOS exposes os.tmpdir() through /var while SQLite resolves /private/var.
-      const canonicalTempRoot = await fs.realpath(tempRoot);
-      const canonicalStateDir = await fs.realpath(stateDir);
-
-      await withEnvAsync({ OPENCLAW_STATE_DIR: canonicalStateDir }, async () => {
-        const sharedStorePath = path.join(canonicalTempRoot, "shared", "sessions.json");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: await fs.realpath(stateDir) }, async () => {
         const cfg = {
-          session: { store: sharedStorePath },
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          session: { store: path.join(await fs.realpath(tempRoot), "shared", "sessions.json") },
+          agents: { entries: { main: {}, work: {} } },
         } satisfies OpenClawConfig;
-        const mainStorePath = resolveStorePath(cfg.session.store, { agentId: "main" });
-        const workStorePath = resolveStorePath(cfg.session.store, { agentId: "work" });
-        const mainMatchKey = `agent:main:discord:channel:${THREAD_ID}`;
-        const workMatchKey = `agent:work:discord:channel:parent:thread:${THREAD_ID}`;
-        const survivorKey = `agent:main:discord:channel:${OTHER_THREAD_ID}`;
-
-        await upsertSessionEntry({
-          agentId: "main",
-          sessionKey: mainMatchKey,
-          storePath: mainStorePath,
-          entry: { sessionId: "main-thread-session", updatedAt: 1_000 },
+        const session = (
+          agentId: string,
+          suffix: string,
+          sessionId: string,
+          updatedAt: number,
+        ) => ({
+          agentId,
+          sessionKey: `agent:${agentId}:discord:channel:${suffix}`,
+          storePath: resolveStorePath(cfg.session.store, { agentId }),
+          entry: { sessionId, updatedAt },
         });
-        await upsertSessionEntry({
-          agentId: "work",
-          sessionKey: workMatchKey,
-          storePath: workStorePath,
-          entry: { sessionId: "work-thread-session", updatedAt: 2_000 },
-        });
-        await upsertSessionEntry({
-          agentId: "main",
-          sessionKey: survivorKey,
-          storePath: mainStorePath,
-          entry: { sessionId: "main-survivor-session", updatedAt: 3_000 },
-        });
+        const main = session("main", THREAD_ID, "main-thread-session", 1_000);
+        const work = session("work", `parent:thread:${THREAD_ID}`, "work-thread-session", 2_000);
+        const survivor = session("main", OTHER_THREAD_ID, "main-survivor-session", 3_000);
+        for (const entry of [main, work, survivor]) {
+          await upsertSessionEntry(entry);
+        }
 
         const listener = new DiscordThreadDeleteListener(cfg, "session-store-integration");
         const deletedThread: GatewayThreadDeleteDispatchData = {
@@ -63,27 +51,12 @@ describe("DiscordThreadDeleteListener session-store integration", () => {
 
         await listener.handle(deletedThread);
 
-        expect(
-          getSessionEntry({
-            agentId: "main",
-            sessionKey: mainMatchKey,
-            storePath: mainStorePath,
-          }),
-        ).toBeUndefined();
-        expect(
-          getSessionEntry({
-            agentId: "work",
-            sessionKey: workMatchKey,
-            storePath: workStorePath,
-          }),
-        ).toBeUndefined();
-        expect(
-          getSessionEntry({
-            agentId: "main",
-            sessionKey: survivorKey,
-            storePath: mainStorePath,
-          }),
-        ).toMatchObject({ sessionId: "main-survivor-session", updatedAt: 3_000 });
+        expect(getSessionEntry(main)).toBeUndefined();
+        expect(getSessionEntry(work)).toBeUndefined();
+        expect(getSessionEntry(survivor)).toMatchObject({
+          sessionId: "main-survivor-session",
+          updatedAt: 3_000,
+        });
       });
     });
   });

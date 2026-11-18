@@ -1,9 +1,5 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  CodexServerNotification,
-  CodexThread,
-  CodexThreadStatus,
-} from "./app-server/protocol.js";
+import type { CodexServerNotification, CodexThread } from "./app-server/protocol.js";
 import type { CodexCatalogStatus } from "./session-catalog-index-field.js";
 import type { CodexCatalogIndexRow } from "./session-catalog-index-row.js";
 import { CODEX_CATALOG_MAX_ROWS } from "./session-catalog-limits.js";
@@ -24,7 +20,8 @@ type CodexCatalogIndexEventOwner = {
   updateSettings(id: string, settings: CodexCatalogSettings, source: CodexCatalogSource): void;
   upsert(thread: CodexThread): Promise<void>;
   reserveTurnStartOrder(): number;
-  refresh(id: string, readThread: ReadThread, sourceOrder: number | undefined): Promise<boolean>;
+  requestNativeRefresh(): void;
+  refresh(id: string, readThread: ReadThread, sourceOrder: number | undefined): Promise<void>;
   archive(id: string): void;
   remove(id: string): void;
   report(error: unknown): void;
@@ -37,7 +34,7 @@ type PendingRefresh = {
   promise: Promise<void>;
 };
 
-/** Event scheduling only; the index owns row publication and stale-read fencing. */
+/** Coalesces metadata refreshes while the index owns row publication. */
 export class CodexCatalogIndexEvents {
   private closed = false;
   private readonly pending = new Map<string, PendingRefresh>();
@@ -98,12 +95,7 @@ export class CodexCatalogIndexEvents {
       if (!isRecord(params.status)) {
         return;
       }
-      this.owner.updateStatus(
-        id,
-        // SAFETY: native v2 ThreadStatusChangedNotification carries the protocol status union.
-        codexCatalogThreadStatus(params.status as CodexThreadStatus),
-        source,
-      );
+      this.owner.updateStatus(id, codexCatalogThreadStatus(params.status), source);
       return;
     }
     if (event.method === "thread/settings/updated") {
@@ -152,6 +144,7 @@ export class CodexCatalogIndexEvents {
     readThread: ReadThread,
     sourceOrder: number | undefined,
   ): void {
+    this.owner.requestNativeRefresh();
     const existing = this.pending.get(id);
     if (existing) {
       existing.readThread = readThread;
@@ -175,13 +168,12 @@ export class CodexCatalogIndexEvents {
           pending.dirty = false;
           const observedSourceOrder = pending.sourceOrder;
           try {
-            const published = await this.owner.refresh(id, pending.readThread, observedSourceOrder);
-            if (published && pending.sourceOrder === observedSourceOrder) {
+            await this.owner.refresh(id, pending.readThread, observedSourceOrder);
+            if (pending.sourceOrder === observedSourceOrder) {
               pending.sourceOrder = undefined;
-            } else if (!published && pending.sourceOrder !== undefined) {
-              pending.dirty = true;
             }
           } catch (error) {
+            // Metadata is best effort; preserve any newer queued activity.
             this.owner.report(error);
           }
         }

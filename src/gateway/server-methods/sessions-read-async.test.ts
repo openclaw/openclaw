@@ -6,9 +6,8 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import {
   addSessionMember,
   removeSessionMember,
-} from "../../config/sessions/session-sharing-store.js";
+} from "../../config/sessions/session-sharing-store.native.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -18,85 +17,54 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import {
   identifiedClient,
   listSessions,
+  profileSessionEntry,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
+import { sessionRoleConfig } from "./sessions-rewind.handler.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-function viewerConfig(others: "view" | "none"): OpenClawConfig {
-  return {
-    gateway: {
-      roles: {
-        default: "viewer",
-        definitions: {
-          viewer: {
-            agents: "*",
-            scopes: ["operator.read", "operator.write"],
-            sessions: { others },
-          },
-        },
-      },
-    },
-  };
-}
+const viewerConfig = (others: "view" | "invited" | "none") =>
+  sessionRoleConfig("viewer", {
+    agents: "*",
+    scopes: ["operator.read", "operator.write"],
+    sessions: { others },
+  });
 
 it.each([
-  "membership",
   "membership-unpublished",
   "membership-external",
+  "membership-invited-unpublished",
+  "membership-invited-external",
   "visibility",
   "identity",
   "config",
 ] as const)(
   "rechecks current %s after the resident projection has completed asynchronous preparation",
-  async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  (change) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
       const viewer = ensureProfileForEmail("page-viewer@example.test").id;
       const owner = ensureProfileForEmail("page-owner@example.test").id;
       const scope = { agentId: "main", sessionKey: "agent:main:selected-page" };
       const membershipChange = change.startsWith("membership");
+      const invited = change.includes("invited");
       const replacementKey = "agent:main:replacement-page";
-      const selected: SessionEntry = {
-        sessionId: "selected-page",
-        updatedAt: 300,
-        visibility: change === "identity" ? "draft" : membershipChange ? "read-only" : "shared",
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: change === "identity" ? viewer : owner,
-        },
+      const seed = (entry: SessionEntry) => {
+        replaceSessionEntrySync({ ...scope, sessionKey: `agent:main:${entry.sessionId}` }, entry);
+        return entry;
       };
-      replaceSessionEntrySync(scope, selected);
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: replacementKey },
-        {
-          sessionId: "replacement-page",
-          updatedAt: 200,
-          visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: change === "identity" ? owner : viewer,
-          },
-        },
-      );
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:tail-page" },
-        {
-          sessionId: "tail-page",
-          updatedAt: 100,
-          visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: change === "identity" ? owner : viewer,
-          },
-        },
-      );
+      const [selectedOwner, otherOwner]: [string, string] =
+        change === "identity" ? [viewer, owner] : [owner, viewer];
+      const selected = seed({
+        ...profileSessionEntry("selected-page", 300, selectedOwner),
+        visibility: change === "identity" ? "draft" : membershipChange ? "read-only" : "shared",
+      });
+      seed(profileSessionEntry("replacement-page", 200, otherOwner));
+      seed(profileSessionEntry("tail-page", 100, otherOwner));
       if (membershipChange) {
         addSessionMember(scope, { identityId: viewer, addedBy: owner });
       }
-      let config = viewerConfig("view");
+      let config = viewerConfig(invited ? "invited" : "view");
       const context = requestContext(config);
       context.getRuntimeConfig = () => config;
       const client = identifiedClient(viewer);
@@ -106,9 +74,9 @@ it.each([
         { key: scope.sessionKey, sessionId: selected.sessionId },
       ]);
       const projection = expectDefined(getSessionRowProjection(context), "resident projection");
-      const ready = projection.ensureMaterialized.bind(projection);
-      vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-        await ready();
+      const ready = projection.prepareSelection.bind(projection);
+      vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async (...args) => {
+        await ready(...args);
         // Resume the real request only after its current authority has changed.
         if (change === "config") {
           config = viewerConfig("none");
@@ -119,7 +87,7 @@ it.each([
             profileId: owner,
           };
         } else {
-          if (change === "membership-external") {
+          if (change.endsWith("external")) {
             const external = new DatabaseSync(openOpenClawAgentDatabase(scope).path);
             try {
               external
@@ -129,7 +97,7 @@ it.each([
               external.close();
             }
             // External writers publish committed changes through their owning bridge.
-            sessionChanges.emit(scope);
+            sessionChanges.emit({ ...scope, factsInvalidated: true });
           } else if (membershipChange) {
             expect(removeSessionMember(scope, viewer)).not.toBeNull();
           } else {
@@ -138,25 +106,23 @@ it.each([
               visibility: "draft",
             });
           }
-          if (change === "membership" || change === "visibility") {
+          if (change === "visibility") {
             emitSessionsChanged(context, { reason: "sharing", sessionKey: scope.sessionKey });
           }
         }
       });
 
-      const result = await listSessions({
-        client,
-        context,
-        request,
-      });
-      if (membershipChange) {
+      const result = await listSessions({ client, context, request });
+      if (membershipChange && !invited) {
         expect(result.sessions).toMatchObject([
           { key: scope.sessionKey, sharingRole: "viewer", activitySummary: { canEnsure: false } },
         ]);
       } else {
         expect(result.sessions.map((session) => session.key)).toEqual([replacementKey]);
         expect(result).toMatchObject({ count: 1, nextOffset: 1 });
+        if (invited) {
+          expect(result.totalCount).toBe(2);
+        }
       }
-    });
-  },
+    }),
 );

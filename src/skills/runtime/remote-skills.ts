@@ -5,7 +5,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
-import { areOrderedArraysEqual } from "./ordered-array-equality.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
 type PreparedNodeSkill = NodeSkillDescriptor & {
@@ -17,7 +16,6 @@ type RemoteSkillNode = {
   nodeId: string;
   connId?: string;
   displayName?: string;
-  connected: boolean;
   canExec: boolean;
   skills: PreparedNodeSkill[];
 };
@@ -25,16 +23,24 @@ type RemoteSkillNode = {
 const remoteSkillNodes = new Map<string, RemoteSkillNode>();
 const log = createSubsystemLogger("gateway/skills-remote");
 let reconcileRemoteSkillConnections: (() => ReadonlySet<string> | undefined) | null = null;
+let prepareRemoteSkillConnectionsOwner: (() => Promise<unknown>) | undefined;
 
-function remoteConnectionKey(nodeId: string, connId: string): string {
+export function remoteConnectionKey(nodeId: string, connId: string): string {
   return `${nodeId}\0${connId}`;
 }
 
 /** Installs the gateway-owned persistent-generation reconciliation boundary. */
 export function setRemoteSkillConnectionReconciler(
   reconcile: (() => ReadonlySet<string> | undefined) | null,
+  prepare?: () => Promise<unknown>,
 ): void {
   reconcileRemoteSkillConnections = reconcile;
+  prepareRemoteSkillConnectionsOwner = prepare;
+}
+
+/** Acquire persistent pairing facts before synchronous remote skill projections. */
+export async function prepareRemoteSkillConnections(): Promise<void> {
+  await prepareRemoteSkillConnectionsOwner?.();
 }
 
 function prepareNodeSkills(
@@ -54,7 +60,7 @@ function prepareNodeSkills(
       }
       prepared.push({ ...skill, frontmatter, contentHash: sha256Hex(skill.content) });
     } catch (error) {
-      const filePath = `node://${encodeURIComponent(nodeId)}/skills/${skill.name}/SKILL.md`;
+      const filePath = remoteSkillLocation(nodeId, skill.name);
       log.warn(`dropped node skill with invalid frontmatter (${filePath}): ${String(error)}`);
     }
   }
@@ -76,7 +82,6 @@ export function recordRemoteSkillNodeInfo(node: {
     nodeId: node.nodeId,
     connId: node.connId ?? existing?.connId,
     displayName: node.displayName,
-    connected: true,
     canExec,
     skills: connectionChanged ? [] : (existing?.skills ?? []),
   });
@@ -95,22 +100,25 @@ export function replaceRemoteNodeSkills(params: {
 }): void {
   const nextSkills = prepareNodeSkills(params.nodeId, params.skills);
   const existing = remoteSkillNodes.get(params.nodeId);
+  const displayName = params.displayName ?? existing?.displayName;
   const changed =
-    !existing?.connected ||
-    existing.displayName !== params.displayName ||
-    !areOrderedArraysEqual(
-      existing.skills,
-      nextSkills,
-      (previous, next) =>
-        previous.name === next.name &&
-        previous.description === next.description &&
-        previous.content === next.content,
+    !existing ||
+    existing.displayName !== displayName ||
+    !(
+      existing.skills.length === nextSkills.length &&
+      existing.skills.every((previous, index) => {
+        const next = nextSkills[index]!;
+        return (
+          previous.name === next.name &&
+          previous.description === next.description &&
+          previous.content === next.content
+        );
+      })
     );
   remoteSkillNodes.set(params.nodeId, {
     nodeId: params.nodeId,
     connId: existing?.connId,
-    displayName: params.displayName ?? existing?.displayName,
-    connected: true,
+    displayName,
     canExec: existing?.canExec ?? false,
     skills: nextSkills,
   });
@@ -142,7 +150,7 @@ function sanitizeSkillNameFragment(value: string): string {
 function prefixedSkillName(params: {
   nodeId: string;
   baseName: string;
-  usedNames: Set<string>;
+  isAvailable: (name: string) => boolean;
 }): string | null {
   const prefix = `${sanitizeSkillNameFragment(params.nodeId)}-`;
   for (let index = 0; index < 100; index += 1) {
@@ -150,7 +158,7 @@ function prefixedSkillName(params: {
     const availableBaseLength = Math.max(1, 64 - prefix.length - suffix.length);
     const base = params.baseName.slice(0, availableBaseLength).replace(/-+$/g, "") || "skill";
     const candidate = `${prefix}${base}${suffix}`;
-    if (!params.usedNames.has(candidate)) {
+    if (params.isAvailable(candidate)) {
       return candidate;
     }
   }
@@ -170,6 +178,7 @@ function locatorNote(node: RemoteSkillNode, skillName: string): string {
 export function mergeRemoteNodeSkillEntries(
   localEntries: readonly SkillEntry[],
   options?: { canExec?: boolean; node?: string },
+  matchesSnapshotSkill?: (skill: SkillEntry["skill"]) => boolean,
 ): SkillEntry[] {
   if (options?.canExec !== true) {
     return [...localEntries];
@@ -177,7 +186,6 @@ export function mergeRemoteNodeSkillEntries(
   const currentConnections = reconcileRemoteSkillConnections?.();
   const connectedNodes = [...remoteSkillNodes.values()].filter(
     (node) =>
-      node.connected &&
       node.canExec &&
       (!currentConnections ||
         (node.connId !== undefined &&
@@ -207,24 +215,14 @@ export function mergeRemoteNodeSkillEntries(
   for (const { skill } of remote) {
     remoteNameCounts.set(skill.name, (remoteNameCounts.get(skill.name) ?? 0) + 1);
   }
-  const localNames = new Set(localEntries.map((entry) => entry.skill.name));
-  const usedNames = new Set(localNames);
+  const usedNames = new Set(localEntries.map((entry) => entry.skill.name));
   const remoteEntries: SkillEntry[] = [];
   for (const { node, skill } of remote) {
-    const hasCollision = usedNames.has(skill.name) || (remoteNameCounts.get(skill.name) ?? 0) > 1;
-    const exposedName = hasCollision
-      ? prefixedSkillName({ nodeId: node.nodeId, baseName: skill.name, usedNames })
-      : skill.name;
-    if (!exposedName || usedNames.has(exposedName)) {
-      log.warn(`dropped node skill with unresolved name collision: ${node.nodeId}/${skill.name}`);
-      continue;
-    }
-    usedNames.add(exposedName);
     const filePath = remoteSkillLocation(node.nodeId, skill.name);
     const invocation = resolveSkillInvocationPolicy(skill.frontmatter);
-    remoteEntries.push({
+    const entry: SkillEntry = {
       skill: {
-        name: exposedName,
+        name: skill.name,
         description: skill.description,
         locationNote: locatorNote(node, skill.name),
         readContent: skill.content,
@@ -250,7 +248,25 @@ export function mergeRemoteNodeSkillEntries(
         includeInAvailableSkillsPrompt: !invocation.disableModelInvocation,
         userInvocable: invocation.userInvocable,
       },
-    });
+    };
+    const isAvailable = (name: string) =>
+      !usedNames.has(name) &&
+      (!matchesSnapshotSkill || matchesSnapshotSkill({ ...entry.skill, name }));
+    const hasCollision =
+      !isAvailable(skill.name) ||
+      (!matchesSnapshotSkill && (remoteNameCounts.get(skill.name) ?? 0) > 1);
+    const exposedName = hasCollision
+      ? prefixedSkillName({ nodeId: node.nodeId, baseName: skill.name, isAvailable })
+      : skill.name;
+    if (!exposedName) {
+      if (!matchesSnapshotSkill) {
+        log.warn(`dropped node skill with unresolved name collision: ${node.nodeId}/${skill.name}`);
+      }
+      continue;
+    }
+    usedNames.add(exposedName);
+    entry.skill.name = exposedName;
+    remoteEntries.push(entry);
   }
   return [...localEntries, ...remoteEntries].toSorted((left, right) =>
     left.skill.name.localeCompare(right.skill.name, "en"),
@@ -260,6 +276,7 @@ export function mergeRemoteNodeSkillEntries(
 function resetRemoteNodeSkillsForTests(): void {
   remoteSkillNodes.clear();
   reconcileRemoteSkillConnections = null;
+  prepareRemoteSkillConnectionsOwner = undefined;
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
