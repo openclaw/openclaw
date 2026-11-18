@@ -390,6 +390,12 @@ vi.mock("./model-discovery-context.js", async (importOriginal) => {
   return { resolveModelWorkspaceDir, resolveModelPluginMetadataSnapshot: () => undefined };
 });
 
+// Lifecycle fixtures own persistence timing; real database admission is covered by Gateway tests.
+vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-agent-execution.js")>()),
+  prepareOpenClawAgentDatabaseExecution: async () => {},
+}));
+
 // mock-isolation: Lifecycle fixtures control model planning/publication timing and failures without initializing real persistence state.
 vi.mock("./models-config.core.js", () => ({
   ensureOpenClawModelsJsonWithInput: (...args: unknown[]) =>
