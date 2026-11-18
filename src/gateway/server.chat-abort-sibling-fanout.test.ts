@@ -319,7 +319,11 @@ for (const [suffix, name] of [
             ok: false,
             error: {
               code: "INVALID_REQUEST",
-              details: { reason: "active-leaf-changed" },
+              details: {
+                code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                method: "chat.send",
+                sessionKey: parentKey,
+              },
             },
           });
           expect(fixture.embeddedRunMock.abortCalls).not.toContain(`${firstRunId}-session`);

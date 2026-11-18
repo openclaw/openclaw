@@ -161,7 +161,7 @@ async function checkApprovalForwarding() {
         expect(prompts()[0]).toMatchObject({
           to: "123",
           text: expect.stringContaining(id),
-          accountId: turnSourceChannel === "telegram" ? "default" : undefined,
+          accountId: turnSourceChannel === "telegram" ? "default" : "ops",
         });
       }
     }

@@ -24,6 +24,7 @@ import { createNoopLogger } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import {
   withCompletionFixture,
+  readConversationMessages,
   installCompletionChannel,
   expectDeliveryWarning,
   PNG,
@@ -288,7 +289,7 @@ it("blocks workspace-only images beside the session store", () =>
     expect(await fixture.records()).toHaveLength(0);
   }));
 
-it("does not prepare media when the source generation changes while waiting", () =>
+it("waits for a transcript change before preparing media for the current conversation", () =>
   withCompletionFixture(async (fixture) => {
     const entered = createDeferredCore();
     const finish = createDeferredCore();
@@ -312,8 +313,21 @@ it("does not prepare media when the source generation changes while waiting", ()
       expect(await fixture.records()).toEqual([]);
       finish.resolve();
       await mutation;
-      await expect(commit).resolves.toMatchObject({ ok: false });
-      expect(await fixture.records()).toEqual([]);
+      await expect(commit).resolves.toMatchObject({ ok: true });
+      const currentMessages = await readConversationMessages(fixture.scope);
+      expect(currentMessages).toHaveLength(1);
+      expect(readAssistantDisplayContent(readTranscriptEventMessage(currentMessages[0]))).toEqual([
+        { type: "text", text: "Example report" },
+        expect.objectContaining({ type: "image", alt: "report.png" }),
+      ]);
+      expect(await fixture.records()).toMatchObject([
+        {
+          record: {
+            messageId: readTranscriptEventId(currentMessages[0]),
+            retentionClass: "history",
+          },
+        },
+      ]);
       expect(await fixture.messages()).toEqual([]);
       expect(fixture.updates()).toBe(0);
     } finally {

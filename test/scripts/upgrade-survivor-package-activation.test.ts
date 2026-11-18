@@ -24,9 +24,12 @@ function faultFixture(cut: "publication-complete" | "verification", preload: str
   const spec = path.join(root, "fault.json");
   writeJson(spec, { cut, evidence, ...(cut === "verification" ? { previousRoot } : { journal }) });
   const run = (code: string, ...args: string[]) =>
-    runNode([...preload, "--import", faultImport, "--input-type=module", "-e", code, ...args], {
-      OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec,
-    });
+    runNode(
+      [...preload, "--import", faultImport, "--input-type=module", "-e", code, "--", ...args],
+      {
+        OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec,
+      },
+    );
   return { evidence, journal, previousRoot, run };
 }
 function writePackage(root: string, version: string, build: { buildId: string }) {
@@ -103,13 +106,13 @@ it.each(["run", "all"])("kills only after the selected real SQLite commit throug
     db.close();
   }
 });
-it("changes retained rollback bytes inside the Doctor child before reporting failure", () => {
+it.each(["doctor", "--doctor"])("fails %s after changing rollback bytes", (argument) => {
   const { evidence, previousRoot, run } = faultFixture("verification");
   fs.mkdirSync(previousRoot);
   const manifest = path.join(previousRoot, "package.json");
   fs.writeFileSync(manifest, '{"version":"2026.9.8"}');
   fs.writeFileSync(evidence, "{}");
-  const result = run("throw new Error('Doctor body must not run')", "doctor");
+  const result = run("throw new Error('Doctor body must not run')", argument);
   expect([result.error, result.status], result.stderr).toEqual([undefined, 1]);
   expect(fs.readFileSync(manifest, "utf8")).toBe('{"version":"2026.9.8"}\n');
   expect(readJson(`${evidence}.doctor`)).toMatchObject({ exitCode: 1 });

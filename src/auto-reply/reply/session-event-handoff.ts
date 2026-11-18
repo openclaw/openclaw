@@ -659,15 +659,13 @@ function enqueueSessionEventAttempt(
               if (!operation) {
                 throw new Error("Session event has no admitted reply owner");
               }
-              // The normal owner may create a previously absent session or
-              // rotate through compaction during admission. Adopt only its
-              // published binding while that exact reply operation is live.
+              // Admission may follow the logical key, including creation or
+              // compaction. Once adopted, pin the published binding so a later
+              // replacement cannot inherit this reply operation's authority.
               if (
                 preparedBinding &&
                 !generationLease?.isCreationAdopted() &&
-                preparedBinding.sessionId === operation.sessionId &&
-                (target?.sessionId !== preparedBinding.sessionId ||
-                  target?.lifecycleRevision !== preparedBinding.lifecycleRevision)
+                preparedBinding.sessionId === operation.sessionId
               ) {
                 generationLease?.release();
                 generationLease = undefined;

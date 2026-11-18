@@ -92,6 +92,7 @@ export async function createCurrentInputContinuityHarness(
       resolveMessage: async () => admittedMessage,
       markRuntimePersisted() {},
       getAdmissionReceipt: () => undefined,
+      isBlocked: () => false,
     } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
   }
   return { harness, params, currentUserMessageId };

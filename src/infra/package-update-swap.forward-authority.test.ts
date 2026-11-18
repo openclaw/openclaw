@@ -7,6 +7,7 @@ import {
   captureSwap,
   expectInstallation,
   expectVersion,
+  publishWithoutPathExchange,
   readText,
 } from "./package-update-swap.assertions.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
@@ -16,6 +17,7 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it("stops fallback publication after local override work loses forward authority", async () => {
+  publishWithoutPathExchange();
   const base = dirs.make("swap-override-authority-");
   const f = await createPackageSwapFixture(base);
   await fs.writeFile(path.join(f.packageRoot, "dist/index.js"), "operator edit\n");
@@ -77,6 +79,7 @@ it("stops subsequent launcher publication while independent rollback remains aut
 it.runIf(process.platform !== "win32")(
   "records EXDEV activation before a post-publication refusal and retains its source",
   async () => {
+    publishWithoutPathExchange();
     const f = await createPackageSwapFixture(dirs.make("swap-copy-authority-"));
     const rename = fs.rename.bind(fs);
     let current = true;
@@ -112,6 +115,7 @@ it.runIf(process.platform !== "win32")(
 it.runIf(process.platform !== "win32")(
   "registers a published native backup even when its copy cleanup loses authority",
   async () => {
+    publishWithoutPathExchange();
     const base = dirs.make("swap-native-backup-authority-");
     const project = path.join(base, "global");
     const globalRoot = path.join(project, "v11");

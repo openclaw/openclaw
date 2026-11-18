@@ -4,8 +4,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { loadTranscriptEventsSync } from "../../../config/sessions/session-accessor.sqlite-read.js";
-import { SessionEntryChangedDuringReadError } from "../../../config/sessions/session-entry-read-errors.js";
 import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
+import { SessionTranscriptProjectionUnavailableError } from "../../../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";
 import * as historyReaders from "../../../config/sessions/session-transcript-worker-readers.js";
 import { appendAssistantMessageToSessionTranscript } from "../../../config/sessions/transcript.runtime.js";
@@ -211,7 +211,7 @@ describe("transcript replay cohorts", () => {
     { phase: "selected-final", change: "close" },
     { phase: "selected-final", change: "revoke" },
   ] as const)(
-    "refuses $phase replay after $change between worker validation and consumption",
+    "never consumes stale $phase replay after $change between worker validation and consumption",
     async ({ phase, change }) => {
       await withInterruptedTurn(
         false,
@@ -264,7 +264,9 @@ describe("transcript replay cohorts", () => {
                     };
                   });
           const consume = vi.fn();
-          const pending = phase === "selected-initial" ? fixture.prepare() : admit!(consume);
+          const initialPreparation = phase === "selected-initial" ? fixture.prepare() : undefined;
+          const pending = initialPreparation ?? admit!(consume);
+          let recovered: Awaited<ReturnType<typeof fixture.prepare>> | undefined;
           let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
           try {
             await awaitGateBeforeSettlement(
@@ -280,8 +282,17 @@ describe("transcript replay cohorts", () => {
               fixture.revoke();
             }
             release.resolve();
-            if (change === "rewrite" && phase !== "legacy-final") {
-              await expect(pending).rejects.toBeInstanceOf(SessionEntryChangedDuringReadError);
+            if (change === "rewrite" && initialPreparation) {
+              // Initial hydration may rebuild and reread, but must not retain the erased turn.
+              recovered = await initialPreparation;
+              expect(recovered.prepareInitialUserTurnReplay).toBeUndefined();
+              expect(
+                recovered.sessionManager.getBranch().filter((entry) => entry.type === "message"),
+              ).toEqual([]);
+            } else if (change === "rewrite" && phase === "selected-final") {
+              await expect(pending).rejects.toBeInstanceOf(
+                SessionTranscriptProjectionUnavailableError,
+              );
             } else {
               await expect(pending).rejects.toThrow(/replay|revoked|closed|current|admission/i);
             }
@@ -289,6 +300,10 @@ describe("transcript replay cohorts", () => {
           } finally {
             release.resolve();
             await Promise.allSettled([pending, closing]);
+            await cleanupEmbeddedAttemptResources({
+              sessionManager: recovered?.sessionManager,
+              flushPendingToolResultsAfterIdle: async () => {},
+            });
             spy.mockRestore();
           }
         },

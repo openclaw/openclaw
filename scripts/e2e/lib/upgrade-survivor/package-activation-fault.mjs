@@ -9,9 +9,8 @@ import { DatabaseSync } from "node:sqlite";
 function installPackageActivationFault({ journal, evidence, cut, terminate }) {
   assert(path.isAbsolute(journal) && path.isAbsolute(evidence));
   assert(["publication-complete", "verification"].includes(cut));
-  // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.
+  // Capture for restoration; intercepted calls supply their database through .call.
   const prepare = DatabaseSync.prototype.prepare;
-  // oxlint-disable-next-line typescript/unbound-method -- Capture for interception/restoration; every call supplies the intercepted database through .call.
   const exec = DatabaseSync.prototype.exec;
   const armed = new WeakSet();
   const observeCommit = (db) => {
@@ -62,7 +61,8 @@ if (specPath) {
   // A real post-publication Doctor child fails, not a fabricated update result.
   if (
     spec.cut === "verification" &&
-    process.argv.includes("doctor") &&
+    // Released 9.8/9.9 updaters delegate to the candidate worker with --doctor.
+    (process.argv.includes("doctor") || process.argv.includes("--doctor")) &&
     fs.existsSync(spec.evidence)
   ) {
     // Change actual rollback bytes before failing verification, so the updater

@@ -682,10 +682,14 @@ it("records a visible delivery failure when the creating conversation is deleted
       delivered: false,
       deliveryAttempted: true,
       deliveryState: { status: "not-delivered" },
-      deliveryError: expect.stringContaining("session rebound"),
+      deliveryError: `session deleted for sessionKey: ${fixture.scope.sessionKey}`,
       disposition: { kind: "error", errorKind: "delivery-target" },
     });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("delivery failed: session rebound"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        `delivery failed: session deleted for sessionKey: ${fixture.scope.sessionKey}`,
+      ),
+    );
     expect(await fixture.messages()).toEqual([]);
     expect(fixture.updates()).toBe(0);
   }, "isolated"));

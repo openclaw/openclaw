@@ -192,7 +192,11 @@ async function persistTestSessionConfig(): Promise<void> {
       delete config.session;
     }
     // Suite servers may still read config from pending session-change callbacks.
-    await writeJsonAtomic(configPath, config, { durable: false, trailingNewline: true });
+    await writeJsonAtomic(configPath, config, {
+      dirMode: 0o700,
+      durable: false,
+      trailingNewline: true,
+    });
   }
   publishGatewayTestConfig();
   lastSyncedSessionStorePath = testState.sessionStorePath;

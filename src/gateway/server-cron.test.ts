@@ -1807,8 +1807,13 @@ describe("buildGatewayCronService", () => {
         const announceRequest = callRecord(mocks.announce);
         const announce = requireRecord(announceRequest.payload, "script failure announce");
         expect(announce.text).toContain(
-          'Automation "script failure detail" failed 1 times\nCause: automation script failed internally',
+          'Automation "script failure detail" was auto-disabled after 1 consecutive run failures.\nCause: automation script failed internally',
         );
+        expect(announce.text).toContain(`openclaw automations enable ${job.id}`);
+        expect(state.cron.getJob(job.id)).toMatchObject({
+          enabled: false,
+          state: { autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 } },
+        });
         expect(announce.text).not.toContain(rawError);
 
         const broadcastEvent = broadcast.mock.calls

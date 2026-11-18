@@ -16,7 +16,7 @@ import { createProductState, productModelConfig } from "./server.chat-product.te
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-it("binds native chat.send, preserves its stopped partial, and resumes the same session", async () => {
+it("binds native chat.send, stops from stale history, and resumes the same session", async () => {
   const state = await createProductState("first-turn-binding");
   const runId = "first-native-turn";
   const sessionKey = "agent:main:first-turn-binding";
@@ -163,34 +163,13 @@ it("binds native chat.send, preserves its stopped partial, and resumes the same 
     sessionInfo: { activeLeafEntryId: expect.any(String) },
   });
   const transcriptScope = { sessionKey, sessionId, agentId: "main" };
-  const stopParams = {
-    sessionKey,
-    message: "/stop",
-    sessionId: history.sessionId,
-    expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
-  };
-  const beforeRejectedStops = await loadTranscriptEvents(transcriptScope);
-  for (const guard of [
-    {
-      idempotencyKey: "stop-stale-first-native-leaf",
-      expectedLeafEntryId: "stale-first-native-leaf",
-    },
-    {
-      idempotencyKey: "stop-copied-first-native-leaf",
-      sessionId: "previous-first-native-session",
-    },
-  ]) {
-    await expect(
-      gateway.client.request("chat.send", { ...stopParams, ...guard }),
-    ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
-    expect(requestOwners[0]?.signal.aborted).toBe(false);
-    expect(response.destroyed).toBe(false);
-    expect(requestBodies).toHaveLength(1);
-    expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
-  }
+  // Stop targets current work, not the sender's possibly stale transcript snapshot.
   await expect(
     gateway.client.request("chat.send", {
-      ...stopParams,
+      sessionKey,
+      message: "/stop",
+      sessionId: "previous-first-native-session",
+      expectedLeafEntryId: "stale-first-native-leaf",
       idempotencyKey: "stop-first-native-turn",
     }),
   ).resolves.toMatchObject({ ok: true, aborted: true, runIds: [runId] });

@@ -63,7 +63,7 @@ async function startAttempt(
   harness: ReturnType<typeof createStartedThreadHarness>,
 ) {
   const run = runCodexAppServerAttempt(params);
-  await harness.waitForMethod("turn/start");
+  await run.waitForTurnAccepted();
   return async (threadId = "thread-1") => {
     await harness.completeTurn("completed", threadId);
     return run;
@@ -120,6 +120,7 @@ async function createSqliteParams(
     resolveMessage: async () => message,
     markRuntimePersisted() {},
     getAdmissionReceipt: () => undefined,
+    isBlocked: () => false,
   } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
   return params;
 }
@@ -331,6 +332,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
           resolveMessage: async () => admittedMessage,
           markRuntimePersisted() {},
           getAdmissionReceipt: () => undefined,
+          isBlocked: () => false,
         } as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
       }
       params.pluginRuntimeRefreshMessages = [
@@ -621,7 +623,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     });
 
     const run = runCodexAppServerAttempt(params);
-    await harness.waitForMethod("turn/start");
+    await run.waitForTurnAccepted();
     await awaitGateBeforeSettlement(
       delivered.promise,
       run,

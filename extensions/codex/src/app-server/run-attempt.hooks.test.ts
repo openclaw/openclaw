@@ -472,6 +472,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       userTurnTranscriptRecorder: {
         message: persistedUser,
         getAdmissionReceipt: () => undefined,
+        isBlocked: () => false,
         getPersistedMessage: () => persistedUser,
       } as unknown as NonNullable<
         ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
@@ -509,6 +510,7 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
       userTurnTranscriptRecorder: {
         message: persistedUser,
         getAdmissionReceipt: () => undefined,
+        isBlocked: () => false,
         getPersistedMessage: () => persistedUser,
       } as unknown as NonNullable<
         ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
