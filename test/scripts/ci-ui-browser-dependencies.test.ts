@@ -46,6 +46,9 @@ export default { test: {
   for (const [command, body] of [
     ["pnpm", 'printf "%s\\n" "$*" >> "$UI_BROWSER_INSTALLS"'],
     ["node", 'printf "%s\\n" "$@" > "$UI_BROWSER_ARGS"'],
+    // Keep the install's apt drop-in and mirror edits away from the host.
+    ["id", "echo 1000"],
+    ["sudo", "cat > /dev/null"],
   ] as const) {
     workflow.writeExecutable(local(`bin/${command}`), ["#!/bin/sh", body]);
   }
@@ -73,7 +76,14 @@ export default { test: {
   };
   run(1);
   run(2);
-  expect(read("installs")).toBe("--dir ui exec playwright install --with-deps webkit\n");
+  expect(read("installs")).toBe(
+    [
+      "--dir ui exec playwright install-deps webkit",
+      "--dir ui exec playwright install-deps webkit",
+      "--dir ui exec playwright install webkit",
+      "",
+    ].join("\n"),
+  );
   writeFileSync(local("installs"), "");
   run(1, [sibling]);
   expect(read("installs")).toBe("");
