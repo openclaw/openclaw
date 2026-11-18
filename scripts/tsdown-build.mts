@@ -31,7 +31,11 @@ import {
 } from "./lib/managed-child-process.mts";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { assertRealOutputRoot, controlUiBuildSiblingPid } from "./lib/output-root-guard.mjs";
-import { readProcessMemoryCapacity, type MemoryLimitParams } from "./lib/process-memory.mts";
+import {
+  readProcessCgroupV2Snapshot,
+  readProcessMemoryCapacity,
+  type MemoryLimitParams,
+} from "./lib/process-memory.mts";
 import { sanitizeBundlerHelperDtsExportTree } from "./lib/sanitize-bundler-helper-dts-exports.mts";
 import {
   TSDOWN_DECLARATION_CONFIG_GROUPS,
@@ -1525,6 +1529,29 @@ export async function runTsdownBuild(
       {
         reportShortfall(shortfall) {
           if (shortfall.fatal) {
+            try {
+              console.error(
+                "[tsdown-build:memory-refusal]",
+                JSON.stringify({
+                  sample: "after-refusal",
+                  memoryCapacity: readProcessMemoryCapacity({}),
+                  rssBytes: process.memoryUsage().rss,
+                  cgroup: readProcessCgroupV2Snapshot()
+                    ?.slice(0, 8)
+                    .map(({ counters }, depth) => {
+                      const current = Number(counters["memory.current"] ?? Number.NaN);
+                      const peak = Number(counters["memory.peak"] ?? Number.NaN);
+                      return {
+                        depth,
+                        currentBytes: Number.isSafeInteger(current) ? current : null,
+                        peakBytes: Number.isSafeInteger(peak) ? peak : null,
+                      };
+                    }),
+                }),
+              );
+            } catch {
+              // Diagnostics must preserve the original admission refusal.
+            }
             console.error(shortfall.message);
           } else {
             console.warn(shortfall.message);

@@ -60,7 +60,7 @@ import {
   type BrokerResourceResponse,
 } from "./resource-protocol.js";
 
-export type { BrokerNativeResourceLease, SpawnBrokerHost };
+export type { SpawnBrokerHost };
 
 const RESTART_DELAYS = [100, 250, 500, 1000, 2000];
 const MAX_BOOTSTRAP_BYTES = 1024;
@@ -95,8 +95,7 @@ class BrokerHost implements SpawnBrokerHost {
   private readonly cleanups = new Set<ReturnType<typeof terminateLostBrokerChild>>();
   private readonly cleanupErrors: Error[] = [];
   private readonly resourceClaims: BrokerResourceClaims | undefined;
-  private readonly resourceDirectory: string | undefined;
-  private readonly resourceAuthority: { endpoint: string; secret: string } | undefined;
+  private readonly resourceAuthority: ReturnType<typeof createNativeResourceAuthority> | undefined;
   private startupDeadline = 0;
   private serviceStartup: (() => void) | undefined;
   private markNativeReady: ((pid: number, generation: number) => void) | undefined;
@@ -122,9 +121,7 @@ class BrokerHost implements SpawnBrokerHost {
       options.workerUrl ?? resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.spawnBroker);
     this.entryPath = fileURLToPath(this.workerUrl);
     if (options.nativeResources) {
-      const { directory, ...authority } = createNativeResourceAuthority();
-      this.resourceDirectory = directory;
-      this.resourceAuthority = authority;
+      this.resourceAuthority = createNativeResourceAuthority();
       this.resourceClaims = new BrokerResourceClaims({
         transmit: async (request) => {
           if (!this.available) {
@@ -186,7 +183,8 @@ class BrokerHost implements SpawnBrokerHost {
         runtimeNeedsTypeScriptLoader(fileURLToPath(input.moduleUrl))
           ? { sourceLoaderUrl: import.meta.resolve("tsx/esm/api") }
           : {}),
-        ...this.resourceAuthority,
+        endpoint: this.resourceAuthority.endpoint,
+        secret: this.resourceAuthority.secret,
         generation: this.generation - 1,
         startupDeadline: this.available ? undefined : this.startupDeadline,
         id: ++this.sequence,
@@ -479,6 +477,8 @@ class BrokerHost implements SpawnBrokerHost {
           request.result?.reject(error);
           request.child.fail(error);
         }
+        // Retained error stacks can keep this callback context alive after settlement.
+        requests.clear();
         // A failed transport is not a writer-close receipt. Join its native owner and
         // retained child cleanup before callers can remove or reuse output paths.
         if (outputRequests.length) {
@@ -490,6 +490,7 @@ class BrokerHost implements SpawnBrokerHost {
               request.output?.reject(error);
               request.child.settleFileOutput();
             }
+            outputRequests.length = 0;
           });
         }
         if (
@@ -725,8 +726,8 @@ class BrokerHost implements SpawnBrokerHost {
       try {
         await this.waitForCleanup();
       } finally {
-        if (this.resourceDirectory && this.hasBeenReady) {
-          await rm(this.resourceDirectory, { recursive: true, force: true });
+        if (this.resourceAuthority?.directory && this.hasBeenReady) {
+          await rm(this.resourceAuthority.directory, { recursive: true, force: true });
         }
       }
     } finally {

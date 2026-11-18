@@ -222,8 +222,8 @@ async function runCronIsolatedAgentTurnInTrace(
               executionStarted ? undefined : { executionStarted: false, providerStarted: false };
             let admissionDeferredReason: "busy" | "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
-            const resolveRecoveryClassification = () =>
-              resolveCronRecoveryClassification(ownReplyOperation);
+            const resolveRecoveryClassification = (includePendingTools = false) =>
+              resolveCronRecoveryClassification(ownReplyOperation, { includePendingTools });
             const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
               const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
@@ -524,6 +524,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 prepared: prepared.context,
                 execution,
                 recoveryClassification: resolveRecoveryClassification(),
+                recoveryError: resolveRecoveryClassification(true),
                 abortReason,
                 isAborted,
                 settleUsage,
@@ -580,7 +581,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 recoveryClassification &&
                 recoveryClassification.trim().length > 0 &&
                 !interruptedByRestart
-                  ? recoveryClassification
+                  ? resolveRecoveryClassification(true)
                   : isCronLaneTimeout
                     ? abortReason()
                     : normalizeCronRunErrorText(err);

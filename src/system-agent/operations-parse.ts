@@ -12,7 +12,7 @@ import {
   isSystemAgentSensitiveConfigValue,
   redactSystemAgentConfigPath,
 } from "./config-redaction.js";
-import type { SystemAgentOperation } from "./operation-types.js";
+import type { SystemAgentOperation, SystemAgentPluginCapabilityReview } from "./operation-types.js";
 import { INVALID_CONFIG_SET_MESSAGE, isInvalidConfigSetOperation } from "./operations-internal.js";
 import type { loadSystemAgentOverview } from "./overview.js";
 import {
@@ -31,7 +31,7 @@ export type SystemAgentOperationResult = {
   agentId?: string;
   exitsInteractive?: boolean;
   message?: string;
-  pluginCapabilityReview?: import("./operation-types.js").SystemAgentPluginCapabilityReview;
+  pluginCapabilityReview?: SystemAgentPluginCapabilityReview;
   nextInput?: string;
   /** Agent TUI exited via /openclaw: re-enter the shell even without a request. */
   returnToShell?: boolean;
@@ -240,6 +240,20 @@ export function secretStoreNameForConfigPath(path: string): string {
  * that does not match the anchored grammar exactly returns kind "none" so the
  * caller can route it to the system agent (or show guidance).
  */
+/** Exact config commands can use host validation and approval without model inference. */
+export function parseSystemAgentConfigCommand(input: string): SystemAgentOperation | null {
+  const operation = parseSystemAgentOperation(input);
+  return operation.kind === "config-set" ||
+    operation.kind === "config-unset" ||
+    operation.kind === "config-set-ref" ||
+    operation.kind === "config-get" ||
+    operation.kind === "config-schema" ||
+    operation.kind === "config-validate" ||
+    isInvalidConfigSetOperation(operation)
+    ? operation
+    : null;
+}
+
 export function parseSystemAgentOperation(input: string): SystemAgentOperation {
   const trimmed = input.trim();
   const lower = trimmed.toLowerCase();

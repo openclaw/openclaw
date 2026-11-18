@@ -7,7 +7,6 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { insertComposerDictation } from "../composer-dictation.ts";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import {
   handleTextareaOverflowInteraction,
@@ -36,12 +35,11 @@ export function renderComposerTextarea(
     const draft = context().visibleDraft;
     const dictation = context().dictation;
     return dictation?.active
-      ? insertComposerDictation(
-          state.dictationSelection?.value ?? draft,
-          dictation.transcript,
-          state.dictationSelection?.start ?? draft.length,
-          state.dictationSelection?.end ?? draft.length,
-        ).value
+      ? (dictation.placeTranscript(dictation.transcript, state.dictationSelection, {
+          start: draft.length,
+          end: draft.length,
+          value: draft,
+        })?.value ?? draft)
       : draft;
   });
   const valueRef = liveValue(() => {

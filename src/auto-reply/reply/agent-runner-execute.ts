@@ -27,7 +27,6 @@ import {
 } from "./pending-final-delivery.js";
 import { claimNextQueuedFollowupRequestFrom, enqueueFollowupRun } from "./queue.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
-import { isFollowupOperatorAuthorityCurrent } from "./queue/types.js";
 import type { PendingReplyDelivery } from "./reply-input-admission.js";
 import {
   isReplyOperationSuperseded,
@@ -75,7 +74,11 @@ export function continueStalledReplyTurn({
   ) {
     return false;
   }
-  if (!isFollowupOperatorAuthorityCurrent(followupRun)) {
+  try {
+    followupRun.operatorAuthority?.signal?.throwIfAborted();
+    followupRun.operatorAuthority?.assertCurrent();
+  } catch {
+    // Refusing this continuation does not revoke or settle any queued source.
     return false;
   }
   const queuedRequest = !guidance && claimNextQueuedFollowupRequestFrom(queueKey, followupRun);

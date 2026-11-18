@@ -48,6 +48,61 @@ async function streamFinalAnswer(
 }
 
 describe("CodexAppServerEventProjector assistant projection", () => {
+  it("bounds candidate snapshots while preserving streamed text and selection transitions", async () => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    const chunk = "Synthetic answer.   ";
+    const answer = chunk.repeat(2_000);
+    await fixture.start(projector, finalItem("draft", ""));
+    // Whitespace must not open a candidate or rescan a growing blank prefix.
+    await fixture.delta(projector, "  ", "draft");
+    for (let index = 0; index < 2_000; index++) {
+      await fixture.delta(projector, chunk, "draft");
+    }
+    await fixture.complete(projector, finalItem("draft", `  ${answer}`));
+    const tool = createNativeCommandItem({ id: "late-tool", command: "echo done" });
+    await fixture.start(projector, tool);
+    await fixture.complete(projector, tool);
+    await streamFinalAnswer(projector, "final", "Selected answer.");
+    await fixture.finish(projector, [finalItem("final", "Selected answer.")]);
+
+    const candidates = fixture.events(onAgentEvent, "item", "answer_candidate");
+    expect(candidates.map((event) => event.data)).toEqual([
+      candidate("draft", "candidate", chunk.trim()),
+      candidate("draft", "candidate", answer.trim()),
+      candidate("draft", "superseded", answer.trim()),
+      candidate("final", "candidate", "Selected answer."),
+      candidate("final", "selected", "Selected answer."),
+    ]);
+    expect(
+      fixture
+        .events(onAgentEvent, "assistant")
+        .filter((event) => event.data.itemId === "draft")
+        .map((event) => event.data.delta)
+        .join(""),
+    ).toBe(`  ${answer}`);
+    expect(fixture.result(projector).preparedTerminalReply).toEqual(
+      terminalReply("Selected answer."),
+    );
+  });
+
+  it("reopens a superseded candidate even when its next delta is whitespace", async () => {
+    const { projector, onAgentEvent } = await fixture.observe();
+    for (const id of ["first", "second"]) {
+      await fixture.start(projector, finalItem(id, ""));
+      await fixture.delta(projector, id, id);
+    }
+    await fixture.delta(projector, " ", "first");
+    expect(
+      fixture.events(onAgentEvent, "item", "answer_candidate").map((event) => event.data),
+    ).toEqual([
+      candidate("first", "candidate", "first"),
+      candidate("first", "superseded", "first"),
+      candidate("second", "candidate", "second"),
+      candidate("second", "superseded", "second"),
+      candidate("first", "candidate", "first"),
+    ]);
+  });
+
   it.each(["failed"])("retains streamed partial evidence after a %s turn", async (status) => {
     const projector = await createProjector();
     await fixture.start(projector, finalItem("partial", ""));

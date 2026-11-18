@@ -203,18 +203,25 @@ function formatChangedObligationFields(
   expected: readonly DeferredPluginMigration[],
   current: readonly DeferredPluginMigration[],
 ): string {
+  const expectedIds = new Set(expected.map((entry) => entry.pluginId));
   const currentById = new Map(current.map((entry) => [entry.pluginId, entry]));
   const fields = deferredPluginMigrationSchema.keyof().options;
   const changed: string[] = [];
   for (const before of expected) {
     const after = currentById.get(before.pluginId);
     if (!after) {
+      changed.push(`${before.pluginId}:removed`);
       continue;
     }
     for (const field of fields) {
       if (!isDeepStrictEqual(before[field], after[field])) {
         changed.push(`${before.pluginId}:${field}`);
       }
+    }
+  }
+  for (const after of current) {
+    if (!expectedIds.has(after.pluginId)) {
+      changed.push(`${after.pluginId}:added`);
     }
   }
   return formatConflictIds(changed);

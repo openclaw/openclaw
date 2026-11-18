@@ -9,14 +9,17 @@ import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contrac
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import { withManagedWorktreeGit } from "./checkout-policy.js";
+import { hasWorktreeUnknownOutcome } from "./errors.js";
 import type { WorktreeCleanupMutation } from "./gc-removal.js";
 import { lockState } from "./git-lock.js";
-import { commandError, requireGit } from "./git.js";
+import { commandError, requireGit, runGit } from "./git.js";
 import {
   captureWorktreeRegistryReadGuard,
   readRegistryWorktree,
+  readRegistryWorktreeForMutation,
   requireActiveWorktreeRecord,
 } from "./registry-read.js";
+import { deferFailedWorktreeRemoval, removalDeferralReason } from "./registry-retirement.js";
 import {
   clearRegistryWorktreeProvisionedChunks,
   createWorktreeRemovalClaimsGuard,
@@ -52,6 +55,7 @@ import type {
   ManagedWorktreeRecord,
   RemoveManagedWorktreeResult,
   WorktreeWorkerAuthority,
+  WorktreeRemovalDeferral,
 } from "./types.js";
 
 export async function claimManagedRemoval(
@@ -82,6 +86,7 @@ export type RemoveWorktreeParams = Pick<CreateManagedWorktreeParams, "signal" | 
   id: string;
   reason: string;
   allowSnapshotLoss?: boolean;
+  retryPreserved?: boolean;
   /** Explicit owner-fenced detached retirement; never combined with force or clean-only removal. */
   exactState?: ExactStateRetirement;
   requireLossless?: boolean;
@@ -92,7 +97,106 @@ export type RemoveWorktreeParams = Pick<CreateManagedWorktreeParams, "signal" | 
   withOwnerMutation?: WorktreeCleanupMutation;
 };
 
-export async function removeSettledManagedWorktree(
+export async function removeManagedWorktreeWithAllocation(
+  params: RemoveWorktreeParams & WorktreeAllocationGuard,
+  context: Parameters<typeof removeSettledManagedWorktree>[1],
+  timing: ReturnType<typeof startGitOperationTiming>,
+  onDeferred?: (value: WorktreeRemovalDeferral | undefined) => void,
+): Promise<RemoveManagedWorktreeResult> {
+  timing?.markRemovalStage("preparation");
+  params.signal?.throwIfAborted();
+  params.commitGuard?.();
+  const record = requireActiveWorktreeRecord(
+    params.id,
+    await readRegistryWorktreeForMutation({ ...params, env: context.env }),
+  );
+  if (params.exactState) {
+    assertExactStateOwner(record, params.exactState);
+    const pending = await runGit(
+      record.repoRoot,
+      ["show-ref", "--verify", "--quiet", `refs/openclaw/removals/${record.id}`],
+      { signal: params.signal, beforeRun: params.commitGuard },
+    );
+    if (pending.code === 0) {
+      throw new Error(
+        "Previous worktree removal may be incomplete; source and recovery snapshot preserved",
+      );
+    }
+    if (pending.code !== 1) {
+      throw commandError("git show-ref", pending);
+    }
+  }
+  const claimToken = params.claimToken ?? (await claimManagedRemoval(context.env, record, params));
+  createWorktreeRemovalClaimsGuard(context.env, [record.id], claimToken)();
+  try {
+    const { withSettledLocalWorkspace } =
+      await import("../../gateway/worker-environments/local-workspace-projection.js");
+    return await withSettledLocalWorkspace(
+      {
+        worktree: record,
+        env: context.env,
+        assertCurrent: params.commitGuard,
+        workerAuthority: params.workerAuthority,
+        retireRuntime: true,
+      },
+      (accepted) =>
+        removeSettledManagedWorktree(
+          {
+            ...params,
+            claimToken,
+            workerAuthority: {
+              ...params.workerAuthority,
+              ...accepted?.workerAuthority,
+              leaseSet: accepted?.workerAuthority.leaseSet ?? params.workerAuthority.leaseSet,
+            },
+            commitGuard: () => {
+              params.commitGuard?.();
+              accepted?.assertCurrent();
+            },
+          },
+          context,
+          timing,
+          accepted?.prepareArchive,
+        ),
+    );
+  } catch (error) {
+    timing?.markRemovalFailure();
+    timing?.markRemovalStage("finalization");
+    if (hasWorktreeUnknownOutcome(error)) {
+      throw error;
+    }
+    let failure = error;
+    try {
+      const reason = removalDeferralReason(error);
+      if (timing && reason) {
+        const deferred = await deferFailedWorktreeRemoval({
+          env: context.env,
+          id: record.id,
+          ...timing.removalProgress(),
+          ...reason,
+          now: Date.now(),
+          previousAttempts: record.gcRetry?.attempts ?? 0,
+          claimToken,
+          assertCurrent: params.rollbackGuard,
+        });
+        onDeferred?.(deferred);
+      }
+    } catch (deferralError) {
+      if (hasWorktreeUnknownOutcome(deferralError)) {
+        throw deferralError;
+      }
+      failure = new AggregateError(
+        [error, deferralError],
+        "Worktree removal and deferral recording failed",
+        { cause: deferralError },
+      );
+    }
+    await abortWorktreeRemoval(context.env, record.id, claimToken);
+    throw failure;
+  }
+}
+
+async function removeSettledManagedWorktree(
   input: RemoveWorktreeParams & WorktreeAllocationGuard & { claimToken: string },
   context: {
     env: NodeJS.ProcessEnv;

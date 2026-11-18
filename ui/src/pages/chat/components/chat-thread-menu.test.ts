@@ -2,6 +2,12 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import {
+  createRichTooltip,
+  dispatchMousePointer,
+  hoverTrigger,
+  settleTooltip,
+} from "../../../components/tooltip.test-support.ts";
 import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import {
   handleTranscriptContextMenu,
@@ -11,7 +17,72 @@ import {
 afterEach(() => {
   resetThreadPresentation();
   document.body.replaceChildren();
+  // Unstub before uninstalling the fake clock so its frame function cannot leak.
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
+
+it("closes the message menu on Escape after a previous hover tooltip finishes loading", async () => {
+  vi.useFakeTimers();
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  });
+  const { tooltip, trigger } = createRichTooltip("Stop Escape", "Stop");
+  document.body.append(tooltip);
+  await settleTooltip(tooltip);
+  hoverTrigger(trigger);
+  vi.advanceTimersByTime(150);
+  dispatchMousePointer(trigger, "pointerleave");
+
+  const bubble = document.body.appendChild(document.createElement("div"));
+  bubble.className = "chat-bubble";
+  Object.assign(bubble, { messageActions: { copyMarkdown: "Synthetic message" } });
+  bubble.addEventListener("contextmenu", (event) =>
+    handleTranscriptContextMenu(event, { paneId: "hover-escape-menu" }),
+  );
+  bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const button = expectDefined(
+    document.querySelector<HTMLButtonElement>('.chat-reply-context-menu [role="menuitem"]'),
+    "message action",
+  );
+  expect(document.activeElement).toBe(button);
+  // The old hover's renderer resolves after the menu has taken focus.
+  await settleTooltip(tooltip);
+  for (const callback of frames.splice(0)) {
+    callback(0);
+  }
+  button.dispatchEvent(
+    new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+  );
+  expect(button.isConnected).toBe(false);
+});
+
+it("lets Escape close the message menu before the first animation frame", () => {
+  vi.stubGlobal("requestAnimationFrame", () => 0);
+  const onFocusComposer = vi.fn();
+  const bubble = document.body.appendChild(document.createElement("div"));
+  bubble.className = "chat-bubble";
+  Object.assign(bubble, { messageActions: { copyMarkdown: "Synthetic message" } });
+  bubble.addEventListener("contextmenu", (event) =>
+    handleTranscriptContextMenu(event, { paneId: "escape-menu", onFocusComposer }),
+  );
+  bubble.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  const button = expectDefined(
+    document.querySelector<HTMLButtonElement>('.chat-reply-context-menu [role="menuitem"]'),
+    "message action",
+  );
+  expect(document.activeElement).toBe(button);
+  const escape = new KeyboardEvent("keydown", {
+    key: "Escape",
+    bubbles: true,
+    cancelable: true,
+  });
+  button.dispatchEvent(escape);
+  expect(escape.defaultPrevented).toBe(true);
+  expect(button.isConnected).toBe(false);
+  expect(onFocusComposer).toHaveBeenCalledOnce();
 });
 
 it("keeps failed context-copy feedback visible and retries before dismissing the menu", async () => {
@@ -48,4 +119,13 @@ it("keeps failed context-copy feedback visible and retries before dismissing the
   await vi.waitFor(() => expect(button.isConnected).toBe(false));
   expect(writeText).toHaveBeenNthCalledWith(1, "Synthetic commentary");
   expect(writeText).toHaveBeenNthCalledWith(2, "Synthetic commentary");
+});
+
+it("keeps native animation frames working after menu mocks are restored", async () => {
+  let delivered = false;
+  const frame = requestAnimationFrame(() => {
+    delivered = true;
+  });
+  onTestFinished(() => cancelAnimationFrame(frame));
+  await vi.waitFor(() => expect(delivered).toBe(true));
 });
