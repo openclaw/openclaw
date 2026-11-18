@@ -7,6 +7,7 @@ import {
 } from "@openclaw/workboard-contract";
 import { isRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { definedFields } from "../record-fields.js";
+import { cardHasRunAttempt } from "./store-card-helpers.js";
 import { MAX_CARD_METADATA_BYTES } from "./store-constants.js";
 import type { WorkboardUpdateCardOptions } from "./store-inputs.js";
 import {
@@ -179,7 +180,7 @@ export function buildVerification(
   if (!cardHasId(card.metadata?.artifacts, artifactId)) {
     throw new Error(`artifact not found on card: ${artifactId}`);
   }
-  if (runId && !card.metadata?.attempts?.some((attempt) => attempt.runId === runId)) {
+  if (runId && !cardHasRunAttempt(card, runId)) {
     throw new Error(`run not found on card: ${runId}`);
   }
   const url = normalizeBoundedString(
