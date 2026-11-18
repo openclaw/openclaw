@@ -370,11 +370,15 @@ function publicationUnavailable(
     .digest("hex")
     .slice(0, 16);
   const unknown = reason === "identity-unavailable-after-unknown";
+  const nextAction = unknown
+    ? "Wait for committed-state confirmation before continuing."
+    : "Wait for the pending publication to settle before continuing.";
   // These guards have publication facts, not proof of native COMMIT or receipt delivery.
   return new Error(
     `Plugin state authority is unavailable (reason=${reason}; identityRef=${identityRef}; ` +
       `settlement=${unknown ? "unknown" : "pending"}; committed=unconfirmed; ` +
-      `installation=${unknown ? "invalidated" : "unconfirmed"})`,
+      `installation=${unknown ? "invalidated" : "unconfirmed"}). ${nextAction} ` +
+      "Do not replay the write while its outcome is uncertain.",
   );
 }
 

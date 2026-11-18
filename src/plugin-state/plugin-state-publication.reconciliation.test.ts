@@ -96,6 +96,12 @@ describe("plugin state unknown settlement reconciliation", () => {
           expect(text).toContain(
             `settlement=${kind}; committed=unconfirmed; installation=${kind === "unknown" ? "invalidated" : "unconfirmed"}`,
           );
+          expect(text).toContain(
+            kind === "unknown"
+              ? "Wait for committed-state confirmation before continuing."
+              : "Wait for the pending publication to settle before continuing.",
+          );
+          expect(text).toContain("Do not replay the write while its outcome is uncertain.");
         }
         const references = failures.map((text) => /identityRef=([a-f0-9]{16})/.exec(text)?.[1]);
         expect(references[0]).toMatch(/^[a-f0-9]{16}$/);

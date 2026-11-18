@@ -54,6 +54,7 @@ function formattedReadDenial(store: ReturnType<typeof openStore<string>>) {
   assert(stateDir);
   expect(text).not.toContain(stateDir);
   expect(text).not.toMatch(/guard-test|bindings|private-binding-value-canary/);
+  expect(text).toContain("Do not replay the write while its outcome is uncertain.");
   return text;
 }
 
@@ -78,7 +79,9 @@ it.for(["reject-new", "evict-oldest"] as const)(
     // A real SQLite writer lock prevents the sibling write from settling.
     const writing = store.register("b-\ud800", "replacement");
     try {
-      expect(formattedReadDenial(store)).toContain("reason=overlapping-publication-pending");
+      const denial = formattedReadDenial(store);
+      expect(denial).toContain("reason=overlapping-publication-pending");
+      expect(denial).toContain("Wait for the pending publication to settle before continuing.");
       expect(() => b.read()).toThrow("authority is unavailable");
       await expect(preparePluginStateRead(store, "b-\ufffd")).rejects.toThrow(
         "authority is unavailable",
@@ -184,7 +187,9 @@ it("restores authority after unknown publications only from re-read committed st
     stopFault();
   }
   expect(() => guard.read()).toThrow("unavailable");
-  expect(formattedReadDenial(store)).toContain("reason=identity-unavailable-after-unknown");
+  const denial = formattedReadDenial(store);
+  expect(denial).toContain("reason=identity-unavailable-after-unknown");
+  expect(denial).toContain("Wait for committed-state confirmation before continuing.");
   await store.register("session", "later");
   expect(await store.lookup("session")).toBe("later");
   // A guard pinned before the indeterminate outcome never trusts its old row again.

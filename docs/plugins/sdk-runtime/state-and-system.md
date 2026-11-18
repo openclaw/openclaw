@@ -308,7 +308,9 @@ Authority-denial errors distinguish `identity-unavailable-after-unknown` from
 within one process without exposing its path, plugin scope, or stored values; it
 changes after restart. Settlement and installation fields describe publication
 state, not native transaction completion. `committed=unconfirmed` never means the
-write rolled back or that replay is safe.
+write rolled back or that replay is safe. Each diagnostic asks you to wait for the
+pending publication to settle or for committed-state confirmation, and not to
+replay a write while its outcome is uncertain.
 
 Custom store adapters return `undefined` because the host cannot observe their
 writers. Keep the adapter's authoritative reader for that case. A failed prepared
