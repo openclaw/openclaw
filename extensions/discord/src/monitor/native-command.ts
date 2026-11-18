@@ -1,5 +1,4 @@
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
-import { loadPreparedModelCatalog, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
 import { ensureConfiguredBindingRouteReady } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import { buildPairingReply } from "openclaw/plugin-sdk/conversation-runtime";
@@ -7,6 +6,7 @@ import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  loadCommandArgMenuModelCatalog,
   parseCommandArgs,
   resolveCommandArgMenuAsync,
   serializeCommandArgs,
@@ -462,15 +462,9 @@ async function dispatchDiscordCommandInteraction(
   // Native /think must not wait on provider discovery; persisted rows retain its metadata.
   const menuModelCatalog =
     command.key === "think" && menuNeedsModelContext
-      ? await loadPreparedModelCatalog({
-          config: cfg,
-          ...(menuModelContext?.agentId
-            ? {
-                agentId: menuModelContext.agentId,
-                agentDir: resolveAgentDir(cfg, menuModelContext.agentId),
-              }
-            : {}),
-          readOnly: true,
+      ? await loadCommandArgMenuModelCatalog({
+          cfg,
+          ...(menuModelContext?.agentId ? { agentId: menuModelContext.agentId } : {}),
         })
       : undefined;
   // Normal dispatch owns the unavailable-binding reply; do not offer choices it cannot apply.

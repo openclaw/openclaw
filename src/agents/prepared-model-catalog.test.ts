@@ -75,6 +75,7 @@ vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
   prepareScopedReadOnlyModelCatalog: mocks.prepareScopedCatalog,
 }));
 
+import { loadCommandArgMenuModelCatalog } from "../auto-reply/command-arg-menu-catalog.js";
 import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot as getPublishedOwner,
@@ -328,6 +329,29 @@ describe("prepared model catalog access", () => {
       }
     },
   );
+
+  it("serves native command menus from the published owner after a config republish", async () => {
+    const published = {
+      ...fullSnapshot,
+      config: { agents: { defaults: { model: "openai/published" } } },
+    };
+    mocks.getSnapshot.mockReturnValue(published);
+    mocks.prepareSnapshot.mockResolvedValue(published);
+    const cfg = { agents: { defaults: { model: "openai/current" } } };
+
+    // Exact readers still refuse a generation built from another config.
+    await expect(
+      loadCatalog({ config: cfg, agentId: "main", readOnly: true }),
+    ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
+    await expect(loadCommandArgMenuModelCatalog({ cfg, agentId: "main" })).resolves.toEqual(
+      published.modelCatalog.entries,
+    );
+    expect(mocks.prepareSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({ agentId: "main", agentDir, config: cfg }),
+      { readPublished: true },
+    );
+    expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+  });
 
   it("leases a full generation for a gateway preflight in a dynamic workspace", async () => {
     unpublished();
