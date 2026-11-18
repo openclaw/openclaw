@@ -181,6 +181,72 @@ async function awaitDepartedDurableWrites(databasePaths: readonly string[]): Pro
   });
 }
 
+/**
+ * Path-only reader closure and fencing follow agent deletion: a removed agent's
+ * canonical database can still be another configured agent's session store or
+ * registered file. Those survivors keep their readers and later opens.
+ * Agent-qualified handle close does not make a path-wide fence safe.
+ */
+async function databasePathsRetainedBySurvivors(
+  cfg: OpenClawConfig,
+  agentId: string,
+  candidates: readonly string[],
+): Promise<Set<string>> {
+  const [
+    {
+      isPathOwnedBySurvivingAgent,
+      readAgentDeleteDatabaseRegistry,
+      resolveSurvivingDatabaseFilePaths,
+    },
+    { findAgentSessionStoreDeletionBlocker },
+    { resolveSessionStorePathCore },
+    { resolveSqliteTargetFromSessionStorePath },
+    { resolveSessionStoreCompatibilityAgentId },
+    { resolveSqliteDatabaseFilePaths },
+  ] = await Promise.all([
+    import("../agents/agent-delete-databases.js"),
+    import("../agents/agent-delete-session-store-safety.kernel.js"),
+    import("../config/sessions/paths.js"),
+    import("../config/sessions/session-sqlite-target.js"),
+    import("../config/legacy.default-agent-owner.js"),
+    import("../infra/sqlite-files.js"),
+  ]);
+  const env = process.env;
+  let survivingDatabaseFilePaths: string[] = [];
+  try {
+    survivingDatabaseFilePaths = resolveSurvivingDatabaseFilePaths(
+      await readAgentDeleteDatabaseRegistry({ env }),
+      agentId,
+      env,
+    );
+  } catch {
+    // A missing registry still leaves the directory, workspace, and session-store checks.
+  }
+  const retained = new Set<string>();
+  for (const pathname of candidates) {
+    if (isPathOwnedBySurvivingAgent(cfg, agentId, pathname, survivingDatabaseFilePaths, env)) {
+      retained.add(path.resolve(pathname));
+    }
+  }
+  if (!cfg.session?.store?.trim()) {
+    return retained;
+  }
+  const blocker = findAgentSessionStoreDeletionBlocker(undefined, cfg, agentId, env);
+  if (!blocker) {
+    return retained;
+  }
+  const storePath = resolveSessionStorePathCore(cfg.session.store, { agentId: blocker, env });
+  const target = resolveSqliteTargetFromSessionStorePath(storePath, {
+    agentId: blocker,
+    defaultAgentId: resolveSessionStoreCompatibilityAgentId(cfg),
+    env,
+  });
+  for (const filePath of resolveSqliteDatabaseFilePaths(target.path)) {
+    retained.add(path.resolve(filePath));
+  }
+  return retained;
+}
+
 async function closeDepartedAgentResources(
   agentId: string,
   previousConfig: OpenClawConfig,
@@ -197,6 +263,7 @@ async function closeDepartedAgentResources(
     sqlitePaths,
     { agentDatabaseLifecycle, closeOpenClawAgentDatabaseByPathAsync },
     { closeDeletedAgentDatabases },
+    { checkpointOpenClawAgentDatabaseForRetirement },
   ] = await Promise.all([
     import("../agents/agent-scope-config.js"),
     import("../agents/prepared-model-runtime.js"),
@@ -205,6 +272,7 @@ async function closeDepartedAgentResources(
     import("../state/openclaw-agent-db.paths.js"),
     import("../state/openclaw-agent-db-lifecycle.js"),
     import("../state/openclaw-agent-db-readers.js"),
+    import("../state/openclaw-agent-db.wal.js"),
   ]);
   const agentDir = resolveEffectiveAgentDir(previousConfig, normalized);
   const canonical = sqlitePaths.resolveOpenClawAgentSqlitePath({
@@ -232,16 +300,31 @@ async function closeDepartedAgentResources(
   if (agentReadmitted(normalized)) {
     return;
   }
-  for (const pathname of readerPaths) {
-    agentDatabaseLifecycle.databases.get(path.resolve(pathname))?.walMaintenance.checkpoint();
+  const survivorConfig = getRuntimeConfigSnapshot() ?? previousConfig;
+  const retainedBySurvivors = await databasePathsRetainedBySurvivors(
+    survivorConfig,
+    normalized,
+    readerPaths,
+  );
+  const departedPaths = readerPaths.filter(
+    (pathname) => !retainedBySurvivors.has(path.resolve(pathname)),
+  );
+  for (const pathname of departedPaths) {
+    const database = agentDatabaseLifecycle.databases.get(path.resolve(pathname));
+    if (!database?.db.isOpen) {
+      continue;
+    }
+    // Worker maintenance owns this TRUNCATE. The host checkpoint runs SQL on the
+    // Gateway thread and is skipped for worker-maintained handles at close.
+    await checkpointOpenClawAgentDatabaseForRetirement(database);
   }
-  for (const pathname of readerPaths) {
+  for (const pathname of departedPaths) {
     await closeOpenClawAgentDatabaseByPathAsync(pathname, normalized);
   }
   if (agentReadmitted(normalized)) {
     return;
   }
-  await closeDeletedAgentDatabases(normalized, readerPaths, {
+  await closeDeletedAgentDatabases(normalized, departedPaths, {
     assertCurrentFinal() {
       if (agentReadmitted(normalized)) {
         throw new Error(`Agent ${normalized} returned to the roster during database release.`);

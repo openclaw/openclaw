@@ -86,7 +86,17 @@ export async function releaseSessionHistoryWorkerDatabases(options: {
       if (!closing) {
         return false;
       }
+      // Clear the lane before yielding so a later dispatch does not publish another
+      // native reader on a handle this close is retiring. A rejected receipt puts the
+      // lane back: the worker and its SQLite handle are still alive, and the next
+      // release has to be able to retry. closeDatabaseWorkerResource does the same.
       resource.nativeLanes.delete(lane);
+      void closing.then(
+        () => undefined,
+        () => {
+          resource.nativeLanes.add(lane);
+        },
+      );
       if (!(await settleWithin(closing, deadline - performance.now()))) {
         return false;
       }

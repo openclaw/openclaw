@@ -22,8 +22,10 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { releaseSessionHistoryWorkerDatabases } from "../config/sessions/session-history-worker-idle.js";
 import { resolveSessionSqliteTargetInWorker } from "../config/sessions/session-transcript-read-worker-runtime.js";
 import {
+  historyDatabases,
   historyLane,
   maintenanceLane,
   type SessionHistoryWorkerLane,
@@ -36,7 +38,9 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDeletedAgentDatabasePath } from "../infra/agent-database-readers.js";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { retainSqliteDatabaseAdmissionLocation } from "../infra/sqlite-database-admission.js";
+import * as workerTaskPool from "../infra/worker-task-pool.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { assertAgentSessionWriteAdmission } from "../sessions/session-agent-work-admission.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
@@ -567,6 +571,114 @@ it("waits for a trajectory retention retain that finishes inside the reload budg
   expect(released).toBe(true);
   expect(worker.database.db.isOpen).toBe(false);
   expect(fs.existsSync(worker.path)).toBe(true);
+});
+
+it("keeps a survivor's readers when its session store is the removed agent's database", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  const main = opened.find((database) => database.agentId === "main");
+  if (!worker || !main) {
+    throw new Error("fixture did not open main and worker");
+  }
+  const shared = {
+    ...roster(["main", "worker"]),
+    session: { store: worker.path },
+  };
+  setRuntimeConfigSnapshot(shared, shared);
+  const retained = retainSessionHistoryWorkerDatabase(
+    { agentId: "main", path: worker.path, env: process.env },
+    historyLane,
+  );
+  onTestFinished(() => retained.release());
+  const reader = [...historyDatabases.values()].find(
+    (resource) => resource.database.agentId === "main" && resource.matchesPath(worker.path),
+  );
+  if (!reader) {
+    throw new Error("fixture did not retain main's reader");
+  }
+  await commitRoster(createHandlers(), {
+    ...roster(["main"]),
+    session: { store: worker.path },
+  });
+  expect(reader.revoked, "main's reader stays open").toBe(false);
+  expect(historyDatabases.has(JSON.stringify(reader.database))).toBe(true);
+  expect(isDeletedAgentDatabasePath(worker.path)).toBe(false);
+  expect(main.database.db.isOpen).toBe(true);
+  const reopened = openNodeSqliteDatabase(worker.path, { readOnly: true });
+  try {
+    expect(reopened.isOpen).toBe(true);
+    expect(reopened.prepare("PRAGMA user_version").get()).toEqual(worker.version);
+  } finally {
+    reopened.close();
+  }
+});
+
+it("keeps the native lane when history resource close rejects", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const retained = retainSessionHistoryWorkerDatabase({
+    agentId: "worker",
+    path: worker.path,
+    env: process.env,
+  });
+  const resource = [...historyDatabases.values()].find(
+    (entry) => entry.database.agentId === "worker" && entry.matchesPath(worker.path),
+  );
+  if (!resource) {
+    throw new Error("fixture did not retain worker history");
+  }
+  resource.nativeLanes.add(historyLane);
+  retained.release();
+  const close = vi
+    .spyOn(workerTaskPool, "closeTaskPoolSqliteResources")
+    .mockRejectedValue(new Error("resource close failed"));
+  const allow = vi.spyOn(historyLane.pool, "canCloseNativeResources").mockReturnValue(true);
+  try {
+    const released = await releaseSessionHistoryWorkerDatabases({
+      agentId: "worker",
+      paths: [worker.path],
+    });
+    expect(released).toBe(false);
+    expect(resource.nativeLanes.has(historyLane)).toBe(true);
+  } finally {
+    close.mockRestore();
+    allow.mockRestore();
+    resource.nativeLanes.delete(historyLane);
+  }
+});
+
+it("does not emit an unhandled rejection when a tracked retention effect rejects", async () => {
+  const { opened } = installState(["main", "worker"]);
+  const worker = opened.find((database) => database.agentId === "worker");
+  if (!worker) {
+    throw new Error("fixture did not open worker");
+  }
+  const target = { agentId: "worker", path: worker.path, env: process.env };
+  const retained = retainSessionHistoryWorkerDatabase(target);
+  onTestFinished(() => retained.release());
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason);
+  };
+  process.on("unhandledRejection", onUnhandled);
+  const effect = Promise.reject(new Error("retention sweep failed"));
+  trackSessionHistoryHostEffect(target, effect);
+  try {
+    await effect.catch(() => undefined);
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(unhandled).toEqual([]);
+    const resource = [...historyDatabases.values()].find(
+      (entry) => entry.database.agentId === "worker" && entry.matchesPath(worker.path),
+    );
+    expect(resource?.hostEffects.has(effect)).toBe(false);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
 });
 
 it("does not block reload when a history read has no completion promise", async () => {

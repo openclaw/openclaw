@@ -49,6 +49,14 @@ export function isSqliteWalWorkerMaintained(database: DatabaseSync): boolean {
   return admissions.get(database)?.execute !== undefined;
 }
 
+/** One maintenance pass on the registered worker. The caller thread does not run SQL. */
+export function dispatchSqliteWalWorkerMaintenance(
+  database: DatabaseSync,
+  request: SqliteWalPeriodicRequest,
+): Promise<SqliteWalPeriodicResult | undefined> | undefined {
+  return admissions.get(database)?.execute?.(request);
+}
+
 export function cancelSqliteWalWriteAdmission(database: DatabaseSync): void | Promise<void> {
   return admissions.get(database)?.cancel?.();
 }
