@@ -336,12 +336,12 @@ async function resolveDeliveryTargetWithPolicy(
     }
   }
 
-  const targetParams = {
+  const targetParams: ResolveOutboundTargetParams = {
     channel: resolvedTarget.channel,
     to: resolvedTarget.to,
     cfg,
     accountId: effectiveAccountId,
-    allowNativeChannelNamespace: target !== "last",
+    channelInferred: target === "last" ? true : undefined,
   };
   const resolved = await resolveOutboundTargetWithPlugin({
     plugin,
@@ -500,7 +500,7 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
     input: deliveryTo,
     accountId: delivery.accountId,
     unknownTargetMode: "normalized",
-    allowNativeChannelNamespace: policy?.target !== "last",
+    channelInferred: policy?.target === "last" ? true : undefined,
     plugin,
   }).catch(() => null);
   if (targetResolution?.ok) {

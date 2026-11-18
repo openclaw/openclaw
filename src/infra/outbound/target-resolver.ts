@@ -224,7 +224,7 @@ export async function resolveChannelTarget(params: {
   preferredKind?: ChannelDirectoryEntryKind;
   runtime?: RuntimeEnv;
   unknownTargetMode?: "error" | "normalized";
-  allowNativeChannelNamespace?: boolean;
+  channelInferred?: true;
   nativeTargetMode?: ChannelOutboundTargetMode;
   allowFrom?: string[];
   plugin?: ChannelPlugin;
@@ -240,7 +240,7 @@ export async function resolveChannelTarget(params: {
     };
   }
   const channelNamespace = resolveBareTargetChannelNamespace({ raw, plugin });
-  const allowNativeTarget = !channelNamespace || params.allowNativeChannelNamespace !== false;
+  const allowNativeTarget = !channelNamespace || !params.channelInferred;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);
   // An inferred channel name must not become a plausible recipient through normalization.
   const normalizedInput = allowNativeTarget
@@ -248,14 +248,14 @@ export async function resolveChannelTarget(params: {
     : undefined;
   const normalized = normalizedInput?.normalized ?? raw;
   const reservedLiteral = resolveReservedTargetLiteral({ raw, plugin });
-  const normalizedResult = (): ResolveMessagingTargetResult => ({
+  const normalizedResult = (to = normalized): ResolveMessagingTargetResult => ({
     ok: true,
     target: {
-      to: normalized,
+      to,
       kind: channelNamespace
-        ? detectTargetKind(params.channel, normalized, params.preferredKind, plugin)
+        ? detectTargetKind(params.channel, to, params.preferredKind, plugin)
         : kind,
-      display: stripTargetPrefixes(normalized),
+      display: stripTargetPrefixes(to),
       source: "normalized",
       resolutionSource: "normalized",
     },
@@ -284,21 +284,17 @@ export async function resolveChannelTarget(params: {
     }
   }
   const query = stripTargetPrefixes(raw, params.channel, plugin);
-  const primaryKind = kind === "user" ? "user" : "group";
   const directoryKinds: ChannelDirectoryEntryKind[] =
     channelNamespace && !params.preferredKind
-      ? [primaryKind, primaryKind === "user" ? "group" : "user"]
-      : [primaryKind];
+      ? ["group", "user"]
+      : [kind === "user" ? "user" : "group"];
   const entries = (
     await Promise.all(
       directoryKinds.map((directoryKind) =>
         getDirectoryEntries({
-          cfg: params.cfg,
-          channel: params.channel,
-          accountId: params.accountId,
+          ...params,
           kind: directoryKind,
           query,
-          runtime: params.runtime,
           preferLiveOnMiss: true,
           plugin,
         }),
@@ -370,26 +366,12 @@ export async function resolveChannelTarget(params: {
         return native;
       }
       if (native?.to.trim()) {
-        return {
-          ok: true,
-          target: {
-            to: native.to,
-            kind: detectTargetKind(params.channel, native.to, params.preferredKind, plugin),
-            display: stripTargetPrefixes(native.to),
-            source: "normalized",
-            resolutionSource: "normalized",
-          },
-        };
+        return normalizedResult(native.to);
       }
     }
     return {
       ok: false,
-      error: missingChannelDestinationError(
-        providerLabel,
-        channelNamespace.namespace,
-        channelNamespace.destinationPrefix,
-        hint,
-      ),
+      error: missingChannelDestinationError(providerLabel, channelNamespace, params.channel, hint),
     };
   }
 

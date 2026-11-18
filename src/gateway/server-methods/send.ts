@@ -54,7 +54,6 @@ import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
 import {
-  createGatewayMessageActionInput,
   createMessageActionRuntimeAuthority,
   resolveAgentRuntimeMessageActionAuthorization,
   resolveAgentRuntimeMessageActionConfig,
@@ -89,6 +88,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(request, validateMessageActionParams, "message.action", respond)) {
       return;
     }
+    const isSend = request.action === "send";
     // Hydration replaces the client buffer with a stored path; retain ingress classification.
     const assertClientUploadAllowed = captureGatewayClientUploadCommitGuard({
       method: "message.action",
@@ -114,8 +114,8 @@ export const sendHandlers: GatewayRequestHandlers = {
       authorization: trustedContext.messageActionAuthorization,
       assertClientUploadAllowed,
     });
-    const assertDirectAdapterHandoff = messageAuthority.assertDirectAdapterHandoff;
-    const onPlatformSendDispatch = messageAuthority.onPlatformSendDispatch;
+    const { assertDirectAdapterHandoff, assertScheduledWriteCurrent, onPlatformSendDispatch } =
+      messageAuthority;
     const downstreamToolContext = trustedContext.toolContext
       ? { ...trustedContext.toolContext, skipCrossContextDecoration: true as const }
       : undefined;
@@ -156,8 +156,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const cfg = trustedContext.messageActionConfig ?? selectLiveRuntimeConfig(selectedCfg);
         const plugin = resolveOutboundChannelPlugin({ channel, cfg });
         const canonicalAction =
-          ((request.action === "send" &&
-            Boolean(plugin?.message?.send?.text || plugin?.outbound?.sendText)) ||
+          ((isSend && Boolean(plugin?.message?.send?.text || plugin?.outbound?.sendText)) ||
             (request.action === "poll" && Boolean(plugin?.outbound?.sendPoll))) &&
           (!plugin?.actions?.handleAction ||
             plugin.actions.supportsAction?.({ action: request.action }) === false);
@@ -220,7 +219,7 @@ export const sendHandlers: GatewayRequestHandlers = {
               }
               if (
                 canonicalAction &&
-                request.action === "send" &&
+                isSend &&
                 !normalizeOptionalString(request.params.target) &&
                 !actionHasTarget("send", request.params, {
                   channel,
@@ -257,7 +256,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                   ? { workspaceDir: resolvedMediaAccess.workspaceDir }
                   : {}),
               };
-              if (request.action === "send") {
+              if (isSend) {
                 await hydrateAttachmentParamsForAction({
                   cfg,
                   channel,
@@ -329,24 +328,26 @@ export const sendHandlers: GatewayRequestHandlers = {
                 // generic delivery must also stay inside its admitted job lifetime.
                 skipQueue:
                   client?.internal?.agentRuntimeIdentity !== undefined &&
-                  (request.action === "send" ||
-                    Boolean(trustedContext.messageActionAuthorization?.scheduled)),
+                  (isSend || Boolean(trustedContext.messageActionAuthorization?.scheduled)),
               };
               let payload: unknown;
-              if (
-                canonicalAction ||
-                messageAuthority.assertScheduledWriteCurrent ||
-                request.channelInferred === true
-              ) {
+              if (canonicalAction || assertScheduledWriteCurrent || request.channelInferred) {
                 const { runMessageAction } =
                   await import("../../infra/outbound/message-action-runner.js");
-                const result = await runMessageAction(
-                  createGatewayMessageActionInput(
-                    actionContext,
-                    request,
-                    trustedContext.runtimeAgentId,
-                  ),
-                );
+                const result = await runMessageAction({
+                  ...actionContext,
+                  gatewayOwnedDelivery: true,
+                  channelInferred: request.channelInferred,
+                  // The delegating client records the confirmed send in its destination.
+                  callerRecordsDestinationHistory: true,
+                  actionOrigin:
+                    isSend && trustedContext.runtimeAgentId ? "message-tool" : undefined,
+                  params: {
+                    ...request.params,
+                    channel,
+                    idempotencyKey: request.idempotencyKey,
+                  },
+                });
                 payload = result.payload;
               } else {
                 await messageAuthority.beforeDeliveryAttempt();

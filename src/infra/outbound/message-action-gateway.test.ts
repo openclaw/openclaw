@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { makeContext } from "../../gateway/server-methods/send.test-support.js";
+import {
+  createMessageMethodTestDriver,
+  makeContext,
+} from "../../gateway/server-methods/send.test-support.js";
+import type { RespondFn } from "../../gateway/server-methods/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -158,133 +162,72 @@ describe("runMessageAction gateway dispatch", () => {
     },
   );
 
-  it.each([
-    ["ordinary", undefined],
-    [
-      "scheduled",
-      {
-        scheduled: {
-          policy: { version: 1 as const, mode: "trusted" as const },
-          assertCurrent: () => {},
-        },
-      },
-    ],
-  ])(
-    "carries inferred-channel namespace provenance through %s Gateway delegation",
-    async (_, authorization) => {
-      const handleActionEntry = vi.fn(async () => jsonResult({ ok: true, local: true }));
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat scheduled action test plugin.",
-        actions: ["edit"],
-        handleAction: handleActionEntry,
-      });
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({ ok: true });
-      const cfg = createEnabledMessageActionConfig("gatewaychat");
+  it.each([false, true])(
+    "preserves namespace intent through Gateway delegation (scheduled=%s)",
+    async (scheduled) => {
+      await withOpenClawTestState({ prefix: "gateway-namespace-provenance-" }, async () => {
+        const handleAction = vi.fn(async () => jsonResult({ ok: true }));
+        const plugin = createGatewayActionPlugin({
+          pluginId: "gatewaychat",
+          label: "Gateway Chat",
+          blurb: "Gateway namespace test plugin.",
+          actions: ["edit"],
+          messaging: {
+            targetPrefixes: ["g"],
+            normalizeTarget: (raw) => (raw.startsWith("@") ? raw : `@${raw}`),
+            targetResolver: { looksLikeId: () => true },
+          },
+          handleAction,
+        });
+        plugin.directory = {
+          listPeers: async () => [{ kind: "user", id: "recipient-1", name: "g" }],
+        };
+        setTestPlugin(plugin, "gatewaychat");
+        const cfg = createEnabledMessageActionConfig("gatewaychat");
+        const { sendHandlers } = await import("../../gateway/server-methods/send.js");
+        const { invokeGatewayMessageMethod } = createMessageMethodTestDriver(() => sendHandlers);
+        mocks.callGatewayLeastPrivilege.mockImplementation(
+          async ({ params }: { params: Record<string, unknown> }) => {
+            const respond = vi.fn<RespondFn>();
+            await invokeGatewayMessageMethod({
+              method: "message.action",
+              request: params,
+              respond,
+              context: makeContext(() => cfg),
+            });
+            const [ok, payload, error] = respond.mock.calls[0] ?? [];
+            if (!ok) {
+              throw new Error(error?.message ?? "Gateway response missing");
+            }
+            return payload;
+          },
+        );
+        const invoke = (to: string, channel?: string) =>
+          runMessageAction({
+            cfg,
+            action: "edit",
+            params: { channel, to, messageId: "message-1", message: "updated" },
+            conversationReadOrigin: "direct-operator",
+            messageActionAuthorization: scheduled
+              ? { scheduled: { policy: { version: 1, mode: "trusted" }, assertCurrent: () => {} } }
+              : undefined,
+            gateway: { clientName: "cli", mode: "cli" },
+          });
 
-      await runMessageAction({
-        cfg,
-        action: "edit",
-        params: {
-          to: "gatewaychat",
-          messageId: "message-1",
-          message: "updated",
-        },
-        messageActionAuthorization: authorization,
-        gateway: {
-          resolveAgentRuntimeIdentityToken: async () => "agent-runtime-token",
-          clientName: "cli",
-          mode: "cli",
-        },
+        await expect(invoke("gatewaychat")).rejects.toThrow("does not specify a destination");
+        expect(handleAction).not.toHaveBeenCalled();
+        await expect(invoke("g")).resolves.toMatchObject({ payload: { ok: true } });
+        expect(handleAction).toHaveBeenLastCalledWith(
+          expect.objectContaining({ params: expect.objectContaining({ to: "@recipient-1" }) }),
+        );
+        await expect(invoke("gatewaychat", "gatewaychat")).resolves.toMatchObject({
+          payload: { ok: true },
+        });
+        expect(handleAction).toHaveBeenCalledTimes(2);
+        expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledTimes(scheduled ? 3 : 2);
       });
-
-      const gatewayCall = readMockCallArg(
-        mocks.callGatewayLeastPrivilege,
-        "scheduled Gateway action",
-      );
-      expect(readRecordField(gatewayCall, "params", "scheduled Gateway params")).toMatchObject({
-        channel: "gatewaychat",
-        action: "edit",
-        channelInferred: true,
-      });
-      expect(handleActionEntry).not.toHaveBeenCalled();
     },
   );
-
-  it("honors namespace restrictions at the ordinary Gateway receiver without a turn capability", async () => {
-    await withOpenClawTestState({ prefix: "gateway-namespace-provenance-" }, async () => {
-      const handleAction = vi.fn(async () => jsonResult({ ok: true }));
-      const gatewayPlugin = createGatewayActionPlugin({
-        pluginId: "gatewaychat",
-        label: "Gateway Chat",
-        blurb: "Gateway Chat native namespace test plugin.",
-        actions: ["edit"],
-        messaging: {
-          targetPrefixes: ["g"],
-          normalizeTarget: (raw) => (raw.startsWith("@") ? raw : `@${raw}`),
-          targetResolver: { looksLikeId: () => true },
-        },
-        handleAction,
-      });
-      gatewayPlugin.directory = {
-        listPeers: async () => [{ kind: "user", id: "recipient-1", name: "g" }],
-      };
-      setTestPlugin(gatewayPlugin, "gatewaychat");
-      const cfg = createEnabledMessageActionConfig("gatewaychat");
-      const { sendHandlers } = await import("../../gateway/server-methods/send.js");
-      const messageAction = sendHandlers["message.action"];
-      if (!messageAction) {
-        throw new Error("message.action handler is unavailable");
-      }
-      const invoke = async (to: string, allowNativeChannelNamespace?: false) => {
-        const respond = vi.fn();
-        await messageAction({
-          params: {
-            channel: "gatewaychat",
-            action: "edit",
-            params: { to, messageId: "message-1", message: "updated" },
-            conversationReadOrigin: "direct-operator",
-            ...(allowNativeChannelNamespace === false ? { channelInferred: true } : {}),
-            idempotencyKey: `namespace-${to}-${allowNativeChannelNamespace ?? "native"}`,
-          },
-          respond,
-          context: { ...makeContext(), getRuntimeConfig: () => cfg },
-          req: { type: "req", id: "namespace-provenance", method: "message.action" },
-          client: null,
-          isWebchatConnect: () => false,
-        });
-        return respond;
-      };
-      const respond = await invoke("gatewaychat", false);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          message: expect.stringContaining("does not specify a destination"),
-        }),
-        expect.anything(),
-      );
-      expect(handleAction).not.toHaveBeenCalled();
-
-      const directoryResponse = await invoke("g", false);
-      expect(directoryResponse).toHaveBeenCalledWith(true, { ok: true }, undefined, {
-        channel: "gatewaychat",
-      });
-      expect(handleAction).toHaveBeenLastCalledWith(
-        expect.objectContaining({
-          params: expect.objectContaining({ to: "@recipient-1" }),
-        }),
-      );
-
-      const nativeResponse = await invoke("gatewaychat");
-      expect(nativeResponse).toHaveBeenCalledWith(true, { ok: true }, undefined, {
-        channel: "gatewaychat",
-      });
-      expect(handleAction).toHaveBeenCalledTimes(2);
-    });
-  });
 
   it("makes required queue persistence bypass gateway plugin dispatch", async () => {
     setTestPlugin(

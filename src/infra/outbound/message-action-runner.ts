@@ -660,7 +660,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             toolContext: input.toolContext,
             agentId: resolvedAgentId,
             deferExternalTargetResolution: defersExternalTargetResolution,
-            allowNativeChannelNamespace: route.allowNativeChannelNamespace,
+            channelInferred: route.channelInferred,
             plugin: channelPlugin,
           });
 
@@ -684,7 +684,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             gateway,
             input: {
               ...input,
-              allowNativeChannelNamespace: route.allowNativeChannelNamespace,
+              channelInferred: route.channelInferred,
               assertDirectAdapterHandoff:
                 route.assertTargetAuthorityCurrent ?? input.assertDirectAdapterHandoff,
             },

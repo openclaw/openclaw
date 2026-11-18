@@ -208,7 +208,7 @@ describe("resolveMessageChannelSelection", () => {
   it("resolves the fallback channel", async () => {
     await expect(
       resolveMessageChannelSelection({ cfg: {} as never, fallbackChannel: "gamma" }),
-    ).resolves.toMatchObject({ channel: "gamma", source: "tool-context-fallback" });
+    ).resolves.toMatchObject({ channel: "gamma" });
   });
 
   it.each([
@@ -277,7 +277,7 @@ describe("resolveMessageChannelSelection", () => {
     if (scenario.expected) {
       await expect(resolveMessageChannelSelection(params)).resolves.toMatchObject({
         channel: "delta",
-        source: "single-configured",
+        channelInferred: true,
       });
     } else {
       await expect(resolveMessageChannelSelection(params)).rejects.toThrow(

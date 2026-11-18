@@ -80,28 +80,9 @@ export function runResolveOutboundTargetCoreTests(): void {
     });
 
     it("preserves a plugin-native direct target that matches its channel id", async () => {
-      setActivePluginRegistry(
-        createTargetsTestRegistry([
-          createTestChannelPlugin({
-            id: "irc",
-            label: "IRC",
-            outbound: {
-              deliveryMode: "direct",
-              resolveTarget: ({ to }) =>
-                to
-                  ? { ok: true as const, to: to.trim() }
-                  : { ok: false as const, error: new Error("target required") },
-            },
-            messaging: {
-              targetPrefixes: ["irc"],
-            },
-          }),
-        ]),
-      );
-
-      const res = await resolveOutboundTarget({ channel: "irc", to: "irc", mode: "explicit" });
-
-      expect(res).toMatchObject({ ok: true, to: "irc" });
+      expect(
+        await resolveOutboundTarget({ channel: "alpha", to: "alpha", mode: "explicit" }),
+      ).toMatchObject({ ok: true, to: "alpha" });
     });
 
     it.each(["tg:self"])(

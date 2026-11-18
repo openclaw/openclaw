@@ -271,7 +271,7 @@ export async function resolveDeliveryTarget(
   });
 
   let fallbackChannel: string | undefined;
-  let allowNativeChannelNamespace = requestedChannel !== "last";
+  let channelInferred: true | undefined = requestedChannel === "last" ? true : undefined;
   let channelResolutionError: Error | undefined;
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
@@ -283,7 +283,7 @@ export async function resolveDeliveryTarget(
         const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
         const selection = await resolveMessageChannelSelection({ cfg });
         fallbackChannel = selection.channel;
-        allowNativeChannelNamespace = selection.source !== "single-configured";
+        channelInferred = selection.channelInferred;
       } catch (err) {
         const detail = formatErrorMessage(err);
         channelResolutionError = new Error(
@@ -374,7 +374,7 @@ export async function resolveDeliveryTarget(
         accountId,
         mode,
         allowFrom: effectiveAllowFrom,
-        allowNativeChannelNamespace,
+        channelInferred,
       });
       if (!currentTargetResolution.ok) {
         if (
@@ -417,7 +417,7 @@ export async function resolveDeliveryTarget(
     accountId,
     mode,
     allowFrom: effectiveAllowFrom,
-    allowNativeChannelNamespace,
+    channelInferred,
   });
   const namespaceTarget = docked.ok ? docked.namespaceTarget : undefined;
   const preResolvedRouteTargetCandidate = docked.ok && namespaceTarget ? docked.to : toCandidate;

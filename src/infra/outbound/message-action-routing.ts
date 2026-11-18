@@ -181,7 +181,7 @@ type PreparedMessageRoute = {
   accountId?: string | null;
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
-  allowNativeChannelNamespace: boolean;
+  channelInferred?: true;
   assertReadAuthorityCurrent?: () => void;
   assertTargetAuthorityCurrent?: () => void;
 };
@@ -351,10 +351,7 @@ export async function prepareMessageRoute(params: {
     accountId,
     dryRun,
     defersExternalTargetResolution,
-    // A sole configured channel was inferred without destination intent. Keep its
-    // own namespace ambiguous unless an exact directory destination proves otherwise.
-    allowNativeChannelNamespace:
-      input.allowNativeChannelNamespace ?? selection.source !== "single-configured",
+    channelInferred: input.channelInferred ?? selection.channelInferred,
     assertReadAuthorityCurrent,
     assertTargetAuthorityCurrent,
   };
@@ -369,7 +366,7 @@ export async function resolveMessageTarget(params: {
   toolContext?: ChannelThreadingToolContext;
   agentId?: string | null;
   deferExternalTargetResolution?: boolean;
-  allowNativeChannelNamespace?: boolean;
+  channelInferred?: true;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedMessagingTarget | undefined> {
   let resolvedTarget: ResolvedMessagingTarget | undefined;
@@ -384,8 +381,7 @@ export async function resolveMessageTarget(params: {
         channel: params.channel,
         input,
         accountId: params.accountId ?? undefined,
-        allowNativeChannelNamespace: params.allowNativeChannelNamespace,
-        nativeTargetMode: "explicit",
+        channelInferred: params.channelInferred,
         plugin: params.plugin,
         ...(key === "channelId" ? { preferredKind: "group" as const } : {}),
       });

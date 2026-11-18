@@ -82,29 +82,19 @@ export function resolveTargetPrefixedChannel(raw?: string | null): string | unde
 export function resolveBareTargetChannelNamespace(params: {
   raw?: string | null;
   plugin?: ChannelPlugin;
-}): { namespace: string; destinationPrefix: string } | undefined {
+}): string | undefined {
   const raw = normalizeOptionalLowercaseString(params.raw);
   const plugin = params.plugin;
   if (!raw || !plugin) {
     return undefined;
   }
-  const namespace = [
+  return [
     plugin.id,
     ...(plugin.meta?.aliases ?? []),
     ...(plugin.messaging?.targetPrefixes ?? []),
-  ]
-    .map((candidate) => normalizeOptionalLowercaseString(candidate))
-    .find((candidate) => candidate === raw);
-  if (!namespace) {
-    return undefined;
-  }
-  const destinationPrefix = (plugin.messaging?.targetPrefixes ?? [])
-    .map((candidate) => normalizeOptionalLowercaseString(candidate))
-    .find((candidate): candidate is string => Boolean(candidate));
-  return {
-    namespace,
-    destinationPrefix: destinationPrefix ?? plugin.id,
-  };
+  ].some((candidate) => normalizeOptionalLowercaseString(candidate) === raw)
+    ? raw
+    : undefined;
 }
 
 /** Rejects targets whose plugin-owned prefix belongs to a different selected channel. */

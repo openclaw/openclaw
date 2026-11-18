@@ -34,7 +34,7 @@ export type ResolveOutboundTargetParams = {
   cfg?: OpenClawConfig;
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
-  allowNativeChannelNamespace?: boolean;
+  channelInferred?: true;
 };
 
 /**
@@ -95,7 +95,7 @@ export async function resolveOutboundTargetWithPlugin(params: {
       accountId: params.target.accountId,
       allowFrom,
       nativeTargetMode: params.target.mode,
-      allowNativeChannelNamespace: params.target.allowNativeChannelNamespace,
+      channelInferred: params.target.channelInferred,
       plugin,
     }).catch((err: unknown) => ({
       ok: false as const,

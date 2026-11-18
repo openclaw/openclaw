@@ -156,7 +156,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
       const result = await resolve(input, {
         plugin,
-        allowNativeChannelNamespace: false,
+        channelInferred: true,
         unknownTargetMode: "normalized",
       });
 
@@ -173,7 +173,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     mocks.listGroups.mockResolvedValue([{ kind: "group", id: "room-1", name: "richchat-news" }]);
     mocks.listPeers.mockResolvedValue([{ kind: "user", id: "peer-1", name: "richchat" }]);
 
-    const result = await resolve("richchat", { allowNativeChannelNamespace: false });
+    const result = await resolve("richchat", { channelInferred: true });
 
     expect(result).toMatchObject({
       ok: true,
@@ -205,7 +205,7 @@ describe("resolveMessagingTarget (directory fallback)", () => {
 
       const result = await resolve("richchat", {
         preferredKind,
-        allowNativeChannelNamespace: false,
+        channelInferred: true,
       });
 
       expect(result).toMatchObject(
