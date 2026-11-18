@@ -784,6 +784,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
   it.each([
     ["rate_limit", undefined, sonnet, sonnet, undefined, false],
     ["model_not_found", "model_not_found", sonnet, sonnet, now + 30_000, false],
+    ["model_not_found", "model_not_found", "gpt-4.1", "gpt-4.1", now + 30_000, false],
     ["model_not_found", undefined, sonnet, sonnet, undefined, true], // #116464
     ["rate_limit", "rate_limit", "gpt-4.1", undefined, undefined, false],
     ["auth", "rate_limit", "claude-opus-4.6", undefined, undefined, false],
@@ -814,6 +815,51 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
           [sonnet, "gpt-4.1"].map((id) => isProfileInCooldown(store, copilotId, now, id)),
         ).toEqual([true, false]);
       }
+    },
+  );
+
+  it("keeps a healthy fallback available after two different missing models", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const store = makeStore();
+    mockLockedUpdateForStore(store);
+
+    for (const modelId of ["missing-primary", "missing-fallback"]) {
+      await markAuthProfileFailure({
+        store,
+        profileId: anthropicId,
+        reason: "model_not_found",
+        modelId,
+      });
+      expect(isProfileInCooldown(store, anthropicId, now, modelId)).toBe(true);
+      expect(isProfileInCooldown(store, anthropicId, now, "healthy-fallback")).toBe(false);
+    }
+    expect(store.usageStats?.[anthropicId]).toMatchObject({
+      cooldownReason: "model_not_found",
+      cooldownModel: "missing-fallback",
+      cooldownUntil: now + 30_000,
+      errorCount: 2,
+      failureCounts: { model_not_found: 2 },
+    });
+  });
+
+  it.each(["auth", "rate_limit", "model_not_found"] as const)(
+    "does not narrow an active profile-wide %s window after a model miss",
+    async (cooldownReason) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(now);
+      const store = makeStore({
+        [anthropicId]: { cooldownReason, cooldownUntil: now + 30_000 },
+      });
+      mockLockedUpdateForStore(store);
+      await markAuthProfileFailure({
+        store,
+        profileId: anthropicId,
+        reason: "model_not_found",
+        modelId: "missing-model",
+      });
+      expect(store.usageStats?.[anthropicId]?.cooldownModel).toBeUndefined();
+      expect(isProfileInCooldown(store, anthropicId, now, "healthy-model")).toBe(true);
     },
   );
 });
