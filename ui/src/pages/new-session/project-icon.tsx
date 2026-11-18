@@ -6,6 +6,7 @@ import { ProjectFolderIcon } from "./project-folder-icon.tsx";
 
 /** A registered project's own icon, served by the Gateway's workspace icon scanner. */
 export function ProjectIcon(props: { context: ApplicationContext | undefined; projectId: string }) {
+  const fallbackIcon = <ProjectFolderIcon />;
   const source = createMemo(() => {
     const context = props.context;
     return context
@@ -27,7 +28,7 @@ export function ProjectIcon(props: { context: ApplicationContext | undefined; pr
           authTokens={current().authTokens}
           authReady={current().authReady}
           connectionId={current().connectionId}
-          fallbackIcon={<ProjectFolderIcon />}
+          fallbackIcon={fallbackIcon}
         />
       )}
     </Show>

@@ -48,7 +48,12 @@ function ProjectRowIcon(props: Parameters<typeof ProjectIcon>[0]) {
     },
   );
   return (
-    <span class="project-picker-icon" ref={glyph}>
+    <span
+      class="project-picker-icon"
+      ref={(element) => {
+        glyph = element;
+      }}
+    >
       <Show when={visible()} fallback={<ProjectFolderIcon />}>
         <ProjectIcon context={props.context} projectId={props.projectId} />
       </Show>
