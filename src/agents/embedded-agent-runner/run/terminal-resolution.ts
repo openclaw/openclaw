@@ -105,11 +105,10 @@ export function resolveSettledTurnFinalizationRequest(input: {
   settledTurnFinalizationAvailable: boolean;
   replyDeliveryState?: ReplyDeliveryState;
 }): string | null {
-  const terminalAssistant = resolveCurrentAttemptAssistant(input.attempt);
   if (
     !input.settledTurnFinalizationAvailable ||
     resolveReplyExpectation(input.runParams) === "optional" ||
-    isTerminalAssistantError(terminalAssistant) ||
+    isTerminalAssistantError(resolveCurrentAttemptAssistant(input.attempt)) ||
     (input.replyDeliveryState ?? "missing") !== "missing"
   ) {
     return null;
