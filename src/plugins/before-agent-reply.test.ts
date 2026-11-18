@@ -147,22 +147,38 @@ describe("before_agent_reply runner boundary", () => {
     );
   });
 
-  it("keeps a nested run from checkpointing its parent admission", async () => {
-    const beforeDispatch = vi.fn(async () => undefined);
-    const afterDispatch = vi.fn(async (result) => result);
-    hookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
-      if (context.runId === "parent") {
-        await runHook("child");
-      }
-      return undefined;
-    });
+  it.each(["attribution", "hook"] as const)(
+    "keeps a nested run during %s from checkpointing its parent admission",
+    async (stage) => {
+      const beforeDispatch = vi.fn(async () => undefined);
+      const checkpoints: string[] = [];
+      const afterDispatch = vi.fn(async (result) => {
+        checkpoints.push(result?.reply?.text ?? "missing reply");
+        return result;
+      });
+      hookRunner.runBeforeAgentReply.mockImplementation(async (_event, context) => {
+        if (stage === "hook" && context.runId === "parent") {
+          await runHook("child");
+        }
+        return { handled: true, reply: { text: context.runId } };
+      });
 
-    await withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () => runHook("parent"));
+      await withBeforeAgentReplyObserver({ beforeDispatch, afterDispatch }, () =>
+        runHook("parent", {
+          awaitSessionDiffBaseline: async () => {
+            if (stage === "attribution") {
+              await runHook("child");
+            }
+          },
+        }),
+      );
 
-    expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
-    expect(beforeDispatch).toHaveBeenCalledOnce();
-    expect(afterDispatch).toHaveBeenCalledOnce();
-  });
+      expect(hookRunner.runBeforeAgentReply).toHaveBeenCalledTimes(2);
+      expect(beforeDispatch).toHaveBeenCalledOnce();
+      expect(afterDispatch).toHaveBeenCalledOnce();
+      expect(checkpoints).toEqual(["parent"]);
+    },
+  );
 
   it("defers its own hook until normal execution resumes without consuming the claim", async () => {
     let privatePreparation = true;
