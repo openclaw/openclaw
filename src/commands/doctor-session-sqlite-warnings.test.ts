@@ -1,7 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { appendTranscriptEvent, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  loadTranscriptEventsSync,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -12,6 +16,7 @@ import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-i
 import {
   collectSessionSqliteMigrationFindings,
   formatSessionSqliteMigrationWarnings,
+  isResolvedSessionSqliteMigrationWarning,
   readSessionSqliteMigrationWarnings,
 } from "./doctor-session-sqlite-warnings.js";
 import { useDoctorSessionSqliteTestFixture } from "./doctor-session-sqlite.test-support.js";
@@ -34,9 +39,9 @@ it("revalidates completed migration findings without changing recovery evidence"
         { sessionId, updatedAt: 1 },
       );
     }
-    await appendTranscriptEvent(
+    await appendTranscriptMessage(
       { ...scope, sessionId: "live" },
-      { type: "session", id: "live", version: 3 },
+      { message: { role: "user", content: "verified mismatch" } },
     );
     await closeOpenClawAgentDatabasesAsync();
     const sqlitePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
@@ -53,8 +58,19 @@ it("revalidates completed migration findings without changing recovery evidence"
       sessionKey: scope.sessionKey,
       message: `${file(name)}: SyntaxError: invalid JSON. Only the readable prefix can be imported; the original remains protected for recovery.`,
     });
+    const mismatch = (name: string, headerId: string) => ({
+      code: "transcript_filename_mismatch",
+      message: `${file(name)}: Header session ID ${headerId} differs from filename ID other; using the header identity and preserving the original.`,
+    });
     fs.writeFileSync(file("broken.jsonl"), "{");
     fs.writeFileSync(file("repaired.jsonl"), "{}\n");
+    {
+      const [header, ...rows] = loadTranscriptEventsSync({ ...scope, sessionId: "live" });
+      fs.writeFileSync(
+        file("mismatch-verified.jsonl"),
+        [JSON.stringify(header), ...rows.map((event) => JSON.stringify(event)), ""].join("\n"),
+      );
+    }
     const oldMissing = {
       ...missing(scope.sessionKey),
       message: `Transcript file is missing: ${file("older-generation.jsonl")}`,
@@ -63,6 +79,7 @@ it("revalidates completed migration findings without changing recovery evidence"
       ...["agent:main:empty", "agent:main:main", "legacy"].map(missing),
       oldMissing,
       malformed("broken.jsonl"),
+      mismatch("mismatch-unverified.jsonl", "absent"),
       { code: "historical_transcript_deferred", message: "Archive remains unverified" },
     ];
     const issues = [
@@ -72,13 +89,38 @@ it("revalidates completed migration findings without changing recovery evidence"
       missing(scope.sessionKey),
       missing("agent:main:pruned"),
       malformed("repaired.jsonl"),
+      mismatch("mismatch-verified.jsonl", "live"),
       ...unresolved,
     ];
+    const archiveDir = path.join(
+      path.dirname(state.sessionsDir()),
+      "session-sqlite-import-archive",
+    );
+    fs.mkdirSync(archiveDir, { recursive: true });
+    const archivedMismatch = path.join(archiveDir, "mismatch-verified.jsonl");
+    fs.renameSync(file("mismatch-verified.jsonl"), archivedMismatch);
     const { manifest, manifestPath } = createSessionSqliteMigrationRun(state.env, [
       { agentId: "main", sqlitePath, storePath },
     ]);
     manifest.completedAt = manifest.failedAt = manifest.startedAt;
-    Object.assign(manifest.targets[0]!, { issues, validationBeforeArchive: "passed" });
+    Object.assign(manifest.targets[0]!, {
+      issues,
+      validationBeforeArchive: "passed",
+      plannedMoves: [
+        {
+          kind: "transcript",
+          sourcePath: file("mismatch-verified.jsonl"),
+          archivePath: archivedMismatch,
+        },
+      ],
+      completedMoves: [
+        {
+          kind: "transcript",
+          sourcePath: file("mismatch-verified.jsonl"),
+          archivePath: archivedMismatch,
+        },
+      ],
+    });
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
     const original = fs.readFileSync(manifestPath);
     const warnings = readSessionSqliteMigrationWarnings(state.env);
@@ -92,6 +134,45 @@ it("revalidates completed migration findings without changing recovery evidence"
       ].map((issue) => `${storePath}: [${issue.code}] ${issue.message}`),
     );
     expect(fs.readFileSync(manifestPath)).toEqual(original);
+    expect(
+      isResolvedSessionSqliteMigrationWarning(
+        `${storePath}: [transcript_filename_mismatch] ${mismatch("mismatch-verified.jsonl", "live").message}`,
+        state.env,
+      ),
+    ).toBe(true);
+    expect(
+      isResolvedSessionSqliteMigrationWarning(
+        `${storePath}: [transcript_filename_mismatch] ${mismatch("mismatch-unverified.jsonl", "absent").message}`,
+        state.env,
+      ),
+    ).toBe(false);
+    expect(
+      isResolvedSessionSqliteMigrationWarning(
+        mismatch("mismatch-verified.jsonl", "live").message,
+        state.env,
+      ),
+    ).toBe(true);
+
+    const { createUpdateRun, getUpdateRun, recordUpdateRunStep } =
+      await import("../infra/update-run-ledger.js");
+    const { finishUpdateRun } = await import("../infra/update-run-write.js");
+    const savedRun = createUpdateRun(
+      { trigger: "cli", target: { kind: "package" } },
+      { env: state.env },
+    );
+    const savedDetail = mismatch("mismatch-verified.jsonl", "live").message;
+    recordUpdateRunStep(
+      savedRun.runId,
+      { step: "warning:doctor:0", status: "completed", detail: savedDetail },
+      { env: state.env },
+    );
+    finishUpdateRun(savedRun.runId, { status: "succeeded" }, { env: state.env });
+    const persistedDetail =
+      getUpdateRun(savedRun.runId, { env: state.env })?.steps.find(
+        (step) => step.step === "warning:doctor:0",
+      )?.detail ?? "";
+    expect(persistedDetail).not.toBe(savedDetail);
+    expect(isResolvedSessionSqliteMigrationWarning(persistedDetail, state.env)).toBe(true);
 
     await closeOpenClawAgentDatabasesAsync();
     fs.renameSync(sqlitePath, `${sqlitePath}.saved`);

@@ -2,7 +2,10 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import type { ChannelStatusIssue } from "../../channels/plugins/types.public.js";
-import { readSessionSqliteMigrationWarnings } from "../../commands/doctor-session-sqlite-warnings.js";
+import {
+  isResolvedSessionSqliteMigrationWarning,
+  readSessionSqliteMigrationWarnings,
+} from "../../commands/doctor-session-sqlite-warnings.js";
 import { collectNodeRuntimeFindings } from "../../commands/node-runtime-diagnostics.js";
 import {
   formatUpdateAvailableHint,
@@ -654,7 +657,12 @@ async function inspectUpdateStatus(
       }
       const report = renderUpdateRunReport(
         run,
-        run.status === "failed" ? { currentHealth: currentRunHealth } : {},
+        run.status === "failed"
+          ? {
+              currentHealth: currentRunHealth,
+              isResolvedWarning: isResolvedSessionSqliteMigrationWarning,
+            }
+          : { isResolvedWarning: isResolvedSessionSqliteMigrationWarning },
       );
       const historical =
         currentRunHealth?.kind === "responding"

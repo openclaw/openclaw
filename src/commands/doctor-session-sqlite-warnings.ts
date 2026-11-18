@@ -4,7 +4,9 @@ import { extractGeneratedTranscriptSessionId } from "../config/sessions/generate
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { readCanonicalSessionMainKey } from "../config/sessions/session-canonical-key.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { HealthFinding } from "../flows/health-checks.js";
+import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import {
   formatMigrationWarningSummary,
@@ -17,6 +19,7 @@ import {
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { countTranscriptEventsForPath } from "../infra/session-sqlite-migration-readers.js";
+import { verifyTranscriptEvents } from "../infra/session-sqlite-transcript-verification.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { resolveActiveSqliteTranscriptFile } from "./doctor-session-sqlite-transcript-file.js";
@@ -30,7 +33,53 @@ const TRANSCRIPT_FINDINGS = new Map([
   ],
   ["transcript_missing", /^Transcript file is missing: (.+)$/s],
   ["transcript_malformed", /^(.+\.jsonl): (?:SyntaxError|Error|TypeError|RangeError)\b/s],
+  [
+    "transcript_filename_mismatch",
+    /^(.+): Header session ID [^\s]+ differs from filename ID [^\s]+; using the header identity and preserving the original\.$/s,
+  ],
 ]);
+
+const HEADER_MISMATCH_HEADER_ID =
+  /Header session ID ([^\s]+) differs from filename ID [^\s]+; using the header identity and preserving the original\.$/s;
+
+function resolveMismatchArchivePath(
+  target: SessionSqliteMigrationTargetManifest,
+  originalPath: string,
+): string {
+  const source = path.resolve(originalPath);
+  for (const move of [...target.completedMoves, ...target.plannedMoves]) {
+    if (
+      (move.kind === "transcript" || move.kind === "unreferenced-jsonl") &&
+      path.resolve(move.sourcePath) === source
+    ) {
+      return move.archivePath;
+    }
+  }
+  return originalPath;
+}
+
+function verifyMismatchSource(
+  target: SessionSqliteMigrationTargetManifest,
+  originalPath: string,
+  headerId: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const sourcePath = resolveMismatchArchivePath(target, originalPath);
+  try {
+    const read = withOpenClawAgentDatabaseReadOnly(
+      (database) =>
+        verifyTranscriptEvents(
+          database.db,
+          { path: sourcePath, sessionId: headerId, originalPath },
+          "contained",
+        ),
+      { agentId: target.agentId, path: target.sqlitePath, env },
+    );
+    return Boolean(read.found && read.value && read.value.missingEvents === 0);
+  } catch {
+    return false;
+  }
+}
 
 function currentMigrationIssues(
   target: SessionSqliteMigrationTargetManifest,
@@ -106,6 +155,25 @@ function currentMigrationIssues(
           const file = pattern?.exec(issue.message)?.[1];
           if (!file || !path.isAbsolute(file)) {
             return true;
+          }
+          if (issue.code === "transcript_filename_mismatch") {
+            const headerId = HEADER_MISMATCH_HEADER_ID.exec(issue.message)?.[1];
+            if (!headerId) {
+              return true;
+            }
+            try {
+              // Archived originals move to the migration archive; verify the mapped
+              // source while preserving the original path for normalization.
+              const sourcePath = resolveMismatchArchivePath(target, file);
+              const verification = verifyTranscriptEvents(
+                database.db,
+                { path: sourcePath, sessionId: headerId, originalPath: file },
+                "contained",
+              );
+              return !(verification && verification.missingEvents === 0);
+            } catch {
+              return true;
+            }
           }
           if (issue.code === "active_sqlite_transcript_jsonl") {
             return Boolean(
@@ -290,4 +358,88 @@ export function collectSessionSqliteMigrationFindings(
     });
   }
   return findings;
+}
+
+/**
+ * Saved update reports replay their recorded warning text. Drop a
+ * `transcript_filename_mismatch` warning only when the current store and
+ * source verification prove it resolved; keep the stored record untouched.
+ */
+export function isResolvedSessionSqliteMigrationWarning(
+  message: string,
+  env = process.env,
+): boolean {
+  const stateDir = resolveStateDir(env);
+  const homes = [
+    ...new Set(
+      [resolveRequiredHomeDir(env), env.HOME, env.USERPROFILE]
+        .map((value) => value?.trim())
+        .filter((value): value is string => Boolean(value)),
+    ),
+  ];
+  const variants = (homes.length > 0 ? homes : [""]).map((home) =>
+    message
+      .split("$OPENCLAW_STATE_DIR")
+      .join(stateDir)
+      .split("~/")
+      .join(home ? `${home}/` : "~/")
+      .split("~\\")
+      .join(home ? `${home}\\` : "~\\"),
+  );
+  for (const variant of variants) {
+    if (isResolvedWarningVariant(variant, env)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isResolvedWarningVariant(message: string, env: NodeJS.ProcessEnv): boolean {
+  const prefixed = /^(.+?): \[transcript_filename_mismatch\] ([\s\S]+)$/u.exec(message.trim());
+  const detail = prefixed?.[2] ?? message.trim();
+  const storePath = prefixed?.[1];
+  const file = TRANSCRIPT_FINDINGS.get("transcript_filename_mismatch")?.exec(detail)?.[1];
+  const headerId = HEADER_MISMATCH_HEADER_ID.exec(detail)?.[1];
+  if (!file || !headerId) {
+    return false;
+  }
+  const seen = new Set<string>();
+  try {
+    for (const manifestPath of listSessionSqliteMigrationManifestPaths(env)) {
+      const manifest = readSessionSqliteMigrationManifest(manifestPath);
+      if (!manifest?.completedAt) {
+        continue;
+      }
+      for (const target of manifest.targets) {
+        if (storePath !== undefined && target.storePath !== storePath) {
+          continue;
+        }
+        const key = JSON.stringify([target.agentId, target.storePath, target.sqlitePath]);
+        if (seen.has(key)) {
+          continue;
+        }
+        seen.add(key);
+        if (
+          !target.issues.some(
+            (issue) => issue.code === "transcript_filename_mismatch" && issue.message === detail,
+          )
+        ) {
+          continue;
+        }
+        if (
+          currentMigrationIssues(target, env).some(
+            (issue) => issue.code === "transcript_filename_mismatch" && issue.message === detail,
+          )
+        ) {
+          return false;
+        }
+        if (verifyMismatchSource(target, file, headerId, env)) {
+          return true;
+        }
+      }
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
