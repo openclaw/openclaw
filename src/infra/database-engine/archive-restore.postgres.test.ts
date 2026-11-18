@@ -409,7 +409,14 @@ describe.skipIf(!connection)("whole-archive PostgreSQL restore", () => {
                 resetDatabaseEngineSelectionForTest();
                 clearRuntimeConfigSnapshot();
                 if (scenario !== "compatibility" && scenario !== "override-cleanup") {
-                  const targetPath = state.path("restored");
+                  const aliasedParent = state.path("restore-alias");
+                  if (scenario === "all" && process.platform !== "win32") {
+                    await fs.symlink(state.root, aliasedParent, "dir");
+                  }
+                  const targetPath =
+                    scenario === "all" && process.platform !== "win32"
+                      ? path.join(aliasedParent, "restored")
+                      : state.path("restored");
                   const restoredConfig = path.join(
                     targetPath,
                     buildBackupArchivePath(backup.archiveRoot, configSourcePath),
