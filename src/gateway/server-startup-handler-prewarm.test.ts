@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostMemory from "../infra/host-memory.js";
 import {
   resetGatewayWorkAdmission,
   markGatewayRestartDraining,
@@ -367,15 +368,10 @@ it("refreshes dependency templates between sessions without overlapping preparat
   }
 });
 
-it.each([
-  [0, 0, false],
-  [1000, 201, false],
-  [1000, 200, true],
-] as const)(
-  "reserves constrained memory for requests (limit: %i, available: %i)",
-  async (limit, available, skipped) => {
-    vi.spyOn(process, "constrainedMemory").mockReturnValue(limit);
-    vi.spyOn(process, "availableMemory").mockReturnValue(available);
+it.each([false, true])(
+  "reserves constrained memory for requests (low memory: %s)",
+  async (skipped) => {
+    vi.spyOn(hostMemory, "isConstrainedProcessLowOnMemory").mockReturnValue(skipped);
     const handles = scheduleGatewayPrewarm(prewarmOptions());
     sidecars.push(...handles);
     expect(handles).toHaveLength(skipped ? 0 : 2);

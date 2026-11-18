@@ -315,16 +315,17 @@ export function createAdmittedSessionSharingAuthority(params: {
   // The creation recorder owns the absent-to-created handoff; only rollover diverges.
   let admittedTarget = target;
   let isAdoptingEffectActive: (() => boolean) | undefined;
+  let effectTarget: ReturnType<typeof captureSessionTarget> | undefined;
   const bindCurrentEffect = () => {
     if (!target?.resolved) {
       return;
     }
     bindSessionEffectTransition(
-      captureSessionTarget({
+      (effectTarget ??= captureSessionTarget({
         storeScope: target.resolved.storePath,
         sessionKey: target.resolved.canonicalKey,
         agentId: target.resolved.agentId,
-      }),
+      })),
       target,
       ({ previous, current }, isActive) => {
         if (

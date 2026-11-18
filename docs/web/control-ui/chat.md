@@ -1197,13 +1197,14 @@ to read it in **Review**. The card shows up to 400 lines and rereads the file
 each time it opens; the full-file view includes all lines. Press Escape to
 dismiss it.
 
-Clipboard text stays in the message input, including long pastes into an existing
-draft, and reaches the model as your message. Uploaded files retain their
-external-content boundary.
+A paste longer than 1,000 characters into a draft that already has text appears
+as a file-sized card in the composer. The card is only a composer view: when you
+send, its exact text is appended to your message, as **Show in text field**
+would, so the model receives it as your own words with no file upload.
 
-Saved pasted-text attachments from earlier clients still appear as a file-sized
-card in the composer and a compact chip in the transcript. Their labels show the
-first 30 characters of a plain-text excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts
+The card label shows the first 30 characters of a plain-text excerpt, with HTML
+and Markdown formatting removed. Pasted-text attachments sent by earlier clients
+appear as a compact chip in the transcript with the same label. Empty or unavailable excerpts
 show **Pasted text**. In the transcript, chips sit above the text bubble alongside
 other attachments; multiple chips share a row and wrap when needed. Click the
 composer excerpt or icon, or a transcript chip, to open the existing attachment

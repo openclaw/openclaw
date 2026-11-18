@@ -22,22 +22,90 @@ const STABLE_114_D843_CI_FAILURES = new Map([
   ["checks-node-agentic-gateway-server-isolated-4", "checks-node-core-test-nondist-shard"],
 ]);
 
+// Exact mobile job names and their CI gate keys; no Gateway or desktop jobs.
+const EXTENDED_1033_MOBILE_JOBS = new Map([
+  ["ios-screenshots-iphone", "ios-screenshot-shard"],
+  ["ios-screenshots-ipad-13", "ios-screenshot-shard"],
+  ["ios-screenshots", "ios-screenshot-capture"],
+  ["ios-screenshot-evidence", "ios-screenshot-evidence"],
+  ["ios-build (release)", "ios-build"],
+  ["ios-build (tests)", "ios-build"],
+  ["ios-build (smoke)", "ios-build"],
+  ["ios-release-e2e / qualify", "ios-release-e2e"],
+  ["android-release-e2e / qualify", "android-release-e2e"],
+  ["android-test-play", "android"],
+  ["android-test-third-party", "android"],
+  ["android-test-wear", "android"],
+  ["android-build-play", "android"],
+  ["android-build-wear", "android"],
+  ["android-ktlint", "android"],
+  ["android-screenshots", "android-screenshots"],
+  ["android-access-native (4096, google_apis)", "android-access-native"],
+  ["android-access-native (16384, google_apis_ps16k)", "android-access-native"],
+]);
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
-  ...["ios-screenshots-iphone", "ios-screenshots-ipad-13"].map((jobName) => ({
+  {
+    targetVersion: "2026.11.6",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized the 2026.11.6 Kova waiver on " +
+      "2026-11-18 at 06:30 UTC while requiring continued cold-turn investigation. " +
+      "The prior cold-turn comparison showed a 13341 ms median versus 6515 ms " +
+      "on 2026.11.5; transient noise or a causal regression is not established. " +
+      "This release-wide grant accepts only the named Kova threshold failures, " +
+      "not evidence of a fix or non-regression. Preserve raw measurements and " +
+      "required execution; no threshold changes or not-run exemption. Other " +
+      "jobs, missing or cancelled evidence, build/setup, crashes, correctness, " +
+      "isolation, data integrity, install/update and publication gates remain blocking.",
+  },
+  {
+    targetVersion: "2026.10.33",
+    childRole: "releaseChecksCandidate",
+    jobName: "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    reason:
+      "Dallin Romney explicitly waived Telegram package recovery for 2026.10.33 " +
+      "on 2026-11-17 at 15:06 UTC after FRV 44090632483/1, job 134090325822. " +
+      "This accepts only the named terminal failed job across candidates and attempts; " +
+      "its underlying onboarding error remains undiagnosed, not fixed or proven flaky. " +
+      "Preserve execution and raw evidence. Other jobs, missing or cancelled evidence, " +
+      "artifact integrity, install/update gates and publication remain blocking.",
+  },
+  {
+    targetVersion: "2026.10.33",
+    childRole: "productPerformance",
+    jobName: "Kova mock provider performance",
+    reason:
+      "Dallin Romney explicitly authorized all performance/Kova failures for " +
+      "2026.10.33 on 2026-11-17 at 02:49 UTC after reviewing FRV 43995308737/1, " +
+      "child 43995795283/1 and the retained 2026.11.4 comparison. This accepts " +
+      "the observed RSS, CPU, event-loop and pre-provider latency failures, " +
+      "including higher many-plugin CPU; lower Gateway RSS is not a claim of " +
+      "overall non-regression. This release-wide grant covers the named terminal " +
+      "failed Kova job across candidates and attempts. Preserve raw results and " +
+      "required execution; no threshold changes or not-run exemption. Other " +
+      "jobs, missing or cancelled evidence, native tests, integrity, install/update " +
+      "and publication gates remain blocking.",
+  },
+  ...[...EXTENDED_1033_MOBILE_JOBS.keys()].map((jobName) => ({
     targetVersion: "2026.10.33",
     childRole: "normalCi",
     jobName,
     reason:
-      "Dallin Romney authorized an iOS-only exception on 2026-11-16 at 22:14 UTC " +
-      "because this extended-stable release does not publish iOS. The observed " +
-      "screenshot jobs failed packaging evidence due to an Xcode version mismatch. " +
-      "Retain raw failures; this is not a test pass or a not-run exemption. Only " +
-      "these two terminal failed screenshot jobs are granted. All other jobs, " +
-      "versions, incomplete evidence, integrity checks and publication approval " +
-      "remain blocking.",
+      "Dallin Romney explicitly authorized all iOS and Android validation failures " +
+      "for 2026.10.33 on 2026-11-17 at 03:14 UTC, reaffirming the 03:12 grant, because " +
+      "extended-stable publishes " +
+      "Gateway npm/plugins/Docker, not mobile apps. This supersedes the screenshot-only " +
+      "grant of 2026-11-16 at 22:14 UTC. It includes the observed Android build timeout, " +
+      "iOS Access-restart configuration selection failure, and iOS pairing/chat timeouts " +
+      "from FRV 43995308737/1 and replay 44001867099/1; these are accepted failures, " +
+      "not passing tests. Preserve raw results and required execution across candidates " +
+      "and attempts. No missing/cancelled evidence exemption. Gateway, desktop, package, " +
+      "integrity, install/update and publication gates remain blocking.",
   })),
   {
     targetVersion: "2026.11.5",
@@ -330,13 +398,15 @@ function aggregateCauses(waiver) {
   if (
     waiver.targetVersion === "2026.10.33" &&
     waiver.childRole === "normalCi" &&
-    ["ios-screenshots-iphone", "ios-screenshots-ipad-13"].includes(waiver.jobName)
+    EXTENDED_1033_MOBILE_JOBS.has(waiver.jobName)
   ) {
     return [
       {
         jobName: "openclaw/ci-gate",
         stepName: "Verify selected CI lanes",
-        causes: ["ios-screenshot-shard finished with failure (selected=true)"],
+        causes: [
+          EXTENDED_1033_MOBILE_JOBS.get(waiver.jobName) + " finished with failure (selected=true)",
+        ],
         exactCauses: true,
       },
     ];

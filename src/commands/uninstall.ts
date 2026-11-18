@@ -155,7 +155,11 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     const { workspaceDirs } = cleanupPlan;
     if (!scopes.has("workspace")) {
       const retiredWorkspace = await attemptCleanup("Retired workspace state cleanup failed", () =>
-        removeWorkspaceDirs(workspaceDirs, runtime, { dryRun, preserveWorkspace: true }),
+        removeWorkspaceDirs(workspaceDirs, runtime, {
+          dryRun,
+          preserveWorkspace: true,
+          retainedState: cleanupPlan,
+        }),
       );
       if (retiredWorkspace && retiredWorkspace.length > 0) {
         runtime.error(`Retired workspace state cleanup incomplete: ${retiredWorkspace.join(", ")}`);
@@ -181,7 +185,8 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
     const workspace = await attemptCleanup("Workspace cleanup failed", () =>
       removeWorkspaceDirs(cleanupPlan.workspaceDirs, runtime, {
         dryRun,
-        removeStateRows: !scopes.has("state") || !stateRemoved,
+        removeStateRows: !stateRemoved,
+        retainedState: stateRemoved ? undefined : cleanupPlan,
       }),
     );
     if (workspace && workspace.length > 0) {

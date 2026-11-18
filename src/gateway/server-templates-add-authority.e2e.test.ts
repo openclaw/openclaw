@@ -501,6 +501,47 @@ it.for(["skill", "plugin", "clawhub-plugin"] as const)(
       };
       const admin = await connect({ scopes: ["operator.read", "operator.admin"], token });
       const reader = await connect({ scopes: ["operator.read"], token });
+      // In-process Gateways share run observations; each case needs its own greeting ID.
+      const localAgentId = `local-${kind}-live`;
+      const localProject = `${state.workspaceDir}/local-project`;
+      await fs.mkdir(localProject, { recursive: true });
+      await fs.writeFile(
+        `${localProject}/package.json`,
+        JSON.stringify({
+          name: `@fixture/${localAgentId}`,
+          version,
+          openclaw: { template: "CLAW.md" },
+        }),
+      );
+      const localManifest = `---\nschemaVersion: 1\nagent: { id: ${localAgentId} }\n---\nLocal live instructions.\n`;
+      await fs.writeFile(`${localProject}/CLAW.md`, localManifest);
+      const localSource = { kind: "local", path: localProject };
+      await expect(
+        reader.client.request("templates.add.plan", { source: localSource }),
+      ).rejects.toThrow();
+      const localReview = await admin.client.request<TemplateLifecyclePlanResult>(
+        "templates.add.plan",
+        { source: localSource },
+      );
+      expect(localReview.trustWarning).toContain("not published to or scanned");
+      await fs.writeFile(`${localProject}/CLAW.md`, localManifest + "Changed.");
+      await expect(
+        admin.client.request("templates.add.apply", {
+          source: localSource,
+          planIntegrity: localReview.planIntegrity,
+        }),
+      ).rejects.toThrow("changed since review");
+      await fs.writeFile(`${localProject}/CLAW.md`, localManifest);
+      const localResult = await admin.client.request("templates.add.apply", {
+        source: localSource,
+        planIntegrity: localReview.planIntegrity,
+      });
+      expect(localResult, JSON.stringify(localResult)).toMatchObject({
+        agentId: localAgentId,
+        status: "complete",
+      });
+      expect(recoveryRestart).not.toHaveBeenCalled();
+
       const creator =
         kind === "plugin"
           ? await pairOperatorDeviceFixture({

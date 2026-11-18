@@ -13,6 +13,7 @@ import {
   PAIRING_SCOPE,
   QUESTIONS_SCOPE,
   READ_SCOPE,
+  PUBLICATION_READ_SCOPE,
   SESSION_READ_SCOPE,
   TALK_SCOPE,
   WRITE_SCOPE,
@@ -244,6 +245,12 @@ export function hasEventScope(
   ownRunQuestion = false,
   hasSessionReadContext?: () => boolean,
 ): boolean {
+  if (
+    client.internal?.publicationReader ||
+    client.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+  ) {
+    return event === "tick";
+  }
   if (client.connectionKind === "worker") {
     return false;
   }
@@ -271,5 +278,33 @@ export function hasEventScope(
             hasSessionReadContext?.() === true),
       ) ||
         (ownRunQuestion && operatorScopeSatisfied("operator.sessions.write", scopes))))
+  );
+}
+
+/** Preserve transport liveness without exposing arbitrary tick payloads or state versions. */
+export function isPublicationReaderEventAllowed(
+  client: GatewayWsClient,
+  event: string,
+  payload: unknown,
+  stateVersion: unknown,
+): boolean {
+  if (
+    !client.internal?.publicationReader &&
+    !client.connect.scopes?.includes(PUBLICATION_READ_SCOPE)
+  ) {
+    return true;
+  }
+  const fields =
+    event === "tick" && isPlainEventPayload(payload)
+      ? Object.getOwnPropertyDescriptors(payload)
+      : undefined;
+  return Boolean(
+    fields &&
+    Reflect.ownKeys(fields).length === 1 &&
+    fields.ts &&
+    "value" in fields.ts &&
+    typeof fields.ts.value === "number" &&
+    Number.isFinite(fields.ts.value) &&
+    stateVersion === undefined,
   );
 }

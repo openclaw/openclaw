@@ -220,6 +220,11 @@ export type OpenClawPluginApi = {
   runtime: PluginRuntime;
   logger: PluginLogger;
   /**
+   * Plugin-owned metric families for diagnostics exporters (diagnostics-prometheus serves them).
+   * Requires plugins.entries.<id>.allowMetrics. Samples are dropped while no exporter listens.
+   */
+  metrics?: import("./plugin-metrics.js").PluginMetricsApi;
+  /**
    * Grouped facade over the existing flat session-related plugin API.
    * Flat methods remain supported for compatibility.
    */

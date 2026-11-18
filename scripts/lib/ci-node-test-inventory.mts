@@ -28,12 +28,19 @@ import {
   isPlainRepoRelativePath,
 } from "../../test/vitest/vitest.include-patterns.ts";
 import { markdownTestFiles } from "../../test/vitest/vitest.markdown-paths.mjs";
+import { isSharedVitestExcludedPath } from "../../test/vitest/vitest.pattern-file.ts";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
   autoReplyTopLevelReplyTestInclude,
   tuiPtyTestFiles,
 } from "../../test/vitest/vitest.test-shards.mjs";
+import { toolingIsolatedTestFiles } from "../../test/vitest/vitest.tooling-isolated-paths.mjs";
+import {
+  toolingDockerTestFiles,
+  toolingTestExclude,
+  toolingTestInclude,
+} from "../../test/vitest/vitest.tooling-paths.mjs";
 import {
   getUnitFastTestFiles,
   getUnitFastIsolatedTestFiles,
@@ -62,6 +69,12 @@ export type NodeTestVolume = {
     full: { id: string; count: number; digest: string } | null;
     selected: { count: number; digest: string } | null;
   }[];
+};
+
+export type NodeTestTargetVolume = {
+  target: string;
+  configs: string[];
+  volume: NodeTestVolume;
 };
 
 export function summarizeNodeTestFiles(files: readonly string[]) {
@@ -204,6 +217,26 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
     configFileCache.set(config, files);
   }
   return files;
+}
+
+/** Measurement-only ownership; adding it must not change runtime partitioning. */
+export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
+  if (config === "test/vitest/vitest.tooling.config.ts") {
+    return listScopedOwnerTestFiles({
+      root: ".",
+      include: toolingTestInclude,
+      exclude: toolingTestExclude,
+    }).filter((file) => !isSharedVitestExcludedPath(file));
+  }
+  const isolated = config === "test/vitest/vitest.tooling-isolated.config.ts";
+  if (isolated || config === "test/vitest/vitest.tooling-docker.config.ts") {
+    const declared = new Set(isolated ? toolingIsolatedTestFiles : toolingDockerTestFiles);
+    const unitFast = isolated ? new Set<string>() : new Set(getUnitFastTestFiles());
+    return listTrackedTestFiles(".").filter(
+      (file) => declared.has(file) && !unitFast.has(file) && !isSharedVitestExcludedPath(file),
+    );
+  }
+  return listNodeTestConfigFiles(config);
 }
 
 // Filtering coverage does not make a whole-config owner safe to split.
