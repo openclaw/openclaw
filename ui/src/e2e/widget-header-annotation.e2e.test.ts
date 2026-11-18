@@ -88,6 +88,20 @@ suite.define(() => {
         const pen = preview.getByRole("button", { name: "Annotate widget", exact: true });
         const target = inner.locator("#status");
         const outline = preview.locator(".widget-inspect-outline");
+        for (const cancel of ["pen", "outside"] as const) {
+          await pen.click();
+          await target.hover();
+          await outline.waitFor();
+          if (cancel === "pen") {
+            // Clicking the nested icon must reach the pen toggle, not dismiss and re-arm it.
+            await pen.locator("svg").click();
+          } else {
+            await composer.click();
+          }
+          await outline.waitFor({ state: "detached" });
+          expect(await pen.getAttribute("aria-pressed")).toBe("false");
+          expect(await dialog.count()).toBe(0);
+        }
         await pen.click();
         await target.hover();
         await outline.waitFor();

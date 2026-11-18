@@ -155,7 +155,7 @@ export function WidgetCardFrame(props: {
       (event) => {
         if (
           event.target !== annotationButton &&
-          !annotationButton?.contains(event.target as Node)
+          !(event.target instanceof Node && annotationButton?.contains(event.target))
         ) {
           stop();
         }
