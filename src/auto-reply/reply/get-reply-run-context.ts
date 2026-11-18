@@ -184,20 +184,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
-  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
-  const groupParticipation =
-    isGroupChat &&
-    !isHeartbeat &&
-    inboundEventKind !== "room_event" &&
-    promptSessionCtx.WasMentioned !== true &&
-    !isExplicitSourceReplyCommand(promptSessionCtx, cfg) &&
-    (conversation.activation ?? defaultActivation) === "always" &&
-    isDecisionAssistanceEligible(cfg, agentId)
-      ? {
-          agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
-          replyToText: sessionCtx.ReplyToBody,
-        }
-      : undefined;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -726,7 +712,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     buildPromptBodies,
     refreshInboundContextAfterAdmissionWait,
     terminalReplyExpectation,
-    groupParticipation,
+    groupParticipation:
+      isGroupChat &&
+      inboundEventKind !== "room_event" &&
+      promptSessionCtx.WasMentioned !== true &&
+      !isExplicitCommandTurnContext(promptSessionCtx, cfg) &&
+      (conversation.activation ?? defaultActivation) === "always" &&
+      isDecisionAssistanceEligible(cfg, agentId)
+        ? {
+            agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
+            replyToText: sessionCtx.ReplyToBody,
+          }
+        : undefined,
   } as const;
 }
 

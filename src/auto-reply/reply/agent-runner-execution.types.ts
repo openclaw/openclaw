@@ -17,10 +17,12 @@ import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { GroupParticipationContext } from "./group-participation-inputs.js";
 import type { FollowupRun } from "./queue.js";
 import type { InternalFollowupRun } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import type { DirectBlockDelivery } from "./reply-delivery.js";
-import type { UnexecutedReplyTurnCompletion } from "./reply-input-admission.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
+import type {
+  AdmittedFollowupTurn,
+  UnexecutedReplyTurnCompletion,
+} from "./reply-turn-admission.types.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 export type InternalFollowupRun = FollowupRun & {
