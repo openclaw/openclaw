@@ -250,10 +250,20 @@ export const codexNativeAssignmentRepair: PluginDoctorStateMigration = {
   phase: "after-session-repair",
   collectBackupResources: () => [],
   async detectLegacyState(params) {
-    for await (const _ of inspect(params)) {
-      return { preview: ["- Repair duplicate or obsolete Codex native pending assignments"] };
+    let unresolved = false;
+    for await (const inspected of inspect(params)) {
+      if (inspected.replacements.length > 0) {
+        return { preview: ["- Repair duplicate or obsolete Codex native pending assignments"] };
+      }
+      unresolved ||= inspected.warnings.length > 0;
     }
-    return null;
+    return unresolved
+      ? {
+          preview: [
+            "- Inspect unresolved Codex native assignment warnings; uncertain assignments will be preserved",
+          ],
+        }
+      : null;
   },
   async migrateLegacyState(params) {
     const changes: string[] = [];

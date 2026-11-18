@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { stateMigrations as codexMigrations } from "../../extensions/codex/doctor-contract-api.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -10,6 +11,8 @@ import { createOpenClawStateLeaseLostError } from "../state/openclaw-state-lease
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
   autoMigrateLegacyPluginDoctorState,
+  collectPluginDoctorStateMigrationPlans,
+  createPluginDoctorStateMigrationInput,
   runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs as repairPluginState,
 } from "./state-migrations.plugin-doctor.js";
@@ -346,3 +349,49 @@ it.each([false, true])(
     });
   },
 );
+
+it("keeps warning-only Codex repair unresolved with visible guidance and unchanged state", async () => {
+  const env = await repairEnv();
+  const stateDir = env.OPENCLAW_STATE_DIR;
+  const migration = codexMigrations.find(
+    (candidate) => candidate.id === "codex-native-assignment-repair",
+  );
+  expect(migration).toBeDefined();
+  controls.entries = [postEntry("codex", migration!.id, migration!)];
+  const input = { config: {}, env, stateDir, oauthDir: stateDir };
+  const context = createPluginDoctorStateMigrationInput(input, {
+    pluginId: "codex",
+    channelIds: [],
+  }).context;
+  const options = { namespace: "app-server-thread-bindings", maxEntries: 100 };
+  const value = {
+    nativeSubagentAssignments: { version: 1, assignments: [{ runId: "preserve-unknown-work" }] },
+  };
+  context.importPluginStateEntries!(options, [
+    { key: "session:main:unknown", value, createdAt: 1 },
+  ]);
+  const before = context.readPluginStateEntriesInKeyRange!(options.namespace, {
+    prefix: "",
+    limit: 100,
+  });
+  const detected = await collectPluginDoctorStateMigrationPlans(input, {
+    includeDoctorOnly: true,
+    phase: "after-session-repair",
+  });
+  expect(detected.plans.map((plan) => plan.preview)).toEqual([
+    [expect.stringContaining("unresolved")],
+  ]);
+  for (let pass = 0; pass < 2; pass++) {
+    const result = await repairPluginState({
+      ...repairParams(env),
+      beforeCompletion: async () => {},
+    });
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringContaining("binding could not be decoded")]);
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(result.completedPluginIds).toBeUndefined();
+    expect(
+      context.readPluginStateEntriesInKeyRange!(options.namespace, { prefix: "", limit: 100 }),
+    ).toEqual(before);
+  }
+});

@@ -178,9 +178,11 @@ it.each(
       return state;
     },
   }),
-)("preserves %s state", async (_name, setup) => {
+)("preserves %s state", async (name, setup) => {
   const state = setup();
-  expect(await migration.detectLegacyState(state)).not.toBeNull();
+  expect(await migration.detectLegacyState(state)).toEqual({
+    preview: [expect.stringContaining(name === "rejected repair" ? "Repair" : "unresolved")],
+  });
   expect(await migration.migrateLegacyState(state)).toEqual({
     changes: [],
     warnings: [expect.any(String)],
@@ -265,4 +267,38 @@ it("admits event-loop work between full detection pages", async () => {
   } finally {
     await progress;
   }
+});
+
+it("finds repairs after a warning-only page and preserves the uncertain row", async () => {
+  const state = fixture(duplicateAssignments);
+  const read = state.context.readPluginStateEntriesInKeyRange!;
+  const repairRows = read("app-server-thread-bindings", { prefix: "", limit: 512 });
+  const uncertain: Row = {
+    key: "binding:000",
+    value: { nativeSubagentAssignments: "malformed" },
+    valueJson: '{"nativeSubagentAssignments":"malformed"}',
+    createdAt: 1,
+    expiresAt: null,
+  };
+  const rows = [
+    uncertain,
+    ...Array.from({ length: 511 }, (_, index): Row => ({
+      key: `binding:${index + 1}`,
+      value: {},
+      valueJson: "{}",
+      createdAt: 1,
+      expiresAt: null,
+    })),
+  ];
+  state.context.readPluginStateEntriesInKeyRange = (_namespace, range) =>
+    range.after ? repairRows : rows;
+  expect(await migration.detectLegacyState(state)).toEqual({
+    preview: [expect.stringContaining("Repair duplicate")],
+  });
+  const result = await migration.migrateLegacyState(state);
+  expect(result.changes).toHaveLength(1);
+  expect(result.warnings).toEqual([expect.stringContaining("binding could not be decoded")]);
+  expect(result.warningDisposition).toBe("recoverable");
+  state.expectState({ nativeSubagentAssignments: inventory([assignment]) });
+  expect(uncertain.valueJson).toBe('{"nativeSubagentAssignments":"malformed"}');
 });
