@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { Type } from "typebox";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
