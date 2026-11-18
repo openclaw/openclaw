@@ -332,7 +332,7 @@ describe("worker environment runtime upgrades", () => {
         entered.resolve();
         return unblock.promise;
       };
-      const preparePlacement = h.gate.prepareWorkerRuntimeRefresh;
+      const preparePlacement = h.gate.prepareWorkerRuntimeRefresh.bind(h.gate);
       const releasePlacement = vi.fn();
       vi.spyOn(h.gate, "prepareWorkerRuntimeRefresh").mockImplementationOnce(async (binding) => {
         const authority = await preparePlacement(binding);
