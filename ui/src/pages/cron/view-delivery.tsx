@@ -147,7 +147,7 @@ function DeliveryRows(
   );
 }
 /** Fields the Advanced card holds; a validation error on one opens the card. */
-export const ADVANCED_FIELDS = [
+const ADVANCED_FIELDS = [
   "timeoutSeconds",
   "activeHoursStart",
   "activeHoursEnd",
