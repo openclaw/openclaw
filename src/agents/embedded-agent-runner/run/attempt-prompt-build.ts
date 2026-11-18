@@ -14,6 +14,7 @@ import { buildInterSessionPromptContext } from "../../../sessions/input-provenan
 import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
+import { isAgentToolExecutionAvailable } from "../../agent-tool-availability.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -30,6 +31,8 @@ import {
   appendModelIdentitySystemPrompt,
   buildModelIdentityPromptLine,
 } from "../../system-prompt.js";
+import { createToolExecutionMatcher } from "../../tool-policy-shared.js";
+import type { ToolSearchCatalogRef } from "../../tool-search.js";
 import { log } from "../logger.js";
 import { normalizeAssistantReplayContent } from "../replay-history.js";
 import {
@@ -91,6 +94,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   /** Absent for a blind child, whose prompt never names its own model. */
   runtimeModel?: string;
   systemPromptText: string;
+  /** Registered Tool Search catalog; Code Mode catalogs are not part of this view. */
+  toolSearchCatalogRef?: ToolSearchCatalogRef;
   runAbortSignal?: AbortSignal;
   hasBaselineTools: () => boolean;
   applyPromptBuildToolsAllow: (
@@ -149,10 +154,26 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     inputProvenance: attempt.inputProvenance,
   };
   const promptBuildMessages = input.activeSession.messages;
+  const executionAllowed = attempt.toolExecutionAllow
+    ? createToolExecutionMatcher(attempt.toolExecutionAllow)
+    : undefined;
   // A reload continuation's prompt is synthetic; prompt hooks see the user's request.
   const promptEvent = {
     prompt: attempt.pluginRuntimeRefreshUserPrompt ?? effectivePrompt,
     messages: promptBuildMessages,
+    ...(attempt.toolsAllow !== undefined ? { toolsAllow: [...attempt.toolsAllow] } : {}),
+    deferredToolNames: [
+      ...new Set(
+        (input.toolSearchCatalogRef?.current?.entries ?? [])
+          .filter(
+            (entry) =>
+              !entry.directVisible &&
+              isAgentToolExecutionAvailable(entry.tool) &&
+              (!executionAllowed || executionAllowed(entry.name)),
+          )
+          .map((entry) => entry.name),
+      ),
+    ],
   };
   const hookResult = preserveExactPrompt
     ? undefined
@@ -160,6 +181,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
         config: attempt.config ?? getRuntimeConfig(),
         prompt: promptEvent.prompt,
         messages: promptBuildMessages,
+        ...(promptEvent.toolsAllow !== undefined ? { toolsAllow: promptEvent.toolsAllow } : {}),
+        deferredToolNames: promptEvent.deferredToolNames,
         hookCtx,
         hookRunner: input.hookRunner,
         refreshContinuation: attempt.pluginRuntimeRefreshUserPrompt !== undefined,

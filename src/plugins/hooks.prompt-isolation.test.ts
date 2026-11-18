@@ -2,10 +2,52 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import type { PluginHookBeforePromptBuildEvent } from "./hook-before-agent-start.types.js";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-fixtures.js";
 
 describe("prompt hook immutable payload isolation", () => {
+  it("keeps tool scope read-only across priority-ordered handlers and dispatches", async () => {
+    const toolsAllow = ["read", "mcp_notes_lookup"];
+    const deferredToolNames = ["mcp_notes_lookup"];
+    const event = { prompt: "test", messages: [], toolsAllow, deferredToolNames };
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_prompt_build",
+          priority: 10,
+          handler: (value: unknown) => {
+            const snapshot = value as PluginHookBeforePromptBuildEvent;
+            expect(() =>
+              Reflect.apply(Array.prototype.push, snapshot.toolsAllow, ["exec"]),
+            ).toThrow(TypeError);
+            expect(() =>
+              Reflect.apply(Array.prototype.pop, snapshot.deferredToolNames, []),
+            ).toThrow(TypeError);
+            expect(Reflect.set(snapshot, "toolsAllow", ["exec"])).toBe(false);
+            return { toolsAllow: ["read"] };
+          },
+        },
+        {
+          hookName: "before_prompt_build",
+          handler: (value: unknown) => {
+            expect(value).toMatchObject({ toolsAllow, deferredToolNames });
+          },
+        },
+      ]),
+      { catchErrors: false },
+    );
+    for (let dispatch = 0; dispatch < 2; dispatch++) {
+      expect((await runner.runBeforePromptBuild(event, {}))?.toolsAllow).toEqual(["read"]);
+      expect(event).toEqual({
+        prompt: "test",
+        messages: [],
+        toolsAllow: ["read", "mcp_notes_lookup"],
+        deferredToolNames: ["mcp_notes_lookup"],
+      });
+    }
+  });
+
   it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
     "%s shares immutable payloads without exposing stored metadata",
     async (hookName) => {

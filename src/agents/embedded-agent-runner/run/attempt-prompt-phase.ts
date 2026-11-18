@@ -195,6 +195,9 @@ export async function runEmbeddedAttemptPromptPhase(
       // A blind child's prompt never names its own model.
       runtimeModel: attempt.blindPrompt ? undefined : runtimeInfo.model,
       systemPromptText,
+      toolSearchCatalogRef: prepared.toolBase.toolSearchControlsEnabledForRun
+        ? prepared.toolBase.toolSearchCatalogRef
+        : undefined,
       runAbortSignal: input.runAbortController.signal,
       hasBaselineTools: promptToolPolicy.hasBaselineTools,
       setActiveSessionSystemPrompt,

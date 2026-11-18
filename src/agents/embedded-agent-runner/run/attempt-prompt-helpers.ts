@@ -44,6 +44,8 @@ export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
   messages: unknown[];
+  toolsAllow?: readonly string[];
+  deferredToolNames?: readonly string[];
   hookCtx: PluginHookAgentContext;
   hookRunner?: PromptBuildHookRunner | null;
   refreshContinuation?: boolean;
@@ -59,6 +61,10 @@ export async function resolvePromptBuildHookResult(params: {
           {
             prompt: params.prompt,
             messages: params.messages,
+            ...(params.toolsAllow !== undefined ? { toolsAllow: params.toolsAllow } : {}),
+            ...(params.deferredToolNames !== undefined
+              ? { deferredToolNames: params.deferredToolNames }
+              : {}),
           },
           params.hookCtx,
         )

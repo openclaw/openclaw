@@ -276,6 +276,7 @@ export function createFixture({ pendingPrompt = "hello", pendingImageCount = 1 }
         },
       },
       systemPrompt: { runtimeInfo: { model: "model-1" } },
+      toolBase: { toolSearchControlsEnabledForRun: false },
       toolCatalog: {
         toolSearch: { compacted: false },
         toolSearchRunPlan: { capabilityToolNames: new Set(["read"]) },

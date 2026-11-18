@@ -213,6 +213,18 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
         });
       }
     }
+    if (hookName === "before_prompt_build") {
+      for (const key of ["toolsAllow", "deferredToolNames"]) {
+        const value: unknown = Reflect.get(snapshot, key);
+        if (Array.isArray(value)) {
+          Object.defineProperty(snapshot, key, {
+            value: Object.freeze(value),
+            writable: false,
+            configurable: false,
+          });
+        }
+      }
+    }
     return snapshot;
   } catch (cause) {
     if (cause instanceof HookIsolationError) {

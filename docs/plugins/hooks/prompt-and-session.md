@@ -111,6 +111,39 @@ the shared-memory isolation checks. Storage-only native prompt text and tool-res
 details are excluded. See the [migration note](/plugins/sdk-migration#prompt-hook-history-is-read-only)
 if your plugin previously mutated nested content.
 
+### Read a run's tool scope
+
+The embedded runner supplies two optional, read-only `before_prompt_build`
+event fields for tool-specific prompt hints:
+
+- `toolsAllow`: the incoming run allowlist, exactly as supplied to the attempt,
+  before the runtime adds forced tools or Tool Search controls. Omitted when
+  the run has no allowlist; `[]` preserves an explicit empty allowlist. It is
+  not the effective tool list: entries can include policy patterns or names
+  that did not resolve to a registered tool.
+- `deferredToolNames`: names from the attempt's registered Tool Search catalog
+  that are allowed for execution but not directly visible. This includes MCP
+  tools deferred in `tools` mode, not schemas, descriptions, or tool objects.
+  Directly visible catalog entries and execution-gated tools are excluded.
+  `[]` means no applicable deferred tools, including when Tool Search is off
+  or only Code Mode is active.
+
+Both arrays are detached from run state and frozen. All handlers in priority
+order see the same pre-hook snapshot: an earlier handler's returned
+`toolsAllow` does not update either event field for later handlers. The existing
+intersection of returned restrictions still applies after ordinary hooks
+finish. Authorized post-policy enrichment receives the same informational
+snapshot; use `ctx.toolAuthority` for finalized policy checks.
+
+These fields are **informational, not an authorization signal**. They cannot
+widen the tool surface, guarantee that a later call succeeds, or authorize
+plugin-side access. Put attempt-specific hints in `prependContext` or
+`appendContext`, not stable system context.
+
+The generic harness prompt helper and CLI prompt paths omit both fields because
+they do not supply this incoming-allowlist/catalog snapshot. Omission there,
+or on an older host, means unreported; do not infer an unrestricted tool set.
+
 ### Restrict a run to local models
 
 Return an explicit fallback list when the routing decision must survive a model
