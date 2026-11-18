@@ -159,8 +159,6 @@ describe("secrets runtime fast path", () => {
   });
 
   it("returns control to the event loop before finishing a large multi-agent auth-store load", async () => {
-    const { prepareSecretsRuntimeSnapshot } = await import("./runtime.js");
-
     const totalAgents = 30;
     const agentDirs = Array.from({ length: totalAgents }, (_, i) => `/tmp/openclaw-agent-${i}`);
     let loadedCount = 0;
