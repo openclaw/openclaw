@@ -86,7 +86,7 @@ async function reviewStaleBuild(page: Page, gateway: Gateway, build: string) {
     details: { code: "PROTOCOL_MISMATCH", gatewayBuildId: build, reloadRequired: true },
     retryable: false,
   });
-  const refresh = page.getByRole("button", { name: /Server updated/u });
+  const refresh = page.getByRole("button", { name: /OpenClaw was updated/u });
   const dialog = page.locator('openclaw-modal-dialog[label="Unsent Incognito draft"]');
   const outcome = await Promise.race([
     automaticReload.then(() => "reloaded" as const),
@@ -166,7 +166,7 @@ suite.define(() => {
       await disconnectGateway(page, gateway);
       await gateway.setServerBuildId("e2e-next-queued-edit");
       await resumeGateway(page, gateway);
-      const refresh = page.getByRole("button", { name: /Server updated/u });
+      const refresh = page.getByRole("button", { name: /OpenClaw was updated/u });
       await refresh.waitFor();
       await refresh.press("Enter");
       await page
@@ -410,7 +410,7 @@ suite.define(() => {
         await page.setViewportSize({ width: 520, height: 900 });
       }
       await exactButton(dialog, "Keep in this tab").click();
-      await page.getByRole("button", { name: /Server updated/u }).click();
+      await page.getByRole("button", { name: /OpenClaw was updated/u }).click();
       await exactButton(page, "Review private draft").click();
       const reloaded = page.waitForEvent("domcontentloaded");
       await exactButton(dialog, "Discard this draft and refresh").click();

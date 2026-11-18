@@ -1564,6 +1564,14 @@ const nodeTestShards = targetNodeTestShards
         : undefined);
     const packedGroups =
       groups?.length && nodeTestGroupsCodec ? encodeNodeTestGroups(groups) : undefined;
+    let targetVolumes;
+    try {
+      if (shard.targetVolumes?.length && nodeTestGroupsCodec) {
+        targetVolumes = encodeNodeTestGroups(shard.targetVolumes);
+      }
+    } catch {
+      // Missing accounting must not change or prevent the execution plan.
+    }
     const capacity =
       process.env.OPENCLAW_CI_EFFECTIVE_RUNNER_BACKEND === "boat" ||
       (remainingBoatNodeJobs > 0 &&
@@ -1602,6 +1610,9 @@ const nodeTestShards = targetNodeTestShards
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,
       groups: groups && !nodeTestGroupsCodec ? groups : undefined,
+      // Accounting is optional and must fit the same per-environment-string bound as group pools.
+      target_volumes_gzip_base64:
+        targetVolumes && targetVolumes.length <= 60_000 ? targetVolumes : undefined,
       configs: packedGroups ? undefined : shard.configs,
       env: shard.env,
       includePatterns: packedGroups ? undefined : shard.includePatterns,

@@ -296,6 +296,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (!pauseNotice && settledBatch.every(hasConsumedRequesterInput)) {
     // The input is already in the requester transcript. Restart continuation belongs
     // to the Gateway; resubmitting it can conflict with the committed payload.
+    if (settledBatch.some((entry) => entry.delivery?.disposition === "ambiguous")) {
+      return false;
+    }
     await completeBatch(settledBatch, selectedState, { delivered: true, path: "direct" });
     return true;
   }
