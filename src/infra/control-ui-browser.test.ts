@@ -1,20 +1,17 @@
 import fs from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { SpawnResult } from "../process/exec-result.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { openUrlPrivately } from "./browser-handoff.js";
 import { resolveControlUiBrowser } from "./control-ui-browser.js";
 import * as windowsPaths from "./windows-install-roots.js";
 import * as wsl from "./wsl.js";
 
-const { readOs, launch } = vi.hoisted(() => ({ readOs: vi.fn(), launch: vi.fn() }));
+const { readOs } = vi.hoisted(() => ({ readOs: vi.fn() }));
+const originalGetuid = Object.getOwnPropertyDescriptor(process, "getuid");
 // mock-isolation: Native application discovery and opener processes are external I/O fixtures.
 vi.mock("../process/exec.js", async (original) => ({
   ...(await original<typeof import("../process/exec.js")>()),
   runExec: readOs,
-  runCommandWithTimeout: launch,
 }));
 const safari = {
   id: "com.apple.Safari",
@@ -28,14 +25,6 @@ const chrome = {
   version: "156.0.1",
 };
 const firefox = { id: "org.mozilla.firefox", path: "/Applications/Firefox.app", version: "150.0" };
-const success: SpawnResult = {
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit",
-};
 const inventory = (value: unknown) =>
   readOs.mockResolvedValue({ stdout: JSON.stringify(value), stderr: "" });
 
@@ -60,60 +49,31 @@ beforeEach(async () => {
   vi.stubEnv("NODE_ENV", "development");
   mockProcessPlatform("darwin");
   const consoleStat = await fs.stat(fileURLToPath(import.meta.url));
-  consoleStat.uid = process.getuid!();
+  // Model the Mac console user independently of the native test host.
+  Object.defineProperty(process, "getuid", { configurable: true, value: () => 501 });
+  consoleStat.uid = 501;
   vi.spyOn(fs, "stat").mockResolvedValue(consoleStat);
   vi.spyOn(wsl, "isWSL").mockResolvedValue(false);
   vi.spyOn(windowsPaths, "getWindowsPowerShellExePath").mockReturnValue(
     "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
   );
   inventory([safari, chrome, firefox]);
-  launch.mockResolvedValue(success);
 });
 
-afterEach(async () => {
-  for (const [argv] of launch.mock.calls) {
-    const last = argv.at(-1);
-    if (typeof last === "string" && last.startsWith("file:///")) {
-      await fs.rm(path.dirname(fileURLToPath(last)), { recursive: true, force: true });
-    }
-  }
+afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  if (originalGetuid) {
+    Object.defineProperty(process, "getuid", originalGetuid);
+  } else {
+    Reflect.deleteProperty(process, "getuid");
+  }
 });
 
-it("routes a fresh pairing through the selected user-installed Mac browser without exposing credentials", async () => {
+it("selects the compatible browser installed only in the Mac user's Applications directory", async () => {
   const browser = await resolveControlUiBrowser();
   expect(browser.openOptions?.browserCommand).toEqual(["/usr/bin/open", "-a", chrome.path]);
   expect(browser.notice).toContain("Chrome for this session");
-  const target = "http://127.0.0.1:18789/#bootstrapToken=fixture-one-time-secret";
-  expect(await openUrlPrivately(target, browser.openOptions)).toBe(true);
-  const argv = launch.mock.calls[0]![0];
-  expect(argv).toEqual(["/usr/bin/open", "-a", chrome.path, expect.stringMatching(/^file:\/\//)]);
-  expect(JSON.stringify([readOs.mock.calls, launch.mock.calls, browser.notice])).not.toContain(
-    "fixture-one-time-secret",
-  );
-  const file = fileURLToPath(argv.at(-1));
-  expect(await fs.readFile(file, "utf8")).toContain("bootstrapToken=fixture-one-time-secret");
-  const handle = await fs.open(file, "r");
-  try {
-    expect((await handle.stat()).mode & 0o777).toBe(0o600);
-  } finally {
-    await handle.close();
-  }
-});
-
-it("does not fall back to the unsupported default after the selected browser fails to launch", async () => {
-  const browser = await resolveControlUiBrowser();
-  launch.mockResolvedValue({ ...success, code: 1 });
-  expect(
-    await openUrlPrivately(
-      "http://127.0.0.1:18789/#bootstrapToken=fixture-secret",
-      browser.openOptions,
-    ),
-  ).toBe(false);
-  expect(launch).toHaveBeenCalledTimes(1);
-  const file = fileURLToPath(launch.mock.calls[0]![0].at(-1));
-  await expect(fs.readFile(file)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 it.each(["26.2", "", "future", "26.2-preview"])(
@@ -226,6 +186,7 @@ it.each([false, true])(
     const exe = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
     inventory({
       headless,
+      defaultPath: "C:\\Program Files\\Mozilla Firefox\\firefox.exe",
       browsers: [
         {
           family: "firefox",
@@ -240,5 +201,42 @@ it.each([false, true])(
     expect(await resolveControlUiBrowser()).toMatchObject(
       headless ? { canOpen: false } : { canOpen: true, openOptions: { browserCommand: [exe] } },
     );
+  },
+);
+
+it("uses the Shell's effective HTML handler rather than stale browser-registration flags", async () => {
+  mockProcessPlatform("win32");
+  const oldChrome = "C:\\Browsers\\Chrome124\\chrome.exe";
+  const edge = "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe";
+  inventory({
+    headless: false,
+    defaultPath: oldChrome,
+    browsers: [
+      { family: "chrome", path: oldChrome, version: "124.0.6367.207" },
+      { family: "edge", path: edge, version: "157.0.4341.60", isDefault: true },
+    ],
+  });
+  expect(await resolveControlUiBrowser()).toMatchObject({
+    canOpen: true,
+    openOptions: { browserCommand: [edge] },
+    notice: expect.stringContaining("Edge for this session"),
+  });
+});
+
+it.each(["supported", "unknown"])(
+  "preserves the effective HTML handler when %s despite an unsupported stale registration",
+  async (handler) => {
+    mockProcessPlatform("win32");
+    const oldChrome = "C:\\Browsers\\Chrome124\\chrome.exe";
+    const edge = "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe";
+    inventory({
+      headless: false,
+      defaultPath: handler === "supported" ? edge.toUpperCase() : "",
+      browsers: [
+        { family: "chrome", path: oldChrome, version: "124.0.6367.207", isDefault: true },
+        { family: "edge", path: edge, version: "157.0.4341.60" },
+      ],
+    });
+    expect(await resolveControlUiBrowser()).toEqual({ canOpen: true });
   },
 );

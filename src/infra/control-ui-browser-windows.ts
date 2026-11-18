@@ -38,31 +38,33 @@ const BROWSERS = [
 const DISCOVER_WINDOWS_BROWSERS = String.raw`
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
-$choice = Get-ItemPropertyValue -LiteralPath 'HKCU:\Software\Microsoft\Windows\Shell\Associations\UrlAssociations\https\UserChoice' -Name ProgId
-$family = switch -Regex ($choice) {
-  '^ChromeHTML(?:[.-]|$)' { 'chrome'; break }
-  '^FirefoxURL(?:[.-]|$)' { 'firefox'; break }
-  '^MSEdgeHTM$' { 'edge'; break }
-  '^IE\.HTTPS?$' { 'ie'; break }
-}
-$defaultPath = $null
-if ($family) {
-  foreach ($root in @('HKCU:\Software\Classes\', 'HKLM:\Software\Classes\')) {
-    $key = Get-Item -LiteralPath ($root + $choice + '\shell\open\command')
-    if ($key) {
-      $command = $key.GetValue('')
-      if ($command -match '^"([^"]+\.exe)"(?:\s|$)|^([^\s]+\.exe)(?:\s|$)') {
-        $defaultPath = if ($Matches[1]) { $Matches[1] } else { $Matches[2] }
-        break
-      }
-    }
+# Use the Shell association resolver, not the undocumented UserChoice registry layout.
+# The opener receives handoff.html, so query its handler rather than assuming HTTPS
+# and local HTML use the same application. This also honors UserChoiceLatest.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class OpenClawBrowserAssociation {
+  [DllImport("shlwapi.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+  private static extern int AssocQueryStringW(uint flags, uint str,
+    string association, string extra, StringBuilder output, ref uint length);
+  public static string HtmlExecutable() {
+    // ASSOCF_NONE / ASSOCSTR_EXECUTABLE / default open verb. A fixed bound
+    // avoids trusting the native returned length for an unbounded allocation.
+    var output = new StringBuilder(32768);
+    uint length = (uint)output.Capacity;
+    return AssocQueryStringW(0, 2, ".html", "open", output, ref length) == 0
+      ? output.ToString() : "";
   }
 }
+'@ -ErrorAction Stop
+$defaultPath = [OpenClawBrowserAssociation]::HtmlExecutable()
 $specs = ConvertFrom-Json '@BROWSERS@'
 $items = @(
   foreach ($spec in $specs) {
     $paths = @(
-      if ($family -eq $spec.family -and $defaultPath) { $defaultPath }
+      if ($defaultPath -and [IO.Path]::GetFileName($defaultPath) -ieq $spec.exe) { $defaultPath }
       foreach ($root in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\App Paths\', 'HKLM:\Software\Microsoft\Windows\CurrentVersion\App Paths\', 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\')) {
         $key = Get-Item -LiteralPath ($root + $spec.exe)
         if ($key) { $key.GetValue('') }
@@ -75,13 +77,12 @@ $items = @(
       if (!$candidate -or [IO.Path]::GetFileName($candidate) -ine $spec.exe) { continue }
       $file = Get-Item -LiteralPath $candidate
       if ($file -and !$file.PSIsContainer) {
-        @{family=$spec.family; path=$file.FullName; version=[string]$file.VersionInfo.ProductVersion;
-          isDefault=($family -eq $spec.family -and $file.FullName -ieq $defaultPath)}
+        @{family=$spec.family; path=$file.FullName; version=[string]$file.VersionInfo.ProductVersion}
       }
     }
   }
 )
-@{headless=(![Environment]::UserInteractive); browsers=$items} | ConvertTo-Json -Depth 4 -Compress
+@{headless=(![Environment]::UserInteractive); defaultPath=$defaultPath; browsers=$items} | ConvertTo-Json -Depth 4 -Compress
 `;
 
 export async function discoverWindowsControlUiBrowsers(): Promise<ControlUiBrowserDiscovery> {
@@ -94,7 +95,8 @@ export async function discoverWindowsControlUiBrowsers(): Promise<ControlUiBrows
       "-Command",
       DISCOVER_WINDOWS_BROWSERS.replace("@BROWSERS@", JSON.stringify(BROWSERS)),
     ],
-    { timeoutMs: 3_000, maxBuffer: 64 * 1024, logOutput: false },
+    // Include bounded cold PowerShell/Add-Type startup without launching a browser.
+    { timeoutMs: 5_000, maxBuffer: 64 * 1024, logOutput: false },
   );
   const inventory: unknown = JSON.parse(stdout.replace(/^\uFEFF/, ""));
   if (
@@ -132,7 +134,10 @@ export async function discoverWindowsControlUiBrowsers(): Promise<ControlUiBrows
       version: item.version,
       command: [executable],
     };
-    if (item.isDefault === true) {
+    if (
+      typeof inventory.defaultPath === "string" &&
+      executable.toLowerCase() === inventory.defaultPath.toLowerCase()
+    ) {
       defaultBrowser = browser;
     }
     if (

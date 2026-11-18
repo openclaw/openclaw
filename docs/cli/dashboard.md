@@ -35,8 +35,11 @@ through the existing private local-file handoff, never in process arguments.
 
 - **macOS:** reads browser registrations and application metadata, including
   `/Applications` and `~/Applications`.
-- **Windows:** reads HTTPS browser registration and installed executable version
-  metadata. This covers the native CLI, not the independently released Windows Hub.
+- **Windows:** asks the Windows Shell for the effective `.html` handler and reads
+  installed executable version metadata. The private handoff is an HTML file, so
+  its handler can differ from the HTTPS default. Discovery does not rely on the
+  legacy `UserChoice` registry layout. This covers the native CLI, not the
+  independently released Windows Hub.
 - **Linux:** reads the HTTPS XDG desktop association and versions of normal
   Chrome, Chromium, Edge, and Firefox executables on `PATH`. Custom desktop
   wrappers, Flatpak-only installs, and a `BROWSER` override may remain unknown.
