@@ -1235,7 +1235,13 @@ async function buildResponsesPayload(
     // Progress scenarios share transcripts. Only the selected prompt's result can finish it.
     const progressInput = turn ? input.slice(turn.index) : [];
     const command = !expectsError && execCommandFromToolProgressPrompt(scenarioFamilyPrompt);
-    if (!hasToolOutput(progressInput)) {
+    // A malformed call/result still belongs to the progress validator, not a new exec.
+    const hasProgressCall =
+      command &&
+      progressInput.some(
+        (item) => item.type === "function_call" || item.type === "custom_tool_call",
+      );
+    if (!hasToolOutput(progressInput) && !hasProgressCall) {
       return buildToolCallEventsWithArgs(
         command ? "exec" : "read",
         command ? { command } : { path: readTargetFromPrompt(scenarioFamilyPrompt) },

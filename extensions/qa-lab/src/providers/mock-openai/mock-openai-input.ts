@@ -278,7 +278,14 @@ function isUserTurn(item: ResponsesInputItem) {
 }
 
 function isContinuationUserText(text: string) {
-  const trimmed = text.trim();
+  // Native turns prepend runtime instructions that can mention retry independently
+  // of the authored request, even when no conversation history is projected.
+  const current = splitMockConversationContext(text).current;
+  const requestHeader = "\n\nCurrent user request:\n";
+  const requestStart = current.indexOf(requestHeader);
+  const trimmed = (
+    requestStart < 0 ? current : current.slice(requestStart + requestHeader.length)
+  ).trim();
   if (!trimmed) {
     return false;
   }
