@@ -489,8 +489,8 @@ describe("live steering at the attempt boundary", () => {
         expect(corrected).not.toContain("queued user request");
         activeSession.dispose();
       } finally {
-        recorder.finishPendingInput?.("interrupted");
-        foreign.finish("interrupted");
+        recorder.finishPendingInput?.("interrupted", "failed");
+        foreign.finish("interrupted", "failed");
       }
     });
   });
@@ -549,7 +549,7 @@ describe("live steering at the attempt boundary", () => {
         expect(activeSession.getLastAssistantText()).toBe("early steering answered");
       } finally {
         activeSession.dispose();
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
     });
   });

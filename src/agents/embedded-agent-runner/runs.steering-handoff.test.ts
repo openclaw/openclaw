@@ -2,6 +2,7 @@ import { describe, afterEach, expect, it, vi } from "vitest";
 import { resetDiagnosticRunActivityForTest } from "../../logging/diagnostic-run-activity.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
 import { waitForSessionRunEnd as waitForEmbeddedAgentRunEnd } from "../../sessions/session-controller.native-runtime.js";
+import { getAttachedBackend } from "../../sessions/session-controller.state.js";
 import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { testing as replyRunTesting } from "../../sessions/session-controller.test-support.js";
@@ -182,38 +183,45 @@ describe("captured question and drain ownership", () => {
     expect(claimed).toEqual(["right"]);
   });
 
-  it.each(["claim"] as const)("rejects backend replacement during question %s", async (_stage) => {
-    const entered = createDeferredCore(),
-      released = createDeferredCore();
-    const queueMessage = vi.fn(asyncNoop),
-      replacement = createEmbeddedRunHandle({ runId: "replacement", queueMessage });
-    const claim = vi.fn<NonNullable<Injection["claimPendingUserInputAnswer"]>>(
-      async (_text, _options, assertCurrent) => {
-        entered.resolve();
-        await released.promise;
-        assertCurrent();
-        return true;
-      },
-    );
-    const { operation } = start({
-      runId: "question-owner",
-      queueMessage,
-      messageInjectionV2: injection({
+  it.each(["claim", "reattach"] as const)(
+    "rejects backend replacement during question %s",
+    async (stage) => {
+      const entered = createDeferredCore(),
+        released = createDeferredCore();
+      const queueMessage = vi.fn(asyncNoop),
+        replacement = createEmbeddedRunHandle({ runId: "replacement", queueMessage });
+      const claim = vi.fn<NonNullable<Injection["claimPendingUserInputAnswer"]>>(
+        async (_text, _options, assertCurrent) => {
+          entered.resolve();
+          await released.promise;
+          assertCurrent();
+          return true;
+        },
+      );
+      const { operation } = start({
+        runId: "question-owner",
         queueMessage,
-        claimPendingUserInputAnswer: claim,
-      }),
-    });
-    const result = claimPendingEmbeddedAgentQuestionAnswer(operation, "Green");
-    try {
-      await entered.promise;
-      setActiveEmbeddedRun(sessionId, replacement);
-      released.resolve();
-      await expect(result).rejects.toThrow("Message injection authority is no longer current");
-      unused(queueMessage);
-    } finally {
-      released.resolve();
-    }
-  });
+        messageInjectionV2: injection({
+          queueMessage,
+          claimPendingUserInputAnswer: claim,
+        }),
+      });
+      const result = claimPendingEmbeddedAgentQuestionAnswer(operation, "Green");
+      try {
+        await entered.promise;
+        if (stage === "reattach") {
+          operation.attachBackend(getAttachedBackend(operation)!);
+        } else {
+          setActiveEmbeddedRun(sessionId, replacement);
+        }
+        released.resolve();
+        await expect(result).rejects.toThrow("Message injection authority is no longer current");
+        unused(queueMessage);
+      } finally {
+        released.resolve();
+      }
+    },
+  );
 
   it("keeps handle and session waiters distinct through replacements", async () => {
     vi.useFakeTimers();
