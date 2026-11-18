@@ -523,7 +523,10 @@ async function closePublicationTestAgentDatabases() {
 
 export function installGitHubPublicationTestHarness(
   harnessOptions: { creatorEmail?: string; sandbox?: "required"; realWorktree?: boolean } = {},
-): void {
+): { restoreNativeIdentity: () => void } {
+  let restoreNativeIdentity: () => void = () => {
+    throw new Error("Publication identity fixture has not been installed");
+  };
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterAll(async () => {
       // Agent close releases leases through shared state; drain it before shared state.
@@ -556,10 +559,11 @@ export function installGitHubPublicationTestHarness(
     const nativeOptions = vi
       .spyOn(nativeIdentity, "prepareGitHubPublicationOptionsIdentity")
       .mockImplementation(mocks.prepareIdentity);
-    onTestFinished(() => {
+    restoreNativeIdentity = () => {
       nativePreparation.mockRestore();
       nativeOptions.mockRestore();
-    });
+    };
+    onTestFinished(restoreNativeIdentity);
     root = tempDirs.make("openclaw-publication-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
     realWorktree = harnessOptions.realWorktree ?? false;
@@ -693,6 +697,7 @@ export function installGitHubPublicationTestHarness(
     closeOpenClawAgentDatabasesForTest();
     vi.unstubAllEnvs();
   });
+  return { restoreNativeIdentity: () => restoreNativeIdentity() };
 }
 
 export async function createRealPublicationWorkspace(
