@@ -8,7 +8,6 @@ set -euo pipefail
 PACKAGE_TGZ=""
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 UPGRADE_SCENARIO_STAGE=""
-MACHINE_ID_FILE=""
 WORKER_RUNTIME_HOST_ROOT=""
 LIMITS_SUMMARY=""
 run_completed="0"
@@ -53,9 +52,6 @@ cleanup_outer() {
   fi
   if [ -n "$UPGRADE_SCENARIO_STAGE" ]; then
     rm -rf "$UPGRADE_SCENARIO_STAGE"
-  fi
-  if [ -n "$MACHINE_ID_FILE" ]; then
-    rm -f "$MACHINE_ID_FILE"
   fi
   if [ -n "$WORKER_RUNTIME_HOST_ROOT" ]; then
     if [ "$exit_status" -eq 0 ] && [ "$run_completed" = "1" ]; then
@@ -350,22 +346,11 @@ if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
   { [ "$SCENARIO" = package-installed-recovery ] && {
     [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ] ||
       [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ] ||
-      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ] ||
-      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = killed-run-admission ]
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = owed-plugin-retry ]
   }; }; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
-fi
-if [ "$SCENARIO" = package-installed-recovery ] &&
-  [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = killed-run-admission ]; then
-  # A monitoring-agent shape: the host's PID namespace and a stable machine identity.
-  # The container can see and, under the same uid, signal host processes: this explicit
-  # cell belongs on a dedicated or disposable Docker host, never a shared CI runner.
-  MACHINE_ID_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-machine-id.XXXXXX")"
-  node -e 'process.stdout.write(require("node:crypto").randomBytes(16).toString("hex") + "\n")' >"$MACHINE_ID_FILE"
-  chmod 0644 "$MACHINE_ID_FILE"
-  DOCKER_RUN_USER_ARGS+=(--pid=host -v "$MACHINE_ID_FILE:/etc/machine-id:ro")
 fi
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
