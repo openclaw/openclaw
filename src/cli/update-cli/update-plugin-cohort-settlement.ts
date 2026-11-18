@@ -115,13 +115,17 @@ async function inspectGitActivation(
   if (from.version === to.version && from.buildId === to.buildId) {
     return " whose build has the same version and build ID as the build it replaced";
   }
-  // Read-only probes must not refresh the checkout's index or fetch a partial clone's objects.
+  // Read-only probes must not refresh the checkout's index or fetch a partial clone's
+  // objects. Older Git ignores GIT_NO_LAZY_FETCH, so every transport is denied too.
   const { gitReadOnlyEnvironment } = await import("../../infra/git-exec.js");
   const git = (argv: string[]) =>
     runCommandWithTimeout(argv, {
       cwd: root,
       timeoutMs,
-      env: gitReadOnlyEnvironment(argv.slice(1), { GIT_OPTIONAL_LOCKS: "0" }),
+      env: gitReadOnlyEnvironment(argv.slice(1), {
+        GIT_OPTIONAL_LOCKS: "0",
+        GIT_ALLOW_PROTOCOL: "",
+      }),
     });
   const head = await git(["git", "-C", root, "rev-parse", "HEAD"]);
   if (head.code !== 0 || head.stdout.trim() !== activation.sha) {
@@ -347,35 +351,43 @@ export async function inspectInterruptedUpdateRecovery(
   /**
    * Finishing runs after settlement retired the plugin recovery, so once it fails only
    * repair's own bookkeeping shows the work unfinished: an interrupted run no repair has
-   * acknowledged, whose newest repair since ended without success. This update would
-   * skip that finish. Repair that succeeds acknowledges the run, even with a warning.
+   * acknowledged, and the run created right after it is a repair that ended without
+   * success. Finishing creates that repair before any other run; an update that settled
+   * the run with nothing to finish creates its own run next. Read in the state that
+   * admission selected, which can be a managed service's.
    */
-  const refuseUnfinishedRepair = () => {
-    const history = listUpdateRuns({ limit: 100 }, options);
-    for (const owed of history) {
-      // Repair's own rule for the interrupted runs it still owes.
-      if (!isAbandonedUpdateRun(owed) || isAcknowledgedAbandonedUpdateRun(owed)) {
-        continue;
-      }
-      const latest = history.find(
-        (run) =>
-          run.createdAtMs > owed.createdAtMs &&
-          run.steps.some((step) => step.step === "finalize:repair-continuation"),
-      );
-      if (latest && latest.status !== "running" && latest.status !== "succeeded") {
-        const outcome = `${latest.status}${latest.reason ? `: ${latest.reason}` : ""}`;
-        return new Error(
-          `Interrupted update ${owed.runId} is still unfinished: update repair run ${latest.runId} did not finish it (${outcome}). Run ${repair}, then retry ${update}.`,
-        );
-      }
-    }
-    return undefined;
-  };
+  const refuseUnfinishedRepair = (ledgerEnv: NodeJS.ProcessEnv) =>
+    withUpdateDatabaseEngine(
+      ledgerEnv,
+      async (readable) => {
+        if (!readable) {
+          return undefined;
+        }
+        // Newest first: the run created after `history[index]` is `history[index - 1]`.
+        const history = listUpdateRuns({ limit: 100 }, { ...options, env: ledgerEnv });
+        for (const [index, owed] of history.entries()) {
+          const next = history[index - 1];
+          if (
+            isAbandonedUpdateRun(owed) &&
+            !isAcknowledgedAbandonedUpdateRun(owed) &&
+            next?.steps.some((step) => step.step === "finalize:repair-continuation") &&
+            next.status !== "running" &&
+            next.status !== "succeeded"
+          ) {
+            const outcome = `${next.status}${next.reason ? `: ${next.reason}` : ""}`;
+            return new Error(
+              `Interrupted update ${owed.runId} is still unfinished: update repair run ${next.runId} did not finish it (${outcome}). Run ${repair}, then retry ${update}.`,
+            );
+          }
+        }
+        return undefined;
+      },
+      { dryRun: true },
+    ).catch(() => undefined);
   const inspect = async () => {
     const pending = await pendingRecovery();
     if (!pending) {
-      const refused = refuseUnfinishedRepair();
-      return refused && { unfinishedRepair: true as const, refused };
+      return { unfinishedRepair: true as const };
     }
     const pair = await inspectPluginCohortRecoveryAdmission({ env }).catch(() => undefined);
     if (!pair) {
@@ -505,16 +517,11 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
-  // Admission can follow a managed service to another state directory: not this recovery.
-  const admitsOtherState = async (
-    resolveAdmissionEnv: (invocationCwd: string | undefined) => Promise<NodeJS.ProcessEnv>,
-  ) =>
-    resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd)) !==
-    resolveOpenClawStateSqlitePath(env);
   if (inspected.unfinishedRepair) {
     return async (resolveAdmissionEnv) => {
-      if (!(await admitsOtherState(resolveAdmissionEnv))) {
-        throw inspected.refused;
+      const refused = await refuseUnfinishedRepair(await resolveAdmissionEnv(invocationCwd));
+      if (refused) {
+        throw refused;
       }
     };
   }
@@ -522,7 +529,13 @@ export async function inspectInterruptedUpdateRecovery(
     inspected;
   const rebooted = inspected.rebooted === true;
   return async (resolveAdmissionEnv) => {
-    if (await admitsOtherState(resolveAdmissionEnv)) {
+    // Admission can follow a managed service to another state directory: not this recovery.
+    const admissionEnv = await resolveAdmissionEnv(invocationCwd);
+    if (resolveOpenClawStateSqlitePath(admissionEnv) !== resolveOpenClawStateSqlitePath(env)) {
+      const unfinished = await refuseUnfinishedRepair(admissionEnv);
+      if (unfinished) {
+        throw unfinished;
+      }
       return;
     }
     if (refused) {

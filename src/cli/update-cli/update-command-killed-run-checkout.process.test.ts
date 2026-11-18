@@ -223,7 +223,7 @@ describe.skipIf(process.platform === "win32")(
         git(killed.slot, "update-index", "--add", "--cacheinfo", `100644,${missing},renamed.json`);
         const local = () =>
           execFileSync("git", ["-C", killed.slot, "cat-file", "-e", missing], {
-            env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
+            env: { ...process.env, GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
             stdio: "ignore",
           });
         expect(local).toThrow();

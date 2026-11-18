@@ -20,6 +20,7 @@ import {
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
   beginRollback,
@@ -271,17 +272,28 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       expect(mocks.proceed).toHaveBeenCalledOnce();
     }));
 
-  it("does not hold updates for a failed repair that owed no interrupted run", () =>
+  it("does not hold updates for a later failed repair when the settled run had nothing to finish", () =>
     fixtures.lifetime.run(async () => {
-      const slot = await installation();
-      const { runId } = createUpdateRun({ trigger: "cli" });
+      // Settled with nothing to finish; the update that went on recorded its own run,
+      // and closed the dead one without an acknowledgment.
+      const killed = await updater(await installation());
+      await nextUpdate(killed.slot);
+      await reconcileAbandonedUpdateRunsAsync({});
+      const { runId: went } = createUpdateRun({ trigger: "cli" });
+      finishUpdateRun(went, { status: "succeeded" });
+      // Later, an unrelated repair fails.
+      const { runId: failed } = createUpdateRun({ trigger: "cli" });
       const continuation = { step: "finalize:repair-continuation", status: "completed" } as const;
-      recordUpdateRunStep(runId, { ...continuation, endedAtMs: Date.now() });
-      finishUpdateRun(runId, { status: "failed", reason: "repair-failed" });
+      recordUpdateRunStep(failed, { ...continuation, endedAtMs: Date.now() });
+      finishUpdateRun(failed, { status: "failed", reason: "repair-failed" });
+      const { db } = openOpenClawStateDatabase();
+      const at = db.prepare("UPDATE update_runs SET created_at_ms = ? WHERE run_id = ?");
+      at.run(Number(getUpdateRun(went)?.createdAtMs) + 1, failed);
+      expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
 
-      await nextUpdate(slot);
+      await nextUpdate(killed.slot);
 
-      expect(mocks.proceed).toHaveBeenCalledOnce();
+      expect(mocks.proceed).toHaveBeenCalledTimes(2);
     }));
 
   it("refuses while another updater holds the installation", () =>
