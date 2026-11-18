@@ -1,12 +1,18 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import {
+  prepareSqliteDatabaseAdmissionAsync,
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
   sqliteSessionIdWriteScope,
 } from "../../infra/sqlite-database-admission.js";
+import { removeTempDirectoryAsync } from "../../infra/sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -36,11 +42,135 @@ import {
   backfillTranscriptActiveFactsBatchInTransaction as backfill,
   discoverTranscriptActiveFactsBackfillSessions as discover,
   probeTranscriptActiveFactsBackfill as probe,
+  type TranscriptActiveFactsBackfillOperations,
 } from "./session-transcript-active-facts-backfill.worker.js";
 import { createSessionTranscriptFactsBackfill } from "./session-transcript-facts-backfill.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { messageEvent } from "./transcript-message.test-support.js";
 import { createTranscriptPayloadUpdater, prepareTranscriptPayload } from "./transcript-payload.js";
+
+it.for(["restored", "cancelled", "rollback"] as const)(
+  "prepares outside the writer and preserves canonical history when publication is %s",
+  (outcome, { signal }) =>
+    withState({ label: "cold-navigation-prepare", scenario: "minimal" }, async (state) => {
+      const f = await createSessionColdStorageFixture(
+        state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+      );
+      await runSessionColdStorageMaintenance({ config: maintenanceConfig(f.scope.storePath) });
+      runOpenClawAgentWriteTransaction(({ db }) => {
+        db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run(historicalId);
+        db.prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?").run(
+          historicalId,
+        );
+      }, f.options);
+      const directory = await createSqliteSnapshotStagingDirectory(undefined, false, signal, true);
+      await prepareSqliteDatabaseAdmissionAsync({
+        location: path.join(directory, "database.sqlite"),
+        assertCurrent: () => signal.throwIfAborted(),
+        create: { authorize: () => signal.throwIfAborted(), retain() {} },
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      const held = runOpenClawAgentWorkerWrite(f.options, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      try {
+        await withinTest(entered.promise, signal);
+        const prepared = await withinTest(
+          withSessionHistoryWorkerDatabase(f.options, (reader) =>
+            reader.prepareColdNavigation(
+              { env: state.env, sessionId: historicalId, directory },
+              signal,
+            ),
+          ),
+          signal,
+        );
+        expect(prepared).toMatchObject({ kind: "prepared", archive: { session_id: historicalId } });
+        expect(
+          f
+            .database()
+            .prepare("SELECT count(*) n FROM transcript_events WHERE session_id = ?")
+            .get(historicalId),
+        ).toEqual({ n: 0 });
+        expect(
+          discover(f.database()).some(
+            (row) => row.sessionId === historicalId && row.coldNavigation,
+          ),
+        ).toBe(true);
+        expect(fs.existsSync(path.join(directory, "database.sqlite"))).toBe(true);
+        release.resolve();
+        await held;
+        if (prepared.kind !== "prepared") {
+          throw new Error("Expected prepared archive");
+        }
+        if (outcome === "restored") {
+          await restoreSessionColdTranscript(f.scope);
+        }
+        const before = f.snapshot();
+        const abort = new AbortController();
+        if (outcome === "cancelled") {
+          abort.abort(new Error("fixture cancellation"));
+        }
+        if (outcome === "rollback") {
+          f.database().exec(
+            "CREATE TRIGGER refuse_cold_copy BEFORE INSERT ON transcript_event_identities BEGIN SELECT RAISE(ABORT, 'fixture cold publication refused'); END",
+          );
+        }
+        const publisher =
+          await workerStores.openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
+            f.options,
+            { version: 2, assertCurrent: () => signal.throwIfAborted() },
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(
+                runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
+              ),
+              input: undefined,
+              priority: "background",
+            },
+          );
+        try {
+          const result = publisher.execute(
+            {
+              type: "batch",
+              input: {
+                sessionId: historicalId,
+                afterPosition: -1,
+                coldNavigation: true,
+                preparedColdNavigation: prepared,
+              },
+            },
+            () => signal.throwIfAborted(),
+            { signal: abort.signal },
+          );
+          if (outcome === "restored") {
+            await expect(result).resolves.toMatchObject({
+              done: true,
+              unavailable: true,
+              rowsFilled: 0,
+            });
+          } else {
+            await expect(result).rejects.toThrow(
+              outcome === "cancelled" ? "fixture cancellation" : "fixture cold publication refused",
+            );
+          }
+          expect(f.snapshot()).toEqual(before);
+          expect(f.database().prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+        } finally {
+          await publisher.close();
+          if (outcome === "rollback") {
+            f.database().exec("DROP TRIGGER refuse_cold_copy");
+          }
+        }
+      } finally {
+        release.resolve();
+        await held;
+        expect(await removeTempDirectoryAsync(directory)).toBe(true);
+      }
+    }),
+);
 
 it.for(["missing", "corrupt"] as const)(
   "leaves a %s archive pending but completes healthy archives later in the same pass",
@@ -121,6 +251,18 @@ it.for(["before", "after"] as const)(
       const archives = () =>
         f.database().prepare("SELECT * FROM session_transcript_cold_archives").all();
       const originalArchives = archives();
+      // Foreground discovery broadcasts closeResources to this pool. Whole-archive
+      // preparation there makes even an idle sibling wait for the busy reader.
+      const runDiscovery = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      using discovery = vi
+        .spyOn(sessionStoreLane.pool, "run")
+        .mockImplementation((input, controls) =>
+          runDiscovery(async () => {
+            const request = typeof input === "function" ? await input() : input;
+            expect(request.kind).not.toBe("cold-navigation-prepare");
+            return request;
+          }, controls),
+        );
       expect(discover(f.database())).toContainEqual(
         expect.objectContaining({
           sessionId: historicalId,
@@ -236,6 +378,7 @@ it.for(["before", "after"] as const)(
           expect(archives()).toEqual(originalArchives);
           await restoreSessionColdTranscript(f.scope);
         }
+        expect(discovery).toHaveBeenCalled();
         const restored = f.snapshot();
         for (const key of ["events", "identities", "active", "index"] as const) {
           expect(restored[key].filter((row) => row.session_id === historicalId)).toEqual(

@@ -291,6 +291,13 @@ type TrajectoryEventsWorkerInput = {
 
 export type SessionHistoryWorkerInput =
   | {
+      kind: "cold-navigation-prepare";
+      database: { agentId: string; path: string };
+      env: NodeJS.ProcessEnv;
+      sessionId: string;
+      directory: string;
+    }
+  | {
       kind: "transcript-facts-discover";
       database: { agentId: string; path: string };
       env: NodeJS.ProcessEnv;
@@ -392,13 +399,20 @@ type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { da
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
 /** `pointRead` places an access check on the worker pool's reserved class-0 lane. */
-export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };
+export type SessionHistoryWorkerRequestOptions =
+  | { timeoutMs?: number; pointRead?: true; lifetime?: never }
+  // Whole-archive maintenance is cancellable by its scheduler, not a foreground read clock.
+  | { lifetime: "caller"; timeoutMs?: never; pointRead?: never };
 
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
 export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValues &
   SessionTranscriptHydrationWorkerValues & {
+    "cold-navigation-prepare": {
+      kind: "cold-navigation-prepare";
+      result: import("./session-cold-navigation-preparation.js").SessionColdNavigationPreparation;
+    };
     "transcript-facts-discover": {
       kind: "transcript-facts-discover";
       result: { supported: boolean; sessions: TranscriptActiveFactsBackfillSession[] };
@@ -594,6 +608,10 @@ export type SessionHistoryWorkerDatabase = SessionTranscriptInventoryReaders &
     readAgentToolUsage: SessionHistoryReader<"agent-tool-usage", "status">;
     discoverTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-discover", "result">;
     probeTranscriptFacts: CancellableSessionHistoryReader<"transcript-facts-probe", "result">;
+    prepareColdNavigation: (
+      input: Parameters<SessionHistoryReader<"cold-navigation-prepare", "result">>[0],
+      signal: AbortSignal,
+    ) => ReturnType<SessionHistoryReader<"cold-navigation-prepare", "result">>;
     readAgentToolUsageImport: SessionHistoryReader<"agent-tool-usage-import", "scan">;
     readRetirement: CancellableSessionHistoryReader<"session-retirement-read", "result">;
     readTrajectoryEvents: CancellableSessionHistoryReader<"trajectory-events", "events">;

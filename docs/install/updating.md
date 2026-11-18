@@ -541,12 +541,17 @@ counts as a recoverable warning, retained by `openclaw update finish` in update
 history; pending archives keep their existing cold-restore path.
 
 After readiness, the existing transcript-facts backfill worker discovers pending
-archives from SQL and commits one complete archive per background writer turn.
-It yields to queued foreground writes and paces subsequent turns using admitted
-execution time. A large archive can still hold one transaction; deferral moves
+archives from SQL. The session read worker verifies and decodes each archive into
+disposable SQLite preparation, including native navigation projection and any
+legacy index repair, without reserving the canonical writer. The writer rechecks
+the archive identity and pending state, then publishes its complete navigation
+atomically. It yields to queued foreground writes and paces subsequent turns
+using preparation and admitted execution time. A large archive can still hold one transaction; deferral moves
 that work out of downtime, not out of the update's total eventual work. Cancellation
 and restart retain completed navigation and rediscover pending archives without
-a new progress store. Standalone `openclaw doctor --fix` and PostgreSQL retain
+a new progress store. Preparation is discarded after use or cancellation; a restart
+reconstructs it from the unchanged archive, never from partial canonical rows.
+Standalone `openclaw doctor --fix` and PostgreSQL retain
 the existing ten-minute archive-work budget, excluding backups and finishing
 the current archive transaction before stopping.
 

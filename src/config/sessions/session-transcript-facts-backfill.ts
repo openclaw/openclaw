@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import path from "node:path";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
@@ -6,12 +7,14 @@ import {
   openOpenClawAgentSqliteWorkerStoreV2,
   type OpenClawAgentSqliteWorkerStoreV2,
 } from "../../state/openclaw-agent-worker-store.js";
+import type { PreparedSessionColdNavigation } from "./session-cold-navigation-preparation.js";
 import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type {
+  TranscriptActiveFactsBackfillBatch,
   TranscriptActiveFactsBackfillOperations,
   TranscriptActiveFactsBackfillSession,
 } from "./session-transcript-active-facts-backfill.worker.js";
-import { sessionStoreLane } from "./session-transcript-worker-resources.js";
+import { coldNavigationLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 // Admitted execution includes reply pickup, so startup or main-thread contention can
@@ -57,6 +60,7 @@ export function createSessionTranscriptFactsBackfill(params: {
   let intervalBatchMs = 0;
   let intervalWriteMs = 0;
   let intervalMaxWriteMs = 0;
+  let intervalPreparationMs = 0;
   let closed = false;
   let client:
     | Promise<OpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>>
@@ -96,13 +100,15 @@ export function createSessionTranscriptFactsBackfill(params: {
         `since last report: ${intervalBatches} batches, ` +
         `${intervalBatchMs.toFixed(1)} ms maximum batch, ` +
         `${intervalMaxWriteMs.toFixed(1)} ms maximum and ` +
-        `${intervalWriteMs.toFixed(0)} ms total admitted execution`,
+        `${intervalWriteMs.toFixed(0)} ms total admitted execution, ` +
+        `${intervalPreparationMs.toFixed(0)} ms cold preparation outside the writer`,
     );
     lastReport = now;
     intervalBatches = 0;
     intervalBatchMs = 0;
     intervalWriteMs = 0;
     intervalMaxWriteMs = 0;
+    intervalPreparationMs = 0;
   };
   const runBatch = async () => {
     if (closed) {
@@ -181,45 +187,124 @@ export function createSessionTranscriptFactsBackfill(params: {
         }
         probeNext = false;
       }
-      client ??= openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
-        params.database,
-        { version: 2, assertCurrent },
-        {
-          moduleUrl: resolveRuntimeWorkerUrl(
-            runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
-          ),
-          input: undefined,
-          readCustody: params.readCustody,
-          priority: "background",
-          observeWriteExecution: (elapsedMs) => {
-            writeExecutionMs = elapsedMs;
-            intervalWriteMs += elapsedMs;
-            intervalMaxWriteMs = Math.max(intervalMaxWriteMs, elapsedMs);
+      const publish = async (preparedColdNavigation?: PreparedSessionColdNavigation) => {
+        client ??= openOpenClawAgentSqliteWorkerStoreV2<TranscriptActiveFactsBackfillOperations>(
+          params.database,
+          { version: 2, assertCurrent },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(
+              runtimeProcessEntrypoints.sessionTranscriptActiveFactsBackfill,
+            ),
+            input: undefined,
+            readCustody: params.readCustody,
+            priority: "background",
+            observeWriteExecution: (elapsedMs) => {
+              writeExecutionMs = elapsedMs;
+              intervalWriteMs += elapsedMs;
+              intervalMaxWriteMs = Math.max(intervalMaxWriteMs, elapsedMs);
+            },
           },
-        },
-      );
-      const store = await client;
-      const batch = await store.execute(
-        {
-          type: "batch",
-          input: {
-            sessionId: session.sessionId,
-            afterPosition,
-            ...(session.coldNavigation ? { coldNavigation: true } : {}),
+        );
+        const store = await client;
+        return store.execute(
+          {
+            type: "batch",
+            input: {
+              sessionId: session.sessionId,
+              afterPosition,
+              ...(session.coldNavigation ? { coldNavigation: true } : {}),
+              ...(preparedColdNavigation ? { preparedColdNavigation } : {}),
+            },
           },
-        },
-        assertCurrent,
-        { signal: params.signal },
-      );
+          assertCurrent,
+          { signal: params.signal },
+        );
+      };
+      let batch: TranscriptActiveFactsBackfillBatch;
+      let preparationMs = 0;
+      writeExecutionMs = 0;
+      if (session.coldNavigation) {
+        const [
+          { createSqliteSnapshotStagingDirectory },
+          { resolvePrivateSqliteSnapshotStagingRoot },
+          { retainSnapshotWork, removeTempDirectoryAsync },
+          { prepareSqliteDatabaseAdmissionAsync },
+        ] = await Promise.all([
+          import("../../infra/sqlite-snapshot-staging.js"),
+          import("../../infra/sqlite-private-directory.js"),
+          import("../../infra/sqlite-readonly-location-cleanup.js"),
+          import("../../infra/sqlite-database-admission.js"),
+        ]);
+        const started = performance.now();
+        const directory = await createSqliteSnapshotStagingDirectory(
+          resolvePrivateSqliteSnapshotStagingRoot(params.database.env),
+          false,
+          params.signal,
+          true,
+        );
+        try {
+          batch = await retainSnapshotWork(
+            (async () => {
+              await prepareSqliteDatabaseAdmissionAsync({
+                location: path.join(directory, "database.sqlite"),
+                assertCurrent,
+                create: {
+                  authorize: assertCurrent,
+                  retain: (work) => {
+                    void retainSnapshotWork(work);
+                  },
+                },
+              });
+              const prepared = await withSessionHistoryWorkerDatabase(
+                { ...params.database, readCustody: params.readCustody },
+                (reader) =>
+                  reader.prepareColdNavigation(
+                    {
+                      env: params.database.env ?? process.env,
+                      sessionId: session.sessionId,
+                      directory,
+                    },
+                    params.signal,
+                  ),
+                coldNavigationLane,
+              );
+              preparationMs = performance.now() - started;
+              intervalPreparationMs += preparationMs;
+              assertCurrent();
+              if (prepared.kind === "unavailable") {
+                return {
+                  afterPosition: -1,
+                  done: true,
+                  unavailable: true,
+                  busy: false,
+                  rowsFilled: 0,
+                  rowsSkipped: 0,
+                  rowsVisited: 0,
+                  bytesRead: 0,
+                  elapsedMs: 0,
+                  warning: prepared.warning,
+                };
+              }
+              return publish(prepared);
+            })(),
+          );
+        } finally {
+          if (!(await removeTempDirectoryAsync(directory))) {
+            params.log.warn("Cold navigation preparation cleanup remains pending");
+          }
+        }
+      } else {
+        batch = await publish();
+      }
       if (batch.warning) {
         params.log.warn(
           `Cold navigation for ${session.sessionId} remains pending: ${batch.warning}`,
         );
       }
       contentionDelayMs = batch.busy ? Math.min(5_000, contentionDelayMs * 2) : 250;
-      // Charge preparation and reply delivery while holding the writer, not foreground FIFO wait.
+      // Pace total work, including off-writer preparation; report writer occupancy separately.
       const delayMs = Math.max(
-        yieldAfter(Math.max(batch.elapsedMs, writeExecutionMs)),
+        yieldAfter(preparationMs + Math.max(batch.elapsedMs, writeExecutionMs)),
         contentionDelayMs,
       );
       afterPosition = batch.afterPosition;

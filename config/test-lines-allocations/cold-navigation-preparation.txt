@@ -1,0 +1,2 @@
+# Separate regressions cover update deferral, exact restore, corrupt-archive progress, off-writer preparation, atomic rollback/cancellation, and caller-owned maintenance lifetime. The foreground cleanup isolation regression and existing lane-retirement coverage bring the change to 435 net test lines; 35 exceed the 400-line allowance.
+35

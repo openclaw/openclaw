@@ -109,6 +109,16 @@ function reader<Input extends object, Request extends SessionHistoryWorkerPrepar
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
+  prepareColdNavigation(input, signal) {
+    return this.runRequest(
+      () => ({ kind: "cold-navigation-prepare", ...input, env: { ...input.env } }),
+      JSON.stringify(input).length * 2,
+      (value) => value.result,
+      signal,
+      undefined,
+      { lifetime: "caller" },
+    );
+  },
   discoverTranscriptFacts: reader(
     (input) => ({ kind: "transcript-facts-discover", ...input }),
     (value) => value.result,

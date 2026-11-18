@@ -16,10 +16,8 @@ import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
-import {
-  pendingSessionColdNavigationQuery,
-  readSessionColdTranscript,
-} from "./session-cold-storage-state.js";
+import type { PreparedSessionColdNavigation } from "./session-cold-navigation-preparation.js";
+import { pendingSessionColdNavigationQuery } from "./session-cold-storage-state.js";
 import { transcriptDependencyFactsProjectableSql } from "./session-transcript-active-facts.js";
 import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
@@ -314,27 +312,53 @@ export function backfillTranscriptActiveFactsBatchInTransaction(
 }
 
 export type TranscriptActiveFactsBackfillOperations = {
-  batch: { input: TranscriptActiveFactsBackfillCursor; output: TranscriptActiveFactsBackfillBatch };
+  batch: {
+    input: TranscriptActiveFactsBackfillCursor & {
+      preparedColdNavigation?: PreparedSessionColdNavigation;
+    };
+    output: TranscriptActiveFactsBackfillBatch;
+  };
 };
 
 export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorkerDatabaseContext) {
   const database = context.database;
-  let coldNavigation: typeof import("./session-cold-storage-navigation.js") | undefined;
-  let coldCodec: typeof import("./session-cold-storage-codec.js") | undefined;
+  let openColdNavigation:
+    | typeof import("./session-cold-navigation-preparation.js").openPreparedSessionColdNavigation
+    | undefined;
+  let coldNavigation:
+    | ReturnType<
+        typeof import("./session-cold-navigation-preparation.js").openPreparedSessionColdNavigation
+      >
+    | undefined;
   return bindSqliteWorkerDatabase<TranscriptActiveFactsBackfillOperations>(database, {
     async prepare(command) {
-      if (command.input.coldNavigation && !coldNavigation) {
-        [coldNavigation, coldCodec] = await Promise.all([
-          import("./session-cold-storage-navigation.js"),
-          import("./session-cold-storage-codec.js"),
-        ]);
+      if (command.input.preparedColdNavigation) {
+        const { openPreparedSessionColdNavigation } =
+          await import("./session-cold-navigation-preparation.js");
+        openColdNavigation = openPreparedSessionColdNavigation;
       }
+    },
+    close() {
+      coldNavigation?.close();
+      coldNavigation = undefined;
+      return undefined;
     },
     execute(command: SqliteWorkerCommand<TranscriptActiveFactsBackfillOperations>) {
       // PostgreSQL needs a separately measured source-row locking protocol; its
       // ordinary writers continue filling facts through the existing owner.
       if (isPostgresSqlConnection(database)) {
         throw new Error("Transcript facts background backfill currently supports SQLite only");
+      }
+      if (command.input.preparedColdNavigation) {
+        if (!openColdNavigation) {
+          throw new Error("Cold navigation publisher was not loaded");
+        }
+        // Async prepare only loads code. Native handles borrow this execution's live admission.
+        coldNavigation = openColdNavigation(
+          database,
+          context.databasePath,
+          command.input.preparedColdNavigation,
+        );
       }
       context.admit("transaction");
       context.admit("commit");
@@ -347,36 +371,27 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
             () => {
               entered = true;
               if (command.input.coldNavigation) {
-                const backfill = coldNavigation?.backfillSessionColdNavigationInTransaction;
-                if (!backfill) {
+                const prepared = command.input.preparedColdNavigation;
+                if (!coldNavigation || !prepared) {
                   throw new Error("Cold navigation backfill was not prepared");
                 }
-                const archive = readSessionColdTranscript(database, command.input.sessionId);
-                const pending = executeSqliteQueryTakeFirstSync(
+                const archive = prepared.archive;
+                // Decode, native projection and any old-index repair already ran
+                // in the read worker. Only atomic publication reserves this writer.
+                const published = withSqliteDatabaseWriteScope(
                   database,
-                  pendingSessionColdNavigationQuery(database)
-                    .select("archive.session_id")
-                    .where("archive.session_id", "=", command.input.sessionId),
+                  [sqliteSessionIdWriteScope(archive.session_id)],
+                  () => coldNavigation!.publish(),
                 );
-                if (archive && pending) {
-                  // Keep an archive atomic: interruption cannot publish partial
-                  // navigation or hide the source from cold restoration. Foreground
-                  // arrivals get the FIFO before the next paced background batch.
-                  withSqliteDatabaseWriteScope(
-                    database,
-                    [sqliteSessionIdWriteScope(archive.session_id)],
-                    () => backfill({ db: database, path: context.databasePath }, archive),
-                  );
-                }
                 return {
                   afterPosition: -1,
                   done: true,
-                  unavailable: !archive || !pending,
+                  unavailable: !published,
                   busy: false,
-                  rowsFilled: archive && pending ? archive.event_count : 0,
+                  rowsFilled: published ? archive.event_count : 0,
                   rowsSkipped: 0,
-                  rowsVisited: archive && pending ? archive.event_count : 0,
-                  bytesRead: archive && pending ? archive.raw_bytes : 0,
+                  rowsVisited: published ? archive.event_count : 0,
+                  bytesRead: published ? archive.raw_bytes : 0,
                   elapsedMs: performance.now() - started,
                 };
               }
@@ -390,27 +405,6 @@ export function bindSqliteWorkerBackend(_input: undefined, context: SqliteWorker
         );
         return { ...result, elapsedMs: performance.now() - started };
       } catch (error) {
-        // The transaction owner has confirmed rollback. Only an archive read
-        // failure may be skipped; authority, cancellation, SQL and lifecycle
-        // failures remain terminal and never authorize replay.
-        if (
-          command.input.coldNavigation &&
-          coldCodec &&
-          error instanceof coldCodec.SessionColdArchiveReadError
-        ) {
-          return {
-            afterPosition: -1,
-            done: true,
-            unavailable: true,
-            busy: false,
-            rowsFilled: 0,
-            rowsSkipped: 0,
-            rowsVisited: 0,
-            bytesRead: 0,
-            elapsedMs: performance.now() - started,
-            warning: error.message,
-          };
-        }
         if (entered || !isSqliteLockError(error)) {
           throw error;
         }
