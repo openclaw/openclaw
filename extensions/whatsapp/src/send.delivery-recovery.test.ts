@@ -361,6 +361,7 @@ it("keeps pre-connect recovery replayable, then sends exactly once after connect
       "queued before listener startup",
       undefined,
       undefined,
+      { accountId: "default" },
     );
   });
 });

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import * as agentRuntime from "openclaw/plugin-sdk/agent-runtime";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime as loadStore,
@@ -9,7 +10,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { upsertAuthProfile, upsertAuthProfileAsync } from "openclaw/plugin-sdk/provider-auth";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, describe, expect, it as baseIt, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it as baseIt, onTestFinished, vi } from "vitest";
 import {
   applyCodexAppServerAuthProfile as applyAuth,
   bridgeCodexAppServerStartOptions as bridgeStart,
@@ -332,7 +333,8 @@ function rotation(prefix: string, overrides: Partial<AccountRotation> = {}): Rot
   return {
     access: `${prefix}-access`,
     refresh: `${prefix}-refresh`,
-    expires: Date.now() + 60_000,
+    // A completed rotation must outlive the proactive refresh window too.
+    expires: Date.now() + 24 * 60 * 60_000,
     ...overrides,
   };
 }
@@ -1331,6 +1333,22 @@ describe("Codex auth bridge", () => {
     });
     const credential = oauthProfile("expired", { expires: Date.now() - 60_000 });
     const f = authFixture(agentDir, credential);
+    // Real owner lookups may finish on different event-loop turns. Hold their results
+    // until all four callers can join the same still-pending scoped rotation.
+    const lookedUp = createDeferred<void>();
+    const readPersisted = agentRuntime.findPersistedAuthProfileCredentialAsync;
+    let readers = 0;
+    const lookup = vi
+      .spyOn(agentRuntime, "findPersistedAuthProfileCredentialAsync")
+      .mockImplementation(async (params) => {
+        const result = await readPersisted(params);
+        if (++readers === 4) {
+          lookedUp.resolve();
+        }
+        await lookedUp.promise;
+        return result;
+      });
+    onTestFinished(() => lookup.mockRestore());
     const first = f.apply();
     const second = f.apply();
     const compatibleWaiter = f.refresh({ previousAccountId: "account-a" });

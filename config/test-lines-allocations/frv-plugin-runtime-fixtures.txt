@@ -1,0 +1,2 @@
+# Align plugin test fixtures with actual account, recorder admission, and credential refresh contracts.
+18

@@ -3507,14 +3507,13 @@ describe("runCodexAppServerAttempt", () => {
         message,
         resolveMessage: async () => message,
         getAdmissionReceipt: () => undefined,
+        isBlocked: () => false,
         markRuntimePersistencePending() {},
         markRuntimePersisted() {},
       } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
       const run = runCodexAppServerAttempt(params);
-      await vi.waitFor(
-        () => expect(requestsFor(harness.requests, "turn/start")).toHaveLength(expectedTurnStarts),
-        fastWait,
-      );
+      await run.waitForTurnAccepted();
+      expect(requestsFor(harness.requests, "turn/start")).toHaveLength(expectedTurnStarts);
       await harness.completeTurn({
         threadId: "thread-existing",
         turnId: `turn-${sender.name.toLowerCase()}`,
