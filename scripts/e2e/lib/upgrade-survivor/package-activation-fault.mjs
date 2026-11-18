@@ -9,8 +9,9 @@ import { DatabaseSync } from "node:sqlite";
 function installPackageActivationFault({ journal, evidence, cut, terminate }) {
   assert(path.isAbsolute(journal) && path.isAbsolute(evidence));
   assert(["publication-complete", "verification"].includes(cut));
-  // Capture for restoration; intercepted calls supply their database through .call.
+  // oxlint-disable-next-line typescript/unbound-method -- Capture before interception; every call supplies the intercepted database through .call.
   const prepare = DatabaseSync.prototype.prepare;
+  // oxlint-disable-next-line typescript/unbound-method -- Capture before interception; every call supplies the intercepted database through .call.
   const exec = DatabaseSync.prototype.exec;
   const armed = new WeakSet();
   const observeCommit = (db) => {
