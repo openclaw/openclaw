@@ -189,6 +189,9 @@ describe("update run ledger", () => {
     const drivers = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) =>
       identity(index, "\0".repeat(255)),
     );
+    const recorded = Array.from({ length: UPDATE_RUN_DRIVER_LIMIT }, (_, index) =>
+      Object.assign(identity(index, "\0".repeat(255)), { namespace }),
+    );
     const managedHandoff = {
       parent: identity(10, "\0".repeat(255)),
       helper: identity(11, "h".repeat(255)),
@@ -203,8 +206,8 @@ describe("update run ledger", () => {
       {
         trigger: "cli",
         origin: {
-          driver: { ...drivers[0]!, namespace },
-          previousDrivers: drivers.slice(1).map((driver) => ({ ...driver, namespace })),
+          driver: recorded[0],
+          previousDrivers: recorded.slice(1),
           managedHandoff,
           gitActivation,
         },
