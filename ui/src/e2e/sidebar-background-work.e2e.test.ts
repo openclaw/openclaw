@@ -117,12 +117,12 @@ suite.define(() => {
       const toggle = parentRow.locator("[data-child-session-toggle]");
       await ui.visible(toggle);
       expect(await toggle.getAttribute("aria-expanded")).toBe("false");
-      expect(
-        await parentRow
-          .locator(".sidebar-session-indicator .session-glyph__ring--background")
-          .count(),
-      ).toBe(0);
       try {
+        expect(
+          await parentRow
+            .locator(".sidebar-session-indicator .session-glyph__ring--background")
+            .count(),
+        ).toBe(0);
         await ui.visible(toggle.locator(".sidebar-child-session-toggle__icon svg"));
         expect(await toggle.locator(".session-run-spinner").count()).toBe(0);
       } catch (error) {
