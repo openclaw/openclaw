@@ -9,9 +9,13 @@ struct StaleGatewayServiceReplacementTests {
 
     private func replacement(_ recorder: Recorder, stopError: String? = nil) -> StaleGatewayServiceReplacement {
         StaleGatewayServiceReplacement(
-            stop: { recorder.steps.append("stop"); return stopError },
+            stop: { recorder.steps.append("stop")
+                return stopError
+            },
             restore: { recorder.steps.append("restore") },
-            install: { recorder.steps.append("install"); return nil })
+            install: { recorder.steps.append("install")
+                return nil
+            })
     }
 
     @Test func `credentials are prepared after the stale service stops and before this build installs`() async throws {
@@ -44,47 +48,41 @@ struct StaleGatewayServiceReplacementTests {
     func `detection replaces only active local Gateways`(
         mode: AppState.ConnectionMode, hostsLocalGateway: Bool, paused: Bool, expected: Bool)
     {
-        #expect(StaleGatewayServiceReplacement.admits(
+        let admission = StaleGatewayServiceReplacement.admission(
             connectionMode: mode,
             hostsLocalGateway: hostsLocalGateway,
             isPaused: paused,
             launchAgentUsesManagedCLI: true,
             gatewayUpdateChannel: nil,
             installPolicy: nil,
-            launchAgentWriteDisabled: false) == expected)
+            launchAgentWriteDisabled: false)
+        #expect(admission == (expected ? .admitted : .notHosted))
     }
 
     @Test(arguments: [AppState.ConnectionMode.local, .remote])
-    func `detection keeps operator-selected Gateway versions`(mode: AppState.ConnectionMode) {
-        func admits(channel: String? = nil, policy: String? = nil) -> Bool {
-            StaleGatewayServiceReplacement.admits(
-                connectionMode: mode,
-                hostsLocalGateway: true,
-                isPaused: false,
-                launchAgentUsesManagedCLI: true,
-                gatewayUpdateChannel: channel,
-                installPolicy: policy,
-                launchAgentWriteDisabled: false)
-        }
-        #expect(admits())
-        #expect(admits(channel: "beta", policy: "exact"))
-        #expect(!admits(channel: "extended-stable"))
-        #expect(!admits(policy: "beta"))
-        #expect(!admits(policy: "stable"))
-    }
-
-    @Test(arguments: [AppState.ConnectionMode.local, .remote])
-    func `detection preserves unmanaged services and disabled service writes`(mode: AppState.ConnectionMode) {
-        for (managed, writeDisabled) in [(false, false), (true, true)] {
-            #expect(!StaleGatewayServiceReplacement.admits(
+    func `detection keeps operator-selected Gateway versions and names their owner`(mode: AppState.ConnectionMode) {
+        func admission(
+            managed: Bool = true,
+            channel: String? = nil,
+            policy: String? = nil,
+            writeDisabled: Bool = false) -> StaleGatewayServiceReplacement.Admission
+        {
+            StaleGatewayServiceReplacement.admission(
                 connectionMode: mode,
                 hostsLocalGateway: true,
                 isPaused: false,
                 launchAgentUsesManagedCLI: managed,
-                gatewayUpdateChannel: nil,
-                installPolicy: nil,
-                launchAgentWriteDisabled: writeDisabled))
+                gatewayUpdateChannel: channel,
+                installPolicy: policy,
+                launchAgentWriteDisabled: writeDisabled)
         }
+        #expect(admission() == .admitted)
+        #expect(admission(channel: "beta", policy: "exact") == .admitted)
+        #expect(admission(channel: "extended-stable") == .excluded(.extendedStable))
+        #expect(admission(policy: "beta") == .excluded(.installPolicy("beta")))
+        #expect(admission(policy: "stable") == .excluded(.installPolicy("stable")))
+        #expect(admission(managed: false) == .excluded(.independentlyManaged))
+        #expect(admission(writeDisabled: true) == .excluded(.independentlyManaged))
     }
 
     @Test func `a refused stop never runs credential preparation`() async throws {

@@ -228,13 +228,26 @@ export function registerMaintenanceCommands(
             ).parseDoctorModelReplacements(opts.replaceModel)
           : [];
         if (opts.clientCredentials === true) {
-          const { prepareStartupClientCredentials } =
+          const { ClientCredentialGatewayHeldError, prepareStartupClientCredentials } =
             await import("../../commands/startup-client-credentials.js");
-          await prepareStartupClientCredentials({
-            env: process.env,
-            runtime: defaultRuntime,
-            prepareRuntimePins: true,
-          });
+          try {
+            await prepareStartupClientCredentials({
+              env: process.env,
+              runtime: defaultRuntime,
+              prepareRuntimePins: true,
+            });
+          } catch (error) {
+            if (opts.json === true && error instanceof ClientCredentialGatewayHeldError) {
+              // The macOS app keys its Gateway-owner recovery on this code, not message text.
+              const failure = formatCliJsonFailure(error);
+              defaultRuntime.writeJson({
+                ...failure,
+                error: { ...failure.error, code: error.code },
+              });
+              exitCliAfterOutput(defaultRuntime, 2);
+            }
+            throw error;
+          }
           if (opts.json === true) {
             defaultRuntime.writeJson({ ok: true });
           }

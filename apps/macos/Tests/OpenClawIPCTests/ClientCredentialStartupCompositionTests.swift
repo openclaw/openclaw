@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import Darwin
 import Foundation
 import OpenClawIPC
@@ -15,6 +16,116 @@ struct ClientCredentialStartupCompositionTests {
     private nonisolated static var isAppHost: Bool {
         Bundle.main.bundleIdentifier == "ai.openclaw.mac.recovery-fixture" &&
             BundledRuntime.isBundledApp && AppProfile.current.isActive
+    }
+
+    @Test(.enabled(if: Self.isAppHost))
+    func `external quit settles startup while credential recovery is open`() async throws {
+        let fixture = try ClientCredentialStartupTests.Fixture()
+        let name = "recovery-" + UUID().uuidString.lowercased()
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": name])
+        let suite = try #require(profile.defaultsSuiteName)
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let plist = GatewayLaunchAgentManager.plistURL(
+            homeDirectory: FileManager.default.homeDirectoryForCurrentUser, profile: profile)
+        var completion: ShellExecutor.ShellResult?
+        var child: Task<Void, Never>?
+        defer {
+            if completion != nil || child == nil {
+                defaults.removePersistentDomain(forName: suite)
+                try? FileManager.default.removeItem(at: plist)
+                try? FileManager.default.removeItem(at: profile.instanceLockURL())
+                fixture.remove()
+            } else {
+                print("[credential-recovery-proof] retained unsettled fixture: \(fixture.root.path)")
+            }
+        }
+        defaults.set(true, forKey: onboardingSeenKey)
+        defaults.synchronize()
+        try Data(#"{"gateway":{"mode":"local"},"update":{"channel":"extended-stable"}}"#.utf8)
+            .write(to: fixture.configURL)
+        let template = Bundle.main.bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("OpenClawStartupFixture.app")
+        let executable = fixture.app.appendingPathComponent("Contents/MacOS/OpenClaw")
+        let files = FileManager.default
+        try files.copyItem(at: template.appendingPathComponent("Contents/MacOS/OpenClaw"), to: executable)
+        try files.createSymbolicLink(
+            at: fixture.app.appendingPathComponent("Contents/Frameworks"),
+            withDestinationURL: template.appendingPathComponent("Contents/Frameworks"))
+        for resource in try files.contentsOfDirectory(
+            at: template.appendingPathComponent("Contents/Resources"), includingPropertiesForKeys: nil)
+            where resource.pathExtension == "bundle"
+        {
+            try files.createSymbolicLink(
+                at: fixture.app.appendingPathComponent("Contents/Resources/" + resource.lastPathComponent),
+                withDestinationURL: resource)
+        }
+        // A definition is enough to exercise exclusion. Never bootstrap or start its service.
+        let definition: [String: Any] = [
+            "Label": profile.gatewayLaunchAgentLabel,
+            "ProgramArguments": [
+                fixture.root.appendingPathComponent("external/node").path,
+                fixture.root.appendingPathComponent("external/openclaw.mjs").path,
+                "gateway",
+            ],
+            "EnvironmentVariables": ["OPENCLAW_PROFILE": name, "OPENCLAW_STATE_DIR": fixture.executionRoot.path],
+        ]
+        try files.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let originalDefinition = try PropertyListSerialization.data(
+            fromPropertyList: definition,
+            format: .xml,
+            options: 0)
+        try originalDefinition.write(to: plist)
+        var environment = fixture.environment
+        environment["HOME"] = FileManager.default.homeDirectoryForCurrentUser.path
+        environment["OPENCLAW_PROFILE"] = name
+        environment["OPENCLAW_STATE_DIR"] = fixture.executionRoot.path
+        environment["OPENCLAW_CONFIG_PATH"] = fixture.configURL.path
+        environment["TEST_EXIT_CODE"] = "2"
+        environment["TEST_STDOUT"] =
+            #"{"ok":false,"error":{"message":"synthetic busy state","code":"client_credentials_gateway_held"}}"#
+        child = Task { @MainActor in
+            completion = await ShellExecutor.runDetailed(
+                command: [executable.path, "--attach-only"], cwd: fixture.root.path, env: environment, timeout: 30)
+        }
+        do {
+            var running: NSRunningApplication?
+            try await TestWait.state("real credential-recovery alert") {
+                if let completion {
+                    throw OpenClawNativeStateError("Fixture exited before recovery: " + completion.stderr.suffix(4000))
+                }
+                guard files.fileExists(atPath: fixture.capture.path) else { return false }
+                let windows = CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]] ?? []
+                for window in windows {
+                    guard let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                          (bounds["Width"] as? Double ?? 0) > 200,
+                          (bounds["Height"] as? Double ?? 0) > 100,
+                          let pid = window[kCGWindowOwnerPID as String] as? Int32,
+                          let path = ProcessIdentity.executablePath(pid: pid),
+                          URL(fileURLWithPath: path).resolvingSymlinksInPath() == executable.resolvingSymlinksInPath()
+                    else { continue }
+                    running = NSRunningApplication(processIdentifier: pid)
+                    return running != nil
+                }
+                return false
+            }
+            let owned = try #require(running)
+            // External Quit exercises AppKit termination, not the SIGTERM failsafe.
+            try #require(owned.terminate())
+            print("[credential-recovery-proof] external Quit sent to real alert owner")
+            await child?.value
+            let result = try #require(completion)
+            try #require(!result.timedOut, "Quit must settle the alert without the subprocess timeout killing it")
+            try #require(result.exitCode == 0)
+            try #require(owned.isTerminated)
+            #expect(try Data(contentsOf: plist) == originalDefinition)
+            #expect(!files.fileExists(atPath: fixture.externalMarker.path))
+            print(
+                "[credential-recovery-proof] real alert open; external Quit exited cleanly; service unchanged")
+        } catch {
+            child?.cancel()
+            await child?.value
+            throw error
+        }
     }
 
     @Test(.enabled(if: Self.isAppHost))
@@ -47,7 +158,10 @@ struct ClientCredentialStartupCompositionTests {
             atPath: app.appendingPathComponent("Contents/MacOS/OpenClaw").path))
 
         try await Self.assertAppCredentials(
-            app: app, root: root, profileName: profileName, material: material,
+            app: app,
+            root: root,
+            profileName: profileName,
+            material: material,
             retainFixture: { canRemoveFixture = false })
         print("[credential-startup-proof] pending migration: app admitted; identity, private key, token preserved")
 
@@ -65,13 +179,16 @@ struct ClientCredentialStartupCompositionTests {
             #expect(throws: OpenClawNativeStateError.self) { try owner.assertReady(rootURL: root) }
         }
         try await Self.assertAppCredentials(
-            app: app, root: root, profileName: profileName, material: material,
+            app: app,
+            root: root,
+            profileName: profileName,
+            material: material,
             retainFixture: { canRemoveFixture = false })
         let owner = try OpenClawClientCredentialStore(rootURL: root, migration: true)
         defer { owner.close() }
         try #require(try owner.readReceipt()?.receipt.sharedFile == actualBinding)
         print(
-            "[credential-startup-proof] remount: app admitted; binding repaired; identity, private key, token preserved")
+            "[credential-startup-proof] remount: app admitted; binding repaired; identity and credentials preserved")
     }
 
     private static func assertAppCredentials(

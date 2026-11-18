@@ -46,7 +46,10 @@ import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-s
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import * as doctorMaintenance from "./doctor-maintenance.js";
-import { prepareStartupClientCredentials } from "./startup-client-credentials.js";
+import {
+  ClientCredentialGatewayHeldError,
+  prepareStartupClientCredentials,
+} from "./startup-client-credentials.js";
 
 describe("automatic client credential preparation", () => {
   const dirs = useStateDatabaseTempDirs();
@@ -448,29 +451,49 @@ describe("automatic client credential preparation", () => {
     await expectCredentials(fixture);
   });
 
-  it("keeps healthy legacy credentials readable while a Gateway owns shared state", async () => {
-    const fixture = await bootstrap();
-    restoreLegacyBootstrapReceipt(fixture.env);
-    const before = fs.readFileSync(fixture.local);
-    const serving = acquireGatewayStateOwner({
-      databasePath: fixture.shared,
-      payload: {
-        pid: process.pid,
-        processNamespace: readGatewayLockProcessNamespace(),
-        role: "gateway",
-        createdAt: new Date().toISOString(),
-        configPath: fixture.env.OPENCLAW_CONFIG_PATH,
-        stateDir: fixture.root,
-      },
-    });
-    try {
-      await fixture.prepare();
-      expect(fs.readFileSync(fixture.local)).toEqual(before);
-      await expectCredentials(fixture);
-    } finally {
-      serving.release();
-    }
-  });
+  it.each([
+    ["gateway", false],
+    ["gateway", true],
+    ["agent-embedded", true],
+  ] as const)(
+    "preserves credentials while %s owns state (maintenance required=%s)",
+    async (role, required) => {
+      const fixture = await bootstrap();
+      if (required) {
+        changeRecordedDevice(fixture.env);
+      } else {
+        restoreLegacyBootstrapReceipt(fixture.env);
+      }
+      const before = fs.readFileSync(fixture.local);
+      const owner = acquireGatewayStateOwner({
+        databasePath: fixture.shared,
+        payload: {
+          pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
+          role,
+          createdAt: new Date().toISOString(),
+          configPath: fixture.env.OPENCLAW_CONFIG_PATH,
+          stateDir: fixture.root,
+        },
+      });
+      try {
+        if (required) {
+          const failure = await fixture.prepare().then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+          expect(failure).toBeInstanceOf(Error);
+          expect(failure instanceof ClientCredentialGatewayHeldError).toBe(role === "gateway");
+        } else {
+          await fixture.prepare();
+          await expectCredentials(fixture);
+        }
+        expect(fs.readFileSync(fixture.local)).toEqual(before);
+      } finally {
+        owner.release();
+      }
+    },
+  );
 
   it.each([
     { label: "readable credentials", required: false, recoveryPreview: false },
