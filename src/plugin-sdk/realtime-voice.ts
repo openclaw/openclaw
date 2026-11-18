@@ -105,6 +105,7 @@ export {
 } from "../talk/realtime-session-policy.js";
 export {
   assertRealtimeVoiceAgentConsultModelSelectionUnlocked,
+  assertRealtimeVoiceAgentConsultModelSelectionUnlockedAsync,
   consultRealtimeVoiceAgent,
   REALTIME_VOICE_AGENT_CONSULT_SENDER_AUTH_VERSION,
 } from "../talk/agent-consult-runtime.js";
