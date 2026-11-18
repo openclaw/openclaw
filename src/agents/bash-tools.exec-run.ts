@@ -568,6 +568,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           pendingMaxOutput: DEFAULT_PENDING_MAX_OUTPUT,
           cleanupMs,
           notifyOnExit,
+          senderIsOwner: defaults?.senderIsOwner === true,
           subagentSession,
           sessionsYieldAvailable: defaults?.sessionsYieldAvailabilityRef?.value === true,
           notifyOnExitEmptySuccess,

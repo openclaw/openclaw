@@ -52,6 +52,7 @@ export function prepareExecExitNotification(
   session: ProcessSession,
   subagentSession: boolean,
   sessionsYieldAvailable: boolean,
+  senderIsOwner = false,
 ): Promise<void> | undefined {
   if (!session.notifyOnExit || !session.sessionKey) {
     return undefined;
@@ -71,10 +72,17 @@ export function prepareExecExitNotification(
   if (!owner) {
     return undefined;
   }
+  const caller = getGatewayToolCallerIdentity();
   return captureSessionEventTarget(owner, targetKey, {
-    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    operatorAuthority: caller?.operatorAuthority,
+    ownerContinuationSessionBound: true,
+    ...(senderIsOwner && caller?.agentId === owner && caller.sessionKey === targetKey
+      ? { ownerContinuation: true as const }
+      : {}),
     // The completion continues the requester's own command, not a new sender's request.
-    retainRequesterOwner: true,
+    ...(caller?.agentId === owner && caller.sessionKey === targetKey
+      ? { retainRequesterOwner: true as const }
+      : {}),
   }).then(
     (target) => {
       if (oneShot && sessionsYieldAvailable) {

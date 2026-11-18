@@ -490,6 +490,7 @@ function enqueueSessionEventAttempt(
       occurrenceId,
       deliveryContext: route,
       target,
+      readSessionId: () => generationLease?.readSessionSettings()?.sessionId,
       assertCurrent,
     });
     const result = await dispatchInboundMessageWithRoutedChannelDispatcher({

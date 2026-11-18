@@ -232,6 +232,7 @@ export async function runExecProcess({
   pendingMaxOutput: number;
   cleanupMs?: number;
   notifyOnExit: boolean;
+  senderIsOwner?: boolean;
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
   /** A one-shot run can await this command's exit only through sessions_yield. */
@@ -331,6 +332,7 @@ export async function runExecProcess({
     session,
     opts.subagentSession === true,
     opts.sessionsYieldAvailable === true,
+    opts.senderIsOwner === true,
   );
   if (notificationTarget) {
     await notificationTarget;

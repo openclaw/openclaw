@@ -19,6 +19,8 @@ export type DurableExecOptions = { notifyOnExit: boolean; notifyOnExitEmptySucce
 
 export type ExecToolDefaults = ExecToolRoutingDefaults & {
   hasCronTool?: boolean;
+  /** Host-resolved owner decision of the turn starting this command. */
+  senderIsOwner?: boolean;
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;
   trigger?: string;

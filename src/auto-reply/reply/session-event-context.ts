@@ -184,6 +184,8 @@ export function buildSessionEventContext(params: {
   occurrenceId: string;
   deliveryContext?: DeliveryContext;
   target: SessionEventTarget;
+  /** Current transcript at adoption, including a reply queued across a reset. */
+  readSessionId?: () => string | undefined;
   assertCurrent: SessionSourceAssertion;
 }): MsgContext {
   const { agentId, sessionKey, text, options, occurrenceId, deliveryContext, target } = params;
@@ -243,13 +245,18 @@ export function buildSessionEventContext(params: {
   }
   const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
-    : options.source === "plugin" ||
+    : options.source === "exec" ||
+        options.source === "plugin" ||
         options.source === "tool_handoff" ||
         options.source === "restart" ||
         // A scheduler turn about a job (not its run) acts for the job's restored operator source.
         (!automation && (options.source === "cron" || options.source === "cron_failure_repair"))
       ? readSessionEventTargetOperatorAuthority(target)
       : undefined;
+  const ownerSessionCurrent = () =>
+    options.source !== "exec" ||
+    !params.readSessionId ||
+    params.readSessionId() === target.sessionId;
   const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
@@ -266,7 +273,10 @@ export function buildSessionEventContext(params: {
       sourceAssertion: params.assertCurrent,
       isCurrent: () => {
         params.assertCurrent();
-        return true;
+        return (
+          ownerSessionCurrent() &&
+          (readSessionEventTargetOwnerContinuation(target) || options.source !== "exec")
+        );
       },
       // Work that outlives this occurrence keeps only the live operator source.
       successor: {
@@ -274,7 +284,10 @@ export function buildSessionEventContext(params: {
         sourceAssertion: operatorAuthority.assertCurrent,
         isCurrent: () => {
           operatorAuthority.assertCurrent();
-          return true;
+          return (
+            ownerSessionCurrent() &&
+            (readSessionEventTargetOwnerContinuation(target) || options.source !== "exec")
+          );
         },
       },
     });
@@ -306,12 +319,19 @@ export function buildSessionEventContext(params: {
         sourceAssertion: params.assertCurrent,
         isCurrent: () => {
           params.assertCurrent();
-          return authority.isCurrent(getSessionEventRuntimeConfig());
+          return (
+            ownerSessionCurrent() &&
+            Boolean(readSessionEventTargetCommandOwner(target)) &&
+            authority.isCurrent(getSessionEventRuntimeConfig())
+          );
         },
         // Work that outlives this occurrence keeps only the requester's live owner check.
         successor: {
           recoveryReference: authority.recoveryReference,
-          isCurrent: () => authority.isCurrent(getSessionEventRuntimeConfig()),
+          isCurrent: () =>
+            ownerSessionCurrent() &&
+            Boolean(readSessionEventTargetCommandOwner(target)) &&
+            authority.isCurrent(getSessionEventRuntimeConfig()),
         },
       });
       // Owner-checked effects (for example Gateway maintenance) recheck this sender at

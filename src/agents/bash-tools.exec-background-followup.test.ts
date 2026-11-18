@@ -986,3 +986,36 @@ test.for(["completed", "revoked", "missing"] as const)(
     }
   },
 );
+
+test.for([true, false])(
+  "resumes an exec with only its original owner decision: %s",
+  async (owner, { signal }) => {
+    const sessionKey = `agent:main:exec-owner-${owner}`;
+    await seedOrigin(sessionKey);
+    const authority = createAdmittedRunOperatorAuthority({
+      profileId: "operator",
+      scopes: ["operator.admin"],
+      assertCurrent() {},
+      modelPolicy: {
+        models: [{ provider: "mock-openai", model: "gpt-5.6-luna" }],
+        allows: (ref) => ref.provider === "mock-openai" && ref.model === "gpt-5.6-luna",
+      },
+    });
+    model.mockImplementation(async (params) => {
+      await admitModelTurn(params);
+      expect(params.senderIsOwner === true).toBe(owner);
+      return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+    });
+    await withGatewayToolCallerIdentity(
+      { agentId: "main", sessionKey, operatorAuthority: authority },
+      () =>
+        backgroundExec(sessionKey, { agentId: "main", senderIsOwner: owner })(
+          "owner-command",
+          'process.stdout.write("OWNER_COMMAND_DONE")',
+        ),
+    );
+    await withinTest(waitForExecScope(sessionKey), signal);
+    await completion(signal);
+    expect(model).toHaveBeenCalledOnce();
+  },
+);

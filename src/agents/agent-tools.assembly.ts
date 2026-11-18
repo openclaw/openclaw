@@ -300,6 +300,7 @@ export function* assembleOpenClawCodingTools(
               timeoutSec: options?.exec?.timeoutSec ?? execConfig.timeoutSec,
               approvalRunningNoticeMs:
                 options?.exec?.approvalRunningNoticeMs ?? execConfig.approvalRunningNoticeMs,
+              senderIsOwner: options?.senderIsOwner === true,
               notifyOnExit: options?.exec?.notifyOnExit ?? execConfig.notifyOnExit,
               notifyOnExitEmptySuccess:
                 options?.exec?.notifyOnExitEmptySuccess ?? execConfig.notifyOnExitEmptySuccess,
