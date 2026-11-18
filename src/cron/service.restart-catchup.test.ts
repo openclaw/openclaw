@@ -330,7 +330,6 @@ describe("CronService restart catch-up", () => {
       }),
       job({
         id: "one-shot",
-        deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(dueAt).toISOString() },
         state: persistedState,
       }),
@@ -362,7 +361,6 @@ describe("CronService restart catch-up", () => {
   it("does not mistake a future retry for a rescheduled one-shot on restart", async () => {
     const runningAtMs = time("2025-12-13T16:30:00Z");
     await using h = await restartFixture({
-      deleteAfterRun: true,
       schedule: { kind: "at", at: "2025-12-13T16:00:00Z" },
       updatedAtMs: runningAtMs,
       state: { nextRunAtMs: time("2025-12-13T18:00:00Z"), runningAtMs },
@@ -371,7 +369,6 @@ describe("CronService restart catch-up", () => {
     const recovered = cron.getJob("restart-job");
     expect(recovered).toMatchObject({
       enabled: false,
-      deleteAfterRun: true,
       schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
       state: {
         lastRunAtMs: runningAtMs,

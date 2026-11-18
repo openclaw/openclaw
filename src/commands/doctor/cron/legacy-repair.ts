@@ -43,6 +43,12 @@ import {
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
 import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
+import {
+  describeEndedOneTimeCronRepair,
+  applyEndedOneTimeCronRepair,
+  archiveEndedOneTimeCronRuns,
+  planEndedOneTimeCronRepair,
+} from "./ended-one-time.js";
 import { parseLegacyCronJobs } from "./legacy-json-shapes.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import {
@@ -317,15 +323,17 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
+  const oneTimeRepair = planEndedOneTimeCronRepair(state.rawJobs);
+  const oneTimeReports = describeEndedOneTimeCronRepair(oneTimeRepair);
   const storeChanged =
+    oneTimeReports.length > 0 ||
     (state.legacyImport?.count ?? 0) > 0 ||
     retirementChanges.length > 0 ||
     state.invalidConfigRows.length > 0 ||
     normalized.mutated ||
     notifyMigration.changed ||
     quarantineRecovery.recoveredJobs.length > 0;
-  const changed = state.legacyQuarantine !== undefined || storeChanged;
-  if (!changed && warnings.length === 0) {
+  if (!state.legacyQuarantine && !storeChanged && warnings.length === 0) {
     return { changes, warnings };
   }
 
@@ -353,7 +361,7 @@ export async function applyLegacyCronStoreRepair(params: {
       if (storeChanged) {
         const store = {
           version: 1,
-          jobs: state.rawJobs as unknown as CronJob[],
+          jobs: applyEndedOneTimeCronRepair(state.rawJobs, oneTimeRepair) as unknown as CronJob[],
         } as const;
         const { assertCurrent, assertRowsUnchanged: assertSnapshotCurrent } =
           captureLegacyCronRepairAdmission(state);
@@ -385,8 +393,13 @@ export async function applyLegacyCronStoreRepair(params: {
         }
         await saveCronJobsStore(state.storePath, store, {
           ...saveOptions,
-          transactionHooks: { beforeWrite: assertSnapshotCurrent },
+          transactionHooks: archiveEndedOneTimeCronRuns(
+            state.storePath,
+            oneTimeRepair,
+            assertSnapshotCurrent,
+          ),
         });
+        changes.push(...oneTimeReports);
       } else if (quarantine) {
         await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }

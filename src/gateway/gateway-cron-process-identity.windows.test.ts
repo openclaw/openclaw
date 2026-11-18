@@ -57,7 +57,6 @@ it.skipIf(process.platform !== "win32")(
           {
             name: "Windows process identity proof",
             enabled: true,
-            deleteAfterRun: false,
             schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
             sessionTarget: "main",
             wakeMode: "next-heartbeat",

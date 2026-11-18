@@ -77,7 +77,6 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
 
 function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
   const raw: Record<string, unknown> = structuredClone(job);
-  const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
   raw.id = normalizeOptionalString(raw.id);
   delete raw.jobId;
   const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
@@ -86,11 +85,6 @@ function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStor
   }
   if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
     normalized.delivery = raw.delivery;
-  }
-  if (!hadDeleteAfterRun) {
-    // Legacy rows omitted deleteAfterRun entirely; avoid writing the default
-    // back into job_json so config round-trips stay byte-light.
-    delete normalized.deleteAfterRun;
   }
   const createdAtMs =
     typeof normalized.createdAtMs === "number" && Number.isFinite(normalized.createdAtMs)

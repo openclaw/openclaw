@@ -389,7 +389,6 @@ describe("worker-owned startup recovery", () => {
   it("restores a recorded result and primary delivery before one-shot deletion", async () => {
     const entry = job("complete", {
       schedule: { kind: "at", at: new Date(now).toISOString() },
-      deleteAfterRun: true,
     });
     const store = await recoveryStore([entry]);
     const receipt = await activateManual(store, entry);

@@ -50,7 +50,6 @@ for (const engine of ["sqlite", "postgres"] as const) {
               id: "one-shot",
               name: "synthetic one-shot",
               enabled: true,
-              deleteAfterRun: false,
               createdAtMs: 1,
               updatedAtMs: 1,
               schedule: { kind: "at", at: new Date(1_000).toISOString() },

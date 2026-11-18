@@ -462,12 +462,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           : {}),
         description: Type.Optional(Type.String({ description: "Human description" })),
         enabled: Type.Optional(Type.Boolean()),
-        deleteAfterRun: Type.Optional(
-          Type.Boolean({
-            description:
-              "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.",
-          }),
-        ),
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
         failureAlert: createCronFailureAlertSchema(),
       },

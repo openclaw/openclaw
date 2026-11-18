@@ -1,5 +1,5 @@
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import type { CronDelivery } from "../types.js";
+import type { CronDelivery, CronJob } from "../types.js";
 import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 
@@ -27,6 +27,18 @@ export function makeResolvedDelivery(
   };
 }
 
+export function makeOneTimeSchedule(): CronJob["schedule"] {
+  return { kind: "at", at: "2026-01-01T00:00:00Z" };
+}
+
+export function deletingRunParams(sessionTarget = "isolated") {
+  return makeBaseParams({
+    synthesizedText: "Delivered report",
+    sessionTarget,
+    schedule: makeOneTimeSchedule(),
+  });
+}
+
 export function makeBaseParams(overrides: {
   synthesizedText?: string;
   deliveryRequested?: boolean;
@@ -36,6 +48,7 @@ export function makeBaseParams(overrides: {
   spawnOnlyHandoff?: boolean;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
+  schedule?: CronJob["schedule"];
 }): DispatchCronDeliveryParams {
   const resolvedDelivery = makeResolvedDelivery({
     mode: overrides.resolvedDeliveryMode ?? "explicit",
@@ -52,10 +65,10 @@ export function makeBaseParams(overrides: {
     job: {
       id: "test-job",
       name: "Test Job",
+      schedule: overrides.schedule ?? { kind: "every", everyMs: 60_000 },
       sessionTarget: overrides.sessionTarget ?? "isolated",
       sessionKey:
         overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
-      deleteAfterRun: false,
       delivery,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,

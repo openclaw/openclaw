@@ -20,7 +20,6 @@ type Job = {
   sessionTarget: string;
   delivery: { mode: string };
   enabled: boolean;
-  deleteAfterRun?: boolean;
   state: { nextRunAtMs: number };
 };
 type ToolCall = { action: string; job?: Job; jobId?: string; includeDisabled?: boolean };
@@ -109,7 +108,6 @@ async function runSchedulingFixture(
             index === 0
               ? { kind: "at", at: new Date(now + 240_000).toISOString() }
               : { kind: "every", everyMs: 20_000 };
-          entry.deleteAfterRun = index === 0;
           entry.payload.message = `Reply exactly QA-MODEL-${schedule.toUpperCase()}-PAYLOAD-${suffix}`;
           return entry;
         });

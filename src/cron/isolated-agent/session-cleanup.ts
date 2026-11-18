@@ -41,7 +41,7 @@ export async function deleteCronSessionViaGateway(params: {
 }
 
 export async function cleanupCronRunSessionAfterRun(params: {
-  job: Pick<CronJob, "deleteAfterRun" | "sessionTarget">;
+  job: Pick<CronJob, "schedule" | "sessionTarget">;
   agentSessionKey: string;
   sessionId: string;
   lifecycleRevision: string;
@@ -73,8 +73,11 @@ export async function cleanupCronRunSessionAfterRun(params: {
 }
 
 function shouldDeleteCronRunSessionAfterRun(params: {
-  job: Pick<CronJob, "deleteAfterRun" | "sessionTarget">;
+  job: Pick<CronJob, "schedule" | "sessionTarget">;
   agentSessionKey: string;
 }): boolean {
-  return params.job.deleteAfterRun === true && isCronSessionKey(params.agentSessionKey);
+  return (
+    (params.job.schedule.kind === "at" || params.job.schedule.kind === "on-exit") &&
+    isCronSessionKey(params.agentSessionKey)
+  );
 }

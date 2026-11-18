@@ -180,7 +180,6 @@ describe("scheduled cron session retirement through the Gateway", () => {
         schedule: oneShot
           ? { kind: "at", at: new Date(Date.now() + 1_000).toISOString() }
           : { kind: "every", everyMs: 10_000 },
-        deleteAfterRun: oneShot,
         sessionTarget: "isolated",
         wakeMode: "now",
         payload: {

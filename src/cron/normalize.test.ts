@@ -205,9 +205,6 @@ it.each<[UnknownRecord, UnknownRecord]>([
   expect([created.schedule, patch.schedule]).toEqual([expected, expected]);
   expect(validateCronAddParams(created)).toBe(true);
   expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
-  if (input.kind === "at") {
-    expect(created.deleteAfterRun).toBe(true);
-  }
 });
 
 it.each<[UnknownRecord, number, number | undefined]>([

@@ -35,7 +35,6 @@ async function admissionFixture(id: string, count: number, command = false) {
     job.agentId = "main";
     job.payload = { kind: "command", argv: ["unused"] };
     delete job.delivery;
-    delete job.deleteAfterRun;
   }
   const blockers = Array.from({ length: count }, (_, index) => ({
     ...job,

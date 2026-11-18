@@ -375,7 +375,6 @@ try {
     schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
     sessionTarget: "isolated",
     wakeMode: "now",
-    deleteAfterRun: false,
     payload: {
       kind: "agentTurn",
       message: "Return a short synthetic cron result.",

@@ -258,6 +258,17 @@ type FailureAlertIncident = NonNullable<CronJob["state"]["failureAlertIncident"]
 /** One notification-worthy failure: its dedupe signature and recovery scope. */
 type FailureAlertSignal = Required<FailureAlertIncident>;
 
+export function buildOneTimeCronFailureNotice(
+  job: CronJob,
+  detail?: CronFailureNotificationDetail,
+): string {
+  return [
+    `⚠️ One-time automation "${truncateUtf16Safe(job.name || job.id, 120)}" ended without a confirmed successful outcome.`,
+    ...cronFailureDetailLines(job.state.lastErrorReason, detail),
+    "Check the run in Automations → Run history before retrying.",
+  ].join("\n");
+}
+
 function buildFailureAlertPayload(params: {
   job: CronJob;
   error?: string;
@@ -269,11 +280,14 @@ function buildFailureAlertPayload(params: {
   localProviderUnavailable?: boolean;
   /** The failure auto-disabled the job: lead with the safety notice and recovery command. */
   autoDisabled?: boolean;
+  oneTimeEnded?: boolean;
 }) {
   const safeJobName = params.job.name || params.job.id;
   const errorReason = params.status === "error" ? params.errorReason : undefined;
   let text: string;
-  if (params.autoDisabled) {
+  if (params.oneTimeEnded) {
+    text = buildOneTimeCronFailureNotice(params.job, params.failureNotificationDetail);
+  } else if (params.autoDisabled) {
     const notice = buildCronAutoDisableNotice({
       job: params.job,
       reason: "consecutive-failures",
@@ -476,7 +490,8 @@ function maybeEmitFailureAlert(
       route: alertConfig,
       status: params.status,
       localProviderUnavailable,
-      autoDisabled: terminal,
+      autoDisabled: terminalRecurring,
+      oneTimeEnded: terminalOneShot,
     }),
     runAtMs: params.runAtMs,
     route: alertConfig,
@@ -498,12 +513,12 @@ function maybeEmitFailureAlert(
   // fail the same way the job did and leave the route silent.
   if (
     !hasJobFailureDestination &&
-    !terminalRecurring &&
-    (terminalOneShot || alertConfig.mode === "announce") &&
+    !terminal &&
+    alertConfig.mode === "announce" &&
     params.status === "error" &&
     // Command jobs and on-exit or stream schedules are operator-only, so they alert as before.
     hasFailureRepairOwner(params.job) &&
-    (terminalOneShot || isJobEnabled(params.job))
+    isJobEnabled(params.job)
   ) {
     // If the owner turn cannot start, the user still gets the plain alert.
     params.deferredNotifications.push({
@@ -515,7 +530,6 @@ function maybeEmitFailureAlert(
         consecutiveErrors: params.consecutiveCount,
         error: params.error,
         errorReason: params.errorReason,
-        terminal: terminalOneShot,
       }),
     });
     return "queued";

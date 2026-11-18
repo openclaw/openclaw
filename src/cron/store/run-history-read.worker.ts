@@ -27,6 +27,7 @@ const SELECTION_KEYS = [
   "runId",
   "runAtMs",
   "sessionId",
+  "jobName",
 ];
 const SEARCH_KEYS = ["error", "summary", "deliveryError", "errorReason", "diagnostics", "delivery"];
 const RESPONSE_KEYS = [
@@ -45,6 +46,7 @@ const RESPONSE_KEYS = [
   "model",
   "provider",
   "usage",
+  "retryAvailable",
 ];
 const TRACE_KEYS = ["diagnostics", "delivery", "failureNotificationDelivery"];
 const CANDIDATE_BATCH_SIZE = 512;
@@ -175,12 +177,17 @@ export function readCronRunHistoryRecordsInDatabase(
   db: EngineConnection,
   storeKey: string,
   taskIds: string[],
-  view?: "full" | "summary",
+  view?: "full" | "summary" | "retry",
 ): CronRunRecord[] {
   if (taskIds.length === 0) {
     return [];
   }
-  const keys = view === "summary" ? RESPONSE_KEYS : [...RESPONSE_KEYS, ...TRACE_KEYS];
+  const keys =
+    view === "retry"
+      ? [...SELECTION_KEYS, "retryAvailable", "archivedJob"]
+      : view === "summary"
+        ? RESPONSE_KEYS
+        : [...RESPONSE_KEYS, ...TRACE_KEYS];
   return executeSqliteQuerySync(
     db,
     historyQuery(db, keys, true).where("task_id", "in", taskIds).limit(taskIds.length),

@@ -2633,6 +2633,12 @@ Doctor restores a managed Gateway it stopped, including after SIGINT, SIGTERM,
 or SIGHUP interrupts repair. If restoration fails, it prints the failure and the
 command to start the Gateway after resolving it.
 
+For ended one-time automations left paused by an older Gateway, Doctor reports
+what it can move to **Automations → Run history**. With repair enabled, it backs
+up cron state first, preserves the run (or reconstructs the last outcome from the
+saved job), and then removes the ended entry from the schedule list. Jobs whose
+old keep-after-run policy cannot be preserved stay paused with an explanation.
+
 On startup, the Gateway can confirm an unfinished plugin data/settings upgrade
 when every plugin migration phase reports no remaining work and its settings
 validate. It does not run offline repairs. A remaining migration stays pending

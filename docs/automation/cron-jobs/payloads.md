@@ -167,8 +167,8 @@ a terminal failure instead of repeatedly retrying the same authority error.
 While an `at` agent-turn continuation in an explicitly named conversation waits
 for a result, it can call `automations` with `action: "next_check"` and `in: "3m"`
 to rearm that same job. It does not create a new job or change its task, target,
-or permissions. Without a next-check proposal, ordinary one-shot completion and
-`deleteAfterRun` behavior are unchanged.
+or permissions. Without another scheduled attempt or next-check proposal, the
+one-time automation ends and its run remains in Run history.
 
 Manual runs use the same scheduled execution context as timer-fired runs after
 the request passes admission. Ending the chat turn or tool call that started a

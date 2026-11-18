@@ -722,7 +722,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         name: "retained-one-shot",
         agentId: "main",
         enabled: true,
-        deleteAfterRun: false,
         // Automatic dispatch stays disabled; a due occurrence belongs to this manual run.
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
@@ -765,7 +764,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         name: "unfinished-one-shot",
         agentId: "main",
         enabled: true,
-        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",
@@ -852,7 +850,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         name: "automatic-scheduler-probe",
         agentId: "main",
         enabled: true,
-        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date().toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",

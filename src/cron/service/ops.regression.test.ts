@@ -537,7 +537,6 @@ it("#104518 finalizes watcher-fired on-exit job: onexit-delete-ok", async () => 
     schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
     state: {},
   });
-  job.deleteAfterRun = true;
   // The gateway watcher persists this disable before force-running the payload.
   job.enabled = false;
   const events: CronEvent[] = [];

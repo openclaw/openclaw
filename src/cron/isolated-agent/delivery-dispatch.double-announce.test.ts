@@ -149,7 +149,9 @@ import type { DispatchCronDeliveryParams } from "./delivery-dispatch-types.js";
 import { dispatchCronDelivery } from "./delivery-dispatch.js";
 import { registerPersistentSessionDeliveryTests } from "./delivery-dispatch.persistent-session.test-support.js";
 import {
+  deletingRunParams,
   makeBaseParams,
+  makeOneTimeSchedule,
   makeResolvedDelivery,
   messageToolOutcome,
 } from "./delivery-dispatch.test-fixtures.js";
@@ -211,12 +213,6 @@ function emptyParams(spawnOnlyHandoff = false, deliveryBestEffort = false) {
   params.deliveryPayloads = [];
   params.summary = undefined;
   params.outputText = undefined;
-  return params;
-}
-
-function deletingRunParams(sessionTarget = "isolated") {
-  const params = makeBaseParams({ synthesizedText: "Delivered report", sessionTarget });
-  params.job.deleteAfterRun = true;
   return params;
 }
 
@@ -550,7 +546,7 @@ describe("dispatchCronDelivery", () => {
     function spawnOnlyJob(delivery: CronDelivery) {
       const params = emptyParams(true);
       params.job.delivery = delivery;
-      params.job.deleteAfterRun = true;
+      params.job.schedule = { kind: "at", at: "2026-01-01T00:00:00Z" };
       params.deliveryPlan = resolveCronDeliveryPlan(params.job);
       params.deliveryRequested = params.deliveryPlan.requested;
       params.runStartedAt = runStartedAt;
@@ -802,7 +798,7 @@ describe("dispatchCronDelivery", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
     const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
-    params.job.deleteAfterRun = true;
+    params.job.schedule = { kind: "at", at: "2026-01-01T00:00:00Z" };
     params.beforeSessionDelete = vi.fn();
     params.job.state = { nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1) };
     const state = await dispatchCronDelivery(params);
@@ -863,11 +859,11 @@ describe("dispatchCronDelivery", () => {
     },
   );
 
-  it("skips deleteAfterRun cleanup for non-cron sessions", async () => {
+  it("skips one-time run cleanup for non-cron sessions", async () => {
     const params = emptyParams();
     params.skipDelivery = "silent";
     params.agentSessionKey = "agent:main:whatsapp:direct:+15551234567";
-    params.job.deleteAfterRun = true;
+    params.job.schedule = { kind: "at", at: "2026-01-01T00:00:00Z" };
 
     const state = await dispatchCronDelivery(params);
 
@@ -882,7 +878,7 @@ describe("dispatchCronDelivery", () => {
     );
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
-  it("cleans up the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
+  it("cleans up the direct cron session when refused delivery is best-effort", async () => {
     const params = makeBaseParams({
       synthesizedText: "refused report",
       deliveryBestEffort: true,
@@ -893,7 +889,7 @@ describe("dispatchCronDelivery", () => {
       mode: "implicit",
       error: new Error("refusing inherited shared-bucket delivery target"),
     };
-    params.job.deleteAfterRun = true;
+    params.job.schedule = { kind: "at", at: "2026-01-01T00:00:00Z" };
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
@@ -1236,7 +1232,7 @@ describe("dispatchCronDelivery", () => {
 
   it("keeps unresolved message-tool delivery out of delivered status", async () => {
     const params = makeBaseParams({ synthesizedText: "hello from cron" });
-    params.job.deleteAfterRun = true;
+    params.job.schedule = { kind: "at", at: "2026-01-01T00:00:00Z" };
     params.resolvedDelivery = {
       ok: false,
       channel: undefined,
@@ -1276,7 +1272,7 @@ describe("dispatchCronDelivery", () => {
     const params = direct
       ? structuredParams([{ text }], text)
       : makeBaseParams({ synthesizedText: text });
-    params.job.deleteAfterRun = cleanup;
+    params.job.schedule = cleanup ? makeOneTimeSchedule() : params.job.schedule;
     const state = await dispatchCronDelivery(params);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDelivered(state);

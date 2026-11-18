@@ -292,7 +292,11 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
       model: "gpt-5.4",
       attempts: [],
     });
-    const result = await runTurn(["web_search"], {}, { deleteAfterRun: true });
+    const result = await runTurn(
+      ["web_search"],
+      {},
+      { schedule: { kind: "at", at: "2026-01-01T00:00:00Z" } },
+    );
     expect(result).toMatchObject({ status: "error", error: "cron isolated agent run aborted" });
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([

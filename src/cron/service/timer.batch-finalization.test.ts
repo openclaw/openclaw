@@ -267,7 +267,6 @@ describe("cron batch outcome finalization", () => {
   it("does not apply a removed startup run to a same-id replacement", async () => {
     const original = dueJob("removed-replacement", {
       name: "removed original scheduled job",
-      deleteAfterRun: true,
     });
     const replacementAt = DUE_AT + 60 * 60_000;
     const runner = blockedRunner();
@@ -288,7 +287,6 @@ describe("cron batch outcome finalization", () => {
         id: original.id,
         name: "independent replacement scheduled job",
         enabled: true,
-        deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
@@ -303,7 +301,6 @@ describe("cron batch outcome finalization", () => {
           id: original.id,
           name: "independent replacement scheduled job",
           enabled: true,
-          deleteAfterRun: true,
           state: { nextRunAtMs: replacementAt },
         });
         expect(replacement?.state.lastRunAtMs).toBeUndefined();
@@ -499,7 +496,7 @@ describe("cron batch outcome finalization", () => {
   });
 
   it("persists a completed startup job before its sibling drains", async () => {
-    const first = dueJob("startup-finished", { deleteAfterRun: false });
+    const first = dueJob("startup-finished", { schedule: { kind: "every", everyMs: 60_000 } });
     const second = dueJob("startup-blocked");
     const runner = blockedRunner(second.id);
     const events: CronEvent[] = [];

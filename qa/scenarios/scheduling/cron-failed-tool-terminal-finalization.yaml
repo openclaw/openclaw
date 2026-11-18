@@ -69,7 +69,6 @@ flow:
               name:
                 expr: "`qa-failed-terminal-${randomUUID()}`"
               enabled: true
-              deleteAfterRun: false
               schedule:
                 kind: at
                 at:

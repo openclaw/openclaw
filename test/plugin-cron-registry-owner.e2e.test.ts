@@ -287,7 +287,6 @@ it(
         expect.objectContaining({
           id,
           enabled: true,
-          deleteAfterRun: false,
           sessionTarget: `session:agent:main:${session}`,
           schedule: { kind: "cron", expr: CRON_EXPRESSION, tz: "UTC" },
         });
@@ -307,7 +306,7 @@ it(
       );
       expect(afterRecurringRuns.map((job) => job.id).toSorted()).toEqual(expectedIds);
       for (const job of afterRecurringRuns) {
-        expect(job).toMatchObject({ enabled: true, deleteAfterRun: false });
+        expect(job).toMatchObject({ enabled: true });
         expect(job.state.lastRunStatus ?? job.state.lastStatus).toBe("ok");
         const lastRunAtMs = job.state.lastRunAtMs;
         const nextRunAtMs = job.state.nextRunAtMs;

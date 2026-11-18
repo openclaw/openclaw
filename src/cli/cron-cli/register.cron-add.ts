@@ -282,9 +282,6 @@ export function registerCronAddCommand(cron: Command) {
             if (!sessionTarget) {
               throw new CronCliError("--session must be main, isolated, current, or session:<id>");
             }
-            if (opts.deleteAfterRun && opts.keepAfterRun) {
-              throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
-            }
 
             await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
             const supportsChatDelivery =
@@ -375,7 +372,6 @@ export function registerCronAddCommand(cron: Command) {
               ...(declarationKey && cmd.getOptionValueSource("disabled") !== "cli"
                 ? {}
                 : { enabled: !opts.disabled }),
-              deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
               agentId,
               sessionKey,
               schedule,

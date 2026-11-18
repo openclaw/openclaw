@@ -10,7 +10,10 @@ import {
   recomputeJobNextRunAtMs,
   resolveCronRestartRetryAtMs,
 } from "../service/jobs-scheduling.js";
-import { resolveForcePreservedOneShotAtMs } from "../service/one-shot-schedule.js";
+import {
+  canRetryArchivedCronJob,
+  resolveForcePreservedOneShotAtMs,
+} from "../service/one-shot-schedule.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
@@ -21,6 +24,7 @@ import type { CronJobPolicyContext, DeferredCronNotifications } from "../service
 import type { CronJob } from "../types.js";
 import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
 import {
+  archiveCronRunDefinitionInDatabase,
   recordCronRunInDatabase,
   recordSkippedCronRequestInDatabase,
 } from "./run-history.kernel.js";
@@ -37,6 +41,7 @@ function recordInterruptedRun(params: {
   interrupted: InterruptedStartupRun;
   nowMs: number;
   job?: CronJob;
+  archive?: boolean;
   receipt?: CronRunReceipt;
   taskRunId?: string;
 }): InterruptedStartupRun {
@@ -58,6 +63,8 @@ function recordInterruptedRun(params: {
       {
         ts: nowMs,
         jobId: interrupted.jobId,
+        jobName: job?.displayName ?? job?.name,
+        retryAvailable: params.archive && job && canRetryArchivedCronJob(job) ? true : undefined,
         action: "finished",
         status: "error",
         completionStatus: "failed",
@@ -71,7 +78,7 @@ function recordInterruptedRun(params: {
         durationMs: interrupted.durationMs,
         nextRunAtMs: job?.state.nextRunAtMs,
       },
-      { storeKey },
+      { storeKey, ...(params.archive ? { archivedJob: job } : {}) },
     ),
   });
   return interrupted;
@@ -235,6 +242,11 @@ export function recoverCronJobInDatabase(
       taskRunId: task.taskRunId,
       interrupted,
       nowMs,
+      archive:
+        job.schedule.kind === "at" &&
+        interrupted.replacementAtMs === undefined &&
+        !job.state.runningScheduleChangeId &&
+        job.state.nextRunAtMs === undefined,
     });
   }
   finishReceipt(
@@ -244,9 +256,40 @@ export function recoverCronJobInDatabase(
     restored && finalized ? finalized.entry.ts : nowMs,
     restored && finalized ? finalized.entry.error : STARTUP_INTERRUPTED_ERROR,
   );
-  if (restored?.shouldDelete) {
+  if (restored?.shouldDelete && finalized) {
+    const { entry } = finalized;
+    archiveCronRunDefinitionInDatabase(
+      database.db,
+      {
+        storeKey,
+        jobId: job.id,
+        runId: entry.runId ?? createCronExecutionId(job.id, runningAtMs),
+        agentId: receipt?.agentId ?? job.agentId,
+        startedAt: entry.runAtMs ?? runningAtMs,
+        endedAt: entry.ts,
+        status: entry.completionStatus === "succeeded" ? "succeeded" : "failed",
+        detail: cronRunLogEntryToDetail(
+          {
+            ...entry,
+            jobName: job.displayName ?? job.name,
+            retryAvailable: entry.completionStatus !== "succeeded" && canRetryArchivedCronJob(job),
+          },
+          { storeKey, archivedJob: job },
+        ),
+      },
+      nowMs,
+    );
     deleteCronJobRowInDatabase(database.db, storeKey, job.id);
     return { removed: true, skipStartupCatchup: true };
+  }
+  if (
+    interrupted &&
+    job.schedule.kind === "at" &&
+    interrupted.replacementAtMs === undefined &&
+    job.state.nextRunAtMs === undefined
+  ) {
+    deleteCronJobRowInDatabase(database.db, storeKey, job.id);
+    return { interrupted, removed: true, skipStartupCatchup: true };
   }
   updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
   return {

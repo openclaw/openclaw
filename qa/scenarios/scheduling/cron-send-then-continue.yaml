@@ -77,7 +77,6 @@ flow:
                     name:
                       expr: "`qa-cron-send-continue-${deliveryMode}-${randomUUID()}`"
                     enabled: true
-                    deleteAfterRun: false
                     schedule:
                       kind: at
                       at:

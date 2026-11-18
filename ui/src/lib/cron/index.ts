@@ -261,9 +261,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       agentId: agentId === null ? null : agentId || undefined,
       sessionKey,
       enabled: form.enabled,
-      ...(form.scheduleKind === "at" || form.scheduleKind === "on-exit"
-        ? { deleteAfterRun: form.deleteAfterRun }
-        : {}),
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       trigger,
@@ -451,6 +448,23 @@ export async function runCronJob(state: CronState, jobId: string) {
       reportFeedback(t("cron.runQueued", { runId: result.runId }), "cronNotice");
     }
   });
+}
+
+export async function retryCronRun(
+  state: CronState,
+  entry: import("../../api/types.ts").CronRunLogEntry,
+) {
+  if (!entry.runId || !entry.retryAvailable) {
+    return;
+  }
+  await withCronBusy(
+    state,
+    { id: entry.jobId, name: entry.jobName ?? entry.jobId },
+    async (client, reportFeedback) => {
+      await client.request("cron.run", { id: entry.jobId, retryRunId: entry.runId });
+      reportFeedback(t("cron.runEntry.retryScheduled"), "cronNotice");
+    },
+  );
 }
 
 export async function removeCronJob(state: CronState, job: CronJob) {

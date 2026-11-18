@@ -347,7 +347,6 @@ export function registerGatewayCronPublicationTests({
         const job = await addAgentTurnJob(state, "One-shot job", "synthetic run", {
           agentId: "main",
           sessionKey: "agent:main:probe",
-          deleteAfterRun: false,
         });
         broadcast.mockClear();
         expect(await state.cron.run(job.id, "force")).toEqual({ ok: true, ran: true });

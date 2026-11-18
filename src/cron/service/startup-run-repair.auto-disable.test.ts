@@ -68,7 +68,6 @@ it.each([
   "uses recorded %s completion for one-shot cleanup",
   (completionStatus, deliveryStatus, mode, failureNotificationDelivery) => {
     const { state, job, deferredNotifications, restore } = repairFixture({
-      deleteAfterRun: true,
       schedule: { kind: "at", at: runAt },
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "do not replay" },

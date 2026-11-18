@@ -188,7 +188,6 @@ describe("WebChat automation creation through the tool and Gateway", () => {
             threadId: "",
             failureDestination: { channel: "", to: "", accountId: "", mode: "announce" },
           },
-          deleteAfterRun: true,
         },
         patch: { name: "", schedule: { kind: "at", at: "" }, trigger: null },
       };
@@ -215,7 +214,6 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           schedule: { kind: "at", at },
           sessionTarget: "main",
           payload: { kind: "systemEvent", text: "Reminder: play basketball!" },
-          deleteAfterRun: true,
         }),
       ]);
     });

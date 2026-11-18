@@ -20,7 +20,7 @@ export type CronReadOnlyRequest = {
     query?: string;
     jobNameById?: Record<string, string>;
     taskIds?: string[];
-    view?: "full" | "summary";
+    view?: "full" | "summary" | "retry";
     transcript?: CronRunHistorySelector;
   };
   /** Omitted only for Doctor's all-partition raw inventory. */

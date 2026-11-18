@@ -85,7 +85,6 @@ flow:
               name:
                 expr: "`qa-cron-parent-board-${randomUUID()}`"
               enabled: true
-              deleteAfterRun: false
               schedule:
                 kind: every
                 everyMs: 3600000

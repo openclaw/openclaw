@@ -31,6 +31,41 @@ const RETENTION_MS = 7 * 24 * 60 * 60_000;
 const LOST_RETENTION_MS = 24 * 60 * 60_000;
 const CRON_HISTORY_KEEP_PER_JOB = 2000;
 
+/** Doctor attaches an archived definition without rewriting the recorded outcome. */
+export function archiveCronRunDefinitionInDatabase(
+  db: EngineConnection,
+  input: CronRunHistoryWrite,
+  repairAtMs: number,
+): void {
+  const matching = readCronRunRecordsInDatabase(db, input.jobId).filter(
+    (row) =>
+      cronRunRecordStoreKey(row) === input.storeKey &&
+      row.startedAt === input.startedAt &&
+      cronRunRecordToRunLogEntry(row) !== null,
+  );
+  let row = matching.length === 1 ? matching[0] : undefined;
+  if (!row) {
+    recordCronRunInDatabase(db, input);
+    row = readCronRunRecordsInDatabase(db, input.jobId, input.runId).find(
+      (candidate) => cronRunRecordStoreKey(candidate) === input.storeKey,
+    );
+  }
+  if (!row || !isRecord(row.detail) || !isRecord(input.detail)) {
+    throw new Error("Could not preserve the ended automation in Activity");
+  }
+  const { archivedJob, jobName, retryAvailable } = input.detail;
+  executeSqliteQuerySync(
+    db,
+    query(db)
+      .updateTable("task_runs")
+      .set({
+        detail_json: JSON.stringify({ ...row.detail, archivedJob, jobName, retryAvailable }),
+        cleanup_after: Math.max(row.cleanupAfter ?? 0, repairAtMs + RETENTION_MS),
+      })
+      .where("task_id", "=", row.id),
+  );
+}
+
 function validateRetainedEnum(value: string, allowed: readonly string[], label: string): void {
   if (!allowed.includes(value)) {
     throw new Error(`Invalid persisted task ${label}: ${JSON.stringify(value)}`);

@@ -202,10 +202,6 @@ export async function schedulePluginSessionTurn(params: {
     logSchedulingFailure("unsupported deliveryMode");
     return undefined;
   }
-  if (cronSchedule.kind === "cron" && params.schedule.deleteAfterRun === true) {
-    logSchedulingFailure("deleteAfterRun requires a one-shot schedule");
-    return undefined;
-  }
   const { tag, invalid: invalidTag } = resolvePluginSessionTurnTag(params.schedule.tag);
   if (invalidTag) {
     logSchedulingFailure('tag contains reserved delimiter ":"');
@@ -239,7 +235,6 @@ export async function schedulePluginSessionTurn(params: {
       sessionTarget: `session:${sessionKey}`,
       payload: cronPayload,
       ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
-      deleteAfterRun: params.schedule.deleteAfterRun ?? cronSchedule.kind === "at",
       wakeMode: "now",
       delivery: {
         mode: cronDeliveryMode,

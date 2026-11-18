@@ -247,12 +247,6 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.enable || opts.disable) {
             patch.enabled = Boolean(opts.enable);
           }
-          if (opts.deleteAfterRun && opts.keepAfterRun) {
-            throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
-          }
-          if (opts.deleteAfterRun || opts.keepAfterRun) {
-            patch.deleteAfterRun = Boolean(opts.deleteAfterRun);
-          }
           if (typeof opts.session === "string") {
             patch.sessionTarget = sessionTarget;
           }

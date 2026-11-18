@@ -169,7 +169,6 @@ it.for([
       await first.cron.start();
       const job = await first.cron.add(
         cronTestInput({
-          ...(interrupted === "before-delivery" ? { deleteAfterRun: false } : {}),
           schedule:
             scheduleKind === "at"
               ? { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() }
@@ -227,9 +226,6 @@ it.for([
       }
       expect(recovered?.state.startupCatchupAtMs).toBeUndefined();
       expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      if (interrupted !== "before-delivery") {
-        expect(recovered?.deleteAfterRun).toBe(true);
-      }
       const readHistory = () =>
         readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: job.id })
           .entries;

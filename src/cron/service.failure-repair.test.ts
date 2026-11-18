@@ -349,7 +349,6 @@ describe("CronService failure repair", () => {
           delivery: createTelegramDelivery(),
           ...jobOptions,
           schedule: oneShot(),
-          deleteAfterRun: true,
           payload: { kind: "script", script, toolsAllow: ["automations"] },
         });
         await f.cron.run(job.id, "due");

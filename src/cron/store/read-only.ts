@@ -293,7 +293,7 @@ export async function readCronRunHistoryCandidates(
 export async function readCronRunHistoryRecords(
   storeKey: string,
   taskIds: string[],
-  view?: "full" | "summary",
+  view?: "full" | "summary" | "retry",
 ): Promise<CronRunRecord[]> {
   if (taskIds.length === 0) {
     return [];

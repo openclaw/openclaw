@@ -8,6 +8,7 @@ import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import type { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
@@ -36,6 +37,75 @@ import {
   initializeSessionReadContext,
 } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
+
+it("retries an ended one-time definition only for an administrator without exposing the definition", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
+    const storePath = fixture.path("cron", "jobs.json");
+    const cron = createReadService({
+      storePath,
+      resolveDefaultAgentId: () => "main",
+      cronEnabled: false,
+      enqueueSystemEvent: vi.fn(),
+      runIsolatedAgentJob: vi.fn(),
+    });
+    const at = Date.now();
+    const job = await cron.add({
+      name: "Check staging build",
+      schedule: { kind: "at", at: new Date(at).toISOString() },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      enabled: false,
+      payload: { kind: "agentTurn", message: "Check the staging build status." },
+      delivery: { mode: "none" },
+    });
+    await cron.remove(job.id);
+    const entry = makeRun(job.id, "failed-build-run", {
+      jobName: job.name,
+      status: "error",
+      error: "staging unavailable",
+      retryAvailable: true,
+    });
+    const record = historyRecord(entry, storePath, "main", "failed-build-task");
+    persistRuns([
+      {
+        ...record,
+        detail: cronRunLogEntryToDetail(entry, { storeKey: record.storeKey, archivedJob: job }),
+      },
+    ]);
+    const context = createDirectChatContext({
+      cron,
+      cronStorePath: storePath,
+      getRuntimeConfig: () => ({}),
+    });
+    const admin = { connect: { scopes: ["operator.admin"] } } as GatewayClient;
+    const selection = { id: job.id, retryRunId: entry.runId };
+    try {
+      const history = await invokeCron(
+        context,
+        "cron.runs",
+        { id: job.id, view: "summary" },
+        { client: admin },
+      );
+      expectReply(
+        history,
+        expect.objectContaining({
+          entries: [expect.objectContaining({ jobName: job.name, retryAvailable: true })],
+        }),
+      );
+      expect(JSON.stringify(history.mock.calls)).not.toContain("archivedJob");
+      expect((await invokeCron(context, "cron.run", selection)).mock.calls[0]?.[0]).toBe(false);
+      expect(
+        (await invokeCron(context, "cron.run", selection, { client: admin })).mock.calls[0]?.[0],
+      ).toBe(true);
+      expect(await cron.list({ includeDisabled: true })).toMatchObject([
+        { name: job.name, enabled: true, payload: job.payload },
+      ]);
+      expect(cron.getJob(job.id)).toBeUndefined();
+    } finally {
+      cron.stop();
+    }
+  });
+});
 
 function expectNotFound(respond: ReturnType<typeof vi.fn<RespondFn>>, jobId: string) {
   expectError(respond, expect.objectContaining({ details: { code: "CRON_JOB_NOT_FOUND", jobId } }));

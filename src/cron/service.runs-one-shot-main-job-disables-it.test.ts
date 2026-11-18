@@ -91,16 +91,6 @@ async function fixture(
   };
 }
 
-it("disables a retained one-shot after success and does not replay it when re-enabled", async () => {
-  await using f = await fixture();
-  const { job } = await f.run(mainJob({ deleteAfterRun: false }));
-  expect(f.cron.getJob(job.id)?.enabled).toBe(false);
-  expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-  expect((await f.cron.update(job.id, { enabled: true })).state.nextRunAtMs).toBeUndefined();
-  await f.tick(atMs + 1_000);
-  expect(f.deps.runSessionEvent).toHaveBeenCalledOnce();
-});
-
 it.each([
   ["default delivery failure", undefined, false, undefined, "failed"],
   ["best-effort delivery failure", true, false, undefined, "succeeded"],
@@ -125,22 +115,14 @@ it.each([
       nextRunAtMs: undefined,
       ...(reason ? { deliverySuppressionReason: reason } : {}),
     });
-    const expectRetained = () => {
-      const retained = f.cron.getJob(job.id);
-      if (completion === "succeeded") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          enabled: false,
-          state: { lastRunStatus: "ok", consecutiveErrors: 0 },
-        });
-      }
-      expect(retained?.state.nextRunAtMs).toBeUndefined();
-    };
-    expectRetained();
+    expect(f.cron.getJob(job.id)).toBeUndefined();
+    expect(f.history(job.id)[0]).toMatchObject({ jobName: job.name, completionStatus: completion });
+    expect(f.history(job.id)[0]?.retryAvailable).toBe(
+      completion === "succeeded" ? undefined : true,
+    );
     await f.restart();
     await f.tick(atMs + 60_000);
-    expectRetained();
+    expect(f.cron.getJob(job.id)).toBeUndefined();
     expect(run).toHaveBeenCalledOnce();
     expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   },
@@ -169,18 +151,14 @@ it.each([
     await f.cron.run(job.id, "force");
     expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
     expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("auto-disabled"),
+      expect.stringContaining("ended without a confirmed"),
       expect.objectContaining({
         contextKey: `cron:${job.id}:auto-disabled`,
         agentId: "ops",
         sessionKey: "agent:ops:telegram:direct:123:thread:123:456",
       }),
     );
-    expect(f.cron.getJob(job.id)?.state).toMatchObject({
-      lastRunStatus: "error",
-      lastError: "session admission refused",
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 1 },
-    });
+    expect(f.cron.getJob(job.id)).toBeUndefined();
     expect(f.history(job.id)).toMatchObject([{ status: "error", completionStatus: "failed" }]);
   },
 );
@@ -195,18 +173,9 @@ it("consumes a scratch-empty one-shot without replaying it after restart", async
   );
   await f.cron.writeScratch(job.id, { content: "" });
   await f.cron.run(job.id, "due");
-  expect(f.cron.getJob(job.id)).toMatchObject({
-    enabled: false,
-    state: {
-      lastStatus: "skipped",
-      lastError: undefined,
-      consecutiveSkipped: 1,
-      nextRunAtMs: undefined,
-    },
-  });
+  expect(f.cron.getJob(job.id)).toBeUndefined();
   now += 90_000;
   await f.restart(createTestGatewayScheduler());
-  await f.cron.writeScratch(job.id, { content: "Check the newly populated scratch" });
   await f.tick(now);
   expect(f.deps.runSessionEvent).not.toHaveBeenCalled();
   expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -229,15 +198,10 @@ it.each([false, true])(
     const { job, event } = await f.run(isolatedJob());
     expect(event).toMatchObject({ jobId: job.id, status: "error" });
     const stored = f.cron.getJob(job.id);
-    expect(stored).toMatchObject({ enabled: !executionStarted, state: { consecutiveErrors: 1 } });
     if (executionStarted) {
-      expect(stored?.state.autoDisabled).toMatchObject({
-        reason: "consecutive-failures",
-        consecutiveErrors: 1,
-      });
-      expect(stored?.state.nextRunAtMs).toBeUndefined();
+      expect(stored).toBeUndefined();
       expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining('Automation "one-shot" was auto-disabled'),
+        expect.stringContaining("ended without a confirmed"),
         expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
       );
     } else {

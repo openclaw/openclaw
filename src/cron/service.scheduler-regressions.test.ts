@@ -134,7 +134,6 @@ describe("Cron issue regressions", () => {
     const baseJob = {
       name: "reminder",
       enabled: true,
-      deleteAfterRun: true,
       createdAtMs: pastAt - 60_000,
       updatedAtMs: pastAt,
       schedule: { kind: "at", at: new Date(pastAt).toISOString() },

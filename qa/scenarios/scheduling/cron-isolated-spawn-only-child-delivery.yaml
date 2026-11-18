@@ -95,7 +95,6 @@ flow:
                     name:
                       expr: "`qa-cron-${parentCase.name}-${randomUUID()}`"
                     enabled: true
-                    deleteAfterRun: true
                     schedule:
                       kind: at
                       at:
@@ -120,7 +119,7 @@ flow:
                 value:
                   expr: "addedJob.id"
               - assert:
-                  expr: "Boolean(jobId) && addedJob.sessionTarget === 'isolated' && addedJob.deleteAfterRun === true && JSON.stringify(addedJob.payload?.toolsAllow) === JSON.stringify(['sessions_spawn', 'read'])"
+                  expr: "Boolean(jobId) && addedJob.sessionTarget === 'isolated' && JSON.stringify(addedJob.payload?.toolsAllow) === JSON.stringify(['sessions_spawn', 'read'])"
                   message:
                     expr: "`${parentCase.name}: expected an isolated delete-after-run job restricted to sessions_spawn and read, got ${JSON.stringify(addedJob)}`"
               - call: waitForCronRunCompletion
