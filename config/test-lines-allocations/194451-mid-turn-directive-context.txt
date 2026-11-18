@@ -1,0 +1,5 @@
+# Keep directive acknowledgements out of an active turn's model context
+# (mid-turn /think, /reasoning, /verbose, /fast, /elevated, /model, /queue):
+# active-turn isolation, idle behaviour, mixed-message passthrough, and both
+# recording paths. 24 added test lines, no deletions.
+24
