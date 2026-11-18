@@ -40,7 +40,6 @@ import {
 import {
   chatSubmitState,
   createChatPaneSendActions,
-  createChatPaneRunRecoveryActions,
   dismissChatError,
   resolveChatPaneFollowUpMode,
 } from "./chat-pane-state.ts";
@@ -601,7 +600,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         continueSession: catalogKey ? () => this.continueCatalogSession(catalogKey) : undefined,
         addSuggestion: suggestionViewer ? () => this.addCurrentSessionSuggestion() : undefined,
       }),
-      ...createChatPaneRunRecoveryActions(state, {
+      ...this.runRecoveryActions(state, {
         canSend: composerAvailability.canSend && !catalogKey && !suggestionViewer,
         onRewindMessage: selectedSessionArchived
           ? undefined
