@@ -7,8 +7,6 @@ import { IconButton } from "./icon-button.tsx";
 export function DialogHeader(props: {
   title: JSX.Element;
   description?: JSX.Element;
-  /** Compact contextual controls, before the close action. */
-  actions?: JSX.Element;
   closeDisabled?: boolean;
   /** Left out when the dialog must not be dismissed, such as an unacknowledged secret. */
   onClose?: () => void;
@@ -16,21 +14,16 @@ export function DialogHeader(props: {
   return (
     <div class="oc-dialog__header">
       <h2 class="oc-dialog__title">{props.title}</h2>
-      <Show when={props.actions || props.onClose}>
-        <div class="oc-dialog__header-actions">
-          {props.actions}
-          <Show when={props.onClose}>
-            <IconButton
-              size={28}
-              class="oc-dialog__close"
-              icon="x"
-              label={t("common.close")}
-              tooltip={false}
-              disabled={props.closeDisabled}
-              onClick={() => props.onClose?.()}
-            />
-          </Show>
-        </div>
+      <Show when={props.onClose}>
+        <IconButton
+          size={28}
+          class="oc-dialog__close"
+          icon="x"
+          label={t("common.close")}
+          tooltip={false}
+          disabled={props.closeDisabled}
+          onClick={() => props.onClose?.()}
+        />
       </Show>
       <Show when={props.description}>
         <div class="oc-dialog__description">{props.description}</div>

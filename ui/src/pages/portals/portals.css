@@ -25,6 +25,15 @@ main.content:where(.content--portals-page) .portals-empty {
   flex: 1 1 auto;
 }
 
+/* The standalone page reads in the standard wide page column, under its header. */
+openclaw-portals-page:not([embedded]) > .portals-empty,
+openclaw-portals-page:not([embedded]) > .portals-layout {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--space-4);
+}
+
 /* The preview's own 480px frame floor keeps the layout tall enough to scroll in
    short windows; there is no viewport-offset cap. */
 .portals-layout {
@@ -173,7 +182,7 @@ main.content:where(.content--portals-page) .portals-empty {
 .portals-preview__notice-title,
 .portals-empty__title {
   color: var(--text);
-  font-size: calc(0.95rem * var(--control-ui-text-scale));
+  font-size: 0.95rem;
   font-weight: 650;
 }
 
@@ -334,7 +343,7 @@ openclaw-portals-page[embedded],
 
 .portals-page--embedded[data-mobile] .portals-embedded__name {
   display: block;
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   font-weight: 500;
 }
 

@@ -106,7 +106,6 @@ suite.define(() => {
       await waitForControlUiGatewayReady(page);
       const importButton = page.getByRole("button", { name: "Import", exact: true });
       await importButton.waitFor();
-      await page.getByText("Appliance care coordinator", { exact: true }).waitFor();
       const entry = await page
         .locator('script[type="module"][src*="/assets/index-"]')
         .getAttribute("src");
@@ -128,15 +127,17 @@ suite.define(() => {
         });
         await writeFile(path.join(suite.artifactDir, name), frame.png);
       };
-      await capture("before-selection.png", importButton);
+      await capture("entry.png", importButton);
       const picker = page.waitForEvent("filechooser");
       await importButton.click();
       await (await picker).setFiles(archive);
       await page.getByRole("dialog", { name: "Import Template" }).waitFor();
+      const dialog = page.getByRole("dialog", { name: "Import Template" });
       await expect
-        .poll(() => page.getByText("upload-proof.tgz", { exact: true }).isVisible())
+        .poll(() => dialog.getByRole("heading", { name: "Upload Proof" }).isVisible())
         .toBe(true);
-      const confirm = page.getByRole("button", { name: "Import template", exact: true });
+      expect(await dialog.locator(".oc-dialog__header").count()).toBe(0);
+      const confirm = dialog.getByRole("button", { name: "Import", exact: true });
       await expect.poll(() => confirm.isVisible()).toBe(true);
       await capture("review.png", confirm);
       await confirm.click();

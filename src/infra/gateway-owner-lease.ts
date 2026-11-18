@@ -49,7 +49,7 @@ import { sqliteExtendedResultCode } from "./sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { AsyncPreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { prepareSqliteReadOnlyLocationAwaited } from "./sqlite-snapshot-source.js";
 import {
   runSqliteImmediateTransactionSync,
@@ -445,6 +445,8 @@ export function acquireGatewayOwnerLease(params: {
       }
       await heartbeat?.stop();
       try {
+        const assertCurrent = await custody?.prepareAccess();
+        assertCurrent?.();
         // Lost custody may join its worker, but cannot mutate the recorded lease.
         if (!custody?.signal.aborted) {
           mutateLease("release", (db) => {

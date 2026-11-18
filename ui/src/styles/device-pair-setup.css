@@ -47,12 +47,12 @@
 
 .device-pair-setup__access strong {
   color: var(--text-strong);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .device-pair-setup__access small {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.35;
 }
 
@@ -64,7 +64,7 @@
   justify-content: center;
   gap: 10px;
   color: var(--muted);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
 }
 
 .device-pair-setup__spinner {
@@ -120,7 +120,7 @@
 .device-pair-setup__qr-unavailable {
   max-width: 220px;
   color: var(--qr-text);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   line-height: 1.5;
   text-align: center;
 }
@@ -271,7 +271,7 @@
 .device-pair-setup__state h3 {
   margin: 2px 0 0;
   color: var(--text-strong);
-  font-size: calc(18px * var(--control-ui-text-scale));
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.015em;
   line-height: 1.3;
@@ -281,7 +281,7 @@
 .device-pair-setup__state p {
   margin: -6px 0 4px;
   color: var(--muted);
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 @media (max-width: 640px) {

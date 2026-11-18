@@ -93,7 +93,7 @@ body.update-dialog-open .sidebar-update-card__status {
   border-radius: var(--radius-md);
   border: 1px solid var(--border);
   background: var(--secondary);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.45;
 }
 

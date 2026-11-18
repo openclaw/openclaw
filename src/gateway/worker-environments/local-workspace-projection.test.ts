@@ -32,7 +32,7 @@ import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { proveResumedBaseRefresh } from "./local-workspace-base-refresh.test-support.js";
 import { decodeLocalWorkspaceTree } from "./local-workspace-cas.js";
 import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
-import { proveUnchangedSandboxCommandCheckpoints } from "./local-workspace-checkpoint.test-support.js";
+import { registerSandboxCheckpointTests } from "./local-workspace-checkpoint.test-support.js";
 import {
   prepareLegacyArchiveRetention,
   proveAcceptedDirectoryRetention,
@@ -76,6 +76,19 @@ import {
   readLocalWorkspaceProjection,
 } from "./local-workspace-store.test-support.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
+
+const checkpointLog = vi.hoisted(() => vi.fn<(message: string) => void>());
+// mock-isolation: capture checkpoint diagnostics before imports create the owner logger.
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      info: checkpointLog,
+    }),
+  };
+});
 
 let root: string;
 let stateRoot: string;
@@ -188,21 +201,7 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
-it("keeps unchanged commands running while checkpointing edits and deletions", () =>
-  proveUnchangedSandboxCommandCheckpoints(owner));
-
-it.each([false, true])(
-  "resumes captured commands without losing later guest writes (interrupted acceptance: %s)",
-  (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner, true, interrupted),
-);
-
-it.each([false, true])(
-  "captures before scanning while preserving post-resume writes (interrupted acceptance: %s)",
-  (interrupted) => proveUnchangedSandboxCommandCheckpoints(owner, true, interrupted, true),
-);
-
-it("re-pauses omitted nested subvolumes under the checkpoint lease before saving their live bytes", () =>
-  proveUnchangedSandboxCommandCheckpoints(owner, true, false, "nested"));
+registerSandboxCheckpointTests(() => owner, checkpointLog);
 
 it.each(["canonical", "projection"] as const)(
   "quarantines rejected checkpoints while allowing new agent work: %s",
@@ -213,7 +212,7 @@ it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(
 
 it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
 
-it("attributes sandbox projection custody and joined preparation waits", () =>
+it("attributes cold sandbox preparation, projection custody, and joined waits", () =>
   proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>
@@ -413,7 +412,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const capture = vi.spyOn(manifests, "captureInitialLocalWorkspaceManifest");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
@@ -610,7 +609,7 @@ it("retains both sides and a durable pending result when edits conflict", () =>
   proveWarmWorkspaceConflictRecovery(owner));
 
 it("resumes an interrupted base refresh from the files it already applied", () =>
-  proveResumedBaseRefresh({ owner, root, repo, canonical }));
+  proveResumedBaseRefresh({ owner, root, repo, canonical, log: checkpointLog }));
 
 it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
   const projection = await prepare();
@@ -883,10 +882,10 @@ it("reports successful native eviction and restores accepted workspace contents"
   const authored = "accepted guest edit before native eviction\n";
   await writeText(projection, "source.txt", authored);
   await synchronize();
-  const { withWorktreeAllocationLease } = await import("../../agents/worktrees/allocation.js");
+  const { withWorktreeMutationLease } = await import("../../agents/worktrees/allocation.js");
   const { evictManagedWorktree } = await import("../../agents/worktrees/eviction.js");
   await expect(
-    withWorktreeAllocationLease({ env: process.env }, (guard) =>
+    withWorktreeMutationLease({ env: process.env, id: owner.worktree.id }, (guard) =>
       evictManagedWorktree({
         env: process.env,
         record: owner.worktree,

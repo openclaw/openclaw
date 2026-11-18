@@ -51,6 +51,8 @@ const actionInputs = new Map<string, ActionInput>();
 const ownerSource = read(".github/actions/git-owner/owner.py");
 const basePolicySource = read(".github/actions/ensure-base-commit/policy.py");
 const publisherPolicySource = read(".github/actions/publish-generated-pr/policy.py");
+const fixtureLifetimeFds =
+  '((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))';
 
 function readActionSteps(action: string) {
   const input =
@@ -350,7 +352,7 @@ export async function runCiGitStep(options: {
              os.path.join(os.environ["RUNNER_TEMP"], "generated-pr-push.log"): "push-log"}
     if event == "open" and args[0] in names:
         subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                        "observe", os.environ["TMPDIR"], "linux:configured", names[args[0]]], check=True)
+                        "observe", os.environ["TMPDIR"], "linux:configured", names[args[0]]], check=True, pass_fds=${fixtureLifetimeFds})
 
 sys.addaudithook(fixture_file_boundary)
 
@@ -363,7 +365,7 @@ def main():`,
             "def backoff(seconds):",
             `def backoff(seconds):
     subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                    "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True)`,
+                    "observe", os.environ["TMPDIR"], "linux:configured", "backoff"], check=True, pass_fds=${fixtureLifetimeFds})`,
           );
         }
         if (action === "git-owner" && options.cancelDuringBackoff) {
@@ -388,7 +390,7 @@ def main():`,
             with open(fixture_cancel, "x") as receipt:
                 json.dump(os.getpid(), receipt)
             subprocess.run([${JSON.stringify(process.execPath)}, ${JSON.stringify(ciCheckoutFixture)},
-                            "observe", os.environ["TMPDIR"], "linux:configured", "backoff-cancel"], check=True)
+                            "observe", os.environ["TMPDIR"], "linux:configured", "backoff-cancel"], check=True, pass_fds=${fixtureLifetimeFds})
             os.kill(os.getpid(), signal.SIGTERM)`,
           );
         }

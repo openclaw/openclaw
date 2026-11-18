@@ -52,7 +52,7 @@ openclaw-plugin-install-action {
   display: flex;
   align-items: center;
   gap: 16px;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 .plugin-install-progress__header strong {
   color: var(--text-strong);
@@ -61,13 +61,13 @@ openclaw-plugin-install-action {
 .plugin-install-progress__header > span {
   margin-left: auto;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .plugin-install-progress__recovery,
 .plugin-install-progress__failure {
   margin: 16px 0 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
@@ -89,7 +89,7 @@ openclaw-plugin-install-action {
   align-items: center;
   gap: 9px;
   min-width: 0;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
   line-height: 1.35;
 }
 .plugin-install-progress__activity--started {
@@ -131,6 +131,6 @@ openclaw-plugin-install-action {
     padding: 16px;
   }
   .plugin-install-progress__activity {
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
   }
 }

@@ -6,7 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import {
   normalizeCatalogOpenTarget,
   normalizeTextScale,
@@ -29,7 +29,6 @@ import {
 } from "../../lib/config/config-secret-fields.ts";
 import {
   currentConfigRead,
-  currentDisplayConfig,
   currentDisplayRuntimeConfig,
 } from "../../lib/config/config-state-model.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
@@ -258,9 +257,7 @@ export function createConfigPage(
     }
     targetBlockId =
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
-    if (pageId === "appearance" && isAppearanceDataTarget(targetBlockId)) {
-      appearanceDataRequested = true;
-    }
+    appearanceDataRequested ||= pageId === "appearance" && isAppearanceDataTarget(targetBlockId);
     synchronize();
     invalidate();
     routeListeners.publish();
@@ -331,12 +328,10 @@ export function createConfigPage(
   }
 
   function requestAppearanceData() {
-    if (pageId !== "appearance" || appearanceDataRequested) {
-      return;
+    if (pageId === "appearance" && !appearanceDataRequested) {
+      appearanceDataRequested = true;
+      refresh();
     }
-    appearanceDataRequested = true;
-    synchronize();
-    invalidate();
   }
 
   function requestAppearanceImport() {
@@ -431,7 +426,12 @@ export function createConfigPage(
       issues: configState.configIssues,
       loading: configState.configLoading,
       configLoaded: configState.configSnapshot !== null,
-      appearanceDisplayReady: currentDisplayConfig(configState) !== null,
+      configReadAccess: !context.gateway.snapshot.hello
+        ? ("pending" as const)
+        : hasOperatorReadAccess(context.gateway.snapshot.hello.auth)
+          ? ("available" as const)
+          : ("denied" as const),
+      appearanceDataRequested,
       onAppearanceDataNeeded: requestAppearanceData,
       configRecoveryError: configState.configRecoveryError,
       configRead: currentConfigRead(configState)?.completion.promise ?? null,

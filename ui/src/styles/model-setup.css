@@ -13,7 +13,7 @@
 
 .model-setup__intro h1 {
   margin: 0;
-  font-size: calc(20px * var(--control-ui-text-scale));
+  font-size: 20px;
 }
 
 .model-setup-wizard .oc-dialog__title,
@@ -65,8 +65,8 @@
 .model-setup__loading-status {
   height: 14px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(14px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 14px;
 }
 
 .model-setup__loading-action {
@@ -139,7 +139,7 @@
   display: inline-block;
   margin-top: 5px;
   overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .model-setup__icon--recommendation,
@@ -161,7 +161,7 @@
   border: 1px solid var(--border);
   border-radius: 999px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -182,7 +182,7 @@
   gap: 7px;
   margin-top: 8px;
   color: var(--danger);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -282,12 +282,12 @@
 
 .model-setup-provider-select__copy > span {
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
 }
 
 .model-setup-provider-select__copy > small {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
   line-height: 1.35;
 }
 
@@ -310,7 +310,7 @@
 .model-setup-provider-select__menu .model-setup-provider-select__option {
   padding: 6px 8px;
   font: inherit;
-  font-size: calc(13px * var(--control-ui-text-scale));
+  font-size: 13px;
 }
 
 .model-setup-provider-select__option > .oc-menu-item__label {
@@ -326,7 +326,7 @@
   align-items: flex-start;
   gap: 8px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
+  font-size: 12px;
   line-height: 1.45;
 }
 
@@ -438,7 +438,7 @@
 
 .model-setup-wizard__success-title {
   margin: 4px 0 0;
-  font-size: calc(22px * var(--control-ui-text-scale));
+  font-size: 22px;
   line-height: 1.3;
 }
 
@@ -446,7 +446,7 @@
   max-width: 360px;
   margin: 0;
   color: var(--muted);
-  font-size: var(--control-ui-text-md);
+  font-size: 14px;
   line-height: 1.5;
 }
 

@@ -506,3 +506,134 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
     runtimeConfig.dispose();
   }
 });
+
+it("retains explicit and schema-default Sources switches during successful and failed schema refresh", async () => {
+  const refreshes = [deferred<unknown>(), deferred<unknown>()];
+  const config = {
+    plugins: {
+      entries: {
+        opencode: { enabled: true, config: {} },
+        acpx: { enabled: true, config: { piSessionCatalog: { enabled: false } } },
+      },
+    },
+  };
+  const entry = (key: string): JsonSchema => ({
+    type: "object",
+    properties: {
+      config: {
+        type: "object",
+        properties: {
+          [key]: {
+            type: "object",
+            properties: {
+              enabled: { type: "boolean", default: true },
+            },
+          },
+        },
+      },
+    },
+  });
+  const response = {
+    schema: {
+      type: "object",
+      properties: {
+        plugins: {
+          type: "object",
+          properties: {
+            entries: {
+              type: "object",
+              properties: {
+                opencode: entry("sessionCatalog"),
+                acpx: entry("piSessionCatalog"),
+              },
+            },
+          },
+        },
+      },
+    },
+    uiHints: {},
+    version: "sources-schema",
+  };
+  let reads = 0;
+  const request = vi.fn((method: string) => {
+    if (method === "config.get") {
+      return Promise.resolve({
+        config,
+        hash: "sources",
+        raw: JSON.stringify(config),
+        valid: true,
+        issues: [],
+      });
+    }
+    if (method === "config.schema") {
+      return ++reads === 1 ? Promise.resolve(response) : refreshes[reads - 2]!.promise;
+    }
+    if (method === "plugins.list") {
+      return Promise.resolve({
+        plugins: ["opencode", "acpx"].map((id) => ({
+          id,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        })),
+        diagnostics: [],
+        mutationAllowed: true,
+      });
+    }
+    return Promise.resolve(method === "models.list" ? { models: [] } : {});
+  });
+  const { gateway } = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client: createTestGatewayClient(request),
+      phase: "connected",
+      hello: gatewayHelloForMethods(["config.get", "config.schema", "config.set", "plugins.list"]),
+    }),
+  );
+  const runtimeConfig = createRuntimeConfigCapability(gateway);
+  await runtimeConfig.ensureLoaded();
+  await runtimeConfig.ensureSchemaLoaded();
+  const context = { ...createConfigRouteContext(), gateway, runtimeConfig };
+  await preloadConfigPage("appearance");
+  const view = mountConfigPage(context, { pageId: "appearance" });
+  try {
+    const section = expectDefined(view.page.querySelector("#settings-session-sources"), "Sources");
+    section.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    const inputs = () => [...section.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+    await waitForSolid(() => expect(inputs().map((input) => input.checked)).toEqual([true, false]));
+    const original = inputs();
+    expect(
+      original.map((input) =>
+        document.getElementById(input.getAttribute("aria-labelledby")!)?.textContent?.trim(),
+      ),
+    ).toEqual(["Show OpenCode sessions", "Show Pi sessions"]);
+    for (const [index, refresh] of refreshes.entries()) {
+      const revalidation = runtimeConfig.refreshSchema();
+      await waitForSolid(() => expect(original.every((input) => input.disabled)).toBe(true));
+      expect(inputs().map((input, rowIndex) => input === original[rowIndex])).toEqual([true, true]);
+      expect(original.map((input) => input.checked)).toEqual([true, false]);
+      for (const input of original) {
+        expect(input.getAttribute("aria-hidden")).not.toBe("true");
+        expect(input.closest(".settings-toggle")?.classList.contains("skeleton")).toBe(false);
+        expect(
+          input.closest(".settings-toggle")?.querySelector<HTMLElement>(".settings-toggle__control")
+            ?.style.visibility,
+        ).not.toBe("hidden");
+      }
+      if (index === 0) {
+        refresh.resolve(response);
+      } else {
+        refresh.reject(new Error("Synthetic refresh unavailable"));
+      }
+      await revalidation;
+      await waitForSolid(() => expect(original.every((input) => !input.disabled)).toBe(true));
+      expect(inputs().map((input, rowIndex) => input === original[rowIndex])).toEqual([true, true]);
+      expect(original.map((input) => input.checked)).toEqual([true, false]);
+    }
+  } finally {
+    for (const refresh of refreshes) {
+      refresh.resolve(response);
+    }
+    view.dispose();
+    runtimeConfig.dispose();
+  }
+});

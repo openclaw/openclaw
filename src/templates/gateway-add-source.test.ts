@@ -5,6 +5,7 @@ import { gzipSync } from "node:zlib";
 import * as tar from "tar";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { planTemplateAddForGateway } from "./gateway-add-plan.js";
 import { withResolvedTemplateAddSource } from "./gateway-add-source.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -74,6 +75,28 @@ async function uploadFixture() {
   const archive = join(dirs.make("upload-archive-"), "template.tgz");
   return { root, archive };
 }
+
+it("discloses local review text from the exact archive while keeping unselected host files private", async () => {
+  const { root, archive } = await uploadFixture();
+  await writeFile(join(root, "private.txt"), "not selected");
+  tar.c({ cwd: root, file: archive, gzip: true, sync: true, prefix: "package" }, [
+    "package.json",
+    "CLAW.md",
+  ]);
+  const bytes = await readFile(archive);
+  const plan = await planTemplateAddForGateway({
+    source: { kind: "upload", archiveBase64: bytes.toString("base64") },
+    config: { agents: { defaults: { workspace: dirs.make("review-workspace-") } } },
+    sourceMcpServers: {},
+  });
+  expect(plan.reviewFiles).toEqual([
+    { path: "CLAW.md#body", content: "Uploaded instructions.\n", workspacePaths: ["SOUL.md"] },
+  ]);
+  expect(plan.manifestDisclosure?.source.integrity).toBe(
+    "sha256:" + createHash("sha256").update(bytes).digest("hex"),
+  );
+  expect(JSON.stringify(plan.reviewFiles)).not.toContain("not selected");
+});
 
 it("keeps exact uploaded bytes and identity through preview and retained apply", async () => {
   const { root, archive } = await uploadFixture();

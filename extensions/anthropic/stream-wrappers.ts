@@ -23,6 +23,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeAnthropicServiceTier,
+  recordFastModeUnsupported,
   resolveAnthropicFastModePlan,
   supportsAnthropicPriorityTier,
   type AnthropicServiceTier,
@@ -191,6 +192,14 @@ export function createAnthropicFastModeWrapper(
     if (resolved === undefined) {
       return underlying(model, context, options);
     }
+    return withPlan(model, context, options, resolved);
+  };
+  function withPlan(
+    model: Parameters<StreamFn>[0],
+    context: Parameters<StreamFn>[1],
+    options: Parameters<StreamFn>[2],
+    resolved: boolean,
+  ): ReturnType<StreamFn> {
     const plan = resolveAnthropicFastModePlan({
       provider: model.provider,
       modelId: model.id,
@@ -212,10 +221,12 @@ export function createAnthropicFastModeWrapper(
       if (!resolved) {
         return underlying(model, context, options);
       }
-      return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, {
+      const fastOptions = {
         ...options,
         headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_FAST_MODE_BETA]),
-      });
+        onFastModeUnsupported: recordFastModeUnsupported,
+      };
+      return fastPayloadWrapper(applyAnthropicFastModePricing(model), context, fastOptions);
     }
     return plan === "service-tier"
       ? createAnthropicServiceTierWrapper(underlying, resolved ? "auto" : "standard_only")(
@@ -224,7 +235,7 @@ export function createAnthropicFastModeWrapper(
           options,
         )
       : underlying(model, context, options);
-  };
+  }
 }
 
 function createAnthropicCompactionWrapper(

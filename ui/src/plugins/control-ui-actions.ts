@@ -5,6 +5,13 @@ import { i18n } from "../i18n/lib/translate.ts";
 import type { ControlUiPluginCapability } from "./control-ui-capability.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
+/** The invoking pane's draft owner; `getDraft` reads ahead of the rendered `draft`. */
+export type ControlUiComposerDraft = {
+  draft: string;
+  getDraft?: () => string;
+  onDraftChange: (next: string) => void;
+};
+
 export function pluginSessionMenuActions(
   runtime: ControlUiPluginCapability,
   session: ControlUiSession,
@@ -41,6 +48,7 @@ export async function runControlUiPluginAction(
     id: string;
     placement: ControlUiAction["placement"];
     session?: ControlUiSession;
+    composer?: ControlUiComposerDraft;
     signal: AbortSignal;
     isCurrent?: () => boolean;
   },
@@ -88,10 +96,28 @@ export async function runControlUiPluginAction(
       ),
     );
   }
+  const composer = params.placement === "composer" ? params.composer : undefined;
+  // Like replacement composer operations, a retired handle throws instead of touching
+  // whichever draft its pane presents next.
+  const checkComposer = () => {
+    if (signal.aborted || params.isCurrent?.() === false) {
+      throw new Error("This plugin UI view has ended.");
+    }
+  };
   await entry.value.run({
     ...context,
     host: scopeControlUiHost(entry.host, signal, params.isCurrent),
     signal,
+    composer: composer && {
+      get draft() {
+        checkComposer();
+        return composer.getDraft?.() ?? composer.draft;
+      },
+      setDraft: (text: string) => {
+        checkComposer();
+        composer.onDraftChange(text);
+      },
+    },
   });
   check();
 }

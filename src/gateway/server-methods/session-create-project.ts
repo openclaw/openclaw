@@ -22,7 +22,11 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import { materializeProjectClone, refreshProjectClone } from "../../projects/project-clone.js";
+import {
+  materializeProjectClone,
+  prepareProjectCloneDefaultBase,
+  refreshProjectClone,
+} from "../../projects/project-clone.js";
 import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { resolveProjectDirectory } from "../../projects/project-registry.js";
 import {
@@ -416,6 +420,10 @@ export async function prepareSessionWorkspaceForRun(params: {
       // A pending repository URL also owns a managed checkout, including retries
       // saved before project sessions stopped binding directly to the shared clone.
       pending ??= { titleSource: "" };
+      let acceptedBase: { baseRef?: string; baseCommit: string } | undefined;
+      if (!pending.baseCommit && !pending.baseRef && project?.source === "cloned") {
+        acceptedBase = await prepareProjectCloneDefaultBase(project, cloneOptions);
+      }
       if (pending.baseRef && !pending.baseCommit) {
         let resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);
         if (
@@ -431,9 +439,12 @@ export async function prepareSessionWorkspaceForRun(params: {
         if (!resolved.ok) {
           throw new Error(resolved.error.message);
         }
+        acceptedBase = { baseCommit: resolved.value };
+      }
+      if (acceptedBase) {
         // Accept once, before setup can fail: retries keep the commit while the
         // original ref remains publication metadata, never a fallback selection.
-        const next = { ...pending, baseCommit: resolved.value };
+        const next = { ...pending, ...acceptedBase };
         const updated = await patchSessionEntryCore(
           target,
           (current) => {

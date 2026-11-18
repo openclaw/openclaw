@@ -58,11 +58,28 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Entering-row forecasts (#196173): measured 1,300,731 B, plus 64 B headroom.
-  // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
-  chatBootJsGzipBytes: 1_301_131,
-  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
-  newBootJsGzipBytes: 803_364,
+  // Coordinator-accepted shipped feature cost after paydown #199196.
+  // Measured on main 5328b275: exact route totals, with no added headroom.
+  // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
+  // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
+  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,313,182 B
+  // (+1,215 B over main 97dd78cc) plus 64 B headroom.
+  // Continuation wakes (#200056): measured 1,314,286 B (+979 B over main 7f234bd9) plus 64 B.
+  // Ayaan approved the #198133 tool-call history cost (2026-11-16): measured +10,341 B
+  // over its merge base plus 64 B headroom.
+  // Approved publication task filtering: +90 B over 054fd978, with no added headroom.
+  // Popover prompt cache hit rate (#200223, Ayaan shipped 2026-11-17): measured +737 B
+  // over its merge base plus 64 B headroom.
+  // Vyctor-approved navigation stack (#200013): +5,501 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  chatBootJsGzipBytes: 1_331_081,
+  // The same shared lazy signer adds the coordinator-accepted +235 B here.
+  // Same #198491 approval: measured 815,742 B (+1,122 B over main) plus 64 B headroom.
+  // Continuation wakes (#200056): measured 816,096 B (+390 B over main) plus 64 B.
+  // Same #200223 popover cache hit rate: measured +408 B over its merge base plus 64 B.
+  // Vyctor-approved navigation stack (#200013): +5,611 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  newBootJsGzipBytes: 822_243,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -73,17 +90,24 @@ const controlUiPerformanceBudgets = {
   startupCssGzipBytes: 50 * KIB,
   // Same snapshot-save repair, measured shared chunk plus 64 B.
   // The same shared-chunk trade, measured plus 64 B.
-  largestJsGzipBytes: 564_484,
+  // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
+  // Same #198491 approval, absorbing inherited debt: measured 572,080 B (+1,010 B over main)
+  // plus 64 B headroom.
+  // Continuation wakes (#200056): measured 572,376 B plus 64 B.
+  // Vyctor-approved navigation stack (#200013): +4,803 B vs paired base 1d82bed0.
+  // Preserve the original main headroom; no additional margin.
+  largestJsGzipBytes: 577_243,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Vincent Koc accepted the interface-wide text-scale cost in #196468
-  // (2026-11-10): +2,284 B gzip / +30,654 B raw versus a7ba22b9.
-  // Add only that accepted delta to the prior fixed ceilings (326,575 /
-  // 1,682,231). Preserve their existing allowance for concurrent main changes,
-  // rather than subtracting it by binding the caps to one stale build total.
-  totalCssGzipBytes: 328_859,
-  totalCssRawBytes: 1_712_885,
+  // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
+  // Measured on main a58dbe09: exact totals, with no added headroom.
+  // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
+  // measured 336,879 B gzip (+371 B over main) / 1,737,690 B raw (+771 B), plus 64 B each.
+  // Ayaan approved the #198133 tool-call history styles (2026-11-16), absorbing inherited debt:
+  // measured 337,248 B gzip (+209 B over main) / 1,740,170 B raw (+2,064 B), plus 64 B each.
+  totalCssGzipBytes: 337_312,
+  totalCssRawBytes: 1_740_234,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

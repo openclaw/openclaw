@@ -94,6 +94,7 @@ export type RepositoryPublicationMutation =
     }
   | { operation: "failPreparation"; row: RepositoryPublicationRow; nextAction: string }
   | { operation: "retire"; row: RepositoryPublicationRow }
+  | { operation: "reopen"; row: RepositoryPublicationRow }
   | { operation: "defer"; selection: GitHubPublicationDeferral };
 
 export type SharedPublicationMutation =

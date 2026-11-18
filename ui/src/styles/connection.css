@@ -138,9 +138,13 @@
   /* Keep the following host details still when a ping fails. */
   min-height: 1lh;
   margin: 0;
-  color: var(--warn);
+  color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
+}
+
+.connection-ping__error--failed {
+  color: var(--warn);
 }
 
 .connection-activity__note {

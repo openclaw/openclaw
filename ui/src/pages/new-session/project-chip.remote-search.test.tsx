@@ -5,16 +5,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { PICKER_INPUT_DEBOUNCE_MS } from "./place-browser-state.ts";
-import { mountProjectChip } from "./project-chip.test-support.tsx";
-
-async function openProjectSearch(container: ParentNode) {
-  await waitForSolid(() => expect(container.querySelector(".header-search")).not.toBeNull());
-  if (!container.querySelector('input[type="search"]')) {
-    container.querySelector<HTMLButtonElement>(".header-search__toggle")?.click();
-    flush();
-  }
-  await waitForSolid(() => expect(container.querySelector('input[type="search"]')).not.toBeNull());
-}
+import { mountProjectChip, openProjectSearch } from "./project-chip.test-support.tsx";
 
 function result(name: string): ProjectsSearchRemoteResult {
   return {
@@ -38,7 +29,7 @@ async function mountSearch() {
   const projects = [
     {
       id: "sample",
-      displayName: "Current Failed Recovered Scope",
+      displayName: "Empty Current Registered Missing Failed Recovered Scope",
       repositoryIdentity: "example/registered",
       repoRoot: "/fixture/sample",
       source: "registered" as const,
@@ -89,40 +80,55 @@ async function mountSearch() {
 afterEach(() => vi.useRealTimers());
 
 describe("remote project search slot", () => {
-  it("keeps input and local selection live through debounce, loading, failure, and a new query", async () => {
+  it("keeps input and local selection live through debounce, loading, empty results, failure, and recovery", async () => {
     const { browser, request, view, input, localRow, typeQuery } = await mountSearch();
-    const current = createDeferred<ProjectsSearchRemoteResult>();
-    request.mockReturnValueOnce(current.promise);
+    const empty = () => view.queryByText("No additional GitHub repositories", { exact: true });
     input.focus();
-    typeQuery("current");
-    await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
-    expect(request).not.toHaveBeenCalled();
-    expect(view.container.querySelector(".new-session-page__project-status")).toBeNull();
-    await vi.advanceTimersByTimeAsync(1);
-    await waitForSolid(() => expect(view.getByRole("status").textContent).toContain("Loading"));
-    expect(input.disabled).toBe(false);
-    expect(document.activeElement).toBe(input);
-    expect(view.container.querySelector('[data-value="project:sample"]')).toBe(localRow);
-    current.resolve({
-      ...result("current"),
-      projects: [...result("current").projects, ...result("registered").projects],
-    });
-    await waitForSolid(() =>
+    for (const [query, response, expectedRows, missingCredential, priorCalls] of [
+      ["empty", { credential: "configured", projects: [] }, [], false, 0],
+      [
+        "current",
+        {
+          ...result("current"),
+          projects: [...result("current").projects, ...result("registered").projects],
+        },
+        ["remote-project:example/current"],
+        false,
+        1,
+      ],
+      ["registered", result("registered"), [], false, 2],
+      ["missing", { credential: "missing", projects: [] }, [], true, 3],
+    ] as const) {
+      const pending = createDeferred<ProjectsSearchRemoteResult>();
+      request.mockReturnValueOnce(pending.promise);
+      typeQuery(query);
+      expect(empty()).toBeNull();
+      expect(view.container.querySelectorAll('[data-value^="remote-project:"]')).toHaveLength(0);
+      await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS - 1);
+      expect(request).toHaveBeenCalledTimes(priorCalls);
+      expect(view.container.querySelector(".new-session-page__project-status")).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await waitForSolid(() => expect(view.getByRole("status").textContent).toContain("Loading"));
+      expect(input.disabled).toBe(false);
+      expect(document.activeElement).toBe(input);
+      expect(view.container.querySelector('[data-value="project:sample"]')).toBe(localRow);
+      pending.resolve({ ...response, projects: [...response.projects] });
+      await waitForSolid(() => expect(view.queryByRole("status")).toBeNull());
+      expect(Boolean(empty())).toBe(expectedRows.length === 0);
       expect(
-        view.container.querySelector('[data-value="remote-project:example/current"]'),
-      ).not.toBeNull(),
-    );
-
-    expect(view.getByText("Local projects", { exact: true })).not.toBeNull();
-    expect(
-      view.container.querySelector('[data-value="remote-project:example/registered"]'),
-    ).toBeNull();
+        Array.from(view.container.querySelectorAll('[data-value^="remote-project:"]'), (row) =>
+          row.getAttribute("data-value"),
+        ),
+      ).toEqual(expectedRows);
+      expect(view.container.textContent?.includes("No GitHub account is configured")).toBe(
+        missingCredential,
+      );
+      expect(view.getByText("Local projects", { exact: true })).not.toBeNull();
+      expect(view.container.querySelector('input[type="search"]')).toBe(input);
+    }
 
     request.mockRejectedValueOnce(new Error("Remote search unavailable"));
     typeQuery("failed");
-    expect(
-      view.container.querySelector('[data-value="remote-project:example/current"]'),
-    ).toBeNull();
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
     await waitForSolid(() =>
       expect(view.getByRole("alert").textContent).toBe("Remote search unavailable"),

@@ -576,9 +576,8 @@ export function reserveSteerCandidate(
         return "steer";
       } catch (error) {
         const cancelled = isFollowupRunAborted(run) || input.abortSignal.aborted;
-        // Failed original execution authority is cancellation, not a new
-        // runnable fallback. No native handoff has occurred in this frame.
-        finish(true);
+        // No native handoff occurred; only recorded cancellation ends queued custody.
+        finish(cancelled);
         if (cancelled) {
           return "cancelled";
         }

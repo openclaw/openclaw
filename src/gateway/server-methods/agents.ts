@@ -295,9 +295,14 @@ export const agentsHandlers: GatewayRequestHandlers = {
           avatar: params.avatar,
           beforePersistentApply: () => {
             assertOwnerCurrent?.();
-            preparation?.assertCurrent();
+            preparation?.assertAuthorityCurrent();
           },
-          ...(preparation ? { expectedConfigHash: preparation.expectedConfigHash } : {}),
+          ...(preparation
+            ? {
+                expectedConfigHash: preparation.expectedConfigHash,
+                assertBeforePublish: preparation.assertCurrent,
+              }
+            : {}),
           assertIdentityInputAllowed: captureGatewayClientUploadCommitGuard({
             method: "agents.create",
             requestParams: params,
@@ -340,7 +345,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }),
               error: applicationError,
             }
-          : await completeAgentOnboarding(options, result.agentId, result.name)
+          : await completeAgentOnboarding(options, result.agentId)
         : undefined;
       let onboardingOperatorAuthority:
         | Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>

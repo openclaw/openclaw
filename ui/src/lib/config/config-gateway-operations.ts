@@ -8,6 +8,7 @@ import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
+import { isGatewayAccessDeniedError } from "../gateway-errors.ts";
 import { showToast } from "../toast.ts";
 import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import {
@@ -33,6 +34,7 @@ import {
   markConfigAwaitingApply,
   resolveEditableSnapshotConfig,
   type ConfigGatewayClient,
+  type ConfigReadResult,
   type LoadConfigOptions,
   type RuntimeConfigState,
   type RuntimeConfigGateway,
@@ -304,7 +306,7 @@ export function refreshConfigAfterMutation(
   });
 }
 
-export async function loadConfigSchema(state: RuntimeConfigState): Promise<Result<void, string>> {
+export async function loadConfigSchema(state: RuntimeConfigState): Promise<ConfigReadResult> {
   const client = state.client;
   if (
     !client ||
@@ -333,7 +335,7 @@ export async function loadConfigSchema(state: RuntimeConfigState): Promise<Resul
         state.configAutoSaveStatus = "error";
       }
     }
-    return failure(message);
+    return { ...failure(message), ...(isGatewayAccessDeniedError(err) ? { denied: true } : {}) };
   } finally {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;

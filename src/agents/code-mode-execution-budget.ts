@@ -8,6 +8,7 @@ import {
   pendingBridgeStatesForSettlement,
   waitForPendingBridgeSettlement,
   type PendingBridgeState,
+  type CodeModeRunOwner,
 } from "./code-mode-state.js";
 
 export type CodeModeCallBudget = { deadlineMs: number };
@@ -45,6 +46,7 @@ export async function waitForCodeModePending(
   budget: CodeModeCallBudget,
   approvalWait: AgentRunApprovalWait,
   signal?: AbortSignal,
+  registerAwaiting?: CodeModeRunOwner["registerAwaiting"],
 ): Promise<boolean> {
   // Abort wins even over already-settled requests: callers treat `false` as
   // "do not resume the guest", which is what a cancelled exec/wait needs.
@@ -78,7 +80,7 @@ export async function waitForCodeModePending(
     if (!approvalWait.pending) {
       arm();
     }
-    await waitForPendingBridgeSettlement(pending, settlementMode, waitSignal);
+    await waitForPendingBridgeSettlement(pending, settlementMode, waitSignal, registerAwaiting);
     return !waitSignal.aborted;
   } finally {
     settlement.abort();

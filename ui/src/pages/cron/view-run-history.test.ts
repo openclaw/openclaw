@@ -9,7 +9,7 @@ import {
 
 function renderView(props: Parameters<typeof renderCronView>[0] = {}, scope = "overview") {
   return renderCronView({
-    listTab: "activity",
+    activityOpen: true,
     detailTab: "history",
     editingJob: scope === "job" ? createCronViewJob("job-1", { state: {} }) : null,
     ...props,
@@ -46,6 +46,66 @@ describe("cron view run history", () => {
         expect(entry.textContent).toContain(error);
       }
     });
+  });
+
+  it("renders a condition-script failure once, without unknown delivery or a transcript", async () => {
+    const error = `cron trigger evaluation failed (internal_error): Error: ${Array(80).fill("HTTP 403").join(", ")}`;
+    const container = await renderView(
+      {
+        runs: [
+          createRun({
+            status: "error",
+            completionStatus: "failed",
+            triggerFired: false,
+            deliveryStatus: "unknown",
+            runId: "receipt-1",
+            sessionKey: "agent:main:cron:job-1",
+            error,
+          }),
+        ],
+      },
+      "job",
+    );
+    const entry = container.querySelector(".cron-run-entry");
+    expect(entryText(entry ?? undefined, "title")).toContain("Condition check failed");
+    expect(entryText(entry ?? undefined, "facts")).toBe("");
+    expect(entryText(entry ?? undefined, "meta")).not.toContain("403");
+    expect(entry?.textContent?.split(error)).toHaveLength(2);
+    expect(entry?.querySelector(".cron-error--clamped")).not.toBeNull();
+    expect(
+      [...(entry?.querySelectorAll("button") ?? [])].map((button) => button.textContent?.trim()),
+    ).toEqual(["Show details"]);
+  });
+
+  it("keeps distinct delivery explanations and drops copies of the run error", async () => {
+    const container = await renderView({
+      runs: [
+        createRun({
+          ts: 3,
+          summary: "Report ready",
+          deliveryStatus: "not-delivered",
+          deliveryError: "Telegram chat not found",
+        }),
+        createRun({
+          ts: 2,
+          summary: "Report ready",
+          deliveryStatus: "unknown",
+          deliveryError: "Send returned no message id",
+        }),
+        createRun({
+          ts: 1,
+          status: "error",
+          error: "boom",
+          deliveryStatus: "unknown",
+          deliveryError: "boom",
+        }),
+      ],
+    });
+    const [failed, uncertain, copied] = container.querySelectorAll(".cron-run-entry");
+    expect(entryText(failed, "delivery-error")).toBe("Delivery failed: Telegram chat not found");
+    expect(entryText(uncertain, "delivery-error")).toBe("Delivery: Send returned no message id");
+    expect(entryText(uncertain, "facts")).toContain("Unknown");
+    expect(copied?.querySelector(".cron-run-entry__delivery-error")).toBeNull();
   });
 
   it("formats run token counts and durations in the rendered entry", async () => {

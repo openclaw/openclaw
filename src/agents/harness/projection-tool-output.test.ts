@@ -2,6 +2,21 @@ import { describe, expect, it } from "vitest";
 import { formatNativeToolOutput, NativeToolOutputAccumulator } from "./projection-tool-output.js";
 
 describe("native tool output accumulation", () => {
+  it("keeps a bounded live tail after capture fills without replacing the captured prefix", () => {
+    const output = new NativeToolOutputAccumulator("Codex");
+    output.append("a", "prefix\n" + "x".repeat(12_000));
+    output.append("b", "other command\n");
+    const result = output.append("a", "😀" + "y".repeat(598));
+    expect(result.liveOutput).toEqual({ text: "😀" + "y".repeat(598), omittedChars: 12_007 });
+    const next = output.append("a", "z");
+    expect(next.liveOutput).toEqual({ text: "y".repeat(598) + "z", omittedChars: 12_009 });
+    expect(next.text).toHaveLength(10_000);
+    expect(next.text).toMatch(/^prefix\nx+/u);
+    expect(next.text).not.toContain("y");
+    expect(output.textByItem.get("b")).toBe("other command\n");
+    expect(output.append("b", "latest\n").liveOutput).toBeUndefined();
+  });
+
   it("tracks per-item echo lengths across leading, trailing, and interleaved whitespace", () => {
     const output = new NativeToolOutputAccumulator("Codex");
     expect(output.append("a", " \n").normalizedLength).toBe(0);

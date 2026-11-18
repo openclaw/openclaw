@@ -5,9 +5,9 @@ openclaw-chat-summary-automations {
   .chat-details__caption {
     gap: 4px;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
+    font-size: 12px;
     font-weight: 500;
-    line-height: calc(24px * var(--control-ui-text-scale));
+    line-height: 24px;
 
     > svg {
       width: 14px;
@@ -31,8 +31,8 @@ openclaw-chat-summary-automations {
     border-radius: 0;
     background: transparent;
     color: var(--muted);
-    font-size: var(--control-ui-text-sm);
-    line-height: calc(24px * var(--control-ui-text-scale));
+    font-size: 12px;
+    line-height: 24px;
 
     &:hover {
       background: transparent;
@@ -66,8 +66,8 @@ openclaw-chat-summary-automations {
   padding: 4px 0;
   border-radius: var(--radius-md);
   color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(24px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 24px;
 
   &:hover {
     background: var(--surface-hover);
@@ -136,8 +136,8 @@ openclaw-chat-summary-automations {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  line-height: calc(24px * var(--control-ui-text-scale));
+  font-size: 11px;
+  line-height: 24px;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -172,14 +172,14 @@ openclaw-chat-summary-automations {
   gap: 8px;
   padding: 5px 7px;
   color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: calc(18px * var(--control-ui-text-scale));
+  font-size: 12px;
+  line-height: 18px;
 }
 
 .chat-summary__automation-retry {
   flex: none;
   padding: 2px 7px;
-  font-size: var(--control-ui-text-xs);
+  font-size: 11px;
 
   &[aria-disabled="true"] {
     opacity: 0.6;

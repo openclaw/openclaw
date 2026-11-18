@@ -12,11 +12,26 @@
  * native Podman/btrfs or model/Gateway latency. Engine pause delays are not simulated.
  * --native-turns --sandbox-backend podman replaces that seam with native Podman,
  * writes through podman exec, and verifies canonical plus subsequent guest reads.
- * --all-mutating writes on all ten commands per turn. Requires an existing local
+ * --tools-per-turn 200 repeats the ten-command mix for a tool-heavy turn;
+ * native runs warm up with ten commands before measuring the requested turn size.
+ * --all-mutating writes on every command. Requires an existing local
  * --guest-image and task-private Podman store supplied by its normal environment.
  * Run on a btrfs fixture for native filesystem proof; pause durations conservatively
  * include pause/unpause CLI latency. Reports command latency plus finalization,
  * per-command main-process CPU and main-isolate allocation, and raw pause samples.
+ * --mode reconcile instead calls the ordinary projection synchronization owner once
+ * per request. --reconcile-target canonical|projection selects guest export or host
+ * import; --reconcile-changed-files N changes N existing files at their original size.
+ * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
+ * --reconcile-random-bytes 7420 writes deterministic incompressible changed files;
+ * allocation mode reports main and matched worker allocation for each reconcile burst.
+ * --reconcile-profile (Node 26+) adds all-worker allocation/CPU profiles and a
+ * one-second allocation timeline. Run this diagnostic separately from timing samples.
+ * It also reports uncompressed patch field bytes and journal counts (no paths/content).
+ * --build-input-files 24997 --files 3 --file-bytes 32 creates 25k files with a
+ * retained build-input inventory; two edited root files still produce a delta journal.
+ * Phase durations are exclusive; existing checkpointPhases remain nested.
+ * Freeze complete source arms for this mode so real worker entrypoints match the owner.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
  * writing its private projection. Use --requests 30 --burst 1 --read-interval-ms 2000
  * --files 62000 --file-bytes 19050 for a minute of Control UI file reads. Reports
@@ -42,8 +57,8 @@
  * its warm counts, as they are outside recurring heartbeat ticks.
  * Maintenance also holds this sibling lease so recurring sweeps share a warm
  * heartbeat carrier, as they do with other active owners on a busy Gateway.
- * --instrument retention samples memory after collecting the main isolate and
- * observed direct workers, outside timing/GC measurements. Use identical-code controls
+ * --instrument retention samples main memory after GC and unforced heap statistics
+ * from observed direct workers, outside timing measurements. Use identical-code controls
  * to separate retained memory from different natural-GC/worker-idle schedules.
  * --retention-ms 120000 gives both revisions the same minimum elapsed time
  * after warmup before collection, including their normal idle-worker retirement.
@@ -54,6 +69,9 @@
  * preparation owner, not Docker or a model. --transcript-mib seeds genuine
  * synthetic transcript payloads using the shared Team fixture; report DB bytes
  * separately because compression changes physical size. Filesystem is host-owned.
+ * --source-authority captures a new operator authority for each preparation, revokes
+ * one during reconciliation, and proves later admissions reuse the same workspace.
+ * This calls the real authority and preparation owners, not WS or model transport.
  * Compare --requests 8 --burst 8 in fresh-process A/A and interleaved A/B runs;
  * allocation is a separate instrumented pass. Later writes must still reconcile.
  * After the first preparation fixture, --reuse-fixture --report <name>.json
@@ -61,7 +79,10 @@
  * sentinel through canonical reconciliation before warmup; never run concurrently.
  * --serial-turns --mode preparation --burst 1 --requests 3 measures first creation,
  * three unchanged turns, one guest edit, an unchanged turn, 200 mixed guest edits,
- * and a final unchanged turn. --fixture-source <directory> imports a retained
+ * and a final unchanged turn. Simple generated serial fixtures reset their mutations
+ * after validation; --reuse-fixture reopens them with a separate first-reuse sample.
+ * Serial allocation profiles surround each owner call, excluding correctness reads.
+ * --fixture-source <directory> imports a retained
  * synthetic deep workspace into a new owned Git repository. Original files stay untouched.
  * --freeze-source <new-directory> freezes all tracked source plus working changes;
  * add --revision <sha> for an exact committed source. Both arms use this benchmark.
@@ -128,14 +149,18 @@ import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { registerHooks } from "node:module";
+import { createConnection } from "node:net";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, PerformanceObserver } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { getHeapStatistics } from "node:v8";
+import { deserialize, getHeapStatistics } from "node:v8";
 import type { Worker } from "node:worker_threads";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { transformSync } from "esbuild";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
 import type { LocalWorkspaceOwner } from "../../src/gateway/worker-environments/local-workspace-types.ts";
@@ -145,6 +170,7 @@ import {
   createGatewayBenchEnv,
   writePluginFixtures,
 } from "../lib/gateway-bench-runtime.ts";
+import { observeLocalWorkspaceMutations } from "./local-workspace-mutation-measure.ts";
 
 const { values } = parseArgs({
   options: {
@@ -153,6 +179,8 @@ const { values } = parseArgs({
     "source-root": { type: "string" },
     "fixture-source": { type: "string" },
     "serial-turns": { type: "boolean", default: false },
+    "fingerprint-import": { type: "boolean", default: false },
+    "source-authority": { type: "boolean", default: false },
     "owner-switch": { type: "boolean", default: false },
     "restart-stage": { type: "string" },
     "creation-contender": { type: "boolean", default: false },
@@ -174,10 +202,21 @@ const { values } = parseArgs({
     "read-interval-ms": { type: "string", default: "2000" },
     "guest-image": { type: "string", default: "node:24-bookworm" },
     "native-turns": { type: "boolean", default: false },
+    "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
+    "checkpoint-changed-files": { type: "string", default: "1" },
+    "checkpoint-seed": { type: "string" },
+    "tools-per-turn": { type: "string", default: "10" },
+    "mutation-segments": { type: "boolean", default: false },
+    "reconcile-traffic": { type: "boolean", default: false },
+    "reconcile-profile": { type: "boolean", default: false },
+    "reconcile-target": { type: "string", default: "canonical" },
+    "reconcile-changed-files": { type: "string", default: "1" },
+    "reconcile-random-bytes": { type: "string", default: "0" },
     requests: { type: "string", default: "2048" },
     burst: { type: "string", default: "64" },
     files: { type: "string", default: "1000" },
+    "build-input-files": { type: "string", default: "0" },
     "file-bytes": { type: "string", default: "0" },
     "transcript-mib": { type: "string", default: "0" },
     "agent-storage-dir": { type: "string" },
@@ -192,12 +231,90 @@ const { values } = parseArgs({
     "retention-ms": { type: "string", default: "0" },
   },
 });
-const processInstance = randomUUID();
+const processInstance = values["checkpoint-seed"] ?? randomUUID();
 const harnessSha256 = createHash("sha256")
   .update(fs.readFileSync(fileURLToPath(import.meta.url)))
   .digest("hex");
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
 const scriptRelative = "scripts/perf/local-workspace-checkpoint-measure.ts";
+// Only frozen proof sources receive these counters; no memo, extra message, or await is added.
+function installFingerprintObservers(destination: string) {
+  const rewrite = (relative: string, edits: Array<[string, string]>) => {
+    const filename = path.join(destination, relative);
+    let source = fs.readFileSync(filename, "utf8");
+    for (const [anchor, replacement] of edits) {
+      assert.equal(source.split(anchor).length, 2, `Fingerprint observer anchor: ${relative}`);
+      source = source.replace(anchor, replacement);
+    }
+    fs.writeFileSync(filename, source);
+  };
+  rewrite("src/infra/git-operation.worker.ts", [
+    [
+      "  async (command, channel, control) => {",
+      `  async (command, channel, control) => {
+    const fingerprintMetrics = { contentHashCount: 0, contentReadBytes: 0,
+      fingerprintHitCount: 0, fingerprintMissCount: 0, packedRecords: 0 };
+    Reflect.set(globalThis, "__workspaceFingerprintMetrics", fingerprintMetrics);`,
+    ],
+    [
+      "return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason };",
+      "return { ok: true, value, revisionUnavailableReason: diffTiming?.revisionUnavailableReason, __fingerprintMetrics: fingerprintMetrics };",
+    ],
+    [
+      '      /(?:)/.test("");',
+      '      Reflect.deleteProperty(globalThis, "__workspaceFingerprintMetrics");\n      /(?:)/.test("");',
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/workspace-actual-manifest.ts", [
+    [
+      "      if (metrics) {\n        metrics.contentHashCount += 1;\n      }",
+      `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) { measured.contentHashCount++; measured.contentReadBytes += size; }
+      if (metrics) { metrics.contentHashCount += 1; }`,
+    ],
+    [
+      "      const reusable = params.reuseFile?.(relative, identity, stats);",
+      `      const reusable = params.reuseFile?.(relative, identity, stats);
+      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) {
+        if (reusable) { measured.fingerprintHitCount++; }
+        else { measured.fingerprintMissCount++; }
+      }`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/workspace-manifest-computation.runtime.ts", [
+    [
+      "      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);",
+      `      const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+      if (measured) {
+        measured.action = action.kind;
+        measured.target = "target" in action ? action.target : null;
+      }
+      const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/local-workspace-cas.ts", [
+    [
+      "  const batches: Uint8Array[] = [];",
+      `  const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+  if (measured) { measured.packedRecords += packs.reduce((sum, pack) => sum + pack.records.length, 0); }
+  const batches: Uint8Array[] = [];`,
+    ],
+  ]);
+  rewrite("src/infra/git-worker.ts", [
+    [
+      '    outcome = "returned";\n    return reply.value;',
+      `    const measured = Reflect.get(reply, "__fingerprintMetrics");
+    if (measured) {
+      Reflect.get(globalThis, "__recordWorkspaceFingerprintMetrics")?.({
+        operation: command.type, ...measured,
+      });
+    }
+    outcome = "returned";
+    return reply.value;`,
+    ],
+  ]);
+}
 if (values["freeze-source"]) {
   const destination = path.resolve(values["freeze-source"]);
   fs.mkdirSync(destination);
@@ -225,12 +342,19 @@ if (values["freeze-source"]) {
       }
     }
   }
+  fs.copyFileSync(
+    new URL("./local-workspace-mutation-measure.ts", import.meta.url),
+    path.join(destination, "scripts/perf/local-workspace-mutation-measure.ts"),
+  );
   // Both arms execute this same measurement program, including its worker instrumentation.
   fs.copyFileSync(fileURLToPath(import.meta.url), path.join(destination, scriptRelative));
   fs.copyFileSync(
     new URL("./sandbox-builder-engine-fixture.ts", import.meta.url),
     path.join(destination, "scripts/perf/sandbox-builder-engine-fixture.ts"),
   );
+  if (values["fingerprint-import"]) {
+    installFingerprintObservers(destination);
+  }
 
   const digest = createHash("sha256");
   let fileCount = 0;
@@ -258,7 +382,9 @@ if (values["freeze-source"]) {
         const resolved = fs.realpathSync(from);
         const local = path.relative(sourceRoot, resolved);
         const target =
-          local === "" || local.startsWith("packages/") || local.startsWith("extensions/")
+          local === "" ||
+          ((local.startsWith("packages/") || local.startsWith("extensions/")) &&
+            !local.includes("/node_modules/"))
             ? path.join(destination, local)
             : resolved;
         fs.symlinkSync(target, to);
@@ -286,6 +412,7 @@ if (values["freeze-source"]) {
         fileCount,
         sha256: digest.digest("hex"),
         sharedDependencies: path.join(sourceRoot, "node_modules"),
+        fingerprintObservers: values["fingerprint-import"],
       },
       null,
       2,
@@ -325,6 +452,7 @@ assert(
       "gateway",
       "file-read",
       "turn-loop",
+      "reconcile",
       "maintenance",
       "publication",
       "heartbeat",
@@ -333,9 +461,30 @@ assert(
 );
 assert(!values.absent || values.mode !== "owner");
 const fileReads = values.mode === "file-read";
-const turnLoop = values.mode === "turn-loop";
+const reconcile = values.mode === "reconcile";
+const turnLoop = values.mode === "turn-loop" || reconcile;
+const toolsPerTurn = Number(values["tools-per-turn"]);
+assert(Number.isSafeInteger(toolsPerTurn) && toolsPerTurn > 0 && toolsPerTurn % 10 === 0);
+const reconcileTarget = values["reconcile-target"];
+assert(reconcileTarget === "canonical" || reconcileTarget === "projection");
+const reconcileChangedFiles = Number(values["reconcile-changed-files"]);
+const reconcileRandomBytes = Number(values["reconcile-random-bytes"]);
+assert(Number.isSafeInteger(reconcileRandomBytes) && reconcileRandomBytes >= 0);
+assert(!reconcileRandomBytes || reconcile);
+assert(Number.isSafeInteger(reconcileChangedFiles) && reconcileChangedFiles > 0);
+assert(!reconcile || reconcileChangedFiles < Number(values.files));
+const checkpointChangedFiles = values["checkpoint-changed-files"].split(",").map(Number);
+if (turnLoop) {
+  console.log(JSON.stringify({ checkpointSeed: processInstance, hostLoad: loadavg() }));
+}
+assert(
+  checkpointChangedFiles.every(
+    (count) => Number.isSafeInteger(count) && count > 0 && count < Number(values.files),
+  ),
+);
 const nativeTurns = values["native-turns"];
 assert(!nativeTurns || (turnLoop && values["sandbox-backend"] === "podman"));
+assert(!values["settlement-socket"] || nativeTurns);
 assert(!values["all-mutating"] || turnLoop);
 assert(!turnLoop || Number(values.burst) === 1);
 const gatewayMode = values.mode === "gateway" || fileReads;
@@ -348,10 +497,8 @@ const dockerHost = fileReads
     }).trim()
   : undefined;
 const serialTurns = values["serial-turns"];
-assert(
-  !serialTurns ||
-    (values.mode === "preparation" && Number(values.burst) === 1 && !values["reuse-fixture"]),
-);
+const fingerprintImport = values["fingerprint-import"];
+assert(!serialTurns || (values.mode === "preparation" && Number(values.burst) === 1));
 assert(!values["fixture-source"] || serialTurns);
 assert(!values["owner-switch"] || serialTurns);
 assert(!values["fresh-only"] || serialTurns);
@@ -409,7 +556,27 @@ assert(
       values["fresh-only"] &&
       values.acceleration),
 );
+const reusableSerial =
+  serialTurns &&
+  !values["fixture-source"] &&
+  !values["owner-switch"] &&
+  !values["restart-stage"] &&
+  !values["fresh-only"] &&
+  !values.acceleration &&
+  !values["agent-db-fixture"] &&
+  siblingWorktrees === 0;
+assert(
+  !fingerprintImport || reusableSerial || reconcile,
+  "Fingerprint counters require the simple serial fixture or reconcile mode",
+);
+if (fingerprintImport) {
+  const frozen = path.join(sourceRoot, "checkpoint-source.json");
+  assert(fs.existsSync(frozen), "Freeze both sources with --fingerprint-import before running");
+  assert.equal(JSON.parse(fs.readFileSync(frozen, "utf8")).fingerprintObservers, true);
+}
+assert(!serialTurns || !values["reuse-fixture"] || reusableSerial);
 const reuseFixture = values["reuse-fixture"] || resumeOwnerSwitch;
+assert(!values["source-authority"] || (values.mode === "preparation" && !serialTurns));
 assert(!reuseFixture || values.mode === "preparation" || fileReads || turnLoop);
 const requests = Number(values.requests),
   burst = Number(values.burst),
@@ -418,15 +585,24 @@ const requests = Number(values.requests),
   worktrees = Number(values.worktrees);
 const fileBytes = Number(values["file-bytes"]);
 assert(Number.isSafeInteger(fileBytes) && fileBytes >= 0);
+const buildInputFiles = Number(values["build-input-files"]);
+assert(Number.isSafeInteger(buildInputFiles) && buildInputFiles >= 0);
 const transcriptMiB = Number(values["transcript-mib"]);
 assert(Number.isSafeInteger(transcriptMiB) && transcriptMiB >= 0);
-assert(!values["agent-db-fixture"] || (serialTurns && !transcriptMiB));
+assert(!values["agent-db-fixture"] || ((serialTurns || reconcile) && !transcriptMiB));
 assert(!transcriptMiB || values.mode === "preparation" || fileReads || turnLoop);
 for (const value of [requests, burst, files, port, worktrees]) {
   assert(Number.isSafeInteger(value) && value > 0);
 }
 assert(port >= 40000 && port <= 65535);
 assert(["timing", "allocation", "retention"].includes(values.instrument!));
+assert(
+  !values["reconcile-profile"] ||
+    (reconcile &&
+      values.instrument === "allocation" &&
+      Number(process.versions.node.split(".")[0]) >= 26),
+  "Reconcile profiles require reconcile allocation mode and Node 26+",
+);
 const retentionMs = Number(values["retention-ms"]);
 assert(Number.isSafeInteger(retentionMs) && retentionMs >= 0);
 const workers = new Set<Worker>();
@@ -440,7 +616,7 @@ const observeWorker = (worker: Worker) => {
     workers.delete(worker);
   });
 };
-if (values.instrument === "retention" || serialTurns) {
+if (values.instrument === "retention" || values.instrument === "allocation" || serialTurns) {
   if (values.instrument === "retention") {
     assert(globalThis.gc, "Retention samples require --expose-gc");
   }
@@ -462,6 +638,166 @@ const sampleWorkerAllocation = async () => {
     clearInterval(keepAlive);
   }
 };
+const summarizeWorkerAllocation = (
+  before: Awaited<ReturnType<typeof sampleWorkerAllocation>>,
+  after: Awaited<ReturnType<typeof sampleWorkerAllocation>>,
+  started: number,
+  exited: number,
+) => {
+  const matched = after.flatMap((sample) => {
+    const previous = before.find((entry) => entry.threadId === sample.threadId);
+    if (previous?.bytes == null || sample.bytes == null) {
+      return [];
+    }
+    assert(sample.bytes >= previous.bytes, "Worker allocation counter must be monotonic");
+    return [{ threadId: sample.threadId, allocatedBytes: sample.bytes - previous.bytes }];
+  });
+  return {
+    before,
+    after,
+    started,
+    exited,
+    matched,
+    matchedAllocatedBytes: matched.reduce((sum, sample) => sum + sample.allocatedBytes, 0),
+    unavailableBefore: before.filter((sample) => sample.bytes == null).length,
+    unavailableAfter: after.filter((sample) => sample.bytes == null).length,
+    unmatchedBefore: before.filter(
+      (sample) => !after.some((entry) => entry.threadId === sample.threadId),
+    ).length,
+    unmatchedAfter: after.filter(
+      (sample) => !before.some((entry) => entry.threadId === sample.threadId),
+    ).length,
+    accounting:
+      "Samples are outside CPU/latency timing. Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
+  };
+};
+const startSerialWorkerProfiles = async (allWorkers = false) => {
+  const { sampleTrackedWorkerMemory } = await import("../../src/infra/worker-cpu.js");
+  const snapshot = sampleTrackedWorkerMemory({ refresh: false });
+  const identities = new Map(
+    [...snapshot.workerHeaps, ...snapshot.workerMemoryMissing].map((entry) => [
+      entry.threadId,
+      entry.script,
+    ]),
+  );
+  const existing = new Set(workers);
+  const selected = [...existing].filter(
+    (worker) => allWorkers || identities.get(worker.threadId) === "git-operation.worker.js",
+  );
+  assert(selected.length <= 16, "Allocation proof supports at most 16 existing Git workers");
+  const captures: {
+    worker: Worker;
+    threadId: number;
+    cpu: Awaited<ReturnType<Worker["startCpuProfile"]>>;
+    heap?: Awaited<ReturnType<Worker["startHeapProfile"]>>;
+    cpuBefore?: NodeJS.CpuUsage;
+  }[] = [];
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    for (const worker of selected) {
+      const capture = {
+        worker,
+        threadId: worker.threadId,
+        cpu: await worker.startCpuProfile(),
+      };
+      captures.push(capture);
+      captures.at(-1)!.heap = await worker.startHeapProfile(
+        allWorkers
+          ? {
+              sampleInterval: 32_768,
+              stackDepth: 32,
+              includeObjectsCollectedByMajorGC: true,
+              includeObjectsCollectedByMinorGC: true,
+            }
+          : undefined,
+      );
+      captures.at(-1)!.cpuBefore = await worker.cpuUsage().catch(() => undefined);
+    }
+  } catch (error) {
+    for (const capture of captures) {
+      await capture.heap?.stop().catch(() => {});
+      await capture.cpu.stop().catch(() => {});
+    }
+    throw error;
+  } finally {
+    clearInterval(keepAlive);
+  }
+  return async (phase: string, discard = false) => {
+    const stopKeepAlive = setInterval(() => {}, 1_000);
+    try {
+      const profiles = [];
+      for (const capture of captures) {
+        const errors: string[] = [];
+        const failed = (error: unknown) => {
+          errors.push(String(error));
+          return undefined;
+        };
+        const cpuAfter = await capture.worker.cpuUsage().catch(() => undefined);
+        const heap = await capture.heap!.stop().catch(failed);
+        const cpu = await capture.cpu.stop().catch(failed);
+        const exited = !workers.has(capture.worker);
+        const prefix = `${values.report}.${phase}.${allWorkers ? "worker" : "git-worker"}-${capture.threadId}`;
+        if (!discard && heap) {
+          fs.writeFileSync(path.join(output, `${prefix}.heapprofile`), heap);
+        }
+        if (!discard && cpu) {
+          fs.writeFileSync(path.join(output, `${prefix}.cpuprofile`), cpu);
+        }
+        const sum = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+          node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+        let parsedCpu;
+        try {
+          parsedCpu = cpu ? JSON.parse(cpu) : undefined;
+        } catch (error) {
+          failed(error);
+        }
+        profiles.push({
+          threadId: capture.threadId,
+          script: identities.get(capture.threadId),
+          exited,
+          errors,
+          ...(allWorkers
+            ? { sampledAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null }
+            : { sampledLiveAllocationBytes: !exited && heap ? sum(JSON.parse(heap).head) : null }),
+          workerCpuMs:
+            !exited && cpuAfter && capture.cpuBefore
+              ? (cpuAfter.user +
+                  cpuAfter.system -
+                  capture.cpuBefore.user -
+                  capture.cpuBefore.system) /
+                1000
+              : null,
+          cpuSamples: !exited && parsedCpu ? parsedCpu.samples?.length : null,
+          cpuProfileDurationMs:
+            !exited && parsedCpu ? (parsedCpu.endTime - parsedCpu.startTime) / 1000 : null,
+          heapProfile: !discard && heap ? `${prefix}.heapprofile` : null,
+          cpuProfile: !discard && cpu ? `${prefix}.cpuprofile` : null,
+        });
+      }
+      return {
+        profiles,
+        selectedBefore: captures.map((capture) => ({
+          threadId: capture.threadId,
+          script: identities.get(capture.threadId),
+        })),
+        unprofiledBefore: [...existing]
+          .filter((worker) => !selected.includes(worker))
+          .map((worker) => ({
+            threadId: worker.threadId,
+            script: identities.get(worker.threadId),
+          })),
+        newWorkerThreadIds: [...workers]
+          .filter((worker) => !existing.has(worker))
+          .map((worker) => worker.threadId),
+        accounting: allWorkers
+          ? "All existing workers, 32 KiB sampling, depth 32, includes minor/major collected objects. Diagnostic pass only. New/exited workers and child processes are unmeasured."
+          : "Existing Git workers only, at most 16, using native profiler defaults. Qualified Node 24 uses 512 KiB heap sampling, depth 16 and no sampling flags: GC-sensitive live allocations only, not total allocation or native memory. CPU starts before heap sampling; heap stops before CPU. Profiles include owner and boundary/setup idle work, exclude correctness/reset. Worker CPU counters span the profiled window; CPU profile duration is elapsed coverage, not consumed CPU. New/exited workers and child processes are unmeasured; failed/exited samples are null. Process CPU remains the separately measured owner counter.",
+      };
+    } finally {
+      clearInterval(stopKeepAlive);
+    }
+  };
+};
 const collectRetainedMemory = async () => {
   assert(globalThis.gc, "Retention samples require --expose-gc");
   // Worker inspection promises do not retain the event loop after these pools unref their workers.
@@ -469,12 +805,28 @@ const collectRetainedMemory = async () => {
   try {
     const workerHeaps = [];
     for (const worker of workers) {
-      const profile = await worker.startHeapProfile({ forceGC: true });
-      await profile.stop();
-      workerHeaps.push({ threadId: worker.threadId, ...(await worker.getHeapStatistics()) });
+      const threadId = worker.threadId;
+      try {
+        workerHeaps.push({ threadId, ...(await worker.getHeapStatistics()) });
+      } catch (error) {
+        if (
+          typeof error !== "object" ||
+          error === null ||
+          !("code" in error) ||
+          error.code !== "ERR_WORKER_NOT_RUNNING"
+        ) {
+          throw error;
+        }
+        workerHeaps.push({ threadId, unavailable: "worker-exited" });
+      }
     }
     globalThis.gc();
-    return { ...process.memoryUsage(), workerHeaps };
+    return {
+      ...process.memoryUsage(),
+      workerHeaps,
+      accounting:
+        "Main heap after explicit GC; worker heap statistics without forced GC. Exited workers are explicitly unavailable, not zero.",
+    };
   } finally {
     clearInterval(keepAlive);
   }
@@ -493,7 +845,7 @@ if (values["agent-storage-dir"] && !reuseFixture) {
   fs.mkdirSync(path.join(output, "state"), { recursive: true });
   fs.symlinkSync(agentStorage, path.join(output, "state", "agents"), "dir");
 }
-if (values["agent-db-fixture"] && !resumeOwnerSwitch) {
+if (values["agent-db-fixture"] && !resumeOwnerSwitch && !reuseFixture) {
   const destination = path.join(
     output,
     "state",
@@ -526,6 +878,8 @@ const owners = [
   "src/gateway/worker-environments/local-workspace-state.ts",
   "src/gateway/worker-environments/local-workspace-checkpoint.ts",
   "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
+  "src/gateway/worker-environments/local-workspace-cas.ts",
+  "src/gateway/worker-environments/local-workspace-cas.kernel.ts",
   "src/gateway/worker-environments/local-workspace-fingerprints.ts",
   "src/gateway/worker-environments/workspace-actual-manifest.ts",
   "src/agents/worktrees/filesystem-native.ts",
@@ -539,9 +893,12 @@ const owners = [
   "src/gateway/control-ui-assistant-media-read.ts",
   "src/gateway/worker-environments/local-workspace-checkout.ts",
   "src/gateway/worker-environments/local-workspace-store.kernel.ts",
+  "src/gateway/worker-environments/local-workspace-store.ts",
+  "src/gateway/worker-environments/local-workspace-publication.ts",
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
+  ...(values["source-authority"] ? ["src/gateway/operator-run-authority.ts"] : []),
 ];
 const source = new Map(
   owners.map((file) => [
@@ -562,13 +919,17 @@ const custodyDurationsMs: number[] = [];
 const containerCommands: string[] = [];
 const finalizations: Array<{
   changed: boolean;
+  changedFiles?: number;
   durationMs: number;
   commandDurationMs: number;
   processCpuMs: number;
   allocatedBytes: number;
   pauses: number;
+  pausedDurationMs: number;
+  maxPauseDurationMs: number;
 }> = [];
 const pauseDurationsMs: number[] = [];
+const nativeRemovals = new Set<Promise<unknown>>();
 const checkpointPhases: Array<{
   name: string;
   durationMs: number;
@@ -597,8 +958,103 @@ const guestHeartbeats = new EventEmitter();
 const nextGuestHeartbeat = () =>
   once(guestHeartbeats, "tick", { signal: AbortSignal.timeout(5_000) });
 const manifestReads: Array<{ kind: string; target?: string; bytes: number }> = [];
+type FingerprintMetrics = {
+  operation: string;
+  action?: string;
+  target?: string | null;
+  contentHashCount: number;
+  contentReadBytes: number;
+  fingerprintHitCount: number;
+  fingerprintMissCount: number;
+  packedRecords: number;
+};
+const fingerprintMetrics: FingerprintMetrics[] = [];
+const mutationObserver = values["mutation-segments"] ? observeLocalWorkspaceMutations() : undefined;
+const reconcileTraffic: Array<{
+  phase: string;
+  operation: string;
+  bytes: number;
+  action?: string;
+  fieldBytes?: Record<string, number>;
+  journalCounts?: Record<string, number>;
+}> = [];
+const reconcilePhases: Array<{ phase: string; durationMs: number }> = [];
+let reconcilePhase = "idle";
+let reconcilePhaseStarted = performance.now();
+const markReconcilePhase = (phase: string) => {
+  const now = performance.now();
+  reconcilePhases.push({ phase: reconcilePhase, durationMs: now - reconcilePhaseStarted });
+  reconcilePhase = phase;
+  reconcilePhaseStarted = now;
+};
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __mutationObserver: mutationObserver,
+  __reconcilePhase: markReconcilePhase,
+  __reconcileTraffic: (
+    operation: string,
+    input: { action?: { kind?: string }; mutation?: unknown },
+    bytes: number,
+  ) => {
+    if (operation.startsWith("localWorkspace.")) {
+      const mutation: unknown =
+        input.mutation instanceof Uint8Array
+          ? deserialize(
+              input.mutation[0] === 0x28 &&
+                input.mutation[1] === 0xb5 &&
+                input.mutation[2] === 0x2f &&
+                input.mutation[3] === 0xfd
+                ? zstdDecompressSync(input.mutation)
+                : inflateRawSync(input.mutation),
+            )
+          : input.mutation;
+      const patch = isRecord(mutation) ? (mutation.patch ?? mutation.row) : undefined;
+      const fieldBytes = isRecord(patch)
+        ? Object.fromEntries(
+            Object.entries(patch).map(([key, value]) => [
+              key,
+              typeof value === "string"
+                ? Buffer.byteLength(value)
+                : value instanceof Uint8Array
+                  ? value.byteLength
+                  : 0,
+            ]),
+          )
+        : undefined;
+      const journal: unknown =
+        isRecord(patch) && typeof patch.journal_json === "string"
+          ? JSON.parse(patch.journal_json)
+          : undefined;
+      const journalCounts = isRecord(journal)
+        ? Object.fromEntries(
+            [
+              "baseEntries",
+              "appliedEntries",
+              "baseDirectories",
+              "appliedDirectories",
+              "baseTree",
+            ].map((key) => [
+              key,
+              Array.isArray(journal[key])
+                ? journal[key].length
+                : typeof journal[key] === "string"
+                  ? Buffer.byteLength(journal[key])
+                  : 0,
+            ]),
+          )
+        : undefined;
+      reconcileTraffic.push({
+        phase: reconcilePhase,
+        operation,
+        bytes,
+        action: input.action?.kind,
+        fieldBytes,
+        journalCounts,
+      });
+    }
+  },
+  __recordWorkspaceFingerprintMetrics: (metrics: FingerprintMetrics) =>
+    fingerprintMetrics.push(metrics),
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
   __nativeCommandFinished: nativeCommandFinished,
   __checkpointPhase: async (name: string, operation: () => Promise<unknown>) => {
@@ -606,9 +1062,14 @@ Object.assign(globalThis, {
     const pausedAtStart = pauseBegan !== undefined;
     const cpu = process.cpuUsage();
     const allocated = getHeapStatistics().total_allocated_bytes;
+    const completion = operation();
+    if (name === "nativeWorktreeFilesystem:remove") {
+      nativeRemovals.add(completion);
+    }
     try {
-      return await operation();
+      return await completion;
     } finally {
+      nativeRemovals.delete(completion);
       const used = process.cpuUsage(cpu);
       checkpointPhases.push({
         name,
@@ -625,9 +1086,11 @@ Object.assign(globalThis, {
     if (args[0] === "pause") {
       assert(!fakePaused, "Cannot pause an already-paused fixture");
       fakePaused = true;
+      pauseBegan = performance.now();
     } else if (args[0] === "unpause") {
       assert(fakePaused, "Cannot resume a running fixture");
       fakePaused = false;
+      nativeCommandFinished("unpause", performance.now(), 0);
     } else {
       assert.equal(args[0], "inspect", `Unexpected engine command: ${args.join(" ")}`);
     }
@@ -669,6 +1132,59 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (
+      values["mutation-segments"] &&
+      relative === "src/gateway/worker-environments/local-workspace-store.ts"
+    ) {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      code = code.replace("const mutate = async (", "const mutateImpl = async (");
+      const anchor = 'const readManifest: LocalWorkspaceStore["manifest"]';
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        `const mutate = (...args) => globalThis.__mutationObserver.run(args[0].patch?.journal_pack?.byteLength ?? 0, () => mutateImpl(...args)); ${anchor}`,
+      );
+      code = code.replace(
+        "serializedBytes = serialized.byteLength;",
+        "serializedBytes = serialized.byteLength; globalThis.__mutationObserver.serialized(serialized.byteLength);",
+      );
+    }
+    if (values["mutation-segments"] && relative === "src/infra/sqlite-worker-broker-reply.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      assert(code.includes("slot.worker.postMessage("));
+      code = code.replaceAll(
+        "slot.worker.postMessage(",
+        "globalThis.__mutationObserver.postMessage(slot.worker, ",
+      );
+    }
+    if (values["mutation-segments"] && relative === "src/infra/sqlite-worker-client.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        anchor + " globalThis.__mutationObserver.serialized(payload.byteLength);",
+      );
+    }
+    if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
+      code ??= fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        anchor + "\nglobalThis.__reconcileTraffic(commandType, command.input, payload.byteLength);",
+      );
+    }
+    if (
+      (values["reconcile-traffic"] || values["reconcile-profile"]) &&
+      relative === "src/gateway/worker-environments/local-workspace-projection-operation.ts"
+    ) {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      code = code.replaceAll(
+        /options\.onPhase\?\.\(([^;]+)\);/g,
+        "globalThis.__reconcilePhase($1); $&",
+      );
+    }
     const phaseFunctions: Record<string, string[]> = {
       "src/agents/worktrees/filesystem-native.ts": ["read", "write"],
       "src/gateway/worker-environments/workspace-manifest-worker.ts": ["computeWorkspaceManifest"],
@@ -680,7 +1196,7 @@ registerHooks({
         "applyStagedWorkerWorkspace",
       ],
     };
-    if (nativeTurns && phaseFunctions[relative]) {
+    if (turnLoop && phaseFunctions[relative]) {
       code ??= fs.readFileSync(path.join(root, relative), "utf8");
       for (const name of phaseFunctions[relative]) {
         const sourceText: string = code;
@@ -736,7 +1252,7 @@ ${anchor}
       );
     }
     if (relative === "src/gateway/worker-environments/local-workspace-store.ts") {
-      code = fs.readFileSync(path.join(root, relative), "utf8");
+      code ??= fs.readFileSync(path.join(root, relative), "utf8");
       const anchor =
         'const readManifest: LocalWorkspaceStore["manifest"] = async (previous, action) => {';
       assert(code.includes(anchor));
@@ -745,7 +1261,7 @@ ${anchor}
         "globalThis.__checkpointMeasure();\nconst env = params.env ?? process.env;",
       );
       code = code.replace(anchor, anchor + "\nglobalThis.__checkpointMeasure(action.kind);");
-      if (nativeTurns) {
+      if (turnLoop) {
         const manifestOwner = "manifest: readManifest,";
         assert(code.includes(manifestOwner));
         code = code.replace(
@@ -786,7 +1302,6 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   caseEnv: {
     ...(dockerHost ? { DOCKER_HOST: dockerHost } : {}),
     OPENCLAW_STATE_DIR: path.join(output, "state"),
-    TMPDIR: path.join(output, "tmp"),
     OPENCLAW_SKIP_CHANNELS: "1",
     DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -846,7 +1361,7 @@ const git = (...args: string[]) =>
 if (reuseFixture && !resumeOwnerSwitch) {
   assert.equal(
     fs.readdirSync(repo).length - 1,
-    files,
+    files + (buildInputFiles ? 1 : 0),
     "Reused fixture must have the requested file count",
   );
 } else if (!resumeOwnerSwitch) {
@@ -875,6 +1390,13 @@ if (reuseFixture && !resumeOwnerSwitch) {
         '{"name":"synthetic-builder","private":true}\n',
       );
       fs.writeFileSync(path.join(repo, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+    }
+  }
+  if (buildInputFiles) {
+    const inputs = path.join(repo, ".artifacts", "build-cache-inputs");
+    fs.mkdirSync(inputs, { recursive: true });
+    for (let index = 0; index < buildInputFiles; index++) {
+      fs.writeFileSync(path.join(inputs, `input-${index}.json`), `{"synthetic":${index}}\n`);
     }
   }
   // An exported repository may contain deliberately tracked ignored fixtures.
@@ -924,7 +1446,7 @@ if (reuseFixture && !resumeOwnerSwitch) {
     );
   }
 }
-if (reuseFixture && !resumeOwnerSwitch) {
+if (reuseFixture && !serialTurns) {
   fs.writeFileSync(path.join(canonical, "file-0.txt"), "synthetic 0\n".padEnd(fileBytes, "."));
 }
 if (gatewayMode && !reuseFixture) {
@@ -985,6 +1507,33 @@ const owner: LocalWorkspaceOwner = {
 };
 const projection =
   await import("../../src/gateway/worker-environments/local-workspace-projection.js");
+const { withLocalWorkspaceStore } =
+  await import("../../src/gateway/worker-environments/local-workspace-store.js");
+const settleCheckpointCleanup = async () => {
+  await withLocalWorkspaceStore({ ...owner, worktreeId: owner.worktree.id }, async () => {});
+  await Promise.all(nativeRemovals);
+  if (fs.statfsSync(output).type === 0x9123683e) {
+    // Native subvolume deletion defers extent retirement to kernel threads.
+    const settlementSocket = values["settlement-socket"];
+    if (settlementSocket) {
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection(settlementSocket);
+        let reply = "";
+        socket.setEncoding("utf8");
+        socket.setTimeout(120_000, () => socket.destroy(new Error("Kernel settlement timed out")));
+        socket.once("connect", () => socket.end("settle\n"));
+        socket.on("data", (data: string) => {
+          reply += data;
+        });
+        socket.once("error", reject);
+        socket.once("end", () => (reply === "settled\n" ? resolve() : reject(new Error(reply))));
+      });
+    } else {
+      execFileSync("sync", ["-f", output], { stdio: "ignore" });
+      execFileSync("btrfs", ["subvolume", "sync", output], { stdio: "ignore" });
+    }
+  }
+};
 const { prepareLocalSandboxWorkspace } =
   await import("../../src/agents/sandbox/local-workspace.js");
 const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
@@ -1029,7 +1578,6 @@ const checkpoint = () =>
 const { collectRetiredWorktreeArtifacts } =
   await import("../../src/agents/worktrees/gc-artifacts.js");
 const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
-const { withWorktreeAllocationLease } = await import("../../src/agents/worktrees/allocation.js");
 // A populated default root with only registered checkouts is the recurring idle case.
 const maintained: LocalWorkspaceOwner["worktree"][] = [];
 if (values.mode === "maintenance") {
@@ -1093,6 +1641,10 @@ measurement: try {
     if (transcriptMiB) {
       const { seedTeamShapeSessions } = await import("./team-shape-sessions.ts");
       const database = agent.openOpenClawAgentDatabase({ agentId: "main" });
+      const sharedState = state.openOpenClawStateDatabase();
+      const { retainOpenClawStateDatabaseForIdle } =
+        await import("../../src/state/openclaw-state-db-cache.js");
+      const releaseState = retainOpenClawStateDatabaseForIdle(sharedState);
       const progress = setInterval(() => {
         // Offline fixture writes use the existing owner to bound WAL growth, outside timing.
         database.walMaintenance.checkpoint();
@@ -1101,6 +1653,9 @@ measurement: try {
         );
       }, 30_000);
       try {
+        // The offline writer owns checkpoints; join periodic inspection before bulk loading.
+        await database.walMaintenance.stop();
+        await sharedState.walMaintenance.stop();
         await seedTeamShapeSessions({
           stateDir: process.env.OPENCLAW_STATE_DIR!,
           sessions: 10_000,
@@ -1111,6 +1666,7 @@ measurement: try {
         });
       } finally {
         clearInterval(progress);
+        releaseState();
       }
     }
     const db = agent.openOpenClawAgentDatabase({ agentId: "main" });
@@ -1136,7 +1692,7 @@ measurement: try {
     );
     await agent.closeOpenClawAgentDatabasesAsync();
   }
-  let runTurn: (() => Promise<void>) | undefined;
+  let runTurn: ((tools?: number) => Promise<void>) | undefined;
   if (turnLoop) {
     assert(workspace);
     const { bindLocalSandboxWorkspace } =
@@ -1145,6 +1701,10 @@ measurement: try {
     const { createHostSandboxFsBridge } =
       await import("../../src/agents/test-helpers/host-sandbox-fs-bridge.js");
     if (nativeTurns) {
+      assert(
+        process.getuid && process.getgid,
+        "Native Podman proof requires a POSIX workspace owner",
+      );
       guestName = `openclaw-checkpoint-measure-${process.pid}`;
       execFileSync("podman", ["image", "inspect", values["guest-image"]], { stdio: "ignore" });
       execFileSync(
@@ -1152,8 +1712,11 @@ measurement: try {
         [
           "run",
           "--detach",
+          "--init",
           "--name",
           guestName,
+          "--user",
+          `${process.getuid()}:${process.getgid()}`,
           "--network",
           "none",
           "--cap-drop",
@@ -1217,37 +1780,128 @@ measurement: try {
       lastUsedAtMs: 1,
     });
     let edit = 0;
-    runTurn = async () => {
-      for (let tool = 0; tool < 10; tool++) {
+    runTurn = async (turnTools = toolsPerTurn) => {
+      if (reconcile) {
+        const commandBegan = performance.now();
+        const commandCpu = process.cpuUsage();
+        const commandAllocated = getHeapStatistics().total_allocated_bytes;
+        const seed = `synthetic reconcile ${++edit}`;
+        const writeRoot = reconcileTarget === "canonical" ? workspace! : canonical;
+        const writeFiles = `
+          const fs = require("node:fs");
+          const [root, seed, count, bytes, randomBytes] = process.argv.slice(1);
+          for (let i = 1; i <= Number(count); i++) {
+            fs.writeFileSync(root + "/file-" + i + ".txt",
+              Number(randomBytes)
+                ? require("node:crypto").createHash("shake256", { outputLength: Number(randomBytes) }).update(seed + " file-" + i).digest()
+                : (seed + " file-" + i + "\\n").padEnd(Number(bytes), "."));
+          }
+        `;
+        assert(pauseBegan === undefined, "Fixture mutation must begin with the guest running");
+        if (nativeTurns && reconcileTarget === "canonical") {
+          execFileSync("podman", [
+            "exec",
+            turnRuntime,
+            "node",
+            "-e",
+            writeFiles,
+            "/workspace",
+            seed,
+            String(reconcileChangedFiles),
+            String(fileBytes),
+            String(reconcileRandomBytes),
+          ]);
+        } else {
+          execFileSync(process.execPath, [
+            "-e",
+            writeFiles,
+            writeRoot,
+            seed,
+            String(reconcileChangedFiles),
+            String(fileBytes),
+            String(reconcileRandomBytes),
+          ]);
+        }
+        const began = performance.now();
+        const beforePauses = pauseDurationsMs.length;
+        await projection.withLocalWorkspaceProjection(owner, (operations) =>
+          operations.synchronize(reconcileTarget),
+        );
+        const ended = performance.now();
+        const usedCpu = process.cpuUsage(commandCpu);
+        const paused = pauseDurationsMs.slice(beforePauses);
+        finalizations.push({
+          changed: true,
+          durationMs: ended - began,
+          commandDurationMs: ended - commandBegan,
+          processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
+          allocatedBytes: getHeapStatistics().total_allocated_bytes - commandAllocated,
+          pauses: pauseDurationsMs.length - beforePauses,
+          pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
+          maxPauseDurationMs: Math.max(0, ...paused),
+        });
+        assert(pauseBegan === undefined, "Reconciliation must resume the guest");
+        for (let i = 1; i <= reconcileChangedFiles; i++) {
+          const expected = reconcileRandomBytes
+            ? createHash("shake256", { outputLength: reconcileRandomBytes })
+                .update(`${seed} file-${i}`)
+                .digest()
+            : Buffer.from(`${seed} file-${i}\n`.padEnd(fileBytes, "."));
+          for (const directory of [canonical, workspace!]) {
+            assert.deepEqual(fs.readFileSync(path.join(directory, `file-${i}.txt`)), expected);
+          }
+        }
+        if (nativeTurns) {
+          assert.deepEqual(
+            execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"]),
+            fs.readFileSync(path.join(canonical, "file-1.txt")),
+          );
+        }
+        return;
+      }
+      for (let tool = 0; tool < turnTools; tool++) {
         const commandBegan = performance.now();
         const commandCpu = process.cpuUsage();
         const commandAllocated = getHeapStatistics().total_allocated_bytes;
         const beforePauses = containerCommands.filter((command) => command === "pause").length;
         const spec = await backend.buildExecSpec({ command: "synthetic", env: {}, usePty: false });
-        const editedFile = Math.floor((files * (tool === 4 ? 1 : 2)) / 3);
-        const relative = `file-${editedFile}.txt`;
-        const content =
-          values["all-mutating"] || tool === 4 || tool === 9
-            ? `synthetic edit ${++edit}\n`
-            : undefined;
-        if (content) {
+        const changed = values["all-mutating"] || tool % 10 === 4 || tool % 10 === 9;
+        const changedFiles = changed
+          ? checkpointChangedFiles[edit % checkpointChangedFiles.length]!
+          : 0;
+        const seed = `${processInstance} synthetic edit ${++edit}`;
+        const content = (index: number) =>
+          createHash("shake256", { outputLength: Math.max(64, fileBytes) })
+            .update(`${seed} file-${index}`)
+            .digest();
+        if (changed) {
           assert(!fakePaused, "Guest command cannot write while frozen");
           if (nativeTurns) {
             execFileSync("podman", [
               "exec",
               turnRuntime,
-              "sh",
-              "-c",
-              'printf "%s" "$1" > "$2"',
-              "sh",
-              content,
-              `/workspace/${relative}`,
+              "node",
+              "-e",
+              `
+              const fs = require("node:fs"), crypto = require("node:crypto");
+              const [seed, count, bytes] = process.argv.slice(1);
+              for (let i = 1; i <= Number(count); i++) fs.writeFileSync("/workspace/file-" + i + ".txt",
+                crypto.createHash("shake256", { outputLength: Number(bytes) }).update(seed + " file-" + i).digest());
+            `,
+              seed,
+              String(changedFiles),
+              String(Math.max(64, fileBytes)),
             ]);
           } else {
-            fs.writeFileSync(path.join(workspace!, relative), content);
+            for (let i = 1; i <= changedFiles; i++) {
+              fs.writeFileSync(path.join(workspace!, `file-${i}.txt`), content(i));
+            }
           }
+        } else if (nativeTurns) {
+          execFileSync("podman", ["exec", turnRuntime, "cat", "/workspace/file-1.txt"]);
         }
         const began = performance.now();
+        const beforePauseSamples = pauseDurationsMs.length;
         await backend.finalizeExec!({
           status: "completed",
           exitCode: 0,
@@ -1256,23 +1910,26 @@ measurement: try {
         });
         const finalizationEnded = performance.now();
         const usedCpu = process.cpuUsage(commandCpu);
+        const paused = pauseDurationsMs.slice(beforePauseSamples);
         finalizations.push({
-          changed: Boolean(content),
+          changed,
+          changedFiles,
           durationMs: finalizationEnded - began,
           commandDurationMs: finalizationEnded - commandBegan,
           processCpuMs: (usedCpu.user + usedCpu.system) / 1000,
           allocatedBytes: getHeapStatistics().total_allocated_bytes - commandAllocated,
           pauses: containerCommands.filter((command) => command === "pause").length - beforePauses,
+          pausedDurationMs: paused.reduce((sum, duration) => sum + duration, 0),
+          maxPauseDurationMs: Math.max(0, ...paused),
         });
         assert(!fakePaused, "Finalization must resume the guest");
-        if (content) {
-          assert.equal(fs.readFileSync(path.join(canonical, relative), "utf8"), content);
+        for (let i = 1; i <= changedFiles; i++) {
+          const expected = content(i);
+          assert.deepEqual(fs.readFileSync(path.join(canonical, `file-${i}.txt`)), expected);
           if (nativeTurns) {
-            assert.equal(
-              execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/${relative}`], {
-                encoding: "utf8",
-              }),
-              content,
+            assert.deepEqual(
+              execFileSync("podman", ["exec", turnRuntime, "cat", `/workspace/file-${i}.txt`]),
+              expected,
               "The next guest read must see the completed command's saved bytes",
             );
           }
@@ -1393,7 +2050,7 @@ measurement: try {
       expiresBefore: 0,
       progress,
       orphanFailures: new Map(),
-      withAllocationLease: (run) => withWorktreeAllocationLease({ env: process.env }, run),
+      guard: {},
     });
     assert.equal(
       progress.result.outcome,
@@ -1404,13 +2061,59 @@ measurement: try {
     assert.deepEqual(result, { orphansDeleted: 0, snapshotsPruned: 0 });
     return result;
   };
-  const prepareWorkspace = async () => {
+  const authorityRuntime = values["source-authority"]
+    ? await import("../../src/gateway/operator-run-authority.js")
+    : undefined;
+  const deviceRuntime = values["source-authority"]
+    ? await import("../../src/gateway/device-revocation.js")
+    : undefined;
+  const operatorProfile = values["source-authority"]
+    ? (await import("../../src/state/user-profiles.js")).ensureProfileForEmail(
+        "source-authority-fixture@example.invalid",
+      )
+    : undefined;
+  const authorityContext = { getRuntimeConfig: () => config };
+  let admissions = 0;
+  const captureSource = async () => {
+    assert(authorityRuntime && deviceRuntime && operatorProfile);
+    const device = deviceRuntime.captureGatewayDeviceRevocation(
+      authorityContext,
+      { deviceId: "synthetic-source", role: "operator" },
+      () => true,
+    );
+    try {
+      const captured = await authorityRuntime.captureGatewayOperatorRunAuthority({
+        client: {
+          connId: `synthetic-${++admissions}`,
+          connect: {
+            minProtocol: 1,
+            maxProtocol: 1,
+            client: { id: "openclaw-control-ui", mode: "webchat", version: "dev", platform: "web" },
+            role: "operator",
+            scopes: ["operator.admin"],
+          },
+          internal: { operatorRoleActor: { kind: "operator", profileId: operatorProfile.id } },
+        },
+        context: authorityContext,
+        hasCurrentClientAuthority: device.isCurrent,
+      });
+      assert(captured, "An admitted operator must receive authority");
+      return captured;
+    } finally {
+      device.release();
+    }
+  };
+  const prepareWithAuthority = async (
+    authority?: Awaited<ReturnType<typeof captureSource>>["authority"],
+  ) => {
     using prepared = await prepareLocalSandboxWorkspace({
       cfg: config,
       agentId: owner.agentId,
       sessionKey,
       workspaceDir: canonical,
       sandbox,
+      assertCurrent: authority?.assertCurrent,
+      signal: authority?.signal,
     });
     assert(prepared, "Preparation must resolve the selected session-owned workspace");
     workspace ??= prepared.workspaceDir;
@@ -1421,6 +2124,62 @@ measurement: try {
     );
     return prepared.workspaceDir;
   };
+  const prepareWorkspace = async () => {
+    const captured = values["source-authority"] ? await captureSource() : undefined;
+    try {
+      return await prepareWithAuthority(captured?.authority);
+    } finally {
+      captured?.release();
+    }
+  };
+  let sourceAuthorityProof: unknown;
+  if (values["source-authority"]) {
+    const original = await captureSource();
+    let revoked = false;
+    const errors: string[] = [];
+    const recordRevocation = (error: unknown) => {
+      const causes = collectNestedErrorCandidates(error);
+      errors.push(...causes.map(String));
+      return (
+        original.authority.signal?.aborted === true &&
+        causes.includes(original.authority.signal.reason)
+      );
+    };
+    try {
+      await assert.rejects(
+        withDiagnosticsTimelineObserver(
+          (name) => {
+            if (!revoked && name === "attempt.setup.sandbox.workspace_selection.reuse.reconcile") {
+              revoked = true;
+              deviceRuntime!.invalidateGatewayDeviceRevocation(
+                authorityContext,
+                "synthetic-source",
+                "operator",
+              );
+            }
+            return undefined;
+          },
+          () => prepareWithAuthority(original.authority),
+        ),
+        recordRevocation,
+      );
+      assert(revoked, "Revocation must occur inside real workspace reconciliation");
+      for (let attempt = 0; attempt < 3; attempt++) {
+        assert.throws(original.authority.assertCurrent, recordRevocation);
+        await prepareWorkspace();
+      }
+      sourceAuthorityProof = {
+        revokedDuring: "attempt.setup.sandbox.workspace_selection.reuse.reconcile",
+        staleAssertionsRejected: 3,
+        freshPreparationsCompleted: 3,
+        errors,
+        abortReason: String(original.authority.signal?.reason),
+        boundary: "real operator/source and sandbox preparation owners; no WS or model",
+      };
+    } finally {
+      original.release();
+    }
+  }
   const runOne = (i: number) =>
     turnLoop
       ? runTurn!()
@@ -1505,6 +2264,7 @@ measurement: try {
     const measureTurn = async (phase: string, prepare = prepareWorkspace) => {
       acquisitions = scans = probes = 0;
       manifestReads.length = 0;
+      fingerprintMetrics.length = 0;
       const workerStartsBefore = workerStarts,
         workerExitsBefore = workerExits;
       const workerAllocationBefore =
@@ -1516,6 +2276,17 @@ measurement: try {
         gitOperations[operation] = (gitOperations[operation] ?? 0) + 1;
       };
       gitDiagnostics.subscribe(observeGitOperation);
+      const stopWorkerProfiles =
+        values.instrument === "allocation" ? await startSerialWorkerProfiles() : undefined;
+      const inspector = values.instrument === "allocation" ? new Session() : undefined;
+      inspector?.connect();
+      await inspector?.post("Profiler.enable");
+      await inspector?.post("Profiler.start");
+      await inspector?.post("HeapProfiler.startSampling", {
+        samplingInterval: 32_768,
+        includeObjectsCollectedByMajorGC: true,
+        includeObjectsCollectedByMinorGC: true,
+      });
       const physicalBefore = snapshotSqliteReaderMetrics();
       const spans: Record<string, { count: number; totalMs: number }> = {};
       const loop = monitorEventLoopDelay({ resolution: 1 });
@@ -1524,6 +2295,7 @@ measurement: try {
         cpuBefore = process.threadCpuUsage(),
         totalBefore = process.cpuUsage();
       const allocationBefore = getHeapStatistics().total_allocated_bytes;
+      const startedAtUTC = new Date().toISOString();
       const started = performance.now();
       const buildStarted = Promise.withResolvers<void>();
       let contenderStarted = false;
@@ -1554,6 +2326,10 @@ measurement: try {
         () => withWorktreePreparationTiming("sandbox", prepare),
       ).catch(async (error: unknown) => {
         gitDiagnostics.unsubscribe(observeGitOperation);
+        inspector?.disconnect();
+        if (stopWorkerProfiles) {
+          await stopWorkerProfiles(phase, true);
+        }
         if (contenderStarted) {
           await Promise.allSettled([contender]);
         }
@@ -1566,6 +2342,24 @@ measurement: try {
       const cpu = process.threadCpuUsage(cpuBefore),
         total = process.cpuUsage(totalBefore);
       const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocationBefore;
+      const heapProfile = await inspector?.post("HeapProfiler.stopSampling");
+      const cpuProfile = await inspector?.post("Profiler.stop");
+      inspector?.disconnect();
+      const workerProfiles = stopWorkerProfiles ? await stopWorkerProfiles(phase) : undefined;
+      if (cpuProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.cpuprofile`),
+          JSON.stringify(cpuProfile.profile),
+        );
+      }
+      if (heapProfile) {
+        fs.writeFileSync(
+          path.join(output, `${values.report}.${phase}.heapprofile`),
+          JSON.stringify(heapProfile.profile),
+        );
+      }
+      const sampledAllocation = (node: HeapProfiler.SamplingHeapProfileNode): number =>
+        node.selfSize + node.children.reduce((sum, child) => sum + sampledAllocation(child), 0);
       loop.disable();
       gitDiagnostics.unsubscribe(observeGitOperation);
       const readMetrics = snapshotSqliteReaderMetrics().map((metric) => {
@@ -1579,33 +2373,28 @@ measurement: try {
       const workerAllocationAfter = workerAllocationBefore
         ? await sampleWorkerAllocation()
         : undefined;
+      assert(!fingerprintImport || fingerprintMetrics.length > 0, "Missing worker hash counters");
       const result = {
         phase,
+        startedAtUTC,
         elapsedMs,
         ...(contender ? { projectionElapsedMs, contender: contenderResult } : {}),
         mainCpuMs: (cpu.user + cpu.system) / 1000,
         processCpuMs: (total.user + total.system) / 1000,
         allocatedBytes,
+        sampledAllocatedBytes: heapProfile ? sampledAllocation(heapProfile.profile.head) : null,
+        allocationAccounting:
+          "Main isolate during owner call and measurement bookkeeping, including overlapping background work; excludes CPU-profiler setup/serialization, correctness reads and reset. Unavailable V8 total counters serialize as null. Worker counters are separate; child process allocation is unmeasured.",
         gitOperations,
+        workerProfiles,
         workerAllocation:
           workerAllocationBefore && workerAllocationAfter
-            ? {
-                before: workerAllocationBefore,
-                after: workerAllocationAfter,
-                started: workerStarts - workerStartsBefore,
-                exited: workerExits - workerExitsBefore,
-                matchedAllocatedBytes: workerAllocationAfter.reduce((sum, after) => {
-                  const before = workerAllocationBefore.find(
-                    (entry) => entry.threadId === after.threadId,
-                  );
-                  return (
-                    sum +
-                    (before?.bytes != null && after.bytes != null ? after.bytes - before.bytes : 0)
-                  );
-                }, 0),
-                accounting:
-                  "Delta covers only workers sampled at both boundaries; new-worker values are lifetime totals. Exited or unavailable workers are unmeasured.",
-              }
+            ? summarizeWorkerAllocation(
+                workerAllocationBefore,
+                workerAllocationAfter,
+                workerStarts - workerStartsBefore,
+                workerExits - workerExitsBefore,
+              )
             : undefined,
         eventLoopP99Ms: loop.percentile(99) / 1e6,
         eventLoopMaxMs: loop.max / 1e6,
@@ -1615,6 +2404,29 @@ measurement: try {
         probes,
         manifestReads: [...manifestReads],
         manifestSnapshotBytes: manifestReads.reduce((sum, read) => sum + read.bytes, 0),
+        ...(fingerprintImport
+          ? {
+              hashMetrics: {
+                operations: [...fingerprintMetrics],
+                contentHashCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.contentHashCount,
+                  0,
+                ),
+                contentReadBytes: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.contentReadBytes,
+                  0,
+                ),
+                fingerprintHitCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.fingerprintHitCount,
+                  0,
+                ),
+                fingerprintMissCount: fingerprintMetrics.reduce(
+                  (sum, entry) => sum + entry.fingerprintMissCount,
+                  0,
+                ),
+              },
+            }
+          : {}),
         physicalReaderMetrics: process.platform === "linux" ? readMetrics : null,
         hostLoad: loadBefore,
         hostLoadAfter: loadavg(),
@@ -1666,6 +2478,9 @@ measurement: try {
     };
     if (resumeOwnerSwitch) {
       workspace = fs.readFileSync(path.join(output, "restart-projection.txt"), "utf8");
+    } else if (reuseFixture) {
+      workspace = fs.readFileSync(path.join(output, "serial-projection.txt"), "utf8");
+      await measureTurn("first-reuse");
     } else {
       await measureTurn("first");
     }
@@ -1690,7 +2505,41 @@ measurement: try {
         fs.writeFileSync(filename, content);
       }
     };
-    if (!values["fresh-only"]) {
+    const restoreCanonical = (expectOriginal = false) => {
+      for (const entry of mutations.keys()) {
+        const original = path.join(repo, entry),
+          target = path.join(canonical, entry);
+        if (fs.existsSync(original)) {
+          fs.copyFileSync(original, target);
+          if (expectOriginal) {
+            mutations.set(entry, fs.readFileSync(original, "utf8"));
+          }
+        } else {
+          fs.rmSync(target, { force: true });
+          if (expectOriginal) {
+            mutations.set(entry, null);
+          }
+        }
+      }
+    };
+    if (fingerprintImport) {
+      assert(regularFiles.length >= 200);
+      for (let i = 0; i < 200; i++) {
+        if (i < 20) {
+          modify(regularFiles[i]!, null);
+        } else if (i < 40) {
+          modify(`lane2383-additions/deep/added-${i}.txt`, `added ${i}\n`);
+        } else {
+          modify(regularFiles[i]!, `changed ${i}\n`);
+        }
+      }
+      await measureTurn("guest-export");
+      restoreCanonical(true);
+      await measureTurn("host-import");
+      // No whole-tree validation or extra reconciliation may warm this next probe.
+      await measureTurn("post-import-reuse");
+      await measureTurn("post-import-steady");
+    } else if (!values["fresh-only"]) {
       modify(regularFiles[0]!, "one changed guest file\n");
       await measureTurn("changed-1");
       await measureTurn("post-edit-1");
@@ -1938,8 +2787,33 @@ measurement: try {
       }
     }
     const sourceFile = path.join(root, "checkpoint-source.json");
+    if (reusableSerial) {
+      // Restore only this scenario's own edits through the real acceptance owner, after timing.
+      if (!fingerprintImport) {
+        restoreCanonical();
+        await prepareWorkspace();
+      }
+      for (const entry of mutations.keys()) {
+        const original = path.join(repo, entry);
+        for (const directory of [canonical, workspace!]) {
+          if (fs.existsSync(original)) {
+            assert.deepEqual(readFixtureEntry(directory, entry), readFixtureEntry(repo, entry));
+          } else {
+            assert(!fs.existsSync(path.join(directory, entry)), `Fixture reset retained ${entry}`);
+          }
+        }
+      }
+      fs.writeFileSync(path.join(output, "serial-projection.txt"), workspace!);
+    }
     const result = {
       mode: "serial-preparation",
+      fingerprintImport,
+      harnessSha256,
+      instrument: values.instrument,
+      reusedFixture: reuseFixture,
+      resetAfterMeasurement: reusableSerial,
+      pauseAccounting:
+        "No registered native runtime in serial preparation; empty pause samples do not qualify guest freeze latency",
       fixture: {
         files: inventory.length,
         bytes: initialBytes,
@@ -1973,9 +2847,12 @@ measurement: try {
       sourceDependentInstallMatches,
       correctness:
         "all accepted file bytes, symlink targets, types and deletions match; ignored host file excluded",
+      hashAccounting: fingerprintImport
+        ? "Successful workspace content-hash calls inside observed Git-worker tasks and logical bytes read by that helper, plus accepted-node reuse hits/misses; excludes main-isolate/native Git reads, failed partial reads and OS-level physical IO. In-memory counters piggyback on existing worker replies, with no memo wrapping."
+        : undefined,
       retainedMemory: globalThis.gc ? await collectRetainedMemory() : null,
       retainedMemoryAccounting: globalThis.gc
-        ? "forced GC after all timing and correctness checks; workers then main"
+        ? "main GC after all timing and correctness checks; worker heap statistics are not forced-GC samples; exited workers explicitly unavailable"
         : "not measured; run with --expose-gc",
 
       physicalReaderAccounting:
@@ -1991,7 +2868,14 @@ measurement: try {
     );
     break measurement;
   }
-  await runOne(0);
+  if (nativeTurns && runTurn) {
+    await runTurn(10);
+  } else {
+    await runOne(0);
+  }
+  if (nativeTurns) {
+    await settleCheckpointCleanup();
+  }
   if (fileReads) {
     await delay(5_000);
     await runOne(0);
@@ -2028,13 +2912,42 @@ measurement: try {
   finalizations.length = 0;
   pauseDurationsMs.length = 0;
   checkpointPhases.length = 0;
+  fingerprintMetrics.length = 0;
+  reconcileTraffic.length = 0;
+  if (mutationObserver) {
+    mutationObserver.samples.length = 0;
+  }
+  reconcilePhases.length = 0;
+  reconcilePhase = "idle";
+  reconcilePhaseStarted = performance.now();
   leaseSources.clear();
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
     await import("../../src/infra/diagnostic-events.js");
   await waitForDiagnosticEventsDrained();
   const leaseRequests: Record<string, number> = {};
+  const workspaceRequests: Array<{
+    requestClass: string;
+    durationMs?: number;
+    executionMs?: number;
+  }> = [];
   stopLeaseDiagnostics = onInternalDiagnosticEvent(
     (event) => {
+      if (
+        values["reconcile-traffic"] &&
+        event.type === "worker.request" &&
+        event.phase === "completed" &&
+        event.requestClass.startsWith("localWorkspace")
+      ) {
+        const timing = event.timing;
+        workspaceRequests.push({
+          requestClass: event.requestClass,
+          durationMs: event.durationMs,
+          executionMs:
+            timing?.executeStarted !== undefined && timing.executeFinished !== undefined
+              ? timing.executeFinished - timing.executeStarted
+              : undefined,
+        });
+      }
       if (
         event.type === "worker.request" &&
         event.phase === "completed" &&
@@ -2076,6 +2989,30 @@ measurement: try {
     }
   });
   observer.observe({ entryTypes: ["gc"] });
+  const nativeWorkerAllocationBefore =
+    (nativeTurns || reconcile) && values.instrument === "allocation"
+      ? await sampleWorkerAllocation()
+      : undefined;
+  const stopReconcileProfiles = values["reconcile-profile"]
+    ? await startSerialWorkerProfiles(true)
+    : undefined;
+  const allocationTimeline: unknown[] = [];
+  let timelinePending = Promise.resolve();
+  const timelineStart = performance.now();
+  const timelineTimer = values["reconcile-profile"]
+    ? setInterval(() => {
+        timelinePending = timelinePending.then(async () => {
+          allocationTimeline.push({
+            elapsedMs: performance.now() - timelineStart,
+            phase: reconcilePhase,
+            main: getHeapStatistics(),
+            workers: await sampleWorkerAllocation(),
+          });
+        });
+      }, 1000)
+    : undefined;
+  const nativeWorkerStartsBefore = workerStarts,
+    nativeWorkerExitsBefore = workerExits;
   const readCgroupCpuUs = () => {
     const usage = /^usage_usec (\d+)$/m.exec(fs.readFileSync("/sys/fs/cgroup/cpu.stat", "utf8"));
     assert(usage, "cgroup v2 CPU accounting must expose usage_usec");
@@ -2085,6 +3022,26 @@ measurement: try {
     nativeTurns && process.platform === "linux" && fs.existsSync("/sys/fs/cgroup/cpu.stat")
       ? readCgroupCpuUs()
       : undefined;
+  const clockTicks =
+    nativeTurns && process.platform === "linux"
+      ? Number(execFileSync("getconf", ["CLK_TCK"], { encoding: "utf8" }))
+      : 0;
+  if (nativeTurns && process.platform === "linux") {
+    assert(Number.isSafeInteger(clockTicks) && clockTicks > 0, "Invalid Linux clock tick rate");
+  }
+  const readHostCpu = () => {
+    const line = fs.readFileSync("/proc/stat", "utf8").split("\n")[0];
+    assert(line !== undefined && line.startsWith("cpu "), "Missing aggregate Linux CPU counters");
+    const ticks = line.trim().split(/\s+/).slice(1).map(Number);
+    return Object.fromEntries(
+      ["user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal"].map((key, index) => {
+        const tick = ticks[index];
+        assert(tick !== undefined && Number.isFinite(tick), `Missing Linux CPU counter: ${key}`);
+        return [key, (1000 * tick) / clockTicks];
+      }),
+    );
+  };
+  const hostCpuBefore = clockTicks ? readHostCpu() : undefined;
   const hostLoad = loadavg(),
     before = process.threadCpuUsage(),
     processBefore = process.cpuUsage(),
@@ -2092,6 +3049,7 @@ measurement: try {
   const spans: Record<string, { count: number; totalMs: number }> = {};
   const latencies: number[] = [];
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const memoryBefore = process.memoryUsage();
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
   let representativeResult: unknown;
@@ -2137,6 +3095,16 @@ measurement: try {
       }),
     );
   }
+  if (values["reconcile-traffic"]) {
+    markReconcilePhase("idle");
+  }
+  const cleanupSettlementStarted = performance.now();
+  if (nativeTurns) {
+    // Settle the instrumented native removals and deferred kernel cleanup after acceptance.
+    // Include their CPU without adding the tail to individual command latency.
+    await settleCheckpointCleanup();
+  }
+  const cleanupSettlementMs = performance.now() - cleanupSettlementStarted;
   if (fileReads || nativeTurns) {
     // Include the last operation's resumed heartbeat, not just intervals arriving mid-request.
     await nextGuestHeartbeat();
@@ -2148,6 +3116,30 @@ measurement: try {
     processCpu = process.cpuUsage(processBefore);
   const cgroupCpuMs =
     cgroupCpuBefore === undefined ? undefined : (readCgroupCpuUs() - cgroupCpuBefore) / 1000;
+  const hostCpuMs = hostCpuBefore
+    ? Object.fromEntries(
+        Object.entries(readHostCpu()).map(([key, value]) => {
+          const previousCpu = hostCpuBefore[key];
+          assert(previousCpu !== undefined, `Missing initial Linux CPU counter: ${key}`);
+          return [key, value - previousCpu];
+        }),
+      )
+    : undefined;
+  const nativeWorkerAllocationAfter = nativeWorkerAllocationBefore
+    ? await sampleWorkerAllocation()
+    : undefined;
+  const nativeWorkerAllocation =
+    nativeWorkerAllocationBefore && nativeWorkerAllocationAfter
+      ? summarizeWorkerAllocation(
+          nativeWorkerAllocationBefore,
+          nativeWorkerAllocationAfter,
+          workerStarts - nativeWorkerStartsBefore,
+          workerExits - nativeWorkerExitsBefore,
+        )
+      : undefined;
+  clearInterval(timelineTimer);
+  await timelinePending;
+  const reconcileProfiles = await stopReconcileProfiles?.("reconcile");
   await waitForDiagnosticEventsDrained();
   stopLeaseDiagnostics();
   stopRpcDiagnostics();
@@ -2160,6 +3152,12 @@ measurement: try {
     fs.writeFileSync(
       path.join(output, `${values.report}.cpuprofile`),
       JSON.stringify(cpuProfile.profile),
+    );
+  }
+  if (profile && values["reconcile-profile"]) {
+    fs.writeFileSync(
+      path.join(output, `${values.report}.heapprofile`),
+      JSON.stringify(profile.profile),
     );
   }
   inspector?.disconnect();
@@ -2176,28 +3174,68 @@ measurement: try {
     return {
       count: ordered.length,
       median: percentile(0.5),
+      p90: percentile(0.9),
       p95: percentile(0.95),
       max: ordered.at(-1) ?? null,
     };
   };
+  if (mutationObserver && reconcileRandomBytes * reconcileChangedFiles >= 1024 * 1024) {
+    assert(mutationObserver.samples.length > 0, "Expected a measured oversized journal mutation");
+    assert(
+      mutationObserver.samples.every((sample) => sample.transferredBytes + sample.clonedBytes > 0),
+      "Expected worker transport byte accounting",
+    );
+  }
   const report = {
     mode: values.mode,
+    workspaceRequests: values["reconcile-traffic"] ? [...workspaceRequests] : undefined,
+    fingerprintMetrics: fingerprintImport ? [...fingerprintMetrics] : undefined,
+    reconcileTraffic: values["reconcile-traffic"] ? [...reconcileTraffic] : undefined,
+    mutationSamples: mutationObserver ? [...mutationObserver.samples] : undefined,
+    reconcilePhases: values["reconcile-traffic"] ? [...reconcilePhases] : undefined,
+    sourceAuthorityProof,
+    operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
     turn: turnLoop
       ? {
-          tools: 10,
-          changed: values["all-mutating"] ? 10 : 2,
-          unchanged: values["all-mutating"] ? 0 : 8,
+          tools: reconcile ? 1 : toolsPerTurn,
+          changed: reconcile ? 1 : values["all-mutating"] ? toolsPerTurn : toolsPerTurn / 5,
+          unchanged: reconcile || values["all-mutating"] ? 0 : (toolsPerTurn * 4) / 5,
+          ...(reconcile ? { reconcileTarget, reconcileChangedFiles, reconcileRandomBytes } : {}),
           pauses: containerCommands.filter((command) => command === "pause").length,
           unpauses: containerCommands.filter((command) => command === "unpause").length,
+          checkpointChangedFiles,
+          checkpointSeed: processInstance,
+          snapshotCaptures: checkpointPhases.filter(
+            (phase) => phase.name === "nativeWorktreeFilesystem:copy",
+          ).length,
+          frozenDurationMs: pauseDurationsMs.reduce((sum, duration) => sum + duration, 0),
           filesystemType: fs.statfsSync(output).type,
           engine: nativeTurns ? "native Podman" : "synthetic execContainer seam; no injected delay",
           pauseDurationsMs: [...pauseDurationsMs],
           checkpointPhases: [...checkpointPhases],
+          cleanupSettlementMs,
+          uid: process.getuid?.(),
+          effectiveCapabilities:
+            process.platform === "linux"
+              ? /^CapEff:\s*(\S+)/m.exec(fs.readFileSync("/proc/self/status", "utf8"))?.[1]
+              : undefined,
+          settlementObserver: values["settlement-socket"]
+            ? "private privileged socket"
+            : "local process",
+          hostCpuMs,
+          hostCpuAccounting:
+            "Whole Linux VM CPU, including kernel cleanup and unrelated daemon work; cgroup CPU excludes some kernel threads",
           phaseAccounting:
             "withStagedWorkerWorkspaceManifest includes applyStagedWorkerWorkspace; phases overlap and must not be summed",
           percentileDefinition: "sorted sample at floor((count - 1) * percentile)",
           pauseDistributionMs: distribution(pauseDurationsMs),
+          operationPauseDistributionMs: distribution(
+            finalizations.map((sample) => sample.pausedDurationMs),
+          ),
+          operationMaxPauseDistributionMs: distribution(
+            finalizations.map((sample) => sample.maxPauseDurationMs),
+          ),
           commandDistributionMs: distribution(
             finalizations.map((sample) => sample.commandDurationMs),
           ),
@@ -2235,14 +3273,19 @@ measurement: try {
           }
         : undefined,
     allocatedBytesPerRequest: allocatedBytes / requests,
-    allocationAccounting:
-      "main-isolate V8 total allocated bytes, including background work; excludes workers",
+    allocationAccounting: Number.isFinite(allocatedBytes)
+      ? "main-isolate V8 total allocated bytes, including background work; excludes workers"
+      : "V8 total allocation counter unavailable; use separate sampled allocation pass",
+    workerAllocation: nativeWorkerAllocation,
+    reconcileProfiles,
+    allocationTimeline: values["reconcile-profile"] ? allocationTimeline : undefined,
     reusedFixture: reuseFixture,
     revision: values.revision ?? "candidate",
     instrument: values.instrument,
     requests,
     burst,
     files,
+    buildInputFiles,
     fileBytes,
     transcriptMiB,
     separateAgentStorage: Boolean(values["agent-storage-dir"]),
@@ -2282,13 +3325,16 @@ measurement: try {
             scope:
               "cgroup and descendants: Node workers, native helpers, Git, Podman and guest; requires an exclusively owned rig",
             membership: fs.readFileSync("/proc/self/cgroup", "utf8").trim(),
-            cpuMax: fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim(),
+            cpuMax: fs.existsSync("/sys/fs/cgroup/cpu.max")
+              ? fs.readFileSync("/sys/fs/cgroup/cpu.max", "utf8").trim()
+              : null,
           },
     mainThreadCpuPercent: (cpu.user + cpu.system) / (elapsedMs * 10),
     cpuUsPerRequest: (cpu.user + cpu.system) / requests,
     sampledBytesPerRequest: sampledBytes === undefined ? null : sampledBytes / requests,
     sampledBytesPerSecond: sampledBytes === undefined ? null : (sampledBytes * 1000) / elapsedMs,
     eventLoopP99Ms: loop.percentile(99) / 1e6,
+    eventLoopMaxMs: loop.max / 1e6,
     eventLoopSamples: loop.count,
     requestLatenciesMs: latencies,
     requestP50Ms: latencies[Math.floor((latencies.length - 1) * 0.5)],
@@ -2303,6 +3349,7 @@ measurement: try {
     gcMs,
     gcByKind,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
+    memoryBefore,
     memory: process.memoryUsage(),
     resultHash,
     semanticResultHash,
@@ -2343,7 +3390,10 @@ measurement: try {
   }
   if (turnLoop) {
     fs.writeFileSync(path.join(workspace!, "file-0.txt"), initial);
-    for (const editedFile of [Math.floor(files / 3), Math.floor((2 * files) / 3)]) {
+    const editedFiles = reconcile
+      ? Array.from({ length: reconcileChangedFiles }, (_, index) => index + 1)
+      : [Math.floor(files / 3), Math.floor((2 * files) / 3)];
+    for (const editedFile of editedFiles) {
       fs.writeFileSync(
         path.join(workspace!, `file-${editedFile}.txt`),
         `synthetic ${editedFile}\n`.padEnd(fileBytes, "."),
@@ -2372,6 +3422,9 @@ measurement: try {
   };
   fs.writeFileSync(path.join(output, values.report), JSON.stringify(verified, null, 2));
   console.log(JSON.stringify(verified));
+} catch (error) {
+  console.error("Workspace measurement failed before cleanup:", error);
+  throw error;
 } finally {
   turnProjection?.[Symbol.dispose]();
   if (turnLoop && !nativeTurns) {
@@ -2383,7 +3436,7 @@ measurement: try {
     // Only the named task fixture is stopped, including if an interrupted read left it paused.
     const engine = nativeTurns ? "podman" : "docker";
     spawnSync(engine, ["unpause", guestName], { stdio: "ignore" });
-    execFileSync(engine, ["rm", "--force", guestName], { stdio: "ignore" });
+    execFileSync(engine, ["rm", "--force", guestName], { stdio: ["ignore", "ignore", "inherit"] });
     await guestExited;
     await (await import("../../src/agents/sandbox/registry.js")).removeRegistryEntry(guestName);
   }

@@ -131,102 +131,94 @@ Every `api.runtime` namespace and the page that documents it.
 | `api.runtime.channel`            | [Channel helpers](/plugins/sdk-runtime/channel#api-runtime-channel)             |
 | `api.runtime.skills`             | [Skill usage](#skill-usage)                                                     |
 
-### Read-only session forks
+### Session forks
 
-Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
-for background inference against an existing session. It returns
-`{ text, usage? }`; usage uses the completion fields `inputTokens`, `outputTokens`,
-`cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, and `costUsd`.
-The timeout defaults to 30 seconds.
+`forkSession` and `runForkedTurn` both run through one core owner. A fork is a
+hidden agent run on a copy of a session's conversation. It sends the session's
+own provider request (system prompt, tool definitions, prompt-cache key,
+thinking setting and history) and appends its own prompt, so the provider serves
+the session's cached prefix:
 
-The fork uses the session's model and harness, with no model override. Codex
-inherits the conversation and tool definitions in an ephemeral thread, but denies
-local tool calls at dispatch and disables provider-hosted web search. On managed
-inference routes, it replays the parent's last prepared instructions, tool schemas,
-and input prefix, including after parent completion, with tool choice set to `none`.
-Snapshots share a 32 MiB in-memory LRU budget; evicted or oversized snapshots
-and WebSocket continuation requests fall back to native thread reconstruction
-without guaranteed cache reuse. Native reconstructed history also takes precedence when
-its prefix no longer matches the recorded request. Completed parent responses and
-subsequent fork tool-denial outcomes remain before the side question or continuation.
-While the prepared request remains in the snapshot budget,
-instructions and tool schemas stay parent-identical even on that native reconstruction path.
-Denied forks always set tool choice to `none` on managed inference requests,
-while native hosted search remains disabled. The fork has its own thread,
-session, and current model authority.
-Start a normal parent turn
-in the current runtime before requesting a fork. The native hook relay must be
-enabled and available; otherwise the request fails closed.
-The built-in `openclaw` runtime builds the fork request when `forkSession` is
-called. Normal model turns do not serialize or retain fork snapshots, copy
-published messages, or schedule fork expiry timers. Active forks read the running
-session's current context; completed sessions are reconstructed from the persisted
-model context, including compaction and the pinned system prompt and tool schemas.
-Sessions with history can be forked after a restart without sending another normal
-message first. Routes without a persisted prompt pin rebuild their configured
-system prompt at fork time.
-Completed-session forks apply the configured channel history window and preserve
-compaction summaries. All built-in runtime forks omit the parent's prompt-cache
-identity, including forks of running sessions: they rebuild context independently
-and do not share the parent's complete request preparation.
+- While the session's run is live, the fork replays that run's last prepared
+  request byte for byte, then appends its own items. Rebuilt history can differ
+  from what the parent sent (runtime-context order, rewritten tool-call IDs);
+  the replay keeps the fork on the parent's bytes.
+- After the run settles, the fork rebuilds the request from the transcript with
+  the session's pinned system prompt and tool definitions.
+- The fork sends its rebuilt request instead of the replay when the parent sent
+  an item the rebuilt context lacks, the parent request is a continuation that
+  carries only its delta, the fork may run a tool the parent request never
+  listed, or the fork may run tools and the parent request lists a
+  provider-hosted tool.
 
-The fork uses the same provider payload builders as a normal request. Unchanged
-prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is
-not guaranteed: reconstruction, compaction, images, and one-shot context or
-payload hooks can produce different bytes. Forks do not re-run the parent's
-one-shot hooks. They return text and usage even when reconstruction misses the
-cache; callers should use the returned cache-read usage to measure actual reuse.
+Every tool the session lists stays in the request; the fork runs only the tools
+it was given. A call to any other tool returns a normal result such as
+`exec is not available in this background run.` A tool-free fork also sets tool
+choice to `none` on OpenAI Responses (including native ChatGPT), Chat
+Completions and Anthropic Messages, so provider-hosted tools cannot run. Other
+APIs keep the parent's tool choice; a tool-free fork whose request carries a
+provider-hosted tool on those APIs fails before it is sent.
 
-Completed tool calls and their outcomes remain in conversation order. A tool
-call still running when the fork starts receives a non-error placeholder saying
-its result is not available yet. This does not cancel the call or persist a
-result in the parent session.
-
-The request uses the current model's credentials, proxy, and TLS policy. Session
-read authority is checked immediately before network sends, including retries.
-Native ChatGPT forks use independent connections without consuming or replacing
-the parent's continuation. Supported APIs are OpenAI Responses (including native
-ChatGPT), Chat Completions, and Anthropic Messages. Other APIs, including Bedrock,
-fail before dispatch because their transports cannot enforce live fork authority.
-Tool choice is set to `none` to prevent hosted tool execution; local tool calls
-are denied, with at most two additional inference attempts. On Anthropic, changing
-tool choice invalidates the messages cache, while the tool and system caches can
-remain reusable.
-
-Read-only forks do not acquire workspace placement authority, write a transcript,
-or change the parent's history. Normal parent settlement preserves a fork's read
-authority; session reset or deletion revokes it before an answer can be returned.
-CLI runtimes remain unsupported for `forkSession`. Ordinary `/btw` keeps its
-lightweight, tool-free context.
+A fork uses the session's full model context with the model's own context
+window and compaction, not an excerpt. Thinking follows the session, because
+Anthropic and OpenAI serve a cached prefix only at the same thinking setting.
+Output tokens follow the session unless the caller sets its own limit. The model
+is locked: no fallbacks and no transient retries. A fork stops when the caller's
+signal or timeout fires, when a Gateway restart drains, or when the source
+session is reset, replaced or deleted. Runs in other sessions, including cron
+runs, do not stop it. A fork never writes the source transcript, never appears in
+the Control UI and never delivers a reply. Cache reuse is not guaranteed:
+compaction, images and one-shot payload hooks can still change bytes, so use the
+returned cache-read usage to measure actual reuse.
 
 Conversation access is required through
 `plugins.entries.<id>.hooks.allowConversationAccess` (enabled by default only for
 bundled plugins). The caller must also have the target session's `sessions.get`
-read access. That authority, the Gateway binding, and conversation access remain
-live through inference and return. Requests share the subagent command lane and
-the `agents.defaults.subagents.maxConcurrent` cap with `subagent.complete`, and
-are cancelled when their runtime is retired. A fork does not write a transcript,
-deliver an answer, fire agent-turn lifecycle hooks, or consume queued injections
-or steering. Missing session context and unsupported harnesses produce errors.
+read access. That authority, the Gateway binding and conversation access remain
+live through the run and its settlement. Tool policy is checked as the anchored
+turn's requester: the sender, owner flag, group and channel that the turn's
+stored user message recorded. Plugins cannot supply requester facts. CLI
+runtimes are not supported.
 
-### Forked turns with plugin tools
+Sandboxed managed-worktree forks prepare the same private workspace and selected
+working directory as an ordinary turn of the source session. The durable project
+workspace remains the transcript cwd. Host-executed forks retain their durable
+workspace behavior.
+
+#### Tool-free forks
+
+Use `api.runtime.subagent.forkSession({ sessionKey, message, signal?, timeoutMs? })`
+to ask a question against an existing session's current conversation. It
+returns `{ text, usage? }`; usage uses the completion fields `inputTokens`,
+`outputTokens`, `cacheReadTokens`, `cacheWriteTokens`, `totalTokens`, and
+`costUsd`. The timeout defaults to 30 seconds. The fork uses the session's model,
+with no model override, and runs no tools.
+
+On the Codex harness, the fork is an ephemeral `thread/fork` that inherits the
+conversation and tool definitions, denies local tool calls at dispatch and
+disables provider-hosted web search. The native hook relay must be enabled and
+available; otherwise the request fails closed. Requests share the subagent
+command lane and the `agents.defaults.subagents.maxConcurrent` cap with
+`subagent.complete`, and are cancelled when their runtime is retired.
+
+#### Forked turns with plugin tools
 
 Use `api.runtime.subagent.runForkedTurn(...)` when background work must act on a
 stored session's conversation with tools, for example a reviewer that records
-what it learned. The fork is a hidden agent turn over a bounded copy of the
-session, read through one completed transcript entry. It never writes the source
-transcript, never appears in the Control UI, and yields to foreground work.
-In an `agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the
-finished turn to fork.
+what it learned. The fork reads through one transcript entry: the one `through`
+names, or the session's latest message when `through` is omitted. In an
+`agent_end` hook, `ctx.sessionKey` and `ctx.completedTurn` name the finished
+turn to fork.
 
 ```typescript
 const result = await api.runtime.subagent.runForkedTurn({
   sessionKey,
-  through: { sessionId, entryId }, // the completed entry to read through
+  through: { sessionId, entryId }, // optional; the latest message when omitted
   prompt: "Review this conversation and record one reusable note.",
-  tools: ["my_plugin_note"], // tools this plugin registered
+  tools: ["my_plugin_note", "read"], // this plugin's tools, plus read, ls or exec
   runId: `my-plugin-review:${reviewId}`, // optional; unique per run
-  timeoutMs: 120_000, // optional; defaults to 120 seconds
+  timeoutMs: 120_000, // optional; defaults to 120 seconds, no upper bound
+  maxTokens: 4_096, // optional; defaults to the session's output limit
   signal, // optional cancellation
   onSettled: async (outcome) => {
     // Runs inside the fork's Gateway work admission: a graceful restart waits for it.
@@ -239,21 +231,28 @@ if (result.status === "refused") {
 }
 ```
 
-- `tools` accepts only exact tools the calling plugin uniquely registered. Core
-  tools and tools another plugin registered are rejected, the same rule as
-  `subagent.run({ toolsAlsoAllow })`. The source session's tool policy is still
-  checked, including explicit denies; a denied tool returns
-  `{ status: "refused", reason: "tool_policy" }` before any model call.
+- `tools` names the tools the fork may run: exact tools the calling plugin
+  uniquely registered, plus `read`, `ls` and `exec`. Other core tools and tools
+  another plugin registered are rejected, the same rule as
+  `subagent.run({ toolsAlsoAllow })`. Every tool the session lists stays in the
+  request, so the provider serves its cached prefix; a call to any other tool
+  returns "not available in this background run" as a normal tool result.
+- The source session's tool policy is still checked, including explicit denies;
+  a denied tool returns `{ status: "refused", reason: "tool_policy" }` before any
+  model call. `read`, `ls` and `exec` are never added to that policy: the session
+  must already allow them. Pass `[]` for a tool-free fork.
+- `exec` runs only when the anchored turn came from the owner. A fork never asks
+  for approval: a command the agent's exec approvals would ask about is denied,
+  and nothing is queued for approval. Allowlist entries and full-permission exec
+  apply as they do for the session's own turns.
+- A manifest's `contracts.tools` may claim a core catalog id only when the
+  catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
+  `exec`, `read` or another core-built tool grants nothing.
 - `through.sessionId` must still be the session's current id, and the entry must
   be on its active transcript; otherwise the call fails. A reset that keeps the
   session id does not refuse the fork. `outcome.source` reports the
   `sessionId` and `lifecycleRevision` the fork read, so a follow-up notice can
   target that same generation.
-- Tool policy is checked as the anchored turn's requester: the sender, owner
-  flag, group and channel that the turn's stored user message recorded. Channel
-  turns and agent-command turns (TUI, node, plugin runs) record them. Older
-  turns that recorded no requester fall back to the session's stored
-  conversation facts. Plugins cannot supply requester facts.
 - The fork runs on the model the anchored turn ran on. An explicit `provider`
   and `model` that name the turn's or the session's own model need no extra
   trust; any other override uses the subagent override policy above.
@@ -261,14 +260,12 @@ if (result.status === "refused") {
   do not choose an owner label. Forks of the same plugin run one at a time.
 - `onSettled` receives `{ runId, source?, ok: true, text? }` or
   `{ runId, source?, ok: false, error, cancelled }`. `cancelled` marks an
-  expected stop: the caller's signal, a Gateway restart drain, yielding to
-  foreground work, or the source session changing during the fork. Its return
-  value is the call's `value` in `{ status: "settled", runId, value }`.
+  expected stop: the caller's signal, a Gateway restart drain, or the source
+  session changing during the fork. Its return value is the call's `value` in
+  `{ status: "settled", runId, value }`.
 - Tools running inside the fork see `toolContext.backgroundRun`
   (`{ sourceSessionKey, ownerPluginId }`); compare `ownerPluginId` with your own
   plugin id before applying fork-only behavior.
-- The same conversation-access and session read requirements as `forkSession`
-  apply, and stay live through the run and `onSettled`.
 - The fork belongs to the plugin registration that started it. That
   registration is checked again before admission, before each tool runs, and
   before `onSettled`; once it is no longer live, the call rejects and
@@ -442,7 +439,12 @@ Plugin authors must not mutate values after handing them to the host, including
 nested objects and byte buffers. Produce a new value for a later update.
 Registered callables retain their instance scope, receiver binding, and lifecycle
 fencing. Plugin code runs inside a Gateway request scope established for its
-invocation.
+invocation. When that scope is released, later calls into a registered instance,
+such as post-turn hooks, Gateway access-policy checks, and deferred deliveries,
+take ordinary counted admission on the instance: they run while it accepts
+calls and are refused only while it is quiesced, replaced, or retired. Callbacks
+explicitly bound to a closed consumer remain unavailable. A policy evaluation
+error means unavailable access and never grants permission.
 
 Tool factories and provider schema normalizers keep the same tool-object API.
 The host separates their definition data from executable callbacks: schemas and
@@ -467,7 +469,7 @@ structured cloning do not cross this boundary.
 `before_prompt_build` and `agent_turn_prepare` receive fresh message arrays and
 envelopes with shared, frozen transcript payload leaves. Treat nested history as
 read-only and return contribution fields instead of mutating message content.
-Non-owned values still receive detached snapshots with shared-memory checks.
+Values without an immutability proof receive detached snapshots with shared-memory checks.
 See the [prompt-hook migration](/plugins/sdk-migration#prompt-hook-history-is-read-only).
 
 Host-created request scopes borrow their plugin registry. A direct registry-scope
@@ -786,6 +788,12 @@ Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
 
+The process keeps one identity descriptor open per admitted database file, because
+closing it can release SQLite's POSIX locks. An owner that deletes a private database
+file it created calls `retireSqliteDatabaseAdmissionForPath(path)` from
+`sqlite-runtime` first, after every connection and worker using that file has closed.
+Otherwise the deleted file keeps its disk space until the process exits.
+
 `readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
 write revision without SQL. PostgreSQL owners retaining a snapshot across their own
 commit capture this revision under the writer lock and accept only that commit's
@@ -881,8 +889,10 @@ surfaces through normal database admission checks; Gateway shutdown cancels the 
 Memory runtimes may implement `prepareReload({ retireRuntime, retiringEmbeddingProviders })`
 and return `drain()` and `resume()`. Preparation synchronously fences affected
 manager acquisition, including lazy and fallback work. Match the exact acquired
-adapter objects rather than provider IDs. Drain removes affected managers from
-reuse before attempting to close them. It may return `{ errors }` to report
+adapter objects rather than provider IDs. Managers whose lazy embedding
+dependency is not known yet drain conservatively when any embedding adapter
+retires; managers with known, unaffected adapters stay live. Drain removes
+affected managers from reuse before attempting to close them. It may return `{ errors }` to report
 cleanup failures. Resume reopens admission after cancellation, or after publication
 when the runtime is retained, even if old cleanup remains unfinished. Retiring
 managers must not publish late results into a replacement manager's caches.
@@ -1015,6 +1025,19 @@ declared breaking Plugin SDK revision. It is not a capability-free runtime path:
 current hosts supply this assertion, and bundled providers reject missing
 allocation authority before performing work. An older host must be updated to
 use these providers.
+
+## Harness request-policy denials
+
+A native harness that confirms a deployment model-request gate refusal can return
+`AgentHarnessModelRequestPolicyError` from `openclaw/plugin-sdk/agent-harness-runtime`
+as its prompt error. This host-owned error stops credential and model fallback and
+carries fixed operator guidance into lifecycle events and assistant history.
+Preserve the Error object through terminal emission; do not replace it with its
+message before the lifecycle owner receives it.
+
+Do not use this error for an ordinary upstream 401/403 or an unverified diagnostic
+code. Those remain provider failures. A code string alone does not establish a
+deployment-policy denial.
 
 ## Harness execution identity
 

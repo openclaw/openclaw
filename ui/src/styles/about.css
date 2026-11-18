@@ -125,7 +125,7 @@
 .about-identity__name {
   margin: var(--space-3) 0 0;
   color: var(--text-strong);
-  font-size: calc(24px * var(--control-ui-text-scale));
+  font-size: 24px;
   font-weight: 700;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -241,6 +241,6 @@
   }
 
   .about-identity__name {
-    font-size: calc(22px * var(--control-ui-text-scale));
+    font-size: 22px;
   }
 }

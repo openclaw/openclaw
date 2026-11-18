@@ -34,13 +34,16 @@ export function dependencyFixturePaths(): string[] {
   ];
 }
 
-export async function seedDependencyFixture(root: string): Promise<void> {
+export async function seedDependencyFixture(
+  root: string,
+  fileBytes = dependencyFileBytes,
+): Promise<void> {
   const files = dependencyFixturePaths();
   const directories = new Set(files.map((file) => path.dirname(path.join(root, file))));
   for (const directory of directories) {
     await fs.mkdir(directory, { recursive: true });
   }
-  const bytes = Buffer.alloc(dependencyFileBytes, 120);
+  const bytes = Buffer.alloc(fileBytes, 120);
   for (const [index, file] of files.entries()) {
     bytes.writeUInt32LE(index, 0);
     const target = path.join(root, file);

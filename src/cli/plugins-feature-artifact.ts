@@ -157,7 +157,15 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
       throwExpectedCliError("Plugin artifacts must be at most 32 MiB.");
     }
     // Exclusive creation preserves existing artifacts and their approval digests.
-    await fs.writeFile(outputPath, bytes, { flag: "wx", mode: 0o600 });
+    const output = await fs.open(outputPath, "wx", 0o600);
+    try {
+      await fs.writeFile(output, bytes);
+      await output.close();
+    } catch (error) {
+      await output.close().catch(() => undefined);
+      await fs.unlink(outputPath).catch(() => undefined);
+      throw error;
+    }
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     return {
       path: outputPath,

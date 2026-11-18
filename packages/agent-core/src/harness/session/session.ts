@@ -163,37 +163,52 @@ export function* iterateSessionContextMessages<T extends SessionTreeEntry>(
   pathEntries: readonly T[],
   readEntry: (entry: T) => SessionTreeEntry = (entry) => entry,
 ): Generator<AgentMessage> {
-  for (const { entry, placement, context } of iterateSessionContextEntries(pathEntries)) {
-    if (entry.type === "reset") {
-      continue;
+  for (const selected of iterateSessionContextEntries(pathEntries)) {
+    const message = projectSessionContextMessage(selected, readEntry);
+    if (message) {
+      yield message;
     }
-    const hydrated = readEntry(entry);
-    if (hydrated.type === "branch_summary" && !hydrated.summary) {
-      continue;
-    }
-    // Explicit reset retention can include otherwise excluded user/assistant messages.
-    let message =
-      placement && hydrated.type === "message"
-        ? projectPlacedBackgroundResultMessage(hydrated.message)
-        : context === "reset-retained" && hydrated.type === "message"
-          ? hydrated.message
-          : projectSessionEntryMessage(hydrated);
-    if (!message) {
-      continue;
-    }
-    if (context !== "current" && message.role === "assistant") {
-      message = stripCompactionReplayCheckpoint(message);
-    }
-    if (context === "reset-retained" && (message.role === "user" || message.role === "assistant")) {
-      message = { ...message };
-      Object.defineProperty(message, SESSION_HISTORY_PRELUDE, {
-        configurable: true,
-        enumerable: false,
-        value: true,
-      });
-    }
-    yield message;
   }
+}
+
+/** Project one selected entry without changing its canonical position or retained context. */
+export function projectSessionContextMessage<T extends SessionTreeEntry>(
+  {
+    entry,
+    placement,
+    context,
+  }: { entry: T; placement?: T; context: "current" | "retained" | "reset-retained" },
+  readEntry: (entry: T) => SessionTreeEntry = (selected) => selected,
+): AgentMessage | undefined {
+  if (entry.type === "reset") {
+    return undefined;
+  }
+  const hydrated = readEntry(entry);
+  if (hydrated.type === "branch_summary" && !hydrated.summary) {
+    return undefined;
+  }
+  // Explicit reset retention can include otherwise excluded user/assistant messages.
+  let message =
+    placement && hydrated.type === "message"
+      ? projectPlacedBackgroundResultMessage(hydrated.message)
+      : context === "reset-retained" && hydrated.type === "message"
+        ? hydrated.message
+        : projectSessionEntryMessage(hydrated);
+  if (!message) {
+    return undefined;
+  }
+  if (context !== "current" && message.role === "assistant") {
+    message = stripCompactionReplayCheckpoint(message);
+  }
+  if (context === "reset-retained" && (message.role === "user" || message.role === "assistant")) {
+    message = { ...message };
+    Object.defineProperty(message, SESSION_HISTORY_PRELUDE, {
+      configurable: true,
+      enumerable: false,
+      value: true,
+    });
+  }
+  return message;
 }
 
 /** Build model context from an ordered session branch and its latest state markers. */

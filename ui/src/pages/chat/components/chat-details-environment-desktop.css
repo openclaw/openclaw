@@ -94,7 +94,7 @@
   flex: none;
   overflow: visible;
   font-family: var(--font-body);
-  font-size: var(--details-meta-font-size, var(--control-ui-text-sm));
+  font-size: var(--details-meta-font-size, 12px);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }

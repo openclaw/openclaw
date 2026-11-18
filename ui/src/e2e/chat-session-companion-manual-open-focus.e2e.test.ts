@@ -54,7 +54,7 @@ suite.define(() => {
             await page.keyboard.press("ControlOrMeta+k");
             foreground = page
               .locator("openclaw-command-palette")
-              .getByRole("textbox", { name: "Search or start a task…" });
+              .getByRole("textbox", { name: "Search…" });
           }
           if (target !== "side chat") {
             await foreground.click();

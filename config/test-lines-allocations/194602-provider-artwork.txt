@@ -1,3 +1,0 @@
-# Provider rendering regressions cover shared artwork, final release, and
-# credential/Gateway replacement while an earlier image response is pending.
-73

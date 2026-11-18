@@ -160,6 +160,11 @@ export function captureSessionActorStorageOwner(
   const currentAuthority =
     authority && selected
       ? {
+          workspaceEvidence: [
+            ...(caller.workspaceEvidence ?? []),
+            ...(authority.workspaceEvidence ?? []),
+          ],
+          readCustody: [...(caller.readCustody ?? []), ...(authority.readCustody ?? [])],
           authorize: (...args: Parameters<typeof caller.authorize>) => caller.authorize(...args),
           assertCurrent() {
             caller.assertCurrent();

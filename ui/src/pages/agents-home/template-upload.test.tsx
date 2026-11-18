@@ -1,5 +1,5 @@
 /* @vitest-environment jsdom */
-import { fireEvent, waitFor } from "@solidjs/testing-library";
+import { fireEvent, waitFor, within } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -47,7 +47,7 @@ vi.mock("../../lib/blob-data-url.ts", () => ({
 }));
 vi.mock("./templates-catalog-client.ts", () => ({
   readTemplateAddReviewPlan: gateway.plan,
-  applyTemplateAdd: gateway.apply,
+  applyTemplateUpload: gateway.apply,
 }));
 
 const plan: TemplateAddReviewPlan = {
@@ -55,6 +55,7 @@ const plan: TemplateAddReviewPlan = {
   operation: "add",
   planIntegrity: "review-integrity",
   target: { agentId: "example", name: "Example briefing" },
+  reviewFiles: [],
   actions: [],
   capabilities: [],
   pluginReviews: [],
@@ -84,41 +85,41 @@ describe("TemplateUpload", () => {
         <TemplateUpload />
       </ShellLayoutProvider>
     ));
-    expect(view.getByRole("button", { name: "Import", exact: true }).textContent).toContain(
-      "Import",
-    );
+    expect(
+      view.getAllByRole("button", { name: "Import", exact: true }).at(-1)!.textContent,
+    ).toContain("Import");
     const release = owner.registerHeaderActions(slot);
     flush();
     expect(view.container.querySelector('button[aria-label="Import"]')).toBeNull();
     const trigger = slot.querySelector<HTMLButtonElement>('button[aria-label="Import"]')!;
     expect(trigger).not.toBeNull();
     expect(trigger.textContent).toBe("");
-    expect(
-      Array.from(trigger.querySelectorAll("svg path"), (path) => path.getAttribute("d")),
-    ).toEqual([
-      "M12 3v12",
-      "m8 11 4 4 4-4",
-      "M8 5H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-4",
-    ]);
+    expect(trigger.querySelector("svg")).not.toBeNull();
+    expect(trigger.innerHTML).toContain("M12 5v14");
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
     const click = vi.spyOn(input, "click");
     trigger.click();
     expect(click).toHaveBeenCalledOnce();
     fireEvent.change(input, { target: { files: [new File(["archive"], "example.tgz")] } });
     await waitFor(() => expect(view.getByRole("status").textContent).toBe("Reviewing template…"));
-    expect(view.container.querySelector(".template-import-skeleton-rows")).not.toBeNull();
+    expect(view.container.querySelector(".template-import-skeleton")).not.toBeNull();
     expect((view.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
       false,
     );
-    expect(view.container.querySelector(".oc-dialog__footer")?.textContent).toContain(
+    expect(view.container.querySelector(".template-creator__footer")?.textContent).toContain(
       "Reviewing template…",
     );
     planning.resolve(plan);
     await waitFor(() =>
-      expect(view.getByRole("button", { name: "Import template", exact: true })).toBeTruthy(),
+      expect(
+        within(view.container.querySelector("openclaw-modal-dialog")!).getByRole("button", {
+          name: "Import",
+          exact: true,
+        }),
+      ).toBeTruthy(),
     );
     const confirm = view.getByRole("button", {
-      name: "Import template",
+      name: "Import",
       exact: true,
     }) as HTMLButtonElement;
     confirm.click();
@@ -128,16 +129,10 @@ describe("TemplateUpload", () => {
     expect(confirm.querySelector('.btn__spinner[aria-hidden="true"]')).not.toBeNull();
     expect(confirm.querySelector('[role="status"]')?.textContent).toBe("Importing…");
     expect(view.container.querySelector('.oc-dialog__body > [role="status"]')).toBeNull();
-    expect((view.getByRole("button", { name: "Change file" }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(view.queryByRole("button", { name: "Change file" })).toBeNull();
     expect((view.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(true);
     expect(trigger.disabled).toBe(true);
-    expect(gateway.apply).toHaveBeenCalledWith(
-      {},
-      { kind: "upload", archiveBase64: "YQ==" },
-      { reviewPlan: plan },
-    );
+    expect(gateway.apply).toHaveBeenCalledWith({}, { kind: "upload", archiveBase64: "YQ==" }, plan);
     applying.resolve({ status: "complete", agentId: "example" });
     await waitFor(() =>
       expect(view.getByRole("status").textContent).toBe("Installed agent: example"),
@@ -204,12 +199,24 @@ describe("TemplateUpload", () => {
     const input = view.container.querySelector<HTMLInputElement>('input[type="file"]')!;
     fireEvent.change(input, { target: { files: [new File(["archive"], "example.tgz")] } });
     await waitFor(() =>
-      expect(view.getByRole("button", { name: "Import template", exact: true })).toBeTruthy(),
+      expect(
+        within(view.container.querySelector("openclaw-modal-dialog")!).getByRole("button", {
+          name: "Import",
+          exact: true,
+        }),
+      ).toBeTruthy(),
     );
-    view.getByRole("button", { name: "Import template", exact: true }).click();
+    within(view.container.querySelector("openclaw-modal-dialog")!)
+      .getByRole("button", { name: "Import", exact: true })
+      .click();
     await waitFor(() => expect(view.getByRole("alert").textContent).toContain("Connection lost"));
     expect(view.queryByRole("button", { name: "Change file", exact: true })).toBeNull();
-    expect(view.queryByRole("button", { name: "Import template", exact: true })).toBeNull();
+    expect(
+      within(view.container.querySelector("openclaw-modal-dialog")!).queryByRole("button", {
+        name: "Import",
+        exact: true,
+      }),
+    ).toBeNull();
     expect(gateway.apply).toHaveBeenCalledOnce();
   });
 });

@@ -1,7 +1,7 @@
 import "../../styles/template-upload.css";
 import { createSignal, createUniqueId, For, Show } from "solid-js";
 import { MAX_TEMPLATE_UPLOAD_ARCHIVE_BYTES } from "../../../../packages/gateway-protocol/src/template-source-limits.js";
-import { DialogHeader } from "../../components/solid/dialog-header.tsx";
+import "../../components/modal-dialog.tsx";
 import { FloatingHeaderActions } from "../../components/solid/floating-header-actions.tsx";
 import { IconButton } from "../../components/solid/icon-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -12,22 +12,21 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
+import { readTemplatePackagePreview } from "../templates/template-package-preview.ts";
 import { openTemplateAgentChat } from "./template-agent-chat.ts";
+import { TemplateArtwork } from "./template-artwork.tsx";
 import { templateImportFacts } from "./template-import-facts.ts";
 import { TemplateImportReview } from "./template-import-review.tsx";
+import { TemplatePackageConsent } from "./template-package-consent.tsx";
 import {
-  applyTemplateAdd,
+  applyTemplateUpload,
   readTemplateAddReviewPlan,
   type TemplateAddReviewPlan,
   type TemplateUploadSource,
 } from "./templates-catalog-client.ts";
-import { TemplatePackageConsent } from "./templates-detail-view.tsx";
 
 export function TemplateUpload() {
   const context = useApplication();
-  const filenameId = createUniqueId();
-  const trustId = createUniqueId();
   const consentId = createUniqueId();
   const acknowledgementId = createUniqueId();
   let fileInput: HTMLInputElement | undefined;
@@ -55,21 +54,6 @@ export function TemplateUpload() {
     setCanChooseAgain(false);
     setOpening(false);
   }
-  let scrollBody!: HTMLDivElement;
-  let scrollContent!: HTMLDivElement;
-  // The shared measurement owner retires observers when the dialog closes.
-  const updateScrollFades = createLayoutMeasurement(
-    () => filename(),
-    () => {
-      const top = scrollBody.scrollTop > 1;
-      const bottom = scrollBody.scrollTop + scrollBody.clientHeight < scrollBody.scrollHeight - 1;
-      return () => {
-        scrollBody.toggleAttribute("data-scroll-fade-top", top);
-        scrollBody.toggleAttribute("data-scroll-fade-bottom", bottom);
-      };
-    },
-    { targets: () => [scrollBody, scrollContent] },
-  );
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: reset,
@@ -155,7 +139,7 @@ export function TemplateUpload() {
     setBusy(true);
     setMessage("");
     try {
-      const result = await applyTemplateAdd(scope.client, upload, { reviewPlan: plan });
+      const result = await applyTemplateUpload(scope.client, upload, plan);
       if (gateway.isCurrent(scope) && current === generation) {
         source = undefined;
         setReview(null);
@@ -178,22 +162,85 @@ export function TemplateUpload() {
       }
     }
   }
+  async function readPackagePreview(
+    item: import("@openclaw/gateway-protocol").TemplateDraftReviewItem,
+  ) {
+    const scope = gateway.capture();
+    const plan = review();
+    const current = generation;
+    if (!scope || !plan) {
+      return null;
+    }
+    const preview = await readTemplatePackagePreview(scope.client, plan.reviewFiles, item);
+    return gateway.isCurrent(scope) && current === generation ? preview : null;
+  }
+  function ImportActions() {
+    return (
+      <>
+        <Show when={reviewing()}>
+          <p role="status" class="text-shimmer">
+            {t("templatesCatalog.reviewingArchive")}
+          </p>
+        </Show>
+        <openclaw-modal-actions>
+          <button type="button" class="btn" disabled={applying()} onClick={reset}>
+            {t(review() || reviewing() ? "common.cancel" : "common.close")}
+          </button>
+          <Show when={canChooseAgain()}>
+            <button type="button" class="btn primary" onClick={() => fileInput?.click()}>
+              {t("templatesCatalog.chooseAnotherArchive")}
+            </button>
+          </Show>
+          <Show when={installed()}>
+            <button
+              type="button"
+              class="btn primary"
+              disabled={opening()}
+              onClick={() => void openChat()}
+            >
+              {t("templatesCatalog.openChat")}
+            </button>
+          </Show>
+          <Show when={review()}>
+            <button
+              type="button"
+              class="btn primary"
+              aria-describedby={
+                review()?.riskAcknowledgementRequired
+                  ? consentId + " " + acknowledgementId
+                  : consentId
+              }
+              disabled={busy() || Boolean(review()?.blockers.length)}
+              onClick={() => void install()}
+            >
+              <Show when={busy()}>
+                <span class="btn__spinner" aria-hidden="true" />
+              </Show>
+              <span role="status">
+                {t(busy() ? "templatesCatalog.importingArchive" : "templatesCatalog.importButton")}
+              </span>
+            </button>
+          </Show>
+        </openclaw-modal-actions>
+      </>
+    );
+  }
   return (
     <Show when={canUpload()}>
       <FloatingHeaderActions
         fallback={
           <button
             type="button"
-            class="btn"
+            class="btn btn--sm btn--ghost"
             disabled={applying()}
             onClick={() => fileInput?.click()}
           >
-            <Icon name="import" /> {t("templatesCatalog.importButton")}
+            <Icon name="plus" /> {t("templatesCatalog.importButton")}
           </button>
         }
       >
         <IconButton
-          icon="import"
+          icon="plus"
           label={t("templatesCatalog.importButton")}
           disabled={applying()}
           onClick={() => fileInput?.click()}
@@ -219,7 +266,7 @@ export function TemplateUpload() {
       <Show when={filename()}>
         <openclaw-modal-dialog
           label={t("templatesCatalog.importTitle")}
-          style={{ "--openclaw-modal-width": "540px" }}
+          style={{ "--openclaw-modal-width": "620px" }}
           onModal-cancel={(event: Event) => {
             event.preventDefault();
             if (!applying()) {
@@ -227,87 +274,48 @@ export function TemplateUpload() {
             }
           }}
         >
-          <div class="oc-dialog template-import-dialog">
-            <DialogHeader
-              title={t("templatesCatalog.importTitle")}
-              actions={
-                <Show when={!installed() && (reviewing() || review() || canChooseAgain())}>
-                  <openclaw-tooltip
-                    prop:content={t("templatesCatalog.chooseAnotherArchive") + ": " + filename()}
-                  >
-                    <button
-                      type="button"
-                      class="btn template-import-file"
-                      aria-label={t("templatesCatalog.chooseAnotherArchive")}
-                      aria-describedby={filenameId}
-                      disabled={applying()}
-                      onClick={() => fileInput?.click()}
-                    >
-                      <Icon name="fileText" />
-                      <span id={filenameId} title={filename()}>
-                        {filename()}
-                      </span>
-                    </button>
-                  </openclaw-tooltip>
-                </Show>
-              }
-              closeDisabled={applying()}
-              onClose={reset}
-            />
-            <div
-              class="oc-dialog__body"
-              ref={(element) => (scrollBody = element)}
-              onScroll={updateScrollFades}
-            >
-              <div class="template-import-content" ref={(element) => (scrollContent = element)}>
-                <Show when={reviewing()}>
-                  <div class="template-import-review" aria-hidden="true">
-                    <div class="template-import-identity">
-                      <span class="agents-home__template-art skeleton" />
-                      <div class="template-import-identity__text template-import-skeleton">
-                        <span class="skeleton skeleton-line" style={{ width: "148px" }} />
-                        <span class="skeleton skeleton-line" style={{ width: "220px" }} />
+          <div class="template-import-dialog">
+            <Show
+              when={review()}
+              fallback={
+                <section class="template-package-preview template-creator">
+                  <header class="template-creator__header">
+                    <span class="template-package-art">
+                      <TemplateArtwork />
+                    </span>
+                    <h2>{installed()?.name ?? t("templatesCatalog.importTitle")}</h2>
+                  </header>
+                  <div class="template-creator__body">
+                    <Show when={reviewing()}>
+                      <div class="template-import-skeleton" aria-hidden="true">
+                        <For each={[1, 2, 3]}>{() => <span class="skeleton skeleton-line" />}</For>
                       </div>
-                    </div>
-                    <div class="template-import-surface template-import-skeleton-rows">
-                      <For each={[132, 64, 118]}>
-                        {(width) => (
-                          <div class="template-import-skeleton">
-                            <span class="skeleton skeleton-line" style={{ width: width + "px" }} />
-                            <span
-                              class="skeleton skeleton-line"
-                              style={{ width: width + 48 + "px" }}
-                            />
-                          </div>
-                        )}
-                      </For>
-                    </div>
-                  </div>
-                </Show>
-                <Show when={installed()}>
-                  {(done) => (
-                    <div class="template-import-identity template-import-result">
-                      <span class="agents-home__template-art" aria-hidden="true">
-                        <Icon name="check" />
-                      </span>
-                      <div class="template-import-identity__text">
-                        <h3>{done().name}</h3>
-                        <span role="status">
+                    </Show>
+                    <Show when={installed()}>
+                      {(done) => (
+                        <p role="status">
                           {t("templatesCatalog.installedAgent", { agentId: done().agentId })}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-                </Show>
-                <Show when={message()}>
-                  <InlineAlert tone="danger" role="alert">
-                    {message()}
-                  </InlineAlert>
-                </Show>
-                <Show when={review()}>
-                  {(plan) => (
+                        </p>
+                      )}
+                    </Show>
+                    <Show when={message()}>
+                      <InlineAlert tone="danger" role="alert">
+                        {message()}
+                      </InlineAlert>
+                    </Show>
+                  </div>
+                  <footer class="template-creator__footer">
+                    <ImportActions />
+                  </footer>
+                </section>
+              }
+            >
+              {(plan) => (
+                <TemplateImportReview
+                  plan={plan()}
+                  readPackagePreview={readPackagePreview}
+                  notices={
                     <>
-                      <TemplateImportReview plan={plan()} />
                       <div id={consentId} class="template-import-consent">
                         <TemplatePackageConsent plan={plan()} />
                       </div>
@@ -318,78 +326,17 @@ export function TemplateUpload() {
                           </ul>
                         </InlineAlert>
                       </Show>
+                      <Show when={plan().riskAcknowledgementRequired}>
+                        <p id={acknowledgementId}>
+                          {plan().trustWarning} {t("templatesCatalog.importRiskAcknowledgement")}
+                        </p>
+                      </Show>
                     </>
-                  )}
-                </Show>
-              </div>
-            </div>
-            <div class="oc-dialog__footer template-import-footer">
-              <Show when={reviewing()}>
-                <p class="template-import-trust">
-                  <span role="status" class="text-shimmer">
-                    {t("templatesCatalog.reviewingArchive")}
-                  </span>
-                </p>
-              </Show>
-              <Show when={review()}>
-                <p class="template-import-trust">
-                  <Icon name="alertTriangle" />
-                  <span>
-                    <span id={trustId}>{t("templatesCatalog.importTrust")}</span>
-                    <Show when={review()?.riskAcknowledgementRequired}>
-                      {" "}
-                      <span id={acknowledgementId}>
-                        {t("templatesCatalog.importRiskAcknowledgement")}
-                      </span>
-                    </Show>
-                  </span>
-                </p>
-              </Show>
-              <openclaw-modal-actions>
-                <button type="button" class="btn" disabled={applying()} onClick={reset}>
-                  {t(review() || reviewing() ? "common.cancel" : "common.close")}
-                </button>
-                <Show when={canChooseAgain()}>
-                  <button type="button" class="btn primary" onClick={() => fileInput?.click()}>
-                    {t("templatesCatalog.chooseAnotherArchive")}
-                  </button>
-                </Show>
-                <Show when={installed()}>
-                  <button
-                    type="button"
-                    class="btn primary"
-                    disabled={opening()}
-                    onClick={() => void openChat()}
-                  >
-                    {t("templatesCatalog.openChat")}
-                  </button>
-                </Show>
-                <Show when={review()}>
-                  <button
-                    type="button"
-                    class="btn primary"
-                    aria-describedby={
-                      review()?.riskAcknowledgementRequired
-                        ? [trustId, acknowledgementId, consentId].join(" ")
-                        : trustId
-                    }
-                    disabled={busy() || Boolean(review()?.blockers.length)}
-                    onClick={() => void install()}
-                  >
-                    <Show when={busy()}>
-                      <span class="btn__spinner" aria-hidden="true" />
-                    </Show>
-                    <span role="status">
-                      {t(
-                        busy()
-                          ? "templatesCatalog.importingArchive"
-                          : "templatesCatalog.importTemplate",
-                      )}
-                    </span>
-                  </button>
-                </Show>
-              </openclaw-modal-actions>
-            </div>
+                  }
+                  footer={<ImportActions />}
+                />
+              )}
+            </Show>
           </div>
         </openclaw-modal-dialog>
       </Show>

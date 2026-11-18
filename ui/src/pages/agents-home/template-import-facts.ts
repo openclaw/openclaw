@@ -16,14 +16,7 @@ function declaration(json: string | undefined): Record<string, unknown> {
 
 export function templateImportFacts(plan: TemplateAddReviewPlan) {
   const manifest = declaration(plan.manifestDisclosure?.manifestJson);
-  const profile = declaration(plan.manifestDisclosure?.openClawProfileJson);
   const agent = isRecord(manifest.agent) ? manifest.agent : {};
-  const profileAgent = isRecord(profile.agent) ? profile.agent : {};
-  const tools = isRecord(profileAgent.tools) ? profileAgent.tools : {};
-  const fs = isRecord(tools.fs) ? tools.fs : {};
-  const requestedTools = [tools.allow, tools.alsoAllow].flatMap((value) =>
-    Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [],
-  );
   const files = plan.actions.filter((action) => action.effect?.type === "workspace-file");
   const skills = plan.actions.flatMap((action) =>
     action.effect?.type === "skill-package" && action.effect.desired
@@ -58,30 +51,5 @@ export function templateImportFacts(plan: TemplateAddReviewPlan) {
     skills,
     schedules,
     mcpServers,
-    requestedTools,
-    toolProfile: typeof tools.profile === "string" ? tools.profile : undefined,
-    workspaceOnly: fs.workspaceOnly === true,
-    requestsExec: requestedTools.includes("exec") || requestedTools.includes("group:runtime"),
   };
-}
-
-export function structuredTemplateFields(value: unknown, prefix = ""): Array<[string, string]> {
-  if (isRecord(value)) {
-    return Object.entries(value).flatMap(([key, child]) =>
-      structuredTemplateFields(child, prefix ? prefix + "." + key : key),
-    );
-  }
-  if (Array.isArray(value)) {
-    return [
-      [
-        prefix,
-        value.length
-          ? value
-              .map((item) => (typeof item === "object" ? JSON.stringify(item) : String(item)))
-              .join(" · ")
-          : "—",
-      ],
-    ];
-  }
-  return [[prefix, typeof value === "string" ? value : (JSON.stringify(value) ?? "—")]];
 }

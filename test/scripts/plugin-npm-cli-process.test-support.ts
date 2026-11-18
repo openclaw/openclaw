@@ -1,8 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { delimiter, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  createPublicationAdmission,
+  createPublicationObservations,
+  createPublicationSourceFact,
+} from "../../scripts/full-release-publication-contract.mjs";
+import { releaseExecutionPlanSha256 } from "../../scripts/full-release-validation-policy.mjs";
 import { npmEvidenceArtifactName } from "../../scripts/plugin-npm-evidence-reuse.mjs";
 import {
   PREPARED_NPM_MANIFEST,
@@ -12,7 +19,6 @@ import { createPluginPublicationArtifact } from "../../scripts/plugin-publicatio
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
-import { addRecoveryGraph } from "./plugin-npm-cli-recovery.test-support.mjs";
 import { packNpmFixture } from "./plugin-npm-publication-readback.test-support.js";
 
 const digest = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -31,12 +37,12 @@ type RequestRecord = {
   kind: string;
   route?: string;
   transport?: string;
+  callsite?: string;
 };
 
 // Materialize external GitHub responses before starting any consumer. The
 // subprocess never imports fixture clients or receives an authenticated owner.
-// The recovery graph retains the original Q receipts under a distinct P seal.
-export async function createNpmCliProcessFixture(root: string) {
+export async function createNpmCliProcessFixture(root: string, plugins = "", packageCount = 2) {
   const f = candidatePublicationFixture();
   const responses: Record<string, ResponseBytes> = {};
   const json = (route: string, value: unknown) => {
@@ -49,6 +55,7 @@ export async function createNpmCliProcessFixture(root: string) {
   const bytes = (route: string, value: Uint8Array) => {
     responses[route] = { encoding: "base64", data: Buffer.from(value).toString("base64") };
   };
+  json("/rate_limit", { resources: { core: { remaining: 5000, reset: 4_070_908_800 } } });
   const source = (path: string, sha: string, text: string) =>
     json("contents/" + path + "?ref=" + sha, {
       type: "file",
@@ -92,7 +99,8 @@ export async function createNpmCliProcessFixture(root: string) {
   };
   producer.artifactName = preparedNpmArtifactName(f.q, producer);
   const policy = "name: immutable npm policy\n";
-  const version = "2026.9.2-beta.1";
+  const projection = expectDefined(f.source.projection, "publication source projection");
+  const version = expectDefined(projection.version, "publication source version");
   const packages: Array<{
     extensionId: string;
     packageDir: string;
@@ -105,7 +113,11 @@ export async function createNpmCliProcessFixture(root: string) {
     artifact: typeof producer;
   }> = [];
   const artifacts = new Map<number, ReturnType<typeof metadata>>();
-  for (const [index, extensionId] of ["alpha", "beta"].entries()) {
+  const extensionIds = Array.from(
+    { length: packageCount },
+    (_, index) => ["alpha", "beta"][index] ?? "plugin-" + index,
+  );
+  for (const [index, extensionId] of extensionIds.entries()) {
     const { packageDir, packageName } = writePublishablePluginFixture(root, {
       extensionId,
       version,
@@ -163,6 +175,72 @@ export async function createNpmCliProcessFixture(root: string) {
       },
     });
   }
+  packages.sort((a, b) =>
+    a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0,
+  );
+  const request = {
+    repository: f.source.repository,
+    candidateSha: f.source.candidateSha,
+    targetContextRef: f.source.targetContextRef,
+    tooling: f.source.tooling,
+    workflow: f.source.workflow,
+    runId: f.source.runId,
+    runAttempt: f.source.runAttempt,
+    coverage: f.source.coverage,
+    validationPurpose: f.source.validationPurpose,
+    publicationSelection: f.source.publicationSelection,
+    ...(f.source.qualificationAdmission === undefined
+      ? {}
+      : { qualificationAdmission: f.source.qualificationAdmission }),
+    ...(f.source.qualificationInputs === undefined
+      ? {}
+      : { qualificationInputs: f.source.qualificationInputs }),
+  };
+  Object.assign(
+    f.source,
+    createPublicationSourceFact(
+      request,
+      { packages: [], platforms: [] },
+      {
+        ...projection,
+        version,
+        platforms: expectDefined(projection.platforms, "publication source platforms"),
+        packages: [
+          ...projection.packages,
+          ...packages.map((entry) => ({
+            name: entry.packageName,
+            version: entry.version,
+            targets: ["npm"],
+          })),
+        ].toSorted((a, b) => a.name.localeCompare(b.name)),
+      },
+    ),
+  );
+  const admission = f.manifest.publicationAdmission!;
+  const npmObservation = expectDefined(admission.observations.npm[0], "original npm observation");
+  const observations = createPublicationObservations(f.source, {
+    ...admission.observations,
+    sourceDigest: f.source.digest,
+    npm: [
+      ...admission.observations.npm,
+      ...packages.map((entry) => ({
+        ...npmObservation,
+        name: entry.packageName,
+        version: entry.version,
+      })),
+    ].toSorted((a, b) => a.name.localeCompare(b.name)),
+  });
+  Object.assign(
+    admission,
+    createPublicationAdmission(
+      f.source,
+      observations,
+      admission.binding.artifact,
+      admission.binding.admittedAt,
+    ),
+  );
+  f.plan.sha256 = releaseExecutionPlanSha256(f.plan);
+  f.manifest.executionPlanSha256 = f.plan.sha256;
   const prepared = makeStoredZip({
     [PREPARED_NPM_MANIFEST]: JSON.stringify({
       schema: "openclaw.plugin-npm-prepared/v1",
@@ -222,7 +300,7 @@ export async function createNpmCliProcessFixture(root: string) {
     permission: "write",
     user: f.admission.actor,
   });
-  json("run view " + f.runId, f.client.getRunView(f.runId));
+  json("run view " + f.runId, await f.client.getRunView(f.runId));
   for (const id of [f.runId, ...f.plan.children.map((child) => child.runId)]) {
     const run = await f.client.getRun(id);
     json("actions/runs/" + id, run);
@@ -250,6 +328,9 @@ export async function createNpmCliProcessFixture(root: string) {
       }
     }
   }
+  for (const [path, text] of f.qualificationSources) {
+    source(path, f.q, text);
+  }
   json("actions/runs/" + f.runId + "/artifacts?per_page=100&page=1", {
     total_count: 2,
     artifacts: [artifacts.get(91), artifacts.get(92)],
@@ -267,6 +348,15 @@ export async function createNpmCliProcessFixture(root: string) {
     head_repository: { full_name: f.repository },
   };
   json("actions/runs/5001/attempts/1", packageRun);
+  const packageArtifacts = [...artifacts.values()].filter(
+    (entry) => entry.workflow_run.id === 5001,
+  );
+  for (let offset = 0; offset < packageArtifacts.length; offset += 100) {
+    json("actions/runs/5001/artifacts?per_page=100&page=" + (offset / 100 + 1), {
+      total_count: packageArtifacts.length,
+      artifacts: packageArtifacts.slice(offset, offset + 100),
+    });
+  }
   const carrierRun = {
     ...packageRun,
     id: 800,
@@ -295,17 +385,7 @@ export async function createNpmCliProcessFixture(root: string) {
   for (const [id, artifact] of artifacts) {
     json("actions/artifacts/" + id, artifact);
   }
-  const recovery = addRecoveryGraph({
-    f,
-    producer,
-    packages,
-    artifacts,
-    json,
-    bytes,
-    source,
-    metadata,
-  });
-  const responseFile = join(root, "responses.json");
+  const responseDirectory = join(root, "responses");
   const log = join(root, "requests.jsonl");
   const gh = join(root, "gh");
   writeFileSync(
@@ -317,7 +397,14 @@ export async function createNpmCliProcessFixture(root: string) {
       ";\nrunGh(process.argv.slice(2));\n",
     { mode: 0o755 },
   );
-  const save = () => writeFileSync(responseFile, JSON.stringify(responses));
+  const save = () => {
+    // Every CLI call is synchronous, so no reader remains while the fixture changes.
+    rmSync(responseDirectory, { recursive: true, force: true });
+    mkdirSync(responseDirectory);
+    for (const [route, response] of Object.entries(responses)) {
+      writeFileSync(join(responseDirectory, digest(route) + ".json"), JSON.stringify(response));
+    }
+  };
   save();
   const env = {
     ...process.env,
@@ -334,14 +421,14 @@ export async function createNpmCliProcessFixture(root: string) {
     PREPARED_NPM_PARENT_RUN_ID: "700",
     PREPARED_NPM_PARENT_RUN_ATTEMPT: "1",
     PREPARED_NPM_ARTIFACT: JSON.stringify(producer),
-    PREPARED_NPM_FRV_RUN_ID: recovery.runId,
+    PREPARED_NPM_FRV_RUN_ID: f.runId,
     PREPARED_NPM_FRV_RUN_ATTEMPT: "1",
-    PREPARED_NPM_SELECTION_MODE: "all-publishable",
-    PREPARED_NPM_PLUGINS: "",
+    PREPARED_NPM_SELECTION_MODE: plugins ? "selected" : "all-publishable",
+    PREPARED_NPM_PLUGINS: plugins,
     PREPARED_NPM_DIST_TAG: "default",
     PREPARED_NPM_EVIDENCE_ID: "",
     PREPARED_NPM_EVIDENCE_DIGEST: "",
-    NPM_CLI_RESPONSES: responseFile,
+    NPM_CLI_RESPONSES_DIR: responseDirectory,
     NPM_CLI_REQUEST_LOG: log,
     NPM_CLI_ENTRYPOINT: cli,
   };
@@ -360,6 +447,8 @@ export async function createNpmCliProcessFixture(root: string) {
       process.execPath,
       ["--import", transport, cli, ...args, "--source-sha", f.q, "--github-output", output],
       {
+        // Publisher jobs contain only trusted tooling, not the source extensions.
+        cwd: directory,
         encoding: "utf8",
         timeout: 60_000,
         maxBuffer: 1024 * 1024,
@@ -379,15 +468,16 @@ export async function createNpmCliProcessFixture(root: string) {
   let carrierDigest = "";
   return {
     f,
-    recovery,
     packages,
+    previewManifest: join(root, "preview-manifest.json"),
     records,
     responses,
     json,
     bytes,
     save,
     run,
-    authorize: (invocation: string, replay = true) => run(invocation, ["authorize"], replay),
+    authorize: (invocation: string, replay = true, index = 0) =>
+      run(invocation, ["authorize", "--package", JSON.stringify(packages[index])], replay),
     // Match the workflow: load takes its roster selection from the CLI option,
     // while the environment selection binds the adoption/evidence request.
     preview: (invocation = "preview") =>

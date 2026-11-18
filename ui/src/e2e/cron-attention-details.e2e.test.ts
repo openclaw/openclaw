@@ -87,15 +87,27 @@ suite.define(() => {
           // Same job-only deep link used by the session Details attention row.
           await page.goto(suite.server.baseUrl + "cron?job=" + job.id);
           const history = page.locator("[data-test-id=cron-detail-tab-history]");
-          await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
+          const settings = page.locator("[data-test-id=cron-detail-tab-settings]");
+          // A failed automation opens on its settings; the banner keeps the failure in view.
+          await expect.poll(() => settings.getAttribute("aria-selected")).toBe("true");
           const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
           const review = attention.locator("[data-test-id=cron-review-failed-run]");
-          const cause = attention.locator(".cron-failure-details__cause");
+          const cause = attention.locator(".cron-error-details__text");
+          // Outside history the raw cause stays collapsed behind "Error details".
           const clipped = () =>
-            cause.evaluate((element) => element.scrollHeight > element.clientHeight);
+            attention
+              .locator("details.cron-error-details")
+              .evaluate((element) => !(element as HTMLDetailsElement).open);
           const fitsViewport = () =>
             page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
+          const prompt = page.locator(".cron-tab-panel textarea").first();
+          const draft = "Keep this unsaved release instruction while reviewing the failure.";
+          await prompt.fill(draft);
+          expect(await clipped()).toBe(true);
+          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
+          await review.click();
+          await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
           expect(await cause.textContent()).toContain(failure);
           expect(await cause.textContent()).toContain(diagnostic);
           expect(await clipped()).toBe(false);
@@ -111,16 +123,7 @@ suite.define(() => {
           } else {
             expect(await page.locator(".cron-run-entry").textContent()).toContain(failure);
           }
-          await page.locator("[data-test-id=cron-detail-tab-settings]").click();
-          const prompt = page.locator(".cron-tab-panel textarea").first();
-          const draft = "Keep this unsaved release instruction while reviewing the failure.";
-          await prompt.fill(draft);
-          expect(await clipped()).toBe(true);
-          expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
-          await review.click();
-          await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
-          expect(await clipped()).toBe(false);
-          await page.locator("[data-test-id=cron-detail-tab-settings]").click();
+          await settings.click();
           expect(await prompt.inputValue()).toBe(draft);
           expect(await fitsViewport()).toBe(true);
           expect(await gateway.getRequests("cron.run")).toHaveLength(0);

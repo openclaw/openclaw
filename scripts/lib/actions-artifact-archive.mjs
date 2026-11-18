@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { crc32, inflateRawSync } from "node:zlib";
+import { accountGithubRequest } from "./plain-gh.mjs";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -737,7 +738,7 @@ function requireExpectedBinding(params) {
   };
 }
 
-export function validateArtifactMetadata(artifact, expected) {
+function validateArtifactMetadata(artifact, expected) {
   if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
     throw new Error("Actions artifact metadata must be an object.");
   }
@@ -843,11 +844,21 @@ export function validateActionsArtifactProducerJob(params) {
     producerJob.status === "completed" &&
     typeof producerJob.conclusion === "string" &&
     producerJob.conclusion.length > 0;
+  // A same-attempt consumer can authenticate an already-uploaded artifact while
+  // its own parent job is still running. This never substitutes job progress for
+  // the exact successful upload step, or admits a retained/other-attempt producer.
+  const activeUpload =
+    params.allowActiveJob === true &&
+    expected.runStatePolicy === "same-run-producer-success" &&
+    expected.runAttempt === expected.consumerRunAttempt &&
+    Boolean(expected.producerStepName) &&
+    producerJob.status === "in_progress" &&
+    producerJob.conclusion === null;
   if (
     producerJob.run_id !== expected.runId ||
     producerJob.run_attempt !== expected.runAttempt ||
     producerJob.head_sha !== expected.workflowSha ||
-    !producerCompleted ||
+    (!producerCompleted && !activeUpload) ||
     (!expected.producerStepName && producerJob.conclusion !== "success")
   ) {
     throw new Error("Actions artifact producer job did not complete successfully.");
@@ -904,7 +915,11 @@ async function consumeBoundedResponseBody(response, params, consume) {
       (response.status === 403 &&
         (retryAfterMs !== undefined || response.headers.get("x-ratelimit-remaining") === "0"));
     const message = `${params.label} returned HTTP ${response.status}.`;
-    if (rateLimited || [408, 500, 502, 503, 504].includes(response.status)) {
+    if (
+      rateLimited ||
+      [408, 500, 502, 503, 504].includes(response.status) ||
+      (params.retryNotFound === true && response.status === 404)
+    ) {
       // GitHub requires a minute for rate limits without a retry/reset header.
       throw new RetryableArtifactTransferError(message, retryAfterMs ?? (rateLimited ? 60_000 : 0));
     }
@@ -1027,6 +1042,7 @@ function remainingTransferMs(deadlineMs, label) {
 }
 
 async function fetchBoundedJson(url, request, params) {
+  accountGithubRequest();
   const response = await request.fetchImpl(url, {
     headers: request.headers,
     redirect: "follow",
@@ -1035,6 +1051,7 @@ async function fetchBoundedJson(url, request, params) {
   const bytes = await readBoundedResponseBody(response, {
     label: params.label,
     maxBytes: params.maxBytes,
+    retryNotFound: params.retryNotFound,
   });
   let value;
   try {
@@ -1147,9 +1164,14 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
   const apiRoot = `https://api.github.com/repos/${expected.repository}`;
   const request = { fetchImpl, headers, timeoutMs };
   const retry = { attempts: retryAttempts, delayMs: retryDelayMs };
-  const phaseDeadlineMs = () => explicitDeadlineMs ?? Date.now() + DEFAULT_TRANSFER_TIMEOUT_MS;
+  const outerDeadlineMs =
+    params.outerDeadlineMs === undefined
+      ? Infinity
+      : assertPositiveInteger(params.outerDeadlineMs, "Outer artifact acquisition deadline");
+  const phaseDeadlineMs = () =>
+    Math.min(outerDeadlineMs, explicitDeadlineMs ?? Date.now() + DEFAULT_TRANSFER_TIMEOUT_MS);
   return {
-    json(endpoint, label) {
+    json(endpoint, label, retryNotFound = false) {
       const deadlineMs = phaseDeadlineMs();
       return runBoundedRetry(
         label,
@@ -1157,7 +1179,7 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
           fetchBoundedJson(
             `${apiRoot}/${endpoint}`,
             { ...request, timeoutMs: Math.min(timeoutMs, remainingMs) },
-            { label, maxBytes: DEFAULT_MAX_JSON_BYTES },
+            { label, maxBytes: DEFAULT_MAX_JSON_BYTES, retryNotFound },
           ),
         { ...retry, deadlineMs },
       );
@@ -1180,6 +1202,7 @@ function createArtifactTransfer(params, expected, digestOnly = false) {
         async (remainingMs) => {
           // Always resolve the immutable API endpoint again: signed redirect URLs
           // may expire between attempts, but the artifact identity cannot change.
+          accountGithubRequest();
           const response = await fetchImpl(
             `${apiRoot}/actions/artifacts/${expected.artifactId}/zip`,
             {
@@ -1250,12 +1273,22 @@ export async function downloadExactActionsArtifactArchive(params) {
     ),
   };
   const transfer = createArtifactTransfer(params, expected);
-  const artifactMetadata = await transfer.json(
-    `actions/artifacts/${expected.artifactId}`,
-    "GitHub Actions artifact metadata",
+  const replay = params.immutableReads;
+  const metadataRoute = `actions/artifacts/${expected.artifactId}`;
+  const readMetadata = async () =>
+    JSON.stringify(
+      await transfer.json(
+        metadataRoute,
+        "GitHub Actions artifact metadata",
+        // Reconcile a fresh list/detail visibility mismatch within the existing budget.
+        // Reuse the bounded retry owner without changing the selected artifact identity.
+        params.retryMetadataNotFound === true,
+      ),
+    );
+  const artifactMetadata = JSON.parse(
+    await (replay ? replay.text(metadataRoute, readMetadata) : readMetadata()),
   );
   validateArtifactMetadata(artifactMetadata, expected);
-  const replay = params.immutableReads;
   replay?.observeArchive(expected.artifactId, artifactMetadata);
   const archiveBytes = replay
     ? await replay.bytes(`actions/artifacts/${expected.artifactId}/zip`, () => transfer.archive())

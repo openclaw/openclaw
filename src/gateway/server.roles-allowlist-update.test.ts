@@ -349,7 +349,7 @@ test("update.run persists the accepted handoff before parking and restarting its
           installReceipt: null,
         });
       // The shared server starts below the CLI run loop that publishes its owner.
-      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLease").mockReturnValue({
+      const readOwner = vi.spyOn(gatewayOwner, "readGatewayOwnerLeaseAsync").mockResolvedValue({
         ...foregroundOrigin,
         host: os.hostname(),
         mode: "foreground",
@@ -393,7 +393,7 @@ test("update.run persists the accepted handoff before parking and restarting its
           });
           return true;
         });
-      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockReturnValue(true);
+      const claim = vi.spyOn(handoff, "claimManagedServiceUpdateHandoff").mockResolvedValue(true);
       const schedule = vi.spyOn(restart, "scheduleGatewayRestart");
       const restartSignal = vi.fn();
       process.on("SIGUSR2", restartSignal);

@@ -1,9 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installWorkboardPage } from "./workboard-page.test-support.ts";
 
@@ -89,19 +85,6 @@ suite.define(() => {
             await page.getByRole("button", { name: "New board", exact: true }).waitFor();
             const board = page.locator(".workboard-board--page");
             await board.waitFor();
-            const title = board.locator(".workboard-card__title h3");
-            await title.waitFor();
-            await page.evaluate(() =>
-              document.documentElement.style.setProperty("--control-ui-text-scale", "1.25"),
-            );
-            const artifacts = createControlUiE2eArtifactDir(
-              `workboard-typography-${outcome.replaceAll(" ", "-")}`,
-            );
-            const frame = await takeControlUiScreenshotFrame(page, board, [title], {
-              animations: "disabled",
-            });
-            await writeFile(path.join(artifacts, "board.png"), frame.png);
-            expect(await title.evaluate((node) => getComputedStyle(node).fontSize)).toBe("18.75px");
             expect(await board.evaluate((element) => getComputedStyle(element).display)).toBe(
               "flex",
             );

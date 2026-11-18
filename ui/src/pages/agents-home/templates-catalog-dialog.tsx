@@ -1,8 +1,5 @@
-import {
-  readClawHubRiskAcknowledgementRequiredError,
-  readTemplateReviewRequiredError,
-} from "@openclaw/gateway-protocol";
 import { action, createMemo, createOptimistic, createSignal, onSettled, Show } from "solid-js";
+import { pathForTemplateCatalogEntry } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { FilePreviewModal } from "../../components/file-preview-modal.tsx";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
@@ -13,26 +10,28 @@ import { loadPluginCatalog } from "../../lib/plugins/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { openTemplateAgentChat } from "./template-agent-chat.ts";
+import { showToast } from "../../lib/toast.ts";
 import {
-  applyTemplateAdd,
-  readTemplateAddReviewPlan,
+  addTemplateAgent,
+  receiveTemplateAddFailures,
+  type TemplateAddFailure,
+} from "./templates-add-agent.ts";
+import {
   readTemplateDetail,
   readTemplatePreview,
   type TemplateCatalogDetail,
   type TemplateCatalogEntry,
   type TemplateCatalogSource,
-  type TemplateAddReviewPlan,
 } from "./templates-catalog-client.ts";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplatesCatalogView } from "./templates-catalog-view.tsx";
+import { TemplatesExplore } from "./templates-explore.tsx";
 
 registerEnglishCatalog(registerTemplatesEnglish);
 
 type TemplatesDialogProps = {
   onClose?: () => void;
-  onAdded?: () => void;
-  initialPackageName: string;
+  initialPackageName?: string;
   initialVersion?: string;
   modal?: boolean;
 };
@@ -47,12 +46,12 @@ class TemplatesCatalogModel {
     request: Promise<void>;
   } | null = null;
   installedPluginPackages: ReadonlySet<string> = new Set();
-  addError: string | null = null;
+  /** Why the last Add of a Template left nothing behind; shown with that Template. */
+  addFailure: Pick<TemplateAddFailure, "entry" | "message"> | null = null;
   applying = false;
+  /** ClawHub's audit of the selected release, awaiting the user's decision. */
   consentWarning: string | null = null;
-  reviewPlan: TemplateAddReviewPlan | null = null;
   private riskAcknowledged = false;
-  addedAgentId: string | null = null;
   gateway!: ReturnType<typeof useGatewayPage>;
   disposed = false;
 
@@ -80,7 +79,6 @@ class TemplatesCatalogModel {
     this.installedPluginPackages = new Set();
     this.applying = false;
     this.consentWarning = null;
-    this.reviewPlan = null;
     this.riskAcknowledged = false;
   }
 
@@ -99,17 +97,17 @@ class TemplatesCatalogModel {
   private loadDetail() {
     this.cancelDetailRead();
     const scope = this.gateway.capture();
-    if (!scope) {
+    const packageName = this.props.initialPackageName ?? this.selected?.packageName;
+    const version = this.props.initialPackageName
+      ? this.props.initialVersion
+      : this.selected?.latestVersion;
+    if (!packageName || !scope) {
       return;
     }
     const revision = ++this.detailRevision;
     this.detail = null;
     this.installedPluginPackages = new Set();
-    this.addError = null;
-    const source = {
-      packageName: this.props.initialPackageName,
-      ...(this.props.initialVersion ? { version: this.props.initialVersion } : {}),
-    };
+    const source = { packageName, ...(version ? { version } : {}) };
     this.presentDetailRequest(
       new Promise((resolve, reject) => {
         // Disconnect stops a pending skeleton without clearing a settled receipt or error.
@@ -146,33 +144,72 @@ class TemplatesCatalogModel {
         return;
       }
       this.installedPluginPackages = new Set(
-        result.plugins
-          .flatMap((plugin) =>
-            plugin.installed ? [plugin.clawhubPackage, plugin.packageName] : [],
-          )
-          .filter((name): name is string => Boolean(name)),
+        result.plugins.flatMap((plugin) =>
+          plugin.installed && plugin.clawhubPackage && plugin.version
+            ? [`${plugin.clawhubPackage}@${plugin.version}`]
+            : [],
+        ),
       );
     } catch {
       // Contents remain available when the local plugin inventory cannot load.
     }
   }
 
-  private resetSelection() {
+  private resetSelection(selected: TemplateCatalogEntry | null = null) {
+    this.detailRevision += 1;
+    this.applying = false;
     this.cancelDetailRead();
     this.closePreview();
-    this.selected = null;
+    this.selected = selected;
     this.detail = null;
     this.presentDetailRequest(undefined);
     this.installedPluginPackages = new Set();
-    this.addError = null;
+    this.addFailure = null;
     this.consentWarning = null;
-    this.reviewPlan = null;
     this.riskAcknowledged = false;
-    this.addedAgentId = null;
   }
 
   refresh() {
     this.loadDetail();
+  }
+
+  async addEntry(entry: TemplateCatalogEntry) {
+    if (this.applying || !entry.latestVersion || !this.canAdd()) {
+      return;
+    }
+    this.resetSelection(entry);
+    await this.add();
+  }
+
+  /** The Gateway undid an Add and returned the user here; false when another Template is shown. */
+  showAddFailure(failure: TemplateAddFailure): boolean {
+    const viewing = this.props.initialPackageName === failure.entry.packageName;
+    if (this.disposed || (this.props.initialPackageName && !viewing)) {
+      return false;
+    }
+    if (!viewing) {
+      this.resetSelection(failure.entry);
+    }
+    if (failure.trustWarning) {
+      // Ask before acknowledging: the audit and its decision appear with the Template.
+      this.consentWarning = failure.trustWarning;
+      if (!viewing) {
+        this.loadDetail();
+      }
+    } else {
+      this.addFailure = failure;
+    }
+    return true;
+  }
+
+  openDetails(entry: TemplateCatalogEntry) {
+    this.resetSelection();
+    this.context.navigate("templates", {
+      pathname: pathForTemplateCatalogEntry(entry.packageName, this.context.basePath),
+      search: entry.latestVersion
+        ? `?${new URLSearchParams({ version: entry.latestVersion })}`
+        : "",
+    });
   }
 
   private close() {
@@ -183,139 +220,63 @@ class TemplatesCatalogModel {
     if (this.applying) {
       return;
     }
-    this.close();
+    if (this.props.initialPackageName) {
+      this.close();
+    } else {
+      this.resetSelection();
+    }
   }
 
-  private openAgentChat(agentId: string, context: ApplicationContext) {
-    this.close();
-    openTemplateAgentChat(context, agentId);
-  }
-
-  private async finishChatHandoff(agentId: string, context: ApplicationContext) {
-    if (this.applying) {
+  private async add() {
+    const entry = this.selected;
+    const scope = this.gateway.capture();
+    if (!entry || !scope || !this.canAdd() || this.applying) {
       return;
     }
     const revision = this.detailRevision;
     const isCurrent = () =>
-      !this.disposed &&
-      revision === this.detailRevision &&
-      this.context === context &&
-      this.addedAgentId === agentId;
+      !this.disposed && this.gateway.isCurrent(scope) && revision === this.detailRevision;
     this.applying = true;
-    this.addError = null;
+    this.addFailure = null;
     try {
-      const deadline = Date.now() + 15_000;
-      while (isCurrent()) {
-        try {
-          const roster = await context.agents.refreshList();
-          if (!isCurrent()) {
-            return;
-          }
-          const agent = roster?.agents.find((entry) => entry.id === agentId);
-          if (agent) {
-            this.props.onAdded?.();
-            this.openAgentChat(agentId, context);
-            return;
-          }
-        } catch {
-          if (!isCurrent()) {
-            return;
-          }
-        }
-        if (Date.now() >= deadline) {
-          break;
-        }
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 400);
-        });
-      }
-      if (isCurrent()) {
-        this.addError = t("templatesCatalog.openChatFailed");
-      }
-    } finally {
-      if (isCurrent()) {
-        this.applying = false;
-      }
-    }
-  }
-
-  private async add(reviewPlan: TemplateAddReviewPlan | null = null) {
-    const source = this.source();
-    const scope = this.gateway.capture();
-    if (!source || !this.detail || !scope || !this.canAdd() || this.applying || this.addedAgentId) {
-      return;
-    }
-    const revision = this.detailRevision;
-    const context = this.context;
-    let resultAgentId: string | null = null;
-    this.applying = true;
-    this.addError = null;
-    try {
-      let result;
-      try {
-        result = await applyTemplateAdd(scope.client, source, {
-          acknowledgeClawHubRisk: this.riskAcknowledged,
-          ...(reviewPlan ? { reviewPlan } : {}),
-        });
-      } catch (error) {
-        const risk = readClawHubRiskAcknowledgementRequiredError(error);
-        if (risk) {
-          if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
-            this.consentWarning = risk.warning;
-          }
-          return;
-        }
-        if (reviewPlan || !readTemplateReviewRequiredError(error)) {
-          throw error;
-        }
-        const plan = await readTemplateAddReviewPlan(scope.client, source);
-        if (
-          !plan.pluginReviews.some((item) => item.ownerAction === "install") &&
-          plan.skillReviews.length === 0
-        ) {
-          throw new Error(t("templatesCatalog.addFailed"), { cause: error });
-        }
-        if (
-          !this.gateway.isCurrent(scope) ||
-          revision !== this.detailRevision ||
-          this.context !== context
-        ) {
-          return;
-        }
-        this.reviewPlan = plan;
+      const source = this.source();
+      if (!source) {
         return;
       }
-      if (
-        !this.gateway.isCurrent(scope) ||
-        revision !== this.detailRevision ||
-        this.context !== context
-      ) {
-        return;
-      }
-      if (!result.agentId || result.status !== "complete") {
-        throw new Error(result.error?.message ?? t("templatesCatalog.addFailed"));
-      }
-      this.consentWarning = null;
-      this.reviewPlan = null;
-      this.riskAcknowledged = false;
-      this.addedAgentId = result.agentId;
-      resultAgentId = result.agentId;
+      const detail = this.detail;
+      // Navigation is synchronous. A cold card uses a presentation-only id until
+      // the application-owned lookup resolves the release's actual agent id.
+      // This keeps catalog/detail network latency out of click-to-chat time.
+      void addTemplateAgent(
+        this.context,
+        {
+          entry,
+          source,
+          agentId: detail?.agentId ?? entry.packageName.split("/").at(-1) ?? "template",
+          ...(detail?.agentName ? { agentName: detail.agentName } : {}),
+          ...(!detail ? { resolveAgent: () => readTemplateDetail(scope.client, source) } : {}),
+        },
+        this.riskAcknowledged,
+      ).catch((error: unknown) => {
+        showToast({ severity: "error", message: formatUiError(error), durationMs: 12_000 });
+      });
     } catch (error) {
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
-        this.addError = formatUiError(error);
+      if (isCurrent()) {
+        this.addFailure = { entry, message: formatUiError(error) };
       }
     } finally {
-      if (this.gateway.isCurrent(scope) && revision === this.detailRevision) {
+      if (isCurrent()) {
         this.applying = false;
       }
-    }
-    if (resultAgentId && this.addedAgentId === resultAgentId && this.gateway.isCurrent(scope)) {
-      await this.finishChatHandoff(resultAgentId, context);
     }
   }
 
   private canAdd() {
-    return canCallGatewayMethod(this.gateway.snapshot, "templates.add.apply", "operator.admin");
+    return (
+      !this.disposed &&
+      !this.context.agents.state.pendingAgent &&
+      canCallGatewayMethod(this.gateway.snapshot, "templates.add.apply", "operator.admin")
+    );
   }
 
   closePreview() {
@@ -359,12 +320,10 @@ class TemplatesCatalogModel {
       preview: this.preview,
       onClosePreview: () => this.closePreview(),
       installedPluginPackages: this.installedPluginPackages,
-      addError: this.addError,
+      addFailure: this.addFailure,
       applying: this.applying,
-      consentWarning: this.consentWarning,
-      reviewPlan: this.reviewPlan,
-      addedAgentId: this.addedAgentId,
       canAdd: this.canAdd(),
+      consentWarning: this.consentWarning,
       onOpenPreview: (kind, name) => void this.openPreview(kind, name),
       onBack: () => this.back(),
       onRetryDetail: () => this.loadDetail(),
@@ -375,23 +334,11 @@ class TemplatesCatalogModel {
       onConfirmConsent: () => {
         this.riskAcknowledged = true;
         this.consentWarning = null;
-        return this.add(this.reviewPlan);
+        return this.add();
       },
       onCancelConsent: () => {
         this.consentWarning = null;
-        this.reviewPlan = null;
         this.riskAcknowledged = false;
-      },
-      onConfirmReview: () => this.add(this.reviewPlan),
-      onCancelReview: () => {
-        this.reviewPlan = null;
-        this.riskAcknowledged = false;
-      },
-      onRetryOpenChat: () => {
-        if (this.addedAgentId) {
-          return this.finishChatHandoff(this.addedAgentId, this.context);
-        }
-        return undefined;
       },
     };
   }
@@ -429,8 +376,14 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
     },
     ensureInitialData: () => model.refresh(),
   });
-  onSettled(() => () => {
-    model.dispose();
+  onSettled(() => {
+    const stopFailures = receiveTemplateAddFailures(context, (failure) =>
+      model.showAddFailure(failure),
+    );
+    return () => {
+      stopFailures();
+      model.dispose();
+    };
   });
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
@@ -484,27 +437,38 @@ export function TemplatesCatalogDialog(props: TemplatesDialogProps) {
       applying={applying() && view().applying}
       onConfirm={() => mutate(view().onConfirm)}
       onConfirmConsent={() => mutate(view().onConfirmConsent)}
-      onConfirmReview={() => mutate(view().onConfirmReview)}
-      onRetryOpenChat={() => mutate(view().onRetryOpenChat)}
     />
   );
   return (
     <openclaw-templates-catalog-dialog>
-      <Show when={props.modal} fallback={content}>
-        <ModalDialog
-          label={t("templatesCatalog.review")}
-          open
-          style={{ "--openclaw-modal-width": "960px" }}
-          onModal-cancel={(event: Event) => {
-            if (model.applying) {
-              event.preventDefault();
-            } else {
-              props.onClose?.();
-            }
-          }}
-        >
-          {content}
-        </ModalDialog>
+      <Show
+        when={props.initialPackageName || view().consentWarning}
+        fallback={
+          <TemplatesExplore
+            onSelect={(entry) => model.openDetails(entry)}
+            onAdd={(entry) => void model.addEntry(entry)}
+            addingPackageName={view().applying ? (view().selected?.packageName ?? null) : null}
+            addDisabled={!view().canAdd || view().applying}
+            addFailure={view().addFailure}
+          />
+        }
+      >
+        <Show when={props.modal} fallback={content}>
+          <ModalDialog
+            label={t("templatesCatalog.review")}
+            open
+            style={{ "--openclaw-modal-width": "960px" }}
+            onModal-cancel={(event: Event) => {
+              if (model.applying) {
+                event.preventDefault();
+              } else {
+                props.onClose?.();
+              }
+            }}
+          >
+            {content}
+          </ModalDialog>
+        </Show>
       </Show>
       <Show when={!props.modal && preview()}>
         {(current) => (

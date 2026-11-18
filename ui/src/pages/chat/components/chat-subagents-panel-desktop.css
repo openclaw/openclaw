@@ -36,7 +36,7 @@
   font-size: calc(12px * var(--control-ui-text-scale));
   font-weight: 400;
   font-variant-numeric: tabular-nums;
-  line-height: calc(20px * var(--control-ui-text-scale));
+  line-height: 20px;
 }
 
 .subagents-desktop__count {
@@ -124,8 +124,8 @@
   width: 25px;
   height: 25px;
   border-radius: var(--radius-sm);
-  background: hsl(var(--subagent-hue) 22% 30% / 0.35);
-  color: hsl(var(--subagent-hue) 32% 65%);
+  background: hsl(var(--subagent-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
+  color: hsl(var(--subagent-hue) var(--subagent-avatar-ink, 32% 65%));
 }
 
 .subagents-desktop__open > .subagents-desktop__avatar {
@@ -174,7 +174,7 @@
 .subagents-desktop__name {
   overflow: hidden;
   font-weight: 500;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
   text-overflow: clip;
   white-space: nowrap;
 }
@@ -184,7 +184,7 @@
   color: var(--muted);
   font-size: calc(12px * var(--control-ui-text-scale));
   font-variant-numeric: tabular-nums;
-  line-height: calc(18px * var(--control-ui-text-scale));
+  line-height: 18px;
 }
 
 .subagents-desktop__elapsed {

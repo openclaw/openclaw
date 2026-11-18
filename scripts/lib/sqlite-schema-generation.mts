@@ -48,7 +48,7 @@ function emitStoreCatalogs(store: string, catalogs: GeneratedCatalog[]) {
   return {
     json: `${JSON.stringify({ tables, catalogs: fullCatalogs })}\n`,
     module: `${GENERATED_HEADER}
-import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 ${CATALOG_TYPE_IMPORT}
 import type { GeneratedSqliteFingerprint } from "../../infra/sqlite-schema-fingerprint.js";
 
@@ -81,7 +81,8 @@ export function ${storeReaderName(store, "Catalog")}(hash: string): SqliteSchema
   if (!fingerprints[hash]) {
     return undefined;
   }
-  data ??= JSON.parse(readFileSync(new URL("./sqlite-${store}-catalogs.json", import.meta.url), "utf8")) as CatalogData; // SAFETY: Emitted with this loader from typed native catalog facts.
+  // Module loading keeps lazy assets on the updater's retained generation after activation.
+  data ??= createRequire(import.meta.url)("./sqlite-${store}-catalogs.json") as CatalogData; // SAFETY: Emitted with this loader from typed native catalog facts.
   const catalog = data.catalogs[hash]!;
   return { tables: catalog.tables.map((index) => data!.tables[index]!), views: catalog.views };
 }

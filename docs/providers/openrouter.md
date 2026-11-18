@@ -379,6 +379,36 @@ OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 `input_audio` (OpenRouter's STT contract), not as multipart OpenAI form
 uploads.
 
+`providerOptions.openrouter` on `tools.media.audio` or an audio entry in
+`tools.media.models[]` sets `temperature` on the request; every other key is
+sent to the upstream provider as OpenRouter `provider.options.<slug>`, where
+`<slug>` is the model's prefix (`elevenlabs` for `elevenlabs/scribe-v2`).
+OpenRouter drops options when a different provider serves the model. For
+example, to turn off ElevenLabs Scribe's audio-event tags such as
+`(laughter)`:
+
+```json5
+{
+  tools: {
+    media: {
+      models: [
+        {
+          provider: "openrouter",
+          model: "elevenlabs/scribe-v2",
+          capabilities: ["audio"],
+        },
+      ],
+      audio: {
+        enabled: true,
+        providerOptions: {
+          openrouter: { tag_audio_events: false },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Fusion router
 
 OpenRouter Fusion sends one OpenClaw model ref to several OpenRouter models in

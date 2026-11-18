@@ -202,10 +202,7 @@ suite.define(() => {
         const { activity, summary } = await openActivity(
           page,
           key,
-          [
-            row(key, "Reader conversation with a deliberately long title wrapping onto two lines"),
-            row(sourceKey, label),
-          ],
+          [row(key, "Reader"), row(sourceKey, label)],
           [1, 2, 3].map((seq) =>
             delivery(
               sourceKey,
@@ -218,51 +215,17 @@ suite.define(() => {
         const exact = (text: string) => summary.getByText(text, { exact: true });
         await exact(label).waitFor();
         expect(
+          await summary.evaluate((element) =>
+            [element, element.querySelector("a")!].map((node) => getComputedStyle(node).fontSize),
+          ),
+        ).toEqual(["12px", "12px"]);
+        expect(
           await summary.evaluate(
             (node) =>
               node.getBoundingClientRect().width -
               node.querySelector(".chat-reply-attribution")!.getBoundingClientRect().width,
           ),
         ).toBeLessThanOrEqual(40);
-        const artifacts = createControlUiE2eArtifactDir(`source-update-typography-${width}`);
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".chat-thread"),
-          [summary],
-          {
-            animations: "disabled",
-            elements: [summary],
-          },
-        );
-        await writeFile(path.join(artifacts, "conversation.png"), frame.png);
-        await writeFile(path.join(artifacts, "summary.png"), frame.elements[0]!.png);
-        for (const scale of [0.9, 1, 1.1, 1.25, 1.4]) {
-          await page.evaluate(
-            (value) =>
-              document.documentElement.style.setProperty("--control-ui-text-scale", String(value)),
-            scale,
-          );
-          expect(
-            await summary.evaluate((element) =>
-              [element, element.querySelector("a")!].map((node) => getComputedStyle(node).fontSize),
-            ),
-          ).toEqual([
-            `${Number((12 * scale).toFixed(2))}px`,
-            `${Number((12 * scale).toFixed(2))}px`,
-          ]);
-        }
-        if (width === 390) {
-          const title = page.locator(
-            ".mobile-header__identity--title-only .mobile-header__title-text",
-          );
-          expect(
-            await title.evaluate(
-              (node) =>
-                node.getBoundingClientRect().height /
-                Number.parseFloat(getComputedStyle(node).lineHeight),
-            ),
-          ).toBeCloseTo(2);
-        }
         expect([
           await activity.count(),
           await summary.locator("a[data-session-key]").count(),

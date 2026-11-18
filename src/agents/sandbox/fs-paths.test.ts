@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildSandboxFsMounts,
+  resolveSandboxFsPreparation,
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
   resolveSandboxFsPathWithMounts,
@@ -169,4 +171,47 @@ describe("resolveSandboxFsPathWithMounts", () => {
       "Path escapes sandbox root (~/workspace-coder; container root /workspace)",
     );
   });
+});
+
+const preparationRoots = useAutoCleanupTempDirTracker(afterEach);
+it.each([1, 40])("prepares mount sources once for %i protected installations", (count) => {
+  const root = preparationRoots.make("sandbox-mount-preparation-");
+  const workspaceDir = path.join(root, "workspace");
+  const sandbox = createSandbox({
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    workspaceAccess: "none",
+  });
+  const sources = Array.from({ length: count }, (_, index) => ({
+    name: `skill-${index}`,
+    filePath: path.join(root, "installed", `skill-${index}`, "SKILL.md"),
+  }));
+  const skillUsagePaths = sources.map(({ name, filePath }) => {
+    const readPath = path.join(workspaceDir, "skills", name, "SKILL.md");
+    for (const file of [filePath, readPath]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "Synthetic skill");
+    }
+    return {
+      skillName: name,
+      sourceFilePath: filePath,
+      skillFile: fs.realpathSync(filePath),
+      readPath,
+      skillSource: "workspace" as const,
+    };
+  });
+  const stat = vi.spyOn(fs, "lstatSync");
+  try {
+    const prepared = resolveSandboxFsPreparation({ sandbox, skillUsagePaths });
+    expect(prepared.protectedSkills).toEqual(
+      sources.map(({ name, filePath }) => ({
+        name,
+        sourceFile: filePath,
+        containerRoot: `/workspace/skills/${name}`,
+      })),
+    );
+    expect(stat).toHaveBeenCalledTimes(2);
+  } finally {
+    stat.mockRestore();
+  }
 });

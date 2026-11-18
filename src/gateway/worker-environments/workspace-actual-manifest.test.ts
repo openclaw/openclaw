@@ -1,7 +1,9 @@
 import { createHook } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import { addAbortListener } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
@@ -19,9 +21,17 @@ import { MAX_WORKSPACE_INVENTORY_TOTAL_BYTES } from "./workspace-inventory-limit
 import { sha256, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 
+// These fault injections exercise asynchronous Gateway I/O. Real worker metadata
+// batching and cancellation are covered by workspace-manifest-worker.test.ts.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
+
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.unstubAllEnvs();
 });
 
@@ -41,6 +51,15 @@ it.each([false, true])(
       }
       return stats;
     });
+    const lstatSync = fsSync.lstatSync.bind(fsSync);
+    vi.spyOn(fsSync, "lstatSync").mockImplementation((...args) => {
+      const stats = lstatSync(...args);
+      if (stats && args[0] === nested) {
+        Reflect.set(stats, "ino", 2n);
+      }
+      return stats;
+    });
+    syncBuiltinESMExports();
     const entries = vi.fn();
     await expect(
       scanActualWorkspaceManifest({

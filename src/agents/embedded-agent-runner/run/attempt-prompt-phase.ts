@@ -5,7 +5,6 @@ import {
   setAgentRunAttemptTerminalFailure,
   type AgentRunAttemptFailureSource,
 } from "../../agent-run-terminal-outcome.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import {
   buildAgentRunBlockedUserMessage,
@@ -16,18 +15,18 @@ import {
   resolvePendingRuntimeContextReplay,
 } from "../../internal-runtime-context.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
+import { createCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
 import {
-  createCompactionRequestBudget,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
-import { createFixedRequestTokenEstimator } from "../../sessions/context-token-pressure.js";
+  SAFETY_MARGIN,
+  createFixedRequestTokenEstimator,
+} from "../../sessions/context-token-pressure.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { prepareGooglePromptCacheStreamFn } from "../google-prompt-cache.js";
 import { log } from "../logger.js";
 import {
   persistToolResultProjections,
   persistSessionSystemPrompt,
-  persistSessionToolSurface,
 } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { createAbortableError, isOpenClawAbortableWrapper } from "./abortable.js";
@@ -463,6 +462,8 @@ export async function runEmbeddedAttemptPromptPhase(
                 config: attempt.config,
                 contextTokenBudget: promptContext.contextTokenBudget,
                 reserveTokens,
+                runId: attempt.runId,
+                isToolBoundarySafe: () => preparedStreamRuntime.isToolBoundarySafe?.() ?? false,
                 timeoutMs: input.sessionLock.compactionTimeoutMs,
                 authProfileId: attempt.runtimePlan?.auth.forwardedAuthProfileId,
                 ...(attempt.sessionKey
@@ -537,8 +538,10 @@ export async function runEmbeddedAttemptPromptPhase(
         persistToolResultProjections: async () => {
           if (
             !isRawModelRun &&
-            (inHistorySystemUpdates ||
+            (sessionRuntime.prepareSystemPromptUpdate ||
               sessionPromptState.pendingToolSurface ||
+              sessionPromptState.usageRanking?.snapshot !==
+                sessionPromptState.persistedUsageRanking ||
               toolResultPromptProjectionState.frozen.size > 0)
           ) {
             await withTranscriptWrite(async () => {
@@ -547,11 +550,9 @@ export async function runEmbeddedAttemptPromptPhase(
                 toolResultPromptProjectionState,
                 (customType, data) => sessionManager.appendCustomEntryAsync(customType, data),
               );
-              const appendEntry = (customType: string, data: unknown) =>
-                sessionManager.appendCustomEntryAsync(customType, data);
-              await (sessionRuntime.prepareSystemPromptUpdate
-                ? persistSessionSystemPrompt(sessionPromptState, appendEntry)
-                : persistSessionToolSurface(sessionPromptState, appendEntry));
+              await persistSessionSystemPrompt(sessionPromptState, (customType, data) =>
+                sessionManager.appendCustomEntryAsync(customType, data),
+              );
             });
           }
         },

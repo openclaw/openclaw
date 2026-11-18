@@ -268,6 +268,7 @@ export const streamSimpleAnthropic: StreamFunction<
       toolChoice?: AnthropicCompactionOptions["toolChoice"];
       thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
       onClaudeCodeVersionRequired?: AnthropicOptions["onClaudeCodeVersionRequired"];
+      onFastModeUnsupported?: AnthropicOptions["onFastModeUnsupported"];
     }
 > = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
@@ -279,6 +280,7 @@ export const streamSimpleAnthropic: StreamFunction<
     cacheTtlPruning: options?.cacheTtlPruning,
     onCompactionRejected: options?.onCompactionRejected,
     onClaudeCodeVersionRequired: options?.onClaudeCodeVersionRequired,
+    onFastModeUnsupported: options?.onFastModeUnsupported,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,

@@ -26,7 +26,6 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import {
   isCronSessionKey,
   isIncognitoSessionKey,
@@ -582,7 +581,7 @@ export function createSessionActivitySummaries(deps: {
       if (!current(state)) {
         continue;
       }
-      // The per-recap scope must not detach cleanup from inherited connection work.
+      // Recaps outlive requesting runs, but still owe cleanup to inherited connection work.
       const work = trackAsyncWork(() => run(state))
         .catch((error: unknown) => {
           log.debug("Activity recap background work failed", { error: formatErrorMessage(error) });
@@ -685,8 +684,7 @@ export function createSessionActivitySummaries(deps: {
       );
       if (target) {
         states.get(activitySummaryScope(target))?.completion?.markTerminal();
-        // Run-end events arrive inside the finished run's plugin scope; the recap outlives it.
-        pluginInvocationContext.exit(() => requestInBackground(target, true));
+        requestInBackground(target, true);
       }
     },
     handleLifecycle(event) {

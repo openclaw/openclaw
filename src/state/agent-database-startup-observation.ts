@@ -1,6 +1,6 @@
-import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import {
@@ -10,18 +10,19 @@ import {
 } from "./agent-database-admission.js";
 import type { AgentDatabasePreparation } from "./agent-database-preparation-context.js";
 import type { PendingAgentDatabaseRecovery } from "./agent-database-startup.types.js";
-import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "./openclaw-agent-db-contract.js";
 
 /** Observe the startup owner's current work without exposing its lifecycle or write borrow. */
 export function createAgentDatabaseStartupObservation(
   pendingAgents: ReadonlyMap<string, PendingAgentDatabaseRecovery>,
   lifetime: AbortSignal,
+  observePreparedIntegrity?: AgentDatabasePreparation["observePreparedIntegrity"],
 ): AgentDatabasePreparation {
   const inputs = new Map<
     string,
     { sessions: ReadonlyMap<string, Promise<void>>; completion: Promise<void> }
   >();
   return {
+    observePreparedIntegrity,
     get hasPendingAgents() {
       return pendingAgents.size > 0 || inputs.size > 0;
     },
@@ -63,22 +64,20 @@ export function createAgentDatabaseStartupObservation(
       if (!pending || readAgentDatabaseAdmissionRefusal(agentId, options) !== pending.refusal) {
         return waitForInputs();
       }
-      if (!options.forWrite && !options.forInput) {
-        const readiness = options.forWrite === false ? pending.readReady : pending.completion;
-        return readiness && racePromiseWithAbortSignal(readiness, signal);
+      if (!options.forWrite) {
+        const readiness =
+          options.forWrite === false && !options.forInput ? pending.readReady : pending.completion;
+        return readiness && racePromiseWithAbortSignal(readiness, signal).then(waitForInputs);
       }
-      // Allow five minutes for slow-host startup, plus a minute per queued inspection batch.
-      const timeoutMs =
-        GATEWAY_STARTUP_ADMISSION_WAIT_MS +
-        Math.ceil(pendingAgents.size / AGENT_DATABASE_PREFLIGHT_CONCURRENCY) * 60_000;
+      // Bound the caller's wait without cancelling the Gateway's preparation or native authority.
       return raceWithTimeout(
         pending.completion,
-        timeoutMs,
+        1_000,
         () => {
           throw new AgentDatabaseAdmissionError({
             ...pending.refusal,
             repairHint:
-              "This agent is still preparing. Retry the request after background inspection and preparation finish.",
+              "Agent database verification and preparation in progress. Retry the request shortly.",
           });
         },
         { signal, ref: false },
@@ -100,4 +99,29 @@ export function recoveryTiming(recovery: PendingAgentDatabaseRecovery, now = per
       ),
     },
   };
+}
+
+export function startAgentDatabasePreparationProgress(
+  pending: ReadonlyMap<string, PendingAgentDatabaseRecovery>,
+  publishingAgentId: () => string | undefined,
+) {
+  const timer = setInterval(() => {
+    const now = performance.now();
+    for (const [agentId, recovery] of pending) {
+      createSubsystemLogger("state/agent-admission").warn(
+        "agent database startup preparation still running",
+        {
+          agentId,
+          phase: recovery.phase,
+          elapsedMs: Math.round(now - recovery.startedAt),
+          phaseElapsedMs: Math.round(now - recovery.phaseStartedAt),
+          ...(recovery.phase === "publication-wait"
+            ? { publishingAgentId: publishingAgentId() }
+            : {}),
+        },
+      );
+    }
+  }, 60_000);
+  timer.unref();
+  return timer;
 }

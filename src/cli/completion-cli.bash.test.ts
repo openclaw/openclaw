@@ -63,60 +63,55 @@ describe("completion-cli native Bash words", () => {
     ).toEqual(["--json"]);
   });
 
-  it
-    .skipIf(process.platform === "win32")
-    .each([
-      ["--profile s", "--profile s", "s", []],
-      ["--profile 's", "--profile 's", "s", []],
-      ["--profile staging g", "--profile staging g", "g", ["gateway"]],
-      ["gateway --token st", "gateway --token st", "st", []],
-      ["gateway --token --f", "gateway --token --f", "--f", []],
-      ["gateway -vt st", "gateway -vt st", "st", []],
-      ["completion --profile --shell=fi", "completion --profile --shell = fi", "fi", []],
-      ["completion --profile -sf", "completion --profile -sf", "-sf", []],
-      ["completion --shell=", "completion --shell =", "", ["zsh", "bash", "powershell", "fish"]],
-      ["completion --shell=fish", "completion --shell=fish", "f", ["fish"], 29],
-      ["completion --sh=fish", "completion --sh=fish", "--sh", ["--shell"], 24],
-      ["completion -ysfish", "completion -ysfish", "-ysf", ["-ysfish"], 24],
-      [
-        "--profile=gateway completion --shell=fish --yes",
-        "--profile = gateway completion --shell = fish --yes",
-        "f",
-        ["fish"],
-        47,
-        7,
-      ],
-      ["completion --shell=fish", "completion --shell=fish", "comple", ["completion"], 15, 1],
-      ["gateway --token = status --j", "gateway --token = status --j", "--j", ["--json"]],
-      ["completion>/dev/null --shell f", "completion > /dev/null --shell f", "f", ["fish"]],
-      [
-        "gateway --token=prefix:status --f",
-        "gateway --token = prefix : status --f",
-        "--f",
-        ["--force"],
-      ],
-      ...['"f"', "\\f", 'f"i'].map((value): NativeWordsCase => [
-        `completion --shell ${value}`,
-        `completion --shell ${value}`,
-        value === 'f"i' ? "i" : value,
-        [value === 'f"i' ? "ish" : "fish"],
-      ]),
-      ["completion --shell='f", "completion --shell = 'f", "f", ["fish"]],
-      ['completion -s "f', 'completion -s "f', "f", ["fish"]],
-    ] satisfies NativeWordsCase[])(
-    "respects native Bash word boundaries in %s",
-    (line, words, word, expected, point, cword) => {
-      const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
-      expect(
-        runGeneratedBashCompletion(program, ["openclaw", ...words.split(" ")], {
-          line: `openclaw ${line}`,
-          word,
-          point,
-          cword,
-        }),
-      ).toEqual(expected);
-    },
-  );
+  it.skipIf(process.platform === "win32").each<NativeWordsCase>([
+    ["--profile s", "--profile s", "s", []],
+    ["--profile 's", "--profile 's", "s", []],
+    ["--profile staging g", "--profile staging g", "g", ["gateway"]],
+    ["gateway --token st", "gateway --token st", "st", []],
+    ["gateway --token --f", "gateway --token --f", "--f", []],
+    ["gateway -vt st", "gateway -vt st", "st", []],
+    ["completion --profile --shell=fi", "completion --profile --shell = fi", "fi", []],
+    ["completion --profile -sf", "completion --profile -sf", "-sf", []],
+    ["completion --shell=", "completion --shell =", "", ["zsh", "bash", "powershell", "fish"]],
+    ["completion --shell=fish", "completion --shell=fish", "f", ["fish"], 29],
+    ["completion --sh=fish", "completion --sh=fish", "--sh", ["--shell"], 24],
+    ["completion -ysfish", "completion -ysfish", "-ysf", ["-ysfish"], 24],
+    [
+      "--profile=gateway completion --shell=fish --yes",
+      "--profile = gateway completion --shell = fish --yes",
+      "f",
+      ["fish"],
+      47,
+      7,
+    ],
+    ["completion --shell=fish", "completion --shell=fish", "comple", ["completion"], 15, 1],
+    ["gateway --token = status --j", "gateway --token = status --j", "--j", ["--json"]],
+    ["completion>/dev/null --shell f", "completion > /dev/null --shell f", "f", ["fish"]],
+    ["2>completion gat", "2 > completion gat", "gat", ["gateway"]],
+    ["gateway > status --f", "gateway > status --f", "--f", ["--force"]],
+    ["gateway > sta", "gateway > sta", "sta", []],
+    [
+      "gateway --token=prefix:status --f",
+      "gateway --token = prefix : status --f",
+      "--f",
+      ["--force"],
+    ],
+    ['completion --shell "f"', 'completion --shell "f"', '"f"', ["fish"]],
+    ["completion --shell \\f", "completion --shell \\f", "\\f", ["fish"]],
+    ['completion --shell f"i', 'completion --shell f"i', "i", ["ish"]],
+    ["completion --shell='f", "completion --shell = 'f", "f", ["fish"]],
+    ['completion -s "f', 'completion -s "f', "f", ["fish"]],
+  ])("respects native Bash word boundaries in %s", (line, words, word, expected, point, cword) => {
+    const program = createDocumentedCompletionProgram().option("--profile <name>", "Profile");
+    expect(
+      runGeneratedBashCompletion(program, ["openclaw", ...words.split(" ")], {
+        line: `openclaw ${line}`,
+        word,
+        point,
+        cword,
+      }),
+    ).toEqual(expected);
+  });
 });
 
 type NativeWordsCase = [

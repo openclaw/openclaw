@@ -172,6 +172,7 @@ export type ClawHubPackageListItem = {
   icon?: string | null;
   ownerHandle?: string | null;
   ownerOfficial?: boolean;
+  categories?: string[] | null;
   createdAt: number;
   updatedAt: number;
   latestVersion?: string | null;

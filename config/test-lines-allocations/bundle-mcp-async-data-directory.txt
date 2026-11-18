@@ -1,2 +1,0 @@
-# Delayed filesystem regression extends the real MCP directory/projection contract.
-26
