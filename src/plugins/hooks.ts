@@ -50,6 +50,7 @@ import type {
   VoidHookRunOptions,
 } from "./hook-runner-types.js";
 import { withHookTimeout } from "./hook-timeout.js";
+import { projectHookTurnTaint } from "./hook-turn-taint.js";
 import { PLUGIN_HOOK_METADATA } from "./hook-types.js";
 import type {
   PluginHookAgentContext,
@@ -531,7 +532,7 @@ export function createHookRunner(
           const invoke = () =>
             (current.handler as (event: unknown, ctx: unknown) => Promise<void> | void)(
               event,
-              projected?.context ?? ctx,
+              projectHookTurnTaint(hookName, projected?.context ?? ctx),
             );
           const handlerPromise =
             hookName === "gateway_stop"
@@ -647,7 +648,7 @@ export function createHookRunner(
             const promise = selection.invoke(current, () =>
               (current.handler as (event: unknown, ctx: unknown) => Promise<HookResult<K>>)(
                 handlerEvent,
-                handlerContext,
+                projectHookTurnTaint(hookName, handlerContext),
               ),
             );
             outcome = await awaitHook(current, promise, modifyingHookTimeoutMsByHook[hookName]);

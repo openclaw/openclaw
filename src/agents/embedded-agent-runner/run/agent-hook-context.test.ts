@@ -49,13 +49,13 @@ it("reports the turn taint that memory provenance reads", () => {
   };
   expect(buildEmbeddedAgentHookContext(run, "main", undefined).turnTainted).toBe(false);
 
-  taint.observe({ toolName: "read", argsHash: "a", resultHash: "a" });
+  const observation = { toolName: "read", argsHash: "a", resultHash: "a" };
+  taint.observe(observation);
   expect(buildEmbeddedAgentHookContext(run, "main", undefined).turnTainted).toBe(false);
 
   taint.observe({
+    ...observation,
     toolName: "web_fetch",
-    argsHash: "b",
-    resultHash: "b",
     resultContentSource: "network",
   });
   expect(buildEmbeddedAgentHookContext(run, "main", undefined).turnTainted).toBe(true);

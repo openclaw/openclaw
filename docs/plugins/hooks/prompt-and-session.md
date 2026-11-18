@@ -378,22 +378,16 @@ augmentation.
   to review the finished turn in the background. It is absent when the runtime
   recorded no final entry, such as CLI backends or a turn superseded before it
   finished.
-- `ctx.turnTainted`: `true` once a tool result in this user turn carried
-  network-sourced content. It is the same flag that records the turn's memory
-  writes as `untrusted` (see [memory provenance](/concepts/memory-provenance#freeform-edits-and-quarantine)),
-  so a plugin that stores turn content can lower its trust or skip it. The
-  embedded runtime also sets it on `before_prompt_build`, `llm_input`,
-  `llm_output`, `before_agent_finalize` and its own compaction hooks, where it
-  reflects the turn so far. It is read-only and absent when the runtime does
-  not report it, such as CLI backends, other harnesses and tool hooks.
-  Memory-flush maintenance runs (`ctx.trigger === "memory"`) start with it
-  `true` when the source turn was tainted or the sender was not the owner,
-  so on those runs it can be `true` before any tool runs. It stays set across
-  retries of the same turn.
-  The flag is informational provenance, not a trust attestation: `false` only
-  means core saw no network-sourced tool result in this turn. The user's own
-  message, channel input, and tool results that are not marked as network
-  content leave it `false`, so do not treat `false` as "trusted".
+- `ctx.turnTainted` reports turn provenance on `agent_end`, `before_agent_finalize`,
+  `before_prompt_build`, `llm_input`, `llm_output`, `before_compaction`, and `after_compaction`.
+  `true` means the runtime observed a network-marked tool result or inherited taint;
+  `false` means it tracked the turn and observed none so far. `"unknown"` means the
+  runtime cannot report a measurement, including when compaction has no turn tracker.
+  A missing field on an older host also means `"unknown"`.
+  Compare values explicitly (`ctx.turnTainted === true`); `"unknown"` is a truthy string.
+  None of the states means the content is safe. Unmarked tool results and the user's
+  message can still contain untrusted text. Memory-flush runs inherit taint when
+  the source turn was tainted or the sender wasn't the owner. See [memory provenance](/concepts/memory-provenance#freeform-edits-and-quarantine).
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait
