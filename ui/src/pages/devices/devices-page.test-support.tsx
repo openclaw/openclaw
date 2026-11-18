@@ -125,6 +125,7 @@ export function mountPage(
   const [presentation, setPresentation] = createSignal({ routeData });
   const configListeners = new Set<() => void>();
   const reloadConfig = vi.fn(async () => undefined);
+  const refreshConfig = vi.fn(async () => undefined);
   const router = createRouter({
     routes: [
       definePage({ id: "devices", path: "/devices", component: () => ({}) }),
@@ -140,6 +141,7 @@ export function mountPage(
     runtimeConfig: runtimeConfig ?? {
       state: { configSnapshot: {}, configForm: {}, configLoading: false, configFormMode: "form" },
       ensureLoaded: async () => undefined,
+      refresh: refreshConfig,
       subscribe: (listener: () => void) => {
         configListeners.add(listener);
         return () => configListeners.delete(listener);
@@ -174,6 +176,7 @@ export function mountPage(
     container,
     config: context.runtimeConfig.state,
     reloadConfig,
+    refreshConfig,
     publishConfig: () => configListeners.forEach((listener) => listener()),
     router,
     dispose,
