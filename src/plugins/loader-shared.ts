@@ -1,7 +1,4 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { activateContextEngineRegistrations } from "../context-engine/registry.js";
 import {
@@ -48,7 +45,7 @@ import {
   stageActivePluginRegistry,
 } from "./runtime.js";
 import { validatePluginConfig } from "./schema-validator.js";
-import { hasKind } from "./slots.js";
+import { hasKind, normalizeSlotValue } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 
 export type PreparedPluginConfig = {
@@ -103,12 +100,8 @@ export function resolveAuthorizedDreamingSidecar(params: {
   manifestRegistry: PluginManifestRegistry;
   memorySlot: string | null | undefined;
 }): AuthorizedDreamingSidecar | null {
-  const selectedMemoryPluginId = normalizeLowercaseStringOrEmpty(params.memorySlot);
-  if (
-    !selectedMemoryPluginId ||
-    selectedMemoryPluginId === "none" ||
-    selectedMemoryPluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID
-  ) {
+  const selectedMemoryPluginId = normalizeSlotValue(params.memorySlot);
+  if (!selectedMemoryPluginId || selectedMemoryPluginId === DEFAULT_MEMORY_DREAMING_PLUGIN_ID) {
     return null;
   }
   const dreamingConfig = resolveMemoryDreamingConfig({
