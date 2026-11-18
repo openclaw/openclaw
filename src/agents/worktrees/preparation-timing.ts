@@ -64,6 +64,7 @@ type PreparationPhase =
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
 type TemplateDetails = {
+  identity?: string;
   reason?: string;
   missReason?:
     | "no-generation"

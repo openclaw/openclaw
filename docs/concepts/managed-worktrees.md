@@ -136,6 +136,12 @@ Ready sandbox generations are immutable and reuse their publication-time validat
 Installation output is still validated after the builder stops, before publication.
 Preparation logs distinguish native snapshot cloning (`templateClone`), installer
 shutdown (`templateRetire`), and publication validation (`templateValidateOutput`).
+`templateDetails.identity` identifies the template backend, cache key, and content
+key; the dependency-builder message carries the same `identity`. The `sandbox-`
+backend prefix identifies dependency templates, separately from source checkouts.
+Preparation summaries are emitted at completion: subtract `durationMs` from the
+log timestamp to find their start. A builder message inside that interval is not
+evidence of a template that was ready before the request began.
 The `snapshot` phase measures the content manifest, not the native filesystem clone.
 Nested phase durations are inclusive; do not add them to their parent duration.
 Concurrent requests for that commit share the refresh. Lockfile or attribute changes

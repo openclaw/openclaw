@@ -268,8 +268,13 @@ it("refreshes source changes once, isolates clones, and rebuilds changed lockfil
   expect(await read(third, "pnpm-lock.yaml")).toBe(secondLock);
   expect(mocks.install).toHaveBeenCalledTimes(3);
   expect(backend.createTemplate).toHaveBeenCalledTimes(2);
+  const selected = (await listTemplatesAsync(env)).find(
+    (record) => record.path !== template.path && record.sourceCommit === changedCommit,
+  );
+  assert(selected, "Updated template was not published");
   expect(mocks.preparation.mock.lastCall?.[0].details).toMatchObject({
     template: "cold",
+    "template.identity": `${selected.backend}:${selected.cacheKey}:${selected.contentKey}`,
     "template.reason": "ready",
     "template.missReason": "commit-changed",
     "template.priorSourceCommit": sourceCommit.slice(0, 12),

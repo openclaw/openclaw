@@ -581,6 +581,9 @@ export async function prepareWorktreeTemplate(params: {
     }
     throw error;
   } finally {
+    setWorktreePreparationTemplate(undefined, {
+      identity: `${params.backend}:${params.cacheKey}:${params.contentKey}`,
+    });
     if (finishPreparation && preparationKey) {
       pendingPreparations.delete(preparationKey);
       finishPreparation();
