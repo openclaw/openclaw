@@ -43,7 +43,6 @@ final class BootstrapSetupFailureUITests: XCTestCase {
             let continueButton = app.buttons["Continue"]
             XCTAssertTrue(continueButton.waitForExistence(timeout: 8))
             continueButton.tap()
-            app.tap()
             let manual = app.buttons["Connect Manually"]
             XCTAssertTrue(manual.waitForExistence(timeout: 8))
             manual.tap()
