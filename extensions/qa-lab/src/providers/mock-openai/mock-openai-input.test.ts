@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  extractToolOutput,
-  hasToolOutput,
-  resolveMockSubagentTurn,
-} from "./mock-openai-input.js";
+import { extractToolOutput, hasToolOutput, resolveMockSubagentTurn } from "./mock-openai-input.js";
 
 it.each([
   "OpenClaw runtime context for this turn:\nWorkspace instructions: retry failed installs.",

@@ -223,7 +223,6 @@ exit 1
     },
   );
 
-
   it("rejects a deleted tag", () => {
     expect(() =>
       verifyReleaseToolingIdentity({

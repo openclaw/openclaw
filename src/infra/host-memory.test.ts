@@ -106,10 +106,10 @@ it("admits a CLI live session under Bun on macOS unless reclaimable memory is lo
   context.params.admittedRunContext = await admission.admit("plugin-harness");
   try {
     const signal = new AbortController().signal;
-  
+
     setMachMemory({ free: 512 * MiB, inactive: 16 * GiB, purgeable: 2 * GiB });
     await expect(ensureCliLiveSessionMemory(context, signal)).resolves.toBeUndefined();
-  
+
     setMachMemory({ free: 128 * MiB, inactive: 128 * MiB, purgeable: 0 });
     await expect(ensureCliLiveSessionMemory(context, signal)).rejects.toMatchObject({
       code: "cli_live_session_host_memory",
