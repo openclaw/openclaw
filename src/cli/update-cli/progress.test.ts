@@ -198,6 +198,35 @@ describe("update progress", () => {
     );
   });
 
+  it.each([
+    {
+      platform: "linux" as const,
+      path: "/report files/operator's $HOME `echo nope`;[1].md",
+      command:
+        "Read report (shell): cat -- '/report files/operator'\\''s $HOME `echo nope`;[1].md'",
+    },
+    {
+      platform: "win32" as const,
+      path: "C:\\report files\\operator's ‘notes’ $HOME `echo nope`;[1].md",
+      command:
+        "Read report (PowerShell): Get-Content -LiteralPath 'C:\\report files\\operator''s ‘‘notes’’ $HOME `echo nope`;[1].md'",
+    },
+  ])("prints a copyable $platform read command beside the saved path", async (fixture) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue(fixture.platform);
+    vi.mocked(writeUpdateRunReportArtifact).mockResolvedValue(fixture.path);
+    await printResult(result, { run: context });
+    expect(log).toHaveBeenCalledWith(`Report: ${fixture.path}`);
+    expect(log).toHaveBeenCalledWith(fixture.command);
+  });
+
+  it("omits path and read guidance when the report could not be saved", async () => {
+    silenceErrors();
+    vi.mocked(writeUpdateRunReportArtifact).mockRejectedValue(new Error("report unavailable"));
+    await printResult(result, { run: context });
+    expect(printed()).not.toContain("Report:");
+    expect(printed()).not.toContain("Read report");
+  });
+
   it.each([true, false])(
     "renders step progress with only bound ledger phases (bound: %s)",
     async (bound) => {

@@ -38,6 +38,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import { formatUpdateReportReadHint } from "./report-path.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 
 const mocks = vi.hoisted(() => ({
@@ -603,6 +604,9 @@ describe("unproved Doctor authority callers", () => {
           } else {
             expect(phasePath).toBeDefined();
             expect(phasePath).not.toBe(canonicalPath);
+            expect(defaultRuntime.error).toHaveBeenCalledWith(
+              formatUpdateReportReadHint(phasePath!),
+            );
             const report = await fs.readFile(phasePath!, "utf8");
             expect(report).toContain("update completion is pending with the parent updater");
             expect(report).toContain("Complete Doctor lint findings (0)");

@@ -5,6 +5,7 @@ import { withTriageTerminal } from "../../commands/triage.test-support.js";
 import { prepareGithubIssue } from "../../infra/github-issue.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
+import { formatUpdateReportReadHint } from "./report-path.js";
 import { stepFixture } from "./update-command-fixtures.test-support.js";
 import {
   UpdateCommandFailure,
@@ -234,6 +235,9 @@ describe("interactive report actions", () => {
       expect(defaultRuntime.log).not.toHaveBeenCalledWith(`Prefilled issue: ${result.fallbackUrl}`);
       expect(defaultRuntime.log).toHaveBeenCalledWith(
         `Saved sanitized report: ${f.prepared.savedReportPath}`,
+      );
+      expect(defaultRuntime.log).toHaveBeenCalledWith(
+        formatUpdateReportReadHint(f.prepared.savedReportPath),
       );
     } else {
       expect(defaultRuntime.log).not.toHaveBeenCalledWith(
