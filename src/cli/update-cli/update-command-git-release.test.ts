@@ -42,7 +42,13 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
     readRuntime: async () => ({ status: "running", pid: 4242 }),
   }),
 }));
-vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn(), log: vi.fn() } }));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: { ...actual.defaultRuntime, error: vi.fn(), log: vi.fn() },
+  };
+});
 // Model only the child transport: the real installer and its native guard decide refusal.
 vi.mock("./update-command-service-command.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-service-command.js")>()),
