@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
 import * as configIo from "../../config/io.js";
 import { readBackupEngine } from "../../snapshot/database-backup.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
@@ -90,32 +89,40 @@ describe.skipIf(!fixtures.connection)("database port command PostgreSQL conforma
     );
   }, 120_000);
 
-  it("keeps a resumed port refused when its verified copy fails owner admission", async () => {
+  it("keeps a resumed port refused when its staged copy changes", async () => {
     await fixtures.fixture(
-      async ({ state, source }) => {
+      async ({ state, source, client }) => {
+        assert(client);
         openOpenClawStateDatabase({ env: state.env });
         await closeOpenClawStateDatabaseAsync();
-        {
-          using db = openNodeSqliteDatabase(source);
-          // SQLite admits an older content marker beneath the current header; PostgreSQL does not.
-          db.prepare(
-            "INSERT OR REPLACE INTO config_machine_state VALUES ('state.schema.contentVersion', ?, 1)",
-          ).run(String(OPENCLAW_STATE_SCHEMA_VERSION - 1));
-        }
         const before = fs.readFileSync(source);
         const originalConfig = fs.readFileSync(state.configPath, "utf8");
+        const run = tasks.runDatabasePortTask;
+        let failed = false;
+        vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
+          if (!failed && args[0].operation === "verify") {
+            failed = true;
+            throw new Error(fixtures.injected);
+          }
+          return run(...args);
+        });
         const refused = async (options: Parameters<typeof doctorDatabasePort>[0]) => {
           await expect(doctorDatabasePort(options)).rejects.toThrow(
-            /^stage: .*observed database validation/,
+            /^verify: .*observed changed canonical rows/,
           );
-          expect(fixtures.manifest(state).targets[0]?.verification).toBeNull();
           expect(fs.readFileSync(state.configPath, "utf8")).toBe(originalConfig);
         };
-        await refused({ to: "postgres", family: "state" });
+        await expect(doctorDatabasePort({ to: "postgres", family: "state" })).rejects.toThrow(
+          /Database port verify:/,
+        );
+        vi.restoreAllMocks();
         const anchorPath = (
           await fixtures.files(state.statePath("recovery", "database-port"))
         ).find((file) => path.basename(file) === "target.sqlite");
         assert(anchorPath, "Owner admission runs after the verified anchor is written");
+        const target = readBackupEngine(anchorPath);
+        assert(target.engine === "postgres");
+        await client.query(`UPDATE "${target.namespace}".schema_meta SET role = 'agent'`);
         const { admit } = await statePortProvider.loadDescriptor();
         assert(admit);
         const admitAnchor = () =>
