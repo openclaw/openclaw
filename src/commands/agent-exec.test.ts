@@ -19,6 +19,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { applyExecConfigOverrides, resolveExecBaseConfig } from "./agent-exec-input.js";
 import { classifyAgentExecResult } from "./agent-exec-result.js";
@@ -81,6 +83,7 @@ function throwFromRun(error: unknown) {
 }
 
 afterEach(() => {
+  resetDatabaseEngineSelectionForTest();
   vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   cleanupTempDirs(externalTempDirs);
@@ -135,6 +138,49 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
+  it.each(["ambient", "pinned", "temporary", "isolated"])(
+    "selects run storage before agent execution (%s)",
+    async (mode) => {
+      const root = tempDirs.make("openclaw-agent-exec-storage-");
+      const base: OpenClawConfig = {
+        database: {
+          families: { state: { engine: "postgres" }, agent: { engine: "postgres" } },
+          postgres: {
+            connection: { source: "env", provider: "default", id: "EXEC_TEST_DSN" },
+          },
+        },
+      };
+      const config = await writeSeed(base, root);
+      setRuntimeConfigSnapshot(base);
+      const retained = mode === "ambient" || mode === "pinned";
+      await withEnvAsync(
+        { EXEC_TEST_DSN: retained ? "postgresql://localhost/exec_test" : undefined },
+        async () => {
+          await runSuccessfulExec(
+            {
+              ...(mode !== "temporary" ? { stateDir: root } : {}),
+              ...(mode === "pinned" ? { config } : {}),
+              ...(mode === "isolated"
+                ? { isolated: true, configOverride: [JSON.stringify(base)] }
+                : {}),
+            },
+            () => {
+              expect(getDatabaseEngineSelection()?.effectiveEngines.state).toBe(
+                retained ? "postgres" : "sqlite",
+              );
+              expect(getDatabaseEngineSelection()?.effectiveEngines.agent).toBe(
+                retained ? "postgres" : "sqlite",
+              );
+              expect(getRuntimeConfigSnapshot()?.database?.postgres).toEqual(
+                retained ? base.database?.postgres : undefined,
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+
   it.each(["ambient", "pinned"])(
     "overlays the %s config for one run without replacing inherited settings",
     async (mode) => {
@@ -485,6 +531,17 @@ describe("agent exec command composition", () => {
 });
 
 describe("agent exec base config resolution", () => {
+  it.each(["ambient", "pinned"])("loads %s config without opening state", async (mode) => {
+    const root = tempDirs.make("openclaw-agent-exec-config-only-");
+    const config = await writeSeed({ plugins: { enabled: false } }, root);
+    await withEnvAsync({ OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: config }, async () => {
+      await resolveExecBaseConfig(mode === "pinned" ? { config } : {});
+      await expect(fs.stat(path.join(root, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    });
+  });
+
   it("overlays isolated defaults without inheriting ambient settings", async () => {
     setRuntimeConfigSnapshot({ tools: { profile: "messaging" } });
     const config = await applyExecConfigOverrides(await resolveExecBaseConfig({ isolated: true }), [

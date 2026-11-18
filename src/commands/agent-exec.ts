@@ -176,6 +176,10 @@ export async function agentExecCommand(
       }).publish();
     }
     const runConfig = buildExecRunConfig({ base: baseConfig, cwd, opts });
+    if (temporaryStateDir || opts.isolated) {
+      // Throwaway state must never create stores in the operator's PostgreSQL namespaces.
+      runConfig.database = { engine: "sqlite" };
+    }
     // Plugin discovery and its index keep the operator's roots after state moves.
     const inheritInstalledPlugins = opts.isolated !== true && opts.authEnvOnly !== true;
     const pluginInstallContext = inheritInstalledPlugins
@@ -236,12 +240,24 @@ export async function agentExecCommand(
       // Temporary runs own their resources without borrowing maintenance schema authority.
       temporaryDatabaseScope = createOpenClawDatabaseMaintenanceScope();
     }
+    const [
+      { resolveDatabaseEngineSelection },
+      { installDatabaseEngineSelection, withDatabaseEngineSelection },
+    ] = await Promise.all([
+      import("../infra/database-engine/config.js"),
+      import("../infra/database-engine/context.js"),
+    ]);
+    const selection = await resolveDatabaseEngineSelection(runConfig);
     if (opts.stateDir) {
-      stateLock = await acquireEmbeddedStateLock({
-        signal: abortSignal,
-        formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
-      });
+      // Lock acquisition reads the existing owner lease using the selected state engine.
+      stateLock = await withDatabaseEngineSelection(selection, () =>
+        acquireEmbeddedStateLock({
+          signal: abortSignal,
+          formatActiveGatewayRefusal: formatActiveGatewayExecRefusal,
+        }),
+      );
     }
+    installDatabaseEngineSelection(selection);
     // Publish in memory; a temporary config file would expose resolved provider keys to tools.
     snapshotIo.setRuntimeConfigSnapshot(runConfig);
     const [

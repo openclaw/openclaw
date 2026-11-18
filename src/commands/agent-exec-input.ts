@@ -117,10 +117,10 @@ export async function resolveExecBaseConfig(
   }
   const { createConfigIO, captureRuntimeConfigAsyncReader } = await import("../config/io.js");
   if (!opts.config) {
-    return await captureRuntimeConfigAsyncReader()();
+    return await captureRuntimeConfigAsyncReader({ observe: false })();
   }
   // A pinned file bypasses the published runtime snapshot and fails if missing or invalid.
-  const io = createConfigIO({ configPath: path.resolve(opts.config) });
+  const io = createConfigIO({ configPath: path.resolve(opts.config), observe: false });
   if (!existsSync(io.configPath)) {
     throw new Error(`--config file not found: ${io.configPath}`);
   }
