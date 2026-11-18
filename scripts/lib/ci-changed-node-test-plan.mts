@@ -42,11 +42,13 @@ import {
   listNodeTestConfigFiles,
   listWholeConfigFiles,
   type NodeTestVolume,
+  type NodeTestTargetVolume,
 } from "./ci-node-test-inventory.mts";
 import {
   UI_REAL_GATEWAY_TEST_CONFIG,
   hasSharedUiE2eInput,
   createSelectedNodeTestShardBundles,
+  prepareNodeTestVolumes,
   packNodeTestGroups,
   normalizeSingletonNodeTestJob,
   nodeTestConfigRequiresCanonicalMetadata,
@@ -58,7 +60,6 @@ import {
   type NodeTestShard,
   type RuntimeTestSelection,
   type NodeTestVolumeContext,
-  type NodeTestShardGroup,
 } from "./ci-node-test-plan.mts";
 import { NODE_WORKER_E2E_TEST_FILES } from "./ci-node-worker-e2e-inventory.mts";
 import { resolvePolicyTestTargets } from "./ci-policy-test-watch.mts";
@@ -97,6 +98,7 @@ export { isCiDocumentationPath, resolveReleaseFastLaneScope } from "../ci-change
 
 type ChangedNodeTestShard = NodeTestShard & {
   targets?: string[];
+  targetVolumes?: NodeTestTargetVolume[];
 };
 type CwdOptions = { cwd?: string };
 type PlanDiagnostic = (reason: string) => void;
@@ -1279,7 +1281,7 @@ export function createChangedNodeTestShards(
     .map(({ target }) => target);
   // Canonical shard inventories describe this checkout, never a caller's
   // synthetic or alternate source root with coincidentally matching paths.
-  let describeVolume: ((group: NodeTestShardGroup) => NodeTestVolume) | undefined;
+  let describeVolume: ReturnType<typeof prepareNodeTestVolumes> | undefined;
   const canonicalShards = canonicalTargets.length
     ? path.resolve(cwd) === process.cwd()
       ? createSelectedNodeTestShardBundles(canonicalTargets, {
@@ -1300,6 +1302,9 @@ export function createChangedNodeTestShards(
     : [];
   if (canonicalShards === null) {
     return fallback("test targets lack canonical shard metadata");
+  }
+  if (!describeVolume && options.volumeContext && path.resolve(cwd) === process.cwd()) {
+    describeVolume = prepareNodeTestVolumes(options.volumeContext);
   }
   const artifactBoundaryOwned =
     changedBuildArtifacts || canonicalShards.some((shard) => shard.requiresDist);
@@ -1407,6 +1412,7 @@ export function createChangedNodeTestShards(
   const cap = options.compactNodeJobCap;
   const withVolumes = (result: ChangedNodeTestShard[]) => {
     if (describeVolume) {
+      const describe = describeVolume;
       for (const job of result) {
         for (const group of job.groups ?? []) {
           try {
@@ -1414,6 +1420,43 @@ export function createChangedNodeTestShards(
           } catch {
             delete group.volume;
           }
+        }
+        if (job.targets?.length) {
+          job.targetVolumes = job.targets.flatMap((target) => {
+            const sourcePlans = prTargetPlans.find((entry) => entry.target === target)?.sourcePlans;
+            if (!sourcePlans?.length) {
+              return [];
+            }
+            try {
+              // Direct children use source routing, not the canonical config remap.
+              // The target runtime projection also preserves native-Bun and Node exceptions.
+              const volume: NodeTestVolume = {
+                ...describe({ ...job, configs: [], shard_name: job.shardName }),
+                entries: sourcePlans.flatMap((plan) =>
+                  plan.watchMode || plan.forwardedArgs.some((arg) => arg !== target)
+                    ? []
+                    : describe(
+                        {
+                          ...job,
+                          configs: [plan.config],
+                          shard_name: job.shardName,
+                          includePatterns: plan.includePatterns ?? [target],
+                        },
+                        [target],
+                      ).entries,
+                ),
+              };
+              return [
+                {
+                  target,
+                  configs: [...new Set(sourcePlans.map((plan) => plan.config))],
+                  volume,
+                },
+              ];
+            } catch {
+              return [];
+            }
+          });
         }
       }
     }

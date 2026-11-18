@@ -34,6 +34,34 @@ it("authorizes custom administrator methods while session storage is unavailable
 });
 
 it.each([
+  { message: "/stop", wait: false },
+  { message: "/st\u0007op", wait: false },
+  { message: "/stop", suppressCommandInterpretation: true, wait: true },
+  { message: "/stop", intent: "goal", wait: true },
+])("preserves startup admission for $message with $wait", async ({ wait, ...input }) => {
+  const waitForAgentPreparation = vi.fn(() => {
+    throw new Error("Stop must not wait for startup");
+  });
+  await expect(
+    resolveSessionMutationAuthorizationAsync({
+      client,
+      context: {
+        ...context,
+        agentDatabaseStartup: {
+          hasPendingAgents: true,
+          registerInputRecovery() {},
+          isAgentInputRecoveryPending: () => false,
+          waitForAgentPreparation,
+        },
+      },
+      method: "chat.send",
+      requestParams: { sessionKey, ...input, idempotencyKey: "stop-pending" },
+    }),
+  ).rejects.toThrow(wait ? "Stop must not wait for startup" : "Session storage is unavailable");
+  expect(waitForAgentPreparation).toHaveBeenCalledTimes(wait ? 1 : 0);
+});
+
+it.each([
   { name: "agent runs", method: "chat.send", requestParams: { sessionKey } },
   { name: "tool execution", method: "tools.invoke", requestParams: { sessionKey } },
   {

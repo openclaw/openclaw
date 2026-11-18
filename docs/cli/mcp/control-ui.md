@@ -23,6 +23,12 @@ then return to OpenClaw. The page refreshes its saved status and shows **Connect
 after authorization is saved. **Edit** opens the MCP settings page. Sign-in requires
 an administrator connection.
 
+For shared OAuth, an owner can also ask the agent to connect in a direct chat, or
+run `openclaw mcp login <name>` while the Gateway runs. After approval, the next
+turn can use the account without restarting the Gateway. See
+[OAuth workflow](/cli/mcp/transports#oauth-workflow) for public-origin, loopback,
+and pasted-redirect instructions.
+
 If sign-in fails, the dialog distinguishes an expired attempt, provider refusal,
 an unverifiable provider, rejected connection settings, and network failures.
 Close the dialog and follow its recovery message before starting sign-in again.
@@ -62,4 +68,4 @@ Notes:
 - command snippets quote server names so unusual names remain copyable in a shell
 - displayed URL-like values are redacted before rendering when they contain embedded credentials
 - the page does not start MCP transports by itself
-- active runtimes may need `openclaw mcp reload`, Gateway config publish, or process restart depending on which process owns the MCP clients
+- OAuth credentials saved by the running Gateway are available on the next agent turn without a reload or restart; other MCP config changes follow their runtime's normal publication lifecycle

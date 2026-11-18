@@ -1,8 +1,48 @@
 import { hasGatewayToolRoutingContext, listNodes } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { BROWSER_PROXY_COMMAND } from "./browser-node-commands.js";
 import { resolveBrowserNodeTarget } from "./browser-node-routing.js";
 import { resolveBrowserConfig } from "./browser/config.js";
+
+/** Read-only candidates: discovery never attaches to a browser or selects its profile. */
+export async function discoverBrowserNodeRoutes(params: {
+  cfg: OpenClawConfig;
+  allowHostControl?: boolean;
+  nodeSelected: boolean;
+  signal?: AbortSignal;
+}) {
+  let nodeRoutes: Array<{ target: "node"; node: string; label: string }> = [];
+  let nodeRoutesUnavailable: string | undefined;
+  const nodePolicy = params.cfg.gateway?.nodes?.browser;
+  if (params.allowHostControl === false || nodePolicy?.mode === "off") {
+    nodeRoutesUnavailable = "Node browser discovery is disabled by policy.";
+  } else if (
+    !hasGatewayToolRoutingContext() &&
+    !params.nodeSelected &&
+    nodePolicy?.mode !== "auto" &&
+    params.cfg.gateway?.mode !== "remote" &&
+    !params.cfg.gateway?.remote?.url?.trim() &&
+    !process.env.OPENCLAW_GATEWAY_URL?.trim()
+  ) {
+    nodeRoutesUnavailable = "Node discovery requires a Gateway-connected run.";
+  } else {
+    try {
+      nodeRoutes = (await listNodes({ timeoutMs: 5_000 }, params.signal))
+        .filter((node) => node.connected && node.commands?.includes(BROWSER_PROXY_COMMAND))
+        .map((node) => ({
+          target: "node" as const,
+          node: node.nodeId,
+          label: node.displayName ?? node.nodeId,
+        }));
+    } catch {
+      params.signal?.throwIfAborted();
+      nodeRoutesUnavailable =
+        "Node discovery failed; alternate routes are unknown, not unavailable.";
+    }
+  }
+  return { nodeRoutes, ...(nodeRoutesUnavailable ? { nodeRoutesUnavailable } : {}) };
+}
 
 export async function resolveBrowserToolNodeTarget(
   params: {

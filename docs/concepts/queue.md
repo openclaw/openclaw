@@ -54,11 +54,10 @@ Messages from channels using durable ingress admission, including Discord and Te
 For runtime-specific timing and dependency behavior, see [Steering queue](/concepts/queue-steering). For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
 After a graceful restart, a marked running root session receives one ordinary
-resume input. Accepted user messages whose IDs were captured in that shutdown
-marker follow it in FIFO order, under their recorded senders' current authority.
-Queued rows left by an earlier crash remain inert. A sender that
-cannot be admitted gets a failed-send outcome. New messages use the normal
-steering and queue rules while the resumed run works; there is no special
+resume input. Accepted, unconsumed user inputs follow in FIFO order under their
+recorded senders' current authority. Their durable rows also retain custody after
+a crash, without needing a shutdown marker. New messages use the normal steering
+and queue rules while the resumed run works; there is no special
 recovery-predecessor admission wait. Explicit Stop and `interrupt` remain terminal.
 See [Restart recovery](/gateway/restart-recovery#automatic-resume).
 
@@ -277,11 +276,25 @@ The chat displays recorded non-Web client sources separately from the sender, fo
 Reported app names describe the submitting client; they do not establish a human identity or grant permissions.
 Collected messages retain their contributing client sources, and older messages without recorded sources keep their existing attribution.
 
-This preserves input, not execution permissions. Graceful shutdown captures the
-accepted queued input IDs in the root session's resume marker; startup admits
-those inputs under each sender's current authority after the resume input.
-Queued rows left by a crash remain inert without interrupted-input notices or
-automatic resubmission. The user can send a new message. The in-memory queue is not replayed.
+The accepted row owns the input until transcript consumption or a recorded terminal
+cause, even if the Gateway crashes before a turn claims it. Each row retains its
+original recovery source; startup rechecks that sender's current authority before
+replaying queued, unconsumed input in FIFO order. A graceful shutdown marker
+requests resumption of a running root turn; it is not the owner of queued input.
+
+An input already committed to the transcript is not executed again by queued-input
+recovery or a same-key resend. Inputs without a recoverable original source end
+with a recorded `restart-unrecoverable` cause rather than silently disappearing.
+Temporary authority or dispatch outages leave recoverable inputs queued for retry.
+A fresh input for that session first retries the older queued inputs once. If the
+outage persists, the fresh input receives a retryable refusal instead of overtaking
+them. Other sessions remain available; no timer or background retry loop is added.
+This preserves input, not execution permissions: Stop, reset, deletion, revocation,
+and queue-policy refusals retain their recorded terminal causes and do not replay.
+A relinquished follow-up retries through its original input recorder, or through
+startup replay of that exact durable input. Both revalidate current authority.
+A failed terminal settlement does not authorize a fresh same-key send to take over
+the still-queued row.
 Host sleep that preserves the process can continue the existing queue normally.
 
 Channel messages retained by durable ingress remain retryable when a queued

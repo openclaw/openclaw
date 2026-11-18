@@ -60,6 +60,15 @@ async function managedWorkspace(row = localWorkspaceProjectionFixture(randomUUID
   return { row, sessionKey, worktree, scope, session, cfg };
 }
 
+it("rejects a forged session owner at the local projection boundary", async () => {
+  const { scope, session, cfg } = await managedWorkspace();
+  const sessionKey = "agent:main:other-session";
+  await replaceSessionEntry({ ...scope, sessionKey }, session);
+  await expect(resolveLocalWorkspaceOwner({ ...scope, sessionKey, cfg })).rejects.toThrow(
+    "Local sandbox managed workspace owner changed",
+  );
+});
+
 it.each(["unrelated publication", "selected identity", "selected removal"])(
   "scopes local workspace resolution while reading across %s",
   async (change) => {

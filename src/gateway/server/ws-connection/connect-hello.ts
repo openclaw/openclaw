@@ -59,7 +59,6 @@ import {
 } from "../../operator-role-policy.js";
 import { broadcastRejectedNodePairing } from "../../pairing-events.js";
 import { MAX_PAYLOAD_BYTES } from "../../payload-limits.js";
-import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
   TICK_INTERVAL_MS,
@@ -233,12 +232,8 @@ export async function sendGatewayHello(
     features: {
       methods: gatewayMethods.filter(
         (method) =>
-          (method !== "mcp.authLogin" ||
-            Boolean(
-              resolveBrowserAuthOrigin(context.browserOrigin, { authPolicy: state.authPolicy }),
-            )) &&
-          (isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
-            !method.startsWith("openclawId.")),
+          isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId) ||
+          !method.startsWith("openclawId."),
       ),
       events: isOpenClawIdEnabled(context.configSnapshot.gateway?.openclawId)
         ? events

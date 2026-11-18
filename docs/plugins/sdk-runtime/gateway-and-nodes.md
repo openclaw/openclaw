@@ -761,3 +761,39 @@ The reporter is revoked when the service stops or its plugin registry generation
 late callback from an old generation cannot overwrite current health. Prefer returning the startup
 promise when the service is not usable until that promise settles; use the reporter only for
 deliberately nonblocking work that owns its own stop path.
+
+## Publication-reader device admission
+
+`openclaw/plugin-sdk/gateway-runtime` exports
+`prepareGatewayPublicationReaderV1(request)` for a registered publication reader.
+It returns the authenticated `deviceId` and an `assertCurrent()` guard, not a
+person profile or a reusable credential. Call the guard after awaited source
+reads and immediately before returning data. The guard checks the host's actual
+request authority; wire parameters and a caller-supplied callback cannot create
+this admission.
+
+The host admits this connection only with a signed paired-device handshake and
+an existing operator token whose stored and requested scopes are both exactly
+`["operator.session-share.read"]`. Requesting that scope with a broader token is
+not sufficient. Omitting it from a restricted token does not enter ordinary
+operator admission. Existing device-token approval, rotation, and revocation
+remain the credential owners.
+
+These connections have no human profile or owner role. Their hello contains no
+session, health, presence, UI, or recovery data. Only registered methods with the
+exact scope and `profileAccess: "independent"` are callable. Ordinary reads,
+preferences, scope upgrades, and writes are denied. The host scope alone does not
+publish any session: the source plugin must separately authorize the exact
+device against its live publication grant, and enforce its group and canonical
+person selection before each disclosure. That source grant is not supplied by
+this host capability. It grants no human steering authority.
+
+### Existing named reader identity
+
+`loadGatewayReaderIdentityV1(identityKey)` from
+`openclaw/plugin-sdk/gateway-runtime` reads a preprovisioned signing identity from
+the host credential owner. Empty, whitespace-padded and `primary` keys are
+rejected. Missing identities throw; the helper never creates or enrolls a device.
+Pass the returned identity explicitly to `GatewayClient` with an explicit device
+token. The identity is signing material, not session authorization. Never expose
+its private key in logs or responses.

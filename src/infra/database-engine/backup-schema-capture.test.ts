@@ -138,15 +138,12 @@ it.skipIf(!connection)(
         expect(manifest.carrier).toBe("postgres-schema");
         assert(manifest.schema);
         namespaces.add(manifest.schema);
-        const live = await inspectDatabasePort(
+        const { catalog: _catalog, ...live } = await inspectDatabasePort(
           { engine: "postgres", db: client, namespace },
           descriptor,
           storeId,
         );
-        expect(manifest.verification).toEqual({
-          tables: live.tables,
-          allocations: live.allocations,
-        });
+        expect(manifest.verification).toEqual(live);
 
         await client.query(`UPDATE "${namespace}".workboard_cards SET title = 'Migrated'`);
         // A retry restores from the same frozen capture.

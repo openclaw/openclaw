@@ -364,11 +364,11 @@ or unsupported scenario. Usable route readiness requires a loaded route and a
 visible usable control; sharing additionally opens its menu. Compare medians and
 p95 against the A/A control before attributing timing changes on a loaded host.
 
-Use `--routes agents,cron --interactions agents-files,cron-history,cron-transcript`
+Use `--routes agents,cron --interactions agents-files,cron-history`
 for the corresponding follow-through probes. Their automation-to-ready wall and
 CPU intervals are separate from cold readiness; they are not INP measurements.
 Coverage mode also records which requested modules actually evaluated during
-each action. Transcript probing opts into a synthetic completed run and messages.
+each action. Automation history probing opts into a synthetic completed run.
 Every matching Agents/Cron variant receives at least 2,000 ms of post-ready
 think time, including builds without passive preloads. When the built navigation
 descriptor provides `agents-next` or `cron-next`, the probe also waits for those

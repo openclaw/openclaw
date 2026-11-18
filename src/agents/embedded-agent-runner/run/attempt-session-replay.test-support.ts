@@ -267,7 +267,7 @@ export async function withInterruptedTurn(
         );
       });
     }
-    previous.finishPendingInput!("interrupted");
+    previous.releasePendingInput!();
     rotateAgentEventLifecycleGeneration();
     await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
@@ -356,7 +356,7 @@ export async function withInterruptedTurn(
           }),
       });
     } finally {
-      recorder.finishPendingInput!("interrupted");
+      recorder.finishPendingInput!("interrupted", "failed");
       await lifecycle.dispose();
       await selected?.databaseClaim.release();
       clearEmbeddedSessionPromptStates([target.sessionId]);

@@ -267,7 +267,12 @@ export function createAgentDatabaseExecution(
         signal,
       );
       // A peer's intentional native close can finish while this admitted operation settles.
-      if (generation === current && !nativeClosing && current.failure()) {
+      // Completed absent reads have no native file to retain for the next creator.
+      if (
+        generation === current &&
+        !nativeClosing &&
+        (current.failure() || (!fileIdentity && !current.getPendingPreparation()))
+      ) {
         await closeNative(current).catch(reportCleanupFailure);
       }
       return result;
@@ -574,7 +579,9 @@ export function createAgentDatabaseExecution(
               return;
             }
             const cleanupSignal = getGatewayShutdownCleanupSignal();
-            const canRetain = () => generation && !nativeClosing && !cleanupSignal.aborted;
+            // An absent read has no admitted file to keep warm and must release creation.
+            const canRetain = () =>
+              generation && fileIdentity && !nativeClosing && !cleanupSignal.aborted;
             try {
               for (const idle of executionState.idle) {
                 if (!canRetain() || executionState.idle.size < MAX_IDLE_EXECUTORS) {

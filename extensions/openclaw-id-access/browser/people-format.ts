@@ -86,6 +86,9 @@ export function deviceApprover(
   if (approver.kind === "invite") {
     return `Approved via invite ${approver.invite_id}`;
   }
+  if (approver.kind === "member_recovery_kit") {
+    return "Added with a recovery kit";
+  }
   if (approver.kind === "owner") {
     return approver.by === "root"
       ? "Approved with the recovery key"

@@ -969,45 +969,52 @@ function warnCandidateToolingLag(candidateSha: string) {
     );
     return;
   }
-  const mainSha = resolveSha("origin/main");
-  if (candidateSha === mainSha) {
-    return;
-  }
-  const commitCount = Number(
-    run("git", [
-      "rev-list",
-      "--count",
-      "--right-only",
-      "--no-merges",
-      `${candidateSha}...${mainSha}`,
-    ]),
-  );
-  // Long-lived release branches can differ from main by tens of thousands of
-  // paths; --shortstat keeps the count bounded instead of buffering every name.
-  const changedPathCount = Number(
-    /^\s*(\d+) files? changed/u.exec(
-      run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
-    )?.[1] ?? 0,
-  );
-  if (commitCount > 0 && changedPathCount > 0) {
-    const changedAreas = run("git", [
-      "diff",
-      "--no-renames",
-      "--dirstat=files,1",
-      candidateSha,
-      mainSha,
-    ])
-      .split(/\r?\n/u)
-      .map((line) => line.trim())
-      .filter(Boolean);
-    console.warn(
-      formatCandidateToolingLagWarning(
+  try {
+    const mainSha = resolveSha("origin/main");
+    if (candidateSha === mainSha) {
+      return;
+    }
+    const commitCount = Number(
+      run("git", [
+        "rev-list",
+        "--count",
+        "--right-only",
+        "--no-merges",
+        `${candidateSha}...${mainSha}`,
+      ]),
+    );
+    // Long-lived release branches can differ from main by tens of thousands of
+    // paths; --shortstat keeps the count bounded instead of buffering every name.
+    const changedPathCount = Number(
+      /^\s*(\d+) files? changed/u.exec(
+        run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
+      )?.[1] ?? 0,
+    );
+    if (commitCount > 0 && changedPathCount > 0) {
+      const changedAreas = run("git", [
+        "diff",
+        "--no-renames",
+        "--dirstat=files,1",
         candidateSha,
         mainSha,
-        commitCount,
-        changedPathCount,
-        changedAreas,
-      ),
+      ])
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      console.warn(
+        formatCandidateToolingLagWarning(
+          candidateSha,
+          mainSha,
+          commitCount,
+          changedPathCount,
+          changedAreas,
+        ),
+      );
+    }
+  } catch {
+    // Drift reporting is advisory; the independent qualification gates below remain fatal.
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because the Git comparison failed; continuing with the existing qualification checks.",
     );
   }
 }

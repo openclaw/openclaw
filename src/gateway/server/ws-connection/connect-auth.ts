@@ -27,6 +27,7 @@ import {
   checkDeviceTokenPeer,
   openclawIdPeerKeyOf,
 } from "../../openclaw-id/device-token-binding.js";
+import { PUBLICATION_READ_SCOPE } from "../../operator-scopes.js";
 import { withSerializedCredentialFallbackAttempt } from "../../rate-limit-attempt-serialization.js";
 import {
   GATEWAY_DELEGATION_DENIED,
@@ -122,6 +123,10 @@ async function authenticateGatewayConnectCore(
   } = context;
   const resolvedAuth = getResolvedAuth();
   const hasRequestedScopes = Array.isArray(connectParams.scopes);
+  // Unbound-scope clearing must not turn a reserved reader claim into owner admission.
+  const publicationReadScopes = connectParams.scopes?.includes(PUBLICATION_READ_SCOPE)
+    ? [...connectParams.scopes]
+    : undefined;
   const admission = await admitGatewayConnect(context);
   if (!admission) {
     return undefined;
@@ -622,6 +627,7 @@ async function authenticateGatewayConnectCore(
     resolvedAuth,
     scopes,
     hasRequestedScopes,
+    publicationReadScopes,
     device,
     devicePublicKey,
     deviceAuthPayloadVersion,

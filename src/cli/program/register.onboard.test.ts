@@ -1,6 +1,12 @@
+import { execFileSync } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveCliNetworkProxyPolicy } from "../command-path-policy.js";
 import { withCliTty } from "../run-main.bare-root.test-support.js";
 import { registerCoreCliCommands } from "./command-registry-core.js";
 import { createProgramContext } from "./context.js";
@@ -198,6 +204,119 @@ describe("setup routing", () => {
     expect(systemAgent).not.toHaveBeenCalled();
   }
   beforeEach(() => configSnapshot({}, false));
+
+  it.skipIf(process.platform === "win32").each(["default", "configured", "missing"])(
+    "exposes the verified desktop CLI without reading config or running setup (home=%s)",
+    async (homeKind) => {
+      const customHome = homeKind !== "default";
+      const configured = homeKind === "configured";
+      const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-desktop-path-"));
+      try {
+        const operatorHome = path.join(home, "operator-home");
+        const stateDir = path.join(operatorHome, "state");
+        const configFile = path.join(stateDir, "openclaw.json");
+        const configBytes = Buffer.from(' {"gateway":{"mode":"remote"}}\n');
+        if (configured) {
+          await fs.mkdir(stateDir, { recursive: true });
+          await fs.writeFile(configFile, configBytes);
+        }
+        const launcher = path.join(home, ".openclaw/bin/openclaw");
+        await fs.mkdir(path.dirname(launcher), { recursive: true });
+        const marker = {
+          purpose: "gateway",
+          runtime: { bun: process.execPath },
+          entry: process.argv[1],
+        };
+        await fs.writeFile(
+          launcher,
+          `#!/bin/sh\n# OpenClaw-Tauri runtime v1 ${JSON.stringify(marker)}\nprintf '%s\\n' "$HOME" "$OPENCLAW_HOME" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH"\nprintf 'desktop:%s:%s\\n' "$OPENCLAW_PROFILE" "$*"\n`,
+          { mode: 0o755 },
+        );
+        const launcherBytes = await fs.readFile(launcher);
+        await fs.writeFile(
+          path.join(home, ".bashrc"),
+          "# operator settings\nexport PATH=/usr/bin:/bin\n",
+          { mode: 0o600 },
+        );
+        const env = {
+          HOME: home,
+          OPENCLAW_HOME: customHome ? operatorHome : undefined,
+          OPENCLAW_PROFILE: configured ? "operator" : undefined,
+          OPENCLAW_STATE_DIR: configured ? stateDir : undefined,
+          OPENCLAW_CONFIG_PATH: configured ? configFile : undefined,
+          SHELL: "/bin/bash",
+          PATH: "/usr/bin:/bin",
+        };
+        expect(
+          resolveCliNetworkProxyPolicy(["node", "openclaw", "setup", "--terminal-path", launcher]),
+        ).toBe("bypass");
+        expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "setup"])).toBe("default");
+        expect(
+          resolveCliNetworkProxyPolicy([
+            "node",
+            "openclaw",
+            "setup",
+            "--",
+            "--terminal-path",
+            launcher,
+          ]),
+        ).toBe("default");
+        await withEnvAsync(env, async () => {
+          for (let attempt = 0; attempt < 2; attempt++) {
+            await runSetup(["--terminal-path", launcher]);
+            expectNoCalls(config, setup, wizard, systemAgent, runtime.error, runtime.exit);
+            for (const [key, value] of Object.entries(env)) {
+              expect(process.env[key]).toBe(value);
+            }
+          }
+        });
+        const output = execFileSync("/bin/bash", ["-ic", "openclaw qr 'literal argument'"], {
+          env: { ...env, OPENCLAW_PROFILE: "operator" },
+          encoding: "utf8",
+        });
+        expect(output.trimEnd().split("\n")).toEqual([
+          home,
+          env.OPENCLAW_HOME ?? "",
+          env.OPENCLAW_STATE_DIR ?? "",
+          env.OPENCLAW_CONFIG_PATH ?? "",
+          "desktop:operator:qr literal argument",
+        ]);
+        expect(await fs.readFile(launcher)).toEqual(launcherBytes);
+        if (configured) {
+          expect(await fs.readFile(configFile)).toEqual(configBytes);
+          expect(await fs.readdir(operatorHome)).toEqual(["state"]);
+          expect(await fs.readdir(stateDir)).toEqual(["openclaw.json"]);
+        } else {
+          await expect(fs.lstat(operatorHome)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+        expect((await fs.stat(path.join(home, ".bashrc"))).mode & 0o777).toBe(0o600);
+        expect(
+          (await fs.readFile(path.join(home, ".bashrc"), "utf8")).match(/if ! command/g),
+        ).toHaveLength(1);
+        expect((await fs.readdir(home)).toSorted()).toEqual([
+          ".bashrc",
+          ".openclaw",
+          ".profile",
+          ...(configured ? ["operator-home"] : []),
+        ]);
+        expect(await fs.readdir(path.join(home, ".openclaw"))).toEqual(["bin"]);
+      } finally {
+        await fs.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(["--baseline", "--mode remote", "--message status", "--json"])(
+    "rejects terminal-only setup combined with %s before reading config",
+    async (other) => {
+      await runSetup(["--terminal-path", "/missing/openclaw", ...other.split(" ")]);
+      expectNoCalls(config, setup, wizard, systemAgent);
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("--terminal-path cannot be combined"),
+      );
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it.each([
     ["pending inference", { agents: { defaults: { model: "acme/verified" } } }, true, true],

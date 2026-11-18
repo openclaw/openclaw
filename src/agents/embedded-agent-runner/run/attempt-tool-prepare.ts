@@ -86,6 +86,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  let getRunAbortDeadlineAtMs: (() => number | undefined) | undefined;
   const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
   const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
@@ -303,11 +304,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     },
   };
   let webSearchUnconfigured = false;
+  let messageToolAvailable = true;
   const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
+    messageToolAvailable = true;
     additionalInheritedToolNamesRef.length = 0;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
@@ -318,6 +321,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       );
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
+        getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
@@ -382,6 +386,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         inboundEventKind: attempt.currentInboundEventKind,
         inputProvenance: attempt.inputProvenance,
         disableMessageTool: attempt.disableMessageTool,
+        retainUnavailableMessageTool: true,
+        onMessageToolAvailability: (available) => {
+          messageToolAvailable = available;
+        },
         forceMessageTool: attempt.forceMessageTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
         additionalInheritedToolNamesRef,
@@ -458,7 +466,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   try {
     const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
     return {
+      bindRunAbortDeadline: (source: () => number | undefined) => {
+        getRunAbortDeadlineAtMs = source;
+      },
       toolHookContext: {
+        getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         awaitSessionDiffBaseline,
         watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
         agentId: params.setup.sessionAgentId,
@@ -514,6 +526,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
+      get messageToolAvailable() {
+        return messageToolAvailable;
+      },
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,
