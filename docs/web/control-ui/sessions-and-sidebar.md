@@ -569,7 +569,7 @@ CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
 Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K**, **⌘P**, or **⌘Shift+P** on Mac, or **Ctrl+K**, **Ctrl+P**, or **Ctrl+Shift+P** on Windows/Linux. These shortcuts also work while typing and inside embedded widgets; the P shortcuts open the palette instead of browser printing. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
-The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
+The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the unread and recent chats and the default commands immediately.
 
 Session metadata filtering and command-palette metadata matches are case-insensitive,
 including the Greek sigma forms **Σ**, **σ**, and **ς**. Title matching also treats
@@ -776,6 +776,15 @@ These direct shortcuts do not change the command palette's **⌘K / Ctrl+K**, th
 **⌘Enter / Ctrl+Enter** workflow for starting a task in the background.
 
 ## Command palette
+
+With an empty field, the palette works as a quick switcher. **Unread** lists
+unread chats, newest activity first, and **Recent** lists the most recently active
+other chats, up to eight in total, above the default commands. The chat you are
+viewing, archived and snoozed chats, and subagent runs are left out. Press
+**⌘K / Ctrl+K**, then **Enter** to open the newest unread chat, or the most
+recently active other chat when nothing is unread. The list comes from the
+sidebar's session list, so opening the palette adds no Gateway request, and rows
+update while it stays open.
 
 The command palette can start an independent task without leaving your current
 conversation or settings page. Search sessions, settings, and commands as usual,

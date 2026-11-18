@@ -216,6 +216,15 @@
   overflow-wrap: anywhere;
 }
 
+.cmd-palette__item--unread .cmd-palette__item-title {
+  font-weight: var(--control-ui-font-weight-semibold);
+}
+
+.cmd-palette__item-title .session-unread-dot {
+  margin-inline-start: 6px;
+  vertical-align: 1px;
+}
+
 /* The time centers on the row, across the title and its metadata. */
 .cmd-palette__item-time {
   grid-column: 2;

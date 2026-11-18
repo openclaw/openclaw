@@ -55,9 +55,10 @@ import {
 } from "./command-palette-input.tsx";
 import { createCommandPaletteMatches } from "./command-palette-matches.ts";
 import { createModeGlide } from "./command-palette-mode-glide.ts";
+import type { CommandPaletteSnapshot } from "./command-palette-recent-sessions.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
-import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
+import type { PaletteFilter } from "./command-palette-state.ts";
 import { ImageLightboxItemView } from "./image-lightbox.tsx";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import {
@@ -71,7 +72,7 @@ import { Kbd, KeyboardShortcut, ShortcutHint, ShortcutText } from "./solid/kbd.t
 
 registerCommandPaletteEnglish();
 
-type CommandPaletteProps = ReturnType<CommandPaletteState["readProps"]>;
+type CommandPaletteProps = CommandPaletteSnapshot;
 
 function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
   const map = new Map<string, CommandPaletteItem[]>();
@@ -373,6 +374,7 @@ function PaletteSearch(props: {
                         "cmd-palette__item",
                         {
                           "cmd-palette__item--session": Boolean(item().session),
+                          "cmd-palette__item--unread": item().session?.unread === true,
                           "cmd-palette__item--active": active(),
                         },
                       ]}

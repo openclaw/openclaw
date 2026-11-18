@@ -50,6 +50,11 @@ export interface ShellNavigationHost {
 export class ShellNavigationOwner {
   constructor(private readonly host: ShellNavigationHost) {}
 
+  /** The chat the current route shows, or an empty string on other pages. */
+  currentChatSessionKey(): string {
+    return isSessionRouteId(this.host.routeState.routeId) ? this.host.activeSessionKey.trim() : "";
+  }
+
   selectChatSession(sessionKey: string, agentId?: string | null): void {
     const context = this.host.context;
     if (!context) {

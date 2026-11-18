@@ -49,6 +49,8 @@ const enCommandPalette = {
       navigation: en.palette.categories.navigation,
       skills: "Skills",
       messages: "In messages",
+      unread: "Unread",
+      recent: "Recent",
     },
     items: {
       apps: "Apps",

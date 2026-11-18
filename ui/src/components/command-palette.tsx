@@ -7,6 +7,7 @@ import type {
   CommandPaletteOpenInput,
   CommandPaletteInputHandoff,
 } from "./command-palette-contract.ts";
+import { CommandPaletteRecentSessions } from "./command-palette-recent-sessions.ts";
 import { CommandPaletteState, type CommandPaletteProperties } from "./command-palette-state.ts";
 import { CommandPaletteView } from "./command-palette-view.tsx";
 
@@ -52,8 +53,12 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
         ),
       (owner) => owner,
     );
+    const recentSessions = new CommandPaletteRecentSessions();
     // Event handlers read owner changes immediately, before Solid settles.
-    const readProps = () => projection.read().readProps();
+    const readProps = () => {
+      const snapshot = projection.read().readProps();
+      return { ...snapshot, recentItems: recentSessions.read(context.sessions, snapshot) };
+    };
     onSettled(() => {
       states.set(host, state);
       Object.defineProperty(host, "isOpen", { configurable: true, get: () => state.open });
@@ -88,6 +93,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
     properties: {
       onNavigate: { default: undefined, attribute: false },
       onSelectSession: { default: undefined, attribute: false },
+      currentSessionKey: { default: undefined, attribute: false },
       onSlashCommand: { default: undefined, attribute: false },
       desktopAvailable: { default: false, attribute: false },
       custodianAvailable: { default: false, attribute: false },

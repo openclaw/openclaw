@@ -45,7 +45,9 @@ export type CommandPaletteItem = {
     | "search"
     | "navigation"
     | "chats"
-    | "messages";
+    | "messages"
+    | "unread"
+    | "recent";
   action: string;
   session?: GatewaySessionRow;
   search?: string;
@@ -72,6 +74,8 @@ const CATEGORY_LABEL_KEYS = new Map([
   ["settings", "palette.items.settings"],
   ["chats", "sessionsView.title"],
   ["messages", "palette.categories.messages"],
+  ["unread", "palette.categories.unread"],
+  ["recent", "palette.categories.recent"],
 ]);
 
 export function commandPaletteCategoryLabel(category: string): string {
@@ -146,6 +150,8 @@ export function filterCommandPaletteItems(params: {
   query: string;
   includeSlashCommands: boolean;
   sessionItems: readonly CommandPaletteItem[];
+  /** Unread and recent chats an empty query lists before its commands. */
+  recentItems?: readonly CommandPaletteItem[];
   catalogItems: readonly CommandPaletteItem[];
   desktopAvailable: boolean;
   custodianAvailable: boolean;
@@ -156,7 +162,7 @@ export function filterCommandPaletteItems(params: {
     params.custodianAvailable,
   ).filter((item) => params.includeSlashCommands || item.category !== "search");
   if (!params.query) {
-    return baseItems;
+    return [...(params.recentItems ?? []), ...baseItems];
   }
   const query = normalizeLowercaseStringOrEmpty(params.query).normalize("NFC");
   const matchRank = (item: CommandPaletteItem) => {

@@ -47,6 +47,8 @@ export type PaletteFilter = "all" | "sessions" | "messages";
 export type CommandPaletteProperties = {
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
+  /** The chat the current route shows, left out of the empty palette's chats. */
+  currentSessionKey?: () => string;
   onSlashCommand?: (command: string) => void;
   desktopAvailable: boolean;
   custodianAvailable: boolean;
