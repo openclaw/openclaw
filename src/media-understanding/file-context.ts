@@ -51,6 +51,8 @@ export async function extractFileContext(params: {
   cache: ReturnType<typeof createMediaAttachmentCache>;
   cfg: OpenClawConfig;
   limits: FileExtractionLimits;
+  /** Caller's context budget for composer pastes; the document cap applies to files only. */
+  pasteMaxChars?: number;
   skipAttachmentIndexes?: Set<number>;
   assertCurrent?: () => void;
   signal?: AbortSignal;
@@ -186,7 +188,15 @@ export async function extractFileContext(params: {
         buffer:
           mimeType === "application/pdf" ? Buffer.from(bufferResult.buffer) : bufferResult.buffer,
         filename: bufferResult.fileName,
-        limits: { ...baseLimits, allowedMimes },
+        // A paste is the sender's message text, so the uploaded-document cap must not
+        // drop its tail; the attachment byte cap still bounds it.
+        limits: {
+          ...baseLimits,
+          allowedMimes,
+          ...(attachment.origin === "paste"
+            ? { maxChars: params.pasteMaxChars ?? Number.POSITIVE_INFINITY }
+            : {}),
+        },
         config: cfg,
         classification,
         mimeType: attachment.mime,
@@ -321,6 +331,7 @@ export async function renderInboundDocumentContext(params: {
         params.maxChars === undefined
           ? limits
           : { ...limits, maxChars: Math.min(limits.maxChars, params.maxChars) },
+      pasteMaxChars: params.maxChars,
       selfServePathsEnabled: false,
       assertCurrent: params.assertCurrent,
       signal: params.signal,
