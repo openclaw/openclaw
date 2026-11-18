@@ -1,6 +1,5 @@
 import { writeFile } from "node:fs/promises";
 import type { Locator, Page } from "playwright";
-import QRCode from "qrcode";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -15,7 +14,6 @@ const suite = createSessionManagementE2eSuite();
 const sessionKey = "agent:main:dashboard:619dfdde-5f1b-4f7f-be9c-68ab72f812f8";
 const title = "Recognizable halftone claw QR for public conversations";
 const owner = { type: "human", id: "owner", label: "Owner" };
-const phase = process.env.OPENCLAW_PUBLIC_SHARE_QR_PHASE ?? "after";
 
 async function openPublishedSession(page: Page) {
   await installMockGateway(page, {
@@ -49,45 +47,7 @@ async function openPublishedSession(page: Page) {
   await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
 }
 
-/** Rebuild the rendered module grid and compare it with the encoder's matrix for `url`. */
-async function expectQrEncodes(qr: Locator, url: string) {
-  const rendered = await qr.evaluate((svg) => ({
-    viewBox: svg.getAttribute("viewBox"),
-    path: svg.querySelector("path")?.getAttribute("d") ?? "",
-    width: svg.getBoundingClientRect().width,
-    height: svg.getBoundingClientRect().height,
-  }));
-  const { size, data } = QRCode.create(url, { errorCorrectionLevel: "M" }).modules;
-  const quiet = 4;
-  expect(rendered.viewBox).toBe(`0 0 ${size + quiet * 2} ${size + quiet * 2}`);
-  const dark = new Set<number>();
-  for (const [, x, y, run] of rendered.path.matchAll(/M(\d+) (\d+)h(\d+)v1h-\d+z/gu)) {
-    for (let offset = 0; offset < Number(run); offset += 1) {
-      dark.add((Number(y) - quiet) * size + Number(x) - quiet + offset);
-    }
-  }
-  const expected = new Set<number>();
-  for (let index = 0; index < data.length; index += 1) {
-    if (data[index]) {
-      expected.add(index);
-    }
-  }
-  expect(dark).toEqual(expected);
-  // Phone cameras need enough pixels per module; keep the symbol square and legible.
-  expect(Math.abs(rendered.width - rendered.height)).toBeLessThanOrEqual(1);
-  expect(rendered.width / (size + quiet * 2)).toBeGreaterThanOrEqual(2.5);
-}
-
-async function expectClaw(qr: Locator, page: Page, surface: Locator, url: string, name: string) {
-  const toggle = surface.getByRole("button", { name: "Use claw QR", exact: true });
-  if (name.includes("desktop")) {
-    await surface.locator(".chat-pane__sharing-url").focus();
-    await page.keyboard.press("Tab");
-    expect(await toggle.evaluate((element) => element === document.activeElement)).toBe(true);
-    await page.keyboard.press("Enter");
-  } else {
-    await toggle.click();
-  }
+async function expectClaw(page: Page, surface: Locator, url: string, name: string) {
   const image = surface.getByRole("img", {
     name: "Claw QR code for the public link",
     exact: true,
@@ -98,24 +58,20 @@ async function expectClaw(qr: Locator, page: Page, surface: Locator, url: string
       await element.decode();
     }
   });
-  const download = surface.getByRole("link", { name: "Download claw QR" });
-  expect(await download.getAttribute("href")).toBe(await image.getAttribute("src"));
-  const frame = await takeControlUiScreenshotFrame(page, surface, [image, download], {
+  expect(await surface.getByRole("button", { name: "Use claw QR" }).count()).toBe(0);
+  expect(await surface.locator("a[download]").count()).toBe(0);
+  const frame = await takeControlUiScreenshotFrame(page, surface, [image], {
     elements: [image],
     scrollTo: image,
     animations: "disabled",
   });
+  const [surfaceBox, imageBox] = await Promise.all([surface.boundingBox(), image.boundingBox()]);
+  expect(imageBox!.width).toBe(240);
+  expect(imageBox!.x).toBeGreaterThanOrEqual(surfaceBox!.x);
+  expect(imageBox!.x + imageBox!.width).toBeLessThanOrEqual(surfaceBox!.x + surfaceBox!.width);
   await writeFile(suite.artifactDir + "/" + name + ".png", frame.png);
   await writeFile(suite.artifactDir + "/display.png", frame.elements[0]!.png);
-  const downloaded = page.waitForEvent("download");
-  await download.click();
-  const file = await downloaded;
-  expect(file.suggestedFilename()).toBe("openclaw-public-link-qr.png");
-  await file.saveAs(suite.artifactDir + "/export.png");
   await writeFile(suite.artifactDir + "/url.txt", url);
-  await surface.getByRole("button", { name: "Use standard QR", exact: true }).click();
-  await qr.waitFor();
-  await expectQrEncodes(qr, url);
 }
 
 suite.define(() => {
@@ -132,20 +88,11 @@ suite.define(() => {
             .toBe(true);
           const url = panel.locator(".chat-pane__sharing-url-text");
           await expect.poll(() => url.textContent()).toMatch(/^http:\/\/.+\/chat\//u);
-          if (phase === "after") {
-            const qr = panel.getByRole("img", { name: "QR code for the public link" });
-            await qr.waitFor();
-            await expectQrEncodes(qr, (await url.textContent())!);
-            const [panelBox, qrBox] = await Promise.all([panel.boundingBox(), qr.boundingBox()]);
-            expect(qrBox!.x).toBeGreaterThanOrEqual(panelBox!.x);
-            expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width);
-          }
           await expectClaw(
-            panel.getByRole("img", { name: "QR code for the public link", exact: true }),
             page,
             panel,
             (await url.textContent())!,
-            `halftone-after-desktop-${colorScheme}`,
+            `round-claw-desktop-${colorScheme}`,
           );
         },
       );
@@ -173,21 +120,11 @@ suite.define(() => {
             .locator('[data-mobile-page="sharing"]');
           const url = sharing.locator(".chat-sharing-mobile__url");
           await expect.poll(() => url.textContent()).toMatch(/^http:\/\/.+\/chat\//u);
-          if (phase === "after") {
-            const qr = sharing.getByRole("img", { name: "QR code for the public link" });
-            await qr.waitFor();
-            await expectQrEncodes(qr, (await url.textContent())!);
-            await qr.scrollIntoViewIfNeeded();
-            const qrBox = await qr.boundingBox();
-            expect(qrBox!.x).toBeGreaterThanOrEqual(0);
-            expect(qrBox!.x + qrBox!.width).toBeLessThanOrEqual(390);
-          }
           await expectClaw(
-            sharing.getByRole("img", { name: "QR code for the public link", exact: true }),
             page,
             sharing,
             (await url.textContent())!,
-            `halftone-after-mobile-${colorScheme}`,
+            `round-claw-mobile-${colorScheme}`,
           );
         },
       );

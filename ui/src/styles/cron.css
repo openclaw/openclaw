@@ -388,6 +388,8 @@
 }
 
 .cron-prompt__run-controls {
+  /* The session composer's pickers sit on the tray's 28px control row. */
+  --chat-composer-chip-height: 28px;
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
@@ -395,6 +397,28 @@
   margin-inline-start: auto;
   min-width: 0;
   min-height: 30px;
+}
+
+/* The composer's pickers take the tray's ink, as Chat's take the composer's.
+   Chat neutralizes its provider mark only inside its own composer (New Session
+   keeps brand color), so the tray follows its label here; chevrons match the
+   schedule selects beside them. */
+.cron-prompt__run-controls .chat-controls__inline-select-trigger {
+  --icon-interactive: var(--muted);
+}
+
+.cron-prompt__run-controls .chat-controls__trigger-provider-icon {
+  color: inherit;
+}
+
+.cron-prompt__run-controls .chat-controls__inline-select-chevron,
+.cron-prompt__run-controls .chat-controls__inline-select-chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+}
+
+.cron-prompt__run-controls .chat-controls__inline-select-chevron svg {
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .cron-prompt__saved-text {
@@ -447,7 +471,7 @@
 .cron-prompt__name::placeholder,
 .cron-prompt__text::placeholder,
 .cron-tray-input::placeholder,
-.cron-advanced__card .settings-input::placeholder {
+.cron-advanced .settings-input::placeholder {
   color: var(--cron-placeholder);
 }
 
@@ -573,11 +597,6 @@
 
 .cron-tray-picker > openclaw-select-picker {
   min-width: 0;
-}
-
-.cron-tray-picker .model-picker__custom {
-  height: 28px;
-  margin-top: 2px;
 }
 
 .cron-prompt__edit {
@@ -828,21 +847,21 @@
   transform: rotate(180deg);
 }
 
-.cron-advanced__desc {
-  margin: 14px 16px 0;
+/* One settings section per concern; pickers' menus and focus rings stay unclipped. */
+.cron-advanced__sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+  margin-top: var(--space-1);
 }
 
-.cron-advanced__group + .cron-advanced__group {
-  margin-top: 6px;
+.cron-advanced__sections .settings-group {
+  overflow: visible;
 }
 
-.cron-advanced__heading {
-  margin: 14px 16px 2px;
-  color: var(--muted-strong);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.cron-advanced__sections .settings-section__header {
+  padding-inline: 16px;
 }
 
 .cron-trigger-icon {
@@ -1561,13 +1580,6 @@
     padding: calc(var(--cron-prompt-radius) + 7px) 10px 8px;
     border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
     background: var(--cron-phone-control);
-  }
-
-  .cron-prompt--editing .cron-prompt__run-controls .cron-tray-input,
-  .cron-prompt--editing .cron-prompt__run-controls .picker-select__trigger {
-    background: var(--cron-phone-card);
-    border-radius: var(--radius-md);
-    min-block-size: 34px;
   }
 
   .cron-editor-schedule,

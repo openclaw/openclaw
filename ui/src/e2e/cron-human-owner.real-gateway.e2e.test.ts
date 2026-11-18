@@ -28,7 +28,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { selectChatModel, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eSuite,
   createControlUiE2eContextOptions,
@@ -423,10 +423,7 @@ suite.define(() => {
     await waitForControlUiGatewayReady(admin);
     await admin.locator('[data-test-id="cron-edit"]').click();
     await admin.locator("#cron-name").waitFor();
-    await selectPickerValue(
-      admin.locator("openclaw-select-picker:has(#cron-payload-model-picker)"),
-      "fixture/edited",
-    );
+    await selectChatModel(admin.locator(".cron-prompt__run-controls"), "fixture/edited");
     await admin.locator('[data-test-id="cron-submit"]').click();
     await expect
       .poll(async () => (await rpc<CronJob>(admin, "cron.get", { id: "legacy-ui-edit" })).payload)

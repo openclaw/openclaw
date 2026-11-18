@@ -167,7 +167,7 @@ it("renders the real event editor, schema error, and subscription replay gap", a
   expect(onFormChange).toHaveBeenCalledWith({ eventArguments: args.value });
   expect(container.textContent).toContain("Replay gap:");
   expect(container.querySelector("#cron-cron-expr")).toBeNull();
-  expect(container.textContent).not.toContain("Delete after run");
+  expect(container.textContent).not.toContain("Delete after it runs");
   for (const field of ["eventServer", "eventName"]) {
     expect(container.querySelector(`#cron-error-${field}`)).not.toBeNull();
   }
