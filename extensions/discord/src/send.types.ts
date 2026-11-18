@@ -82,6 +82,12 @@ export type DiscordReactionSummary = {
 export type DiscordPermissionsSummary = {
   channelId: string;
   guildId?: string;
+  channelName?: string;
+  guildName?: string;
+  parentId?: string;
+  parentName?: string;
+  threadOwnerId?: string;
+  botId?: string;
   permissions: string[];
   raw: string;
   isDm: boolean;

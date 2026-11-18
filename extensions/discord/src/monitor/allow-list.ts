@@ -275,7 +275,7 @@ export function resolveDiscordCommandAuthorized(params: {
 }
 
 export function resolveDiscordGuildEntry(params: {
-  guild?: Guild<true> | Guild | null;
+  guild?: Pick<Guild, "id" | "name"> | null;
   guildId?: string | null;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }): DiscordGuildEntryResolved | null {
@@ -397,9 +397,13 @@ export function resolveDiscordShouldRequireMention(params: DiscordMentionPolicyP
   return resolveDiscordMentionPolicy(params).requireMention;
 }
 
-export function resolveDiscordMentionPolicy(
-  params: DiscordMentionPolicyParams,
-): Pick<InboundMentionPolicy, "requireMention" | "allowedImplicitMentionKinds"> {
+export function resolveDiscordMentionPolicy(params: DiscordMentionPolicyParams): Pick<
+  InboundMentionPolicy,
+  "requireMention" | "allowedImplicitMentionKinds"
+> & {
+  source: "channel" | "guild" | "default" | "autoThread" | "direct";
+  setting: "requireMention" | "requireMentionInBotThreads";
+} {
   const botId = params.botId?.trim();
   const threadOwnerId = params.threadOwnerId?.trim();
   const isBotOwnedThread = Boolean(
@@ -413,13 +417,26 @@ export function resolveDiscordMentionPolicy(
     ? (params.channelConfig?.requireMentionInBotThreads ??
       params.guildInfo?.requireMentionInBotThreads)
     : undefined;
+  const setting =
+    requireMentionInBotThreads !== undefined ? "requireMentionInBotThreads" : "requireMention";
+  const bypass =
+    requireMentionInBotThreads === undefined && (!params.isGuildMessage || isAutoThreadOwnedByBot);
+  const source = bypass
+    ? params.isGuildMessage
+      ? "autoThread"
+      : "direct"
+    : params.channelConfig?.[setting] !== undefined
+      ? "channel"
+      : params.guildInfo?.[setting] !== undefined
+        ? "guild"
+        : "default";
   return {
-    requireMention:
-      requireMentionInBotThreads ??
-      (params.isGuildMessage && !isAutoThreadOwnedByBot
-        ? (params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true)
-        : false),
+    requireMention: bypass
+      ? false
+      : (params.channelConfig?.[setting] ?? params.guildInfo?.[setting] ?? true),
     allowedImplicitMentionKinds: requireMentionInBotThreads === true ? ["native"] : undefined,
+    setting,
+    source,
   };
 }
 

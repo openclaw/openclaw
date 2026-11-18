@@ -307,6 +307,19 @@ Notes:
 - `--target` accepts `channel:<id>` or a raw numeric channel id and only applies to Discord. For Discord voice channels, the permission check flags missing `ViewChannel`, `Connect`, `Speak`, `SendMessages`, and `ReadMessageHistory`.
 - Checks are provider-specific: Discord bot identity + intents plus optional channel permissions; Slack bot + user scopes; Telegram bot flags + webhook; Signal daemon version; Microsoft Teams app token + Graph roles/scopes (annotated where known). Channels without checks report that the live check is unavailable.
 
+For Discord guild targets, the diagnostic also explains channel access and
+`requireMention` from local configuration, including the responsible guild,
+channel, or account setting. Name-based entries are reported as unresolved rather
+than guessed: the running Gateway may have bound those names to IDs. Use numeric
+guild/channel IDs for this check. Thread overrides use the observed parent and
+bot ownership; bound-thread route activation is not checked.
+
+A successful permission check is not proof that the Gateway is connected or that
+a particular sender is allowed. Sender access is not evaluated without sender
+context. For the first message test, mention the bot in an allowed channel from
+an allowed sender. Check `channels status --probe` separately for connectivity;
+local configuration may differ from a deferred Gateway reload.
+
 ## Resolve names to IDs
 
 Resolve channel/user names to IDs using the provider directory:
