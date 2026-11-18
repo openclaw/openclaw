@@ -817,7 +817,6 @@ extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/webhook.ts	5
 extensions/voyage/embedding-batch.ts	1
-extensions/web-readability/web-content-extractor.ts	2
 extensions/whatsapp/src/account-config.ts	1
 extensions/whatsapp/src/agent-tools-call.ts	1
 extensions/whatsapp/src/agent-tools-login.ts	6
