@@ -12,8 +12,9 @@ import {
   initializeLocalWorkspaceProjection,
 } from "./local-workspace-checkout.js";
 import {
-  pendingLocalWorkspaceDirection as pendingDirection,
+  recoverLocalWorkspaceCheckpoint,
   prepareLocalWorkspaceCheckpoint,
+  prehashLocalWorkspaceCheckpoint,
   selectLocalWorkspaceCheckpoint,
   stageLocalWorkspaceCheckpoint,
   createLocalWorkspaceCheckpointRejection,
@@ -25,6 +26,7 @@ import {
 import { LocalWorkspaceConflictError } from "./local-workspace-conflict-error.js";
 import {
   admitLocalWorkspaceSourcePaths,
+  createLocalWorkspaceManifestReader,
   captureLocalWorkspaceArchiveBaseline,
   parseLocalWorkspaceSourcePaths,
   prepareLocalWorkspaceBuildInputs,
@@ -38,7 +40,7 @@ import {
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type {
   LocalWorkspaceCapture,
-  LocalWorkspaceManifestAction,
+  LocalWorkspacePreparedEntry,
   LocalWorkspaceManifestCheckpoint,
 } from "./local-workspace-store.types.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
@@ -50,10 +52,8 @@ import {
 import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
-  parseWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
-import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 import {
   hasWorkerWorkspaceResultRef,
@@ -78,6 +78,9 @@ export function projectionOperations(
   },
   reason: LocalWorkspacePauseReason = "reconcile",
 ) {
+  let checkpointPreparation: LocalWorkspacePreparedEntry[] | undefined;
+  let checkpointObjects: Array<[string, string]> | undefined;
+  let refreshStartedHere = false;
   const signal = store.signal;
   let row = initialRow;
   const selectCurrent = (assertCurrent: (() => void) | undefined) => {
@@ -106,32 +109,18 @@ export function projectionOperations(
       row = await store.reject(selected, value, owner.workerAuthority);
     },
   });
-  const repairBaseline = async () => {
-    const repair = await store.manifest(current(), {
-      kind: "repair",
-      canonicalRoot: owner.worktree.path,
-    });
-    if (repair.kind !== "replace") {
-      throw new Error("Local workspace baseline repair is missing");
-    }
-    row = await store.accept(repair.update, owner.workerAuthority);
-  };
-  const readManifest = async (action: LocalWorkspaceManifestAction) => {
-    try {
-      return await store.manifest(current(), action);
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !error.message.includes("Local workspace baseline nodes are missing")
-      ) {
-        throw error;
-      }
-      // Repair older missing packs only from a verified baseline or checkpoint;
-      // divergent files must never replace the merge base.
-      await repairBaseline();
-      return await store.manifest(current(), action);
-    }
-  };
+  const {
+    read: readManifest,
+    repair: repairBaseline,
+    probeUnchanged,
+  } = createLocalWorkspaceManifestReader({
+    store,
+    current,
+    owner,
+    accept: async (prepared) => {
+      return (row = await store.accept(prepared, owner.workerAuthority));
+    },
+  });
   const baselineDocument = async () => {
     const document = await readManifest({ kind: "materialize" });
     current();
@@ -222,12 +211,19 @@ export function projectionOperations(
       target,
       canonicalRoot: owner.worktree.path,
       capture: source,
+      preparedEntries: target === "canonical" && !source ? checkpointPreparation : undefined,
     });
     current();
     if (snapshot.kind !== "scan") {
       throw new Error("Local workspace checkpoint scan is missing");
     }
-    const { observation, ...checkpoint } = snapshot;
+    const {
+      observation,
+      preparedEntries: _preparedEntries,
+      existingObjects,
+      ...checkpoint
+    } = snapshot;
+    checkpointObjects = existingObjects;
     if (observation) {
       // Admit host paths and unchanged-file identities without materializing the tree here.
       row = await store.accept(observation, owner.workerAuthority);
@@ -236,31 +232,15 @@ export function projectionOperations(
     preparedInputPaths = undefined;
     return checkpoint;
   };
-  const recover = async () => {
-    const selected = current();
-    if (!selected.journal_json) {
-      return;
-    }
-    await quiescence?.pause();
-    quiescence?.markPhase("recovery");
-    if (!selected.journal_pack || !pendingDirection(selected.pending_target)) {
-      throw new Error("Local workspace recovery metadata is incomplete");
-    }
-    // A base refresh keeps its receipt and paused runtime until both sides accept it, so an
-    // interrupted application resumes from the files it already wrote. Restoring them would
-    // discard that progress, and a refresh longer than one turn's deadline could never finish.
-    if (!isLocalWorkspaceBaseRefreshRef(selected.pending_ref)) {
-      const plan = parseWorkerWorkspaceReconciliationPlan(selected.journal_json);
-      await recoverWorkerWorkspaceReconciliation({
-        root: targetPath(pendingDirection(selected.pending_target)!),
-        journal: { ...plan, basePack: selected.journal_pack },
-        buildCacheInputs: await buildCacheInputs(),
-        assertCurrent,
-        workerAuthority,
-      });
-    }
-    await update({ journal_json: null, journal_pack: null });
-  };
+  const recover = () =>
+    recoverLocalWorkspaceCheckpoint({
+      selected: current(),
+      canonicalRoot: owner.worktree.path,
+      buildCacheInputs,
+      update,
+      application: { assertCurrent, workerAuthority },
+      quiescence,
+    });
   const cleanupAccepted = async () => {
     const selected = current();
     if (!selected.pending_ref || selected.pending_target) {
@@ -362,6 +342,7 @@ export function projectionOperations(
           {
             root: owner.worktree.path,
             stagingRoot: source?.root ?? sourcePath(target),
+            existingObjects: checkpointObjects,
             stagedResultRef: selected.pending_ref,
             baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
             currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
@@ -383,10 +364,10 @@ export function projectionOperations(
       // The Git result now owns the command's bytes. Canonical-only reconciliation
       // can run beside later guest writes; command completion still awaits acceptance.
       await afterCapture?.();
-      // A base refresh owns both namespaces until its two-sided transfer settles.
-      // Ordinary results already own immutable Git bytes, so materialization and
-      // patch generation need no guest freeze. Imports re-fence before confirmation.
-      if (!refresh) {
+      // Fresh receipts have not changed guest files; prepare their immutable Git
+      // input while it runs. A resumed refresh may already have partially applied
+      // files, so recovery retains its freeze until settlement.
+      if (!refresh || refreshStartedHere) {
         await quiescence?.resume();
       }
       quiescence?.markPhase("materialization");
@@ -531,6 +512,9 @@ export function projectionOperations(
     return await prepareLocalWorkspaceCheckpoint({
       operation,
       baselineRef: selected.baseline_ref,
+      settle,
+      probeUnchanged,
+      quiescence,
       synchronize,
       current,
       signal,
@@ -540,9 +524,14 @@ export function projectionOperations(
     current,
     workerAuthority,
     canonicalPaths,
+    prehash: async () => {
+      current();
+      checkpointPreparation = await prehashLocalWorkspaceCheckpoint(store, owner.worktree.path);
+    },
     capture,
     buildCacheInputs,
     baselineDocument,
+    probeUnchanged,
     prepare,
     reuse: async () => (row?.baseline_ref ? await prepare(undefined, "reuse") : undefined),
     synchronize,
@@ -570,7 +559,12 @@ export function projectionOperations(
       });
       inputPaths = undefined;
       preparedInputPaths = undefined;
-      await settle();
+      refreshStartedHere = true;
+      try {
+        await settle();
+      } finally {
+        refreshStartedHere = false;
+      }
     },
     restoreSnapshot: async () => {
       await buildCacheInputs();

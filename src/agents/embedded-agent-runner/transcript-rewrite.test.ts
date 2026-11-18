@@ -233,7 +233,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           originalRows,
         );
         expect(await listSessionPendingInputs(target)).toEqual({ items: [], total: 0 });
-        receipt.finish("cancelled");
+        receipt.finish("cancelled", "failed");
         expect(() => receipt.run(() => {})).toThrow("ownership ended");
         expect(
           await withSessionPendingInputPersistence(receipt, () =>
@@ -241,7 +241,7 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
           ),
         ).toMatchObject({ appended: false, messageId: currentEntryId });
       } finally {
-        receipt.finish("interrupted");
+        receipt.finish("interrupted", "failed");
       }
     },
   );

@@ -97,7 +97,6 @@ suite.define(() => {
         for (const scope of ["all", "job"] as const) {
           if (scope === "job") {
             await openAutomation(page, job.id);
-            await page.locator('[data-test-id="cron-detail-tab-history"]').click();
           }
           await expect
             .poll(async () =>
@@ -115,13 +114,12 @@ suite.define(() => {
           const titles = (await runs.locator(".cron-run-entry__title").allTextContents()).map(
             (title) => title.replace(/\s+/g, " ").trim(),
           );
-          expect
-            .soft(titles, `${scope} completion labels`)
-            .toEqual([
-              `${job.name} · Completed · Error`,
-              `${job.name} · Completed · Unknown`,
-              `${job.name} · Completed`,
-            ]);
+          expect.soft(titles, `${scope} completion labels`).toEqual(
+            // The automation's own history does not repeat its name on every run.
+            ["Completed · Error", "Completed · Unknown", "Completed"].map((label) =>
+              scope === "all" ? `${job.name} · ${label}` : label,
+            ),
+          );
           expect(await runs.nth(0).textContent()).toContain(
             "Synthetic delivery target unavailable.",
           );
@@ -130,6 +128,14 @@ suite.define(() => {
           );
 
           const previousRequests = (await gateway.getRequests("cron.runs")).length;
+          // The automation's own history keeps its filters behind one button.
+          const filtersToggle = history.locator('[data-test-id="cron-runs-filters-toggle"]');
+          if (
+            (await filtersToggle.count()) > 0 &&
+            (await filtersToggle.getAttribute("aria-expanded")) !== "true"
+          ) {
+            await filtersToggle.click();
+          }
           const statusFilter = history.locator('[data-filter="status"]');
           await statusFilter.locator(".cron-filter-dropdown__trigger").click();
           await statusFilter.locator('[data-value="option:ok"]').click();

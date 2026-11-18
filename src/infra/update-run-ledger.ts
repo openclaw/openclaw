@@ -27,8 +27,10 @@ import { runUpdateRunAdmission } from "./update-run-admission.js";
 import { encodeRun, type UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
 import {
   inspectUpdateRunDriver,
-  readUpdateRunDriver,
+  readRecordedUpdateRunDriver,
+  type RecordedUpdateRunDriver,
   sameUpdateRunDriver,
+  toUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
 import type { UpdateRunPatch as RunPatch } from "./update-run-mutation.types.js";
@@ -196,7 +198,7 @@ export function adoptUpdateRun(
   runId: string,
   options: LedgerOptions & { managedHandoffParent?: UpdateRunDriver } = {},
 ): UpdateRunRecord {
-  const driver = readUpdateRunDriver();
+  const driver = readRecordedUpdateRunDriver();
   let identityUnavailable = false;
   const adopted = mutateRun(
     runId,
@@ -217,10 +219,17 @@ export function adoptUpdateRun(
         return;
       }
       if (options.managedHandoffParent) {
-        record.origin.managedHandoff = { parent: options.managedHandoffParent, helper: driver };
+        record.origin.managedHandoff = {
+          parent: options.managedHandoffParent,
+          helper: toUpdateRunDriver(driver),
+        };
       }
-      const previousDrivers: UpdateRunDriver[] = [];
-      for (const previous of recordedUpdateRunDrivers(record)) {
+      // Retained drivers keep the boot each one recorded.
+      const previousDrivers: RecordedUpdateRunDriver[] = [];
+      for (const previous of [
+        ...(record.origin.driver ? [record.origin.driver] : []),
+        ...(record.origin.previousDrivers ?? []),
+      ]) {
         if (
           !sameUpdateRunDriver(previous, driver) &&
           !previousDrivers.some((retained) => sameUpdateRunDriver(retained, previous)) &&

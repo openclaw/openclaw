@@ -12,15 +12,23 @@ How the Codex model catalog is discovered, and what happens when discovery fails
 
 ## Model discovery
 
-OpenClaw's ChatGPT subscription provider requests the account-scoped Codex
-catalog with `client_version=99.0.0`, regardless of which Codex binary runs turns.
-A model may appear in OpenClaw's picker before the selected Codex version can run
-it. If the runtime rejects a listed model, choose another model or use a
-[newer supported Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+By default, the Codex plugin asks the app-server for available models. Model
+availability is owned by Codex app-server, so the list can change when
+OpenClaw upgrades the bundled `@openai/codex` version, when OpenClaw selects a
+[newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex),
+or when a deployment points `appServer.command` at a different Codex binary.
+ChatGPT-login model discovery reports the selected binary's version as its
+`client_version`, so the list matches the binary that runs turns. Availability can also
+be account-scoped. Use `/codex models` on a running gateway to see the live
+catalog for that harness and account.
 
-The native Codex plugin still asks its app-server for models independently. Use
-`/codex models` on a running Gateway to see the live catalog for that harness
-and account.
+New OpenAI models can require a newer Codex version than your OpenClaw release
+bundles. The reporter-supplied minimum for GPT-6.2 is Codex `0.166.0`.
+For the evidence limits and upgrades between OpenClaw releases, see
+[Newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
+With a ChatGPT/Codex login, select the **Codex** runtime for your session.
+Installing Codex alone does not fix automatic routing or grant account access
+to a model.
 
 Automatic discovery and hosted-search model selection use visible picker entries.
 Bounded turns with an explicit model selection, including image understanding,
@@ -120,9 +128,11 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.162.1`. A `model/list`
-check against that app-server in an isolated, unauthenticated Codex home returned
-these visible bundled catalog entries on October 18, 2026:
+The current bundled harness is `@openai/codex` `0.169.0`, which already meets
+the reported GPT-6.2 minimum version. The table below is a historical snapshot, not the
+current catalog: a `model/list` check against `0.162.1` in an isolated,
+unauthenticated Codex home returned these visible bundled catalog entries on
+October 18, 2026:
 
 | Model id        | Input modalities | Reasoning efforts                    | Default effort |
 | --------------- | ---------------- | ------------------------------------ | -------------- |

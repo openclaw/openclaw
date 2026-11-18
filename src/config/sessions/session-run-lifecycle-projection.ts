@@ -445,8 +445,7 @@ export function projectSessionLifecyclePatch(
     !restartResumeSkipReason(params.canonicalKey, entry)
   ) {
     // A timed-out shutdown marker must not turn cancellation into a lost continuation.
-    patch.resumeAfterRestart =
-      entry.resumeAfterRestart ?? createRestartResumeMarker({ queuedInputIds: [] });
+    patch.resumeAfterRestart = entry.resumeAfterRestart ?? createRestartResumeMarker({});
   }
   const stopped =
     patch.status === "killed" &&

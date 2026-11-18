@@ -143,28 +143,59 @@ describe("managed launcher diagnostic attribution", () => {
     { name: "different syscall command", syscall: "spawn /other/codex", accepted: false },
     { name: "successful exit", exit: 0, accepted: false },
     { name: "diagnostic beyond prefix limit", padding: `${"x".repeat(16_383)}\n`, accepted: false },
-  ])("classifies $name", ({ header, syscall, exit, padding, accepted }) => {
-    const native = `/synthetic/codex-${randomUUID()}`;
-    const child: RegistrationTestChildProcess & Pick<CodexAppServerTransport, "startupFailure"> =
-      new RegistrationTestChildProcess(1);
-    observeManagedCodexLauncherFailure(child, native);
-    const diagnostic = `${padding ?? ""}EACCES: permission denied, posix_spawn '${header ?? native}'
+    { name: "Node execve abort", execveAbort: true, signal: "SIGABRT" as const, accepted: true },
+    {
+      name: "Node execve abort with late stderr",
+      execveAbort: true,
+      signal: "SIGABRT" as const,
+      lateStderr: true,
+      accepted: true,
+    },
+    { name: "unrelated abort", signal: "SIGABRT" as const, accepted: false },
+    { name: "Node execve header without abort", execveAbort: true, accepted: false },
+    {
+      name: "Node execve header with another signal",
+      execveAbort: true,
+      signal: "SIGTERM" as const,
+      accepted: false,
+    },
+  ])(
+    "classifies $name",
+    ({ header, syscall, exit, padding, execveAbort, signal, lateStderr, accepted }) => {
+      const native = `/synthetic/codex-${randomUUID()}`;
+      const child: RegistrationTestChildProcess & Pick<CodexAppServerTransport, "startupFailure"> =
+        new RegistrationTestChildProcess(1);
+      observeManagedCodexLauncherFailure(child, native);
+      const diagnostic = execveAbort
+        ? "process.execve failed with error code EACCES\n"
+        : `${padding ?? ""}EACCES: permission denied, posix_spawn '${header ?? native}'
    syscall: "${syscall ?? `spawn ${native}`}",
 `;
-    for (const chunk of [diagnostic.slice(0, 12), diagnostic.slice(12)]) {
-      child.stderr.emit("data", Buffer.from(chunk));
-    }
-    child.exitCode = exit ?? 1;
-    child.emit("exit", child.exitCode);
-    child.emit("close", child.exitCode);
-    if (accepted) {
-      expect(child.startupFailure?.error).toMatchObject({
-        name: "CodexAppServerSpawnError",
-        command: native,
-        cause: expect.objectContaining({ code: "EACCES" }),
-      });
-    } else {
-      expect(child.startupFailure?.error).toBeUndefined();
-    }
-  });
+      if (lateStderr) {
+        child.exitCode = null;
+        child.signalCode = signal ?? null;
+        child.emit("exit", child.exitCode, child.signalCode);
+      }
+      for (const chunk of [diagnostic.slice(0, 12), diagnostic.slice(12)]) {
+        child.stderr.emit("data", Buffer.from(chunk));
+      }
+      if (!lateStderr) {
+        child.exitCode = signal ? null : (exit ?? 1);
+        child.signalCode = signal ?? null;
+        child.emit("exit", child.exitCode, child.signalCode);
+      }
+      child.emit("close", child.exitCode);
+      if (accepted) {
+        expect(child.startupFailure?.error).toMatchObject({
+          name: "CodexAppServerSpawnError",
+          command: native,
+          cause: expect.objectContaining({ code: "EACCES" }),
+        });
+      } else {
+        expect(child.startupFailure?.error).toBeUndefined();
+      }
+      expect(child.stderr.listenerCount("data")).toBe(0);
+      expect(child.listenerCount("exit")).toBe(0);
+    },
+  );
 });

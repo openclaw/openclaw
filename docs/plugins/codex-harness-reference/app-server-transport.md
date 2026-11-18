@@ -14,7 +14,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 
 For ordinary harness turns, OpenClaw starts a managed Codex binary: a newer
 Codex you installed yourself, or the one shipped with the official plugin
-(currently `@openai/codex` `0.162.1`):
+(currently `@openai/codex` `0.169.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -27,6 +27,28 @@ entrypoint without requiring a `codex.cmd` shim. Set `appServer.command` only
 when you intentionally want a different executable.
 
 ### Newer installed Codex
+
+New OpenAI models can require a newer Codex version than your OpenClaw release
+bundles. For GPT-6.2, [the issue report](https://github.com/openclaw/openclaw/issues/200972)
+cites Codex `0.166.0` as the minimum. Its successful test used `0.169.1`,
+so it does not establish the exact minimum. The current `0.169.0` bundle
+exceeds the reported minimum.
+
+To get a newer compatible Codex between OpenClaw releases, install it on the
+Gateway host:
+
+```bash
+npm i -g @openai/codex
+```
+
+Make sure the installed `codex` is on the Gateway's `PATH`, then restart the
+Gateway so it repeats binary selection. This is the supported between-release
+upgrade path, subject to the selection checks below.
+
+With a ChatGPT/Codex login, select the **Codex** runtime for your session.
+Check that `/status` shows `Runtime: OpenAI Codex`, then use `/codex models`
+to inspect the live catalog for your account. Installing Codex alone does not
+fix automatic routing or grant account access to a model.
 
 ChatGPT gates new models on the Codex version that runs the turn, so OpenClaw
 uses a newer Codex from `PATH` (for example `npm i -g @openai/codex`, a Bun
@@ -60,21 +82,35 @@ on `PATH` and uses it only when all of these hold:
 
 Otherwise OpenClaw uses the shipped binary. The Gateway logs one line with the
 chosen binary, its version, and the reason, for example
-`Codex app-server: using installed /usr/local/bin/codex 0.163.0 (newer than bundled 0.162.1)`
-or `Codex app-server: using bundled 0.162.1 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
+`Codex app-server: using installed /usr/local/bin/codex 0.169.1 (newer than bundled 0.169.0)`
+or `Codex app-server: using bundled 0.169.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
 
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
 shipped binary for that request before any thread or turn exists, logs one
-warning, and keeps using the shipped binary until the Gateway restarts. A Gateway
-restart repeats the selection, which picks up Codex installs, upgrades, and
-removals. [ChatGPT subscription model discovery](/plugins/codex-harness-reference/model-discovery#model-discovery)
-is independent of this selection, so a model in the picker may require a newer
-binary than the one running the turn.
+warning, and keeps using the shipped binary until the Gateway restarts. ChatGPT
+model discovery reports the selected binary's version as `client_version`, so
+the model list matches the binary that runs turns. A Gateway restart repeats the
+selection, which picks up Codex installs, upgrades, and removals.
+
+The model list can briefly disagree with the binary after such a fallback. A
+fallback only happens after the installed binary already passed the selection
+handshake, so these windows are rare:
+
+- A model-list refresh that started before the fallback, including one still
+  queued for a catalog worker, finishes with the installed version's list.
+- A list fetched before the fallback stays cached until the ChatGPT model rows
+  expire (about a minute) and the next refresh runs. A model only the installed
+  version offers can be picked in that window, and its turn then runs on the
+  shipped binary.
+- `openclaw models list --refresh` without a running Gateway selects a binary
+  in its own process, so its list can differ from a Gateway started later, for
+  example after installing or upgrading Codex in between.
 
 `appServer.command`, `OPENCLAW_CODEX_APP_SERVER_BIN`, and remote app-servers
-always win. Login-status checks, node exec-servers, and the Doctor package check
-always use the shipped binary.
+always win; discovery then keeps reporting the shipped version. Login-status
+checks, node exec-servers, and the Doctor package check always use the shipped
+binary.
 
 Ordinary managed turns with the default isolated agent home prefer this package
 selection even when a macOS desktop bundle is installed. When
@@ -84,7 +120,8 @@ the desktop app binary that owns the required macOS permissions. The same
 desktop-first rule applies when an isolated agent home's effective Codex config
 enables native Computer Use. If no desktop app bundle is installed, OpenClaw
 falls back to the package selection. A desktop-first start that finds the
-desktop app does not check `PATH`: the shipped binary is its fallback.
+desktop app does not check `PATH`: the shipped binary is its fallback, and
+ChatGPT model discovery for that agent keeps reporting the shipped version.
 
 Before cutting over a staged OpenClaw package, run the opt-in managed-binary
 check against the candidate installation:
@@ -273,7 +310,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships stable Codex app-server `0.162.1` and prefers a newer
+The plugin ships stable Codex app-server `0.169.0` and prefers a newer
 installed Codex only under the rules in
 [Newer installed Codex](#newer-installed-codex). Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a
