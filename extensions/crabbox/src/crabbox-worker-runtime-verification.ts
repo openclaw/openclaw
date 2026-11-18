@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { CrabboxWorkerNodeRuntimePreparation } from "./crabbox-worker-node-enrollment.js";
+import type { CrabboxWorkerNodeRuntimePreparation } from "./crabbox-worker-node-runtime.types.js";
 import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 /** Project grant-free metadata for the installed package preparation command. */

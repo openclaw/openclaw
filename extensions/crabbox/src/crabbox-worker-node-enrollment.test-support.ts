@@ -15,11 +15,9 @@ import {
   readCrabboxRuntimeInstallation,
   type CrabboxRuntimeInstallationIdentity,
 } from "../cli-runtime-api.js";
-import type {
-  CrabboxWorkerNodeEnrollment,
-  CrabboxWorkerNodeRuntimePreparation,
-} from "./crabbox-worker-node-enrollment.js";
+import type { CrabboxWorkerNodeEnrollment } from "./crabbox-worker-node-enrollment.js";
 import { createCrabboxNodeResumeScript } from "./crabbox-worker-node-process.js";
+import type { CrabboxWorkerNodeRuntimePreparation } from "./crabbox-worker-node-runtime.types.js";
 
 export type DesktopFixture = { enabled: boolean } & Partial<
   Record<"setup" | "display" | "dbus" | "runtimeDir", string>
