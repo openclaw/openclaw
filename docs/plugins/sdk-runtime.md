@@ -46,6 +46,16 @@ surface and session root. Channels may use this capability to enable helper
 tools for restricted senders. Core remains responsible for authorization and
 containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
 
+## Reply session initialization conflicts
+
+Use `isReplySessionInitConflictError(error)` from
+`openclaw/plugin-sdk/reply-runtime` to recognize an exhausted reply-session
+initialization conflict. Core owns classification, including errors serialized
+across runtime boundaries; plugins should not match the error text themselves.
+Channels can send a terminal busy notice or record intentional delivery-policy
+suppression before completing the inbound event. If notice delivery fails, keep
+the event retryable through the channel's durable ingress owner.
+
 ## Module loading and host identity
 
 Declare plugin entries in `package.json` under `openclaw.extensions`, import
