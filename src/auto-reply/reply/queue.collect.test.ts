@@ -526,6 +526,32 @@ describe("followup queue collect routing", () => {
     }
   });
 
+  it.each([
+    { ids: ["C123", "C123"], expected: "C123" },
+    { ids: ["C123", "C456"], expected: undefined },
+    { ids: [undefined, "C123"], expected: undefined },
+    { ids: ["C123", undefined], expected: undefined },
+  ])(
+    "attributes a collected turn only when all native origins agree: $ids",
+    async ({ ids, expected }) => {
+      const q = createQueueCase();
+      for (const [index, originatingNativeChannelId] of ids.entries()) {
+        q.add(
+          createRun({
+            prompt: String(index),
+            originatingChannel: "slack",
+            originatingTo: "channel:A",
+            originatingNativeChannelId,
+          }),
+        );
+      }
+      await q.drain();
+      expect(q.calls).toHaveLength(1);
+      expect(q.calls[0]?.originatingNativeChannelId).toBe(expected);
+      expect(q.calls[0]?.originatingTo).toBe("channel:A");
+    },
+  );
+
   it("collects when channel+destination match", async () => {
     const q = createQueueCase();
     const { calls } = q;
@@ -1193,6 +1219,7 @@ describe("followup queue collect routing", () => {
     const q = createQueueCase({ cap: 1 });
     for (const [index, prompt] of ["first", "second", "survivor"].entries()) {
       const source = createOffloadedImageQueueRun(prompt, index);
+      source.originatingNativeChannelId = "C123";
       q.add(source);
     }
     await drainSettledQueue(q.key, q.runFollowup);
@@ -1200,6 +1227,7 @@ describe("followup queue collect routing", () => {
     const collected: InternalFollowupRun | undefined = q.calls[0];
     expect(collected?.prompt).toContain("Dropped 2 messages");
     expect(collected?.prompt).toContain("second");
+    expect(collected?.originatingNativeChannelId).toBe("C123");
     expect(collected?.currentTurnImagesPrepared).toBe(true);
     expect(collected?.images).toEqual([]);
     expect(collected?.imageOrder).toEqual(["offloaded", "offloaded"]);

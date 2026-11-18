@@ -61,6 +61,7 @@ type EmbeddedReplyRoute = Pick<
   | "originatingTo"
   | "originatingAccountId"
   | "originatingChatType"
+  | "originatingNativeChannelId"
   | "originatingThreadId"
   | "originatingReplyToId"
   | "originatingReplyToMode"
@@ -288,6 +289,7 @@ function buildEmbeddedContextFromTemplate(params: {
     chatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
+    diagnosticMessageOriginId: params.replyRoute?.originatingNativeChannelId,
     memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
     ...buildThreadingToolContext({
       sessionCtx,

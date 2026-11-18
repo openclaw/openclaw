@@ -21,6 +21,7 @@ export function createDiagnosticMessageLifecycle(
     trackSessionState: boolean;
     agentId?: string;
     userPrompt?: string;
+    messageOrigin?: { channelId: string };
   },
 ) {
   const startedAtMs = params.startedAtMs ?? Date.now();
@@ -101,6 +102,7 @@ export function createDiagnosticMessageLifecycle(
         error: options?.error,
         userPrompt: options?.userPrompt ?? params.userPrompt,
         finalResponse: options?.finalResponse,
+        messageOrigin: params.messageOrigin,
       });
     },
   };

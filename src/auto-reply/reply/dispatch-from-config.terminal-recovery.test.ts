@@ -5,7 +5,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { setVerbose } from "../../global-state.js";
-import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
+import {
+  onDiagnosticEvent,
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "../../logging/logger.js";
 import {
   createReplyOperation,
@@ -138,6 +143,72 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     controllerTesting.resetSessionControllerForTest();
     resetInboundDedupe();
   });
+
+  it.each([
+    { name: "enabled Slack", channel: "slack", capture: true, nativeId: "C123", expected: "C123" },
+    {
+      name: "disabled capture",
+      channel: "slack",
+      capture: false,
+      nativeId: "C123",
+      expected: undefined,
+    },
+    {
+      name: "missing native ID",
+      channel: "slack",
+      capture: true,
+      nativeId: undefined,
+      expected: undefined,
+    },
+    {
+      name: "other channel",
+      channel: "telegram",
+      capture: true,
+      nativeId: "C123",
+      expected: undefined,
+    },
+  ])(
+    "keeps current message origin private: $name",
+    async ({ channel, capture, nativeId, expected }) => {
+      const publicEvents: DiagnosticEventPayload[] = [];
+      const privateOrigins: Array<string | undefined> = [];
+      const stopPublic = onDiagnosticEvent((event) => {
+        if (event.type === "message.processed") {
+          publicEvents.push(event);
+        }
+      });
+      const stopPrivate = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+        if (event.type === "message.processed") {
+          privateOrigins.push(privateData.messageOrigin?.channelId);
+        }
+      });
+      try {
+        await dispatchReplyFromConfig({
+          ...createVisibleDispatchParams(async () => ({ text: "ok" })),
+          cfg: {
+            diagnostics: { enabled: true, otel: { enabled: true, captureMessageOrigin: capture } },
+          },
+          ctx: buildTestCtx({
+            Provider: channel,
+            Surface: channel,
+            OriginatingChannel: channel,
+            NativeChannelId: nativeId,
+            To: "user:destination-not-origin",
+            ChatType: "direct",
+            SessionKey: sessionKey,
+            BodyForAgent: "hello",
+          }),
+        });
+        await waitForDiagnosticEventsDrained();
+        expect(publicEvents).toHaveLength(1);
+        expect(publicEvents[0]).not.toHaveProperty("messageOrigin");
+        expect(privateOrigins).toEqual([expected]);
+      } finally {
+        stopPublic();
+        stopPrivate();
+      }
+    },
+  );
 
   it("renders post-compaction context after dispatcher normalization", async () => {
     const dispatchParams = createVisibleDispatchParams(async () =>

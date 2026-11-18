@@ -454,6 +454,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Interval in milliseconds for periodic telemetry flush from buffers to the collector. Increase to reduce export chatter, or lower for faster visibility during active incident response.",
   "diagnostics.otel.captureContent":
     "Opt-in OTEL span content capture. Defaults to off; true captures non-system message and tool content.",
+  "diagnostics.otel.captureMessageOrigin":
+    "Opt in to exporting native message origin identifiers on traces. Defaults to off independently of content capture.",
+  "diagnostics.otel.captureSessionIdentity":
+    "Export session identifiers on traces without content capture. When unset, follows captureContent; false disables session identifiers.",
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "tools.exec.applyPatch.enabled":

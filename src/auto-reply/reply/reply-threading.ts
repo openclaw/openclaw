@@ -58,7 +58,7 @@ function resolveConfiguredReplyToMode(
 
 export function resolveReplyToMode(
   cfg: OpenClawConfig,
-  channel?: OriginatingChannelType,
+  channel?: string,
   accountId?: string | null,
   chatType?: string | null,
 ): ReplyToMode {

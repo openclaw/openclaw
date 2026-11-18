@@ -22,6 +22,7 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { resolveDiagnosticMessageOrigin } from "../../infra/diagnostic-message-origin.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import {
   logMessageDispatchCompleted,
@@ -225,6 +226,11 @@ export async function gatherDispatchRequest(
     messageId,
     sessionKey,
     sessionId: lifecycleSessionId,
+    messageOrigin: resolveDiagnosticMessageOrigin(
+      cfg,
+      ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface,
+      ctx.NativeChannelId,
+    ),
     // The target agent ingests the prompt for this turn even when a command
     // retargets execution to another session's agent.
     agentId: targetAgentId,

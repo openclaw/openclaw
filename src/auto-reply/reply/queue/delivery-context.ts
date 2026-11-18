@@ -444,6 +444,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),
+    originatingNativeChannelId: source.originatingNativeChannelId,
     abortSignal: source.abortSignal,
     deliveryCorrelations: source.deliveryCorrelations,
     onQueueDisposition: source.onQueueDisposition,

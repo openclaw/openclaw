@@ -144,7 +144,7 @@ export async function runAgentHarnessSettledTurnFinalization(
   settledAttempt: EmbeddedRunAttemptResult,
   harness: AgentHarness,
 ) {
-  const internalParams = params as EmbeddedRunAttemptParams & {
+  const internalParams = params as EmbeddedRunAttemptInternalParams & {
     systemAgentTool?: SystemAgentToolOptions;
   };
   const finalizeSettledTurn = harness.finalizeSettledTurn?.bind(harness);
@@ -187,11 +187,16 @@ export async function runAgentHarnessSettledTurnFinalization(
     const result = await runAgentHarnessOperation(harness, params, () =>
       runWithAgentRingZeroTools([], () =>
         withPreparedEmbeddedRunToolAuthority(internalParams, attemptParams, undefined, (prepared) =>
-          runAgentHarnessLifecycleFinalization(harness, prepared, () => {
-            assertHarnessModelPolicySupport(harness, params);
-            modelExecution?.assertCurrent();
-            return finalizeSettledTurn({ attempt: prepared, settledAttempt });
-          }),
+          runAgentHarnessLifecycleFinalization(
+            harness,
+            prepared,
+            () => {
+              assertHarnessModelPolicySupport(harness, params);
+              modelExecution?.assertCurrent();
+              return finalizeSettledTurn({ attempt: prepared, settledAttempt });
+            },
+            params.diagnosticMessageOriginId,
+          ),
         ),
       ),
     );
@@ -317,6 +322,7 @@ export async function runAgentHarnessAttempt(
           );
           return harness.runAttempt(attempt);
         },
+        params.diagnosticMessageOriginId,
       );
       await nativeSessionRuntime?.assertCurrent();
       modelExecution?.assertCurrent();
@@ -567,6 +573,7 @@ function withoutPluginHarnessPrivateState(
   // The released replyOperation reference delegates to the same controller owner.
   const {
     admittedRunContext: _admittedRunContext,
+    diagnosticMessageOriginId: _diagnosticMessageOriginId,
     thinkingExplicit: _thinkingExplicit,
     runtimePluginToolGrant: _runtimePluginToolGrant,
     assistantErrorTranscript: _assistantErrorTranscript,
@@ -590,7 +597,7 @@ function withoutPluginHarnessPrivateState(
 }
 
 function prepareHarnessFinalizationParams(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
+  params: EmbeddedRunAttemptInternalParams & { systemAgentTool?: SystemAgentToolOptions },
   builtIn: boolean,
 ): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
   import("./types.js").AgentHarnessAttemptParamsV2
@@ -617,7 +624,7 @@ function prepareHarnessFinalizationParams(
 }
 
 async function withoutInternalHarnessAuthority(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   harness: AgentHarness,
   builtIn: boolean,
   ownerPluginId: string | undefined,

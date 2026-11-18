@@ -67,6 +67,8 @@ export type RunCliAgentParams = Pick<
   | "skillLibraryAuthoring"
   | "disableTrajectory"
 > & {
+  /** Native source identifier for private diagnostics, owned by the admitted turn. */
+  diagnosticMessageOriginId?: string;
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
   diagnosticOwner?: DiagnosticEmbeddedRunOwner;

@@ -12,6 +12,7 @@ import {
   type DiagnosticHarnessRunErrorEvent,
 } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
+import { resolveDiagnosticMessageOrigin } from "../../infra/diagnostic-message-origin.js";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContextFromActiveScope,
@@ -51,6 +52,8 @@ type ClaudeCliRunDiagnosticParams = Pick<
   RunCliAgentParams,
   | "abortSignal"
   | "agentId"
+  | "diagnosticMessageOriginId"
+  | "isolatedCompletion"
   | "messageChannel"
   | "messageProvider"
   | "model"
@@ -96,9 +99,15 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   const startedAt = Date.now();
   let phase: ClaudeCliRunPhase = "prepare";
   let unsubscribeCommentary: (() => void) | undefined;
-  const contentCapturePolicy = resolveDiagnosticModelContentCapturePolicy(
-    getRuntimeConfigSnapshot(),
-  );
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const contentCapturePolicy = resolveDiagnosticModelContentCapturePolicy(runtimeConfig);
+  const messageOrigin = params.isolatedCompletion
+    ? undefined
+    : resolveDiagnosticMessageOrigin(
+        runtimeConfig,
+        params.messageChannel ?? params.messageProvider,
+        params.diagnosticMessageOriginId,
+      );
   let capturedContent: { userPrompt?: string; finalResponse?: string } | undefined;
   const completionPrivateData = (
     contentField: "messageContent" | "harnessContent",
@@ -106,10 +115,12 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
   ) => {
     const content =
       capturedContent && Object.keys(capturedContent).length > 0 ? capturedContent : undefined;
-    return errorMessage || content
+    const runOrigin = contentField === "messageContent" ? messageOrigin : undefined;
+    return errorMessage || content || runOrigin
       ? {
           ...(errorMessage ? { errorMessage } : {}),
           ...(content ? { [contentField]: content } : {}),
+          ...(runOrigin ? { messageOrigin: runOrigin } : {}),
         }
       : undefined;
   };
@@ -159,10 +170,10 @@ export async function runClaudeCliAgentTurnWithDiagnostics(
     type: "harness.run.started",
     ...harnessBase,
   });
-  emitTrustedDiagnosticEvent({
-    type: "run.started",
-    ...runBase,
-  });
+  emitTrustedDiagnosticEventWithPrivateData(
+    { type: "run.started", ...runBase },
+    messageOrigin ? { messageOrigin } : undefined,
+  );
 
   try {
     const result = await runWithDiagnosticTraceContext(runTrace, () => run(lifecycle));

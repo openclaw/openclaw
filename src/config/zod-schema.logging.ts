@@ -37,6 +37,10 @@ export const DiagnosticsConfigSchema = z
         flushIntervalMs: z.number().int().nonnegative().optional(),
         /** Opt in to raw non-system message/tool content in OTEL span attributes. */
         captureContent: z.boolean().optional(),
+        /** Opt in to native message origin identifiers on spans. */
+        captureMessageOrigin: z.boolean().optional(),
+        /** Export session identity on spans; unset follows captureContent. */
+        captureSessionIdentity: z.boolean().optional(),
       })
       .optional(),
     cacheTrace: z

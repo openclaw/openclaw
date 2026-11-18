@@ -64,6 +64,48 @@ async function collectSignals(
 const completed = { outcome: "completed", durationMs: 80 } as const;
 const runBase = { runId: "run-otlp", provider: "openai", model: "gpt-5.6-luna" };
 
+test.each([
+  { captureContent: false, captureSessionIdentity: undefined, expected: undefined },
+  { captureContent: false, captureSessionIdentity: true, expected: "session-identity-only" },
+  { captureContent: true, captureSessionIdentity: undefined, expected: "session-identity-only" },
+  { captureContent: true, captureSessionIdentity: false, expected: undefined },
+])(
+  "gates session identity independently of content: $captureContent / $captureSessionIdentity",
+  async (flags) => {
+    await startOtelService({
+      traces: true,
+      configure: (ctx) => {
+        Object.assign(ctx.config.diagnostics!.otel!, {
+          captureContent: flags.captureContent,
+          captureSessionIdentity: flags.captureSessionIdentity,
+        });
+      },
+    });
+    emitTrustedDiagnosticEventWithPrivateData(
+      {
+        type: "run.completed",
+        ...runBase,
+        sessionId: "session-identity-only",
+        sessionKey: "agent:main:slack:channel:private",
+        ...completed,
+      },
+      { messageContent: { userPrompt: "private prompt", finalResponse: "private response" } },
+    );
+    await waitForDiagnosticEventsDrained();
+    await sdk.provider.forceFlush();
+    const span = sdk.exporter.getFinishedSpans().find((item) => item.name === "openclaw.run");
+    expect(span?.attributes["gen_ai.conversation.id"]).toBe(flags.expected);
+    expect(span?.attributes["openclaw.session.id"]).toBe(flags.expected);
+    expect(span?.attributes).not.toHaveProperty("openclaw.sessionKey");
+    expect(span?.attributes["input.value"]).toBe(
+      flags.captureContent ? "private prompt" : undefined,
+    );
+    expect(span?.attributes["output.value"]).toBe(
+      flags.captureContent ? "private response" : undefined,
+    );
+  },
+);
+
 test("bounds tool metric series across collections while preserving span parameter lengths", async () => {
   const { reader } = installTestMeter();
   const paramsKey = "openclaw.tool.params";

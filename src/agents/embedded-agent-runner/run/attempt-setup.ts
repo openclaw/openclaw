@@ -12,11 +12,9 @@ import {
   diagnosticErrorCategory,
   diagnosticErrorMessage,
 } from "../../../infra/diagnostic-error-metadata.js";
-import {
-  emitTrustedDiagnosticEvent,
-  emitTrustedDiagnosticEventWithPrivateData,
-} from "../../../infra/diagnostic-events.js";
+import { emitTrustedDiagnosticEventWithPrivateData } from "../../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
+import { resolveDiagnosticMessageOrigin } from "../../../infra/diagnostic-message-origin.js";
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -532,7 +530,7 @@ export type EmitDiagnosticRunCompleted = (
   extra?: { blockedBy?: string; finalResponse?: string },
 ) => void;
 
-export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams) {
+export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptInternalParams) {
   const diagnosticTrace = freezeDiagnosticTraceContext(
     getActiveDiagnosticTraceContext() ?? createDiagnosticTraceContext(),
   );
@@ -550,10 +548,15 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
       : {}),
     trace: runTrace,
   };
-  emitTrustedDiagnosticEvent({
-    type: "run.started",
-    ...diagnosticRunBase,
-  });
+  const messageOrigin = resolveDiagnosticMessageOrigin(
+    getRuntimeConfigSnapshot(),
+    params.messageChannel ?? params.messageProvider,
+    params.diagnosticMessageOriginId,
+  );
+  emitTrustedDiagnosticEventWithPrivateData(
+    { type: "run.started", ...diagnosticRunBase },
+    messageOrigin ? { messageOrigin } : undefined,
+  );
   const startedAt = Date.now();
   let completed = false;
   const emitCompleted: EmitDiagnosticRunCompleted = (outcome, err, extra) => {
@@ -587,10 +590,11 @@ export function startEmbeddedAttemptDiagnostics(params: EmbeddedRunAttemptParams
         ...(extra?.blockedBy ? { blockedBy: extra.blockedBy } : {}),
         ...(failed ? { errorCategory: diagnosticErrorCategory(err) } : {}),
       },
-      errorMessage || messageContent
+      errorMessage || messageContent || messageOrigin
         ? {
             ...(errorMessage ? { errorMessage } : {}),
             ...(messageContent ? { messageContent } : {}),
+            ...(messageOrigin ? { messageOrigin } : {}),
           }
         : undefined,
     );

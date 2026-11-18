@@ -257,6 +257,13 @@ async function executeClaim(
       ...source,
       ...resolveOriginRoutingMetadata(sources),
       ...collectRuntimeMetadata(sources, cancellation.signal),
+      originatingNativeChannelId:
+        source.originatingNativeChannelId &&
+        sources.every(
+          (item) => item.originatingNativeChannelId === source.originatingNativeChannelId,
+        )
+          ? source.originatingNativeChannelId
+          : undefined,
       ...collectQueuedPromptMedia(sources),
       ...(claim.summary
         ? { currentInboundContext: collectCurrentInboundContext(summarizedSources) }

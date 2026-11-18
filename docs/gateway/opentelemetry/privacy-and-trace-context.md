@@ -45,13 +45,13 @@ request trace; longer values make the request frame invalid. `tracestate` and
 ## Privacy and content capture
 
 Raw model/tool content is **not** exported by default. Spans carry bounded
-identifiers (channel, provider, model, error category, hash-only request ids,
-tool source, tool owner, skill name/source) and never include prompt text,
-response text, tool inputs, tool outputs, skill file paths, or session keys
-while `diagnostics.otel.captureContent` is unset (see
-[Session identity](#session-identity)). Values that look like scoped agent
-session keys (for example starting with
-`agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
+attributes such as channel, provider, model, error category, hash-only request
+IDs, tool source, tool owner, and skill name/source. Without content capture,
+spans do not include prompt text, response text, tool inputs, tool outputs, or
+skill file paths. Spans never include raw session keys. Session and message
+origin identifiers have separate capture controls described below. Values that
+look like scoped agent session keys (for example starting with `agent:`) are
+replaced with `unknown` on low-cardinality attributes. OTLP log
 records keep severity, logger, available code locations, trusted trace context, and
 sanitized attributes by default; the raw log message body is exported only
 when `diagnostics.otel.captureContent` is `true`. Subsystem `info` records omit code
@@ -62,10 +62,13 @@ handoff tokens.
 
 ## Session identity
 
-Trace backends group spans into conversations by a session attribute, which the
-default redaction removes. When `diagnostics.otel.captureContent` is `true`,
-run-scoped spans (run, message and prompt processing, model call, model usage,
-harness, tool execution, and skill use) carry:
+Trace backends can group spans into conversations by session ID. To export this
+ID without content, set `diagnostics.otel.captureSessionIdentity` to `true`.
+When unset, this setting follows `diagnostics.otel.captureContent` for
+compatibility. Set it to `false` to disable session ID export even when content
+capture is on. With session identity capture enabled, run-scoped spans (run,
+message and prompt processing, model call, model usage, harness, tool execution,
+and skill use) carry:
 
 - `gen_ai.conversation.id`: the GenAI semantic-conventions attribute that
   Langfuse, LangWatch, Phoenix, and other vendor-neutral backends read for
@@ -73,16 +76,37 @@ harness, tool execution, and skill use) carry:
 - `openclaw.session.id`: the same session id under the OpenClaw-native key.
 
 The value is the session id — the durable identifier OpenClaw assigns at
-session creation, not the session key — so backends group every turn of a
-session into one conversation. A `/new` reset clears history but preserves the
-durable session id, so reset continuations stay grouped in the same backend
-conversation; a fresh conversation id arises when a session is first created.
-The raw session key (which can embed channel
-peer ids and collides across Gateways that share a collector) is never
-exported. Session ids are still stable identifiers of a conversation; the
-shared `captureContent` gate exists so identity travels only to a collector
-already trusted with raw prompt and tool content. Metric attributes never
-carry session identifiers.
+session creation, not the session key — so backends group turns with the same
+session ID into one conversation. A `/new` reset normally preserves the durable
+session ID; ACP session resets rotate it. A fresh session also receives a new ID.
+The raw session key can embed channel peer IDs and is never exported. Session
+IDs remain stable identifiers of a conversation, not anonymous values. Approve
+the collector and its retention policy for identifiers before enabling capture.
+Metric attributes never carry session identifiers.
+
+## Message origin
+
+Set `diagnostics.otel.captureMessageOrigin` to `true` to export a native message
+origin without content capture. The setting defaults to off, even when content
+capture is on. For Slack turns, `openclaw.message.processed` and `openclaw.run`
+spans can include `openclaw.origin.channel.id`. Its value identifies the current
+turn's native Slack channel or direct-message conversation, not the session ID.
+Other channel integrations do not supply this attribute. Model, tool, and
+harness spans do not inherit it from their parent spans. Generic CLI backends
+other than Claude CLI do not currently emit an `openclaw.run` span; the message
+span can still carry the origin when available. Slack slash commands do not yet
+supply this diagnostic origin. Built-in restricted finalization run spans omit it.
+
+OpenClaw omits the attribute when the native origin is missing, unsuitable, or
+ambiguous, including a collected batch with mixed origins. The identifier must
+contain 1 to 128 printable ASCII characters without spaces. The exporter applies
+sensitive-text redaction to the identifier. Origin IDs never label metrics or
+appear in public diagnostic event payloads. Trusted diagnostic listeners that
+request private data can receive the origin ID. A Slack ID can identify a
+conversation, so approve the collector and retention policy for this data.
+Traces can be sampled or lost and are not a complete audit trail.
+
+## Other trace data
 
 Skill-use spans can include a SHA-256 fingerprint of the instructions actually
 delivered while tracing is active, even with content capture disabled. This

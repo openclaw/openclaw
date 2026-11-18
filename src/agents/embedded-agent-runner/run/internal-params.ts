@@ -52,6 +52,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Native source identifier for private diagnostics, owned by the admitted turn. */
+  diagnosticMessageOriginId?: string;
   /** The reply owner checkpoints the source before recovery rewrites its context. */
   beforeRecoveryCompaction?: (context: {
     sessionId: string;
@@ -123,6 +125,7 @@ export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
     | "onCompactionRequestBudget"
     | "runCleanupSettlement"
     | "joinObservation"
+    | "diagnosticMessageOriginId"
   > & {
     /** Spawn preference from the exact session entry already captured by run admission. */
     toolUsageRankingSeed?: InternalSessionEntry["toolUsageRankingSeed"];

@@ -546,6 +546,7 @@ export async function runCliFallbackCandidate(
             groupSpace: turn.followupRun.run.groupSpace,
             spawnedBy: turn.followupRun.run.spawnedBy,
             chatId: turn.followupRun.originatingChatId,
+            diagnosticMessageOriginId: turn.followupRun.originatingNativeChannelId,
             currentThreadTs: cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
             currentMessageId: cliCurrentMessageId,
             replyToMode: cliReplyToMode,

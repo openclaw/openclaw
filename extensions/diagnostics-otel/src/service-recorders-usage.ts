@@ -5,6 +5,7 @@ import type {
   DiagnosticEventPayload,
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { assignOtelMessageOrigin } from "./service-attributes.js";
 import { assignOtelContentAttr } from "./service-content-normalization.js";
 import type { DiagnosticHandlers } from "./service-events.js";
 import {
@@ -263,6 +264,9 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
       }
       const spanAttrs: Record<string, string | number> = { ...attrs };
       runtime.addRunAttrs(spanAttrs, evt);
+      if (runtime.captureMessageOrigin) {
+        assignOtelMessageOrigin(spanAttrs, privateData.messageOrigin?.channelId);
+      }
       if (evt.reason) {
         spanAttrs["openclaw.reason"] = normalizeDiagnosticValue(evt.reason, "unknown");
       }
@@ -287,12 +291,15 @@ export function createUsageRecorders(runtime: DiagnosticsRecorderRuntime) {
     "message.delivery.started"(evt) {
       runtime.messageDeliveryStartedCounter.add(1, messageDeliveryAttrs(evt));
     },
-    "run.started"(evt, metadata) {
+    "run.started"(evt, metadata, privateData) {
       if (!runtime.tracesEnabled || !metadata.trusted) {
         return;
       }
       const spanAttrs: Record<string, string | number | boolean> = {};
       runtime.addRunAttrs(spanAttrs, evt);
+      if (runtime.captureMessageOrigin) {
+        assignOtelMessageOrigin(spanAttrs, privateData.messageOrigin?.channelId);
+      }
       const span = runtime.trackInternalOrTrustedSpan(
         evt,
         metadata,

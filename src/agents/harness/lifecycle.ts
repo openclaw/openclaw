@@ -6,12 +6,12 @@ import {
   diagnosticErrorMessage,
 } from "../../infra/diagnostic-error-metadata.js";
 import {
-  emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
   type DiagnosticHarnessRunErrorEvent,
   type DiagnosticHarnessRunOutcome,
 } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
+import { resolveDiagnosticMessageOrigin } from "../../infra/diagnostic-message-origin.js";
 import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
@@ -173,6 +173,7 @@ function emitAgentRunCompleted(
   trace: DiagnosticTraceContext | undefined,
   startedAt: number,
   completion: AgentRunCompletion,
+  messageOrigin: { channelId: string } | undefined,
   classifyMissingError = false,
 ): void {
   if (!trace) {
@@ -190,10 +191,11 @@ function emitAgentRunCompleted(
       ...(completion.blockedBy ? { blockedBy: completion.blockedBy } : {}),
       ...(failed ? { errorCategory: diagnosticErrorCategory(completion.error) } : {}),
     },
-    errorMessage || completion.messageContent
+    errorMessage || completion.messageContent || messageOrigin
       ? {
           ...(errorMessage ? { errorMessage } : {}),
           ...(completion.messageContent ? { messageContent: completion.messageContent } : {}),
+          ...(messageOrigin ? { messageOrigin } : {}),
         }
       : undefined,
   );
@@ -272,7 +274,13 @@ function createAgentHarnessLifecycleDiagnostics(
   harness: AgentHarness,
   params: AgentHarnessAttemptParams,
   finalizing = false,
+  diagnosticMessageOriginId?: string,
 ) {
+  const messageOrigin = resolveDiagnosticMessageOrigin(
+    getRuntimeConfigSnapshot(),
+    params.messageChannel ?? params.messageProvider,
+    diagnosticMessageOriginId,
+  );
   const startedAt = Date.now();
   const trace = getActiveDiagnosticTraceContext();
   const createRunTrace = () =>
@@ -304,6 +312,7 @@ function createAgentHarnessLifecycleDiagnostics(
       agentRunTrace,
       agentRunStartedAt,
       completion,
+      messageOrigin,
       classifyMissingError,
     );
   return {
@@ -322,10 +331,10 @@ function createAgentHarnessLifecycleDiagnostics(
         }
       }
       if (agentRunTrace) {
-        emitTrustedDiagnosticEvent({
-          type: "run.started",
-          ...agentRunDiagnosticBase(params, agentRunTrace),
-        });
+        emitTrustedDiagnosticEventWithPrivateData(
+          { type: "run.started", ...agentRunDiagnosticBase(params, agentRunTrace) },
+          messageOrigin ? { messageOrigin } : undefined,
+        );
       }
     },
     run<T>(execute: () => Promise<T>): Promise<T> {
@@ -360,9 +369,15 @@ export async function runAgentHarnessLifecycleAttempt(
   execute: (params: AgentHarnessAttemptParamsV2) => Promise<AgentHarnessAttemptResult> = (
     attemptParams,
   ) => harness.runAttempt(attemptParams),
+  diagnosticMessageOriginId?: string,
 ): Promise<EmbeddedRunAttemptResult> {
   let result: EmbeddedRunAttemptResult;
-  const diagnostics = createAgentHarnessLifecycleDiagnostics(harness, params);
+  const diagnostics = createAgentHarnessLifecycleDiagnostics(
+    harness,
+    params,
+    false,
+    diagnosticMessageOriginId,
+  );
   try {
     assertAgentHarnessContextEngineSupport(harness, params);
     diagnostics.startAgentRun();
@@ -426,8 +441,14 @@ export async function runAgentHarnessLifecycleFinalization(
   harness: AgentHarness,
   params: AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2>,
   execute: () => Promise<AgentHarnessSettledTurnFinalizationResult>,
+  diagnosticMessageOriginId?: string,
 ): Promise<AgentHarnessLifecycleFinalizationOutcome> {
-  const diagnostics = createAgentHarnessLifecycleDiagnostics(harness, params, true);
+  const diagnostics = createAgentHarnessLifecycleDiagnostics(
+    harness,
+    params,
+    true,
+    diagnosticMessageOriginId,
+  );
   diagnostics.startAgentRun();
   try {
     const runAndValidate = async () => {

@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { DiagnosticEventPayload } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
-import { assignOptionalNumberAttrs } from "./service-attributes.js";
+import { assignOptionalNumberAttrs, assignOtelMessageOrigin } from "./service-attributes.js";
 import {
   assignOtelContentAttr,
   normalizeOtelErrorMessage,
@@ -364,6 +364,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
         "openclaw.outcome": evt.outcome,
       };
       runtime.addRunAttrs(spanAttrs, evt);
+      if (runtime.captureMessageOrigin) {
+        assignOtelMessageOrigin(spanAttrs, privateData.messageOrigin?.channelId);
+      }
       if (evt.blockedBy) {
         spanAttrs["openclaw.blocked_by"] = normalizeDiagnosticValue(evt.blockedBy, "unknown");
       }

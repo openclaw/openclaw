@@ -145,6 +145,8 @@ export type FollowupRunPayload = {
   originatingTo?: string;
   /** Transport-native chat/conversation ID for hook identity context. */
   originatingChatId?: string;
+  /** Native Slack channel ID from the source turn; diagnostic consent is checked at execution. */
+  originatingNativeChannelId?: string;
   /** Provider account id (multi-account). */
   originatingAccountId?: string;
   /** Thread id for reply routing (Telegram topic id or Matrix thread event id). */

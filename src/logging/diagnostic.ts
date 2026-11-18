@@ -419,6 +419,7 @@ export function logMessageProcessed(
   params: DiagnosticLogParams<"message.processed"> & {
     userPrompt?: string;
     finalResponse?: string;
+    messageOrigin?: { channelId: string };
   },
 ) {
   if (!areDiagnosticsEnabledForProcess()) {

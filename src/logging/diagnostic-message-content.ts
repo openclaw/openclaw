@@ -13,6 +13,7 @@ export function emitMessageProcessedDiagnosticEvent(
   params: Omit<Extract<DiagnosticEventInput, { type: "message.processed" }>, "type"> & {
     userPrompt?: string;
     finalResponse?: string;
+    messageOrigin?: { channelId: string };
   },
 ): void {
   // Gate each message content field on its own captureContent policy field so that
@@ -32,9 +33,16 @@ export function emitMessageProcessedDiagnosticEvent(
         }
       : undefined;
   const hasContent = messageContent !== undefined && Object.keys(messageContent).length > 0;
-  const { userPrompt: _userPrompt, finalResponse: _finalResponse, ...event } = params;
+  const {
+    userPrompt: _userPrompt,
+    finalResponse: _finalResponse,
+    messageOrigin,
+    ...event
+  } = params;
   emitInternalDiagnosticEvent(
     { type: "message.processed" as const, ...event },
-    hasContent ? { messageContent } : undefined,
+    hasContent || messageOrigin
+      ? { ...(hasContent ? { messageContent } : {}), ...(messageOrigin ? { messageOrigin } : {}) }
+      : undefined,
   );
 }

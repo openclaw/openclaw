@@ -17,6 +17,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { runClaudeCliAgentTurnWithDiagnostics } from "../../agents/cli-runner/run-diagnostics.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -37,6 +38,10 @@ import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -2188,6 +2193,57 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(secondRun.extraSystemPromptStatic).toBe(firstRun.extraSystemPromptStatic);
     expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
+  });
+
+  it("retains a Slack native origin until queued execution checks diagnostics consent", async () => {
+    const diagnosticsOff = createConfig({
+      diagnostics: { otel: { enabled: true, captureMessageOrigin: false } },
+    });
+    const diagnosticsOn = createConfig({
+      diagnostics: { otel: { enabled: true, captureMessageOrigin: true } },
+    });
+    setRuntimeConfigSnapshot(diagnosticsOff);
+    const origins: Array<string | undefined> = [];
+    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      if (event.type === "run.completed" && event.runId === "queued-origin") {
+        origins.push(privateData.messageOrigin?.channelId);
+      }
+    });
+    try {
+      await runPrepared({
+        cfg: diagnosticsOff,
+        ...turn("hello", {
+          Provider: "slack",
+          OriginatingChannel: "slack",
+          NativeChannelId: "C123",
+          OriginatingTo: "user:U123",
+          ChatType: "direct",
+        }),
+      });
+      const queued = requireRunReplyAgentCall().followupRun;
+      expect(queued.originatingNativeChannelId).toBe("C123");
+      const key = `origin-config-${Date.now()}`;
+      expect(enqueueFollowupRun(key, queued, { mode: "followup" })).toBe(true);
+      const receipt = expectDefined(queued.controllerInput, "queued input").settlement.promise;
+      setRuntimeConfigSnapshot(diagnosticsOn);
+      scheduleFollowupDrain(key, async (run) => {
+        await runClaudeCliAgentTurnWithDiagnostics(
+          {
+            runId: "queued-origin",
+            sessionId: run.run.sessionId,
+            messageChannel: run.originatingChannel,
+            diagnosticMessageOriginId: run.originatingNativeChannelId,
+          },
+          async () => ({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } }),
+        );
+      });
+      await receipt;
+      await waitForDiagnosticEventsDrained();
+      expect(origins).toEqual(["C123"]);
+    } finally {
+      stop();
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it("captures the prepared reply policy for queued Slack runs", async () => {

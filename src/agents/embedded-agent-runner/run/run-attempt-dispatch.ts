@@ -416,6 +416,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     memoryFlushTools: params.memoryFlushTools,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
+    diagnosticMessageOriginId: params.diagnosticMessageOriginId,
     clientCaps: params.clientCaps,
     bootstrapUserProfileId: params.bootstrapUserProfileId,
     sessionUserProfileId: params.sessionUserProfileId,

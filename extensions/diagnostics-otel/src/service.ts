@@ -339,6 +339,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
       const sampleRate = asFiniteNumberInRange(otel.sampleRate, { min: 0, max: 1 });
       const captureContent = otel.captureContent === true;
+      const captureSessionIdentity = otel.captureSessionIdentity ?? captureContent;
+      const captureMessageOrigin = otel.captureMessageOrigin === true;
 
       const resource = resources.resourceFromAttributes({
         [ATTR_SERVICE_NAME]: serviceName,
@@ -509,7 +511,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       const tracer = active.traceProvider
         ? active.traceProvider.getTracer("openclaw")
         : trace.getTracer("openclaw");
-      const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer, { captureContent });
+      const diagnosticsTrace = createDiagnosticsTraceRuntime(tracer, { captureSessionIdentity });
       active.stopActiveTrustedSpans = diagnosticsTrace.stopActiveTrustedSpans;
       const diagnosticMetrics = createDiagnosticsMetrics(meter, otel.metricNamePrefix);
 
@@ -532,6 +534,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         ...diagnosticMetrics,
         ...diagnosticsTrace,
         captureContent,
+        captureMessageOrigin,
         tracesEnabled: tracesActive,
       };
       const recordLogEvent = diagnosticsLogs.recordLogEvent;

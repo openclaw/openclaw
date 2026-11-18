@@ -112,6 +112,31 @@ describe("Claude CLI run diagnostics", () => {
     clearRuntimeConfigSnapshot();
   });
 
+  it.each([
+    { enabled: false, isolatedCompletion: false, expected: undefined },
+    { enabled: true, isolatedCompletion: false, expected: "C012EXAMPLE" },
+    { enabled: true, isolatedCompletion: true, expected: undefined },
+  ])(
+    "keeps run origin private and gated ($enabled, isolated=$isolatedCompletion)",
+    async ({ enabled, isolatedCompletion, expected }) => {
+      setRuntimeConfigSnapshot({
+        diagnostics: { otel: { enabled: true, captureMessageOrigin: enabled } },
+      });
+      const diagnostics = captureLifecycle("origin-run");
+      await diagnostics.run(async () => success(), {
+        messageChannel: "slack",
+        diagnosticMessageOriginId: "C012EXAMPLE",
+        isolatedCompletion: isolatedCompletion || undefined,
+      });
+      for (const { event, privateData } of diagnostics.events) {
+        expect(JSON.stringify(event)).not.toContain("C012EXAMPLE");
+        expect(privateData.messageOrigin?.channelId).toBe(
+          event.type === "run.started" || event.type === "run.completed" ? expected : undefined,
+        );
+      }
+    },
+  );
+
   it("attributes isolated run and harness events to their utility purpose", async () => {
     const diagnostics = captureLifecycle("utility-run");
     await diagnostics.run(async () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } }), {

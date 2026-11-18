@@ -45,7 +45,6 @@ import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { getRequesterProfile, transferRequesterProfile } from "../requester-profile.js";
-import type { OriginatingChannelType } from "../templating.js";
 import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
@@ -57,7 +56,7 @@ import {
 } from "./get-reply-run-helpers.js";
 import { hasInboundAudio } from "./inbound-media.js";
 import { normalizeMessageTimestampMs } from "./message-timestamp.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveOriginMessageProvider, slackNativeMessageOrigin } from "./origin-routing.js";
 import { resolveReplySteeringIntent } from "./reply-steering-intent.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
@@ -380,9 +379,7 @@ export async function executePreparedReplyRun(
   if (userTurnTranscriptRecorder) {
     await opts?.internalEventExecution?.prepareInput?.(userTurnTranscriptRecorder);
   }
-  const replyPolicyChannel =
-    (replyRoute.channel as OriginatingChannelType | undefined) ??
-    (messageProvider as OriginatingChannelType | undefined);
+  const replyPolicyChannel = replyRoute.channel ?? messageProvider;
   const queuedToolsAllow = opts?.toolsAllow ? [...opts.toolsAllow] : opts?.toolsAllow;
   const queuedToolIntersections = opts?.toolsAllow
     ? readToolAllowlistIntersection(opts.toolsAllow)
@@ -504,6 +501,7 @@ export async function executePreparedReplyRun(
     originatingChatId:
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
+    originatingNativeChannelId: slackNativeMessageOrigin(ctx),
     originatingChatType: replyRoute.chatType,
     run: {
       scheduledAutomation: opts?.scheduledAutomation,

@@ -49,6 +49,15 @@ export function assignOptionalNumberAttrs(
   }
 }
 
+export function assignOtelMessageOrigin(
+  attributes: Record<string, string | number | boolean>,
+  channelId: string | undefined,
+): void {
+  if (channelId && /^[\x21-\x7e]{1,128}$/u.test(channelId)) {
+    attributes["openclaw.origin.channel.id"] = channelId;
+  }
+}
+
 export function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
   const redactedAttributes: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(attributes)) {

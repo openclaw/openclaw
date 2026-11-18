@@ -181,6 +181,7 @@ export async function runEmbeddedAgentViaCliBackendIfEligible(
       extraSystemPrompt: params.extraSystemPrompt,
       messageChannel: params.messageChannel,
       messageProvider: params.messageProvider,
+      diagnosticMessageOriginId: params.diagnosticMessageOriginId,
       bootstrapContextMode: params.bootstrapContextMode,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       abortSignal: params.abortSignal,
