@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../agents/agent-run-terminal-outcome.js";
@@ -13,6 +15,8 @@ import {
 } from "../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -26,7 +30,7 @@ import { createCanonicalRepairFixture } from "./doctor-session-repair-fixture.te
 const receipts: SessionPendingInputReceipt[] = [];
 afterEach(async () => {
   for (const receipt of receipts.splice(0)) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
@@ -117,7 +121,7 @@ describe("Doctor canonical completion receipt repair", () => {
       f.create();
       const first = await f.stage();
       await first.completeAsync!(stopped);
-      first.finish("interrupted");
+      first.finish("interrupted", "failed");
       const before = f.rows();
       f.database(true).db.exec("DROP TABLE session_input_completions");
       await f.restart();
@@ -129,7 +133,7 @@ describe("Doctor canonical completion receipt repair", () => {
       expect(retry.completion).toEqual(stopped);
       expect(() => retry.run(() => "replayed work")).toThrow("already completed");
       expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
-      retry.finish("interrupted");
+      retry.finish("interrupted", "failed");
       const deleted = await deleteSessionEntryLifecycle({
         agentId: "main",
         storePath: f.scope(true).storePath,
@@ -199,6 +203,107 @@ describe("Doctor canonical completion receipt repair", () => {
         await expect(f.repair()).rejects.toThrow("conflicting input completions");
         expect(f.rows()).toEqual(source);
         expect(f.rows(true)).toEqual(destination);
+      });
+    },
+  );
+});
+
+describe("Doctor canonical pending-input repair", () => {
+  it("preserves version 42 user-stop retirement and message bytes across owner repair and restart", async () => {
+    await withStateDirEnv("doctor-legacy-stopped-input-", async ({ stateDir }) => {
+      const f = fixture(stateDir);
+      f.create();
+      const first = await f.stage();
+      first.finish("cancelled", "failed");
+      await first.settled?.();
+      const filename = f.database().path;
+      await f.restart();
+      fs.copyFileSync(filename, `${filename}.previous`);
+      fs.renameSync(`${filename}.previous`, filename);
+      const legacyMessage = JSON.stringify({
+        ...first.message,
+        __openclaw: { pendingInputCancelledByUser: true },
+      });
+      {
+        using old = new DatabaseSync(filename);
+        old.exec(`
+          ALTER TABLE session_pending_inputs DROP COLUMN end_cause;
+          ALTER TABLE session_pending_inputs DROP COLUMN origin_source_json;
+          PRAGMA user_version = 42;
+          UPDATE schema_meta SET schema_version = 42 WHERE meta_key = 'primary';
+        `);
+        old
+          .prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?")
+          .run(legacyMessage, first.inputId);
+      }
+      const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+      await withAgentDatabaseMaintenanceLease({ env }, (maintenance) =>
+        migrateOpenClawAgentDatabaseForMaintenance(
+          { agentId: "ops", env, pathname: filename },
+          maintenance,
+        ),
+      );
+
+      expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
+      await f.restart();
+      expect(f.database().db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 43 });
+      expect(
+        f
+          .database()
+          .db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 43 });
+      expect(
+        f
+          .database(true)
+          .db.prepare(
+            "SELECT input_id, session_key, state, end_cause, message_json FROM session_pending_inputs",
+          )
+          .all(),
+      ).toEqual([
+        {
+          input_id: first.inputId,
+          session_key: f.canonicalKey,
+          state: "cancelled",
+          end_cause: "user-stop",
+          message_json: legacyMessage,
+        },
+      ]);
+      expect(f.database().db.prepare("SELECT * FROM session_pending_inputs").all()).toEqual([]);
+      await expect(
+        stageSessionPendingInput(f.scope(true), {
+          runId: "announce:private-result",
+          message: first.message,
+          assertCurrent: () => {},
+          trackCompletion: true,
+          retryCancelled: true,
+        }),
+      ).rejects.toThrow("ownership ended");
+      expect(await f.repair()).toMatchObject({ repairedGroups: 0 });
+    });
+  });
+
+  it.each([
+    ["user-stop", "failed"],
+    ["failed", "user-stop"],
+  ] as const)(
+    "keeps a deliberate retirement when merging copies (source %s, destination %s)",
+    async (sourceCause, destinationCause) => {
+      await withStateDirEnv("doctor-merge-cause-", async ({ stateDir }) => {
+        const f = fixture(stateDir);
+        f.create(false, 20);
+        f.create(true, 10);
+        const source = await f.stage();
+        source.finish("cancelled", sourceCause);
+        await source.settled?.();
+        const destination = await f.stage(true);
+        destination.finish("cancelled", destinationCause);
+        await destination.settled?.();
+        await f.restart();
+        expect(await f.repair()).toMatchObject({ repairedGroups: 1 });
+        expect(
+          f.database(true).db.prepare("SELECT state, end_cause FROM session_pending_inputs").all(),
+        ).toEqual([{ state: "cancelled", end_cause: "user-stop" }]);
       });
     },
   );

@@ -499,7 +499,6 @@ export function renderChatComposerView(
                   props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
                 }
               />
-              <ComposerDictationStatus readDictation={() => context().dictation} />
               <ChatAttachmentInputs
                 {...props}
                 inputHandle={inputHandle}
@@ -665,6 +664,7 @@ export function renderChatComposerView(
                     );
                   }}
                 </Show>
+                <ComposerDictationStatus readDictation={() => context().dictation} />
                 <div class="agent-chat__composer-actions">
                   <ChatPrimaryActions {...context().runControlsProps} />
                 </div>

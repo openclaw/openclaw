@@ -3,7 +3,10 @@ import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import type { ControlUiMockGatewayScenario } from "../test-helpers/control-ui-e2e.ts";
+import {
+  waitForControlUiRoute,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { textContent, chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { focusChatSidePanel, openChatSidePanelType } from "./chat-side-panel.test-support.ts";
@@ -128,12 +131,13 @@ suite.define(() => {
         ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/${file}`).source),
       ),
     ).toEqual({ titlebarRegistered: false, requested: [false, false] });
-    // The active view's rail item collapses its panel; Sessions reopens it.
-    const pages = page.locator('[data-navigation-view="pages"]');
+    // The panel collapses itself; the Sessions rail item reopens it.
     const sidebarPanel = page.locator(".sidebar-shell");
     await visible(sidebarPanel);
-    await pages.click();
-    await pages.click();
+    await page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true })
+      .click();
     await visible(sidebarPanel, false);
     await page.locator('[data-navigation-view="sessions"]').click();
     await visible(sidebarPanel);
@@ -366,15 +370,19 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    // A view button with a tooltip: the Sessions avatar carries its name in its label.
-    const toggle = page.locator('[data-navigation-view="pages"]');
+    // People is a view button with a tooltip; the panel's own button collapses it.
+    const toggle = page.locator('[data-navigation-view="online"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
     await toggle.click();
+    await waitForControlUiRoute(page, { routeId: "activity" });
+    const collapse = page
+      .locator("openclaw-app-sidebar")
+      .getByRole("button", { name: "Collapse sidebar", exact: true });
 
     // Safari tap leaves post-collapse focus restoration to the shell.
-    await toggle.evaluate((element) => {
+    await collapse.evaluate((element) => {
       for (const type of ["pointerdown", "pointerup"]) {
         element.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType: "touch" }));
       }
@@ -400,7 +408,7 @@ suite.define(() => {
       .poll(() =>
         openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
       )
-      .toBe("Pages");
+      .toBe("People");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -551,7 +559,7 @@ suite.define(() => {
     await newThread.click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
 
-    for (const view of ["sessions", "pages", "online"]) {
+    for (const view of ["sessions", "online"]) {
       await rail.locator(".sidebar-identity-card").click();
       await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
       await expectShellClass(page, "shell--settings");

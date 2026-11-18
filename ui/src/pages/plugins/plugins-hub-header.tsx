@@ -5,7 +5,12 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { isTemplatesAvailable } from "../templates/availability.ts";
-import { PLUGINS_HUB_DOCS_URLS, PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
+import {
+  PLUGINS_HUB_DOCS_URLS,
+  PLUGINS_HUB_PANEL_ID,
+  pluginsHubTabsShown,
+  type PluginsHubTab,
+} from "./plugins-hub.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
 
@@ -15,6 +20,7 @@ export function PluginsHubHeader(props: {
   subtitle?: JSX.Element;
   wide?: boolean;
   class?: string;
+  actions?: JSX.Element;
   secondaryAction?: {
     label: string;
     icon?: JSX.Element;
@@ -31,23 +37,30 @@ export function PluginsHubHeader(props: {
       title={props.active === "plugins" ? t("tabs.plugins") : undefined}
       subtitle={props.subtitle}
       wide={props.wide}
-      tabs={{
-        id: "plugins",
-        items: [
-          { value: "plugins", label: t("tabs.plugins") },
-          { value: "skills", label: t("tabs.skills") },
-          { value: "skill-workshop", label: t("tabs.skillWorkshop") },
-          ...(templates() ? [{ value: "templates" as const, label: t("tabs.templates") }] : []),
-        ],
-        ariaLabel: t("pluginsPage.hubTablistLabel"),
-        panelId: PLUGINS_HUB_PANEL_ID,
-        class: "plugins-tabs",
-        onSelect: (tab) => props.onSelect(tab),
-      }}
+      tabs={
+        pluginsHubTabsShown()
+          ? {
+              id: "plugins",
+              items: [
+                { value: "plugins", label: t("tabs.plugins") },
+                { value: "skills", label: t("tabs.skills") },
+                { value: "skill-workshop", label: t("tabs.skillWorkshop") },
+                ...(templates()
+                  ? [{ value: "templates" as const, label: t("tabs.templates") }]
+                  : []),
+              ],
+              ariaLabel: t("pluginsPage.hubTablistLabel"),
+              panelId: PLUGINS_HUB_PANEL_ID,
+              class: "plugins-tabs",
+              onSelect: (tab) => props.onSelect(tab),
+            }
+          : undefined
+      }
       docsUrl={PLUGINS_HUB_DOCS_URLS[props.active]}
       class={props.class ? `plugins-hub-header ${props.class}` : "plugins-hub-header"}
       actions={
-        props.secondaryAction && (
+        props.actions ??
+        (props.secondaryAction && (
           <button
             type="button"
             class={[
@@ -60,7 +73,7 @@ export function PluginsHubHeader(props: {
           >
             {props.secondaryAction.icon ?? props.secondaryAction.label}
           </button>
-        )
+        ))
       }
     />
   );

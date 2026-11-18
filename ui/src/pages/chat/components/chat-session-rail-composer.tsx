@@ -175,7 +175,6 @@ export function SessionRailComposer(props: {
         pendingReads={props.attachmentProps.attachmentReads?.pendingReads ?? 0}
       />
       <div class="agent-chat__composer-lede">
-        <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
         <Show when={props.companion.commentsSaving}>
           <div class="muted chat-session-rail__save-status" role="status">
             {t("common.saving")}
@@ -206,7 +205,7 @@ export function SessionRailComposer(props: {
             readonly={dictationActive()}
             onPaste={(event) => {
               if (props.connected) {
-                handleChatAttachmentPaste(event, props.attachmentProps);
+                handleChatAttachmentPaste(event, props.attachmentProps, { imagesOnly: true });
                 if (event.defaultPrevented) {
                   event.stopPropagation();
                 }
@@ -290,6 +289,7 @@ export function SessionRailComposer(props: {
               </div>
             )}
           </Show>
+          <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
           <div class="agent-chat__composer-actions">
             {/* Preparing dictation starts capability reads and follows the settled rail. */}
             <Show when={settled()}>

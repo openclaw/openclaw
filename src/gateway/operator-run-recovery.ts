@@ -59,6 +59,7 @@ import {
 } from "./operator-run-authority.js";
 import {
   decodeQueuedOperatorRecoverySource,
+  hasAutomationAdminDelegation,
   type OperatorRunRecoverySnapshot,
 } from "./operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "./operator-run-recovery-source.js";
@@ -73,6 +74,7 @@ export type RestoredGatewayOperatorAuthority = {
   assertPolicyCurrent: () => void;
   authenticatedUserProfile: GatewayAuthenticatedUserProfile;
   controlUiAdmin: boolean;
+  automationAdmin: boolean;
   release: () => void;
 };
 
@@ -425,6 +427,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         assertPolicy();
       },
       authenticatedUserProfile: { profileId: id, ...display, updatedAt: profile.updated_at },
+      automationAdmin:
+        hasAutomationAdminDelegation(snapshot) &&
+        operatorScopeSatisfied("operator.admin", authority.scopes),
       controlUiAdmin:
         snapshot.controlUiAdmin && operatorScopeSatisfied("operator.admin", authority.scopes),
       release,
@@ -479,7 +484,10 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   context: GatewayRequestContext;
   assertCurrent: () => void;
 }): Promise<
-  Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release"> & {
+  Pick<
+    RestoredGatewayOperatorAuthority,
+    "authority" | "controlUiAdmin" | "automationAdmin" | "release"
+  > & {
     /** Only Gateway recovery reauthenticates a Control UI profile. */
     authenticatedUserProfile?: GatewayAuthenticatedUserProfile;
   }
@@ -578,7 +586,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
       },
     });
     authority.assertCurrent();
-    return { authority, controlUiAdmin: false, release };
+    return { authority, controlUiAdmin: false, automationAdmin: false, release };
   } catch (error) {
     release();
     throw error;

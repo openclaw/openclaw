@@ -408,6 +408,7 @@ describe("actor-owned memory storage", () => {
       mutate(current, "session.pendingInput.mutate", {
         ...oldInput,
         kind: "finish",
+        endCause: "failed",
         inputId: "old-input",
         disposition: "interrupted",
       }),

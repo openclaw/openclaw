@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import type { JSX } from "@solidjs/web";
 import { createSignal, Show } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -25,6 +25,24 @@ function templatesFlag(templates: boolean) {
     ),
   };
 }
+
+// The tabs show only in the native apps, which have no Customize sidebar.
+beforeEach(() => {
+  Object.assign(window, { __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" } });
+});
+afterEach(() => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+});
+
+it("leaves the Customize pages to the sidebar outside the native apps", () => {
+  Reflect.deleteProperty(window, "__OPENCLAW_NATIVE_EMBED__");
+  const view = mountSolid(
+    () => <PluginsHubHeader active="plugins" onSelect={() => {}} />,
+    templatesFlag(true),
+  );
+  expect(view.getByRole("heading", { level: 1 }).textContent).toBe("Plugins");
+  expect(view.queryAllByRole("tab")).toEqual([]);
+});
 
 it("lists Templates as a Customize tab only while its experimental flag is on", () => {
   const tabs = (templates: boolean) =>

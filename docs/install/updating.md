@@ -53,6 +53,30 @@ backup.
 
 ## Update implementation contract
 
+Service reconciliation recognizes a deleted pnpm store generation only when it
+belongs to the same global root as a verified active pnpm install. This repairs
+older service definitions without adopting another global installation. The
+candidate also retains the post-activation predicate imported by supported
+2026.9 extended-stable updaters.
+
+The candidate CLI and Matrix plugin keep explicit `matrix doctor inspect` and
+`matrix doctor recover --account <id> --accept-snapshot-rollback` available through
+the separate Doctor contract when an unfinished migration withholds normal Matrix
+commands. Recovery retains snapshot validation and exclusive crypto custody. It
+never runs automatically or settles the deferred migration: after explicit
+recovery, rerun `openclaw update repair` or `openclaw doctor --fix`, then restart
+the Gateway. Older installed CLIs do not gain this route from a newer plugin alone.
+
+When a package baseline's final rescan detects stat drift, the update still
+refuses package replacement. Local failure output and `openclaw update status --json`
+diagnostics identify the first entry relative to the package root (`.` for the
+root), changed stat fields, and their before/after values. Public failure reports
+retain only the changed field names. An unavailable original inode still refuses
+inspection, identifying the entry and zero inode locally and only the closed
+unavailable-inode classification publicly. These observations do not identify the writer
+or establish why a Windows update failed. The installed updater must contain this
+diagnostic change; a newer candidate cannot change an older updater's scan.
+
 Candidate Doctor compares pending plugin migration obligations independently of
 plugin order and repair guidance. A changed owner, protected path, or migration
 requirement still refuses input publication; diagnostics name added or removed
@@ -259,6 +283,10 @@ references protect their files on each cleanup pass. The candidate Gateway must
 contain this fix. It does not restore generations already deleted or discover
 references supplied only through environment variables, relative paths, or external
 symlinks. An incidental path-valued setting can conservatively retain extra files.
+
+If a retained npm marker cannot be read or parsed, cleanup reports that candidate
+and leaves its files intact. Other eligible retired npm installs are still cleaned
+during the same pass, including legacy shared-root installs.
 
 The candidate macOS app's narrow credential Doctor also completes pending local
 service-runtime intent migration before native startup selects a Gateway. This
@@ -2083,12 +2111,20 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 they continue, so a killed publication no longer needs its printed recovery
 command. A killed update usually also leaves the plugin recovery it reserved,
 which is a separate check. The next `openclaw update` settles that as well when
-`openclaw update repair` would have nothing left to finish: on a package
-install, the killed update was a command-line `openclaw update` whose process
-has exited, the update lease
-store still holds its lease, it did not leave the Gateway stopped, and either
-the previous version is still installed or the Gateway was verified on the new
-one. It reports an `interrupted-update-recovery` warning and continues.
+no operator is needed: on a package install, or a source checkout that still
+holds exactly the build the killed update installed, the killed update was a
+command-line `openclaw update` whose process has exited, and the update lease
+store still holds its lease. On Linux and macOS hosts a restart that cleared
+that store does not block it: the killed update recorded the boot it ran in,
+which shows its processes gone. It reports an `interrupted-update-recovery` warning.
+If the killed update had replaced the installed version without confirming it,
+had begun rolling back on it, or left the Gateway stopped, the update first
+finishes that version as `openclaw update repair` does (Doctor, plugin
+convergence, Gateway restart). That work is recorded on its own repair run,
+named by an `interrupted-update-finalization` warning. Then the update
+continues. A stopped Gateway is restarted only when the update would restart it
+anyway. With `--no-restart`, or when finishing fails, the update stops and
+names `openclaw update repair`.
 Otherwise it stops with `Update <id> has unfinished recovery` and, when repair
 can settle it, the reason and the command to run; see
 [how a killed update is settled](/cli/update/how-updates-run#replacing-the-package-directory).

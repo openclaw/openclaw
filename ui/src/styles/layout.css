@@ -910,6 +910,14 @@ div.shell.shell--onboarding {
   transition: clip-path var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
+/* A page without a sidebar drops it at once, and the next page with one opens it at once;
+   only the explicit collapse toggle animates. */
+.shell--nav-page-hidden,
+.shell--nav-page-hidden .shell-nav,
+.shell--nav-page-shown .shell-nav {
+  transition: none;
+}
+
 .shell-nav-backdrop {
   display: none;
 }
@@ -1760,8 +1768,6 @@ div.shell.shell--onboarding {
 .agent-chat__goal-copy,
 .agent-chat__goal-label,
 .agent-chat__goal-objective,
-.cron-table__name-text,
-.cron-table__cell-value,
 .chat-queue__error-text,
 .multi-select__chip-label {
   min-width: 0;
@@ -2301,6 +2307,93 @@ div.shell.shell--onboarding {
   border-radius: 0;
 }
 
+/* Automations section: New automation and Run history, then grouped rows with a byline. */
+.sidebar-automations {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* A group starts a new shelf, like the Sessions group boundaries. */
+.sidebar-list-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-block-start: var(--sidebar-group-gap);
+}
+
+/* Each automation reads as one unit: a strong name tight over a quieter byline, with more
+   room between automations than inside one. The shared nav-item rules own the inline
+   padding (desktop and drawer), so the copy owns the vertical padding. */
+.sidebar-automations__row {
+  --sidebar-automations-row-pad: 6px;
+  --sidebar-automations-name-line: calc(18px * var(--control-ui-text-scale));
+
+  align-items: flex-start;
+}
+
+.sidebar-automations__copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding-block: var(--sidebar-automations-row-pad);
+}
+
+.sidebar-automations__name,
+.sidebar-automations__byline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-automations__name {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  line-height: var(--sidebar-automations-name-line);
+}
+
+.sidebar-automations__byline {
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  font-size: var(--control-ui-text-sm);
+  line-height: calc(16px * var(--control-ui-text-scale));
+}
+
+/* A failed or auto-disabled automation carries a dot instead of a word, on the name's line. */
+.sidebar-automations__failed {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  margin-block-start: calc(
+    var(--sidebar-automations-row-pad) + (var(--sidebar-automations-name-line) - 6px) / 2
+  );
+  border-radius: 50%;
+  background: var(--danger);
+}
+
+/* Customize section: the hub's pages. */
+.sidebar-customize {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* The people list's heading matches the Sessions group headings, without a toggle. */
+.sidebar-online__heading {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding-inline: calc(var(--sidebar-inset) + 2px) 8px;
+}
+
+/* Activity heads the Users section above its people. */
+.sidebar-online__overview {
+  margin-block-end: 6px;
+}
+
 /* Share the counter track so missing or shorter counts never move person actions. */
 .sidebar-online__list {
   display: grid;
@@ -2654,7 +2747,7 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-recent-sessions__group--dragging,
-.sidebar-recent-session--dragging,
+.reorder-dragging,
 .sidebar-zone-entry--dragging {
   opacity: 0.45;
 }
@@ -2669,15 +2762,9 @@ div.shell.shell--onboarding {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--accent) 75%, transparent);
 }
 
-/* A row's rounded fill would bend an inset edge; draw the drop line straight in the row gap. */
-.sidebar-recent-session:is(.sidebar-zone-entry--drop-before, .sidebar-zone-entry--drop-after) {
-  box-shadow: none;
-}
-
-.sidebar-recent-session:is(
-    .sidebar-zone-entry--drop-before,
-    .sidebar-zone-entry--drop-after
-  )::before {
+/* Draw a straight insertion line in the gap between rounded rows. */
+.reorder-drop-before::before,
+.reorder-drop-after::before {
   content: "";
   position: absolute;
   inset-inline: 6px;
@@ -2687,12 +2774,12 @@ div.shell.shell--onboarding {
   pointer-events: none;
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-before::before {
-  top: -2px;
+.reorder-drop-before::before {
+  top: var(--reorder-edge, -2px);
 }
 
-.sidebar-recent-session.sidebar-zone-entry--drop-after::before {
-  bottom: -2px;
+.reorder-drop-after::before {
+  bottom: var(--reorder-edge, -2px);
 }
 
 /* Rows keep their intrinsic height; capped menus scroll instead of squeezing multiline labels. */
@@ -2893,26 +2980,6 @@ a:is(
   color: var(--navigation-selected-icon, var(--accent));
 }
 
-/* Pinned sessions share the page-nav chrome (hover/active fill, muted glyphs and
-   meta) while retaining session actions. The title deliberately opts out and
-   keeps the list's --text: a session name is content in both zones, and pinning
-   a row must not make it read as dimmer than the same row further down. */
-.sidebar-zone-entry .sidebar-recent-session {
-  --session-row-bg: var(--session-row-tint, transparent);
-
-  padding-block: 0;
-  padding-inline: calc(var(--sidebar-inset) + var(--sidebar-session-row-inset)) 11px;
-  transition:
-    border-color var(--duration-fast) ease,
-    background var(--duration-fast) ease,
-    transform var(--duration-fast) ease;
-}
-
-.sidebar-zone-entry .sidebar-recent-session__link {
-  gap: var(--sidebar-row-gap);
-  padding: 3px 0;
-}
-
 @media (hover: none), (pointer: coarse) {
   .sidebar-shell {
     --sidebar-session-row-floor: 44px;
@@ -2937,19 +3004,6 @@ a:is(
   }
 }
 
-.sidebar-zone-entry .sidebar-recent-session:hover,
-.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--menu-open {
-  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
-
-  color: var(--text);
-}
-
-.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--active {
-  --session-row-bg: var(--surface-selected);
-
-  color: var(--text-strong);
-}
-
 .sidebar-recent-session.sidebar-recent-session--active:hover,
 .sidebar-recent-session.sidebar-recent-session--active.sidebar-recent-session--menu-open {
   --session-row-bg: var(--surface-selected-hover);
@@ -2967,10 +3021,6 @@ a:is(
   );
 }
 
-.sidebar-pages__entry:hover
-  .sidebar-recent-session--colored.sidebar-recent-session--active:not(
-    .sidebar-recent-session--selected
-  ),
 .sidebar-recent-session--colored.sidebar-recent-session--active:not(
     .sidebar-recent-session--selected
   ):hover,
@@ -2986,15 +3036,10 @@ a:is(
 
 /* Multi-select overrides both tag and active fills, including pinned rows. */
 .sidebar-recent-session.sidebar-recent-session--selected,
-.sidebar-recent-session.sidebar-recent-session--selected:hover,
-.sidebar-zone-entry .sidebar-recent-session.sidebar-recent-session--selected {
+.sidebar-recent-session.sidebar-recent-session--selected:hover {
   --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 
   color: var(--text-strong);
-}
-
-.sidebar-zone-entry .sidebar-recent-session__aside {
-  padding-right: 0;
 }
 
 .sidebar-workspace-header {
@@ -3938,8 +3983,10 @@ openclaw-tooltip.sidebar-hover-tooltip {
       var(--content-inline-padding)
   );
 
-  /* Stacked headers and pages without a toolbar clear floating chrome with padding. */
-  &:not(.content--toolbar-header, .content--plugin-embed) {
+  /* Stacked headers and pages without a toolbar clear floating chrome with padding. Only native
+     hosts float chrome there; on the web the rail holds those controls. */
+  :is(html.openclaw-native-macos, html.openclaw-native-nav)
+    &:not(.content--toolbar-header, .content--plugin-embed) {
     padding-top: calc(var(--page-toolbar-height) + var(--page-toolbar-clearance) + 16px);
   }
 
@@ -4062,8 +4109,7 @@ html.openclaw-native-web-chrome
   flex: 0 0 16px;
 }
 
-.sidebar-recent-sessions .sidebar-session-indicator,
-.sidebar-zone-entry .sidebar-session-indicator {
+.sidebar-recent-sessions .sidebar-session-indicator {
   width: var(--sidebar-lead);
   flex-basis: var(--sidebar-lead);
 }

@@ -28,8 +28,9 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -276,6 +277,7 @@ export function TemplatesExplore(
   return (
     <openclaw-templates-explore>
       <PluginsHubHeader
+        actions={<TemplateUpload />}
         active="templates"
         subtitle={t("templatesCatalog.exploreDescription")}
         wide
@@ -287,12 +289,7 @@ export function TemplatesExplore(
         }}
       />
       <SettingsPage wide carapace>
-        <div
-          class="agents-home"
-          id={PLUGINS_HUB_PANEL_ID}
-          role="tabpanel"
-          aria-labelledby="plugins-tab-templates"
-        >
+        <div class="agents-home" {...pluginsHubPanel("templates")}>
           <section
             class="agents-home__explore plugin-catalog-results"
             data-templates-explore

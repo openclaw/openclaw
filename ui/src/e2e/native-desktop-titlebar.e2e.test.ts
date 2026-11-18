@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -160,6 +160,10 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
       .toEqual([]);
     for (const control of await controls.all()) {
       if (await control.isEnabled()) {
+        // Resting on a closed rail item opens its floating section peek, which stays open while
+        // the pointer is inside the sidebar. Start each trial click outside it so a slow click
+        // on a rail item cannot leave that peek covering the next header control.
+        await page.mouse.move(width - 1, 899);
         await control.click({ trial: true });
       }
     }
@@ -335,68 +339,67 @@ async function alignsNativeHeaders(
     expect(bar!.x).toBe(content!.x + 12);
     expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
   }
-  for (const panel of ["pages", "online"] as const) {
-    await page.locator(`[data-navigation-view="${panel}"]`).click();
-    const header = page.locator(".sidebar-panel-header");
-    const toggle = macNavigation
-      ? page.locator(".macos-titlebar-controls__sidebar")
-      : header.getByRole("button", { name: "Collapse sidebar" });
-    await toggle.waitFor();
-    const panelGeometry = await header.evaluate((element) => {
-      const title = element.firstElementChild!.getBoundingClientRect();
-      const collapseBounds = element
-        .querySelector(".sidebar-session-toolbar__collapse")!
-        .getBoundingClientRect();
-      const headerBounds = element.getBoundingClientRect();
-      return {
-        x: title.x,
-        y: headerBounds.y,
-        height: headerBounds.height,
-        center: title.y + title.height / 2,
-        collapseCenter: collapseBounds.y + collapseBounds.height / 2,
-        collapseRight: collapseBounds.right,
-        right: headerBounds.right,
-      };
-    });
-    expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
-    expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
-    if (!macNavigation) {
-      expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
-      expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
-    }
-    // Empty header space must stay non-interactive so it can drag the window.
-    const dragGap = await header.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const controls = [...element.querySelectorAll("button")]
-        .map((button) => button.getBoundingClientRect())
-        .toSorted((a, b) => a.left - b.left);
-      let start = bounds.left;
-      let widest = { left: start, width: 0 };
-      for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
-        if (control.left - start > widest.width) {
-          widest = { left: start, width: control.left - start };
-        }
-        start = Math.max(start, control.right);
+  // Measure the Users panel on Activity before Sessions returns to the chat.
+  await page.locator('[data-navigation-view="online"]').click();
+  await waitForControlUiRoute(page, { routeId: "activity" });
+  const header = page.locator(".sidebar-panel-header");
+  const toggle = macNavigation
+    ? page.locator(".macos-titlebar-controls__sidebar")
+    : header.getByRole("button", { name: "Collapse sidebar" });
+  await toggle.waitFor();
+  const panelGeometry = await header.evaluate((element) => {
+    const title = element.firstElementChild!.getBoundingClientRect();
+    const collapseBounds = element
+      .querySelector(".sidebar-session-toolbar__collapse")!
+      .getBoundingClientRect();
+    const headerBounds = element.getBoundingClientRect();
+    return {
+      x: title.x,
+      y: headerBounds.y,
+      height: headerBounds.height,
+      center: title.y + title.height / 2,
+      collapseCenter: collapseBounds.y + collapseBounds.height / 2,
+      collapseRight: collapseBounds.right,
+      right: headerBounds.right,
+    };
+  });
+  expect(panelGeometry).toMatchObject({ y: geometry.row.y, height: geometry.row.height });
+  expect(panelGeometry.center).toBeCloseTo(geometry.row.y + geometry.row.height / 2, 1);
+  if (!macNavigation) {
+    expect(panelGeometry.collapseCenter).toBeCloseTo(panelGeometry.center, 1);
+    expect(panelGeometry.collapseRight).toBe(panelGeometry.right - 8);
+  }
+  // Empty header space must stay non-interactive so it can drag the window.
+  const dragGap = await header.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const controls = [...element.querySelectorAll("button")]
+      .map((button) => button.getBoundingClientRect())
+      .toSorted((a, b) => a.left - b.left);
+    let start = bounds.left;
+    let widest = { left: start, width: 0 };
+    for (const control of [...controls, { left: bounds.right, right: bounds.right }]) {
+      if (control.left - start > widest.width) {
+        widest = { left: start, width: control.left - start };
       }
-      const hit = document.elementFromPoint(
-        widest.left + widest.width / 2,
-        bounds.top + bounds.height / 2,
-      );
-      return { width: widest.width, button: Boolean(hit?.closest("button")) };
-    });
-    expect(dragGap.width).toBeGreaterThanOrEqual(24);
-    expect(dragGap.button).toBe(false);
-    if (native && !macNavigation) {
-      expect(panelGeometry.x).toBe(macos ? 92 : 68);
+      start = Math.max(start, control.right);
     }
-    await toggle.click();
+    const hit = document.elementFromPoint(
+      widest.left + widest.width / 2,
+      bounds.top + bounds.height / 2,
+    );
+    return { width: widest.width, button: Boolean(hit?.closest("button")) };
+  });
+  expect(dragGap.width).toBeGreaterThanOrEqual(24);
+  expect(dragGap.button).toBe(false);
+  if (native && !macNavigation) {
+    expect(panelGeometry.x).toBe(macos ? 92 : 68);
+  }
+  await toggle.click();
+  // Native shells reopen with their own control; on the web Sessions reopens the panel.
+  if (native) {
     await page
       .locator(
-        macNavigation
-          ? ".macos-titlebar-controls__sidebar"
-          : native
-            ? ".shell-chrome-controls__nav-toggle"
-            : `[data-navigation-view="${panel}"]`,
+        macNavigation ? ".macos-titlebar-controls__sidebar" : ".shell-chrome-controls__nav-toggle",
       )
       .click();
   }

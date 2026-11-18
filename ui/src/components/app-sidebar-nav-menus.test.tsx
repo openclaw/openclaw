@@ -300,14 +300,11 @@ describe("sidebar rail pin menu", () => {
       [
         ...sidebar
           .querySelector(".sidebar-rail__pins")!
-          .querySelectorAll(
-            "[data-sidebar-entry], [data-navigation-view], .sidebar-rail__separator",
-          ),
+          .querySelectorAll("[data-sidebar-entry], [data-rail-more], .sidebar-rail__separator"),
       ].map(
         (element) =>
           element.getAttribute("data-sidebar-entry") ??
-          element.getAttribute("data-navigation-view") ??
-          "separator",
+          (element.hasAttribute("data-rail-more") ? "pages" : "separator"),
       );
     await sidebar.updateComplete;
     // A new rail: Automations, Customize and Usage, then the "more" menu.
@@ -322,45 +319,57 @@ describe("sidebar rail pin menu", () => {
     expect(order()).toEqual(["route:usage", "pages"]);
   });
 
-  it("opens Sessions, then the sidebar, then the agent menu from the rail avatar", async () => {
+  it("opens Activity and the people list from the People rail item", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const navigate = vi.fn();
+    sidebar.onNavigate = navigate;
+    sidebar.navigationCollapsed = true;
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    sidebar.querySelector<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+    await sidebar.updateComplete;
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(navigate).toHaveBeenCalledWith("activity");
+    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: false });
+    const overview = sidebar.querySelector<HTMLAnchorElement>(".sidebar-online__overview a")!;
+    expect(overview.textContent).toContain("Activity");
+    expect(overview.getAttribute("href")).toBe("/activity");
+  });
+
+  it("opens the Sessions list and agent picker from separate rail buttons", async () => {
     const { sidebar } = await mountSidebar(
       createGateway(createTestGatewayClient(createGatewayRequestMock())),
       createSessions("main", []),
       "panel",
       TWO_AGENTS,
     );
-    sidebar.navigationView = "pages";
+    sidebar.navigationView = "automations";
+    sidebar.navigationCollapsed = true;
     sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
     await sidebar.updateComplete;
     const agent = sidebar.querySelector<HTMLButtonElement>(
-      ".sidebar-rail .sidebar-agent-card__main",
+      '.sidebar-rail button[aria-label="Molty · Switch agent"]',
     )!;
-    const click = async () => {
-      agent.click();
-      await sidebar.updateComplete;
-      await vi.dynamicImportSettled();
-      await sidebar.updateComplete;
-    };
-    const state = () => [
-      agent.getAttribute("aria-label"),
-      agent.getAttribute("aria-pressed"),
-      sidebar.navigationView,
-      sidebar.navigationCollapsed,
-      sidebar.querySelector(".sidebar-agent-menu") !== null,
-    ];
-    expect(state()).toEqual(["Molty · Sessions", "false", "pages", false, false]);
-    // Outside Sessions: go to Sessions.
-    await click();
-    expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, false]);
-    // In Sessions with the sidebar closed: open the sidebar.
-    sidebar.navigationCollapsed = true;
+    const sessions = sidebar.querySelector<HTMLButtonElement>(
+      '.sidebar-rail button[aria-label="Sessions"]',
+    )!;
+
+    agent.click();
     await sidebar.updateComplete;
-    expect(state()).toEqual(["Molty · Sessions", "false", "sessions", true, false]);
-    await click();
-    expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, false]);
-    // In Sessions with the sidebar open: open the agent switcher.
-    await click();
-    expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, true]);
+    await vi.dynamicImportSettled();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-agent-menu")).not.toBeNull();
+    expect(sidebar).toMatchObject({ navigationView: "automations", navigationCollapsed: true });
+    expect(sessions.getAttribute("aria-pressed")).toBe("false");
+
+    sessions.click();
+    await sidebar.updateComplete;
+    expect(sidebar).toMatchObject({ navigationView: "sessions", navigationCollapsed: false });
+    expect(sessions.getAttribute("aria-pressed")).toBe("true");
   });
 
   // Section pins and person pins sit on either side of the rail separator, so
