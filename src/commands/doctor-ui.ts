@@ -18,6 +18,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+import { resolveDoctorRepairMode } from "./doctor-repair-mode.js";
 
 type UiProtocolFreshnessIssue = {
   readonly root: string;
@@ -145,8 +146,19 @@ function formatUiProtocolFreshnessIssue(issue: UiProtocolFreshnessIssue): string
 }
 
 async function controlUiRepairDisabled(): Promise<boolean> {
-  // Source read only: this runs after Doctor has already opened config, and it
-  // must not take database admission or plugin validation.
+  // Outside an update this is a source read: no database admission or plugin
+  // validation. Shipped updaters replace io.runtime.js with a bridge that
+  // rejects readSourceConfigBestEffort and would abort Doctor while assets are
+  // still repairable. readConfigFileSnapshot is on that bridge and still
+  // exposes the authored enabled flag.
+  if (resolveDoctorRepairMode({}).updateInProgress) {
+    const { readConfigFileSnapshot } = await import("../config/io.runtime.js");
+    const snapshot = await readConfigFileSnapshot({
+      observe: false,
+      skipPluginValidation: true,
+    });
+    return snapshot.sourceConfig.gateway?.controlUi?.enabled === false;
+  }
   const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
   const config = await readSourceConfigBestEffort();
   return config.gateway?.controlUi?.enabled === false;
