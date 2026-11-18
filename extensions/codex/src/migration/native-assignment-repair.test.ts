@@ -189,6 +189,21 @@ it.each(
   state.expectState();
 });
 
+it("normalizes legacy turn_completed records and converges", async () => {
+  const legacyCompletion = { ...completion, statusLabel: "turn_completed" };
+  const state = fixture([{ ...assignment, recordedCompletion: legacyCompletion }]);
+  expect(await migration.detectLegacyState(state)).not.toBeNull();
+
+  const result = await migration.migrateLegacyState(state);
+  expect(result.warnings).toEqual([]);
+  expect(result.changes).toHaveLength(1);
+  state.expectState({
+    nativeSubagentAssignments: inventory([{ ...assignment, recordedCompletion: completion }]),
+  });
+  expect(await migration.detectLegacyState(state)).toBeNull();
+  expect(await migration.migrateLegacyState(state)).toEqual(unchanged);
+});
+
 it.each([false, true])("merges aliases, keeps turns, converges (reverse=%s)", async (reverse) => {
   const receipt = submission("child", "child-call");
   const aliases = [

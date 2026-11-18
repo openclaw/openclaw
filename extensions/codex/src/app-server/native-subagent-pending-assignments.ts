@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import {
   codexNativeSubagentRunId,
@@ -131,12 +132,36 @@ function mergeNativeAssignmentMetadata(
   }
 }
 
+function normalizeLegacyRecordedCompletionStatusLabel(value: unknown): unknown {
+  const inventory = asOptionalRecord(value);
+  if (!inventory || !Array.isArray(inventory.assignments)) {
+    return value;
+  }
+  let changed = false;
+  const assignments = inventory.assignments.map((rawAssignment: unknown) => {
+    const assignment = asOptionalRecord(rawAssignment);
+    const recordedCompletion = asOptionalRecord(assignment?.recordedCompletion);
+    if (!assignment || recordedCompletion?.statusLabel !== "turn_completed") {
+      return rawAssignment;
+    }
+    changed = true;
+    return {
+      ...assignment,
+      recordedCompletion: {
+        ...recordedCompletion,
+        statusLabel: "recorded_task_result",
+      },
+    };
+  });
+  return changed ? { ...inventory, assignments } : value;
+}
+
 /** Doctor and binding writes merge compatible facts for one obligation, never distinct turns. */
 export function normalizeNativePendingAssignments(value: unknown) {
   if (value === undefined) {
     return undefined;
   }
-  const inventory = inventorySchema.parse(value);
+  const inventory = inventorySchema.parse(normalizeLegacyRecordedCompletionStatusLabel(value));
   return { version: 1 as const, assignments: mergeNativePendingAssignments(inventory.assignments) };
 }
 
