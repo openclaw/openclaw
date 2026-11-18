@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type {
   SessionPendingInputRow,
   SessionInputCompletion,
@@ -55,6 +56,7 @@ export type PendingInputMutation =
       trackCompletion: boolean;
       inputId: string;
       messageJson: string;
+      originSourceJson?: string;
     })
   | (PendingInputSettlementIdentity & {
       kind: "complete";
@@ -64,6 +66,7 @@ export type PendingInputMutation =
       kind: "finish";
       inputId: string;
       disposition: "cancelled" | "interrupted";
+      endCause: SessionPendingInputEndCause;
     });
 
 export type PendingInputMutationReceipt = PendingInputIdentity & {

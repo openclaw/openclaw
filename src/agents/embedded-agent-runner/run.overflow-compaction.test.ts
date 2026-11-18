@@ -28,7 +28,6 @@ import {
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -69,15 +68,6 @@ const recoveryRequest = {
   attempt: 1,
   maxAttempts: 3,
 } satisfies Parameters<typeof compactForRecovery>[1];
-
-function makeAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
-  return makeAttemptResult({
-    terminal: { kind: "failed", source: "prompt", error: new Error("context overflow") },
-    sessionIdUsed: "session-1",
-    assistantTexts: [],
-    ...overrides,
-  });
-}
 
 function makeContextEngine(
   compact: ContextEngine["compact"] | ReturnType<typeof vi.fn> = vi.fn(),
@@ -125,7 +115,7 @@ function makeRecoveryInput(
     prepareRecoverySession: vi.fn<EmbeddedRunCompactionRecoveryInput["prepareRecoverySession"]>(),
     contextEngine: makeContextEngine(),
     genericCompactionRecoveryAllowed: true,
-    attempt: makeAttempt(),
+    attempt: makeAttemptResult(),
     runtimeAuthPlan: {
       providerForAuth: "openai",
       authProfileProviderForAuth: "openai",
@@ -153,7 +143,6 @@ function makeRecoveryInput(
     adoptCompactionTranscript: vi.fn(async () => undefined),
     getActiveSession: vi.fn<EmbeddedRunCompactionRecoveryInput["getActiveSession"]>(),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
-    armPostCompactionGuard: vi.fn(),
     usageAccumulator: createUsageAccumulator(),
     ...overrides,
   };
@@ -167,18 +156,20 @@ function recover(
 }
 
 describe("compactEmbeddedRunForRecovery", () => {
-  beforeEach(() => {
-    compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    for (const mock of Object.values(completionMocks)) {
-      mock.mockReset();
-    }
-  });
+  beforeEach(() => vi.resetAllMocks());
 
   it("carries locked model, auth, fallback, cache, and overflow facts into compaction", async () => {
+    const qualityFacts = { qualityDegraded: true, summaryRefused: true } as const;
+    const onAgentEvent = vi.fn();
     const compact = vi.fn<ContextEngine["compact"]>(async () => ({
       ok: true as const,
       compacted: true as const,
-      result: { summary: "compacted", tokensBefore: 150_000, tokensAfter: 80_000 },
+      result: {
+        summary: "compacted",
+        tokensBefore: 150_000,
+        tokensAfter: 80_000,
+        details: { readFiles: [], modifiedFiles: [], ...qualityFacts },
+      },
     }));
     const promptCache = {
       retention: "short" as const,
@@ -190,6 +181,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       {
         runParams: {
           ...baseRunParams,
+          onAgentEvent,
           trigger: "user",
           sandboxSessionKey: "global",
           sandboxAgentId: "main",
@@ -198,7 +190,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         },
         contextEngine: makeContextEngine(compact),
         contextTokenBudget: 200_000,
-        attempt: makeAttempt({ promptCache }),
+        attempt: makeAttemptResult({ promptCache }),
         thinkLevel: "ultra",
         modelSelection: {
           provider: "openai",
@@ -211,6 +203,12 @@ describe("compactEmbeddedRunForRecovery", () => {
     );
 
     expect(result.result).toMatchObject({ ok: true, compacted: true });
+    expect(onAgentEvent.mock.lastCall?.[0].data).toEqual({
+      phase: "end",
+      itemId: "diag-1",
+      completed: true,
+      ...qualityFacts,
+    });
     expect(compact).toHaveBeenCalledOnce();
     expect(compact.mock.calls[0]?.[0]).toMatchObject({
       sessionId: "session-1",
@@ -384,7 +382,10 @@ describe("createEmbeddedRunCompactionRuntime", () => {
   beforeEach(() => setRuntimeConfigSnapshot({}));
   afterEach(() => clearRuntimeConfigSnapshot());
 
-  async function createRuntime(sessionTarget?: ContextEngineSessionTarget) {
+  async function createRuntime(
+    sessionTarget?: ContextEngineSessionTarget,
+    isTurnTainted?: () => boolean,
+  ) {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforeCompaction: vi.fn(async () => undefined),
@@ -433,6 +434,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
         workspaceDir: "/tmp/workspace",
       },
       sessionPromptState,
+      isTurnTainted,
     });
     const compactResult = {
       ok: true,
@@ -478,6 +480,24 @@ describe("createEmbeddedRunCompactionRuntime", () => {
         sessionFile: baseRunParams.sessionKey,
       }),
       expect.objectContaining({ sessionId: "rotated-session" }),
+    );
+  });
+
+  it("reports the current turn taint on owned compaction hooks", async () => {
+    let tainted = false;
+    const { runtime, compactResult, hookRunner } = await createRuntime(undefined, () => tainted);
+
+    await runtime.runOwnsCompactionBeforeHook("overflow recovery");
+    tainted = true;
+    await runtime.runOwnsCompactionAfterHook("overflow recovery", compactResult);
+
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turnTainted: false }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ turnTainted: true }),
     );
   });
 

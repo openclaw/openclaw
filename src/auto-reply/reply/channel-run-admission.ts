@@ -2,6 +2,7 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  resolveAdmittedRunActiveAssertion,
   type AdmittedRunContext,
   type AdmittedRunOperatorAuthority,
   type PreparedAgentRunAdmission,
@@ -22,6 +23,7 @@ import {
   readGatewayLocalUserIngressFacts,
   type GatewayLocalUserIngress,
 } from "../../gateway/local-user-ingress.js";
+import { admitUnlinkedChannelRequester } from "../requester-profile.js";
 
 /** Adapt reply ingress to admission; authenticated Gateway attach has no plugin-channel decision. */
 function consumeChannelRunAdmission(
@@ -104,6 +106,12 @@ export function prepareChannelRunAdmission(params: {
   return Object.freeze({
     operationalRunInstance,
     assertSourceCurrent,
+    assertCurrent: () => {
+      if (closed) {
+        throw new Error("prepared execution context is already closed");
+      }
+      prepared?.assertCurrent();
+    },
     readOperatorAuthority: () => {
       if (closed && params.operatorAuthority) {
         throw new Error("prepared operator authority is no longer active");
@@ -153,6 +161,20 @@ export function prepareChannelRunAdmission(params: {
                 );
               } catch (error) {
                 throw new ChannelRunAuthorizationError(error);
+              }
+            }
+            if (
+              params.sourceContext &&
+              params.ingressKind === "channel" &&
+              !params.operatorAuthority
+            ) {
+              const assertRunCurrent = resolveAdmittedRunActiveAssertion(context);
+              if (assertRunCurrent) {
+                admitUnlinkedChannelRequester(
+                  params.sourceContext,
+                  context.operationalRunInstance,
+                  assertRunCurrent,
+                );
               }
             }
             params.onAdmitted?.(context);

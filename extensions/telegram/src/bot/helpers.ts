@@ -17,6 +17,7 @@ import {
   resolveTelegramEffectiveDmPolicy,
   type NormalizedAllowFrom,
 } from "../bot-access.js";
+import { getTelegramAdoptedDmThreadId } from "../dm-topic-adopt.js";
 import type { TelegramGroupConfigResolver } from "../group-config-helpers.js";
 import type { TelegramThreadSpec } from "../thread-spec.js";
 import { buildTelegramConversationId } from "../topic-conversation.js";
@@ -31,7 +32,7 @@ import {
   normalizeForwardedContext,
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   resolveTelegramTextContent,
   type TelegramForwardedContext,
   type TelegramMediaKind,
@@ -327,6 +328,11 @@ export function resolveTelegramMessageThreadSpec(
     const id = parseStrictPositiveInteger(message.direct_messages_topic?.topic_id);
     return id === undefined ? { scope: "none" } : { id, scope: "direct-messages" };
   }
+  // Topic fact decided once by the receiving account's ingress monitor.
+  const adoptedDmThreadId = getTelegramAdoptedDmThreadId(message);
+  if (adoptedDmThreadId !== undefined) {
+    return { id: adoptedDmThreadId, scope: "dm" };
+  }
   const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
   return resolveTelegramThreadSpec({
     isGroup,
@@ -498,7 +504,8 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const safeReplyText = replyTextParts?.text ?? "";
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const replyBody = safeReplyText.trim() || resolveTelegramRichMessageBody(replyLike) || "";
+    const replyBody =
+      safeReplyText.trim() || resolveTelegramRichMessagePlaceholder(replyLike) || "";
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {

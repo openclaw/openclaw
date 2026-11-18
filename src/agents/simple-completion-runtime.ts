@@ -22,6 +22,7 @@ import {
 } from "../plugins/runtime/generation-scope.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } from "./agent-scope.js";
 import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -96,6 +97,8 @@ export type PrepareSimpleCompletionModelParams = {
   skipAgentDiscovery?: boolean;
   bindAuthOwner?: boolean;
   modelResolver?: SimpleCompletionModelResolver;
+  /** Internal authorization wrappers around resolveModelAsync may keep single-row stores. */
+  selectedModelStores?: boolean;
   signal?: AbortSignal;
   /** Internal caller-owned generation. Public plugin callers use the agent helper below. */
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
@@ -139,6 +142,9 @@ export async function prepareSimpleCompletionModel(
       preparedModelRuntime.workspaceDir ??
       resolveAgentWorkspaceDir(config, params.agentId ?? resolveDefaultAgentId(config)),
     modelResolver: params.modelResolver,
+    selectedModelStores:
+      params.selectedModelStores ??
+      (params.transport !== "provider-stream" && !params.modelResolver),
     agentRuntimeId: params.agentRuntimeId,
   });
   const prepared = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
@@ -163,6 +169,9 @@ async function prepareSimpleCompletionModelCore(
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
 ): Promise<PreparedStreamCompletionModel> {
+  const assertAgentAdmitted = params.agentId
+    ? captureAgentDatabaseAdmission(params.agentId, { access: "read" })
+    : undefined;
   const blocked = resolveSimpleCompletionWorkerBlock(params, context.preparedModelRuntime);
   if (blocked) {
     return blocked;
@@ -409,10 +418,26 @@ async function prepareSimpleCompletionModelCore(
     resolvedModel = applyPreparedRuntimeAuthToModel(resolvedModel, preparedAuth);
   }
 
-  const resolvedAuth: ResolvedProviderAuth = {
+  let resolvedAuth: ResolvedProviderAuth = {
     ...auth,
     apiKey: authValue,
   };
+  if (assertAgentAdmitted) {
+    const assertCredentialCurrent = getProviderAuthAuthority(auth);
+    const assertRuntimeCredentialCurrent = getProviderAuthAuthority(resolvedModel);
+    // Request-scoped copies retain live agent admission through every transport projection.
+    resolvedAuth = attachProviderAuthAuthority(resolvedAuth, () => {
+      assertAgentAdmitted();
+      assertCredentialCurrent?.();
+      if (assertRuntimeCredentialCurrent !== assertCredentialCurrent) {
+        assertRuntimeCredentialCurrent?.();
+      }
+    });
+    resolvedModel = attachProviderAuthAuthority(
+      resolvedModel,
+      getProviderAuthAuthority(resolvedAuth),
+    );
+  }
   const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
   const sourceAuthFingerprint = params.bindAuthOwner
     ? profileCredential?.type === "oauth" && params.profileId
@@ -422,7 +447,8 @@ async function prepareSimpleCompletionModelCore(
         })
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);
@@ -638,6 +664,7 @@ async function acquireCommittedSimpleCompletionModel(
     });
     const preparationParams: PrepareSimpleCompletionModelParams = {
       ...params,
+      agentId,
       transport: "simple-completion",
       provider: selection.provider,
       modelId: selection.modelId,

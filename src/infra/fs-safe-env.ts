@@ -1,3 +1,5 @@
+import { captureEnvironmentKey, resolveEnvironmentKey } from "../shared/environment-key.js";
+
 const nativeModeKey = "OPENCLAW_FS_SAFE_NATIVE_MODE";
 const legacyModeKeys = ["FS_SAFE_PYTHON_MODE", "OPENCLAW_FS_SAFE_PYTHON_MODE"] as const;
 const legacyKeys = [
@@ -16,7 +18,7 @@ type NativeModeFallback = {
 };
 // This records only a derived env slot. Config/dotenv owners retain authority over
 // the original inputs, and their snapshots must not adopt the derived value.
-const fallbacks = new WeakMap<NodeJS.ProcessEnv, NativeModeFallback>();
+const fallbacks = new WeakMap<object, NativeModeFallback>();
 let warned = false;
 
 function nativeModeIsValid(value: string | undefined): boolean {
@@ -25,7 +27,7 @@ function nativeModeIsValid(value: string | undefined): boolean {
 }
 
 function currentFallback(env: NodeJS.ProcessEnv): NativeModeFallback | undefined {
-  const fallback = fallbacks.get(env);
+  const fallback = fallbacks.get(resolveEnvironmentKey(env));
   return fallback && env[fallback.key] === fallback.value ? fallback : undefined;
 }
 
@@ -45,7 +47,7 @@ export function fsSafeEnvInput(env: Readonly<NodeJS.ProcessEnv>): Readonly<NodeJ
 /** Retire our unchanged projection before an environment owner writes real inputs. */
 export function clearFsSafeEnvFallback(env: NodeJS.ProcessEnv): void {
   const fallback = currentFallback(env);
-  fallbacks.delete(env);
+  fallbacks.delete(resolveEnvironmentKey(env));
   if (!fallback) {
     return;
   }
@@ -89,5 +91,5 @@ export function normalizeFsSafeNativeEnv(env: NodeJS.ProcessEnv = process.env): 
   const existed = Object.hasOwn(env, key);
   const previous = env[key];
   env[key] = value;
-  fallbacks.set(env, { key, value, previous, existed });
+  fallbacks.set(captureEnvironmentKey(env), { key, value, previous, existed });
 }

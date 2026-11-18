@@ -2,7 +2,8 @@ import { ChildProcess } from "node:child_process";
 import * as readline from "node:readline";
 import { PassThrough, Writable } from "node:stream";
 import {
-  AgentSideConnection,
+  agent as createAgentApp,
+  methods,
   ndJsonStream,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
@@ -65,7 +66,11 @@ describe("interactive ACP permissions", () => {
     const output = Object.assign(new PassThrough(), { isTTY: true });
     const fromClient = new PassThrough();
     const toClient = new PassThrough();
-    const agent = Object.assign(new ChildProcess(), { stdin: fromClient, stdout: toClient });
+    const agent = Object.defineProperties(new ChildProcess(), {
+      stdin: { value: fromClient },
+      stdout: { value: toClient },
+      stderr: { value: null },
+    });
     const closeServer = () => {
       if (agent.exitCode !== null) {
         return;
@@ -95,35 +100,31 @@ describe("interactive ACP permissions", () => {
     const promptReady = waitForText(stdout, "> ");
     const permissionReady = waitForText(output, "[permission] Allow");
     const result = createDeferred<RequestPermissionResponse>();
-    const server = new AgentSideConnection(
-      (connection) => ({
-        async initialize(params) {
-          return { protocolVersion: params.protocolVersion, agentCapabilities: {} };
-        },
-        async authenticate() {},
-        async newSession() {
-          return { sessionId: permission.sessionId };
-        },
-        async prompt() {
-          const response = await connection.requestPermission(permission);
-          result.resolve(response);
-          return { stopReason: "end_turn" };
-        },
-        async cancel() {},
-      }),
-      ndJsonStream(
-        Writable.toWeb(toClient),
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));
-            fromClient.once("end", () => {
-              controller.close();
-              closeServer();
-            });
-          },
-        }),
-      ),
-    );
+    const server = createAgentApp()
+      .onRequest(methods.agent.initialize, ({ params }) => ({
+        protocolVersion: params.protocolVersion,
+        agentCapabilities: {},
+      }))
+      .onRequest(methods.agent.session.new, () => ({ sessionId: permission.sessionId }))
+      .onRequest(methods.agent.session.prompt, async ({ client }) => {
+        const response = await client.request(methods.client.session.requestPermission, permission);
+        result.resolve(response);
+        return { stopReason: "end_turn" };
+      })
+      .connect(
+        ndJsonStream(
+          Writable.toWeb(toClient),
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              fromClient.on("data", (bytes: Buffer) => controller.enqueue(bytes));
+              fromClient.once("end", () => {
+                controller.close();
+                closeServer();
+              });
+            },
+          }),
+        ),
+      );
     const work = runAcpClientInteractive({
       cwd: "/tmp/openclaw-acp-cwd",
       serverCommand: "fixture-acp",

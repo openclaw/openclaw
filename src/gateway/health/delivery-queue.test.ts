@@ -23,6 +23,20 @@ beforeEach(() => {
   countIngress.mockReset().mockResolvedValue({ failed: [], pressure: [] });
 });
 
+it("reads ingress health without waiting for outbound storage", async () => {
+  const outbound = Promise.withResolvers<typeof outboundFailed>();
+  countOutbound.mockReturnValueOnce(outbound.promise);
+  countIngress.mockResolvedValueOnce({ failed: ingressFailed, pressure: [] });
+  const summary = buildDeliveryQueueHealthSummary();
+  try {
+    expect(countIngress).toHaveBeenCalledTimes(1);
+  } finally {
+    outbound.resolve(outboundFailed);
+    await summary;
+  }
+  expect(await summary).toEqual({ failed: outboundFailed, ingressFailed });
+});
+
 it.each([
   [
     "outbound failures on ingress rejection",

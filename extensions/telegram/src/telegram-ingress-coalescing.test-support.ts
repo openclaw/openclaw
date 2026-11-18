@@ -150,6 +150,17 @@ export function forwardedPhotoUpdate(params: MessageIds) {
   });
 }
 
+export function voiceUpdate(params: MessageIds) {
+  return messageUpdate(params, {
+    voice: {
+      file_id: `voice-${params.messageId}`,
+      file_unique_id: `voice-unique-${params.messageId}`,
+      duration: 11,
+      mime_type: "audio/ogg",
+    },
+  });
+}
+
 export function textUpdate(params: MessageIds & { text: string }) {
   return messageUpdate(params, { text: params.text });
 }

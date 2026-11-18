@@ -196,7 +196,7 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
       }
       const afterEquivalent = sequences();
       for (const entry of [
-        { enabled: true, hooks: { allowPromptInjection: false } },
+        { enabled: true, hooks: { allowPromptModification: false } },
         { enabled: false },
         { enabled: true },
       ]) {

@@ -59,7 +59,7 @@ function withDraft(
 const openDraft = (page: Page, route = "new?agent=main") => page.goto(suite.server.baseUrl + route);
 const openChat = (page: Page) => page.locator("openclaw-chat-page").waitFor({ state: "visible" });
 const returnToDraft = async (page: Page) => {
-  await page.getByRole("link", { name: "New conversation" }).first().click();
+  await page.getByRole("link", { name: "New session" }).first().click();
   await page.locator(".new-session-page__message").waitFor({ state: "visible" });
 };
 
@@ -148,7 +148,7 @@ async function visitChats({ page, gateway, composer }: DraftFixture) {
     await composer.press("Enter");
     await gateway.waitForRequest("sessions.create", { after: visit });
     await openChat(page);
-    await page.getByRole("link", { name: "New conversation" }).first().click();
+    await page.getByRole("link", { name: "New session" }).first().click();
     await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
     await composer.waitFor({ state: "visible", timeout: 5000 });
     expect(await composer.isEnabled()).toBe(true);

@@ -63,6 +63,7 @@ import {
 } from "./openclaw-state-db-historical-fixtures.test-support.js";
 import { runHotRollbackJournalRecoveryProbe } from "./openclaw-state-db-hot-journal.test-support.js";
 import { prepareStateDatabaseSchemaRepair } from "./openclaw-state-db-maintenance.js";
+import * as stateRepair from "./openclaw-state-db-repair.js";
 import { ensureGitHubPublicationSchema } from "./openclaw-state-db-schema-additive.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -118,6 +119,9 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 });
 
 const stateDbTempDirs: string[] = [];
+const schemaRepairs = (["sync SDK", "async Doctor"] as const).flatMap((mode) =>
+  [false, true].map((readabilityFirst) => ({ mode, readabilityFirst })),
+);
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
 const fixtureLifetime = createFixtureLifetime();
 const processTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -636,68 +640,76 @@ afterAll(async () => {
 });
 
 describe("openclaw state database", () => {
-  it("requires Doctor to repair the dangling Workshop review index in schema v16", async () => {
-    const { options, databasePath } = createStateFixture((database) => {
-      restorePreTemplateStateIdentifiersForTest(database);
-      addPreCutoverClientCredentialTablesForTest(database);
-      database.exec(
-        "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;",
-      );
-      insertRow(database, "skill_workshop_collection_reviews", {
-        review_id: "review-preserved",
-        owner_agent_id: "main",
-        backup_id: "backup-preserved",
-        create_time: 1,
-        kept_names_json: "[]",
-        written_names_json: "[]",
-        dropped_json: "[]",
-      });
-      removePreparedWorkerOwnershipColumns(database);
-      database.exec(`
+  it.each(schemaRepairs)(
+    "repairs schema v16 ($mode, readability first: $readabilityFirst)",
+    async ({ mode, readabilityFirst }) => {
+      const { options, databasePath } = createStateFixture((database) => {
+        restorePreTemplateStateIdentifiersForTest(database);
+        addPreCutoverClientCredentialTablesForTest(database);
+        database.exec(
+          "CREATE TABLE skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT;",
+        );
+        insertRow(database, "skill_workshop_collection_reviews", {
+          review_id: "review-preserved",
+          owner_agent_id: "main",
+          backup_id: "backup-preserved",
+          create_time: 1,
+          kept_names_json: "[]",
+          written_names_json: "[]",
+          dropped_json: "[]",
+        });
+        removePreparedWorkerOwnershipColumns(database);
+        database.exec(`
         PRAGMA user_version = 16;
         UPDATE schema_meta SET schema_version = 16 WHERE meta_key = 'primary';
       `);
-    });
-    const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
-    const defensiveProbe = openNativeDatabase(databasePath);
-    expect(hasDanglingSkillWorkshopCollectionReviewIndex(defensiveProbe)).toBe(true);
-    const schemaVersion = readSqliteNumberPragma(defensiveProbe, "schema_version");
-    defensiveProbe.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
-    expect(readSqliteNumberPragma(defensiveProbe, "schema_version")).toBe(schemaVersion);
-    defensiveProbe.close();
+      });
+      const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
+      const defensiveProbe = openNativeDatabase(databasePath);
+      expect(hasDanglingSkillWorkshopCollectionReviewIndex(defensiveProbe)).toBe(true);
+      const schemaVersion = readSqliteNumberPragma(defensiveProbe, "schema_version");
+      defensiveProbe.exec(`PRAGMA schema_version = ${schemaVersion + 1};`);
+      expect(readSqliteNumberPragma(defensiveProbe, "schema_version")).toBe(schemaVersion);
+      defensiveProbe.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow(
-      /legacy-workshop-review-index.*openclaw doctor --fix/u,
-    );
-    await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(
-      /legacy-workshop-review-index.*openclaw doctor --fix/u,
-    );
-    expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
+      const refusal = /legacy-workshop-review-index.*openclaw doctor --fix/u;
+      expect(() => openOpenClawStateDatabase(options)).toThrow(refusal);
+      await expect(prepareOpenClawStateDatabaseSchema(options)).rejects.toThrow(refusal);
+      expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toMatchObject({ rootpage });
 
-    expect(
-      await withStateMigrationBackupForTest(options, () =>
-        repairOpenClawStateDatabaseSchema(options),
-      ),
-    ).toEqual({
-      changes: expect.arrayContaining([
-        "Removed dangling legacy Skill Workshop review index",
-        "Recorded prepared worker ownership and one-use lifecycle (v17)",
-      ]),
-      warnings: [],
-    });
-
-    withReadOnlyDatabase(databasePath, (repaired) => {
-      expectRecord(
-        repaired,
-        "skill_workshop_collection_reviews WHERE review_id = 'review-preserved'",
-        { review_id: "review-preserved", backup_id: "backup-preserved" },
+      const catalogChange = "Removed dangling legacy Skill Workshop review index";
+      if (readabilityFirst) {
+        const result = await withStateMigrationBackupForTest(options, () =>
+          mode === "sync SDK"
+            ? stateRepair.repairDoctorStateSchema(options, "readability")
+            : stateRepair.repairDoctorStateSchemaAsync(options, "readability"),
+        );
+        expect(result).toEqual({ changes: [catalogChange], warnings: [] });
+      }
+      const { changes, warnings } = await withStateMigrationBackupForTest(options, () =>
+        mode === "sync SDK"
+          ? repairOpenClawStateDatabaseSchema(options)
+          : prepareOpenClawStateDatabaseSchema(options, "doctor"),
       );
-      expectRows(repaired, "PRAGMA integrity_check").toEqual([{ integrity_check: "ok" }]);
-      expectCurrentStateVersion(repaired);
-      expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
-    });
-    expect(() => openOpenClawStateDatabase(options)).not.toThrow();
-  });
+      expect(warnings).toEqual([]);
+      expect(changes).toContain("Recorded prepared worker ownership and one-use lifecycle (v17)");
+      if (!readabilityFirst) {
+        expect(changes).toContain(catalogChange);
+      }
+
+      withReadOnlyDatabase(databasePath, (repaired) => {
+        expectRecord(
+          repaired,
+          "skill_workshop_collection_reviews WHERE review_id = 'review-preserved'",
+          { review_id: "review-preserved", backup_id: "backup-preserved" },
+        );
+        expectRows(repaired, "PRAGMA integrity_check").toEqual([{ integrity_check: "ok" }]);
+        expectCurrentStateVersion(repaired);
+        expect(readDanglingSkillWorkshopReviewIndex(databasePath)).toBeUndefined();
+      });
+      expect(() => openOpenClawStateDatabase(options)).not.toThrow();
+    },
+  );
 
   it.each([
     { refusal: "persisted", generationBound: false },
@@ -705,7 +717,7 @@ describe("openclaw state database", () => {
     { refusal: "process", generationBound: true },
   ] as const)(
     "preserves $refusal corruption refusal during Doctor readability repair (generation-bound: $generationBound)",
-    ({ refusal, generationBound }) => {
+    async ({ refusal, generationBound }) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
       const sourcePath = materializeCorruptionRefusalStateDatabase(
@@ -750,7 +762,9 @@ describe("openclaw state database", () => {
         recordOpenClawStateDatabaseOpenFailure(databasePath, error);
       }
 
-      expect(() => repairOpenClawStateDatabaseReadabilityForDoctor(options)).toThrow(reason);
+      await expect(repairOpenClawStateDatabaseReadabilityForDoctor(options)).rejects.toThrow(
+        reason,
+      );
       expect(readStableSqliteFileGeneration(databasePath)).toEqual(before);
       deepStrictEqual(fs.readFileSync(databasePath), beforeDatabase);
       if (beforeWal) {
@@ -761,7 +775,7 @@ describe("openclaw state database", () => {
     },
   );
 
-  it("rolls back Doctor readability repair for a foreign role", () => {
+  it("rolls back Doctor readability repair for a foreign role", async () => {
     const options = { env: { OPENCLAW_STATE_DIR: createTempStateDir() } };
     const databasePath = materializeCurrentStateDatabase(options.env.OPENCLAW_STATE_DIR);
     withDatabase(databasePath, (database) => {
@@ -770,7 +784,7 @@ describe("openclaw state database", () => {
     const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
     const before = fs.readFileSync(databasePath);
 
-    expect(repairOpenClawStateDatabaseReadabilityForDoctor(options)).toEqual({
+    expect(await repairOpenClawStateDatabaseReadabilityForDoctor(options)).toEqual({
       changes: [],
       warnings: [expect.stringMatching(/schema role agent; expected global/)],
     });
@@ -782,16 +796,10 @@ describe("openclaw state database", () => {
     const { options, databasePath } = createStateFixture();
     const rootpage = createDanglingSkillWorkshopReviewIndex(databasePath);
     const database = openNativeDatabase(databasePath);
-    const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(
-      database,
-      databasePath,
-      options.env,
-    );
+    const repair = prepareStateDatabaseSchemaRepair(database, databasePath, options.env);
     expect(() =>
       runSqliteImmediateTransactionSync(database, () => {
-        expect(repairAdmittedSchema()).toEqual([
-          "Removed dangling legacy Skill Workshop review index",
-        ]);
+        expect(repair.apply()).toEqual(["Removed dangling legacy Skill Workshop review index"]);
         throw new Error("injected post-reclamation failure");
       }),
     ).toThrow("injected post-reclamation failure");
@@ -2309,23 +2317,28 @@ describe("openclaw state database", () => {
     },
   );
 
-  it("preserves orphan delivery payload before Doctor recovery from 2026.7.1-2", async () => {
-    const stateDir = createTempStateDir();
-    const databasePath = materializeV2026_7_1_2StateDatabase(stateDir).databasePath;
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const corrupted = openNativeDatabase(databasePath);
-    const payload = '  {"channel":"synthetic","to":"recover-me"}\n\u0000';
-    const timestamp = 9007199254740993n;
-    try {
+  it.each(schemaRepairs)(
+    "preserves orphan delivery payload from 2026.7.1-2 ($mode, readability first: $readabilityFirst)",
+    async ({ mode, readabilityFirst }) => {
+      const stateDir = createTempStateDir();
+      const databasePath = materializeV2026_7_1_2StateDatabase(stateDir).databasePath;
+      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+      using corrupted = openNativeDatabase(databasePath);
+      const repair = () =>
+        mode === "sync SDK"
+          ? repairOpenClawStateDatabaseSchema(options)
+          : prepareOpenClawStateDatabaseSchema(options, "doctor");
+      const payload = '  {"channel":"synthetic","to":"recover-me"}\n\u0000';
+      const timestamp = 9007199254740993n;
       corrupted.exec(
         "PRAGMA foreign_keys = OFF; PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;",
       );
       corrupted.exec(`INSERT INTO task_runs
-          (task_id,runtime,owner_key,scope_kind,task,status,delivery_status,notify_policy,created_at)
-          VALUES ('healthy-task','subagent','synthetic-owner','session','keep me','completed','delivered','silent',1);
-          INSERT INTO task_delivery_state(task_id) VALUES ('healthy-task');`);
+        (task_id,runtime,owner_key,scope_kind,task,status,delivery_status,notify_policy,created_at)
+        VALUES ('healthy-task','subagent','synthetic-owner','session','keep me','completed','delivered','silent',1);
+        INSERT INTO task_delivery_state(task_id) VALUES ('healthy-task');`);
       const insert = corrupted.prepare(`INSERT INTO task_delivery_state
-          (task_id,requester_origin_json,last_notified_event_at) VALUES (?,?,?)`);
+        (task_id,requester_origin_json,last_notified_event_at) VALUES (?,?,?)`);
       for (let index = 0; index < 18; index += 1) {
         insert.run(`missing-task-${index}`, payload, timestamp);
       }
@@ -2341,7 +2354,11 @@ describe("openclaw state database", () => {
       expect(checkpointCallback).not.toHaveBeenCalled();
 
       const result = await withStateMigrationBackupForTest(options, () =>
-        repairOpenClawStateDatabaseSchema(options),
+        !readabilityFirst
+          ? repair()
+          : mode === "sync SDK"
+            ? stateRepair.repairDoctorStateSchema(options, "readability")
+            : stateRepair.repairDoctorStateSchemaAsync(options, "readability"),
       );
       expect(result.warnings).toEqual([]);
       expect(result.changes).toContainEqual(
@@ -2350,10 +2367,7 @@ describe("openclaw state database", () => {
       const recoveryDirs = recoveryArtifacts(databasePath);
       expect(recoveryDirs).toHaveLength(1);
       const recoveryDir = path.join(path.dirname(databasePath), recoveryDirs[0]!);
-      const backup = openNativeDatabase(path.join(recoveryDir, "database.sqlite"), {
-        readOnly: true,
-      });
-      try {
+      withReadOnlyDatabase(path.join(recoveryDir, "database.sqlite"), (backup) => {
         expectIntegrity(backup);
         expectRows(backup, "PRAGMA foreign_key_check").toHaveLength(18);
         const row = backup.prepare(
@@ -2364,9 +2378,7 @@ describe("openclaw state database", () => {
           requester_origin_json: payload,
           last_notified_event_at: timestamp,
         });
-      } finally {
-        backup.close();
-      }
+      });
       const exported = fs
         .readFileSync(path.join(recoveryDir, "orphan-rows.jsonl"), "utf8")
         .trim()
@@ -2377,28 +2389,23 @@ describe("openclaw state database", () => {
         requester_origin_json: payload,
         last_notified_event_at: timestamp.toString(),
       });
+      expectRows(
+        corrupted,
+        "SELECT 1 FROM task_delivery_state WHERE task_id LIKE 'missing-task-%'",
+      ).toEqual([]);
+      if (readabilityFirst) {
+        expect((await withStateMigrationBackupForTest(options, repair)).warnings).toEqual([]);
+      }
       const repaired = openOpenClawStateDatabase(options);
       expectRows(repaired.db, "PRAGMA foreign_key_check").toEqual([]);
       expectIntegrity(repaired.db);
       expectRows(repaired.db, "SELECT task_id FROM task_delivery_state").toContainEqual({
         task_id: "healthy-task",
       });
-      expectRows(
-        repaired.db,
-        "SELECT 1 FROM task_delivery_state WHERE task_id LIKE 'missing-task-%'",
-      ).toEqual([]);
-      expect(
-        (
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          )
-        ).warnings,
-      ).toEqual([]);
+      expect((await withStateMigrationBackupForTest(options, repair)).warnings).toEqual([]);
       expect(recoveryArtifacts(databasePath)).toEqual(recoveryDirs);
-    } finally {
-      corrupted.close();
-    }
-  });
+    },
+  );
 
   it.each(["unrelated foreign key", "trigger"])(
     "refuses orphan delivery recovery with %s without changing data",

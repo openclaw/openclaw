@@ -1,5 +1,7 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { createStageTimingTracker, formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
+import type { CodexAppServerContextEngineBinding } from "./session-binding-record-codec.js";
 
 export type CodexThreadLifecycleTimingTracker = ReturnType<
   typeof createCodexThreadLifecycleTimingTracker
@@ -55,4 +57,35 @@ export function createCodexThreadLifecycleTimingTracker(enabled: boolean) {
       }
     },
   };
+}
+
+/** Logs a ready thread's context-engine binding write and closes the lifecycle timing summary. */
+export function recordCodexThreadReady(
+  params: {
+    params: Pick<AgentHarnessSessionRuntimeParamsV1, "runId" | "sessionId" | "sessionKey">;
+  },
+  context: {
+    contextEngineBinding?: CodexAppServerContextEngineBinding;
+    lifecycleTiming: Pick<CodexThreadLifecycleTimingTracker, "mark" | "logSummary">;
+  },
+  threadId: string,
+  action: "resumed" | "rotated" | "started",
+): void {
+  const { contextEngineBinding, lifecycleTiming } = context;
+  const event = {
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    threadId,
+    action,
+  };
+  if (contextEngineBinding) {
+    embeddedAgentLog.info("codex app-server wrote context-engine thread binding", {
+      ...event,
+      engineId: contextEngineBinding.engineId,
+      epoch: contextEngineBinding.projection?.epoch,
+      fingerprint: contextEngineBinding.projection?.fingerprint,
+    });
+  }
+  lifecycleTiming.mark("thread-ready");
+  lifecycleTiming.logSummary({ runId: params.params.runId, ...event });
 }

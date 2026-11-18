@@ -54,8 +54,8 @@ it("preserves markup ordering, literal HTML, links, backslashes and list boundar
   const fragments = [
     ["### Highlights", "<h3>Highlights</h3>"],
     [
-      "- **Fast** & reliable `path\\file`\n- [Guide](https://example.com?a=1&b=2) and **bold**",
-      '<ul>\n<li><strong>Fast</strong> & reliable <code>path\\file</code></li>\n<li><a href="https://example.com?a=1&b=2">Guide</a> and <strong>bold</strong></li>\n</ul>',
+      "- **Fast** & reliable `path\\file`; run `openclaw cron enable <job-id>` and keep `a&b > c` / `&lt;`\n- [Guide](https://example.com?a=1&b=2) and **bold**",
+      '<ul>\n<li><strong>Fast</strong> & reliable <code>path\\file</code>; run <code>openclaw cron enable &lt;job-id&gt;</code> and keep <code>a&amp;b &gt; c</code> / <code>&amp;lt;</code></li>\n<li><a href="https://example.com?a=1&b=2">Guide</a> and <strong>bold</strong></li>\n</ul>',
     ],
     ["\n#### Details\n<p>Existing &amp; HTML</p>", "<h4>Details</h4>\n<p>Existing &amp; HTML</p>"],
     ["##### More\n- Plain <tag>", "<h5>More</h5>\n<ul>\n<li>Plain <tag></li>\n</ul>"],

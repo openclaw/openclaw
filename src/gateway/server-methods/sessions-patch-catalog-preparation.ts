@@ -1,5 +1,5 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { ModelCatalogSnapshot } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
 import { prepareSessionsPatchEntry, projectSessionsPatchEntry } from "../sessions-patch.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";

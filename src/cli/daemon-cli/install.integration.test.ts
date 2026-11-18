@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -351,10 +352,11 @@ describe("runDaemonInstall integration", () => {
         "SERVICE_DEFINITION_UNKNOWN",
         "unsafe-permissions",
         "service directory",
+        ancestor,
         "group/world-writable",
         "chmod go-w",
       ],
-      ["private-path-canary", "MISSING_GATEWAY_TOKEN"],
+      ["MISSING_GATEWAY_TOKEN"],
     );
 
     await fs.chmod(ancestor, 0o700);
@@ -503,6 +505,53 @@ describe("runDaemonInstall integration", () => {
     expect(serviceMock.install).not.toHaveBeenCalled();
     expectText(runtimeLogs.join("\n"), ["SERVICE_DEFINITION_UNKNOWN"], [secret]);
   });
+
+  it.skipIf(process.platform === "win32").each(["default", "work"])(
+    "publishes a usable terminal command after verified %s service installation",
+    async (profile) => {
+      const node = process.execPath;
+      await fs.rm(configPath);
+      tempHome = path.join(
+        accountHome,
+        profile === "default" ? ".openclaw" : ".openclaw-" + profile,
+      );
+      configPath = path.join(tempHome, "openclaw.json");
+      await fs.mkdir(tempHome, { recursive: true });
+      await writeConfig({
+        gateway: { mode: "local", auth: { mode: "token", token: "fixture-token" } },
+      });
+      const entrypoint = path.join(accountHome, "package/dist/index.mjs");
+      await fs.mkdir(path.dirname(entrypoint), { recursive: true });
+      await fs.writeFile(path.join(accountHome, "package/package.json"), '{"name":"openclaw"}');
+      await fs.writeFile(
+        entrypoint,
+        "console.log(JSON.stringify({profile:process.env.OPENCLAW_PROFILE,args:process.argv.slice(2)}))",
+      );
+      process.argv = [node, entrypoint];
+      serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValue(true);
+      await withEnvAsync(
+        {
+          OPENCLAW_HOME: undefined,
+          OPENCLAW_PROFILE: profile,
+          OPENCLAW_STATE_DIR: tempHome,
+          OPENCLAW_CONFIG_PATH: configPath,
+          SHELL: "/bin/bash",
+          PATH: "/usr/bin:/bin",
+          ZDOTDIR: undefined,
+          XDG_CONFIG_HOME: undefined,
+        },
+        async () => {
+          await runDaemonInstall({ json: true, force: true, runtimePath: node });
+        },
+      );
+      const output = execFileSync(path.join(accountHome, ".openclaw/bin/openclaw"), ["qr"], {
+        env: { HOME: accountHome, PATH: "/usr/bin:/bin" },
+        encoding: "utf8",
+      });
+      expect(JSON.parse(output)).toEqual({ profile, args: ["qr"] });
+      expect(serviceMock.install).toHaveBeenCalledOnce();
+    },
+  );
 
   it("auto-mints token when no source exists without embedding it into service env", async () => {
     await writeConfig(tokenConfig(), 2);

@@ -66,7 +66,10 @@ it("renders a dismiss control only when the producer supplies the action", () =>
   expect(find(".sidebar-issues-panel__dismiss")).toBeNull();
   const onDismiss = vi.fn();
   render(() => <SidebarIssueItem item={item} handlers={{ ...shared, onDismiss }} />);
-  find(".sidebar-issues-panel__dismiss")?.click();
+  const dismiss = find(".sidebar-issues-panel__dismiss");
+  expect(dismiss?.getAttribute("aria-label")).toBe("Dismiss Nightly backup");
+  expect(dismiss?.hasAttribute("title")).toBe(false);
+  dismiss?.click();
   expect(onDismiss).toHaveBeenCalledOnce();
 });
 
@@ -255,7 +258,7 @@ describe("renderSidebarUpdateSurface", () => {
         if (revokeAccess) {
           await vi.waitFor(() =>
             expect(modal.textContent).toContain(
-              "Status could not be refreshed. Check your connection and try again.",
+              "Couldn’t refresh update status. Check your connection and try again.",
             ),
           );
           expect(modal.querySelector(".update-confirmation-details")).toBeNull();

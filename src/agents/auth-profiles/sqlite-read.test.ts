@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -34,10 +35,10 @@ const rows: AuthProfileRowRead = {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let databasePath: string;
 let rootCurrent: boolean;
-const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+const readers = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
 const publishFileChange = authProfileFileChanges.onChange;
-function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
-  const reader = prepareAgentAuthProfileRowsRead({ databasePath, agentId: "main", env });
+async function prepare(env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture" }) {
+  const reader = await prepareAgentAuthProfileRowsRead({ databasePath, agentId: "main", env });
   readers.add(reader);
   return reader;
 }
@@ -85,6 +86,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   runtimeAuthProfileRowsCache.clear();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
   vi.useRealTimers();
 });
 
@@ -130,12 +132,12 @@ describe("prepared auth profile row reads", () => {
               },
             });
           } finally {
-            admission.finish();
+            await admission.finish();
             sender.close();
             receiver.close();
           }
         });
-      const agentReader = isAgent ? prepare() : undefined;
+      const agentReader = isAgent ? await prepare() : undefined;
       const read = () => (agentReader ? agentReader.read() : readSharedAuthProfileRows(context));
       const workerRead = isAgent ? child.read : sharedRead;
       await expect(read()).resolves.toEqual(rows);
@@ -174,15 +176,46 @@ describe("prepared auth profile row reads", () => {
   );
 
   it("retains revocable read authority even when persisted rows come from a cache", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     reader.assertCurrent();
     expect(resources.hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
     await Promise.all(resources.revokeAgentDatabaseResources({ path: databasePath }));
     expect(() => reader.assertCurrent()).toThrow("Auth profile read owner was revoked");
     expect(child.read).not.toHaveBeenCalled();
   });
+  it("retains revocation while cold identity admission is pending", async () => {
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const stat = fs.promises.stat;
+    vi.spyOn(fs.promises, "stat").mockImplementation(async (...args) => {
+      if (String(args[0]) === databasePath) {
+        entered.resolve();
+        await release.promise;
+      }
+      return Reflect.apply(stat, fs.promises, args);
+    });
+    syncBuiltinESMExports();
+    const preparing = prepare();
+    try {
+      await Promise.race([
+        entered.promise,
+        preparing.then(() => {
+          throw new Error("Cold identity admission did not enter the filesystem gate");
+        }),
+      ]);
+      const closing = Promise.all(resources.revokeAgentDatabaseResources({ path: databasePath }));
+      release.resolve();
+      await closing;
+      const reader = await preparing;
+      await expect(reader.read()).rejects.toThrow(/closed|revoked/);
+      expect(child.read).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await preparing;
+    }
+  });
   it("rejects rows whose source identity changed before the child settled", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     child.read.mockImplementation(async () => {
       await changeDatabase(() => {
         const replacement = `${databasePath}.replacement`;
@@ -195,7 +228,7 @@ describe("prepared auth profile row reads", () => {
   });
 
   it("rejects rows when shared owner authority changes while the child reads", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     child.read.mockImplementation(async () => {
       rootCurrent = false;
       return rows;
@@ -205,7 +238,7 @@ describe("prepared auth profile row reads", () => {
 
   it("retains captured absence when the first session creates its database", async () => {
     fs.unlinkSync(databasePath);
-    const reader = prepare();
+    const reader = await prepare();
     await changeDatabase(() => fs.writeFileSync(databasePath, "created auth database"));
     await expect(reader.read()).resolves.toEqual({
       store: { status: "missing", reason: "database" },
@@ -215,7 +248,7 @@ describe("prepared auth profile row reads", () => {
     await reader.dispose();
     expect(() => reader.assertCurrent()).not.toThrow();
     expect(child.read).not.toHaveBeenCalled();
-    await expect(prepare().read()).resolves.toEqual(rows);
+    await expect((await prepare()).read()).resolves.toEqual(rows);
     expect(child.read).toHaveBeenCalledWith(
       databasePath,
       expect.objectContaining({ expectedIdentity: expect.stringMatching(/^file:/) }),
@@ -225,7 +258,7 @@ describe("prepared auth profile row reads", () => {
   it("captures environment and retains the agent owner through child settlement", async () => {
     const registration = vi.spyOn(resources, "registerOpenClawAgentDatabaseAsyncResource");
     const env = { OPENCLAW_STATE_DIR: "/fixture/original" };
-    const reader = prepare(env);
+    const reader = await prepare(env);
     env.OPENCLAW_STATE_DIR = "/fixture/replaced";
     const entered = createDeferredCore();
     const release = createDeferredCore<AuthProfileRowRead>();
@@ -271,7 +304,7 @@ describe("prepared auth profile row reads", () => {
   });
 
   it("keeps captured authority checkable after ordinary disposal but rejects new reads", async () => {
-    const reader = prepare();
+    const reader = await prepare();
     await expect(reader.read()).resolves.toEqual(rows);
     await reader.dispose();
     expect(() => reader.assertCurrent()).not.toThrow();

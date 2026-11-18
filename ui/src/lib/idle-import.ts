@@ -8,21 +8,38 @@ export function createIdleImport<T>(importModule: () => Promise<T>, onLoaded?: (
 
   const run = (): Promise<T> => {
     moduleLoad ??= importModule()
+      .catch((error: unknown) =>
+        import("../app/stale-chunk-reload.ts").then((recovery) =>
+          recovery.retryFailedControlUiImport(error, () => {
+            if (!active) {
+              throw error;
+            }
+            return importModule();
+          }),
+        ),
+      )
       .then((value) => {
         stopOnline?.();
-        onLoaded?.(value);
+        if (onLoaded) {
+          if (active) {
+            onLoaded(value);
+          } else {
+            // Reactivation must deliver the callback; existing callers keep this result.
+            moduleLoad = null;
+          }
+        }
         return value;
       })
       .catch((error: unknown) => {
         // A failed chunk fetch must not pin a rejected promise forever.
         moduleLoad = null;
-        if (!active) {
-          throw error;
-        }
-        stopOnline = listen(window, "online", start, { once: true });
-        if (navigator.onLine && !onlineRetryAttempted) {
-          onlineRetryAttempted = true;
-          scheduleIdle();
+        if (active) {
+          stopOnline?.();
+          stopOnline = listen(window, "online", start, { once: true });
+          if (navigator.onLine && !onlineRetryAttempted) {
+            onlineRetryAttempted = true;
+            scheduleIdle();
+          }
         }
         throw error;
       });

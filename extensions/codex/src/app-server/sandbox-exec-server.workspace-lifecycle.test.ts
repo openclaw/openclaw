@@ -125,9 +125,13 @@ it.each([false, true])(
       chunk: Buffer.from(text).toString("base64"),
     });
     try {
-      expect(writeProcess(processes, input("accepted"))).toEqual({ status: "accepted" });
+      await expect(writeProcess(processes, input("accepted"))).resolves.toEqual({
+        status: "accepted",
+      });
       revoke();
-      expect(() => writeProcess(processes, input("forbidden"))).toThrow("workspace revoked");
+      await expect(writeProcess(processes, input("forbidden"))).rejects.toThrow(
+        "workspace revoked",
+      );
       expect(writes).toEqual(["accepted"]);
     } finally {
       await terminate();

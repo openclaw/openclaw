@@ -4,6 +4,7 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import type { AgentDatabaseExecutionFileIdentity } from "../../state/openclaw-agent-execution-identity.types.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type {
   SessionLifecycleArchivedTranscript,
@@ -35,6 +36,7 @@ import type {
   TranscriptEvent,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
+import type { SessionCreationOperation } from "./session-creation-operation.js";
 import type { SessionOwnerAssignment } from "./session-entry-provenance.js";
 import type { SessionMaintenancePreservationSnapshot } from "./store-maintenance-preserve-snapshot.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
@@ -133,6 +135,7 @@ export type ProjectedLifecycleCommitInput = {
 };
 
 type SessionLifecycleCreation = {
+  receipt?: { operation: SessionCreationOperation; sessionKey: string; entry: SessionEntry };
   preparedTranscript?: {
     sessionKey: string;
     sessionId: string;
@@ -165,8 +168,8 @@ export type SessionEntryLifecycleMutationParams = {
   beforeCommitInTransaction?: () => void;
   /** Retain source authority around the final writer, after projection and native preparation. */
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
-  /** Non-throwing notification after outer COMMIT, before lifecycle publication and owner cleanup. */
-  onLifecycleCommitted?: () => void;
+  /** Non-throwing after outer COMMIT, before publication/cleanup; only memory omits its file source. */
+  onLifecycleCommitted?: (source?: AgentDatabaseExecutionFileIdentity) => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 };
 
@@ -176,6 +179,7 @@ export type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
 };
 
 export type SqliteSessionReclamationCallbacks = {
+  preparedReferenceOwners?: (sessionKey: string) => Map<string, string> | undefined;
   beforeMutation?: () => void;
   onCommit?: (database: OpenClawAgentDatabase, result?: SqliteSessionReclamationResult) => void;
   afterCommit?: () => void;

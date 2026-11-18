@@ -17,7 +17,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { prepareArtifactPreservingSqliteRead } from "../infra/sqlite-snapshot-source.js";
 import {
   createLegacyStateMigrationStepReceipt,

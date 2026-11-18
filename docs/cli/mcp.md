@@ -19,6 +19,8 @@ sidebarTitle: "MCP"
   `list`, `show`, `set`, and `unset` only read and write OpenClaw-managed `mcp.servers` entries in OpenClaw config. They do not include mcporter servers from `config/mcporter.json`; use `mcporter list` for that registry.
 </Note>
 
+`openclaw mcp login <name>` and `logout <name>` work while the Gateway runs; the Gateway remains the shared credential owner. For shared OAuth you can also ask the agent to connect in a direct chat. See [Transports and OAuth](/cli/mcp/transports#oauth-workflow) for redirect and paste-fallback instructions.
+
 Use [`openclaw acp`](/cli/acp) when OpenClaw should host a coding harness session itself and route that runtime through ACP.
 
 ## Choose the right MCP path

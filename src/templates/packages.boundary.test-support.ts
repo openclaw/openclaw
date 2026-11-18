@@ -8,7 +8,6 @@ import * as packageLease from "../state/claw-package-lifecycle-lease.js";
 import * as addState from "./add-state-write.js";
 import { installTemplatePackages as installPackages } from "./packages.js";
 import * as pluginProbe from "./plugin-capability-probe.js";
-import type { readTemplatePackageRefs } from "./provenance.js";
 
 export const testPluginPackage = {
   kind: "plugin",
@@ -78,10 +77,10 @@ type PackageBoundaryFixtures = {
   preflightPlugin?: typeof pluginPreflight.preflightPluginInstall;
   preflightSkill?: typeof skillLifecycle.preflightSkillFromClawHub;
   readPackageRefs?: (
-    ...args: Parameters<typeof readTemplatePackageRefs>
+    ...args: Parameters<typeof addState.readTemplatePackageRefsForAdd>
   ) =>
-    | ReturnType<typeof readTemplatePackageRefs>
-    | Promise<ReturnType<typeof readTemplatePackageRefs>>;
+    | Awaited<ReturnType<typeof addState.readTemplatePackageRefsForAdd>>
+    | ReturnType<typeof addState.readTemplatePackageRefsForAdd>;
   acquirePackageLease?: typeof packageLease.acquireClawPackageLifecycleLease;
   resolvePlugin?: typeof pluginPreflight.resolveInstalledClawHubPlugin;
 };

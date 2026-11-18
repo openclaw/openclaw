@@ -83,7 +83,7 @@ export class GatewayUpdateSuccessor {
             child,
             probeHosts: [params.host ?? "127.0.0.1"],
             requireRunningService: true,
-            requirePluginHealth: false,
+            requireOwnedListener: true,
           })
         : undefined;
     if (
@@ -186,8 +186,9 @@ export class GatewayUpdateSuccessor {
     if (!pending) {
       throw new Error("foreground update settlement owner is unavailable; remaining draining");
     }
-    await this.cancelHandoff(() => identity);
+    // Retain settlement's lease worker before cancellation can finish and close it.
     this.joinForegroundStop();
+    await this.cancelHandoff(() => identity);
     await pending.confirmed.promise;
     return { respawn: false };
   }

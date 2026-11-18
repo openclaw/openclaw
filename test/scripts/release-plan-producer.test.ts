@@ -46,6 +46,7 @@ import { listDirectoryTreeStrictSync } from "../../src/infra/directory-walk.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { INVENTORY_PRODUCER_PATHS as TOOLING_CLOSURE } from "./release-inventory-paths.test-support.js";
+import { fixture as qualificationAdmissionFixture } from "./release-qualification-admission.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
@@ -309,6 +310,14 @@ type YamlPackageHarnessParams = {
 function runYamlPackageSubprocess(
   options: {
     inventory?: boolean;
+    admission?:
+      | "valid"
+      | "candidate"
+      | "qualification"
+      | "inputs"
+      | "descriptor"
+      | "authority"
+      | "ancestry";
     version?: string;
     toolingFullRef?: string;
     identityResponse?: (params: YamlPackageHarnessParams) => string;
@@ -336,6 +345,45 @@ function runYamlPackageSubprocess(
       toolingFullRef: `refs/tags/release-publish/${toolingSha.slice(0, 12)}-2`,
     };
   }
+  const admission = options.admission
+    ? qualificationAdmissionFixture(false, {
+        candidateSha: options.admission === "candidate" ? "c".repeat(40) : fixture.candidateSha,
+        qualificationSha:
+          options.admission === "qualification" ? fixture.candidateSha : fixture.toolingSha,
+        transportRef:
+          "release-ci/" +
+          (options.admission === "qualification" ? fixture.candidateSha : fixture.toolingSha).slice(
+            0,
+            12,
+          ) +
+          "-123",
+        inputs: {
+          ref: options.admission === "candidate" ? "c".repeat(40) : fixture.candidateSha,
+          expected_sha: options.admission === "candidate" ? "c".repeat(40) : fixture.candidateSha,
+        },
+      })
+    : undefined;
+  const admissionResponses: Record<string, string> = {};
+  if (admission) {
+    admission.verify();
+    if (options.admission === "authority") {
+      admission.authority.permission = "read";
+    }
+    if (options.admission === "ancestry") {
+      admission.authority.qualificationAncestry = "diverged";
+    }
+    for (const endpoint of new Set(admission.calls)) {
+      admissionResponses[endpoint] = admission.runGh(["api", endpoint]);
+    }
+    admissionResponses["repos/openclaw/openclaw/compare/" + fixture.toolingSha + "...main"] =
+      JSON.stringify({ status: admission.authority.qualificationAncestry });
+    if (options.admission === "descriptor") {
+      admission.descriptor.artifactName = "wrong-admission-artifact";
+    }
+    if (options.admission === "inputs") {
+      admission.selected.inputs.mode = "node";
+    }
+  }
   const packageRoot = join(fixture.root, "node_modules/yaml");
   cpSync(dirname(createRequire(import.meta.url).resolve("yaml/package.json")), packageRoot, {
     recursive: true,
@@ -354,7 +402,7 @@ ${options.beforeImport?.(params) ?? ""}
 const { produceReleasePlan, produceVerifiedReleaseInventory } = await import("./scripts/release-plan-producer.mts");
 ${options.beforeProduce?.(params) ?? ""}
 
-const toolingFullRef = ${JSON.stringify(options.toolingFullRef ?? (options.main ? "refs/heads/main" : fixture.toolingFullRef))};
+const toolingFullRef = ${JSON.stringify(admission ? "refs/heads/release-ci/" + fixture.toolingSha.slice(0, 12) + "-123" : (options.toolingFullRef ?? (options.main ? "refs/heads/main" : fixture.toolingFullRef)))};
 const toolingSha = ${JSON.stringify(fixture.toolingSha)};
 const plan = ${options.inventory ? "produceVerifiedReleaseInventory" : "produceReleasePlan"}({
   repoRoot: ${JSON.stringify(fixture.root)},
@@ -368,7 +416,21 @@ const plan = ${options.inventory ? "produceVerifiedReleaseInventory" : "produceR
   candidateSha: ${JSON.stringify(fixture.candidateSha)},
   toolingSha,
   toolingFullRef,
+  ${
+    admission
+      ? `qualificationAdmission: ${JSON.stringify(admission.descriptor)},
+  qualificationInputs: ${JSON.stringify(admission.selected.inputs)},
+  downloadArchive: () => Buffer.from(${JSON.stringify(Buffer.from(admission.archive()).toString("base64"))}, "base64"),`
+      : ""
+  }
   runGh: (args) => {
+    ${
+      admission
+        ? `const responses = ${JSON.stringify(admissionResponses)};
+    if (!Object.hasOwn(responses, args[1])) throw new Error("unexpected admission request: " + args[1]);
+    return responses[args[1]];`
+        : ""
+    }
     ${
       options.inventory
         ? `
@@ -430,6 +492,92 @@ function yamlTempEntries(root: string) {
 }
 
 describe("release plan producer", () => {
+  it.skipIf(process.platform === "win32")(
+    "retains GitHub failure diagnostics in the producer CLI",
+    () => {
+      const bin = tempDirs.make("release-plan-gh-failure-");
+      const requests = join(bin, "requests");
+      writeFileSync(
+        join(bin, "gh"),
+        `#!/bin/sh
+printf '%s\n' "$@" > "$REQUESTS"
+printf 'sensitive-response-body\n'
+printf 'gh: API rate limit exceeded (HTTP 403)\nX-GitHub-Request-Id: RRI451-SYNTHETIC\nX-RateLimit-Reset: 1794910200\n' >&2
+exit 1
+`,
+        { mode: 0o755 },
+      );
+      const sha = "a".repeat(40);
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve("scripts/release-plan-producer.mts"),
+          "--intent",
+          "diagnostic",
+          "--candidate-sha",
+          sha,
+          "--candidate-ref",
+          "refs/heads/main",
+          "--tooling-sha",
+          sha,
+          "--tooling-full-ref",
+          "refs/heads/main",
+        ],
+        { encoding: "utf8", env: { PATH: bin, REQUESTS: requests, GH_TOKEN: "synthetic-token" } },
+      );
+
+      expect(readFileSync(requests, "utf8").trim().split("\n")).toEqual([
+        "api",
+        `repos/openclaw/openclaw/compare/${sha}...main`,
+        "--method",
+        "GET",
+        "--jq",
+        "{status}",
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toContain("main release tooling ancestry could not be verified");
+      expect(result.stderr).toContain("HTTP 403");
+      expect(result.stderr).toContain("X-GitHub-Request-Id: RRI451-SYNTHETIC");
+      expect(result.stderr).toContain("X-RateLimit-Reset: 1794910200");
+      expect(result.stderr).not.toContain("sensitive-response-body");
+      expect(result.stderr).not.toContain("synthetic-token");
+    },
+  );
+  it("produces admitted inventory with independent C, Q, and P through the verified wrapper", () => {
+    const { result, fixture } = runYamlPackageSubprocess({ inventory: true, admission: "valid" });
+    expect(result.status, result.stderr).toBe(0);
+    expect(new Set([fixture.candidateSha, fixture.toolingSha, "b".repeat(40)]).size).toBe(3);
+    const inventory = JSON.parse(result.stdout) as VerifiedReleaseInventory;
+    expect(inventory).toMatchObject({
+      candidateSha: fixture.candidateSha,
+      version: "2026.8.1-beta.2",
+      tooling: {
+        ref: "refs/heads/release-ci/" + fixture.toolingSha.slice(0, 12) + "-123",
+        sha: fixture.toolingSha,
+      },
+    });
+    expect(inventory.inventory.packages).toContainEqual({
+      name: "openclaw",
+      version: "2026.8.1-beta.2",
+      targets: ["npm"],
+    });
+  });
+
+  it.each([
+    ["candidate", "Qualification evidence differs from the authenticated operator request"],
+    ["qualification", "Qualification evidence differs from the authenticated operator request"],
+    ["inputs", "Qualification evidence differs from the authenticated operator request"],
+    ["descriptor", "Invalid qualification admission artifact identity"],
+    ["authority", "Qualification operator no longer has repository qualification authority"],
+    ["ancestry", "main release tooling SHA is not reachable"],
+  ] as const)("rejects admitted inventory with invalid %s", (admission, message) => {
+    const { result } = runYamlPackageSubprocess({ inventory: true, admission });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(message);
+    expect(result.stdout).toBe("");
+  });
+
   it.each(["main", "protected"] as const)(
     "produces verified inventory with %s tooling without plan authority",
     (route) => {

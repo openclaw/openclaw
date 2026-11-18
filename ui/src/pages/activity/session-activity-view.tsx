@@ -13,6 +13,7 @@ import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import "../../components/solid/viewer-facepile.tsx";
 import { formatTimeAgo } from "../../lib/format.ts";
 import {
@@ -365,7 +366,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           <Errored
             fallback={(error) => {
               const failure = error();
-              return feedback(failure instanceof Error ? failure.message : String(failure), false);
+              return feedback(formatUiError(failure), false);
             }}
           >
             {(latest(read), feedback(props.error, props.loading || isPending(read)))}

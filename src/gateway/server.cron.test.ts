@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import * as sessionEventDelivery from "../auto-reply/reply/session-event-delivery.js";
+import * as routedReplies from "../auto-reply/reply/route-reply.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
@@ -991,7 +991,7 @@ describe("gateway server cron", () => {
   registerCronRepairCases(() => caseDir, startCronClient, sendCronAnnouncePayloadStrictMock);
 
   test.for(["success", "error"] as const)(
-    "keeps owner-topic repair pending through retries until the agent turn settles with %s",
+    "sends an owner-topic failure notice once while the same failure repeats (turn %s)",
     { timeout: 45_000 },
     async (outcome, { signal }) => {
       testState.cronEnabled = true;
@@ -1036,7 +1036,7 @@ describe("gateway server cron", () => {
       const repairTurnStarted = createDeferred();
       const finishRepairTurn = createDeferred();
       // A repair's runtime error stays out of the owner chat; the next alert escalates.
-      const chatDelivery = vi.spyOn(sessionEventDelivery, "prepareSessionEventDelivery");
+      const chatDelivery = vi.spyOn(routedReplies, "routePreparedReply");
       const repairTurn = installCronRepairTurn(async () => {
         repairTurnStarted.resolve();
         await finishRepairTurn.promise;
@@ -1073,13 +1073,12 @@ describe("gateway server cron", () => {
           BodyForAgent: expect.stringContaining("Automation repair request from the scheduler"),
         });
 
-        // Dispatch acceptance is not repair completion: a retry while the turn is held
-        // cannot verify its changes or consume the incident's one escalation.
+        // The same failure while the owner turn works is not raised again.
         await run(jobId);
         const pending = await request("cron.get", { id: jobId });
         expect(pending.ok).toBe(true);
         expect(pending.payload).toMatchObject({
-          state: { lastFailureNotificationDeliveryStatus: "not-requested" },
+          state: { consecutiveErrors: 3, lastFailureNotificationDeliveryStatus: "not-requested" },
         });
         expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
         expect(gatewayReplyMock).toHaveBeenCalledOnce();
@@ -1087,18 +1086,12 @@ describe("gateway server cron", () => {
       } finally {
         finishRepairTurn.resolve();
       }
-      await vi.waitFor(async () => {
-        const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-          ?.repair;
-        expect(repair?.settledAtMs).toEqual(expect.any(Number));
-      });
       expect(chatDelivery).not.toHaveBeenCalled();
       chatDelivery.mockRestore();
+      // The owner turn was the user's notice: the same failure stays quiet until its daily reminder.
       await run(jobId);
-      await vi.waitFor(() => expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce());
-      await run(jobId);
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+      expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+      expect(gatewayReplyMock).toHaveBeenCalledOnce();
     },
   );
 });

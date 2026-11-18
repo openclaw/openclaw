@@ -28,7 +28,10 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  type OpenClawTestState,
+  withOpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { buildBuiltinChatCommands } from "../commands-registry.shared.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
@@ -186,6 +189,27 @@ function params(body = "/fork Alternative") {
   return value;
 }
 
+async function createForkSource(state: OpenClawTestState, automaticReplies = true) {
+  const cfg = {
+    agents: { defaults: { workspace: state.workspaceDir } },
+    ...(automaticReplies
+      ? { messages: { groupChat: { visibleReplies: "automatic" as const } } }
+      : {}),
+  };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const source = await createGatewaySession({
+    cfg,
+    key: parentKey,
+    commandSource: "test",
+    creation: { via: "channel" },
+  });
+  if (!source.ok) {
+    throw new Error(source.error.message);
+  }
+  return { cfg, source, scope: { sessionKey: parentKey, sessionId: source.entry.sessionId } };
+}
+
 it("registers native and text /fork and rejects unsupported/unauthorized input without effects", async () => {
   expect(buildBuiltinChatCommands().find((c) => c.key === "fork")).toMatchObject({
     nativeName: "fork",
@@ -210,22 +234,7 @@ it.each([false, true])(
   "keeps the fork input and outcome through shared dispatch (ack fails=%s) without duplicating delivered acknowledgment",
   async (ackFails) => {
     await withOpenClawTestState({ label: "channel-fork" }, async (state) => {
-      const cfg = {
-        agents: { defaults: { workspace: state.workspaceDir } },
-        messages: { groupChat: { visibleReplies: "automatic" as const } },
-      };
-      await state.writeConfig(cfg);
-      setRuntimeConfigSnapshot(cfg);
-      const source = await createGatewaySession({
-        cfg,
-        key: parentKey,
-        commandSource: "test",
-        creation: { via: "channel" },
-      });
-      if (!source.ok) {
-        throw new Error(source.error.message);
-      }
-      const scope = { sessionKey: parentKey, sessionId: source.entry.sessionId };
+      const { cfg, source, scope } = await createForkSource(state);
       for (const [role, content, display] of [
         ["user", "Older context is inherited", true],
         ["assistant", "First visible excerpt", true],
@@ -356,19 +365,7 @@ it.each([
   "aborted",
 ] as const)("retains the copied session and refuses recap delivery after %s", async (failure) => {
   await withOpenClawTestState({ label: "fork-refusal" }, async (state) => {
-    const cfg = { agents: { defaults: { workspace: state.workspaceDir } } };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const source = await createGatewaySession({
-      cfg,
-      key: parentKey,
-      commandSource: "test",
-      creation: { via: "channel" },
-    });
-    if (!source.ok) {
-      throw new Error(source.error.message);
-    }
-    const scope = { sessionKey: parentKey, sessionId: source.entry.sessionId };
+    const { cfg, scope } = await createForkSource(state, false);
     await appendTranscriptMessage(scope, {
       message: { role: "user", content: "Preserved source" },
     });
@@ -408,22 +405,7 @@ it.each([
 
 it("forks an active source only through its completed prefix", async () => {
   await withOpenClawTestState({ label: "active-channel-fork" }, async (state) => {
-    const cfg = {
-      agents: { defaults: { workspace: state.workspaceDir } },
-      messages: { groupChat: { visibleReplies: "automatic" as const } },
-    };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const source = await createGatewaySession({
-      cfg,
-      key: parentKey,
-      commandSource: "test",
-      creation: { via: "channel" },
-    });
-    if (!source.ok) {
-      throw new Error(source.error.message);
-    }
-    const scope = { sessionKey: parentKey, sessionId: source.entry.sessionId };
+    const { cfg, source, scope } = await createForkSource(state);
     for (const message of [
       { role: "user", content: "Completed question" },
       { role: "assistant", content: "Completed answer", stopReason: "stop" },
@@ -470,20 +452,7 @@ it("forks an active source only through its completed prefix", async () => {
 
 it("retains a private fork and records its audience when channel authority closes during recap preparation", async () => {
   await withOpenClawTestState({ label: "fork-native-authority" }, async (state) => {
-    const cfg = {
-      agents: { defaults: { workspace: state.workspaceDir } },
-      messages: { groupChat: { visibleReplies: "automatic" as const } },
-    };
-    await state.writeConfig(cfg);
-    setRuntimeConfigSnapshot(cfg);
-    const source = await createGatewaySession({
-      cfg,
-      key: parentKey,
-      commandSource: "test",
-      creation: { via: "channel" },
-    });
-    assert(source.ok);
-    const scope = { sessionKey: parentKey, sessionId: source.entry.sessionId };
+    const { cfg, scope } = await createForkSource(state);
     await appendTranscriptMessage(scope, { message: { role: "user", content: "Source context" } });
     audienceNotice = "Private fork: only requester and bot are added.";
     let revoked = false;

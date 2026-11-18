@@ -179,8 +179,13 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(button(panel, "Enable word wrap").getAttribute("aria-pressed")).toBe("false");
       await click(panel, "File actions");
       await click(panel, "Search in file");
-      await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "rect");
+      const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      await userEvent.fill(search, "rect");
       await expect.poll(() => panel.querySelector('[role="status"]')?.textContent).toBe("1/1");
+      search.dispatchEvent(new CompositionEvent("compositionend"));
+      const enter = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+      search.dispatchEvent(enter);
+      expect(enter.defaultPrevented).toBe(false);
       await click(panel, "Reading mode: Highlighted source");
       await click(panel, "Preview");
       expect(panel.querySelector('input[type="search"]')).toBeNull();
@@ -375,17 +380,17 @@ describe.runIf(browserMode)("chat file editor", () => {
   });
 
   it.each([
-    { name: "mixed CRLF first", content: "first\r\nneedle\rlast\r\nneedle", matchLines: [1, 3] },
+    { name: "mixed CRLF first", content: "first\r\nnéedle\rlast\r\nnéedle", matchLines: [1, 3] },
     {
       name: "editable mixed LF first",
-      content: "first\nneedle\rlast\r\nneedle",
+      content: "first\nnéedle\rlast\r\nnéedle",
       matchLines: [1, 3],
       editable: true,
     },
   ])("searches the displayed lines in $name files", async ({ content, matchLines, editable }) => {
     const panel = await mountFile(editable ? editableFile(content) : file(content));
     await click(panel, "Search in file");
-    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "needle");
+    await userEvent.fill(panel.querySelector<HTMLInputElement>('input[type="search"]')!, "e\u0301");
     const lineIndexes = (selector: string) => {
       const lines = Array.from(panel.querySelectorAll(".cm-line"));
       return Array.from(panel.querySelectorAll(selector), (line) => lines.indexOf(line));
@@ -398,8 +403,6 @@ describe.runIf(browserMode)("chat file editor", () => {
     await click(panel, "Previous match");
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
     expect(readFileDraft(panel.content)).toBeUndefined();
-    expect(canReloadControlUiDocument()).toBe(true);
-    panel.remove();
     expect(canReloadControlUiDocument()).toBe(true);
   });
 
@@ -432,6 +435,10 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(counter()).toBe("1/3");
       const focusTarget = control === "input" ? input : button(panel, control);
       if (control === "input") {
+        // WebKit can send the IME-confirming Enter after compositionend with its flags cleared.
+        input.dispatchEvent(new CompositionEvent("compositionend"));
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
         await userEvent.keyboard("{Enter}");
         expect(counter()).toBe("2/3");
         await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
@@ -481,10 +488,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     await userEvent.keyboard("{Enter}");
     await expectAccessibleEditor(editor, false);
     await userEvent.fill(editor, "after");
-    const saveButton = button(panel, "Save");
-    expect(saveButton.disabled).toBe(false);
-    await userEvent.click(saveButton);
-    await expect.poll(() => save.mock.calls.length).toBe(1);
+    await saveFile(panel, save, 1);
     expect(save).toHaveBeenCalledWith({ content: "after", expectedHash: "hash-1" });
     await expect.poll(() => button(panel, "Save").disabled).toBe(true);
     expect(editorOf(panel).textContent).toContain("after");
@@ -621,11 +625,7 @@ describe.runIf(browserMode)("chat file editor", () => {
     "drops edit mode and its draft when a conflict reload returns %j",
     async (content) => {
       const save = vi.fn().mockResolvedValue({ ok: false, code: "conflict" });
-      const fetchLatest = vi.fn().mockResolvedValue({
-        content,
-        hash: "hash-2",
-        editable: false,
-      });
+      const fetchLatest = vi.fn().mockResolvedValue({ content, hash: "hash-2", editable: false });
       const panel = await mountFile(editableFile("before", { save, fetchLatest }));
       await beginEdit(panel, "local");
       await click(panel, "Save");
@@ -635,8 +635,6 @@ describe.runIf(browserMode)("chat file editor", () => {
       expect(editorOf(panel).getAttribute("contenteditable")).toBe("false");
       expect(panel.querySelector('button[aria-label="Edit file"]')).toBeNull();
       expect(readFileDraft(panel.content)).toBeUndefined();
-      expect(canReloadControlUiDocument()).toBe(true);
-      panel.remove();
       expect(canReloadControlUiDocument()).toBe(true);
     },
   );

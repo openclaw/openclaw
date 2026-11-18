@@ -10,6 +10,12 @@ export {
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export { projectInternalRealtimeVoicePublicConfig } from "../talk/provider-internal.js";
 export type {
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../talk/provider-contexts.js";
+export type {
   OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceAudioChunkMetadata,
@@ -22,14 +28,10 @@ export type {
   RealtimeVoiceCloseDisposition,
   RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceGatewayControl,
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceCloseReason,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
-  RealtimeVoiceProviderResolveConfigContext,
   RealtimeVoiceResponseError,
   RealtimeVoiceResponseOutcome,
   RealtimeVoiceRole,

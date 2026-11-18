@@ -190,7 +190,9 @@ export async function stageWorkerCodex(params: {
     'const parentArgs = fs.readFileSync(`/proc/${process.ppid}/cmdline`, "utf8").split("\\0");',
     'const status = fs.readFileSync(`/proc/${process.ppid}/status`, "utf8");',
     "const nodePid = Number(status.match(/^PPid:\\s+(\\d+)/m)?.[1]);",
-    'const nativePids = fs.readFileSync(`/proc/${nodePid}/task/${nodePid}/children`, "utf8").trim().split(/\\s+/).map(Number).filter(pid => { try { const args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\\0"); return args.includes("app-server") || args.includes("exec-server"); } catch { return false; } });',
+    // Linux records children per task; native spawns can originate on a runtime worker thread.
+    "const nodeTasks = fs.readdirSync(`/proc/${nodePid}/task`);",
+    'const nativePids = [...new Set(nodeTasks.flatMap(tid => { try { return fs.readFileSync(`/proc/${nodePid}/task/${tid}/children`, "utf8").trim().split(/\\s+/).map(Number); } catch { return []; } }))].filter(pid => { try { const args = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\\0"); return args.includes("app-server") || args.includes("exec-server"); } catch { return false; } });',
     'const evidence = { nativePids, startedAt: Date.now(), helperPid: process.pid, gate, appServerPid: process.ppid, nodePid, parentAppServer: parentArgs.includes("app-server"), executable: fs.readlinkSync(`/proc/${process.ppid}/exe`), home: process.env.HOME, codexHome: process.env.CODEX_HOME };',
     `fs.writeFileSync(path.join(${JSON.stringify(observations)}, process.pid + ".json"), JSON.stringify(evidence), { mode: 0o600 });`,
     ...(params.receiptEndpoint

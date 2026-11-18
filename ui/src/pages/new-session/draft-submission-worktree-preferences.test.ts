@@ -505,6 +505,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
       await Promise.all(writes.mock.results.map((result) => result.value));
       expect(first.context.sessions.createResult).not.toHaveBeenCalled();
       expect(warning).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message:
           "Saving your new-session choices could not be confirmed. Check them before starting a session.",
       });
@@ -593,7 +594,6 @@ it("keeps accepted names retired when older model saves commit last", async () =
       await modelSave.wait();
     }
   });
-  const writes = vi.spyOn(next.gateway, "persistPreference");
   await chooseModel(next);
   try {
     await modelSave.started.promise;
@@ -602,10 +602,9 @@ it("keeps accepted names retired when older model saves commit last", async () =
     expect(prefs.stored()).toMatchObject({ worktreeName: "" });
   } finally {
     modelSave.release.resolve();
-    await Promise.all(writes.mock.results.map((result) => result.value));
+    await expectSaved(prefs, { model: "openai/gpt-5.6-sol" });
   }
   expect(next.context.sessions.createResult).not.toHaveBeenCalled();
-  expect(prefs.stored()).toMatchObject({ model: "openai/gpt-5.6-sol" });
   expect(decodePreference(prefs.stored()).main?.worktreeName).toBeUndefined();
 });
 

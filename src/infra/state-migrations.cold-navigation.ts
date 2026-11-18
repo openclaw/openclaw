@@ -22,7 +22,7 @@ import {
   withSqliteDatabaseWriteScope,
 } from "./sqlite-database-admission.js";
 import { backupDoctorSqliteRepair } from "./sqlite-index-recovery.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -149,7 +149,7 @@ export async function migrateSessionColdNavigation(
                   changes.push(...backup.changes);
                 } else {
                   changes.push(
-                    `Saved pre-repair SQLite backup: ${backupDoctorSqliteRepair(target.path, "cold-navigation")}`,
+                    `Saved pre-repair SQLite backup: ${await backupDoctorSqliteRepair(target.path, "cold-navigation")}`,
                   );
                 }
                 backedUp = true;

@@ -92,6 +92,7 @@ const listSessionEntries: RuntimeSession["listSessionEntries"] = (params = {}) =
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return listEntries({
+    projection: params.projection,
     ...(params.sessionKeys !== undefined ? { sessionKeys: params.sessionKeys } : {}),
     ...(params.includeParticipants !== undefined
       ? { includeParticipants: params.includeParticipants }

@@ -204,9 +204,8 @@ describe("web push Gateway reconciliation", () => {
         <NotificationsSection {...webProps} webPush={capability.snapshot} />
       ));
       expect(container.textContent).toContain("Unavailable");
-      expect(container.textContent).toContain("Not requested");
       expect(container.textContent).not.toContain("Enable notifications");
-      expect(container.textContent).not.toContain("Send test");
+      expect(container.textContent).not.toContain("Test all browsers");
     } finally {
       capability.dispose();
     }
@@ -285,7 +284,7 @@ describe("web push Gateway reconciliation", () => {
       expect([...controls].every((control) => control.matches(":disabled"))).toBe(true);
       container.querySelector<HTMLInputElement>(".settings-stack input")?.click();
       expect(changePreferences).not.toHaveBeenCalled();
-      expect(container.textContent).not.toContain("Send test");
+      expect(container.textContent).not.toContain("Test all browsers");
       await capability.run({ kind: "disable" });
       expect(unsubscribe).toHaveBeenCalledOnce();
       expect(capability.snapshot.subscription).toBe("missing");
@@ -511,8 +510,8 @@ describe("web push Gateway reconciliation", () => {
     });
     const firstSave = createDeferred();
     const firstSaveStarted = createDeferred();
-    const first = notificationPreferences(true);
-    const second = notificationPreferences(false);
+    const first = { ...notificationPreferences(true), agentIds: ["unlisted", "research"] };
+    const second = { ...notificationPreferences(false), agentIds: ["unlisted", "main"] };
     let stored = first;
     let saveCount = 0;
     const request = vi.fn(async (method: string, params?: unknown) => {
@@ -1017,8 +1016,8 @@ describe("web push Gateway reconciliation", () => {
         expect(request).not.toHaveBeenCalledWith("push.web.subscribe", expect.anything());
         expect(subscribe).not.toHaveBeenCalled();
         expect(unsubscribe).not.toHaveBeenCalled();
-        expect(container.textContent).toContain("Not subscribed");
-        expect(button("Send test")).toBeUndefined();
+        expect(container.textContent).toContain("Unavailable");
+        expect(button("Test all browsers")).toBeUndefined();
         const resetButton = button("Unsubscribe");
         expect(resetButton).toBeDefined();
         await vi.waitFor(() => expect(resetButton?.disabled).toBe(false));
@@ -1027,7 +1026,7 @@ describe("web push Gateway reconciliation", () => {
         await vi.waitFor(() => expect(button("Enable notifications")?.disabled).toBe(false));
         button("Enable notifications")?.click();
 
-        await vi.waitFor(() => expect(button("Send test")?.disabled).toBe(false));
+        await vi.waitFor(() => expect(button("Test all browsers")?.disabled).toBe(false));
         expect(subscribe).toHaveBeenCalledOnce();
         expect(request).toHaveBeenCalledWith("push.web.subscribe", {
           endpoint: "https://push.example.test/subscription",

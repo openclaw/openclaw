@@ -25,7 +25,7 @@ export function createState(
   vi.spyOn(host.sessions, "reconcileRunTerminal").mockReturnValue(false);
   vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
   onTestFinished(() => host.sessions.dispose());
-  return { ...host, connectionEpoch: 1 };
+  return Object.assign(host, { connectionEpoch: 1 });
 }
 
 export function activeHistory(runId: string): ChatHistoryResult {

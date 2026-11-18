@@ -302,6 +302,7 @@ credentials, approvals, or external-effect authorization. See
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                    |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                        |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                   |
+| `recommendedPrompts`                 | No       | `string[]`                   | Up to three author-written starter prompts, read without executing plugin code. See [Recommended prompts](#recommended-prompts).                                                                                                                                                                                                                                                               |
 | `categories`                         | No       | `string[]`                   | One to three controlled catalog category slugs, ordered with the primary category first. Bundled plugins must declare exactly one active category.                                                                                                                                                                                                                                             |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                  |
 | `configGroups`                       | No       | `object[]`                   | Author-defined Settings sections with unique ids, titles, optional integer order, and immediate config property names. See [configGroups](/plugins/manifest/setup-and-auth#configgroups-reference).                                                                                                                                                                                            |
@@ -312,6 +313,57 @@ An `AuthAlias` is either a provider id string or an object with `provider` and
 endpoint after trimming whitespace and trailing slashes. It does not rename
 stored credential providers or contribute a new setup provider. Existing profile
 order, explicit bindings, and plugin trust checks still apply.
+
+## Recommended prompts
+
+`recommendedPrompts` is optional, author-written presentation metadata for starter
+prompts. Native plugins, including third-party plugins, declare it at the top level:
+
+```json
+{
+  "id": "weekly-planner",
+  "configSchema": { "type": "object", "additionalProperties": false },
+  "recommendedPrompts": [
+    "Help me plan my week around my priorities.",
+    "Compare the options for my next project."
+  ]
+}
+```
+
+- Declare at most **three** non-empty strings, each at most **128 Unicode code
+  points** after whitespace normalization. Omit the field or use `[]` when there
+  are no useful recommendations.
+- Write the actual user request, not a button label. Do not include a plugin
+  mention in the authored text; the host owns plugin selection and mention context.
+- OpenClaw trims outer whitespace and collapses internal whitespace, including
+  line breaks, to single spaces. Ordering and the complete normalized text are
+  preserved; overlong prompts are rejected, never truncated. Clients must display
+  the same normalized text they insert.
+- Invalid optional declarations are ignored as a whole, with a native manifest
+  warning, rather than partially shown or used to block plugin loading.
+- These strings do not install, enable, execute, or grant trust to a plugin.
+  Catalog, inspection, and local discovery detail can read them without loading
+  the plugin runtime.
+
+On upgrade, previously accepted declarations with a prompt longer than 128 normalized
+Unicode code points are ignored as a whole; the plugin still loads. Shorten those
+prompts to restore recommendations. Existing internal whitespace is now collapsed
+to single spaces, including line breaks.
+
+The Gateway also understands `recommendedPrompts` in a registry's selected-version
+`pluginManifestSummary`. Pre-install availability depends on the registry actually
+publishing that field; a registry summary that omits it cannot supply recommendations.
+See [Plugin bundles](/plugins/bundles#recommended-prompts) for Codex-compatible input.
+
+The Control UI shows these prompts in an artwork panel on the plugin detail page.
+The shared artwork follows the user’s primary theme color while preserving its neutral
+background and raster texture. Plugins without recommendations retain their existing layout. Choosing a prompt
+uses the existing install or enable flow, including any required capability review,
+then opens a new chat with the plugin mention and the displayed text in the editable
+composer. It never sends automatically. Installation progress and failures stay on
+the plugin page, and existing chat drafts are preserved. A successful installation
+can open the draft even if credentials or configuration still need attention; prompt
+selection does not add a separate authentication-readiness gate.
 
 ## Catalog categories
 
@@ -491,6 +543,9 @@ See [Configuration reference](/gateway/configuration-reference#plugins) for the 
 - Only documented manifest fields are read by the manifest loader. Avoid custom top-level keys.
 - `channels`, `providers`, `cliBackends`, and `skills` can all be omitted when a plugin does not need them.
 - `providerCatalogEntry` must stay lightweight and should not import broad runtime code; use it for static provider catalog metadata or narrow discovery descriptors, not request-time execution.
+  A live `catalog.run` descriptor supplies runtime discovery for its own provider ID.
+  Full plugin registration still supplies any runtime or refreshable sibling providers
+  that the entry does not cover; a static-only descriptor does not replace live discovery.
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory` (default `memory-core`), `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Bundled plugins use manifest kinds without loading their runtime during enablement. Runtime-entry `OpenClawPluginDefinition.kind` was deprecated on 2026-07-25 and remains only as a compatibility fallback for older external plugins; its removal gate is 2026-10-01. See the [compatibility policy](/plugins/sdk-migration/compatibility-policy#compatibility-policy).
 - Env-var metadata in `setup.providers[].envVars` is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.

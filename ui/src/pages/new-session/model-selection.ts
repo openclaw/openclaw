@@ -1,12 +1,17 @@
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
-import type { CyberAccessProgram, FastMode, GatewayAgentRow } from "../../api/types.ts";
+import type {
+  CyberAccessProgram,
+  FastMode,
+  GatewayAgentRow,
+  ModelCatalogEntry,
+} from "../../api/types.ts";
 import type { DurableDraftModelSelection } from "../../lib/chat/composer-draft-store.runtime.ts";
 import {
   normalizeChatFastModeInput,
   type ChatFastModeSelectValue,
 } from "../../lib/chat/model-select-state.ts";
 import { normalizeThinkingOptionValue } from "../../lib/chat/thinking.ts";
-import { selectableRuntimeId, type ModelRuntimeEntry } from "../../lib/model-runtime-choice.ts";
+import { selectableRuntimeId } from "../../lib/model-runtime-choice.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import {
   reconcileDraftModelSelection,
@@ -39,10 +44,10 @@ export type ModelSelectionChange = (
 /** Mutable intent belongs to this draft, separate from remembered defaults and catalog metadata. */
 export abstract class NewSessionModelSelection {
   abstract accessProgramForSubmission(): CyberAccessProgram | undefined;
-  abstract resolveAgentRuntime(): ModelRuntimeEntry["agentRuntime"];
+  abstract resolveAgentRuntime(): ModelCatalogEntry["agentRuntime"];
   abstract hostedEnvironments(): Array<{ id: string; model?: string }>;
   abstract hostEnvironmentRuntime():
-    | { model: string; runtime: NonNullable<ModelRuntimeEntry["agentRuntime"]> }
+    | { model: string; runtime: NonNullable<ModelCatalogEntry["agentRuntime"]> }
     | undefined;
   abstract selectModel(model: string, agentRuntime?: string): void;
   abstract hostEnvironmentDisabledReason(): string | undefined;

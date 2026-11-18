@@ -17,6 +17,8 @@ const identity = z.strictObject({
   ino: z.string().regex(/^\d+$/u),
   manifestSha256: z.string().regex(/^[a-f0-9]{64}$/u),
 });
+// Prior installs may be damaged before the update; the cohort restores them unchanged.
+const priorIdentity = identity.extend({ manifestSha256: identity.shape.manifestSha256.nullable() });
 const installRecord = StrictPluginInstallRecordSchema.passthrough();
 const configPathSnapshot = z.strictObject({
   targetPath: absolutePath,
@@ -95,7 +97,7 @@ const pluginCohortRecoverySchema = z
           .strictObject({
             pluginId: text,
             packageDir: absolutePath,
-            identity: identity.nullable(),
+            identity: priorIdentity.nullable(),
             record: installRecord.optional(),
             markerBefore: z.string().max(MAX_PLUGIN_COHORT_BYTES).nullable(),
             markerAfter: z.string().max(MAX_PLUGIN_COHORT_BYTES).nullable(),

@@ -143,6 +143,48 @@ describe("msteams members added handler", () => {
     );
   });
 
+  it.each([
+    ["personal", 1],
+    ["groupChat", 0],
+  ] as const)("stores the %s install conversation reference", async (conversationType, saves) => {
+    const deps = createDeps();
+    const upsert = vi.fn(async () => {});
+    deps.conversationStore.upsert = upsert;
+    await createMSTeamsActivityHandler(deps)({
+      activity: {
+        type: "conversationUpdate",
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+        membersAdded: [{ id: "28:bot-app" }],
+        from: { id: "29:user-bf", aadObjectId: "user-aad" },
+        recipient: { id: "28:bot-app", name: "Bot" },
+        conversation: { id: "a:installed-chat", conversationType, tenantId: "tenant-1" },
+        channelData: { tenant: { id: "tenant-1" } },
+      },
+      sendActivity: vi.fn(async () => ({ id: "activity-id" })),
+      updateActivity: vi.fn(async () => undefined),
+    });
+    expect(upsert).toHaveBeenCalledTimes(saves);
+    if (saves) {
+      expect(upsert).toHaveBeenCalledWith("a:installed-chat", {
+        activityId: undefined,
+        user: { id: "29:user-bf", name: undefined, aadObjectId: "user-aad" },
+        agent: { id: "28:bot-app", name: "Bot" },
+        conversation: {
+          id: "a:installed-chat",
+          conversationType: "personal",
+          tenantId: "tenant-1",
+        },
+        tenantId: "tenant-1",
+        aadObjectId: "user-aad",
+        teamId: undefined,
+        channelId: "msteams",
+        serviceUrl: "https://smba.trafficmanager.net/amer",
+        locale: undefined,
+      });
+    }
+  });
+
   it("uses account-specific welcome card config", async () => {
     const deps: MSTeamsMessageHandlerDeps = {
       ...createDeps(),

@@ -11,6 +11,7 @@ import { i18n } from "../i18n/index.ts";
 import type { ConfigPatchOptions } from "../lib/config/config-gateway-operations.ts";
 import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createConfigCapabilityHarness } from "../lib/config/config-test-harness.ts";
+import { resolveReadMcpServerRuntime, type McpToolsRead } from "../lib/config/mcp-server-status.ts";
 import type { RuntimeConfigCapability } from "../lib/config/runtime-config-capability.ts";
 import * as uuid from "../lib/uuid.ts";
 import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
@@ -90,7 +91,6 @@ async function mountCard(
   const { container } = mountSolid(
     () =>
       createComponent(McpServersCard, {
-        pluginsHref: "/settings/plugins",
         docsUrl: "https://docs.openclaw.ai/tools/mcp",
       }),
     { wrapper: createSolidApplicationContextProvider(context).wrapper },
@@ -108,27 +108,40 @@ function actionButton(container: Element, label: string): HTMLButtonElement {
   );
   return expectDefined(button, `${label} button`);
 }
+function openRow(card: HTMLElement, name: string) {
+  expectDefined(
+    card.querySelector<HTMLButtonElement>(`[data-mcp-name="${name}"] .mcp-server-row__summary`),
+    `${name} row`,
+  ).click();
+  flush();
+}
+function enabledSwitch(card: HTMLElement, name: string): HTMLInputElement {
+  return expectDefined(
+    card.querySelector<HTMLInputElement>(`input[role="switch"][aria-label="${name}"]`),
+    `${name} switch`,
+  );
+}
 async function submitAddForm(
   card: HTMLElement,
   name: string,
   target: string,
   transport: "streamable-http" | "sse" | "stdio" = "streamable-http",
 ) {
-  const add = actionButton(card, "Add server");
-  add.click();
-  add.click();
-  flush();
   expect(card.querySelector(".mcp-server-form")).toBeNull();
-  add.click();
+  actionButton(card, "Add server").click();
   flush();
   const form = expectDefined(card.querySelector<HTMLFormElement>(".mcp-server-form"), "MCP form");
   const field = (fieldName: string) =>
     expectDefined(
-      form.querySelector<HTMLInputElement | HTMLSelectElement>(`[name="mcp-${fieldName}"]`),
+      form.querySelector<HTMLInputElement>(`[name="mcp-${fieldName}"]`),
       `${fieldName} field`,
     );
   field("name").value = name;
-  field("transport").value = transport;
+  expectDefined(
+    form.querySelector<HTMLInputElement>(`input[type="radio"][value="${transport}"]`),
+    "transport option",
+  ).click();
+  flush();
   field("target").value = target;
   form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 }
@@ -201,34 +214,30 @@ it.each(["initial", "load", "patch refusal"])(
         harness.runtimeConfig.state.lastError = failure.message;
         harness.patch.mockResolvedValueOnce(false);
       }
-      actionButton(card, "Disable").click();
+      enabledSwitch(card, "local").click();
     }
     await waitMessage(card, failure.message, "alert");
-    expect(actionButton(card, "Disable").disabled).toBe(false);
+    const local = enabledSwitch(card, "local");
+    expect(local.disabled).toBe(false);
+    expect(local.checked).toBe(true);
     harness.patch.mockClear();
     const completion = deferred<boolean>();
     harness.patch.mockReturnValueOnce(completion.promise);
-    expectNamedAction(card, "Disable local", "Disable");
-    expectNamedAction(card, "Enable other", "Enable");
-    const disable = actionButton(card, "Disable");
-    disable.click();
+    expect(enabledSwitch(card, "other").checked).toBe(false);
+    openRow(card, "local");
+    local.click();
     actionButton(card, "Remove local").click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledOnce());
     expect(harness.patch.mock.calls[0]?.[0].raw).toEqual(configWith({ local: { enabled: false } }));
     expect(card.querySelector('[role="alert"]')).toBeNull();
-    expect(disable.disabled).toBe(true);
-    expect(disable.textContent?.trim()).toBe("Working…");
+    expect(local.getAttribute("aria-disabled")).toBe("true");
     expect(actionButton(card, "Add server").disabled).toBe(true);
-    expect(disable.getAttribute("aria-label")).toBe("Working… local");
-    const other = actionButton(card, "Working… other");
-    expect(other.disabled).toBe(true);
+    expect(enabledSwitch(card, "other").getAttribute("aria-disabled")).toBe("true");
     completion.resolve(true);
     await waitForFast(() => {
-      expect(disable.disabled).toBe(false);
+      expect(local.getAttribute("aria-disabled")).toBeNull();
       expect(message(card)).toBe("Disabled MCP server local.");
     });
-    expect(disable.textContent?.trim()).toBe("Disable");
-    expect(disable.getAttribute("aria-label")).toBe("Disable local");
     if (stage !== "initial") {
       initialLoad.reject(new Error("Earlier read failed"));
       await initialLoad.promise.catch(() => {});
@@ -237,7 +246,7 @@ it.each(["initial", "load", "patch refusal"])(
         expect(message(card)).toBe("Disabled MCP server local.");
       });
     }
-    actionButton(card, "Enable other").click();
+    enabledSwitch(card, "other").click();
     await waitForFast(() => expect(harness.patch).toHaveBeenCalledTimes(2));
     expect(harness.patch.mock.calls[1]?.[0].raw).toEqual(configWith({ other: { enabled: null } }));
   },
@@ -249,8 +258,9 @@ it("starts the selected connector and keeps a usable link when the popup is bloc
     .mockResolvedValueOnce(browserStep)
     .mockResolvedValue({ status: "cancelled" });
   expect([request.mock.calls, open.mock.calls]).toEqual([[], []]);
-  expectNamedAction(card, "Sign in docs", "Sign in");
-  expectNamedAction(card, "Disable docs", "Disable");
+  expect(card.querySelector('[aria-label="Sign in to docs"]')).toBeNull();
+  openRow(card, "docs");
+  expectNamedAction(card, "Sign in to docs", "Sign in");
   actionButton(card, "Sign in").click();
   await waitForFast(() => expect(card.querySelector(".wizard-step__external-link")).not.toBeNull());
   expect(request).toHaveBeenCalledWith(
@@ -280,7 +290,7 @@ const unavailableLoginCases: [NonNullable<Parameters<typeof mountLoginCard>[0]>,
   [{ server: { ...oauthServer, enabled: false } }, loginCommand],
   [
     { server: { ...oauthServer, oauth: { identity: "per-requester" } } },
-    "Each person signs in through this MCP server in chat.",
+    "Each person signs in to this MCP server in Chat.",
   ],
   [
     { server: { ...oauthServer, oauth: { authProfileId: "linked-account" } } },
@@ -291,14 +301,23 @@ it.each(unavailableLoginCases)(
   "withholds native login for %j and shows %s",
   async (options, alternative) => {
     const { card, request, open, harness } = await mountLoginCard(options);
-    expect(card.querySelector('[aria-label="Sign in docs"]')).toBeNull();
+    openRow(card, "docs");
+    expect(card.querySelector('[aria-label="Sign in to docs"]')).toBeNull();
     expect(card.textContent).toContain(alternative);
     if (options.admin === false) {
-      const controls = [...card.querySelectorAll<HTMLButtonElement>("button")];
+      // Reading a server stays open to read-only operators; only changes are blocked.
+      const controls = [
+        ...card.querySelectorAll<HTMLButtonElement>(
+          "button:not(.mcp-server-row__summary, .chat-copy-btn, .settings-section__help-button)",
+        ),
+      ];
       expect(controls.length).toBeGreaterThan(0);
       expect(controls.every((button) => button.disabled)).toBe(true);
-      expect(controls.every((button) => button.title.includes("operator.admin"))).toBe(true);
-      actionButton(card, "Disable").click();
+      expect(
+        controls.every((button) => button.title === "You need admin access to change MCP servers."),
+      ).toBe(true);
+      expect(enabledSwitch(card, "docs").disabled).toBe(true);
+      enabledSwitch(card, "docs").click();
       expect(harness.patch).not.toHaveBeenCalled();
     }
     expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
@@ -321,6 +340,7 @@ it.each(["target replacement", "agent selection", "disconnect", "capability drop
       .mockResolvedValue({ status: "cancelled" });
     const replacement = new GatewayBrowserClient({ url: "ws://gateway-b.example.test" });
     const replacementRequest = vi.spyOn(replacement, "request");
+    openRow(card, "docs");
     actionButton(card, "Sign in").click();
     await nextRequested.promise;
     const snapshot = connection.gateway.snapshot;
@@ -350,7 +370,7 @@ it.each(["target replacement", "agent selection", "disconnect", "capability drop
     await lateNext.promise;
     flush();
     expect(card.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(card.textContent).not.toContain("Authentication saved");
+    expect(card.textContent).not.toContain("Signed in");
     expect(replacementRequest).not.toHaveBeenCalled();
   },
 );
@@ -363,7 +383,7 @@ it.each([
       toolFilter: {},
       sslVerify: false,
     },
-    ["https://m.test/?keep=y&token=***", "sse · oauth · tool filter · TLS verify off"],
+    ["https://m.test/?keep=y&token=***", "Tool filter · TLS verification off"],
     ["secret"],
   ],
   [
@@ -375,13 +395,13 @@ it.each([
       supportsParallelToolCalls: true,
       clientCert: "client.pem",
     },
-    ["node", "stdio · parallel · mTLS"],
+    ["node", "Parallel · mTLS"],
     ["server.js", "secret"],
   ],
   [
     "mixed",
     { command: "node", url: "https://m.test/?token=secret", transport: httpTransport },
-    ["node", "stdio"],
+    ["node"],
     ["m.test", "secret"],
   ],
   ["docs; echo unsafe", docsServer, ["openclaw mcp probe 'docs; echo unsafe'"], []],
@@ -389,6 +409,7 @@ it.each([
   "renders %s without exposing credentials or unsafe shell commands",
   async (name, server, visible, hidden) => {
     const { card } = await mountCard({ servers: { [name]: server } });
+    openRow(card, name);
     const row = expectDefined(card.querySelector(`[data-mcp-name="${name}"]`), name);
     for (const text of visible) {
       expect(row.textContent).toContain(text);
@@ -406,9 +427,7 @@ it.each([
   ["stdio", 'mcp "C:\\My Files\\\\"', { command: "mcp", args: ["C:\\My Files\\"] }],
 ] as const)("adds a %s server from %s", async (transport, target, expected) => {
   const { card, harness } = await mountCard();
-  expect(card.querySelector(".settings-empty")?.textContent).toContain(
-    "No MCP servers configured.",
-  );
+  expect(card.querySelector(".settings-empty")?.textContent).toContain("No MCP servers yet.");
   const setupLink = card.querySelector<HTMLAnchorElement>(".settings-empty a");
   expect(setupLink).toMatchObject({
     href: "https://docs.openclaw.ai/tools/mcp",
@@ -468,6 +487,7 @@ it("retries removal confirmation and removes arrays after queued writes settle",
   try {
     await runtimeConfig.ensureLoaded();
     const { card } = await mountCard({ runtimeConfig });
+    openRow(card, "docs");
     vi.mocked(showConfirmDialog).mockRejectedValueOnce(new Error("Confirmation failed"));
     actionButton(card, "Remove docs").click();
     await waitMessage(card, "Confirmation failed", "alert");
@@ -478,7 +498,7 @@ it("retries removal confirmation and removes arrays after queued writes settle",
     expect(card.querySelector('[data-mcp-name="docs"]')).not.toBeNull();
     expect(showConfirmDialog).toHaveBeenCalledWith({
       title: "Remove docs?",
-      message: expect.stringContaining("saved configuration"),
+      message: expect.stringContaining("saved command"),
       confirmLabel: "Remove",
       danger: true,
     });
@@ -512,4 +532,163 @@ it("retries removal confirmation and removes arrays after queued writes settle",
     gate.resolve();
     runtimeConfig.dispose();
   }
+});
+const mcpTool = (server: string, name: string, description = "") => ({
+  id: `${server}__${name}`,
+  label: name,
+  description,
+  rawDescription: description,
+  source: "mcp",
+  mcpServer: server,
+  mcpToolName: name,
+});
+async function mountStatusCard(result: unknown, servers: Record<string, unknown>) {
+  const client = new GatewayBrowserClient({ url: "ws://gateway-a.example.test" });
+  const request = vi.spyOn(client, "request");
+  if (result instanceof Error) {
+    request.mockRejectedValue(result);
+  } else {
+    request.mockResolvedValue(result);
+  }
+  const mounted = await mountCard({
+    client,
+    methods: ["tools.effective", "mcp.authLogin"],
+    servers,
+  });
+  await waitForFast(() =>
+    expect(request).toHaveBeenCalledWith("tools.effective", { sessionKey: "main" }),
+  );
+  await flushPromises();
+  return { ...mounted, request };
+}
+const flushPromises = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+  flush();
+};
+const rowStatus = (card: HTMLElement, name: string) =>
+  card.querySelector(`[data-mcp-name="${name}"] .mcp-server-row__status`)?.textContent?.trim();
+it("states each server's condition from the session's tools and shows them on demand", async () => {
+  const { card } = await mountStatusCard(
+    {
+      agentId: "main",
+      profile: "full",
+      groups: [
+        {
+          id: "mcp",
+          label: "MCP",
+          source: "mcp",
+          tools: [mcpTool("docs", "search_docs", "Search the docs."), mcpTool("broken", "stale")],
+        },
+      ],
+      notices: [
+        {
+          id: "mcp-server-diagnostic:broken",
+          severity: "warning",
+          message: 'MCP server "broken": spawn ENOENT',
+          servers: ["broken"],
+        },
+      ],
+    },
+    {
+      broken: localServer,
+      docs: docsServer,
+      empty: docsServer,
+      login: oauthServer,
+      off: { ...docsServer, enabled: false },
+    },
+  );
+  await waitForFast(() => expect(rowStatus(card, "docs")).toBe("Tools listed"));
+  expect(rowStatus(card, "broken")).toBe("Failing");
+  expect(rowStatus(card, "empty")).toBe("No tools");
+  // Sign-in state is not readable here, so an OAuth server is not told it needs one.
+  expect(rowStatus(card, "login")).toBe("No tools");
+  expect(rowStatus(card, "off")).toBe("");
+  expect(card.querySelector(".mcp-server-tools")).toBeNull();
+  openRow(card, "docs");
+  expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("search_docs");
+  expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("Search the docs.");
+  openRow(card, "broken");
+  expect(card.querySelector('[data-mcp-name="docs"] .mcp-server-tools')).toBeNull();
+  const panel = card.querySelector('[data-mcp-name="broken"] .mcp-server-row__note');
+  expect(panel?.textContent).toBe("spawn ENOENT");
+});
+it("clears session tools on selection changes and ignores an earlier session's response", async () => {
+  const result = (name: string) => ({
+    agentId: "main",
+    profile: "full",
+    groups: [{ id: "mcp", label: "MCP", source: "mcp", tools: [mcpTool("docs", name)] }],
+  });
+  const { card, context, connection, request } = await mountStatusCard(result("initial"), {
+    docs: docsServer,
+  });
+  openRow(card, "docs");
+  expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("initial");
+
+  const pending = deferred<unknown>();
+  request.mockReturnValueOnce(pending.promise);
+  connection.publish({ ...context.gateway.snapshot, sessionKey: "second" });
+  flush();
+  expect(card.querySelector(".mcp-server-tools")).toBeNull();
+  expect(rowStatus(card, "docs")).toBe("");
+  expect(request).toHaveBeenLastCalledWith("tools.effective", { sessionKey: "second" });
+
+  request.mockResolvedValueOnce(result("current"));
+  connection.publish({ ...context.gateway.snapshot, sessionKey: "third" });
+  await waitForFast(() =>
+    expect(card.querySelector(".mcp-server-tools")?.textContent).toContain("current"),
+  );
+  pending.resolve(result("stale"));
+  await flushPromises();
+  expect(card.querySelector(".mcp-server-tools code")?.textContent).toBe("current");
+  expect(request).toHaveBeenCalledTimes(3);
+});
+
+it("does not call an unused server failing before a session has connected it", async () => {
+  const { card, request } = await mountStatusCard(
+    {
+      agentId: "main",
+      profile: "full",
+      groups: [],
+      notices: [
+        {
+          id: "mcp-not-yet-connected",
+          severity: "info",
+          message: "not connected",
+          servers: ["docs"],
+        },
+      ],
+    },
+    { docs: docsServer },
+  );
+  await waitForFast(() => expect(rowStatus(card, "docs")).toBe("Not connected yet"));
+  expect(card.querySelector(".settings-status--danger")).toBeNull();
+  expect(card.querySelector(".settings-section__desc")).toBeNull();
+  expect(card.querySelector(".settings-section__help-button")).not.toBeNull();
+  expect(card.querySelector(".settings-section__help-panel")?.textContent).toContain(
+    "connections rebuild on next use",
+  );
+  expect(request.mock.calls.filter(([method]) => method === "tools.effective")).toHaveLength(1);
+});
+it("states nothing about a server saved differently since the session's tools were read", () => {
+  const read = {
+    result: {
+      agentId: "main",
+      profile: "full",
+      groups: [{ id: "mcp", label: "MCP", source: "mcp", tools: [mcpTool("docs", "search_docs")] }],
+    },
+    servers: { docs: docsServer },
+  } as unknown as McpToolsRead;
+  expect(resolveReadMcpServerRuntime(read, "docs", { ...docsServer }).kind).toBe("connected");
+  expect(resolveReadMcpServerRuntime(read, "docs", { url: "https://other.test" }).kind).toBe(
+    "unknown",
+  );
+  expect(resolveReadMcpServerRuntime(read, "added", docsServer).kind).toBe("unknown");
+});
+it("states nothing when the session's tools cannot be read", async () => {
+  const { card } = await mountStatusCard(new Error('unknown session key "main"'), {
+    docs: docsServer,
+  });
+  expect(rowStatus(card, "docs")).toBe("");
+  expect(card.querySelector('[role="alert"]')).toBeNull();
 });

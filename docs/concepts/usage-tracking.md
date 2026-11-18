@@ -6,6 +6,27 @@ read_when:
 title: "Usage tracking"
 ---
 
+## Account-scoped quotas
+
+The account-aware `models.authStatus` response includes an optional
+`usage.authProfileId` when the Gateway knows which saved credential supplied the
+measurement. This is account attribution, not a credential or a new
+account-selection setting. The general `usage.status` response omits this
+profile identity.
+
+The chat composer joins quota facts to the session’s selected auth profile, never
+to the first response for a provider. Automatic account selection, measurements
+without attribution, and conflicting account measurements show **Quota account
+unknown** instead of guessing. Model pickers and account summaries likewise do
+not borrow a plan name measured for another account.
+
+An unknown quota account does not change subscription billing into token-based
+billing. The composer keeps token-cost estimates hidden when the session
+provider has a subscription credential, even with automatic account selection or
+unavailable quota data. Until usage records attribute each run to its credential,
+providers with both subscription and API-key credentials keep this conservative
+subscription display.
+
 ## What it is
 
 - Pulls provider usage/quota directly from each provider's usage endpoint. No estimated provider billing; only provider-reported plan names, quota windows, balances, spend, budgets, daily cost history, token/model attribution, or account-state summaries.
@@ -50,7 +71,11 @@ Detailed report batches share one short wait per agent for pending usage updates
 Session reports have a 15-second data-read budget. If it expires, completed
 batches remain visible as a partial report, with a hint to narrow the date
 range or select a session. Partial totals are not complete billing totals.
-Disconnecting still cancels the request without publishing a response.
+Disconnecting still cancels the request without publishing a response. The
+`usage.cost` method has the same 15-second budget; when no summary is available
+in time, it returns an unavailable error rather than zero totals. Its
+request-owned refresh stops when the response is sent. Independently scheduled
+projection updates continue, and the overview retains its background backfill.
 
 Session reports preserve agent attribution when agents share a session store. A
 background usage refresh does not invalidate a selected report when its session
@@ -101,9 +126,14 @@ backfill yields between completed transcripts after ten seconds of scanning or
 50 transcripts, whichever comes first. One large transcript or the initial
 inventory can take longer. Transcripts
 remain the source of truth. Detailed reports retain exact timestamp boundaries and the recorded
-order of floating-point cost additions. Cached SQLite detail reads use the rollup's
-recorded checkpoint and current transcript mutation facts instead of rescanning
-all transcript rows for their size and event count.
+order of floating-point cost additions. SQLite summary and detail reads use recorded quarter aggregates, checkpoints,
+and transcript mutation facts instead of recounting transcript payloads. Complete
+cost summaries remain reusable until the owning usage, transcript, session, or
+pricing facts change. Cold SQLite statistics are read in cancellable pages;
+refresh discovery applies its batch limit before collecting those statistics.
+Hot payload reads yield between pages, with physical reads paced to 16 MiB/s where
+kernel accounting is available. A single oversized row can exceed a page budget.
+Cold archives retain whole-archive verification, with cancellation checks between records.
 After an append, background refresh also reuses the checkpoint's size and event
 count and reads only the appended rows. A transcript rewrite or missing checkpoint
 still requires a full recount before the new totals are published.
@@ -418,7 +448,8 @@ provider-neutral for CLI, app, and Control UI consumers.
 - **Anthropic (Claude)**: OAuth tokens in auth profiles. If the OAuth token lacks
   `user:profile` scope, falls back to a `claude.ai` web session (`CLAUDE_AI_SESSION_KEY`,
   `CLAUDE_WEB_SESSION_KEY`, or a `sessionKey=` cookie in `CLAUDE_WEB_COOKIE`) when set.
-  Model-scoped limits and enabled extra-usage monthly spend/budgets are included
+  Stored setup-token profiles never call the OAuth usage endpoint: they use that web
+  session, and Anthropic usage is skipped when none is set. Model-scoped limits and enabled extra-usage monthly spend/budgets are included
   when Anthropic reports them. An explicit Anthropic Admin API key, or an
   auto-detected `sk-ant-admin...` provider profile, instead shows 30-day
   organization cost and Messages API history.

@@ -16,6 +16,7 @@ import {
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
 import {
+  readQaSessionTranscriptEvents,
   readRawQaSessionStore,
   readSessionTranscriptSummary,
 } from "./suite-runtime-agent-session.ts";
@@ -295,7 +296,18 @@ suite.define(() => {
         const userInputs = userMessages.map(userMessageText);
         const resumeText =
           "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
-        expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(1);
+        expect(userInputs.filter((text) => text.includes(resumeText))).toHaveLength(0);
+        const { events } = await readQaSessionTranscriptEvents({ gateway }, sessionKey);
+        const restartInputs = events
+          .flatMap((event) => (isRecord(event) && isRecord(event.message) ? [event.message] : []))
+          .filter(
+            (message) => message.role === "user" && userMessageText(message).includes(resumeText),
+          );
+        expect(restartInputs).toHaveLength(1);
+        expect(restartInputs[0]?.provenance).toMatchObject({
+          kind: "internal_system",
+          sourceTool: "restart",
+        });
         expect(
           await gateway.call("cron.list", { sessionKey, includeDisabled: true }),
         ).toMatchObject({

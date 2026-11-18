@@ -86,6 +86,8 @@ it("projects the Side Chat model catalog only when its panel mounts", async () =
 
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
   await renderPanels();
+  // Reveal starts the real lazy load; registration is a prerequisite to mounted-state checks.
+  await customElements.whenDefined("openclaw-chat-session-rail");
   await waitForSolid(() =>
     expect(mount.querySelector("openclaw-chat-session-rail")).not.toBeNull(),
   );

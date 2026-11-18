@@ -1,4 +1,6 @@
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   onManagedGitHubProfileChanged,
   resolveConfiguredGitHubToolIdentity,
@@ -130,6 +132,7 @@ const log = createSubsystemLogger("gateway/worker-github");
 /** Discovery prepared the account off the turn path; admission binds only local live authority. */
 async function prepareWorkerGitHubBindingGrant(
   params: PublicationSessionIdentity & {
+    operatorAuthority?: AdmittedRunOperatorAuthority;
     github: WorkerGitHubLaunchBinding;
     identity: PreparedGitHubPublicationIdentity;
     workspaceKey: string;
@@ -138,11 +141,19 @@ async function prepareWorkerGitHubBindingGrant(
     assertCurrent: () => void;
   },
 ): Promise<WorkerGitHubBindingGrant> {
+  if (params.operatorAuthority) {
+    assertAdmittedRunOperatorAuthority(params.operatorAuthority);
+  }
   const controller = new AbortController();
-  const signal = AbortSignal.any([params.signal, controller.signal]);
+  const signal = AbortSignal.any([
+    params.signal,
+    controller.signal,
+    ...(params.operatorAuthority?.signal ? [params.operatorAuthority.signal] : []),
+  ]);
   const assertRun = () => {
     signal.throwIfAborted();
     params.assertCurrent();
+    params.operatorAuthority?.assertCurrent();
   };
   assertRun();
   if (
@@ -213,6 +224,10 @@ async function prepareWorkerGitHubBindingGrant(
     }
   };
   try {
+    const releaseOperator = params.operatorAuthority?.retain?.();
+    if (releaseOperator) {
+      stops.push(releaseOperator);
+    }
     signal.addEventListener("abort", onAbort, { once: true });
     stops.push(
       registerConfigWriteListener(changed),
@@ -308,6 +323,7 @@ async function prepareWorkerGitHubBindingGrant(
 
 /** Attach the background fact to this admitted turn without running identity discovery. */
 export async function bindWorkerGitHubTurn(params: {
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   session: PublicationSessionIdentity;
   fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>;
   sessionTarget: AgentRunSessionTarget;
@@ -326,6 +342,7 @@ export async function bindWorkerGitHubTurn(params: {
   }
   const preparing = prepareWorkerGitHubBindingGrant({
     ...params.session,
+    operatorAuthority: params.operatorAuthority,
     github,
     identity,
     workspaceKey: expectedWorkspace,

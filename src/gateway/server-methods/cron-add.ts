@@ -167,13 +167,18 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions = await captureCronCreatorSession(
       jobCreate,
       callerScope,
-      { client, context, signal },
+      { client, context, signal, hasCurrentClientAuthority },
       cfg,
       runtimeAuthority !== undefined,
     );
     await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
-    await assertValidCronCreateDelivery(cfg, jobCreate);
+    await assertValidCronCreateDelivery(
+      cfg,
+      { ...jobCreate, createdActor: creatorOptions.createdActor },
+      context.cron.getDefaultAgentId(),
+    );
   } catch (err) {
+    creatorOptions?.disposeOperatorSource?.();
     creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
@@ -185,7 +190,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   try {
     deliveryPreview = await resolveCronDeliveryPreview({
       ...previewContext,
-      job: { ...jobCreate, sourceConversation: creatorOptions.sourceConversation },
+      job: {
+        ...jobCreate,
+        sourceConversation: creatorOptions.sourceConversation,
+        createdActor: creatorOptions.createdActor,
+      },
     });
     const streamSandbox = execPolicy?.sandboxContext
       ? (() => {
@@ -209,6 +218,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
         context.cron.add(jobCreate, {
           streamExecApproval,
           streamSandbox,
+          ...(jobCreate.schedule.kind === "stream" &&
+          !streamSandbox &&
+          creatorOptions?.operatorSource?.snapshot.openclawIdPrincipal
+            ? { streamOperatorSource: creatorOptions.operatorSource.snapshot }
+            : {}),
           execPolicy,
           sessionEntryCurrent: creator.sessionEntryCurrent,
 
@@ -264,6 +278,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
   } finally {
+    creatorOptions.disposeOperatorSource?.();
     creatorOptions.disposeInferenceAuthorization?.();
   }
   const job = "job" in result ? result.job : result;
@@ -275,13 +290,21 @@ export const cronAddHandler: GatewayRequestHandler = async ({
   });
   respond(
     true,
-    cronAddResultReadView({
-      result,
-      deliveryPreview:
-        "job" in result && !result.created
-          ? await resolveCronDeliveryPreview({ ...previewContext, job })
-          : deliveryPreview,
-    }),
+    {
+      ...cronAddResultReadView({
+        result,
+        deliveryPreview:
+          "job" in result && !result.created
+            ? await resolveCronDeliveryPreview({ ...previewContext, job })
+            : deliveryPreview,
+      }),
+      ...(creatorOptions?.operatorSourceUnavailable && !job.operatorSource
+        ? {
+            warning:
+              "This automation cannot retain the initiating operator grant. Protected operator actions require an interactive turn; its ingress owner must support principal recovery to run them unattended.",
+          }
+        : {}),
+    },
     undefined,
   );
 };

@@ -1,11 +1,11 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
+import { readAuthProfileDatabaseIdentityAsync } from "./file-state.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -13,11 +13,7 @@ import { mergePersistedAuthProfileState } from "./persisted.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { isSharedAuthProfileWrite } from "./shared-store-bootstrap.js";
 import { prepareAgentAuthProfileRowsRead, readSharedAuthProfileRows } from "./sqlite-read.js";
-import {
-  prepareAuthProfileWriteEnvironment,
-  resolveAuthProfileDatabasePath,
-  resolveAuthProfileDatabaseOwnerId,
-} from "./sqlite.js";
+import { prepareAuthProfileWriteEnvironment, resolveAuthProfileDatabasePath } from "./sqlite.js";
 import {
   findPersistedAuthProfileCredentialAsync,
   updateAuthProfileStoreWithLock,
@@ -80,10 +76,14 @@ async function loadAuthProfileWriteAuthorities(
   ];
   const reservation = reserveAuthProfileUsagePreparation(paths);
   const watches = paths.map((databasePath) => {
-    const watch = watchAuthProfileNativeCommits(databasePath);
-    return { dispose: () => watch.dispose(), unchanged: watch.capture() };
+    const watch = watchAuthProfileNativeCommits(
+      databasePath,
+      readAuthProfileDatabaseIdentityAsync(databasePath),
+    );
+    return { dispose: () => watch.dispose(), unchanged: watch.capture(), ready: watch.ready };
   });
   try {
+    await Promise.all(watches.flatMap((watch) => (watch.ready ? [watch.ready] : [])));
     await reservation.ready;
     await prepareSharedAuthStoreOwnership(env);
     const readStore = async (dir?: string) => {
@@ -93,9 +93,8 @@ async function loadAuthProfileWriteAuthorities(
       const reader =
         !dir && databasePath === resolveOpenClawStateSqlitePath(env)
           ? undefined
-          : prepareAgentAuthProfileRowsRead({
+          : await prepareAgentAuthProfileRowsRead({
               databasePath,
-              agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
               env,
             });
       try {

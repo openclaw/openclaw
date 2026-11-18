@@ -230,11 +230,11 @@ it.each([false, true])(
   "requires explicit consent and handles a rejected recovery=%s without replay",
   async (rejectRecovery) => {
     const { host, selection, modal } = await selecting({ rejectRecovery });
-    for (const phrase of ["own permissions", "Gateway host", "Only this chat"]) {
+    for (const phrase of ["own permissions", "Gateway device", "Only this session"]) {
       expect(modal.textContent).toContain(phrase);
     }
     expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-    click(modal, "Continue for this chat");
+    click(modal, "Continue for this session");
     await expect(selection).resolves.toBe(!rejectRecovery);
     const patches = requestCalls(host.request, "sessions.patch");
     expect(patches).toHaveLength(2);
@@ -330,7 +330,7 @@ it.each([
   if (change === "newer-selection" || change === "retired") {
     expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   } else {
-    click(modal, change === "cancel" ? "Cancel" : "Continue for this chat");
+    click(modal, change === "cancel" ? "Cancel" : "Continue for this session");
   }
   await expect(selection).resolves.toBe(false);
   const patches = requestCalls(host.request, "sessions.patch");
@@ -352,7 +352,7 @@ it("rechecks a confirmed recovery after the shared settings tail, before dispatc
   );
   await waitForFast(() => expect(requestCalls(host.request, "sessions.patch")).toHaveLength(2));
   const previousTail = getPendingChatPickerPatch(host, "global", "selected-agent");
-  click(modal, "Continue for this chat");
+  click(modal, "Continue for this session");
   // Observe admission behind the held mutation before revoking UI authority.
   await waitForFast(() =>
     expect(getPendingChatPickerPatch(host, "global", "selected-agent")).not.toBe(previousTail),
@@ -400,7 +400,7 @@ it.each(["repeated refusal", "newer draft", "unbound session"] as const)(
     if (scenario === "newer draft") {
       host.chatMessage = "A newer draft, not yet submitted";
     }
-    click(modal, "Continue for this chat");
+    click(modal, "Continue for this session");
     await sending;
     const sends = requestCalls(host.request, "chat.send");
     expect(sends).toHaveLength(2);
@@ -440,7 +440,7 @@ it.each(["newer-selection", "server-selection", "session"] as const)(
       await selectionChanges[change](host);
     }
     if (change !== "newer-selection") {
-      click(modal, "Continue for this chat");
+      click(modal, "Continue for this session");
     }
     await sending;
     expectNoPatchFields(host, "nativeRuntimeConsent");

@@ -101,15 +101,18 @@ function toImagePart(asset: VideoGenerationSourceAsset): OpenRouterImagePart {
   };
 }
 
-function resolveVideoJobState(status: string | undefined): "active" | "completed" | "failure" {
+function isOpenRouterVideoJobComplete(
+  payload: ReturnType<typeof readOpenRouterVideoResponse>,
+): boolean {
+  const status = payload.status;
   if (status === "completed") {
-    return "completed";
+    return true;
   }
   if (status === "failed" || status === "cancelled" || status === "expired") {
-    return "failure";
+    throw new Error(payload.error ?? `OpenRouter video generation ${status}`);
   }
   if (status && ["queued", "pending", "in_progress", "processing", "running"].includes(status)) {
-    return "active";
+    return false;
   }
   throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
 }
@@ -275,13 +278,8 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
       if (!jobId || !pollingUrl) {
         throw new Error("OpenRouter video generation response missing job details");
       }
-      const submittedStatus = submitted.status;
-      const submittedState = submittedStatus ? resolveVideoJobState(submittedStatus) : "active";
-      if (submittedState === "failure") {
-        throw new Error(submitted.error ?? `OpenRouter video generation ${submittedStatus}`);
-      }
       let completed = submitted;
-      if (submittedState !== "completed") {
+      if (!submitted.status || !isOpenRouterVideoJobComplete(submitted)) {
         const pollDeadline = createProviderOperationDeadline({
           timeoutMs: resolveProviderOperationTimeoutMs({
             deadline,
@@ -324,11 +322,7 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
               await releasePoll();
             }
           },
-          isComplete: (payload) => resolveVideoJobState(payload.status) === "completed",
-          getFailureMessage: (payload) =>
-            resolveVideoJobState(payload.status) === "failure"
-              ? payload.error || `OpenRouter video generation ${payload.status}`
-              : undefined,
+          isComplete: isOpenRouterVideoJobComplete,
         });
       }
       const completedJobId = completed.id ?? jobId;

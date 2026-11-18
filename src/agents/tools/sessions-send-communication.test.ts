@@ -496,118 +496,45 @@ describe("sessions_send communication boundary", () => {
     }
   });
 
-  it("retained completed-task pins do not grant or require live task authority", async () => {
+  it("continues an owned task after its run advances and refuses once it is killed", async () => {
     const source = endpoint("source");
     const target = childOf(source);
     const task = createSubagentRunRecord({
-      runId: "finished",
+      runId: "first-run",
       childSessionKey: target.sessionKey,
       requesterSessionKey: source.sessionKey,
       requesterAgentId: "main",
-      endedAt: 1,
-      endedReason: "subagent-complete",
-      cleanupCompletedAt: 2,
     });
     state.task = task;
-    const input = {
-      ...operation(source, target),
-      expectedTask: {
-        runId: task.runId,
-        taskRunId: task.taskRunId,
-        generation: task.generation,
+    const input = operation(source, target);
+    using gate = await openGate(input);
+    expect(gate.ownedTask).toBe(true);
+    // An exec wake, yield or follow-up moves the task to a new run.
+    state.task = { ...task, runId: "woken-run", generation: (task.generation ?? 0) + 1 };
+    const request = bindInProcessSubagentResume(
+      agentRequest(input, { idempotencyKey: "successor", expectedExistingSessionId: "stale" }),
+      {
+        caller: state.caller,
+        childSessionKey: target.sessionKey,
+        childSessionId: "stale",
+        previousRunId: "woken-run",
+        taskRunId: task.taskRunId ?? task.runId,
+        generation: (task.generation ?? 0) + 1,
         createdAt: task.createdAt,
       },
-    };
-    using gate = await openGate(input);
-    expect(gate.ownedTask).toBe(false);
-    await gate.callGateway(agentRequest(input));
+    );
+    await gate.callGateway(request);
     expect(input.callGateway).toHaveBeenCalledOnce();
     input.callGateway.mockClear();
-    state.task = { ...task, generation: (task.generation ?? 0) + 1 };
-    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("authority changed");
+    state.task = { ...task, runId: "woken-run", killIntent: { requestedAt: 1, reason: "killed" } };
+    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("ended or was cancelled");
     expect(input.callGateway).not.toHaveBeenCalled();
-    state.task = task;
-    source.entry!.communication = { send: "never" };
-    await denied(input, "disabled");
   });
-  it.each([false, true])("checks a retained pin before admission (matches=%s)", async (matches) => {
-    const input = operation();
-    const task = createSubagentRunRecord({
-      runId: "pinned",
-      childSessionKey: input.target.sessionKey,
-    });
-    state.task = task;
-    const expectedTask = {
-      runId: matches ? task.runId : "changed",
-      taskRunId: task.taskRunId,
-      generation: task.generation,
-      createdAt: task.createdAt,
-    };
-    if (matches) {
-      await delivered({ ...input, expectedTask });
-    } else {
-      await denied({ ...input, expectedTask }, "changed before admission");
-    }
-    expect(state.approve).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "fences the private resume binding without ownedTask convenience (matches=%s)",
-    async (matches) => {
-      const input = operation();
-      const task = createSubagentRunRecord({
-        runId: "pinned",
-        childSessionKey: input.target.sessionKey,
-        cleanupCompletedAt: 1,
-      });
-      state.task = task;
-      using gate = await openGate({
-        ...input,
-        expectedTask: {
-          runId: task.runId,
-          taskRunId: task.taskRunId,
-          generation: task.generation,
-          createdAt: task.createdAt,
-        },
-      });
-      expect(gate.ownedTask).toBe(false);
-      const request = bindInProcessSubagentResume(
-        agentRequest(input, { idempotencyKey: "successor" }),
-        {
-          caller: state.caller,
-          childSessionKey: input.target.sessionKey,
-          childSessionId: "target",
-          previousRunId: matches ? task.runId : "other",
-          taskRunId: task.taskRunId ?? task.runId,
-          generation: task.generation,
-          createdAt: task.createdAt,
-        },
-      );
-      if (matches) {
-        await gate.callGateway(request);
-        expect(input.callGateway).toHaveBeenCalledOnce();
-      } else {
-        await expect(gate.callGateway(request)).rejects.toThrow(
-          "differs from the captured communication owner",
-        );
-        expectNoApprovalOrDelivery(input);
-      }
-    },
-  );
-
-  it("retained absence pins reject a newly appeared task", async () => {
-    const input = { ...operation(), expectedTask: null };
+  it("a retained send whose task ended is refused", async () => {
+    const input = { ...operation(), expectTask: true };
     state.task = null;
-    using gate = await openGate(input);
-    await gate.callGateway(agentRequest(input));
-    expect(input.callGateway).toHaveBeenCalledOnce();
-    input.callGateway.mockClear();
-    state.task = createSubagentRunRecord({
-      runId: "new",
-      childSessionKey: input.target.sessionKey,
-    });
-    await expect(gate.callGateway(agentRequest(input))).rejects.toThrow("authority changed");
-    expect(input.callGateway).not.toHaveBeenCalled();
+    await denied(input, "ended or was cancelled");
+    expect(state.approve).not.toHaveBeenCalled();
   });
 
   it("only live exact owned tasks get the guidance exception", async () => {
@@ -622,7 +549,7 @@ describe("sessions_send communication boundary", () => {
       using gate = await openGate(operation(source, target));
       expect(gate.ownedTask).toBe(true);
       state.task = undefined;
-      expect(gate.assertCurrent).toThrow("authority changed");
+      expect(gate.assertCurrent).toThrow("ended or was cancelled");
     }
     await denied(operation(source, target), "disabled");
   });

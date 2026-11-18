@@ -1,12 +1,39 @@
 import { prepareDoctorDatabasePreflight } from "../../commands/doctor-database-preflight.js";
+import { acquireWithWait } from "../../infra/acquire-with-wait.js";
+import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS } from "../../infra/gateway-lock.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../../infra/startup-maintenance-required.js";
+import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.types.js";
+import { isOpenClawStateWriteContentionError } from "../../state/openclaw-state-ownership.js";
 import { readOwnGatewayServiceCommand } from "../run-main-service-installation.js";
+
+const ACTIVATION_CONTENTION_RETRY_MS = 5_000;
+
+/** Another process holds state for now; only a retry can tell whether repair still applies. */
+function isTransientStateContention(error: unknown): boolean {
+  const causes = collectNestedErrorCandidates(error);
+  if (
+    causes.some(
+      (cause) =>
+        cause instanceof DoctorMaintenanceRefusalError && cause.refusal.kind !== "deferred",
+    )
+  ) {
+    return false;
+  }
+  return causes.some(
+    (cause) =>
+      isOpenClawStateWriteContentionError(cause) ||
+      (cause instanceof DoctorMaintenanceRefusalError &&
+        cause.refusal.kind === "deferred" &&
+        cause.refusal.reason === "agent-database-in-use"),
+  );
+}
 
 function assertRepairable(schemas: OpenClawDatabaseSchemaPreflight): void {
   const problems = [
@@ -48,14 +75,35 @@ export async function prepareSystemdGatewayActivation(params: {
     const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");
     // A null install root deliberately excludes service stop/install/start. This
     // process is already the unit's MainPID; only systemd may control its lifecycle.
-    const maintenance = await beginDoctorMaintenance({
-      root: null,
-      options: { repair: true, nonInteractive: true },
-      runtime: params.runtime,
+    // Doctor waits out recorded CLI holders on its own deadline, which can exceed
+    // this one. Unidentified holders retry here, which keeps starts under the limit.
+    let announcedWait = false;
+    const maintenance = await acquireWithWait({
+      acquire: async () => {
+        const owner = await beginDoctorMaintenance({
+          root: null,
+          options: { repair: true, nonInteractive: true },
+          runtime: params.runtime,
+          waitForMaintenance: true,
+        });
+        if (!owner) {
+          throw new Error("Systemd activation requires Doctor maintenance ownership.");
+        }
+        return owner;
+      },
+      shouldRetry: (error) => {
+        const retry = isTransientStateContention(error);
+        if (retry && !announcedWait) {
+          announcedWait = true;
+          params.runtime.log(
+            "Systemd activation: OpenClaw state is busy; waiting for it to be released.",
+          );
+        }
+        return retry;
+      },
+      deadlineMs: performance.now() + GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS,
+      pollIntervalMs: ACTIVATION_CONTENTION_RETRY_MS,
     });
-    if (!maintenance) {
-      throw new Error("Systemd activation requires Doctor maintenance ownership.");
-    }
     try {
       await maintenance.run(async () => {
         const schemas = await prepareDoctorDatabasePreflight();
@@ -70,7 +118,7 @@ export async function prepareSystemdGatewayActivation(params: {
         const targets = discovery?.discovery.schemaTargets ?? [];
         const { prepareDoctorDatabaseMigrations } =
           await import("../../commands/doctor-schema-migrations.js");
-        const report = (result: { changes: string[]; warnings: string[] }) => {
+        const report = (result: { changes: string[]; warnings: string[]; failure?: unknown }) => {
           for (const change of result.changes) {
             params.runtime.log(change);
           }
@@ -78,6 +126,10 @@ export async function prepareSystemdGatewayActivation(params: {
           // startup admission decides readiness after Doctor releases custody.
           for (const warning of result.warnings) {
             params.runtime.error(warning);
+          }
+          // A blocked repair changed nothing, and admission would park it as unrepaired.
+          if (isTransientStateContention(result.failure)) {
+            throw result.failure;
           }
         };
         const prepared = await prepareDoctorDatabaseMigrations({
@@ -107,6 +159,14 @@ export async function prepareSystemdGatewayActivation(params: {
     }
   } catch (error) {
     if (findStartupMaintenanceRequiredError(error)) {
+      throw error;
+    }
+    if (isTransientStateContention(error)) {
+      // Nothing is wrong with this state, so exit 78 would strand a healthy service.
+      // Restart=always retries; the unit's start limit bounds repeated repair attempts.
+      params.runtime.error(
+        `Systemd activation: OpenClaw state is still busy; exiting so systemd retries. ${formatErrorMessage(error)}`,
+      );
       throw error;
     }
     // Existing deployed units park exit 78; an unsuccessful activation must not

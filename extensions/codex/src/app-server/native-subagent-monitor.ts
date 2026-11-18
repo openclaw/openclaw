@@ -43,6 +43,7 @@ import {
 import {
   prepareNativeModelToolInput,
   drainNativeChildModelAdmissions,
+  RetiredNativeChildPaths,
 } from "./native-subagent-model-input.js";
 import {
   currentNativeModelExecution,
@@ -126,6 +127,7 @@ class Monitor {
   // Native threads survive completed assignments; task runs and delivery remain per assignment.
   private readonly knownChildren = new Map<string, KnownChild>();
   private readonly childThreadIdsByAgentPath = new Map<string, string>();
+  private readonly retiredChildren = new RetiredNativeChildPaths(this.childThreadIdsByAgentPath);
   private readonly interruptModelExecution?: MonitorOptions["interruptModelExecution"];
   private readonly interruptChildAndWait?: MonitorOptions["interruptChildAndWait"];
   private readonly cancellationReservations = new Map<
@@ -191,6 +193,7 @@ class Monitor {
       children: this.childStates,
       parents: this.parentStates,
       retiredParents: this.retiredParentStates,
+      isParentThreadRetained: (parentThreadId) => this.parentThreadRetentions.has(parentThreadId),
       unregisterChild: (child) => this.unregisterChild(child),
       abandon: (state, child, assertCurrent) =>
         this.assignments.abandon(state, child, assertCurrent),
@@ -931,6 +934,7 @@ class Monitor {
         ),
       admissions: this.admissionCustody.entries,
       canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
+      retiredChildren: this.retiredChildren,
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -2349,8 +2353,17 @@ class Monitor {
     // Pending completion delivery keeps its own custody, but must not block
     // the parent from resuming to receive those results.
     const releaseParentThread = this.parentThreadRetentions.get(parentThreadId);
+    if (!releaseParentThread) {
+      return;
+    }
     this.parentThreadRetentions.delete(parentThreadId);
-    releaseParentThread?.();
+    releaseParentThread();
+    // Completion delivery holds detached results while this retention protects
+    // the parent; wake them now that their turn can take the parent subscription.
+    const state = this.parentStates.get(parentThreadId);
+    if (state) {
+      this.completionDelivery.deliverDetached(state);
+    }
   }
 
   private hasChildrenForParent(parentThreadId: string): boolean {
@@ -2383,11 +2396,7 @@ class Monitor {
           this.childCloses.retireReceiver(known, () =>
             this.updateChildThreadOwnership("release", threadId, this.releaseChildThread),
           );
-          for (const path of known.agentPaths) {
-            this.childThreadIdsByAgentPath.delete(
-              buildParentAgentPathKey(state.parentThreadId, path),
-            );
-          }
+          this.retiredChildren.retire(state.parentThreadId, known, threadId);
           this.knownChildren.delete(threadId);
           known.pendingTurns.forEach(releaseCompletionCustody);
         }

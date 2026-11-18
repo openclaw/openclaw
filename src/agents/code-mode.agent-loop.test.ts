@@ -7,10 +7,15 @@ import {
   model as agentLoopModel,
   reply,
 } from "../../packages/agent-core/src/agent-loop.test-support.js";
+import {
+  getInternalBeforeRequest,
+  setInternalBeforeRequest,
+} from "../../packages/agent-core/src/internal-hooks.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { getSession, waitForExecSession } from "./bash-process-registry.js";
@@ -31,11 +36,16 @@ import {
   resultDetails,
   testing,
 } from "./code-mode.test-support.js";
+import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
+import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
 import {
   captureAgentPluginRuntimeRefresh,
   createAgentPluginRuntimeRefresh,
 } from "./plugin-runtime-refresh.js";
 import { Agent } from "./runtime/index.js";
+import { createResourceLoader } from "./sessions/agent-session-loop-resource-loader.test-support.js";
+import { AgentSession } from "./sessions/agent-session.js";
+import { AuthStorage, ModelRegistry, SessionManager, SettingsManager } from "./sessions/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
 import { isToolResultError, readToolResultDetails } from "./tool-result-error.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
@@ -97,14 +107,22 @@ async function runCodeModeAgent(params: {
     RecoveryProgram | ((context: Context) => RecoveryProgram | Promise<RecoveryProgram>)
   >;
   hiddenTools: AnyAgentTool[];
+  executor?: "node" | "quickjs";
   execInput?: Record<string, unknown>;
   abortSignal?: AbortSignal;
+  embeddedSession?: boolean;
   configureAgent?: (
     agent: Agent,
-    harness: { tools: AnyAgentTool[]; ctx: Parameters<typeof createCodeModeTools>[0] },
+    harness: {
+      tools: AnyAgentTool[];
+      ctx: Parameters<typeof createCodeModeTools>[0];
+      session?: AgentSession;
+    },
   ) => void;
 }) {
-  const harness = createCodeModeHarness();
+  const harness = createCodeModeHarness({
+    codeMode: params.executor ? { executor: params.executor } : undefined,
+  });
   const ctx = harness.ctx;
   const tools = params.abortSignal
     ? createCodeModeTools({ ...ctx, abortSignal: params.abortSignal }).map((candidate) =>
@@ -140,13 +158,158 @@ async function runCodeModeAgent(params: {
       return reply({ ...message, api: model.api, timestamp: Date.now() });
     },
   });
-  params.configureAgent?.(agent, { tools, ctx });
-  await agent.prompt("finish the task despite tool errors");
+  let session: AgentSession | undefined;
+  if (params.embeddedSession) {
+    const sessionManager = SessionManager.inMemory();
+    const authStorage = AuthStorage.inMemory();
+    authStorage.setRuntimeApiKey(model.provider, "synthetic-test-key");
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: harness.config,
+      sessionManager,
+      workspaceDir: "/workspace",
+      model,
+    });
+    const resourceLoader = await createResourceLoader(async (api) => {
+      for (const factory of factories) {
+        await factory(api);
+      }
+    });
+    session = new AgentSession({
+      agent,
+      systemPrompt: "Synthetic Code Mode recovery",
+      cwd: "/workspace",
+      customTools: toToolDefinitions(tools, ctx),
+      allowedToolNames: tools.map((availableTool) => availableTool.name),
+      resourceLoader,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        compaction: { enabled: false },
+        retry: { enabled: false },
+      }),
+      modelRegistry: ModelRegistry.inMemory(authStorage),
+    });
+  }
+  params.configureAgent?.(agent, { tools, ctx, session });
+  try {
+    await (session ?? agent).prompt("finish the task despite tool errors");
+  } finally {
+    session?.dispose();
+  }
   return { agent };
 }
 
 describe("Code Mode agent-loop error recovery", () => {
   const tempDirs = createTempDirTracker();
+  it.each(["tool", "request-preparation"] as const)(
+    "injects steers after a failed cell at the next boundary (%s)",
+    async (arrival) => {
+      const corrections = ["first correction", "second correction"];
+      const receipts: Promise<unknown>[] = [];
+      let enqueue!: () => Promise<void>;
+      const failure = tool("failing_action", async () => {
+        if (arrival === "tool") {
+          await enqueue();
+        }
+        throw new Error("synthetic Code Mode failure");
+      });
+      let nextRequest: Context | undefined;
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [failure],
+        embeddedSession: true,
+        programs: [
+          "return await failing_action({});",
+          (context) => {
+            nextRequest = context;
+            return "return 1;";
+          },
+        ],
+        configureAgent(loop, { session }) {
+          if (!session) {
+            throw new Error("Expected embedded session");
+          }
+          loop.steeringMode = "all";
+          enqueue = async () => {
+            for (const text of corrections) {
+              const accepted = createDeferred<boolean>();
+              receipts.push(
+                steerActiveSessionWithOptionalDeliveryWait(session, text, {
+                  waitForTranscriptCommit: true,
+                  onQueueAccepted: accepted.resolve,
+                }),
+              );
+              expect(await accepted.promise).toBe(true);
+            }
+          };
+          const beforeRequest = getInternalBeforeRequest(loop);
+          let requests = 0;
+          setInternalBeforeRequest(loop, async (signal) => {
+            const result = await beforeRequest?.(signal);
+            if (++requests === 2 && arrival === "request-preparation") {
+              await enqueue();
+            }
+            return result;
+          });
+        },
+      });
+      await Promise.all(receipts);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: { status: "failed" },
+      });
+      expect(nextRequest?.messages.filter((message) => message.role === "user").slice(-2)).toEqual(
+        corrections.map((text) => expect.objectContaining({ content: [{ type: "text", text }] })),
+      );
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(3);
+    },
+  );
+  it.for(["node", "quickjs"] as const)(
+    "%s returns a rejected cell while a sibling bridge has no response",
+    async (executor, { signal }) => {
+      const started = createDeferred();
+      let enqueueFollowUp!: () => void;
+      const held = tool("held_action", async (_id, _args, abort) => {
+        enqueueFollowUp();
+        started.resolve();
+        if (!abort) {
+          throw new Error("Expected the bridge cancellation signal");
+        }
+        return await withinTest(createDeferred<never>().promise, abort);
+      });
+      const failing = tool("failing_action", async () => {
+        await started.promise;
+        throw new Error("bridge unavailable");
+      });
+      const code = "await Promise.all([held_action({}), failing_action({})]);";
+      const { agent } = await runCodeModeAgent({
+        hiddenTools: [held, failing],
+        executor,
+        programs: [code],
+        execInput: { code, awaitResults: true },
+        abortSignal: signal,
+        configureAgent: (loop) => {
+          enqueueFollowUp = () =>
+            loop.followUp({ role: "user", content: "queued follow-up", timestamp: Date.now() });
+        },
+      });
+      expectRecovered(agent);
+      expect(agent.state.messages.find((message) => message.role === "toolResult")).toMatchObject({
+        isError: true,
+        details: {
+          status: "failed",
+          failurePhase: "bridge",
+          error: expect.stringContaining("bridge unavailable"),
+        },
+      });
+      expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+      expect(
+        agent.state.messages.filter((message) => message.role === "assistant").slice(-2),
+      ).toEqual([
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+        expect.objectContaining({ content: [{ type: "text", text: "recovered" }] }),
+      ]);
+    },
+  );
+
   it.each([
     { name: "omitted title", metadata: {}, accepted: true },
     { name: "authored title", metadata: { title: "Record the fixture effect" }, accepted: true },
@@ -305,6 +468,67 @@ describe("Code Mode agent-loop error recovery", () => {
     expectRecovered(agent);
     expectToolCalls(3, shell);
     expect(await readFile(join(state.workspaceDir, "executions.txt"), "utf8")).toBe("run\n");
+  });
+
+  it("delivers a steer before a required nested shell finishes and resumes its exact result", async ({
+    onTestFinished,
+  }) => {
+    const { state, shell } = await nativeExecFixture("steer-held-shell", onTestFinished);
+    const started = join(state.workspaceDir, "started");
+    const release = join(state.workspaceDir, "release");
+    const command = nodeCommand(`const fs = require("node:fs");
+      const watcher = fs.watch(${JSON.stringify(state.workspaceDir)}, () => {
+        if (fs.existsSync(${JSON.stringify(release)})) { watcher.close(); clearTimeout(timer); console.log("original result"); }
+      });
+      const timer = setTimeout(() => watcher.close(), 10000);
+      fs.appendFileSync(${JSON.stringify(started)}, "started");`);
+    const correction = "Check this before the command finishes.";
+    let session!: AgentSession;
+    const observed: Context[] = [];
+    const run = runCodeModeAgent({
+      hiddenTools: [shell],
+      embeddedSession: true,
+      execInput: {
+        code: `return (await exec({command:${JSON.stringify(command)}})).aggregated;`,
+        awaitResults: true,
+      },
+      programs: [
+        "exec",
+        async (context) => {
+          observed.push(context);
+          await writeFile(release, "finish");
+          const result = readToolResultDetails(
+            context.messages.findLast((m) => m.role === "toolResult"),
+          );
+          expect(result).toMatchObject({
+            status: "waiting",
+            reason: "steering",
+            runId: expect.any(String),
+          });
+          return { wait: true, runId: String(result?.runId) };
+        },
+      ],
+      configureAgent(_agent, harness) {
+        session = harness.session!;
+      },
+    });
+    await vi.waitFor(async () => expect(await readFile(started, "utf8")).toBe("started"), {
+      timeout: 15000,
+    });
+    const receipt = steerActiveSessionWithOptionalDeliveryWait(session, correction, {
+      waitForTranscriptCommit: true,
+    });
+    const { agent } = await run;
+    await receipt;
+    expect(observed[0]?.messages.slice(-2)).toMatchObject([
+      { role: "toolResult", details: { status: "waiting" } },
+      { role: "user", content: [{ type: "text", text: correction }] },
+    ]);
+    expect(
+      readToolResultDetails(agent.state.messages.findLast((m) => m.role === "toolResult")),
+    ).toMatchObject({ status: "completed", value: "original result" });
+    expect(agent.state.messages.filter((message) => message.role === "user")).toHaveLength(2);
+    expect(await readFile(started, "utf8")).toBe("started");
   });
 
   it("keeps native failure output within its budget", async ({ onTestFinished }) => {

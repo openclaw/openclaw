@@ -80,6 +80,64 @@ it("runs bridged recovery code against the replaced dependency tree, not the cac
   });
 });
 
+it("preserves cleanup classification through nested worker errors", () => {
+  const root = createTempDir("update-compat-errors-");
+  fs.writeFileSync(
+    path.join(root, "current.mjs"),
+    `
+export function fail(kind) {
+  const error = new Error("cleanup");
+  Object.defineProperty(error, Symbol.for("openclaw.command-cleanup-uncertain"), { value: true });
+  if (kind === "cause") throw new Error("recovery", { cause: error });
+  if (kind === "aggregate") throw new AggregateError([error], "recovery");
+  throw error;
+}
+`,
+  );
+  fs.writeFileSync(
+    path.join(root, "updater.mjs"),
+    `
+import assert from "node:assert/strict";
+const shim = await import(process.argv[2]);
+const fail = shim.isolatedUpdateCompatExport(import.meta.url, "./current.mjs", "fail");
+for (const kind of ["direct", "cause", "aggregate"]) {
+  await assert.rejects(fail(kind), (error) => {
+    const nested = kind === "cause" ? error.cause : kind === "aggregate" ? error.errors?.[0] : error;
+    assert.equal(nested?.[Symbol.for("openclaw.command-cleanup-uncertain")], true, kind);
+    return true;
+  });
+}
+`,
+  );
+  const shim = new URL("../../scripts/lib/update-compat-isolated-bridge.mjs", import.meta.url);
+  execFileSync("node", ["updater.mjs", shim.href], { cwd: root, timeout: 10000 });
+});
+
+it("settles asynchronous callback fulfillment and rejection on the caller thread", () => {
+  const root = createTempDir("update-compat-callback-");
+  fs.writeFileSync(
+    path.join(root, "current.mjs"),
+    `
+export async function resolveRoot(callback) { return await callback(); }
+`,
+  );
+  fs.writeFileSync(
+    path.join(root, "updater.mjs"),
+    `
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+const shim = await import(process.argv[2]);
+const resolveRoot = shim.isolatedUpdateCompatExport(import.meta.url, "./current.mjs", "resolveRoot");
+assert.equal(await resolveRoot(() => readFile("root.txt", "utf8")), "/synthetic/root");
+const failure = new Error("root unavailable");
+await assert.rejects(resolveRoot(async () => { throw failure; }), (error) => error === failure);
+`,
+  );
+  fs.writeFileSync(path.join(root, "root.txt"), "/synthetic/root");
+  const shim = new URL("../../scripts/lib/update-compat-isolated-bridge.mjs", import.meta.url);
+  execFileSync("node", ["updater.mjs", shim.href], { cwd: root, timeout: 10000 });
+});
+
 it("keeps recovery bridges thin and refuses unisolated recovery imports", () => {
   const root = createTempDir("update-compat-isolated-graph-");
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}');

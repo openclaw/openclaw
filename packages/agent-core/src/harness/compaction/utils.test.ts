@@ -14,7 +14,7 @@ import {
 import {
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessage,
+  extractFileOpsFromMessages,
   formatFileOperations,
   mergeSummaryFileOperations,
   serializeConversation,
@@ -26,15 +26,15 @@ function serializeToolResult(text: string): string {
 
 function fileLists(messages: AgentMessage[]) {
   const fileOps = createFileOps();
-  for (const message of messages) {
-    extractFileOpsFromMessage(message, fileOps);
-  }
+  extractFileOpsFromMessages(messages, fileOps);
   return computeFileLists(fileOps);
 }
-it("extracts namespaced tool names", () => {
-  const call = (name: string, path: string) => toolCall(name, { path });
-  const calls = [call("mcp__files__READ", "r.ts"), call("files__edit", "e.ts")];
-  expect(fileLists([assistant(calls)])).toEqual({ readFiles: ["r.ts"], modifiedFiles: ["e.ts"] });
+it.each([false, true, undefined])("extracts namespaced outcomes: %s", (changed) => {
+  const read = toolCall("mcp__files__READ", { path: "r.ts" }, "r.ts");
+  const edit = toolCall("files__edit", { path: "e.ts" }, "e.ts");
+  const result = toolResult("", { toolName: "edit", toolCallId: "e.ts", details: { changed } });
+  const expected = { readFiles: ["r.ts"], modifiedFiles: changed === false ? [] : ["e.ts"] };
+  expect(fileLists([assistant([read, edit]), result])).toEqual(expected);
 });
 it("extracts top-level and nested apply_patch result summaries", () => {
   const details = (added: string[], modified: string[], deleted: string[]) => ({
@@ -108,7 +108,7 @@ describe("serializeConversation", () => {
     const content = [textBlock("alpha"), textBlock("end")];
     const message = custom(content, { timestamp: 0 });
     const original = structuredClone(content);
-    expect(serializeConversation(convertToLlm([message]))).toBe("[User]: alpha\nend");
+    expect(serializeConversation(convertToLlm([message]))).toBe("[Synthetic input]: alpha\nend");
     expect(estimateTokens(message)).toBe(3);
     expect(message.content).toEqual(original);
   });
