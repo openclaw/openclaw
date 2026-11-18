@@ -31,6 +31,8 @@ export function createSteeredCliMessageInjection(params: {
     params: Pick<PreparedCliRunContext["params"], "cwd" | "workspaceDir">;
     beforeModelRequest?: PreparedCliRunContext["beforeModelRequest"];
   };
+  /** Native owns the steered input; tool tracking starts a new input's reply state. */
+  onInputSubmitted?: () => void;
 }): ReplyBackendMessageInjectionV2 {
   const gate = params.context.beforeModelRequest;
   const queueMessage = async (
@@ -82,6 +84,7 @@ export function createSteeredCliMessageInjection(params: {
                 params.assertCurrent();
                 submit();
                 submitted = true;
+                params.onInputSubmitted?.();
               });
             });
           } catch (cause) {
