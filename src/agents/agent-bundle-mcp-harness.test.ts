@@ -509,6 +509,10 @@ afterEach(() => {
 
 describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
   it("advertises an unauthenticated server's connect tool alongside an already-authenticated server's tools", async () => {
+    readCredentialsStatus.mockResolvedValue([
+      { state: "authorized" },
+      { state: "unauthenticated" },
+    ]);
     mocks.resolveRuntime.mockImplementation(async (params) =>
       makeMixedAuthConnectRuntime({
         sessionId: params.sessionId,
