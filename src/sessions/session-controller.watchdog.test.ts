@@ -174,6 +174,7 @@ describe("execution deadline recovery", () => {
         (await effect.recoverExecutionDeadline?.()) ? "resumed" : "blocked",
     });
     const attempt = watchdog.attachAttempt({ assertCurrent() {} });
+    attempt.beginTool({ toolName: "exec", toolCallId: "recovered-tool" });
     attempt.setExecutionDeadline(10);
     watchdog.beginExecution(() => 10, recover);
     watchdog.beginExecution(() => 20, laterRecovery);
@@ -181,6 +182,7 @@ describe("execution deadline recovery", () => {
     expect(recover).toHaveBeenCalledOnce();
     expect(laterRecovery).not.toHaveBeenCalled();
     expect(watchdog.snapshot().recovery).toBeUndefined();
+    expect(watchdog.describeStop().error).toMatchObject({ pendingTools: [] });
     watchdog.close();
   });
 
