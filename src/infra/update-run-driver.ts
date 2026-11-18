@@ -1,9 +1,23 @@
 import { hostname } from "node:os";
 import type { z } from "zod";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
-import type { UpdateRunDriverSchema } from "./update-run-driver-schema.js";
+import { captureNamespacedStateLeaseProcessOwner } from "./state-lease-process-owner.js";
+import type { RecordedUpdateRunDriver, UpdateRunDriverSchema } from "./update-run-driver-schema.js";
 
+export { toUpdateRunDriver, type RecordedUpdateRunDriver } from "./update-run-driver-schema.js";
 export type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
+
+/**
+ * A run's own driver also records the boot it ran in, so a later boot of the same
+ * host can show it gone. Only Linux and macOS read that; elsewhere it is not captured.
+ */
+export function readRecordedUpdateRunDriver(): RecordedUpdateRunDriver | undefined {
+  const driver = readUpdateRunDriver();
+  if (!driver || (process.platform !== "linux" && process.platform !== "darwin")) {
+    return driver;
+  }
+  return { ...driver, namespace: captureNamespacedStateLeaseProcessOwner().namespace };
+}
 
 export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDriver): boolean {
   return (

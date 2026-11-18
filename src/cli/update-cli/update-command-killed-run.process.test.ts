@@ -32,6 +32,7 @@ import {
 } from "../../infra/package-update-steps.test-support.js";
 import { expectedPathExchangeRoute } from "../../infra/path-exchange.test-support.js";
 import * as runtimeWorker from "../../infra/runtime-worker-url.js";
+import * as processOwner from "../../infra/state-lease-process-owner.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import * as updateGlobal from "../../infra/update-global.js";
@@ -52,7 +53,10 @@ import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as shared from "./shared.js";
 import {
@@ -189,6 +193,7 @@ afterEach(async () => {
     os.userInfo,
     gatewayService.readGatewayServiceState,
     restartHealth.waitForGatewayHealthyRestart,
+    processOwner.captureNamespacedStateLeaseProcessOwner,
   ]) {
     if (vi.isMockFunction(spied)) {
       spied.mockRestore();
@@ -364,6 +369,22 @@ const reserved = (runId: string) => ({
   config: fs.readFileSync(configPath, "utf8"),
 });
 
+const laterBoot = "00000000-0000-4000-8000-00000000000b";
+/** A process namespace as `captureNamespacedStateLeaseProcessOwner` encodes it. */
+const namespace = ({
+  platform,
+  boot = "00000000-0000-4000-8000-00000000000a",
+  // Linux's initial PID namespace: the host itself, not a container.
+  pid = "pid:[4026531836]",
+  machine = "a".repeat(64) as string | null,
+}: {
+  platform: "linux" | "darwin";
+  boot?: string;
+  pid?: string;
+  machine?: string | null;
+}) => JSON.stringify([platform, boot, platform === "linux" ? pid : null, machine]);
+const linux = (boot?: string) => namespace({ platform: "linux", boot });
+
 describe.skipIf(process.platform === "win32")("next update after a killed update run", () => {
   it("settles the dead run's plugin recovery itself and proceeds", () =>
     fixtures.lifetime.run(async () => {
@@ -432,6 +453,52 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
     const { databasePath } = await lease(path.join(root, "unrelated"));
     fs.renameSync(databasePath, `${databasePath}.lost`);
   };
+  /**
+   * A machine restart after the kill: the temporary lease store is gone, the run's
+   * drivers name the boot they ran in (`drivers`, current first; `undefined` is a
+   * driver recorded without one), and this process reports `current`.
+   */
+  const rebooted =
+    (drivers: Array<string | null | undefined>, current: string, origin: object = {}) =>
+    async (killed: Dead) => {
+      await loseStore();
+      const { db } = openOpenClawStateDatabase();
+      const select = db.prepare("SELECT origin_json FROM update_runs WHERE run_id = ?");
+      const recorded = JSON.parse(String(select.get(killed.runId)?.origin_json));
+      const capture = processOwner.captureNamespacedStateLeaseProcessOwner;
+      // The killed updater recorded the boot it ran in: this host's, this boot's.
+      expect(recorded.driver.namespace).toBe(capture().namespace);
+      const [driver, ...previous] = drivers.map((namespace, index) => ({
+        // Earlier drivers are other dead processes of that boot on this host.
+        ...(index ? { ...recorded.driver, startIdentity: String(index) } : recorded.driver),
+        namespace,
+      }));
+      const update = db.prepare("UPDATE update_runs SET origin_json = ? WHERE run_id = ?");
+      const previousDrivers = previous.length ? previous : undefined;
+      update.run(JSON.stringify({ ...recorded, driver, previousDrivers, ...origin }), killed.runId);
+      vi.spyOn(processOwner, "captureNamespacedStateLeaseProcessOwner").mockImplementation(() => ({
+        ...capture(),
+        namespace: current,
+      }));
+    };
+  it.each(["linux", "darwin"] as const)(
+    "settles a run killed before a %s machine restarted, then proceeds",
+    (platform) =>
+      fixtures.lifetime.run(async () => {
+        const killed = await updater(await installation());
+        const before = namespace({ platform });
+        await rebooted([before, before], namespace({ platform, boot: laterBoot }))(killed);
+
+        await nextUpdate(killed.slot);
+
+        expect(mocks.proceed).toHaveBeenCalledOnce();
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(config()).toEqual({ plugins: { enabled: false } });
+        expect(settled(admitted[0])).toMatch(
+          new RegExp(`^Settled interrupted update ${killed.runId}.*rolled back, because`, "u"),
+        );
+      }),
+  );
   it.each<{
     name: string;
     refusal: RegExp;
@@ -452,6 +519,55 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
       name: "the update lease store was replaced",
       refusal: unleased,
       control: () => loseStore().then(() => lease(path.join(root, "unrelated"))),
+    },
+    // After the lease store is lost, only a recorded earlier boot of this host shows the
+    // updater's processes gone; each of these leaves that unproven.
+    ...(
+      [
+        ["the lease store was lost within the same boot", [linux()], linux()],
+        ["an older version recorded the run without its boot", [undefined], linux(laterBoot)],
+        ["the run recorded that its boot was unknown", [null], linux(laterBoot)],
+        ["one of the run's drivers recorded no boot", [linux(), undefined], linux(laterBoot)],
+        [
+          "the machine identity is unknown on both boots",
+          [namespace({ platform: "linux", machine: null })],
+          namespace({ platform: "linux", boot: laterBoot, machine: null }),
+        ],
+        [
+          "the run was recorded on another machine",
+          [namespace({ platform: "linux", machine: "b".repeat(64) })],
+          linux(laterBoot),
+        ],
+        [
+          // A container restart is not a host restart, and container identities can repeat.
+          "this update runs in a Linux PID namespace other than the host's",
+          [namespace({ platform: "linux", pid: "pid:[4026532001]" })],
+          namespace({ platform: "linux", boot: laterBoot, pid: "pid:[4026532001]" }),
+        ],
+      ] as const
+    ).map(([name, drivers, current]) => ({
+      name,
+      refusal: unleased,
+      control: rebooted([...drivers], current),
+    })),
+    {
+      // Abandonment already refuses it; the restart rule never reads its other drivers.
+      name: "the run lost its updater's identity before a restart",
+      refusal: running,
+      control: async (killed: Dead) => {
+        const step = { step: "driver:identity-unavailable", status: "completed" } as const;
+        recordUpdateRunStep(killed.runId, { ...step, endedAtMs: Date.now() });
+        await rebooted([linux()], linux(laterBoot))(killed);
+      },
+    },
+    {
+      name: "a managed helper had adopted the run before a restart",
+      refusal: new RegExp(`not left by a killed openclaw update command.*${repair}`, "u"),
+      control: (killed: Dead) => {
+        const driver = { host: os.hostname(), pid: killed.proc.pid!, startIdentity: "1" };
+        const managedHandoff = { parent: driver, helper: driver };
+        return rebooted([linux()], linux(laterBoot), { managedHandoff })(killed);
+      },
     },
     {
       // A recovery command claimed and released the installation: the lease that tied

@@ -9,6 +9,7 @@ import type { UpdateRuns } from "../state/openclaw-state-db.generated.js";
 import { parseDoctorRetirementWideningLine } from "./doctor-progress.js";
 import { resolveRequiredHomeDir } from "./home-dir.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+import { toUpdateRunDriver } from "./update-run-driver-schema.js";
 import { UPDATE_RUN_TEXT_LIMIT } from "./update-run-limits.js";
 import type { UpdateRunRedactionFacts } from "./update-run-mutation.types.js";
 import { isUpdateOwedStepRow } from "./update-run-owed-step.js";
@@ -263,7 +264,34 @@ function boundedJson(
   return json;
 }
 
+/**
+ * Driver boot namespaces only let a later update skip a repair after a restart, so
+ * they yield first: a run without them keeps the explicit repair it had before.
+ */
 function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
+  const json = boundedOriginJsonWithNamespaces(origin);
+  if (json !== undefined) {
+    return json;
+  }
+  const { driver, previousDrivers } = origin;
+  return (
+    boundedOriginJsonWithNamespaces({
+      ...origin,
+      driver: driver && toUpdateRunDriver(driver),
+      previousDrivers: previousDrivers?.map(toUpdateRunDriver),
+    }) ?? throwOversizedReceipts()
+  );
+}
+
+function throwOversizedReceipts(): never {
+  throw new Error("Update run recovery receipts exceed the origin byte limit");
+}
+
+/** Undefined when receipts or admission identities do not fit beside namespaces. */
+function boundedOriginJsonWithNamespaces(origin: UpdateRunRecord["origin"]): string | undefined {
+  const hasNamespaces = [origin.driver, ...(origin.previousDrivers ?? [])].some(
+    (driver) => driver?.namespace !== undefined,
+  );
   const {
     driver,
     previousDrivers,
@@ -290,7 +318,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     windowsUserSid,
   });
   if (Buffer.byteLength(retained) > JSON_BYTES) {
-    throw new Error("Update run recovery receipts exceed the origin byte limit");
+    return hasNamespaces ? undefined : throwOversizedReceipts();
   }
   const routing = { requester, sessionKey, deliveryContext, campaignId };
   const hasAdmission = origin.admission !== undefined || origin.candidateAdmission !== undefined;
@@ -333,7 +361,7 @@ function boundedOriginJson(origin: UpdateRunRecord["origin"]): string {
     mapJsonText(diagnostics, (text, key) => (key && preservedTextFields.has(key) ? text : "")),
   );
   if (Buffer.byteLength(minimumDiagnostics) > diagnosticBudget) {
-    return retained;
+    return hasNamespaces ? undefined : retained;
   }
   const boundedDiagnostics = boundedJson(diagnostics, diagnosticBudget, preservedTextFields);
   return `{${[identities.slice(1, -1), boundedDiagnostics.slice(1, -1)].filter(Boolean).join(",")}}`;

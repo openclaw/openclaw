@@ -2,6 +2,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
 import { classifyUpdateRunCause } from "./update-run-cause.js";
+import { toUpdateRunDriver } from "./update-run-driver-schema.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
@@ -109,6 +110,13 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
   delete origin.managedHandoff;
   delete origin.packageStage;
   delete origin.packageRelease;
+  // The wire driver is closed: recorded boot namespaces stay local.
+  if (origin.driver) {
+    origin.driver = toUpdateRunDriver(origin.driver);
+  }
+  if (origin.previousDrivers) {
+    origin.previousDrivers = origin.previousDrivers.map(toUpdateRunDriver);
+  }
   const verification = { ...record.verification };
   if (verification.recovery?.serviceRestartSafe === false) {
     verification.recovery = { ...verification.recovery };
