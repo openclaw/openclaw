@@ -7,7 +7,8 @@ export function scheduleServiceDelivery<T>(
   run: () => T,
 ): Promise<Awaited<T>> {
   return new Promise((resolve, reject) => {
-    const onAbort = () => reject(scheduler.signal.reason ?? new Error("Voice Call service stopped"));
+    const onAbort = () =>
+      reject(scheduler.signal.reason ?? new Error("Voice Call service stopped"));
     if (scheduler.signal.aborted) {
       onAbort();
       return;

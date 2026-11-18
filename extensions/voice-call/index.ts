@@ -30,9 +30,9 @@ import {
   validateProviderConfig,
   type VoiceCallConfig,
 } from "./src/config.js";
+import { scheduleServiceDelivery } from "./src/service-delivery-context.js";
 import { TELEPHONY_DEFAULT_TTS_TIMEOUT_MS } from "./src/telephony-tts.js";
 import { VoiceCallToolSchema } from "./src/tool-schema.js";
-import { scheduleServiceDelivery } from "./src/service-delivery-context.js";
 
 const VOICE_CALL_WRITE_METHOD_SCOPE = { scope: "operator.write" as const };
 const VOICE_CALL_READ_METHOD_SCOPE = { scope: "operator.read" as const };

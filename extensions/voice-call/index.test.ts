@@ -1,12 +1,12 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { Command } from "commander";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
-import { AsyncLocalStorage } from "node:async_hooks";
-import { Command } from "commander";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VoiceCallRuntime } from "./runtime-entry.js";
 import { normalizeVoiceCallConfig } from "./src/config.js";
@@ -697,15 +697,19 @@ describe("runtime lifecycle", () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestPluginServiceScheduler(createTestGatewayScheduler(clock.clock));
     const start = (service: ReturnType<typeof register>, name: string) =>
-      actor.run(name, () => service.service.start({
-        ...serviceContext,
-        scheduler: {
-          ...scheduler,
-          schedule: (params) => scheduler.schedule({
-            ...params, run: () => actor.run(name, params.run),
-          }),
-        },
-      }));
+      actor.run(name, () =>
+        service.service.start({
+          ...serviceContext,
+          scheduler: {
+            ...scheduler,
+            schedule: (params) =>
+              scheduler.schedule({
+                ...params,
+                run: () => actor.run(name, params.run),
+              }),
+          },
+        }),
+      );
     const readContext = async (index: number) => {
       const pending = actor.run("requesting-caller", () =>
         createRuntime.mock.calls[index]?.[0].runInServiceContext?.(() => actor.getStore()),
