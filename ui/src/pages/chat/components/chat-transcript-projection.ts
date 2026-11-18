@@ -26,6 +26,7 @@ import {
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
+import { projectInlineSwarms } from "./chat-inline-swarm-projection.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
@@ -40,7 +41,10 @@ import {
   createTranscriptActions,
   createTranscriptMessageOptions,
 } from "./chat-transcript-actions.ts";
-import { projectTranscriptActivity } from "./chat-transcript-activity.ts";
+import {
+  createLiveStatusSignature,
+  projectTranscriptActivity,
+} from "./chat-transcript-activity.ts";
 import { latestTranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import {
   resolveTranscriptAssistantIdentity,
@@ -62,7 +66,6 @@ import {
   guardChatRenderItems,
   trackTranscriptRenderDependencies,
   transcriptContextDependencies,
-  type TranscriptDependencyItem,
 } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
 import type { ChatTranscriptSession, TranscriptHeader } from "./chat-transcript-session.ts";
@@ -391,40 +394,28 @@ export function projectChatTranscript(
       searchResult: searchFiltering,
     } satisfies NativeMessageGroupOptions;
   };
-  // Only working indicators depend on live usage and subagent status.
+  const swarmsByFrame = projectInlineSwarms(
+    props,
+    rows,
+    liveItem,
+    searchFiltering,
+    actions.onOpenSubagent,
+  );
+  // Only working indicators depend on live usage and subagent wait status.
   const workingUsageKey = JSON.stringify([
     runOutputTokens,
     subagents.statusKey,
     presented,
     bubbleActivityGroupKey,
   ]);
-  const liveStatusSignature = (item: TranscriptDependencyItem): string => {
-    if (item.kind === "reading-indicator") {
-      return workingUsageKey;
-    }
-    if (item.kind === "stream-run") {
-      return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";
-    }
-    if (item.kind !== "group" && item.kind !== "agent-run-frame") {
-      return "";
-    }
-    const duration = item.runId ? transcriptChain.runDurations.get(item.runId) : undefined;
-    const statusKey = `${duration ?? ""}|${item.key === latestAssistantItemKey ? "latest-assistant" : ""}`;
-    if (item.kind === "agent-run-frame") {
-      const hasWorkingIndicator = item.parts.some(
-        (part) =>
-          part.kind === "stream-run" &&
-          part.parts.some((streamPart) => streamPart.kind === "reading-indicator"),
-      );
-      return `${hasWorkingIndicator ? workingUsageKey : ""}|${statusKey}`;
-    }
-    const continuation = continuations.get(item.key);
-    // Continuation options already participate in the shared render context.
-    const continuationKey = continuation
-      ? `${continuation.map((part) => part.key).join(" ")}${workingUsageKey}`
-      : "";
-    return `${continuationKey}|${statusKey}|${searchFiltering ? "search-result" : ""}`;
-  };
+  const liveStatusSignature = createLiveStatusSignature(
+    workingUsageKey,
+    transcriptChain.runDurations,
+    latestAssistantItemKey,
+    continuations,
+    searchFiltering,
+    (key) => swarmsByFrame.get(key)?.signature,
+  );
   // Deferred palettes apply leaf branding after the preference snapshot.
   const appliedBranding = currentThemeBranding();
   trackTranscriptRenderDependencies(state, [
@@ -588,6 +579,7 @@ export function projectChatTranscript(
         options: {
           basePath: props.basePath,
           sessionPublicOrigin: props.sessionPublicOrigin,
+          swarm: swarmsByFrame.get(item.key)?.view,
           streamOptions: streamGroupOptions,
           renderGroupOptions,
           partDependencies: renderDependencies,

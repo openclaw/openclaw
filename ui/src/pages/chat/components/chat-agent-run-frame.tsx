@@ -31,6 +31,7 @@ import {
   type ProjectedContinuationSource,
 } from "../chat-turn-boundary.ts";
 import { ChatHandoffResume } from "./chat-handoff-sessions.tsx";
+import { ChatInlineSwarm, type InlineSwarm } from "./chat-inline-swarm.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
   ActivityGroup,
@@ -48,6 +49,7 @@ import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.t
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
+import "../../../styles/chat/inline-swarm.css";
 
 const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
   export: "ChatSourcePreviews",
@@ -56,6 +58,7 @@ const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
 type AgentRunFrameOptions = {
   basePath?: string;
   sessionPublicOrigin?: string;
+  swarm?: InlineSwarm;
   streamOptions: StreamGroupOptions;
   renderGroupOptions: (group: MessageGroupData) => NativeMessageGroupOptions;
   partDependencies: (part: BodyPart) => readonly unknown[];
@@ -320,7 +323,12 @@ export function AgentRunFrame(props: FrameProps) {
   const statusParts = createMemo(() => agentRunFrameActiveStatusParts(props.frame));
   return (
     <Show when={statusParts()} fallback={<RunFrame frame={props.frame} options={props.options} />}>
-      {(parts) => <StreamGroup parts={parts()} options={props.options.streamOptions} />}
+      {(parts) => (
+        <>
+          <Show when={props.options.swarm}>{(swarm) => <ChatInlineSwarm swarm={swarm()} />}</Show>
+          <StreamGroup parts={parts()} options={props.options.streamOptions} />
+        </>
+      )}
     </Show>
   );
 }
@@ -333,6 +341,7 @@ function RunFrame(props: FrameProps) {
     shellOptions().bubbleMode ? undefined : state().actionOwner?.key;
   const firstBubbleKey = createMemo(() => state().firstBubbleKey);
   const frameContent = [
+    <Show when={props.options.swarm}>{(swarm) => <ChatInlineSwarm swarm={swarm()} />}</Show>,
     <FrameBody
       parts={state().bodyParts}
       options={props.options}
