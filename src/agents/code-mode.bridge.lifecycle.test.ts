@@ -31,6 +31,7 @@ import {
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { countActiveToolExecutions } from "./embedded-agent-subscribe.handlers.tools.start.js";
+import { installSessionPlacementAdmissionProvider } from "./session-placement-admission.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { fakeTool } from "./test-helpers/fake-tool.js";
@@ -127,9 +128,8 @@ describe("Code Mode subscribed bridge lifecycle", () => {
   });
 
   it.each([undefined, 1_800_000])(
-    "names an off-VM wait at watchdog stop (deadline=%s)",
+    "preserves an off-VM wait when stop recovery aborts and drains exec (deadline=%s)",
     async (deadline) => {
-      await import("./session-placement-admission.js");
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       vi.setSystemTime(0);
       const harness = createHarness({ name: "await-diagnostic", timeoutMs: 2_000 });
@@ -173,6 +173,7 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           harness.runAbortController.signal,
         )
         .catch((error: unknown) => error);
+      let releasePlacement: (() => void) | undefined;
       try {
         await started.promise;
         // The host can dispatch before the worker publishes its parked frontier.
@@ -183,23 +184,40 @@ describe("Code Mode subscribed bridge lifecycle", () => {
           ).toHaveLength(1),
         );
         const stoppedAtMs = (deadline ?? 0) + SESSION_WATCHDOG_QUIET_TOOL_MS + 1;
+        releasePlacement = installSessionPlacementAdmissionProvider({
+          assertCompactionSuccessorAllowed() {},
+          executeLocalTurn: async (_claim, runLocal) => await runLocal(),
+          executeTurn: async (_claim, _params, runLocal) => await runLocal(),
+          recoverTerminalTurn: async (_session, assertCurrent) => {
+            assertCurrent?.();
+            harness.runAbortController.abort();
+            await execution;
+            expect(operation.watchdog.snapshot().tools).toEqual([]);
+            vi.setSystemTime(stoppedAtMs + 150);
+            return undefined;
+          },
+        });
         vi.setSystemTime(stoppedAtMs);
         await operation.watchdog.tick(Date.now());
         await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
-        expect(readSessionWatchdogFailure(operation.abortSignal.reason)?.pendingTools[0]).toEqual({
-          toolName: "exec",
-          toolCallId: "await-cell",
-          elapsedMs: stoppedAtMs,
-          awaiting: [
-            {
-              kind: "bridge",
-              method: "callValue",
-              deadlineAtMs: deadline ?? null,
-              elapsedMs: stoppedAtMs,
-            },
-          ],
-        });
+        expect(readSessionWatchdogFailure(operation.abortSignal.reason)?.pendingTools).toEqual([
+          {
+            toolName: "exec",
+            toolCallId: "await-cell",
+            elapsedMs: stoppedAtMs,
+            awaiting: [
+              {
+                kind: "bridge",
+                method: "callValue",
+                deadlineAtMs: deadline ?? null,
+                elapsedMs: stoppedAtMs,
+              },
+            ],
+          },
+          { toolName: "stalled", toolCallId: expect.any(String), elapsedMs: stoppedAtMs },
+        ]);
       } finally {
+        releasePlacement?.();
         harness.runAbortController.abort();
         await execution;
       }
