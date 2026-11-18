@@ -6,13 +6,9 @@ import { resolveModelRoutes } from "./provider-policy-api.js";
 
 // mock-isolation: these tests count model-list requests; the npm Codex version read is
 // covered by openai-codex-discovery.test.ts.
-vi.mock("./codex-client-version.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./codex-client-version.js")>();
-  return {
-    ...actual,
-    resolveOpenAICodexClientVersion: async () => actual.OPENAI_CODEX_CLIENT_VERSION_FLOOR,
-  };
-});
+vi.mock("./codex-client-version.js", () => ({
+  resolveOpenAICodexClientVersion: async () => "0.1.0",
+}));
 
 type CatalogOptions = { apiKey?: string; baseUrl?: string; profileId?: string };
 async function runCatalog(response: Response | undefined, options: CatalogOptions = {}) {
