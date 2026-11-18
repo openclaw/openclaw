@@ -12,7 +12,37 @@ export type InlineSwarm = {
 };
 
 const statuses = ["queued", "running", "done", "failed"] as const;
-const glyphs: Record<Status, string> = { queued: "", running: "•", done: "✓", failed: "×" };
+const markerColor: Record<Status, string> = {
+  queued: "var(--border-strong)",
+  running: "var(--info)",
+  done: "var(--ok)",
+  failed: "var(--danger)",
+};
+
+function SwarmMarker(props: { status: Status }) {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <rect
+        x="1"
+        y="1"
+        width="14"
+        height="14"
+        rx="2"
+        stroke={markerColor[props.status]}
+        stroke-width="1"
+      />
+      <Show when={props.status === "running"}>
+        <circle cx="8" cy="8" r="1.5" fill={markerColor.running} stroke="none" />
+      </Show>
+      <Show when={props.status === "done"}>
+        <path d="m4 8 2.5 2.5L12 5" stroke={markerColor.done} stroke-width="1.5" />
+      </Show>
+      <Show when={props.status === "failed"}>
+        <path d="m5 5 6 6m0-6-6 6" stroke={markerColor.failed} stroke-width="1.5" />
+      </Show>
+    </svg>
+  );
+}
 
 export function ChatInlineSwarm(props: { swarm: InlineSwarm }) {
   const group = () => props.swarm.group;
@@ -25,7 +55,7 @@ export function ChatInlineSwarm(props: { swarm: InlineSwarm }) {
       data-test-id="chat-inline-swarm"
       aria-label={t("chat.inlineSwarm.title")}
     >
-      <div class="chat-inline-swarm__header" role="status" aria-atomic="true">
+      <div class="label chip-row" role="status" aria-atomic="true">
         <strong>{t("chat.inlineSwarm.title")}</strong>
         <span>
           {t("chat.inlineSwarm.progress", {
@@ -34,7 +64,7 @@ export function ChatInlineSwarm(props: { swarm: InlineSwarm }) {
           })}
         </span>
       </div>
-      <div class="chat-inline-swarm__markers">
+      <div class="chip-row">
         <For each={children()} keyed={(child) => child.sessionKey}>
           {(child) => {
             const name = () => props.swarm.labels.get(child().sessionKey);
@@ -48,26 +78,26 @@ export function ChatInlineSwarm(props: { swarm: InlineSwarm }) {
                 when={name() ? props.swarm.onOpenChild : undefined}
                 fallback={
                   <span
-                    class="chat-inline-swarm__marker"
+                    class="oc-icon-button oc-icon-button--28"
                     data-state={child().status}
                     role="img"
                     aria-label={label()}
                     title={label()}
                   >
-                    {glyphs[child().status]}
+                    <SwarmMarker status={child().status} />
                   </span>
                 }
               >
                 {(open) => (
                   <button
                     type="button"
-                    class="chat-inline-swarm__marker"
+                    class="oc-icon-button oc-icon-button--28"
                     data-state={child().status}
                     aria-label={label()}
                     title={label()}
                     onClick={() => open()(child().sessionKey)}
                   >
-                    {glyphs[child().status]}
+                    <SwarmMarker status={child().status} />
                   </button>
                 )}
               </Show>
@@ -80,7 +110,7 @@ export function ChatInlineSwarm(props: { swarm: InlineSwarm }) {
           </span>
         </Show>
       </div>
-      <div class="chat-inline-swarm__counts">
+      <div class="label chip-row">
         <For each={statuses}>
           {(status) => (
             <Show when={group()[status] > 0}>

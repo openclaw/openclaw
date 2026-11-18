@@ -28,7 +28,7 @@ export function projectInlineSwarms(
     for (const group of parent.swarm.groups) {
       const childLabels = group.children?.map((child) => labels.get(child.sessionKey));
       swarms.set(group.groupId, {
-        view: { group, labels, onOpenChild: onOpenChild },
+        view: { group, labels, onOpenChild },
         signature: JSON.stringify([group, childLabels]),
       });
     }
