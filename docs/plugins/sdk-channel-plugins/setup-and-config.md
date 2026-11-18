@@ -180,6 +180,13 @@ surfaces:
 - `openclaw/plugin-sdk/thread-bindings-runtime` for thread-binding lifecycle
   and adapter registration
 
+The optional `threading.isThreadAddressedByTarget({ to, threadId })` hook is a
+synchronous transport proof: return `true` only when omitting that thread ID
+still sends to the exact same destination. Scheduled delivery uses this proof
+only when the channel, account, and recipient are unchanged and one route omits
+the thread ID. Without a proof, omitted and explicit threads remain different;
+two different explicit thread IDs always remain different.
+
 The `threading.resolveReplyTransport` hook receives the payload's optional
 `replyToCurrent` intent separately from `replyToIsExplicit`. Channels whose
 native API requires a thread root can resolve a current-message reply against
