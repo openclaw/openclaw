@@ -78,6 +78,8 @@ it.each([
           : []),
       ],
       env: {
+        // Exclude state-local file logs from the no-state validation contract.
+        OPENCLAW_LOG_LEVEL: "silent",
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         ...("tty" in testCase ? { NO_COLOR: undefined } : {}),
       },

@@ -69,7 +69,8 @@ describe("cli json stdout contract", () => {
           'import net from "node:net";',
           `net.Socket.prototype.connect = function () { throw new Error(${JSON.stringify(gatewayError)}); };`,
         ],
-        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+        // Exclude state-local file logs from the no-state validation contract.
+        env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_LOG_LEVEL: "silent" },
       });
       const message =
         "gatewayRequest" in testCase
