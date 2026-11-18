@@ -16,8 +16,11 @@ publish its own featured list, which leads that provider's recommendations.
 
 Maintainers curate the list by hand in
 [`scripts/lib/recommended-models.json`](https://github.com/openclaw/openclaw/blob/main/scripts/lib/recommended-models.json)
-and change it through reviewed pull requests. Automated suggestions are a
-starting point; the reviewer's edit is the source of truth.
+and change it through reviewed pull requests. This is a curated shortlist, not
+a history of previously recommended models or a list of everything providers
+serve. Automated suggestions are a starting point; the reviewer's edit is the
+source of truth. Removing a recommendation does not remove that model from the
+full availability catalog, manual selection, or existing runtime defaults.
 
 When the [hosted catalog](/concepts/models#hosted-catalog-updates) is published,
 each provider's served model ids are matched against the list; deprecated,
@@ -74,8 +77,17 @@ size and is `qwen-27b`.
 
 **Successor.** A newer version in the same family is a successor. It takes its
 predecessor's position, including on launch day; do not wait for usage data.
-Keep the predecessor listed while some providers serve only the predecessor; a
-provider that serves both shows only the successor.
+Remove the superseded recommendation in the same change. Provider availability
+alone is not a reason to keep the predecessor: a provider that serves only the
+older model may have no global recommendation for that family. Retain an older
+model only for a specific independent recommendation merit, such as a measured
+cost, latency, or task-quality advantage, and record that reason in the PR.
+
+The suggestion generator proposes the newest explicitly versioned member of
+each canonical family and reports superseded entries for removal, even when
+the older model is still served. It also replaces an unranked curated
+predecessor when usage data is unavailable. Review aliases and distinct classes
+manually rather than treating an unversioned id as an older release.
 
 **New class.** A model whose family name differs from every listed family, such
 as a new `-mini` or `-pro` tier, is a new class, never an automatic successor.
@@ -85,7 +97,13 @@ A reviewer decides whether it belongs on the list and where.
 into the base model. List the base id only.
 
 **Dropping.** Remove an entry when its vendor deprecates or retires it, or when
-every provider that serves it also serves its successor.
+it is superseded without an independent recommendation reason to retain it.
+Do not wait for every provider to offer the successor.
+
+**Same-model aliases.** Separate canonical ids may still refer to one release.
+For example, `muse-wonder` and `muse-wonder-1` name the same recommended model,
+not an older and newer recommendation. Keep both while the identity owner
+distinguishes them; do not infer a version upgrade from the added `-1` alone.
 
 **Ordering.** Start from the model's Arena agent score, then break ties and
 fill gaps with observed usage. A reviewer may move any entry; human judgement

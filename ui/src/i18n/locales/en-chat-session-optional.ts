@@ -404,9 +404,9 @@ const catalog = {
     workspaceFiles: {
       attachments: "Attachments",
       attachmentsLoading: "Loading attachments…",
-      attachmentsUnknown: "Transcript attachment coverage is not yet known.",
+      attachmentsUnknown: "Chat attachment coverage is not yet known.",
       attachmentsPartial:
-        "Showing attachments available in the loaded transcript. Earlier or omitted content may contain more.",
+        "Showing attachments available in the loaded chat. Earlier or omitted content may contain more.",
       mobile: {
         searchFolder: "Search in {folder}",
         empty: "No files match this filter.",

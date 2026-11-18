@@ -23,6 +23,7 @@ import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   isDirectGatewayChatUserTurn,
   resolveGatewayChatCronCreatorAuthorityAdmission,
+  resolveGatewayTemplateSetupCronAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
 import type { GatewayClient } from "./shared-types.js";
@@ -58,7 +59,6 @@ function admitAgent({
     runId: "run-local-operator",
     resolvedSessionKey: "agent:main:main",
     client: createClient(),
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
     ...overrides,
     request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
@@ -71,7 +71,6 @@ it.each([
   ["ephemeral run", { resolvedSessionKey: "" }],
   ["spawned run", { spawnedBy: "agent:main:parent" }],
   ["external provenance", { inputProvenance: { kind: "external_user" } }],
-  ["cron continuation", { hasRestoredCronContinuation: true }],
   ["model run", { isOneShotModelRun: true }],
   ["internal handoff", { request: { internalRuntimeHandoffId: "handoff-1" } }],
   ["model-run request", { request: { modelRun: true } }],
@@ -189,6 +188,30 @@ it.each([true, undefined] as const)(
   },
 );
 
+it.each([true, undefined] as const)(
+  "admits authenticated native-app admin chat management with locality %s",
+  (isLocalClient) => {
+    const client = createClient({ isLocalClient, authenticatedOperator: true });
+    client.connect.client = {
+      id: "openclaw-macos",
+      mode: "ui",
+      version: "test",
+      platform: "macOS",
+    };
+    expect(admitChat({ client })?.managementEntitlement).toEqual({ source: "native-app-admin" });
+    client.connect.scopes = ["operator.write"];
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+    client.connect.scopes = ["operator.admin"];
+    client.internal!.authenticatedOperator = undefined;
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+    client.internal!.authenticatedOperator = true;
+    expect(admitChat({ client, isReconnectResume: true })).toBeUndefined();
+    expect(admitChat({ client, isSystemGenerated: true })).toBeUndefined();
+    client.connect.client.mode = "node";
+    expect(admitChat({ client })?.managementEntitlement).toBeUndefined();
+  },
+);
+
 it("does not derive Control UI authority from a claimed client name or session route", () => {
   const client = createClient({ isLocalClient: undefined });
   client.connect.client = {
@@ -234,7 +257,38 @@ it.each([
   ["spawned lineage", { spawnedBy: "agent:main:parent" }],
   ["input provenance", { inputProvenance: { kind: "external_user" } }],
   ["read-only client", { client: createClient({}, ["operator.read"]) }],
-  ["cron continuation client", { client: createClient({ cronRunContinuation: true }) }],
 ] as const)("rejects chat ingress from %s", (_label, overrides) => {
   expect(admitChat(overrides)).toBeUndefined();
 });
+
+it.each(["setup", "ordinary internal", "non-admin", "claimed UI", "synthetic"] as const)(
+  "admits automation creation only for the real administrator Template setup: %s",
+  (kind) => {
+    const client = createClient(
+      {
+        isLocalClient: undefined,
+        ...(kind !== "claimed UI" ? { controlUiAdmin: true as const } : {}),
+        ...(kind === "synthetic" ? { syntheticClient: true } : {}),
+      },
+      kind === "non-admin" ? ["operator.write"] : ["operator.admin"],
+    );
+    const admission = resolveGatewayTemplateSetupCronAuthorityAdmission({
+      ...createChatParams({ client }),
+      isIncognitoEntry: false,
+      isSystemGenerated: true,
+      inputProvenance: {
+        kind: "internal_system",
+        sourceTool:
+          kind === "ordinary internal" ? "agents_create_onboarding" : "template_add_setup",
+      },
+    });
+    if (kind === "setup") {
+      expect(admission).toMatchObject({
+        callerScopedCreation: true,
+        managementEntitlement: { source: "control-ui-admin" },
+      });
+    } else {
+      expect(admission).toBeUndefined();
+    }
+  },
+);

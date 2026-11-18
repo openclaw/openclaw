@@ -26,10 +26,13 @@
  * none|observer|service-tier selects no hook, an observer, or the bundled tier wrapper.
  * --diagnostics reports cold/warm/appended encode work separately from timing passes.
  * --interval-ms 200 paces each request to compare memory at five requests/second.
+ * --cpu-profile attributes sampled CPU separately from timing/allocation runs.
+ * ownerSites attributes copy, comparison, inspection and encoding work; multiply
+ * bytes/request by the workload's requests/minute for a normalized allocation rate.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session, type HeapProfiler, type Profiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setImmediate, setTimeout as delay } from "node:timers/promises";
@@ -46,6 +49,7 @@ const { values } = parseArgs({
     mode: { type: "string", default: "full" },
     iterations: { type: "string" },
     allocation: { type: "boolean", default: false },
+    "cpu-profile": { type: "boolean", default: false },
     retained: { type: "boolean", default: false },
     "prepared-system": { type: "boolean", default: false },
     images: { type: "boolean", default: false },
@@ -277,6 +281,8 @@ async function collect(): Promise<void> {
 if (values.diagnostics) {
   assert(serialize);
   const nativeStringify = JSON.stringify;
+  const nativeDescriptor = Object.getOwnPropertyDescriptor;
+  const nativeOwnKeys = Reflect.ownKeys;
   const NativeBlob = Blob;
   const counts = {
     messageEncodes: 0,
@@ -285,12 +291,22 @@ if (values.diagnostics) {
     blobAssemblyMs: 0,
     frozenChecks: 0,
     frozenCheckMs: 0,
+    plainChecks: 0,
+    plainCheckMs: 0,
+    descriptorReads: 0,
+    ownKeyWalks: 0,
   };
   configureAiTransportHost({
     ...getAiTransportHost(),
     immutableData: {
       freezeJsonSnapshot,
-      isPlainData,
+      isPlainData(value) {
+        const start = performance.now();
+        const result = isPlainData(value);
+        counts.plainCheckMs += performance.now() - start;
+        counts.plainChecks++;
+        return result;
+      },
       isDeeplyFrozenPlainData(value) {
         const start = performance.now();
         const result = isDeeplyFrozenPlainData(value);
@@ -300,6 +316,14 @@ if (values.diagnostics) {
       },
     },
   });
+  Object.getOwnPropertyDescriptor = (value, key) => {
+    counts.descriptorReads++;
+    return nativeDescriptor(value, key);
+  };
+  Reflect.ownKeys = (value) => {
+    counts.ownKeyWalks++;
+    return nativeOwnKeys(value);
+  };
   JSON.stringify = (value, replacer, space) => {
     const result =
       typeof replacer === "function"
@@ -366,6 +390,8 @@ if (values.diagnostics) {
     }
   } finally {
     JSON.stringify = nativeStringify;
+    Object.getOwnPropertyDescriptor = nativeDescriptor;
+    Reflect.ownKeys = nativeOwnKeys;
     globalThis.Blob = NativeBlob;
   }
   process.exit(0);
@@ -538,8 +564,16 @@ await run();
 await verifyLast();
 await collect();
 const inspector = new Session();
-if (values.allocation) {
+assert(!(values.allocation && values["cpu-profile"]), "Profile CPU and allocation separately");
+if (values.allocation || values["cpu-profile"]) {
   inspector.connect();
+}
+if (values["cpu-profile"]) {
+  await inspector.post("Profiler.enable");
+  await inspector.post("Profiler.setSamplingInterval", { interval: 100 });
+  await inspector.post("Profiler.start");
+}
+if (values.allocation) {
   await inspector.post("HeapProfiler.startSampling", {
     samplingInterval: 4096,
     includeObjectsCollectedByMajorGC: true,
@@ -557,21 +591,64 @@ const elapsedMs = performance.now() - start;
 const collections = gc.stop()?.statistics ?? [];
 let allocationBytesPerRequest: number | undefined;
 let sites: Array<{ name: string; bytesPerRequest: number }> | undefined;
+const ownerNames = new Set([
+  "copyPlainData",
+  "samePlainData",
+  "inspectPlainData",
+  "isDeeplyFrozenPlainData",
+  "encodeMessageFragment",
+]);
+const ownerSites = new Map<string, number>();
 if (values.allocation) {
   const { profile } = await inspector.post("HeapProfiler.stopSampling");
   const totals = new Map<string, number>();
-  const sum = (node: HeapProfiler.SamplingHeapProfileNode): number => {
+  const sum = (node: HeapProfiler.SamplingHeapProfileNode, owner?: string): number => {
     const name = `${node.callFrame.functionName}@${node.callFrame.url.split("/").at(-1)}`;
     totals.set(name, (totals.get(name) ?? 0) + node.selfSize);
-    return node.selfSize + node.children.reduce((total, child) => total + sum(child), 0);
+    const current = ownerNames.has(node.callFrame.functionName)
+      ? node.callFrame.functionName
+      : owner;
+    if (current) {
+      ownerSites.set(current, (ownerSites.get(current) ?? 0) + node.selfSize);
+    }
+    return node.selfSize + node.children.reduce((total, child) => total + sum(child, current), 0);
   };
   allocationBytesPerRequest = sum(profile.head) / iterations;
   sites = [...totals]
     .toSorted((a, b) => b[1] - a[1])
     .slice(0, 10)
     .map(([name, bytes]) => ({ name, bytesPerRequest: bytes / iterations }));
-  inspector.disconnect();
 }
+if (values["cpu-profile"]) {
+  const { profile } = await inspector.post("Profiler.stop");
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
+  const owners = new Map<number, string>();
+  const visit = (node: Profiler.ProfileNode, owner?: string): void => {
+    const current = ownerNames.has(node.callFrame.functionName)
+      ? node.callFrame.functionName
+      : owner;
+    if (current) {
+      owners.set(node.id, current);
+    }
+    for (const id of node.children ?? []) {
+      const child = nodes.get(id);
+      if (child) {
+        visit(child, current);
+      }
+    }
+  };
+  const root = profile.nodes[0];
+  if (root) {
+    visit(root);
+  }
+  for (const [index, id] of (profile.samples ?? []).entries()) {
+    const owner = owners.get(id);
+    if (owner) {
+      ownerSites.set(owner, (ownerSites.get(owner) ?? 0) + (profile.timeDeltas?.[index] ?? 0));
+    }
+  }
+}
+inspector.disconnect();
 const expectedWire = await verifyLast();
 const memoryBeforeFinalGc = process.memoryUsage();
 globalThis.gc?.();
@@ -602,5 +679,9 @@ console.log(
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     sites,
+    ownerSites: Object.fromEntries(
+      [...ownerSites].map(([name, total]) => [name, total / iterations]),
+    ),
+    ownerSiteUnits: values.allocation ? "bytes/request" : "sampled-us/request",
   }),
 );

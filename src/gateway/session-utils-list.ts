@@ -41,7 +41,10 @@ import {
   type SessionEntryPair,
 } from "./session-list-order.js";
 import { bindSessionListRowRead } from "./session-list-read-result.js";
-import { retainCurrentSessionListPartitions } from "./session-list-view-cache.js";
+import {
+  mergeSessionListOwnerCounts,
+  retainCurrentSessionListPartitions,
+} from "./session-list-view-cache.js";
 import type { SessionRowGeneration } from "./session-row-identity.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import {
@@ -82,14 +85,17 @@ export function selectSessionEntries(
     params.partitions &&
     params.retained &&
     !params.opts.includePeople &&
-    !params.opts.involvingProfileId &&
-    !params.opts.includeOwnerSessionCounts;
+    !params.opts.involvingProfileId;
   let filteredResult: SessionListFilteredEntries;
   if (incremental) {
     retainCurrentSessionListPartitions(params.retained!, params.partitions!);
     const pages: SessionEntryPair[][] = [];
     const ownerPages: SessionEntryPair[][] = [];
     const owners = new Map<string, SessionListFilteredEntries["ownerFacet"][number]>();
+    const countParts: SessionListFilteredEntries[] | undefined = params.opts
+      .includeOwnerSessionCounts
+      ? []
+      : undefined;
     let totalCount = 0;
     let hits = 0;
     let misses = 0;
@@ -104,7 +110,7 @@ export function selectSessionEntries(
         misses++;
         part = filterSessionEntries({
           ...params,
-          entries: () => Array.from(partition.entries.values()),
+          entries: () => partition.entries.values(),
         });
         part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
         part.ownerEntries = sortAndLimitSessionEntries(
@@ -116,6 +122,7 @@ export function selectSessionEntries(
       } else {
         hits++;
       }
+      countParts?.push(part);
       pages.push(part.entries);
       ownerPages.push(part.ownerEntries);
       totalCount += part.totalCount;
@@ -130,6 +137,7 @@ export function selectSessionEntries(
       ownerEntries: mergeSessionEntryPages(ownerPages, ownerLimit, params.opts.sortBy),
       totalCount,
       ownerFacet: sortSessionOwnerFacet(owners),
+      ...(countParts ? mergeSessionListOwnerCounts(countParts) : {}),
       ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
     };
   } else {
@@ -140,7 +148,9 @@ export function selectSessionEntries(
   }
   const { ownerEntries, entries: filtered, ...facets } = filteredResult;
   const sharedEntries = incremental
-    ? filtered.slice(offset)
+    ? offset === 0
+      ? filtered
+      : filtered.slice(offset)
     : params.entriesSorted
       ? filtered
       : sortAndLimitSessionEntries(filtered, pageEnd, params.opts.sortBy).slice(offset);

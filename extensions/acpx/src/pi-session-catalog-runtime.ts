@@ -154,7 +154,7 @@ export function createPiSessionCatalogRuntime(api: OpenClawPluginApi) {
       messages: {
         invalidNodeCursor: "Pi node returned an invalid cursor",
         invalidNodeSessionPage: "Pi node returned an invalid session page",
-        invalidNodeTranscriptPage: "Pi node returned an invalid transcript page",
+        invalidNodeTranscriptPage: "Pi node returned an invalid chat history page",
         invalidHostId: "Pi session catalog hostId is invalid",
         localReadFailed: "Local Pi sessions are unavailable",
         nodeInvokeFailed: "Paired node Pi sessions are unavailable",

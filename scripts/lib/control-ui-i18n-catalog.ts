@@ -21,6 +21,7 @@ import { registerChatCommandResultsEnglish } from "../../ui/src/i18n/locales/en-
 import { registerChatComposerMenuEnglish } from "../../ui/src/i18n/locales/en-chat-composer-menu.ts";
 import { registerChatComposerEnglish } from "../../ui/src/i18n/locales/en-chat-composer.ts";
 import { registerChatDetailsEnglish } from "../../ui/src/i18n/locales/en-chat-details.ts";
+import { registerChatDictationEnglish } from "../../ui/src/i18n/locales/en-chat-dictation.ts";
 import { registerChatFailedMessageEditEnglish } from "../../ui/src/i18n/locales/en-chat-failed-message-edit.ts";
 import { registerChatGoalsEnglish } from "../../ui/src/i18n/locales/en-chat-goals.ts";
 import { registerChatMediaEnglish } from "../../ui/src/i18n/locales/en-chat-media.ts";
@@ -33,6 +34,7 @@ import { registerChatQuestionsEnglish } from "../../ui/src/i18n/locales/en-chat-
 import { registerChatSessionOptionalEnglish } from "../../ui/src/i18n/locales/en-chat-session-optional.ts";
 import { registerChatSessionSharingEnglish } from "../../ui/src/i18n/locales/en-chat-session-sharing.ts";
 import { registerChatSessionEnglish } from "../../ui/src/i18n/locales/en-chat-session.ts";
+import { registerChatSystemNoticeEnglish } from "../../ui/src/i18n/locales/en-chat-system-notice.ts";
 import { registerChatToolContentEnglish } from "../../ui/src/i18n/locales/en-chat-tool-content.ts";
 import { registerChatToolLabelsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-labels.ts";
 import { registerChatToolWidgetsEnglish } from "../../ui/src/i18n/locales/en-chat-tool-widgets.ts";
@@ -78,6 +80,7 @@ import { registerProfileEnglish } from "../../ui/src/i18n/locales/en-profile.ts"
 import { registerProviderUsageEnglish } from "../../ui/src/i18n/locales/en-provider-usage.ts";
 import { registerRouteSubtitlesEnglish } from "../../ui/src/i18n/locales/en-route-subtitles.ts";
 import { registerSecretsStoreEnglish } from "../../ui/src/i18n/locales/en-secrets-store.ts";
+import { registerSessionDeletionEnglish } from "../../ui/src/i18n/locales/en-session-deletion.ts";
 import { registerSessionMachineEnglish } from "../../ui/src/i18n/locales/en-session-machine.ts";
 import { registerSessionMenuEnglish } from "../../ui/src/i18n/locales/en-session-menu.ts";
 import { registerSessionNavigationEnglish } from "../../ui/src/i18n/locales/en-session-navigation.ts";
@@ -145,6 +148,7 @@ const sourceFiles = [
   "en-board.ts",
   "en-browser.ts",
   "en-chat-camera.ts",
+  "en-chat-dictation.ts",
   "en-chat-ci.ts",
   "en-chat-command-results.ts",
   "en-chat-commands.ts",
@@ -158,6 +162,7 @@ const sourceFiles = [
   "en-chat-public-qr.ts",
   "en-chat-questions.ts",
   "en-chat-session.ts",
+  "en-chat-system-notice.ts",
   "en-chat-tool-content.ts",
   "en-chat-tool-labels.ts",
   "en-chat-tool-widgets.ts",
@@ -196,6 +201,7 @@ const sourceFiles = [
   "en-session-navigation.ts",
   "en-session-organization-shared.ts",
   "en-session-organization.ts",
+  "en-session-deletion.ts",
   "en-session-people.ts",
   "en-session-placement.ts",
   "en-new-session-runtime.ts",
@@ -292,6 +298,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   for (const [key, value] of Object.entries(
     registerSessionOrganizationEnglish.catalog.sessionsView,
   )) {
+    // Deferred deletion leaves keep their original canonical order.
+    if (key === "archiveSessionTitle") {
+      Object.assign(sessionsView, registerSessionDeletionEnglish.catalog.sessionsView);
+    }
     const lastMenuKey = menuBefore.get(key);
     if (lastMenuKey) {
       while (menuIndex < menuEntries.length) {
@@ -585,6 +595,10 @@ export function loadControlUiSourceCatalog(): TranslationMap {
         sessionDetails,
         sessionSharing,
         subagentsPanel,
+        pendingInputs: {
+          ...registerChatSessionEnglish.catalog.chat.pendingInputs,
+          ...registerChatSystemNoticeEnglish.catalog.chat.pendingInputs,
+        },
         sessionHeader: {
           ...registerChatSessionEnglish.catalog.chat.sessionHeader,
           continueInTerminal,
@@ -642,6 +656,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     registerSecretsStoreEnglish.catalog,
     registerBrowserEnglish.catalog,
     registerChatCameraEnglish.catalog,
+    registerChatDictationEnglish.catalog,
     { chat: { pullRequests: { ...ciPullRequests, automationNoChecks, automationRetry } } },
     registerChatCommandResultsEnglish.catalog,
     {

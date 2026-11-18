@@ -325,7 +325,7 @@ export function buildExternalRunFailureReply(
     const loginCommandMarkdown = formatInlineCodeSpan(loginCommand);
     const providerText = oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : "";
     const retryLoginHint = providerLoginRecovery
-      ? "send `/login` from a private chat or Control UI session to choose a provider, or re-auth"
+      ? "send `/login` from a private chat or the OpenClaw app to choose a provider, or re-auth"
       : "re-auth";
     if (oauthRefreshFailure.reason) {
       return {

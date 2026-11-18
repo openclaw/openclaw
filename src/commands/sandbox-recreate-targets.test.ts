@@ -90,8 +90,6 @@ it.each([
         ]);
         const calls: string[][] = [];
         const success = { failed: false, isCanceled: false, exitCode: 0, stderr: Buffer.alloc(0) };
-        const containerStateFormat =
-          '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}';
         const responses: Record<string, string> = {
           info: "true\ttrue\t\t5.0.0\n",
           system: "[]",
@@ -117,8 +115,14 @@ it.each([
           }
           const key = args[0] === "inspect" ? `inspect:${args[2]}` : args[0];
           const stdout =
-            key === `inspect:${containerStateFormat}`
-              ? `${expectDefined(containerIds.get(args.at(-1)!), "synthetic container ID")}\ntrue\nfalse\n\n`
+            args[0] === "inspect" && args[2]?.includes('"State":{{json .State}}')
+              ? JSON.stringify({
+                  Id: expectDefined(containerIds.get(args.at(-1)!), "synthetic container ID"),
+                  State: { Running: true, Paused: false },
+                  ReadonlyRootfs: false,
+                  Labels: {},
+                  Mounts: [],
+                })
               : expectDefined(responses[key!], "supported container command/format");
           return { ...success, stdout: Buffer.from(stdout) };
         });

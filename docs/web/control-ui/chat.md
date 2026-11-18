@@ -78,12 +78,24 @@ composer; unarchive the session to continue the conversation.
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
 
-Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Activity summaries stay
-dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
-screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
-and outcomes available. Completed group summaries retain their operation counts.
+Tool activity names the recorded action and its target, such as a file, command,
+or conversation. Consecutive eligible actions share a factual summary such as
+**Read files, ran commands**. Expand the group to inspect individual inputs,
+outputs, and outcomes. Narration and events with their own placement separate
+activity groups.
+
+Recorded actions inside Code Mode follow the same presentation rules. Their
+execution title and source remain available in the call details. An execution
+without representative child actions keeps its descriptive title in the activity
+row, including when it fails. Starting another Code Mode execution does not by
+itself start another visual group. Activity
+summaries stay dimmed until hover or keyboard focus brightens their text, without
+an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
+header shows elapsed time without adding a tool-call counter when expanded.
+When a run finishes while you are reading earlier work, that work stays open
+and your reading position is preserved. If you are following the end of the
+conversation, completed work folds above the answer. Opening saved history keeps
+completed work folded until you expand it.
 The **Worked for** summary and reply metadata use the same saved elapsed time,
 from the initiating message to the last recorded output for that run. This includes
 request preparation and waiting, not just model execution. Starting another turn
@@ -146,35 +158,28 @@ the agent speaking: it appears as ordinary assistant text at the end of that
 reply, with Markdown, and stays there after the agent resumes. Put answers in
 normal assistant text; the acknowledgment is meant as a brief waiting status.
 
-While the handoff waits on child sessions, its working line names them in place
-of the working text. With one child it reads **Waiting on** and that child's
-name, then the time since your message. With several it reads, for example,
-**Waiting on 3 sessions · 1 needs your input · 9m**, and a list below it shows
-each child with its status in words: **Needs your input**, **Paused**,
-**Running**, **Failed**, **Stopped**, or **Done**. Children that asked for your
-attention come first, then paused ones. The list is open while the agent waits; select the line to close or reopen
-it. It names subagents and child sessions alike, including children that finished
-during the wait. Each name, here and in the **Resumed** list, links to that
-child's session; Cmd-, Ctrl-, or middle-click opens it in a new tab. A child the
-chat's own subagent list does not include, or a pane that cannot open sessions,
-shows the name as plain text. **Needs your input** is the child's own attention request, the
-same one the sidebar shows. A child that called `sessions_yield` and waits for a
-continuation reads **Paused**, and the line counts it, as in **Waiting on 3
-sessions · 1 paused · 9m**; with one child it reads **Waiting on** its name and
-**Paused**. A paused child keeps the waiting line open even when no other child
-is running, without showing the parent as working, until it continues, finishes,
-or is stopped; once it runs again it reads **Running**. While every remaining
-child is paused, the line shows no time. After the agent resumes, if the only
-children left are paused, the reply ends with a quiet note instead of a waiting
-line: **CI action pins is paused**, with the name linked, or **2 sessions are
-paused**. A child with its own work still running reads **Running** and keeps the
-waiting line. The time stays on the same clock across handoffs and resumes.
-Until the subagent list is available, the existing working indicator remains as
-a fallback. Its wait clock measures the
-current idle interval from the parent’s latest recorded run end, even if the
-handoff is outside loaded history. A later parent update starts a new idle
-interval; this is not the original request duration or a child’s runtime. Child
-activity without a completed parent turn does not invent a parent wait.
+While a confirmed handoff waits on child sessions, its status reads **Wait for
+subagents**. This status belongs to the turn that actually handed off; it has no
+parent-idle elapsed clock. Child activity by itself does not create a waiting
+status on a completed parent turn.
+
+When the parent resumes, the handoff records a **Resumed** rule with the duration
+of that completed handoff. Its duration stays the same after reload. Expanding
+the rule lists the child sessions it waited on and their current status, such as
+**Running**, **Paused**, **Needs your input**, **Failed**, **Stopped**, or **Done**.
+Each name links to the child's session when the chat's own access-scoped child
+list includes it and this pane can open sessions; otherwise it stays plain text.
+Cmd-, Ctrl-, or middle-click opens a linked child in a new tab.
+
+A parent update that receives `already_pending` from `sessions_yield` has not
+created another handoff. After that update settles, it does not leave a stale
+waiting status or start a new idle clock, even while an earlier child continues.
+The intervening user message starts a request of its own, so it does not mark
+the original handoff as resumed. A later automatic child completion gets a rule
+such as **Resumed · 2s later · Agent finished**, rather than inventing a new confirmed
+handoff or child list. Its settled duration and the completed reply remain
+after reload.
+
 The parent’s own working indicator remains visible while the parent is actively
 working. There is no additional waiting-status line above the composer. Tool rows
 you opened stay open through the handoff. A `sessions_yield` waiting for an
@@ -190,7 +195,16 @@ same block, with one footer at the end. Below a spoken acknowledgment, a thin
 select it to see the children it waited on and their current status. Until the
 chat's own subagent list has loaded, the rule shows the wait time alone. Tool activity that
 resumes with nothing written in between joins the activity row from before the
-handoff. In dashboard sessions, tool activity recorded after the resumed
+handoff, unless a **Resumed** rule marks the resume.
+
+Work the agent picks up again on its own continues the block it belongs to, with
+or without a handoff: when a background command finishes, when the Gateway
+restarts during a run, or when a subagent of this session finishes. A thin rule
+such as **Resumed · 3m later · Background command finished** marks each place it
+picked up again; the other labels are **Gateway restarted** and **Agent
+finished**. An answer the agent already gave stays in place above the rule. A
+heartbeat, a scheduled automation, or a message from another person or session
+still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
 so the answer stays last; a step that failed there stays where it happened. The
 working indicator
@@ -203,12 +217,14 @@ block, for example when the request is older than the loaded history, both
 lines describe the resumed run alone. A message you send after the handoff
 starts a block of its own, with that run's own clock and closing line.
 
-In the tool activity, a subagent's launch row shows the label its launch gave
-it, when it gave one, rather than its instructions, followed by **running**
-while it works and by its duration once it has finished. A subagent that failed
-or timed out reads **failed** instead, and one that was stopped reads
-**stopped**. Selecting the name opens that subagent in the **Subagents** panel;
-the rest of the row still expands the launch's details. The panel labels elapsed
+In the tool activity, a subagent's launch row records the launch itself, such
+as **Launched Atlas**, using the label its launch gave it rather than its
+instructions. Consecutive launches share one row. A later row reports how each
+subagent ended: **Atlas finished**, **Atlas timed out**, **Atlas failed** or
+**Atlas stopped**, placed when that result arrived. Stopping a subagent and
+listing subagents read **Stopped** and **Listed subagents**. Selecting a name
+opens that subagent in the **Subagents** panel; the rest of the row still
+expands the call's details. The panel labels elapsed
 work as **Duration** and shows **No subagents yet.** before any are listed. Collapsed activity counts subagents on
 their own, such as **1 other operation · 3 subagents**. A launch that was
 refused started no subagent and is counted with the other operations. While the
@@ -296,6 +312,9 @@ view and reports an error. Turn the option off and back on to retry.
 Type `/` to open the command menu. `/steer` guides the agent’s current reply;
 `/redirect` restarts the agent’s reply with a new message. `/clear` clears the
 conversation. The `/help` result uses the heading **Available commands**.
+
+While `/steer` or `/redirect` is in progress, the status reads **Steering…** or
+**Redirecting…**. A finished action shows **Steered.** or **Redirected.**
 
 Command failures explain what could not be done and what to try next. For example,
 `/model` shows “Couldn’t load model details. Try again.” when model details cannot
@@ -563,9 +582,12 @@ an invalid source folder.
 
 ## Mobile composer
 
-On phones, tapping the compact composer focuses the text field and opens the
-keyboard in the same gesture. The expanded editor keeps your draft and selection
-while you use its controls.
+Only phone-sized layouts collapse an empty, unfocused composer to one line.
+Wider windows keep the editor and its controls expanded, even when navigation
+uses a drawer. Clicking or focusing the compact composer expands it; on phones,
+tapping also opens the keyboard in the same gesture. The expanded editor keeps
+your draft and selection while you use its controls, and stays open when you
+leave a typed draft.
 
 ## Composer predictions
 
@@ -1046,7 +1068,6 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Each chat pane has a main view and a unified side panel. When Chat and Desktop are both present, the panel’s **Panel position** menu offers a **Swap** action that exchanges them; Dashboard keeps its own view controls. Expanding or restoring a panel preserves live content and drafts. The header’s **Panels** control hides or reopens the side panel without clearing its tabs, and the browser remembers each session’s arrangement.
     - On desktop, the **Panel position** menu in the panel header places it left, right, or below the main area. Use the adjacent expand/restore control to change how much of the pane it occupies. On mobile, **Panels** opens the shared sheet; its expand/restore control changes the sheet height without changing the saved desktop docking arrangement. Drag the grabber or empty header space to resize it: a slow release keeps the height you chose, a flick moves to the next height (docked, expanded, or full), and a downward flick or a pull past half its minimum height closes it.
     - In **Processes**, **Finished** starts collapsed; click its heading to expand or collapse the list.
-    - While the conversation is idle and a background command will continue it on exit ([`tools.exec.notifyOnExit`](/gateway/background-process)), a **Waiting on …** card sits above the composer with the command name and elapsed time. Select it to open that command's output in **Processes**, where **Stop** is available. Several commands collapse to **Waiting on N processes**; expand it to open any one. The card hides during a running turn and disappears once the command exits, when its completion starts the next turn. A successful command with no output also starts that turn. With `tools.exec.notifyOnExitEmptySuccess=false`, the card does not appear, because a silent success would not continue the conversation.
     - **Details → Processes** previews only running commands, with their elapsed time and available **Stop** action. Its count includes every running process; the preview shows up to three on desktop and two on mobile. Select a command to open its output, or **View all processes** to open the full list, including finished commands. The Details section disappears when no processes are running; **Panels → Processes** remains available.
     - A new Browser side panel uses the chat pane's available width and the rendered chat column to reclaim unused chat margins. This default applies on web, macOS, and Tauri; saved widths and manual divider adjustments take precedence.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. A confirmed model selection stays visible if the following session refresh fails; later Gateway updates can still change it. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.

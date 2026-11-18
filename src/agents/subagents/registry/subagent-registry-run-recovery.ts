@@ -567,7 +567,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
           } else if (previousRunId !== nextRunId) {
             postimages.set(previousRunId, null);
           }
-          return { value: { source, next }, postimages };
+          return { value: { source, next }, postimages, removalReason: "superseded" };
         },
         {
           runs: this.options.runs,

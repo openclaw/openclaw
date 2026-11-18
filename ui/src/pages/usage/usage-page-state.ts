@@ -22,7 +22,7 @@ import {
 import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
-import { createUsageDetails } from "./usage-details.ts";
+import { createUsageDetails, resolveUsageConversationTarget } from "./usage-details.ts";
 import type {
   UsageDetailPresentation,
   UsagePresentation,
@@ -68,8 +68,6 @@ export function createUsagePage(context: ApplicationContext) {
       timeSeriesBreakdownMode: "by-type",
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
-      sessionLogsExpanded: false,
-      logFilters: { roles: [], tools: [], hasTools: false, query: "" },
     },
   });
   let usageSelectedSessions: string[] = [];
@@ -511,6 +509,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function read() {
     const timeSeries = details.timeSeries.data;
+    const conversation = resolveUsageConversationTarget(context, selectedSession);
     return {
       result: usageResult(),
       data: {
@@ -547,6 +546,7 @@ export function createUsagePage(context: ApplicationContext) {
       filters: { ...filters, selectedSessions: usageSelectedSessions },
       display,
       detail: {
+        conversationHref: conversation?.href ?? null,
         context: {
           weight: details.session.data?.contextWeight,
           read: details.session.read,
@@ -648,19 +648,14 @@ export function createUsagePage(context: ApplicationContext) {
           },
         },
         details: {
+          onOpenConversation: () => {
+            if (conversation) {
+              context.navigate("chat", conversation.options);
+            }
+          },
           onToggleContextExpanded: () => {
             setPresentation((draft) => {
               draft.display.contextExpanded = !draft.display.contextExpanded;
-            });
-          },
-          onToggleSessionLogsExpanded: () => {
-            setPresentation((draft) => {
-              draft.detail.sessionLogsExpanded = !draft.detail.sessionLogsExpanded;
-            });
-          },
-          onLogFiltersChange: (next: Partial<UsageDetailPresentation["logFilters"]>) => {
-            setPresentation((draft) => {
-              Object.assign(draft.detail.logFilters, next);
             });
           },
           onSelectSession: selectSession,

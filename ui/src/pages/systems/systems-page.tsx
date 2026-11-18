@@ -238,7 +238,7 @@ function SystemsDetails(props: { controller: Systems; row?: SystemsInventoryRow 
           );
         }}
       </Show>
-      {!props.row || props.row.environment.id === "gateway" ? (
+      {controller().connected() && (!props.row || props.row.environment.id === "gateway") ? (
         <SystemsBackups controller={controller()} />
       ) : null}
     </aside>
@@ -327,6 +327,7 @@ function SystemsWorkspace(props: {
 }) {
   const controller = () => props.controller;
   const row = () => controller().selected();
+  const inventoryKnown = () => controller().state.inventory !== null;
   const readStatus = () => {
     latest(props.inventoryRead.read);
     return null;
@@ -404,7 +405,10 @@ function SystemsWorkspace(props: {
         class="systems-page-header"
       />
       <header class="systems-toolbar">
-        <div class="systems-heading">
+        <div
+          class="systems-heading"
+          style={{ visibility: inventoryKnown() ? undefined : "hidden" }}
+        >
           <h2>{title()}</h2>
           <span>{row() ? systemKindLabel(row()!) : t("systems.selectHint")}</span>
         </div>
@@ -482,11 +486,6 @@ function SystemsWorkspace(props: {
             </Errored>
           )}
         </Show>
-        {!controller().connected() ? (
-          <div class="systems-callout" role="status">
-            {t("systems.offlineGateway")}
-          </div>
-        ) : null}
         {auxiliaryErrors().length ? (
           <details class="systems-callout">
             <summary>{t("systems.errors")}</summary>
@@ -518,7 +517,7 @@ function SystemsWorkspace(props: {
             </Show>
           </div>
         ) : null}
-        {!row() || row()!.environment.id === "gateway" ? (
+        {controller().connected() && (!row() || row()!.environment.id === "gateway") ? (
           <SystemsBackups
             controller={controller()}
             onDetails={() => controller().updatePresentation({ showDetails: true })}
@@ -546,17 +545,14 @@ function SystemsWorkspace(props: {
               class="systems-state"
               role="status"
               style={{
-                visibility:
-                  props.inventoryRead.pending() && !controller().state.inventory
-                    ? "hidden"
-                    : undefined,
+                visibility: controller().connected() && !inventoryKnown() ? "hidden" : undefined,
               }}
             >
               <span class="systems-state__icon" aria-hidden="true">
                 <Icon name="monitor" />
               </span>
               <h2>{emptyTitle()}</h2>
-              <p>{emptyHint()}</p>
+              {controller().connected() ? <p>{emptyHint()}</p> : null}
               {row() ? (
                 <button
                   class="systems-text-button"

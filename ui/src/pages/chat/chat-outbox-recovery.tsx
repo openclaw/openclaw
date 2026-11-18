@@ -116,8 +116,8 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
     const request = ++generation;
     const host = props.host;
     const owner = readOwner();
-    setDrafts([]);
     if (!owner) {
+      setDrafts([]);
       setEntries([]);
       setError("");
       return;
@@ -136,7 +136,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         }
       }
       setEntries(recovery?.entries ?? []);
-      setError(retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : ""));
+      // A background check is not recovery: retain rows and feedback until storage answers.
       const result = await (await loadDraftStore()).prepareDurableComposerRecovery(owner);
       if (request !== generation || !isConnected()) {
         return;
@@ -145,6 +145,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: () => HTMLEleme
         throw new Error("storage-failed");
       }
       setDrafts(result.entries);
+      setError(retirementError || (recovery?.blocked ? t("chat.outboxRecoveryFull") : ""));
     } catch {
       if (request !== generation || !isConnected()) {
         return;

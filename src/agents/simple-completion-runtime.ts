@@ -138,6 +138,9 @@ export async function prepareModelWithCredentials(
       preparedModelRuntime.workspaceDir ??
       resolveAgentWorkspaceDir(config, params.agentId ?? resolveDefaultAgentId(config)),
     modelResolver: params.modelResolver,
+    selectedModelStores:
+      params.selectedModelStores ??
+      (params.transport !== "provider-stream" && !params.modelResolver),
     agentRuntimeId: params.agentRuntimeId,
   });
   const prepared = await withPluginRuntimeGenerationScope(preparedModelRuntime, () =>
@@ -451,7 +454,8 @@ async function prepareModelWithCredentialsCore(
         })
       : fingerprintResolvedProviderAuth(auth)
     : undefined;
-  await import("./ai-transport-runtime-host.js");
+  const { configureAiTransportRuntimeHost } = await import("./ai-transport-runtime-host.js");
+  configureAiTransportRuntimeHost();
   assertCurrent?.();
   params.signal?.throwIfAborted();
   const modelRuntime = getModelRegistryRuntime(resolved.modelRegistry);

@@ -246,7 +246,7 @@ async function publicationFixture(name = "@maker/research-brief") {
       name,
       family: "template",
       channel: "community",
-      ownerHandle: "maker",
+      ownerHandle: name.startsWith("@") ? name.slice(1).split("/")[0] : "maker",
       expectedArtifactSha256: digest,
     });
     uploads.push(bytes);
@@ -379,7 +379,7 @@ Research public sources.
     );
     const choices = {
       name: "public-researcher",
-      description: "Researches public sources for a new user.",
+      description: "Researches public sources for a new user. ",
       excluded: [
         "file:workspace/checklist.md",
         "package:skill:clawhub:@maker/sources",
@@ -607,10 +607,45 @@ Research public sources.
         code: change === "authority" ? "FORBIDDEN" : "INVALID_REQUEST",
         message:
           change === "authority"
-            ? "Create, review, and publish Templates from an active administrator Control UI connection."
+            ? "Create, review, and publish Templates from the OpenClaw app while connected as an administrator."
             : "The draft or publisher changed. Review the current files before publishing.",
       });
       expect(fixture.posts).toBe(0);
     },
   );
+
+  it("normalizes mixed-case and padded /whoami handles to lowercase personal publishers", async () => {
+    const fixture = await publicationFixture("@mertbasar0/research-brief");
+    fixture.identity.publisher = "  MertBasar0  ";
+    const review = await fixture.review();
+    expect(review.name).toBe("@mertbasar0/research-brief");
+
+    const accepted = await fixture.publish(review.reviewToken);
+    expect(accepted[0], JSON.stringify(accepted[2])).toBe(true);
+    expect(accepted[1]).toMatchObject({
+      name: "@mertbasar0/research-brief",
+      url: `${registryUrl}/mertbasar0/templates/research-brief`,
+      publicationStatus: "pending",
+      attemptId: "fixture_attempt",
+    });
+
+    fixture.registry.attemptStatus = "finalized";
+    const checked = await fixture.check({
+      reviewToken: review.reviewToken,
+      attemptId: "fixture_attempt",
+    });
+    expect(checked[0], JSON.stringify(checked[2])).toBe(true);
+    expect(checked[1]).toMatchObject({
+      publisher: "mertbasar0",
+      publicationState: {
+        status: "published",
+        publication: {
+          name: "@mertbasar0/research-brief",
+          url: `${registryUrl}/mertbasar0/templates/research-brief`,
+          publicationStatus: "published",
+        },
+      },
+    });
+    expect(fixture.posts).toBe(1);
+  });
 });

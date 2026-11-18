@@ -88,6 +88,8 @@ export type ReplyMessageInjectionOptions = ReplyBackendQueueMessageOptions & {
   allowCollaborativeSteering?: boolean;
   /** Accepted sender facts when the ingress owner already prepared route-specific authority. */
   personalToolParticipant?: ReplyTurnParticipantInput;
+  /** Verified paired device that wrote this human input; omitted for device-less sources. */
+  inputRequesterDeviceId?: string;
   /** Composed into V2's final admission assertion after asynchronous preparation. */
   assertCurrent?: () => void;
 };

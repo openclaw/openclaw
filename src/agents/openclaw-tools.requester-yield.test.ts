@@ -21,7 +21,7 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
-import { addSession, markExited } from "./bash-process-registry.js";
+import { addSession, markExited, type ProcessSession } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
@@ -591,6 +591,32 @@ describe("requester yield ownership", () => {
     },
   );
 
+  it.each([
+    { deadlineAtMs: Date.now() + 60_000, expected: "yielded" },
+    { deadlineAtMs: undefined, expected: "error" },
+  ])(
+    "awaits a wake-armed command of its chat, bounded by its deadline ($expected)",
+    async ({ deadlineAtMs, expected }) => {
+      const sessionKey = "agent:main:subagent:watcher";
+      await seedNativeChild({ runId: "run-watcher", childSessionKey: sessionKey });
+      // No run owns the command: an earlier run on this chat may have started it.
+      const process = Object.assign(backgroundProcess(sessionKey), {
+        agentId: "main",
+        notifyOnExit: true,
+        notifyOnExitEmptySuccess: true,
+        notifySessionTarget: {} as NonNullable<ProcessSession["notifySessionTarget"]>,
+        exitWakeAfterYield: true as const,
+        processActivity: { deadlineAtMs, resultSettled: false, lastOutputAtMs: Date.now() },
+      });
+      const onYield = vi.fn();
+
+      await expectYield(watcherTool({ onYield }), expected);
+      // Only an accepted yield arms the exit to resume this run.
+      expect(onYield).toHaveBeenCalledTimes(expected === "yielded" ? 1 : 0);
+      expect(process.resumesYieldedRun).toBe(expected === "yielded" ? true : undefined);
+    },
+  );
+
   it("preserves a runtime completion claim with an owned background exec", async () => {
     const sessionKey = "agent:main:subagent:watcher";
     backgroundProcess(sessionKey);
@@ -728,6 +754,14 @@ describe("requester yield ownership", () => {
     expect(turn2Yield).not.toHaveBeenCalled();
     // Reporting must not disturb the armed wake or claim the child for turn 2.
     expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
+
+    const acknowledgment =
+      "The existing task is still running. I will report back when it finishes.";
+    const waiting = await turn2.execute("yield-waiting-reply", { acknowledgment });
+    expect(waiting.details).toMatchObject({ status: "yielded", acknowledgment });
+    expect(turn2Yield).toHaveBeenCalledExactlyOnceWith("Turn yielded.", acknowledgment, undefined);
+    expect(getSubagentRunByRunId(child.runId)).toEqual(settled);
+    turn2Yield.mockClear();
 
     // The completion owner stays dispatching until its requester continuation returns.
     assert(settled?.requesterSettleWake);

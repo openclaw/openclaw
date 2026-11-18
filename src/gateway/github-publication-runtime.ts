@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import { githubPublicationReceipts } from "../state/github-publication-receipts.js";
 import { createGitHubPublicationWorkerScope } from "../state/github-publication-worker.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -146,16 +147,17 @@ export function createGitHubPublicationRuntime(params: {
     reconcileNeeded = true;
   };
   const reconcilePublications = async (isStopping?: () => boolean) => {
-    if (isStopping?.()) {
+    const isPaused = () => isStopping?.() || isConstrainedProcessLowOnMemory();
+    if (isPaused()) {
       return;
     }
     await ready;
-    if (isStopping?.()) {
+    if (isPaused()) {
       return;
     }
     try {
       const isPendingEmpty = !pendingKnown ? await loadPendingRequests() : undefined;
-      if (isStopping?.()) {
+      if (isPaused()) {
         return;
       }
       if (!reconcileNeeded && pendingRequests.size === 0) {
@@ -166,20 +168,20 @@ export function createGitHubPublicationRuntime(params: {
       reconcileNeeded = false;
       try {
         await coordinator.deferOrphanedRequestsAsync(isPendingEmpty);
-        if (!isStopping?.()) {
-          await coordinator.resumeSessionRequests(isStopping, isPendingEmpty);
+        if (!isPaused()) {
+          await coordinator.resumeSessionRequests(isPaused, isPendingEmpty);
         }
       } catch (error) {
         reconcileNeeded = true;
         params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
       }
-      if (isStopping?.()) {
+      if (isPaused()) {
         reconcileNeeded = true;
         return;
       }
       try {
         for (const publication of await coordinator.listUnreportedResultsAsync()) {
-          if (isStopping?.()) {
+          if (isPaused()) {
             reconcileNeeded = true;
             break;
           }

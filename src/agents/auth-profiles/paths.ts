@@ -16,10 +16,7 @@ import {
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "./sqlite-read.js";
-import {
-  inspectPersistedAuthProfileStoreRaw,
-  resolveAuthProfileDatabaseOwnerId,
-} from "./sqlite.js";
+import { inspectPersistedAuthProfileStoreRaw } from "./sqlite.js";
 import type { AuthProfileRowRead } from "./types.js";
 
 export { resolveOAuthRefreshLockPath };
@@ -69,9 +66,8 @@ export async function resolveAuthStorePathForDisplayAsync(
     ? path.join(resolveUserPath(agentDir, capturedEnv), "openclaw-agent.sqlite")
     : undefined;
   const local = localPath
-    ? prepareAgentAuthProfileRowsRead({
+    ? await prepareAgentAuthProfileRowsRead({
         databasePath: localPath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(localPath)),
         env: capturedEnv,
       })
     : undefined;

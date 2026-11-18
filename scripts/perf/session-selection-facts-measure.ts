@@ -19,6 +19,12 @@
  * without changing totals, facets or membership of the returned page.
  * --selection-shapes compares retained paging, Activity people facets and sidebar
  * owner counts at --sessions 15000/60000, with row churn across 15 live sessions.
+ * --list-source and --view-cache-source load pinned owner copies from any path.
+ * --cache-pressure --sidebar-counts --listeners 1 measures 22 audience slots with
+ * three 200-row sidebar views and one count query each. Acceptance: preserve all
+ * 66 conditional sidebar baselines at 15k/60k rows; report heap and filter visits.
+ * Count acceleration may be retired under the existing byte budget. Run pressure
+ * separately from timing/allocation; do not call cache admission wall-time proof.
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -42,7 +48,6 @@ import { createSessionIdentityProjection } from "../../src/gateway/session-ident
 import { readSessionListSelectionFacts } from "../../src/gateway/session-list-target.js";
 import type { Row, SelectionChange } from "../../src/gateway/session-row-projection-record.js";
 import { createProfileSessionEntryFilter } from "../../src/gateway/session-sharing-read.js";
-import { selectSessionEntries } from "../../src/gateway/session-utils-list.js";
 import { buildSessionListRowMetadataContext } from "../../src/gateway/session-utils-projection.js";
 import { notifyListeners } from "../../src/shared/listeners.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -57,6 +62,9 @@ const { values } = parseArgs({
     mode: { type: "string", default: "timing" },
     "sidebar-counts": { type: "boolean", default: false },
     "selection-shapes": { type: "boolean", default: false },
+    "cache-pressure": { type: "boolean", default: false },
+    "list-source": { type: "string", default: "src/gateway/session-utils-list.ts" },
+    "view-cache-source": { type: "string", default: "src/gateway/session-list-view-cache.ts" },
     "filter-source": { type: "string", default: "src/gateway/session-list-filters.ts" },
   },
 });
@@ -90,6 +98,33 @@ const filterHook = registerHooks({
 const { filterSessionEntries }: typeof import("../../src/gateway/session-list-filters.js") =
   await import(filterUrl);
 filterHook.deregister();
+const listSource = path.resolve(values["list-source"]);
+const cacheSource = path.resolve(values["view-cache-source"]);
+const listUrl = `${new URL("../../src/gateway/session-utils-list.ts", import.meta.url).href}?measured-list`;
+const cacheUrl = `${new URL("../../src/gateway/session-list-view-cache.ts", import.meta.url).href}?measured-cache`;
+const ownerHook = registerHooks({
+  load(url, context, nextLoad) {
+    const ownerSource = url === listUrl ? listSource : url === cacheUrl ? cacheSource : undefined;
+    if (!ownerSource) {
+      return nextLoad(url, context);
+    }
+    const contents = readFileSync(ownerSource, "utf8");
+    return {
+      format: "module-typescript",
+      source:
+        url === listUrl
+          ? contents.replace('"./session-list-filters.js"', JSON.stringify(filterUrl))
+          : contents,
+      shortCircuit: true,
+    };
+  },
+});
+const { selectSessionEntries }: typeof import("../../src/gateway/session-utils-list.js") =
+  await import(listUrl);
+const { SessionListViewCache }: typeof import("../../src/gateway/session-list-view-cache.js") =
+  await import(cacheUrl);
+ownerHook.deregister();
+assert(!values["cache-pressure"] || (values["sidebar-counts"] && listenerCount === 1));
 const sharing = createProfileSessionEntryFilter(
   { profileId: "synthetic", sessionCap: "view" },
   (actor) => actor?.id === "synthetic",
@@ -175,6 +210,7 @@ for (const name of workloads) {
   for (const owner of owners) {
     owner.read();
   }
+  let lastParams: Parameters<typeof selectSessionEntries>[0] | undefined;
   let revision = 0;
   let filterCalls = 0;
   let filtered:
@@ -254,14 +290,75 @@ for (const name of workloads) {
           return sharing(key, entry);
         },
       };
-      filtered =
-        name === "sidebar"
-          ? filterSessionEntries(params, { offset: 0, limit: 1, ownerLimit: 0 })
-          : selectSessionEntries(params);
+      lastParams = params;
+      filtered = selectSessionEntries(params);
     }
   };
   for (let index = 0; index < 500; index++) {
     run();
+  }
+  if (values["cache-pressure"]) {
+    assert(lastParams);
+    const cache = new SessionListViewCache();
+    const projected = new WeakMap<object, { key: string; kind: "direct"; updatedAt: number }>();
+    const rounds = [];
+    for (let round = 0; round < 2; round++) {
+      const filteredBefore = filterCalls;
+      if (round) {
+        run();
+      }
+      for (let audience = 0; audience < 22; audience++) {
+        for (const sortBy of ["updatedAt", "lastInteractionAt", "activity"] as const) {
+          const selected = owners[0]!.read(sortBy);
+          const view = cache.get(`selection:${audience}:${sortBy}`);
+          view.selection = selectSessionEntries({
+            ...lastParams,
+            opts: { limit: 200, archived: "all", sortBy },
+            entries: selected.entries,
+            partitions: selected.partitions,
+            retained: cache.partitions(view),
+          });
+          cache.update(view);
+          const sidebarRows = view.selection.entries.map(([key, entry]) => {
+            let row = projected.get(entry);
+            if (!row) {
+              row = Object.freeze({
+                key,
+                kind: "direct" as const,
+                updatedAt: entry.updatedAt ?? 0,
+              });
+              projected.set(entry, row);
+            }
+            return row;
+          });
+          cache.setRows(cache.get(`rows:${audience}:${sortBy}`), sidebarRows, true);
+        }
+        const selected = owners[0]!.read("updatedAt");
+        const view = cache.get(`counts:${audience}`);
+        view.selection = selectSessionEntries({
+          ...lastParams,
+          entries: selected.entries,
+          partitions: selected.partitions,
+          retained: cache.partitions(view),
+        });
+        cache.update(view);
+      }
+      const views = [...cache.values()];
+      rounds.push({
+        round,
+        filters: filterCalls - filteredBefore,
+        retainedSidebar: views.filter((view) => view.key.startsWith("rows:") && view.rows).length,
+        views: views.length,
+        bytes: views.reduce((sum, view) => sum + view.bytes, 0),
+        retainedCountPartitions: views
+          .filter((view) => view.key.startsWith("counts:"))
+          .reduce((sum, view) => sum + (view.partitions?.size ?? 0), 0),
+      });
+    }
+    global.gc();
+    results.push({ name, rounds, memoryAfterGc: process.memoryUsage() });
+    cache.clear();
+    continue;
   }
   filterCalls = 0;
   global.gc();
@@ -341,6 +438,8 @@ for (const name of workloads) {
     sampledBytesPerUpdate: bytes === undefined ? undefined : bytes / iterations,
     p50Ms: times[Math.floor(iterations * 0.5)],
     p99Ms: times[Math.min(iterations - 1, Math.floor(iterations * 0.99))],
+    maxMs: times.at(-1),
+    over180: times.filter((time) => time > 180).length,
     gcMs,
     gcMsPerUpdate: gcMs / iterations,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
@@ -356,6 +455,8 @@ console.log(
   JSON.stringify({
     node: process.version,
     source,
+    listSourceSha256: createHash("sha256").update(readFileSync(listSource)).digest("hex"),
+    cacheSourceSha256: createHash("sha256").update(readFileSync(cacheSource)).digest("hex"),
     filterSourceSha256: createHash("sha256").update(readFileSync(filterSource)).digest("hex"),
     sourceSha256: createHash("sha256").update(readFileSync(source)).digest("hex"),
     recordSource,

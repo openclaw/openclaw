@@ -93,6 +93,9 @@ async function setup(
       paused.add(target);
     }
     if (args[0] === "unpause") {
+      if (!physical.has(target)) {
+        return { code: 1, stdout: "", stderr: "no such container" };
+      }
       paused.delete(target);
     }
     if (args[0] === "rm") {
@@ -191,7 +194,7 @@ it.each(["before", "after"] as const)(
       h.command.mock.calls
         .filter(([, args]) => args[0] === "unpause")
         .map(([, args]) => args.at(-1)),
-    ).toEqual(phase === "before" ? [oldId] : []);
+    ).toEqual([oldId]);
   },
 );
 it.each(

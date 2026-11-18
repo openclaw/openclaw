@@ -16,6 +16,12 @@ All plugin APIs are [experimental](/plugins/sdk-overview#api-stability),
 including these entry helpers. Pin and test the OpenClaw host versions your
 plugin supports.
 
+`openclaw/plugin-sdk/plugin-entry` also exports the named
+`PluginHookBeforeModelRequestEvent` and `PluginHookBeforeModelRequestResult`
+contracts for [model request hooks](/plugins/hooks/prompt-and-session#final-model-request-policy),
+plus `PluginMetricFamilyDeclaration`, `PluginMetricLabels`, `PluginMetrics`, and
+`PluginMetricFamily` for [plugin metrics](/gateway/prometheus#plugin-metric-families).
+
 Gateway adapters use the existing `core` or `gateway-runtime`
 `GatewayRequestHandlerOptions.context.githubPublicationService` contract for
 GitHub publication. Prepare its required capabilities with

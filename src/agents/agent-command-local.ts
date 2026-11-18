@@ -9,6 +9,7 @@ import {
 import { settleWithCleanup } from "../infra/error-graph-internal.js";
 import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { ensureGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createLegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
@@ -47,7 +48,8 @@ export async function runLocalAgentCommand<TResult>(params: {
 }): Promise<TResult> {
   const existingHost = getBoundLegacyPluginSdkResourceHost();
   const scheduler = existingHost ? existingHost.scheduler : new GatewayScheduler();
-  const host = existingHost ?? new LegacyPluginSdkResourceHost();
+  const host =
+    existingHost ?? new LegacyPluginSdkResourceHost(createLegacyPluginSdkReplyDispatch());
   if (!existingHost) {
     host.bindScheduler(scheduler);
   }
