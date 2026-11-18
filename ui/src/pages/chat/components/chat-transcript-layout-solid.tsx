@@ -16,7 +16,6 @@ import {
 } from "../solid-render-lifecycle.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
-  TranscriptReadPresentation,
   TranscriptRowKeyContext,
   type TranscriptContent,
   type TranscriptLayoutProps,
@@ -25,6 +24,7 @@ import {
 import { TranscriptMediaDisconnect } from "./chat-transcript-media-lifecycle.ts";
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-read-presentation.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import { nativeRows, type NativeTranscriptView } from "./chat-transcript-rows.ts";
 

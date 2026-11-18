@@ -6,7 +6,7 @@ import { createIntersectionObserver } from "../../../lib/reactive/observers.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
-import { TranscriptReadPresentation } from "./chat-transcript-layout.ts";
+import { TranscriptReadPresentation } from "./chat-transcript-read-presentation.ts";
 
 /** The mounted source bubble, not session activation or prewarming, acknowledges a mention. */
 export function createChatMentionReadRef(
