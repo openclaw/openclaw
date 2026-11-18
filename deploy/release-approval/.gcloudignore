@@ -1,7 +1,0 @@
-*
-!Dockerfile
-!package.json
-!package-lock.json
-!server.mjs
-!service.mjs
-!.dockerignore

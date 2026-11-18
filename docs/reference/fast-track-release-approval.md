@@ -91,9 +91,26 @@ unknown fields are also displayed. JSON is retained for exact hashing/storage,
 not dumped into the human review card. Decision buttons keep the same immutable
 request/digest binding and disappear after the first decision.
 
+## Manual checks (not CI)
+
+Approval-client checks are deliberately outside the standard `*.test.ts` CI
+inventory. Run them explicitly before changing these operator tools:
+
+```sh
+node scripts/run-vitest.mjs run --config test/manual-release-approval.config.ts
+```
+
+The manual configuration refuses execution when `CI` is set. No test-budget
+allocation is required for this manual suite. Existing unrelated release tests
+remain in their normal CI lanes. Backend/callback tests belong with the separately
+owned approval service, not this repository. Client tests do not import its
+implementation or require access to its source.
+
 ## Independent human decision
 
-The standalone service in `deploy/release-approval/` has no OpenClaw dependency.
+Service deployment and backend implementation are owned separately and are not
+shipped from this repository. This repository owns only the approval client and
+release-request/verification contracts.
 Only authenticated Google Chat Workspace add-on button events from the exact
 Vincent/Dallin allowlist can settle requests. Email enrollment is pinned to stable
 Google user IDs in private DMs. The managing account is not an approver. App

@@ -5,16 +5,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   exchangeFastTrackApproval,
   verifyFastTrackApproval,
-} from "../../scripts/lib/release-fast-track-approval.mts";
+} from "../scripts/lib/release-fast-track-approval.mts";
 import {
   collectFastTrackEligibility,
   fastTrackRequestDigest,
   parseFastTrackRequest,
   serializeFastTrackRequest,
   type FastTrackRequest,
-} from "../../scripts/lib/release-fast-track-contract.mts";
-import { runReleasePublishPreflightCommand } from "../../scripts/release-publish-preflight.mts";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+} from "../scripts/lib/release-fast-track-contract.mts";
+import { runReleasePublishPreflightCommand } from "../scripts/release-publish-preflight.mts";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const digest = `sha256:${"a".repeat(64)}`;
@@ -289,30 +289,6 @@ it("requires live exact approval after recomputing the publisher delta, not a Gi
   } finally {
     vi.unstubAllGlobals();
   }
-});
-
-it("serializes release requests unchanged across the independently deployable service boundary", () => {
-  const value = { ...request(), expiresAt: new Date(Date.now() + 3600000).toISOString() };
-  const serviceUrl = new URL("../../deploy/release-approval/service.mjs", import.meta.url).href;
-  const output = execFileSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `
-    import { readFileSync } from 'node:fs';
-    import { parseRequest } from ${JSON.stringify(serviceUrl)};
-    console.log(JSON.stringify(parseRequest({ payload: readFileSync(0, 'utf8') }, Date.now())));
-  `,
-    ],
-    { input: serializeFastTrackRequest(value), encoding: "utf8" },
-  );
-  expect(JSON.parse(output)).toMatchObject({
-    requestId: value.requestId,
-    payload: serializeFastTrackRequest(value),
-    digest: fastTrackRequestDigest(value),
-    state: "pending",
-  });
 });
 
 it("submits canonical review bytes and reads only the bound result without any machine approval operation", async () => {
