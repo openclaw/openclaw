@@ -91,4 +91,68 @@ describe("shared local Template review", () => {
     expect(view.getByRole("button", { name: "@example/weather", exact: true })).toBeTruthy();
     view.unmount();
   });
+
+  it("uses canonical automation names and readable redacted MCP details", () => {
+    const value = plan();
+    const manifest = JSON.parse(value.manifestDisclosure!.manifestJson);
+    value.manifestDisclosure!.manifestJson = JSON.stringify({
+      ...manifest,
+      automations: [{ id: "daily-check", name: "Morning briefing" }],
+    });
+    value.scheduledJobs = {
+      coverage: "package-declarations",
+      jobs: [
+        {
+          id: "daily-check",
+          action: "create",
+          blocked: false,
+          proposed: {
+            enabled: true,
+            schedule: { cron: "0 9 * * *", timezone: "UTC" },
+            session: "isolated",
+            delivery: "none",
+            messageDigest: "digest",
+            message: "Prepare briefing",
+          },
+        },
+      ],
+    };
+    value.actions.push({
+      kind: "mcpServer",
+      id: "incident-tools",
+      action: "create",
+      blocked: false,
+      effect: {
+        type: "mcp-server",
+        proposed: {
+          transport: "stdio",
+          command: "npx",
+          arguments: ["--isolated"],
+          environment: [{ name: "TOKEN", sourceName: "EXAMPLE_TOKEN" }],
+          authentication: "none",
+        },
+      },
+    });
+    const view = mountSolid(() => (
+      <TemplateImportReview plan={value} readPackagePreview={() => Promise.resolve(null)} />
+    ));
+    view.getByRole("button", { name: /MCP servers/ }).click();
+    flush();
+    view.getByRole("button", { name: "incident-tools", exact: true }).click();
+    flush();
+    expect(view.getByText("Arguments")).toBeTruthy();
+    expect(view.getByText("--isolated")).toBeTruthy();
+    expect(view.container.textContent).toContain("${EXAMPLE_TOKEN}");
+    expect(view.container.textContent).not.toContain("templatesDraft.serverFields.");
+    view.getByRole("button", { name: "Back to contents" }).click();
+    flush();
+    view.getByRole("button", { name: "Back to Template" }).click();
+    flush();
+    view.getByRole("button", { name: /Automations/ }).click();
+    flush();
+    view.getByRole("button", { name: "Morning briefing", exact: true }).click();
+    flush();
+    expect(view.getByText("Prepare briefing")).toBeTruthy();
+    view.unmount();
+  });
 });

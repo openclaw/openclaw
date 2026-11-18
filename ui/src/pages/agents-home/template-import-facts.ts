@@ -32,7 +32,7 @@ export function templateImportFacts(plan: TemplateAddReviewPlan) {
   const automations = Array.isArray(manifest.automations) ? manifest.automations : [];
   const mcpServers = plan.actions.flatMap((action) =>
     action.effect?.type === "mcp-server"
-      ? [{ id: action.id, action: action.action, ...action.effect.proposed }]
+      ? [{ id: action.id, proposed: action.effect.proposed }]
       : [],
   );
   const schedules = (plan.scheduledJobs?.jobs ?? []).map((job) => {

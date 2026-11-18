@@ -44,7 +44,26 @@ export function TemplateImportReview(props: {
         id: "mcp:" + server.id,
         kind: "mcp",
         label: server.id,
-        detail: JSON.stringify(server),
+        detail: JSON.stringify({
+          transport: server.proposed?.transport,
+          command: server.proposed?.command,
+          args: server.proposed?.arguments,
+          env:
+            server.proposed?.environment &&
+            Object.fromEntries(
+              server.proposed.environment.map(({ name, sourceName }) => [
+                name,
+                "${" + sourceName + "}",
+              ]),
+            ),
+          url: server.proposed?.url,
+          urlDigest: server.proposed?.urlDigest,
+          queryParameterNames: server.proposed?.queryParameterNames,
+          auth: server.proposed?.authentication,
+          toolFilter: server.proposed?.toolFilter,
+          timeout: server.proposed?.timeout,
+          connectTimeout: server.proposed?.connectTimeout,
+        }),
         included: true,
       })),
       ...facts.schedules.flatMap((job): TemplateDraftReviewItem[] =>

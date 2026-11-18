@@ -1,15 +1,17 @@
 import { createHash } from "node:crypto";
 import { readFile, writeFile, mkdir, stat } from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import * as tar from "tar";
 import { expect, it } from "vitest";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../../../test/helpers/openclaw-test-instance.ts";
+import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -31,37 +33,68 @@ const suite = createControlUiE2eSuite({
     ]) {
       expect((await readFile(file)).length, file).toBeGreaterThan(0);
     }
-    const owner = await createOpenClawTestInstance({
-      name: "template-upload",
-      entrypoint: ["dist/index.js"],
-      env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-      config: {
-        gateway: {
-          controlUi: {
-            enabled: true,
-            root: path.resolve("dist/control-ui"),
-            experimental: { templates: true },
-          },
-          reload: { mode: "hybrid" },
-        },
-        plugins: { allow: [] },
-        cron: { enabled: false },
-        logging: { level: "info", consoleLevel: "error" },
-      },
+    // Installation now starts the agent’s greeting. Keep that real Gateway path,
+    // but script only its loopback model response; this is not external-provider proof.
+    const provider = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, response) => {
+          request.resume();
+          request.once("end", () => {
+            if (request.method !== "POST" || request.url !== "/v1/responses") {
+              response.writeHead(404).end();
+              return;
+            }
+            writeOpenAiResponsesText(response, {
+              text: "Synthetic upload greeting.",
+              messageId: "upload-proof-message",
+              responseId: "upload-proof-response",
+            });
+          });
+        }),
     });
-    instance = owner;
+    const cleanup = () =>
+      runQaGatewayFixture(
+        () => instance?.cleanup(),
+        async () => {
+          provider.listener.closeAllConnections();
+          await provider.releaseListener();
+        },
+        () => provider.claim.release(),
+      );
     try {
+      const owner = await createChatGatewayInstance({
+        name: "template-upload",
+        provider: "template-upload-fixture",
+        identity: "Upload fixture",
+        model: "echo",
+        apiKey: "synthetic-unused-key",
+        baseUrl: `http://127.0.0.1:${provider.claim.port}/v1`,
+        models: [{ id: "echo", name: "Echo" }],
+        entrypoint: ["dist/index.js"],
+        config: {
+          gateway: {
+            controlUi: {
+              enabled: true,
+              root: path.resolve("dist/control-ui"),
+              experimental: { templates: true },
+            },
+            reload: { mode: "hybrid" },
+          },
+          plugins: { allow: [] },
+          cron: { enabled: false },
+          logging: { level: "info", consoleLevel: "error" },
+        },
+      });
+      instance = owner;
       const validation = await owner.cli(["config", "validate", "--json"]);
       expect(validation.code, validation.stdout || validation.stderr).toBe(0);
       await owner.startGateway();
-      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: () => owner.cleanup() };
+      return { baseUrl: `http://127.0.0.1:${owner.port}/`, close: cleanup };
     } catch (error) {
-      return await runQaGatewayFixture(
-        async (): Promise<never> => {
-          throw error;
-        },
-        () => owner.cleanup(),
-      );
+      return await runQaGatewayFixture(async (): Promise<never> => {
+        throw error;
+      }, cleanup);
     }
   },
 });
@@ -102,6 +135,35 @@ suite.define(() => {
     const url = new URL("templates", handoff.browserUrl);
     url.hash = new URL(handoff.browserUrl).hash;
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      // Network review/install completion is not the renderer's one-second polling budget.
+      // Observe the real browser RPC; never call the owner directly or extend a timeout.
+      const receipts = {
+        "templates.add.plan": Promise.withResolvers<boolean>(),
+        "templates.add.apply": Promise.withResolvers<boolean>(),
+      };
+      const requests = new Map<string, keyof typeof receipts>();
+      page.on("websocket", (socket) => {
+        socket.on("framesent", ({ payload }) => {
+          const frame = asOptionalRecord(JSON.parse(payload.toString()));
+          if (
+            frame?.type === "req" &&
+            typeof frame.id === "string" &&
+            (frame.method === "templates.add.plan" || frame.method === "templates.add.apply")
+          ) {
+            requests.set(frame.id, frame.method);
+          }
+        });
+        socket.on("framereceived", ({ payload }) => {
+          const frame = asOptionalRecord(JSON.parse(payload.toString()));
+          const method =
+            frame?.type === "res" && typeof frame.id === "string"
+              ? requests.get(frame.id)
+              : undefined;
+          if (method) {
+            receipts[method].resolve(frame?.ok === true);
+          }
+        });
+      });
       expect((await page.goto(url.toString()))?.status()).toBe(200);
       await waitForControlUiGatewayReady(page);
       const importButton = page.getByRole("button", { name: "Import", exact: true });
@@ -123,14 +185,13 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [content], {
           animations: "disabled",
           viewport: { width: 1280, height: 900 },
-          scrollTo: content,
         });
         await writeFile(path.join(suite.artifactDir, name), frame.png);
       };
-      await capture("entry.png", importButton);
       const picker = page.waitForEvent("filechooser");
       await importButton.click();
       await (await picker).setFiles(archive);
+      expect(await receipts["templates.add.plan"].promise).toBe(true);
       await page.getByRole("dialog", { name: "Import Template" }).waitFor();
       const dialog = page.getByRole("dialog", { name: "Import Template" });
       await expect
@@ -141,6 +202,7 @@ suite.define(() => {
       await expect.poll(() => confirm.isVisible()).toBe(true);
       await capture("review.png", confirm);
       await confirm.click();
+      expect(await receipts["templates.add.apply"].promise).toBe(true);
       const success = page.getByText("Installed agent: upload-proof", { exact: true });
       await expect.poll(() => success.isVisible()).toBe(true);
       await capture("installed.png", success);
@@ -148,6 +210,10 @@ suite.define(() => {
       const agent = config.agents.entries["upload-proof"];
       expect(agent).toBeTruthy();
       expect((await stat(agent.workspace)).isDirectory()).toBe(true);
+      // The manifest’s Markdown body owns SOUL.md, not undeclared archive files.
+      expect(await readFile(path.join(agent.workspace, "SOUL.md"), "utf8")).toBe(
+        "Synthetic upload proof.\n",
+      );
     });
   });
 });

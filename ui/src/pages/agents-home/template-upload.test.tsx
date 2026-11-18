@@ -126,6 +126,8 @@ describe("TemplateUpload", () => {
     flush();
     expect(confirm.disabled).toBe(true);
     expect(confirm.textContent).toBe("Importing…");
+    expect(confirm.getAttribute("aria-label")).toBe("Importing…");
+    expect(confirm.getAttribute("aria-busy")).toBe("true");
     expect(confirm.querySelector('.btn__spinner[aria-hidden="true"]')).not.toBeNull();
     expect(confirm.querySelector('[role="status"]')?.textContent).toBe("Importing…");
     expect(view.container.querySelector('.oc-dialog__body > [role="status"]')).toBeNull();

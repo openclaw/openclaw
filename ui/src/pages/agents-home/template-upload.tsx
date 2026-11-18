@@ -205,6 +205,10 @@ export function TemplateUpload() {
             <button
               type="button"
               class="btn primary"
+              aria-label={t(
+                busy() ? "templatesCatalog.importingArchive" : "templatesCatalog.importButton",
+              )}
+              aria-busy={busy() ? "true" : undefined}
               aria-describedby={
                 review()?.riskAcknowledgementRequired
                   ? consentId + " " + acknowledgementId
