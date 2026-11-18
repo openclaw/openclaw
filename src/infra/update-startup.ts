@@ -24,6 +24,7 @@ import {
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 import { compareSemverStrings } from "./npm-registry-spec.js";
+import { detectRespawnSupervisor } from "./supervisor-markers.js";
 import { checkTelemetryUpdate } from "./telemetry.js";
 import { UpdateCampaignController } from "./update-campaign.js";
 import {
@@ -41,6 +42,9 @@ import { resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js"
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { prepareStartupUpdateInstall, withUpdateInstallStatus } from "./update-install-status.js";
 import type { StartupInstallStatus } from "./update-install-status.types.js";
+import { selectUpdateOwedSteps, UPDATE_OWED_STEP_HISTORY } from "./update-run-owed-step.js";
+import { listUpdateRunsAsync } from "./update-run-reader.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import { canRunDevGitCampaign, resolveDevGitUpdate } from "./update-startup-refresh.js";
 import {
@@ -210,6 +214,38 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
+/**
+ * Owed plugin convergence a same-version campaign can still retry, from runs listed newest first.
+ * Each row gets one such campaign: a same-version campaign run created at or after the run that
+ * owes the row (including that run, when the retry owed it again) ends automatic retries until a
+ * real update or a manual command takes the row. A Doctor-only row is not a reason to restart:
+ * the update path settles it only after changing plugins.
+ */
+function owesPluginRetry(runs: readonly UpdateRunRecord[]): boolean {
+  if (runs.some((run) => run.status === "running")) {
+    return false;
+  }
+  const retried = (run: UpdateRunRecord) =>
+    run.trigger === "campaign" && run.target.version === VERSION && run.before.version === VERSION;
+  return selectUpdateOwedSteps(runs).some((step) => {
+    const owner = runs.find((run) => run.runId === step.runId);
+    return (
+      step.id === "plugin-convergence" &&
+      owner !== undefined &&
+      (owner.after.version ?? owner.target.version) === VERSION &&
+      !runs.some((run) => run.createdAtMs >= owner.createdAtMs && retried(run))
+    );
+  });
+}
+
+/** Unreadable history proves nothing is owed, so it never starts a retry. */
+async function readOwedPluginRetry(): Promise<boolean> {
+  return listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
+    owesPluginRetry,
+    () => false,
+  );
+}
+
 async function recordAutoUpdateAttempt(version: string): Promise<void> {
   const attemptAt = resolveUpdateCheckNowMs(Date.now());
   const attemptState = await readState();
@@ -272,6 +308,8 @@ async function runGatewayUpdateCheckOwned(
     installStatus: StartupInstallStatus,
     channel: "stable" | "beta" | "dev",
     tag: string,
+    // Revalidates live state after the idle wait, immediately before the update run is created.
+    admit?: () => Promise<boolean>,
   ) => {
     const { root, status } = installStatus;
     const canApply = () => {
@@ -332,8 +370,13 @@ async function runGatewayUpdateCheckOwned(
         setSchedule(campaign ? { ...current, campaign } : withoutUpdateCampaign(current));
       },
       apply: ({ forced, target: admittedTarget }) =>
-        lifecycle.run(() =>
-          runCampaignUpdate({
+        lifecycle.run(async () => {
+          // Ending the campaign here settles only this campaign; a newer one keeps its target.
+          if (admit && !(await admit())) {
+            params.log.info("update campaign ended before applying: nothing left to retry");
+            return "failed";
+          }
+          return runCampaignUpdate({
             channel,
             mode: admittedTarget.kind === "git" ? "git" : status.packageManager,
             version:
@@ -351,8 +394,8 @@ async function runGatewayUpdateCheckOwned(
             campaign: updateCampaign,
             onUpdateRunCreated: params.onUpdateRunCreated,
             signal: params.signal,
-          }),
-        ),
+          });
+        }),
     });
   };
   const announceDevGitUpdate: NonNullable<UpdateCheckLifecycle["announceDevGitUpdate"]> = async (
@@ -669,7 +712,43 @@ async function runGatewayUpdateCheckOwned(
     if (channel !== "extended-stable") {
       clearAutoState(nextState);
     }
-    retireUpdateTarget(getUpdateSchedule() ?? initialSchedule, updateCampaign, params);
+    // A current core can still owe plugin convergence from the update that installed it. The
+    // same-version update converges plugins and retries owed steps through the existing handoff.
+    // The registry must name this exact version so the handoff can resolve its tag.
+    const retryChannel =
+      cmp === 0 && shouldRunAutoUpdate && (channel === "stable" || channel === "beta")
+        ? channel
+        : undefined;
+    const retryOwed =
+      retryChannel !== undefined &&
+      !(recentAttempt && state.autoLastAttemptVersion === VERSION) &&
+      Boolean(
+        detectRespawnSupervisor(process.env, process.platform, {
+          includeLinuxOpenClawGatewayServiceMarker: true,
+        }),
+      ) &&
+      (await readOwedPluginRetry());
+    if (retryChannel && !isCurrent()) {
+      return;
+    }
+    if (retryChannel && retryOwed) {
+      setAvailable(null);
+      // No target is published: nothing newer is available.
+      const { target: _target, ...current } = getUpdateSchedule() ?? initialSchedule;
+      setSchedule(current);
+      if (!updateCampaign.getState()) {
+        params.log.info("automatic update will retry owed plugin steps", { version: VERSION, tag });
+      }
+      announceUpdate(
+        { kind: "package", version: VERSION },
+        installStatus,
+        retryChannel,
+        tag,
+        readOwedPluginRetry,
+      );
+    } else {
+      retireUpdateTarget(getUpdateSchedule() ?? initialSchedule, updateCampaign, params);
+    }
   }
 
   await writeState(nextState);

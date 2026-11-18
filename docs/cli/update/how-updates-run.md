@@ -965,7 +965,9 @@ Later commands settle what is owed:
 A retry that fails keeps the step owed and warns again. It does not fail the
 command, except for the plugin convergence cases above. The command that retried
 it then holds the step in its own run. Gateway startup does not retry owed steps.
-See
+With automatic updates on, a Gateway whose core is current can retry owed plugin
+convergence once through an update campaign; see
+[Automatic updates](/install/updating/automatic-updates#owed-plugin-steps). See
 [Status and history](/cli/update/status-and-history#update-status) to inspect them.
 
 An updater records and retries owed steps only when its own version supports
