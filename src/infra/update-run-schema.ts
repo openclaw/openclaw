@@ -241,6 +241,15 @@ export const UpdateRunPackageReleaseSchema = z.object({
   adoption: z.literal(true).optional(),
 });
 
+/** What an in-place Git checkout activation made live, recorded before its plugin cohort. */
+export const UpdateRunGitActivationSchema = z.object({
+  sha: z.string().regex(/^[0-9a-f]{40}(?:[0-9a-f]{24})?$/u),
+  buildId: z.string().min(1).max(96),
+  previousBuildId: z.string().min(1).max(96).nullable(),
+});
+
+export type UpdateRunGitActivation = z.infer<typeof UpdateRunGitActivationSchema>;
+
 export const UpdateRunRecordSchema = z.object({
   runId: z.uuid(),
   createdAtMs: timestamp,
@@ -270,6 +279,8 @@ export const UpdateRunRecordSchema = z.object({
       .optional(),
     // Advice for the next run about a release link switch; always rechecked on disk.
     packageRelease: UpdateRunPackageReleaseSchema.optional(),
+    // Lets the next update recognize a killed checkout update's build; rechecked on disk.
+    gitActivation: UpdateRunGitActivationSchema.optional(),
     previousDrivers: z
       .array(driver)
       .max(UPDATE_RUN_DRIVER_LIMIT - 1)

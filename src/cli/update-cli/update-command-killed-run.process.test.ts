@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -213,6 +213,7 @@ type Updater = {
   installed?: "previous" | "candidate";
   trigger?: "cli" | "api";
   gateway?: "untouched" | "stopped" | "restarted";
+  checkout?: { sha: string; buildId: string; marker?: "none" | { buildId: string } };
 };
 /**
  * A real updater process that reserved its plugin cohort and changed config
@@ -264,6 +265,50 @@ async function installation(name = "prefix") {
   await writePackageRoot(slot, "2026.11.3");
   return slot;
 }
+const git = (slot: string, ...args: string[]) =>
+  execFileSync("git", ["-C", slot, "-c", "user.name=OpenClaw Test", "-c", "user.email=", ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
+const writeBuild = (slot: string, commit: string, buildId: string) =>
+  fs.writeFileSync(path.join(slot, "dist", "build-info.json"), JSON.stringify({ commit, buildId }));
+/**
+ * A real source checkout serving its built previous commit, with the candidate
+ * commit beside it. The update this kills checks that candidate out with its build.
+ */
+function sourceCheckout(name = "checkout") {
+  // The real install-kind probe recognizes the checkout.
+  if (vi.isMockFunction(updateCheck.resolveUpdateInstallKind)) {
+    vi.mocked(updateCheck.resolveUpdateInstallKind).mockRestore();
+  }
+  const slot = path.join(root, name);
+  fs.mkdirSync(path.join(slot, "dist"), { recursive: true });
+  git(slot, "init", "-q");
+  // Like the repository's own ignore rules: builds and runtime staging stay untracked.
+  fs.writeFileSync(path.join(slot, ".gitignore"), "dist\n*.tmp\n");
+  const commit = (version: string) => {
+    fs.writeFileSync(
+      path.join(slot, "package.json"),
+      JSON.stringify({ name: "openclaw", version }),
+    );
+    git(slot, "add", "-A");
+    git(slot, "commit", "-q", "--no-gpg-sign", "-m", version);
+    return git(slot, "rev-parse", "HEAD");
+  };
+  const previous = commit("2026.11.3");
+  const sha = commit(candidate);
+  git(slot, "reset", "-q", "--hard", previous);
+  writeBuild(slot, previous, "build-previous");
+  return { slot, previous, sha, buildId: "build-candidate" };
+}
+/** What a refused update must leave of the checkout: its commit, tree and build. */
+const checkoutState = (slot: string) => ({
+  head: git(slot, "rev-parse", "HEAD"),
+  tree: git(slot, "status", "--porcelain", "--ignored"),
+  build: fs.existsSync(path.join(slot, "dist", "build-info.json"))
+    ? fs.readFileSync(path.join(slot, "dist", "build-info.json"), "utf8")
+    : null,
+});
 /** A publication killed with its candidate waiting beside the untouched installed package. */
 async function killedPublication() {
   const complete = await runSwitch(path.join(root, "complete"), "complete", "journal", { env });
@@ -506,12 +551,6 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
           ...loadPluginCohortRecovery(killed.runId)!.cohort,
           disposition: "commit",
         }),
-    },
-    {
-      // A checkout can hold the new sources under the old version and build identity.
-      name: "the installation is a source checkout",
-      refusal: new RegExp(`left by an update of a source checkout.*Run ${repair}`, "u"),
-      control: () => vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git"),
     },
     {
       name: "the recovery belongs to another installation",
@@ -786,4 +825,135 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
         expect(packageVersion(killed.slot)).toBe("2026.11.3");
       }),
   );
+
+  describe("of a source checkout", () => {
+    /** A killed update that had checked out and installed its built candidate, then reserved its cohort. */
+    async function killedCheckout(
+      dead: Omit<Updater, "checkout"> = {},
+      marker?: "none" | { buildId: string },
+      name?: string,
+    ) {
+      const checkout = sourceCheckout(name);
+      const { sha, buildId } = checkout;
+      const killed = await updater(checkout.slot, { ...dead, checkout: { sha, buildId, marker } });
+      expect(git(checkout.slot, "rev-parse", "HEAD")).toBe(sha);
+      return { ...checkout, ...killed };
+    }
+
+    it("keeps the plugin changes of a dead update whose build was verified serving", () =>
+      fixtures.lifetime.run(async () => {
+        const killed = await killedCheckout({ gateway: "restarted" });
+
+        await nextUpdate(killed.slot);
+
+        expect(mocks.proceed).toHaveBeenCalledOnce();
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        expect(config().gateway).toEqual({ mode: "local" });
+        expect(settled(admitted[0])).toMatch(/kept, because its Gateway was verified/u);
+        // Nothing was left to finish: no repair-shaped run, and the checkout is as it was.
+        expect(finalizationRuns()).toEqual([]);
+        expect(git(killed.slot, "rev-parse", "HEAD")).toBe(killed.sha);
+      }));
+
+    it("finishes a dead update that installed its build unconfirmed as repair does", () =>
+      fixtures.lifetime.run(async () => {
+        const killed = await killedCheckout();
+
+        await nextUpdate(killed.slot);
+
+        expect(mocks.proceed).toHaveBeenCalledOnce();
+        expect(observedAtAdmission).toEqual([{ doctor: 1, json: 0, started: 0 }]);
+        expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();
+        // Rolled back for the original core, then converged forward on the installed build.
+        expect(config()).toEqual({ plugins: { enabled: false } });
+        expect(admitted[0]?.packageActivationSteps?.map((step) => step.name)).toEqual([
+          "interrupted-update-recovery",
+          "interrupted-update-finalization",
+        ]);
+        expect(finalizationRuns()).toEqual([
+          expect.objectContaining({ trigger: "cli", status: "succeeded" }),
+        ]);
+        expect(getUpdateRun(killed.runId)).toMatchObject({ status: "failed", reason: "abandoned" });
+        expect(git(killed.slot, "rev-parse", "HEAD")).toBe(killed.sha);
+      }));
+
+    it("records what repair records for a dead update that installed its build unconfirmed", () =>
+      fixtures.lifetime.run(async () => {
+        const finished = await killedCheckout();
+        await nextUpdate(finished.slot);
+        const [stage] = finalizationRuns();
+        const repaired = await killedCheckout({}, undefined, "repaired");
+        mocks.root.mockResolvedValue(repaired.slot);
+
+        await updateRepairCommand({ json: true, yes: true });
+
+        const [repairRun] = finalizationRuns();
+        expect(repairRun?.runId).not.toBe(stage?.runId);
+        expect(shape(stage)).toEqual(shape(repairRun));
+        expect(loadPluginCohortRecovery(repaired.runId)).toBeUndefined();
+        expect(shape(getUpdateRun(finished.runId))).toEqual(shape(getUpdateRun(repaired.runId)));
+      }));
+
+    // Each control leaves the checkout's build unproven; the update must not touch it.
+    type Checkout = Awaited<ReturnType<typeof killedCheckout>>;
+    it.each<{
+      name: string;
+      refusal: RegExp;
+      marker?: "none" | { buildId: string };
+      control?: (killed: Checkout) => unknown;
+    }>([
+      {
+        // Runs recorded by an updater that predates the activation fact.
+        name: "the dead update recorded no activated build",
+        refusal: /did not record which build it activated/u,
+        marker: "none",
+      },
+      {
+        name: "the recorded build is not the plugin recovery's target",
+        refusal: /recorded build does not match its plugin recovery/u,
+        marker: { buildId: "build-other" },
+      },
+      {
+        name: "the checkout was moved to another commit",
+        refusal: /no longer at the commit that update activated/u,
+        control: (killed) => git(killed.slot, "checkout", "-q", killed.previous),
+      },
+      {
+        name: "the checkout has local changes",
+        refusal: /checkout has local changes/u,
+        control: (killed) => fs.writeFileSync(path.join(killed.slot, "notes.txt"), "operator\n"),
+      },
+      {
+        name: "the build is missing",
+        refusal: /build is missing or was not built from the checked-out commit/u,
+        control: (killed) => fs.rmSync(path.join(killed.slot, "dist", "build-info.json")),
+      },
+      {
+        name: "the build was made from another commit",
+        refusal: /build is missing or was not built from the checked-out commit/u,
+        control: (killed) => writeBuild(killed.slot, killed.previous, killed.buildId),
+      },
+      {
+        name: "the checkout was rebuilt by hand",
+        refusal: /build is not the one that update activated/u,
+        control: (killed) => writeBuild(killed.slot, killed.sha, "build-rebuilt"),
+      },
+    ])("still refuses when $name", ({ refusal, marker, control }) =>
+      fixtures.lifetime.run(async () => {
+        const killed = await killedCheckout({}, marker);
+        await control?.(killed);
+        const before = { ...reserved(killed.runId), checkout: checkoutState(killed.slot) };
+        const refused = new RegExp(
+          `left by an update of a source checkout.*${refusal.source}.*Run openclaw update repair`,
+          "u",
+        );
+
+        await expect(nextUpdate(killed.slot)).rejects.toThrow(refused);
+
+        expect(mocks.proceed).not.toHaveBeenCalled();
+        expect(finalization.doctor).not.toHaveBeenCalled();
+        expect({ ...reserved(killed.runId), checkout: checkoutState(killed.slot) }).toEqual(before);
+      }),
+    );
+  });
 });

@@ -2107,7 +2107,8 @@ or rollback for it. Do not rewrite identities or delete recovery artifacts.
 they continue, so a killed publication no longer needs its printed recovery
 command. A killed update usually also leaves the plugin recovery it reserved,
 which is a separate check. The next `openclaw update` settles that as well when
-no operator is needed: on a package install, the killed update was a
+no operator is needed: on a package install, or a source checkout that still
+holds exactly the build the killed update installed, the killed update was a
 command-line `openclaw update` whose process has exited, and the update lease
 store still holds its lease. It reports an `interrupted-update-recovery` warning.
 If the killed update had replaced the installed version without confirming it,

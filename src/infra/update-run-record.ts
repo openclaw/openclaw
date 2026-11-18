@@ -109,6 +109,7 @@ export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecor
   delete origin.managedHandoff;
   delete origin.packageStage;
   delete origin.packageRelease;
+  delete origin.gitActivation;
   const verification = { ...record.verification };
   if (verification.recovery?.serviceRestartSafe === false) {
     verification.recovery = { ...verification.recovery };

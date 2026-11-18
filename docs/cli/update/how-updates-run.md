@@ -1736,9 +1736,10 @@ for the installed version and restarts a Gateway the update had stopped.
 The next `openclaw update` settles that recovery itself, after the publication,
 when nothing needs an operator:
 
-- the installation is a package install, and the killed update was a
-  command-line `openclaw update`, not one the Gateway started, whose recorded
-  process is no longer running;
+- the installation is a package install, or a source checkout that still holds
+  exactly the build the killed update installed (see below);
+- the killed update was a command-line `openclaw update`, not one the Gateway
+  started, whose recorded process is no longer running;
 - the update lease store still holds that process's lease, so claiming the
   installation shows its child processes are gone too.
 
@@ -1747,6 +1748,22 @@ version from before that update is still installed they are rolled back, and
 when the Gateway was verified on the version it installed they are kept. The
 update prints what it settled, continues, and records an
 `interrupted-update-recovery` warning in its run history.
+
+A source checkout's version does not show whether the killed update had
+replaced its build. An update of a checkout in place records the commit and
+build it activates before it reserves its plugin recovery. The next update
+settles that recovery only when all of these still hold:
+
+- the killed update recorded that activation, for the same build its plugin
+  recovery targets;
+- the checkout is still at that commit and has no local changes;
+- its build was made from that commit and is that same build.
+
+Then the checkout runs the killed update's build, and the update treats it like
+a package install that has the candidate installed. A checkout that was pulled,
+edited or rebuilt by hand, or a run recorded by an older updater, keeps the
+refusal below. Updates through the Git release layout never reserve plugin
+recovery, so they are unaffected.
 
 Some killed updates also leave work that repair finishes and an update that
 finds its core already current would skip:
@@ -1788,9 +1805,9 @@ repair can settle the recovery, the message adds the reason and the command:
   attempt reports this reason. Run `openclaw update repair`.
 - **The recovery could not be settled.** The message includes the cause. Run
   `openclaw update repair`.
-- **The installation is a source checkout.** Its version does not show whether
-  the killed update had already switched the sources. Run
-  `openclaw update repair`.
+- **The installation is a source checkout that cannot show the killed update's
+  build.** The message names the reason: no recorded activation, a commit or
+  build that differs from it, or local changes. Run `openclaw update repair`.
 - **The recovery belongs to another installation.** Run `openclaw update repair`
   from that installation.
 - **A dry run** changes nothing. Run `openclaw update`.
