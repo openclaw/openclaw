@@ -613,11 +613,9 @@ export async function updateGitCheckout(params: {
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
-      recovery = {
-        serviceRestartSafe: false,
-        reason: "state-migration-started",
-        dataAtRisk: "state-migrated-no-rollback",
-      };
+      // Doctor may migrate, so code rollback stops here. Starting Doctor is not evidence of
+      // risk: its own refusal names one, and the CLI measures the schema it left behind.
+      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
       const doctorSteps: UpdateStepResult[] = [];
       let doctorStep: UpdateStepResult | null;
       try {

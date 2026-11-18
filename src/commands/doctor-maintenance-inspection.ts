@@ -7,6 +7,8 @@ import { isErrno } from "../infra/errno.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
+import { LegacyGatewayLockError } from "../infra/gateway-lock-legacy.js";
+import { GatewayLockNamespaceError } from "../infra/gateway-lock-payload.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import type { GatewayOwnerLeaseIdentity } from "../infra/gateway-owner-lease.types.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
@@ -133,12 +135,20 @@ export function classifyDoctorMaintenanceRefusal(error: unknown): DoctorMaintena
   if (
     causes.some(
       (cause) =>
-        cause instanceof GatewayLockError ||
+        // An uncoordinated legacy owner, or an owner in another process namespace, may
+        // still write: the state lock cannot exclude either.
+        cause instanceof LegacyGatewayLockError ||
+        (cause instanceof GatewayLockError &&
+          collectNestedErrorCandidates(cause.cause).some(
+            (nested) => nested instanceof GatewayLockNamespaceError,
+          )) ||
         (cause instanceof ConfigWritePostCommitError && cause.rollbackStatus !== "restored"),
     )
   ) {
     return { kind: "data-at-risk", reason: "gateway-state-unverified" };
   }
+  // Other lock failures (held, timed out or unreadable) refused admission before any
+  // repair writer opened, and the state lock still excludes a second Gateway.
   return {
     kind: "deferred",
     reason: causes.some((cause) => cause instanceof GatewayStateOwnerContentionError)
