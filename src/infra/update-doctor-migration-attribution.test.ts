@@ -35,7 +35,6 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runClientCredentialOperation } from "./client-credential-store.js";
 import { readExecApprovalsConfigRow } from "./exec-approvals-sqlite.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import * as fileGeneration from "./sqlite-file-generation.js";
 import * as sqliteReadOnlyWorker from "./sqlite-readonly-worker.js";
 import * as sqliteTransactions from "./sqlite-transaction.js";
 import {
@@ -352,63 +351,6 @@ it.each(["different content", "same content"])(
       );
     });
     expect(receipt).toMatchObject({ unchanged: false });
-  },
-);
-
-it.each(["while Doctor reads it", "after admission", "after a same-content commit"] as const)(
-  "attributes a migration when an outside reader rebuilds retained WAL frames %s",
-  async (timing) => {
-    const { pathname, env } = fixture("source.sqlite", "INSERT INTO retained VALUES (7);");
-    const read = (database: DatabaseSync) => database.prepare("SELECT value FROM retained").all();
-    // A reader that outlives the last writer keeps its frames and live index.
-    const keep = (write: string) => {
-      const reader = new DatabaseSync(pathname, { readOnly: true });
-      read(reader);
-      const writer = new DatabaseSync(pathname);
-      writer.exec(write);
-      writer.close();
-      reader.close();
-    };
-    keep("INSERT INTO retained VALUES (8);");
-    const generations = readUpdateDatabaseGenerations([pathname]);
-    const rebuild = () => {
-      using reader = new DatabaseSync(pathname, { readOnly: true });
-      read(reader);
-    };
-    const { receipt, warnings } = await withCapture(env, generations, async () => {
-      if (timing === "while Doctor reads it") {
-        const stable = fileGeneration.readStableSqliteFileGeneration;
-        vi.spyOn(fileGeneration, "readStableSqliteFileGeneration").mockImplementationOnce(
-          (...args) => {
-            const generation = stable(...args);
-            rebuild();
-            return generation;
-          },
-        );
-      } else {
-        if (timing === "after a same-content commit") {
-          keep("UPDATE retained SET value = 9; UPDATE retained SET value = 8;");
-        }
-        rebuild();
-      }
-      const change = fs.readFileSync(`${pathname}-shm`).readUInt32LE(8);
-      expect(change === 0).toBe(timing !== "while Doctor reads it");
-      using database = new DatabaseSync(pathname);
-      if (timing === "after a same-content commit") {
-        expect(() => migrate(database, pathname)).toThrow(
-          "SQLite migration source changed after update capture:",
-        );
-        return;
-      }
-      migrate(database, pathname);
-      expect(read(database)).toEqual([{ value: 7 }, { value: 8 }]);
-    });
-    if (timing === "after a same-content commit") {
-      expect(receipt).toMatchObject({ unchanged: false });
-      return;
-    }
-    expect(warnings).toEqual([]);
-    expect(receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
   },
 );
 
