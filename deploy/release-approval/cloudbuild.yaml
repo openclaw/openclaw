@@ -1,0 +1,38 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: [build, -t, '${_IMAGE}', .]
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - run
+      - --rm
+      - -e
+      - SERVICE_URL=https://smoke.invalid
+      - -e
+      - CHAT_SERVICE_ACCOUNT=service-1@gcp-sa-gsuiteaddons.iam.gserviceaccount.com
+      - -e
+      - REQUESTER_EMAILS=synthetic@smoke.invalid
+      - '${_IMAGE}'
+      - node
+      - --input-type=module
+      - -e
+      - |
+        import { spawn } from 'node:child_process';
+        import { setTimeout } from 'node:timers/promises';
+        const child = spawn(process.execPath, ['server.mjs'], { stdio: 'inherit' });
+        try {
+          let ready = false;
+          for (let attempt = 0; attempt < 100; attempt++) {
+            if (child.exitCode !== null) throw new Error('Runtime exited before listening.');
+            try {
+              const response = await fetch('http://127.0.0.1:8080/requests/00000000-0000-4000-8000-000000000001', { signal: AbortSignal.timeout(1000) });
+              if (response.status !== 401) throw new Error('Unauthenticated request was not rejected.');
+              ready = true;
+              break;
+            } catch { await setTimeout(100); }
+          }
+          if (!ready) throw new Error('Runtime startup smoke failed.');
+          console.log('Non-root runtime started and rejected unauthenticated request.');
+        } finally { child.kill(); }
+images: ['${_IMAGE}']
+options:
+  logging: CLOUD_LOGGING_ONLY

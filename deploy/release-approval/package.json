@@ -1,0 +1,1 @@
+{"name":"@openclaw/release-approval-service","private":true,"type":"module","engines":{"node":">=24"},"scripts":{"start":"node server.mjs","test":"node --test service.test.mjs"},"dependencies":{"@google-cloud/firestore":"9.4.1","google-auth-library":"11.3.4"}}
