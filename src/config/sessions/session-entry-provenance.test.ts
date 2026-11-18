@@ -51,12 +51,12 @@ it("resolves personal profiles from assigned humans or authenticated creators on
   }
 });
 
-it("defaults visible work to its verified requester without replacing another human's ownership", () => {
+it("assigns new visible work to its verified requester independently of the parent", () => {
   type Resolve = Parameters<typeof inheritSpawnSessionOwner>[4];
   const cases: Array<[Source, string | undefined, SessionActor, number?, Resolve?]> = [
     [created(creator), creator.id, human(creator.id), 42],
     [owned(human("profile-owner")), "profile-owner", human("profile-owner"), 42],
-    [created(creator), "profile-other", spawningAgent],
+    [created(creator), "profile-other", human("profile-other")],
     [created(creator), undefined, spawningAgent],
     [
       owned(human("profile-before-merge")),
@@ -71,7 +71,7 @@ it("defaults visible work to its verified requester without replacing another hu
       creator.id,
       human(creator.id),
     ],
-    [owned(human(undefined)), creator.id, spawningAgent],
+    [owned(human(undefined)), creator.id, human(creator.id)],
     [created({ type: "human", source: "channel", id: "discord-user" }), undefined, spawningAgent],
   ];
   for (const [source, requester, actor, now, resolve] of cases) {
