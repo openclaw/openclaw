@@ -137,9 +137,12 @@ it.each([
 
 it("recomputes complete delta including generated files and detects caller count or anchor mismatches", () => {
   const h = history();
-  const candidate = h.commit("generated.txt", "generated\n".repeat(1000));
-  const value = { ...request(candidate, h.anchor), delta: { commits: 1, added: 1000, deleted: 0 } };
-  expect(eligibility(h.root, value)).toEqual({ commits: 1, added: 1000, deleted: 0 });
+  const candidate = h.commit("generated.txt", "generated\n".repeat(50000));
+  const value = {
+    ...request(candidate, h.anchor),
+    delta: { commits: 1, added: 50000, deleted: 0 },
+  };
+  expect(eligibility(h.root, value)).toEqual({ commits: 1, added: 50000, deleted: 0 });
   expect(() => eligibility(h.root, { ...value, delta: { ...value.delta, added: 1 } })).toThrow(
     "Publisher-computed delta",
   );
@@ -150,23 +153,23 @@ it("recomputes complete delta including generated files and detects caller count
   expect(() => eligibility(h.root, value, { published: false })).toThrow();
 });
 
-it("counts deletions, accepts 1000 total lines and rejects 1001", () => {
+it("counts deletions, accepts 50000 total lines and rejects 50001", () => {
   const h = history();
-  const anchor = h.commit("generated.txt", "old\n".repeat(500));
-  const candidate = h.commit("generated.txt", "new\n".repeat(500));
+  const anchor = h.commit("generated.txt", "old\n".repeat(25000));
+  const candidate = h.commit("generated.txt", "new\n".repeat(25000));
   expect(
     eligibility(h.root, {
       ...request(candidate, anchor),
-      delta: { commits: 1, added: 500, deleted: 500 },
+      delta: { commits: 1, added: 25000, deleted: 25000 },
     }),
-  ).toEqual({ commits: 1, added: 500, deleted: 500 });
-  const excessive = h.commit("generated.txt", "new\n".repeat(501));
+  ).toEqual({ commits: 1, added: 25000, deleted: 25000 });
+  const excessive = h.commit("generated.txt", "new\n".repeat(25001));
   expect(() =>
     eligibility(h.root, {
       ...request(excessive, anchor),
-      delta: { commits: 2, added: 501, deleted: 500 },
+      delta: { commits: 2, added: 25001, deleted: 25000 },
     }),
-  ).toThrow("at most 1000");
+  ).toThrow("at most 50000");
 });
 
 it("counts every commit since the validated anchor, not since the last fast-track", () => {

@@ -204,9 +204,11 @@ export function collectFastTrackEligibility(input: {
     !Number.isSafeInteger(commits) ||
     !Number.isSafeInteger(added + deleted) ||
     commits > 10 ||
-    added + deleted > 1000
+    added + deleted > 50000
   ) {
-    throw new Error("Fast-track requires at most 10 commits and at most 1000 added/deleted lines.");
+    throw new Error(
+      "Fast-track requires at most 10 commits and at most 50000 added/deleted lines.",
+    );
   }
   if (
     commits !== request.delta.commits ||
