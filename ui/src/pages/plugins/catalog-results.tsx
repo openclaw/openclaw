@@ -23,9 +23,9 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { categoryIcon } from "./catalog-category-icon.tsx";
 import { PluginCatalogGrid } from "./catalog-grid.tsx";
 import { PluginCatalogSkeleton, renderCatalogGridSkeleton } from "./catalog-skeleton.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
+import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   renderPluginAuthor,
   PluginCardSummary,

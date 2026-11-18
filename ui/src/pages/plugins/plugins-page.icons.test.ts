@@ -10,7 +10,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createModelSetupIconLoader } from "../model-setup/model-setup-icon-loader.tsx";
 import type { ModelSetupPageState } from "../model-setup/state.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
+import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   createClient,
   createContext,

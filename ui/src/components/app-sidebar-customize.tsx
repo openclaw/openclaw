@@ -11,7 +11,7 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
-import { PluginArtTile } from "../pages/plugins/consent-dialog.tsx";
+import { PluginArtTile } from "../pages/plugins/plugin-art-tile.tsx";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";

@@ -14,11 +14,10 @@ import {
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { PluginArtTile } from "./consent-dialog.tsx";
 import { PluginDetailLoadingHero } from "./detail-loading-hero.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import "../../styles/sidebar-markdown.css";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
+import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginContentCapabilities,
@@ -26,6 +25,7 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
+import { PluginArtTile } from "./plugin-art-tile.tsx";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";

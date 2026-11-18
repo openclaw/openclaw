@@ -16,9 +16,8 @@ import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginReadme } from "./catalog-detail.tsx";
-import { PluginArtTile } from "./consent-dialog.tsx";
-import "./custom-elements.ts";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
+import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -29,6 +28,7 @@ import {
   renderPluginPublisher,
   renderPluginAskAction,
 } from "./overview.tsx";
+import { PluginArtTile } from "./plugin-art-tile.tsx";
 import {
   pluginRowKey,
   renderPluginRowMessage,
