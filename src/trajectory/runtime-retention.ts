@@ -1,6 +1,9 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
-import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
+import {
+  retainSessionHistoryWorkerDatabase,
+  trackSessionHistoryHostEffect,
+} from "../config/sessions/session-transcript-worker-runtime.js";
 import { readSqliteInspectionBudgetAsync } from "../infra/sqlite-readonly-worker.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -191,6 +194,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
       await cleanup();
     }
   });
+  trackSessionHistoryHostEffect(options, state.pending);
   void state.pending.catch(observeFailure);
   return state.pending;
 }

@@ -1,0 +1,2 @@
+# Config reload closes a removed agent's open database without deleting its files. Covers re-admission, rejected publish, an in-flight turn that finishes before close, a held embedded stream, journaled agents.delete, native history lanes whose close latch is false, a survivor whose session store is the removed database, a rejected history-resource close that keeps its lane, and a rejected retention effect that must not surface as an unhandled rejection.
+691

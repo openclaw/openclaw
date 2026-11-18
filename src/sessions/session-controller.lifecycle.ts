@@ -112,6 +112,7 @@ export {
 export { SessionMutationPreemptTimeoutError } from "./session-controller.mutation-preemption.js";
 
 export {
+  captureAgentWorkAdmissionSettlement,
   closeAgentWorkAdmissions,
   collectActiveAgentSessionWorkAdmissions,
   startAgentWorkAdmissionInterruption,

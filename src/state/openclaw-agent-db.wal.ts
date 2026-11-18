@@ -1,12 +1,37 @@
 import { createSessionWorkerExecutionSource } from "../config/sessions/session-worker-execution-source.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
-import { registerSqliteWalWorkerMaintenance } from "../infra/sqlite-wal-write-admission.js";
+import {
+  dispatchSqliteWalWorkerMaintenance,
+  registerSqliteWalWorkerMaintenance,
+} from "../infra/sqlite-wal-write-admission.js";
 import { retainAgentDatabase } from "./openclaw-agent-db-borrower.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
 import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
 import { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import { runOpenClawAgentWorkerWrite } from "./openclaw-agent-write-admission.js";
+
+/**
+ * Final TRUNCATE checkpoint for a worker-maintained writer.
+ * Host `walMaintenance.close` skips that SQL; the registered maintenance owner runs it.
+ * Returns false when this handle has no worker maintenance registration.
+ */
+export async function checkpointOpenClawAgentDatabaseForRetirement(
+  database: OpenClawAgentDatabase,
+): Promise<boolean> {
+  if (isPostgresSqlConnection(database.db) || !database.db.isOpen) {
+    return false;
+  }
+  const pending = dispatchSqliteWalWorkerMaintenance(database.db, {
+    maxPages: 0,
+    checkpointMode: "TRUNCATE",
+  });
+  if (!pending) {
+    return false;
+  }
+  await pending;
+  return true;
+}
 
 /** Keep the published timer's exact native owner pinned through worker settlement. */
 export function registerOpenClawAgentWalMaintenance(

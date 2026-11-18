@@ -457,6 +457,21 @@ export function retainSessionHistoryWorkerDatabase(
   }
 }
 
+/** Join a fire-and-forget retain (trajectory retention) from a later database close. */
+export function trackSessionHistoryHostEffect(
+  options: SessionHistoryDatabaseTarget,
+  effect: Promise<unknown>,
+): void {
+  const resource = acquireHistoryDatabaseResource(options);
+  resource.hostEffects.add(effect);
+  // Two-branch then: a rejecting effect must not leave `.finally`'s derived promise
+  // unhandled. The caller already observes the original effect.
+  const releaseEffect = () => {
+    resource.hostEffects.delete(effect);
+  };
+  void effect.then(releaseEffect, releaseEffect);
+}
+
 /** Retain each selected reader for the operation. */
 export async function withSessionHistoryWorkerDatabases<T>(
   options: readonly SessionHistoryDatabaseTarget[],

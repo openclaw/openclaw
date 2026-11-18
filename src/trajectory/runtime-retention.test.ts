@@ -75,10 +75,12 @@ vi.mock("../config/sessions/session-transcript-worker-runtime.js", () => ({
     },
     release: fixture.releaseReader,
   }),
+  trackSessionHistoryHostEffect: vi.fn(),
 }));
 // mock-isolation: Exercise scheduling against worker outcomes without a live writer broker.
 vi.mock("../state/openclaw-agent-write-admission.js", () => ({
   runOpenClawAgentWorkerWrite: () => fixture.write(),
+  drainOpenClawAgentWriteQueues: async () => {},
 }));
 // mock-isolation: Native execution is never admitted; only its cleanup result is injected.
 vi.mock("../state/openclaw-agent-execution.js", () => ({

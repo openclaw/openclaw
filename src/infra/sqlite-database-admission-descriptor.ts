@@ -18,6 +18,7 @@ import {
   type SqliteDatabaseAdmissionLocation,
 } from "./sqlite-database-admission-record.js";
 import type { SqliteDatabaseCleanCloseSeals } from "./sqlite-database-admission-seal.js";
+import { isDepartedAgentSqliteAdmission } from "./sqlite-departed-agent-admission.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import {
   assertDatabaseFileIdentity,
@@ -329,6 +330,11 @@ export function createSqliteDatabaseDescriptorOwner(
     expectedIdentity?: DatabaseFileIdentity,
     observedLocation?: SqliteDatabaseAdmissionLocation,
   ): void {
+    // A departed-agent fence must not open another descriptor. Closing one can
+    // release SQLite's POSIX locks for a database a surviving agent still uses.
+    if (isDepartedAgentSqliteAdmission(location)) {
+      return;
+    }
     if (
       retainPreparedSqliteDatabaseAdmissionLocation(location, expectedIdentity, observedLocation)
     ) {
