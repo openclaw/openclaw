@@ -11,12 +11,15 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
+import { hasRunContinuationEvidence, YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import {
   assistantMessage,
   attemptResult,
   prepareAttempt,
 } from "./terminal-preparation.test-support.js";
+import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
+import { expectComplete, makeTerminalInput } from "./terminal-resolution.test-support.js";
 function hardTimeoutState(): NonNullable<Parameters<typeof prepareAttempt>[0]["terminalState"]> {
   return {
     outcome: {
@@ -448,4 +451,47 @@ describe("prepareEmbeddedRunTerminal", () => {
       expect.objectContaining({ lastAssistant: undefined, currentAssistant: null }),
     );
   });
+  it.each([undefined, "  ", "The existing task is still running."])(
+    "prefers an explicit waiting acknowledgment %j without inventing continuation evidence",
+    async (yieldAcknowledgment) => {
+      const assistant = {
+        ...assistantMessage("aborted"),
+        content: [
+          { type: "toolCall" as const, id: "yield-call", name: "sessions_yield", arguments: {} },
+        ],
+      };
+      const attempt = attemptResult({
+        terminal: { kind: "aborted", source: "yield_cleanup" },
+        assistantTexts: [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: undefined,
+        currentAttemptCompletedAssistant: assistant,
+        yieldDetected: true,
+        yieldAcknowledgment,
+        runtimeContinuationStarted: false,
+        lastToolError: { toolName: "exec", error: "Command exited with code 1" },
+        toolMetas: [{ toolName: "exec", isError: true }],
+      });
+      const terminal = makeTerminalInput({
+        attempt,
+        runParams: { authProfileStateMode: "read-only" },
+      });
+      const prepared = await prepareAttempt({
+        runParams: terminal.runParams,
+        attempt,
+        model: "mock-1",
+        activeErrorContext: { provider: "openai", model: "mock-1" },
+        terminalState: terminal.terminalState,
+      });
+      expect(hasRunContinuationEvidence(attempt)).toBe(false);
+      const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
+      expectComplete(result);
+      expect(result.result.payloads ?? []).toEqual(
+        yieldAcknowledgment?.trim() ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
+      );
+      if (yieldAcknowledgment?.trim()) {
+        expect(result.result.meta).toMatchObject({ yielded: true, yieldAcknowledgment });
+      }
+    },
+  );
 });
