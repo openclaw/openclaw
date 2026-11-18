@@ -45,6 +45,9 @@ const proxies: ViteDevServer[] = [];
 const urls: string[] = [];
 const profiles: string[] = [];
 const providerAuthorizations: (string | undefined)[] = [];
+const namingPrompt = "Every morning, check the water level in the fictional garden.";
+const namingTitle = "Morning garden watering";
+const namingModels: unknown[] = [];
 let heldProviderResponse: ServerResponse | undefined;
 const legacyRunKey = "agent:main:legacy-admin-run";
 let legacyOperation: "model" | "cap" | "run" | undefined;
@@ -65,7 +68,18 @@ const suite = createControlUiE2eSuite({
               response.writeHead(404).end();
               return;
             }
-            const body: { model?: unknown } = JSON.parse((await buffer(request)).toString("utf8"));
+            const body: { model?: unknown; input?: unknown } = JSON.parse(
+              (await buffer(request)).toString("utf8"),
+            );
+            if (JSON.stringify(body.input)?.includes(namingPrompt)) {
+              namingModels.push(body.model);
+              writeOpenAiResponsesText(response, {
+                text: namingTitle,
+                messageId: "garden-message",
+                responseId: "garden-response",
+              });
+              return;
+            }
             providerAuthorizations.push(request.headers.authorization);
             if (legacyOperation) {
               legacyModels.push(body.model);
@@ -185,6 +199,7 @@ const suite = createControlUiE2eSuite({
           agents: {
             defaults: {
               model: "fixture/echo",
+              utilityModel: "fixture/edited",
               models: {
                 "fixture/echo": { agentRuntime: { id: "openclaw" } },
                 "fixture/edited": { agentRuntime: { id: "openclaw" } },
@@ -287,6 +302,20 @@ async function rpc<T>(page: Page, method: string, params: unknown): Promise<T> {
 }
 
 suite.define(() => {
+  it("creates a prompt-only automation with its utility model title", async () => {
+    const context = await suite.newBrowserContext(createControlUiE2eContextOptions());
+    const page = await context.newPage();
+    await page.goto(new URL("automations?new", urls[0]).toString());
+    await waitForControlUiGatewayReady(page);
+    await page.locator("#cron-payload-text").fill(namingPrompt);
+    expect(await page.locator("#cron-name").count()).toBe(0);
+    await page.locator('[data-test-id="cron-submit"]').click();
+    await page.getByText(namingTitle, { exact: true }).first().waitFor();
+    expect(namingModels).toEqual(["edited"]);
+    const { jobs } = await rpc<{ jobs: CronJob[] }>(page, "cron.list", { includeDisabled: true });
+    expect(jobs.filter((job) => job.name === namingTitle)).toHaveLength(1);
+  });
+
   it("saves and transfers an owned automation, then denies the former owner", async () => {
     const pages: Page[] = [];
     for (let index = 0; index < people.length; index++) {

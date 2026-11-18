@@ -717,7 +717,7 @@ suite.define(() => {
         const menu = page.locator(".cron-detail-actions .cron-job-menu");
         await menu.locator(".cron-job-menu__trigger").click();
         await menu.locator('[data-value="clone"]').click();
-        await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
+        await page.locator("#cron-name").fill("Cloned partial failure policy");
         const cloned = await submitCronForm(evidence, "cron.add");
         const cloneId = cronJobId(cloned.stored);
         await openAutomation(page, cloneId);
@@ -832,8 +832,11 @@ suite.define(() => {
           await menu.locator(".cron-job-menu__trigger").click();
           await menu.locator('[data-value="clone"]').click();
           await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
-          // A copy keeps its source's name without showing a name field.
-          const cloneName = `${sourceName} copy`;
+          await expect
+            .poll(() => page.locator("#cron-name").inputValue())
+            .toBe(`${sourceName} copy`);
+          const cloneName = `Synthetic clone ${variant.name} copy`;
+          await page.locator("#cron-name").fill(cloneName);
           const cloned = await submitCronForm(evidence, "cron.add", (id) =>
             cliJson(["automations", "get", id, "--json"]),
           );

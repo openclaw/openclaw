@@ -123,14 +123,14 @@ it("does not treat an accepted edit as completion of a newer clone", async () =>
     page.cron.cronCreateOpen = true;
     page.refreshView();
     await page.settle();
-    expect(page.cron.cronForm.name).toBe("Garden reminder copy");
+    expect(dom.inputValue(page, "#cron-name")).toBe("Garden reminder copy");
     const draft = page.cron.cronForm;
     saved.resolve({ ...job, name: "Earlier edit saved" });
     await waitFor(() => expect(page.cron.cronBusy).toBe(false));
     await page.settle();
     expect(page.cron).toMatchObject({ cronCreateOpen: true, cronEditingJob: null });
     expect(page.cron.cronForm).toBe(draft);
-    expect(page.cron.cronForm.name).toBe("Garden reminder copy");
+    expect(dom.inputValue(page, "#cron-name")).toBe("Garden reminder copy");
   } finally {
     saved.resolve(job);
     page.remove();
@@ -500,8 +500,9 @@ it.each([
   await dom.waitForElement(page, ".cron-job-menu");
   await openCronMenu(page, ".cron-job-menu");
   dom.click(page, '.cron-job-menu [data-value="clone"]');
-  await dom.waitForElement(page, "#cron-payload-text");
-  expect(page.cron.cronForm.name).toBe("Daily ping copy");
+  // A copy shows its name field, prefilled from the source.
+  await dom.waitForElement(page, "#cron-name");
+  expect((page.querySelector("#cron-name") as HTMLInputElement).value).toBe("Daily ping copy");
   if (once) {
     await chooseOneTime(page);
   }

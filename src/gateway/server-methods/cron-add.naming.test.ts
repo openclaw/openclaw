@@ -1,7 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import {
   agentTurnCronParams,
+  createCronCallerClient,
   createCronTestContext,
   createCronTestInvoker,
   expectCronSuccess,
@@ -12,7 +16,7 @@ const getRuntimeConfig = vi.hoisted(() =>
   vi.fn<() => OpenClawConfig>(() => ({}) as OpenClawConfig),
 );
 const generateAutomationName = vi.hoisted(() =>
-  vi.fn<(params: { agentId: string; message: string }) => Promise<string | null>>(),
+  vi.fn<typeof import("../dashboard-session-title.js").generateAutomationName>(),
 );
 
 vi.mock("../../config/config.js", async () => ({
@@ -36,14 +40,34 @@ vi.mock("../dashboard-session-title.js", async (importOriginal) => ({
 }));
 
 import { cronHandlers } from "./cron.js";
+import type { GatewayClient } from "./types.js";
 
 const invokeCron = createCronTestInvoker(cronHandlers, getRuntimeConfig);
 
-async function addJob(params: Record<string, unknown>) {
+const uiClient: GatewayClient = {
+  connect: gatewayConnect(["operator.cron"]),
+  internal: {
+    authenticatedControlUi: true,
+    operatorRunAuthority: createAdmittedRunOperatorAuthority({
+      profileId: "synthetic-operator",
+      scopes: ["operator.cron"],
+      assertCurrent() {},
+    }),
+  },
+};
+
+async function addJob(params: Record<string, unknown>, client: GatewayClient = uiClient) {
   const context = createCronTestContext(undefined, getRuntimeConfig);
-  const { respond } = await invokeCron("cron.add", params, { context });
+  const { respond } = await invokeCron("cron.add", params, { context, client });
   expectCronSuccess(respond);
   return requireCronAddPayload(context);
+}
+
+function unnamedParams(message: string) {
+  const { name: _name, ...params } = agentTurnCronParams({
+    payload: { kind: "agentTurn", message, toolsAllow: [] },
+  });
+  return params;
 }
 
 describe("cron.add naming", () => {
@@ -51,17 +75,21 @@ describe("cron.add naming", () => {
     generateAutomationName.mockReset();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("names an unnamed automation from its prompt", async () => {
     generateAutomationName.mockResolvedValue("Morning inbox summary");
-    const { name: _name, ...params } = agentTurnCronParams({
-      payload: { kind: "agentTurn", message: "Summarize my inbox every morning" },
-    });
-
-    const job = await addJob(params);
+    const job = await addJob(unnamedParams("Summarize my inbox every morning"));
 
     expect(job.name).toBe("Morning inbox summary");
     expect(generateAutomationName).toHaveBeenCalledWith(
-      expect.objectContaining({ agentId: "main", message: "Summarize my inbox every morning" }),
+      expect.objectContaining({
+        agentId: "main",
+        message: "Summarize my inbox every morning",
+        operatorAuthority: uiClient.internal?.operatorRunAuthority,
+      }),
     );
   });
 
@@ -85,5 +113,50 @@ describe("cron.add naming", () => {
 
     expect(generateAutomationName).not.toHaveBeenCalled();
     expect(job.name).toBe(overrides.name ?? "hello");
+  });
+
+  it("creates with the prompt-derived name when naming outlasts its budget", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const started = createDeferred<AbortSignal | undefined>();
+    const late = createDeferred<string>();
+    // A provider that ignores the abort must not hold the create open.
+    generateAutomationName.mockImplementation(({ abortSignal }) => {
+      started.resolve(abortSignal);
+      return late.promise;
+    });
+    const pending = addJob(unnamedParams("Water the garden"));
+    const signal = await started.promise;
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    const job = await pending;
+    expect(signal?.aborted).toBe(true);
+    late.resolve("Too late");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(job.name).toBe("Water the garden");
+  });
+
+  it("leaves agent callers to name their own jobs", async () => {
+    const job = await addJob(unnamedParams("Water the garden"), createCronCallerClient("main"));
+
+    expect(generateAutomationName).not.toHaveBeenCalled();
+    expect(job.name).toBe("Water the garden");
+  });
+
+  it("keeps unnamed CLI requests local even with the same operator grant", async () => {
+    const job = await addJob(unnamedParams("Water the garden"), {
+      connect: gatewayConnect(["operator.cron"], { id: "cli", mode: "cli" }),
+      internal: { operatorRunAuthority: uiClient.internal?.operatorRunAuthority },
+    });
+    expect(generateAutomationName).not.toHaveBeenCalled();
+    expect(job.name).toBe("Water the garden");
+  });
+
+  it("keeps the deterministic name if there is no operator grant for inference", async () => {
+    const job = await addJob(unnamedParams("Water the garden"), {
+      connect: uiClient.connect,
+      internal: { authenticatedControlUi: true },
+    });
+    expect(generateAutomationName).not.toHaveBeenCalled();
+    expect(job.name).toBe("Water the garden");
   });
 });

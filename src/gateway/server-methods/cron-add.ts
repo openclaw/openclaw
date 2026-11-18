@@ -16,6 +16,7 @@ import { cronCreateRequiresStreamExecAuthority } from "../../cron/stream-exec-au
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronDeliveryPreview, CronJobCreate } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
@@ -42,6 +43,9 @@ import { respondInvalidCronParams, respondRefusedCronAgent } from "./cron-job-ac
 import { withCronStreamExecApproval } from "./cron-stream-approval.js";
 import type { GatewayRequestHandler } from "./types.js";
 import { assertValidParams } from "./validation.js";
+
+// A title is optional. Share one short budget across setup and both model attempts.
+const CRON_ADD_NAMING_TIMEOUT_MS = 5_000;
 
 export const cronAddHandler: GatewayRequestHandler = async ({
   params: rawParams,
@@ -198,25 +202,48 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       : jobCreate.payload.kind === "systemEvent"
         ? jobCreate.payload.text
         : undefined;
-  // Declarations converge on their key, so a generated name would churn on every apply.
-  if (!nameProvided && !jobCreate.declarationKey && namingAgentId && namingSource) {
-    let operator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  // Only the interactive editor requests model naming. Other callers keep the
+  // deterministic name without disclosing the prompt to a title provider.
+  if (
+    !nameProvided &&
+    client?.internal?.authenticatedControlUi &&
+    !callerScope &&
+    !jobCreate.declarationKey &&
+    namingAgentId &&
+    namingSource
+  ) {
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), CRON_ADD_NAMING_TIMEOUT_MS);
+    const namingSignal = signal ? AbortSignal.any([signal, timeout.signal]) : timeout.signal;
     try {
-      operator = await captureGatewayOperatorRunAuthority({
-        client,
-        context,
-        hasCurrentClientAuthority,
-        invocationAuthority: { assertCurrent: commitGuard, signal },
-      });
-      const { generateAutomationName } = await import("../dashboard-session-title.js");
-      const name = await generateAutomationName({
-        cfg,
-        agentId: namingAgentId,
-        message: namingSource,
-        abortSignal: signal,
-        assertCurrent: commitGuard,
-        operatorAuthority: operator?.authority,
-      });
+      const name = await racePromiseWithAbortSignal(async () => {
+        const operator = await captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+          invocationAuthority: { assertCurrent: commitGuard, signal: namingSignal },
+        });
+        if (!operator) {
+          return null;
+        }
+        try {
+          // Release the grant even if the provider ignores cancellation.
+          return await racePromiseWithAbortSignal(async () => {
+            const { generateAutomationName } = await import("../dashboard-session-title.js");
+            namingSignal.throwIfAborted();
+            return generateAutomationName({
+              cfg,
+              agentId: namingAgentId,
+              message: namingSource,
+              abortSignal: namingSignal,
+              assertCurrent: commitGuard,
+              operatorAuthority: operator.authority,
+            });
+          }, namingSignal);
+        } finally {
+          operator.release();
+        }
+      }, namingSignal);
       if (name) {
         jobCreate.name = name;
       }
@@ -224,7 +251,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       // Naming is best effort: the prompt-derived name stays, and the commit guard
       // below still refuses a request whose authority changed meanwhile.
     } finally {
-      operator?.release();
+      clearTimeout(timer);
     }
   }
   // Resolve the preview before durable add so a preview failure cannot duplicate a retry.

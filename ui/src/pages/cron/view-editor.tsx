@@ -212,8 +212,9 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
 }
 
 /**
- * The automation as one composer: prompt (and, once saved, its name) on the sheet, and when
- * and how it runs on the tray tucked under it. New automations are named from their prompt.
+ * The automation as one composer: prompt (and, for a saved automation or a copy, its name) on
+ * the sheet, and when and how it runs on the tray tucked under it. New automations are named
+ * from their prompt.
  */
 function PromptBlock(
   props: CronProps & {
@@ -248,14 +249,15 @@ function PromptBlock(
   return (
     <div class="cron-prompt cron-prompt--editing">
       <div class="cron-prompt__sheet">
-        <Show when={props.mode === "job"}>
+        <Show when={props.mode === "job" || props.cloning}>
           <textarea
             id={inputIdForField("name")}
             class="cron-prompt__name"
             rows="1"
             value={props.form.name}
             aria-label={t("cron.form.fieldName")}
-            placeholder={t("cron.form.namePlaceholder")}
+            // An empty name keeps the saved one, so show it rather than an example.
+            placeholder={props.editingJob?.name ?? t("cron.form.namePlaceholder")}
             onKeyDown={(event) => {
               // The name is one line that wraps, as the single-line field it replaces.
               if (event.key === "Enter" && !event.isComposing) {
