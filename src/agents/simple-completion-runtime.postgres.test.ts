@@ -201,13 +201,16 @@ module.exports = {
               entries: { main: {}, [agentId]: {} },
               defaults: { workspace: workspaceDir, model: "completion-provider/completion-model" },
             },
-            auth: { order: { "completion-provider": [primaryId, backupId] } },
+            auth: storedProfiles ? { order: { "completion-provider": [primaryId, backupId] } } : {},
             models: {
               providers: {
                 "completion-provider": {
                   api: "openai-completions" as const,
                   baseUrl: server.baseUrl,
-                  ...(!storedProfiles ? { apiKey: "fixture-completion-key" } : {}),
+                  // Direct auth excludes cooldown profiles retained by earlier cases in this pair.
+                  ...(!storedProfiles
+                    ? { auth: "api-key" as const, apiKey: "fixture-completion-key" }
+                    : {}),
                   models: [completionModelDefinition({ id: "completion-model" })],
                 },
               },
