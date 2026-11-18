@@ -1535,7 +1535,7 @@ jobs:
               dispatch_id="full-release-validation-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-ci"
               dispatch_run_name="CI ${dispatch_id}"
               ci_release_scope="${CI_RELEASE_SCOPE:-full}"
-              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f include_mobile=false -f include_android=false -f dispatch_id="$dispatch_id")
+              args=(-f target_ref="$TARGET_SHA" -f release_scope="$ci_release_scope" -f dispatch_id="$dispatch_id")
               context_ref="${TARGET_CONTEXT_REF:-$TARGET_REF}"
               context_ref="${context_ref#refs/heads/}"
               context_ref="${context_ref#refs/tags/}"

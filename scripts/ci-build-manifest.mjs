@@ -238,7 +238,9 @@ if (
   );
 }
 // Gateway release qualification excludes candidate-source mobile apps.
-const skipMobileValidation = process.env.OPENCLAW_CI_INCLUDE_MOBILE === "false";
+const skipMobileValidation =
+  workflowEventName === "workflow_dispatch" &&
+  (process.env.OPENCLAW_CI_DISPATCH_ID ?? "").startsWith("full-release-validation-");
 const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
 // Stable tags also ship the macOS app, and its post-tag validation is too late
 // to block the tag, so only beta defers macOS Swift proof.

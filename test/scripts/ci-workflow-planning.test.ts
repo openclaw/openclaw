@@ -10234,7 +10234,10 @@ describe("ci workflow guards", () => {
       const gateway = runCiManifestFixture({
         ...options,
         packageVersion,
-        scopeEnv: { ...options.scopeEnv, OPENCLAW_CI_INCLUDE_MOBILE: "false" },
+        scopeEnv: {
+          ...options.scopeEnv,
+          OPENCLAW_CI_DISPATCH_ID: "full-release-validation-1-1-ci",
+        },
       });
       expect(native.status, native.output).toBe(0);
       expect(gateway.status, gateway.output).toBe(0);
@@ -15104,8 +15107,9 @@ describe("ci workflow guards", () => {
         },
       );
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout).toContain("include_mobile=false");
-      expect(result.stdout).toContain("include_android=false");
+      expect(result.stdout).not.toContain("include_mobile=");
+      expect(result.stdout).toContain("dispatch_id=full-release-validation-1-1-ci");
+      expect(result.stdout).not.toContain("include_android=");
       expect(result.stdout).toContain("release_scope=" + scope);
     },
   );

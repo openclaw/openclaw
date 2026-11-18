@@ -32,11 +32,6 @@ on:
         required: false
         default: false
         type: boolean
-      include_mobile:
-        description: Include candidate-source iOS and Android validation.
-        required: false
-        default: true
-        type: boolean
       include_android:
         description: Run Android lanes for this manual CI dispatch.
         required: false
@@ -1492,7 +1487,7 @@ jobs:
           OPENCLAW_CI_RUN_IOS_BUILD: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}
           OPENCLAW_CI_RUN_IOS_SCREENSHOTS: ${{ steps.changed_scope.outputs.run_ios_screenshots || 'false' }}
           OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS: ${{ steps.changed_scope.outputs.run_android_screenshots || 'false' }}
-          OPENCLAW_CI_INCLUDE_MOBILE: ${{ github.event_name != 'workflow_dispatch' || inputs.include_mobile }}
+          OPENCLAW_CI_DISPATCH_ID: ${{ inputs.dispatch_id }}
           OPENCLAW_CI_RUN_ANDROID: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && ((inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true')) || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}
           OPENCLAW_CI_RUN_WINDOWS: ${{ github.event_name == 'schedule' && 'true' || github.event_name == 'workflow_dispatch' && !inputs.release_gate && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'true' || steps.changed_scope.outputs.run_windows || 'false' }}
           OPENCLAW_CI_RUN_NODE_FAST_ONLY: ${{ github.event_name == 'workflow_dispatch' && (steps.runner_profile.outputs.node_runner_backend != 'runson' && steps.runner_profile.outputs.ci_qualification != 'true') && 'false' || steps.changed_scope.outputs.run_node_fast_only || 'false' }}
