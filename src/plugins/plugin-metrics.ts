@@ -139,7 +139,8 @@ function pluginMetricPrefix(pluginId: string): string {
 
 function admitFamily(prefix: string, input: PluginMetricFamilyDeclaration): PluginMetricFamily {
   const fail = (message: string): never => {
-    throw new Error(`plugin metrics: ${String(input?.name)}: ${message}`);
+    const name = typeof input?.name === "string" ? input.name : "<unnamed>";
+    throw new Error(`plugin metrics: ${name}: ${message}`);
   };
   const { name, type, help } = input ?? {};
   if (typeof name !== "string" || !METRIC_NAME.test(name)) {
@@ -162,7 +163,7 @@ function admitFamily(prefix: string, input: PluginMetricFamilyDeclaration): Plug
       label.startsWith("__") ||
       label === "le"
     ) {
-      fail(`invalid label name ${String(label)}`);
+      fail(typeof label === "string" ? `invalid label name ${label}` : "invalid label name");
     }
   }
   if (new Set(labels).size !== labels.length) {
