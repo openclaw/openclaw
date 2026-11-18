@@ -21,6 +21,90 @@ declare global {
 }
 
 suite.define(() => {
+  it.each(["malformed", "unreadable"] as const)(
+    "applies the light iOS palette before runtime with %s web settings",
+    async (storage) => {
+      await suite.withPage({ colorScheme: "light", serviceWorkers: "block" }, async ({ page }) => {
+        await installNativeEmbed(page, { platform: "ios", formFactor: "pad" });
+        await page.addInitScript((storage) => {
+          if (storage === "malformed") {
+            localStorage.setItem("openclaw.control.settings.v1", "{");
+          } else {
+            Object.defineProperty(window, "localStorage", {
+              get() {
+                throw new DOMException("Storage unavailable", "SecurityError");
+              },
+            });
+          }
+        }, storage);
+        // The document-start script must set the palette without runtime correcting it.
+        await page.route("**/*", (route) =>
+          route.request().resourceType() === "script" ? route.abort() : route.fallback(),
+        );
+        await page.goto(new URL("automations", suite.server.baseUrl).toString());
+        await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
+        expect(
+          await page.locator("html").evaluate((root) => getComputedStyle(root).backgroundColor),
+        ).toBe("rgb(246, 247, 249)");
+      });
+    },
+  );
+
+  it("prepares the ordinary browser offline shell without the iOS palette", async () => {
+    await suite.withPage({ serviceWorkers: "allow" }, async ({ page, context }) => {
+      // Network-isolated Chromium can report offline even when loopback works.
+      if (!(await page.evaluate(() => navigator.onLine))) {
+        const protocol = await context.newCDPSession(page);
+        await protocol.send("Network.overrideNetworkState", {
+          offline: false,
+          latency: 1,
+          downloadThroughput: -1,
+          uploadThroughput: -1,
+          connectionType: "ethernet",
+        });
+      }
+      const nativePaletteRequests: string[] = [];
+      context.on("request", (request) => {
+        if (new URL(request.url()).pathname.endsWith("/themes/native-ios.css")) {
+          nativePaletteRequests.push(request.url());
+        }
+      });
+      await installMockGateway(page, {
+        operatorScopes: ["operator.admin", "operator.read"],
+        methodResponses: createNativeEmbedLayoutMethodResponses(),
+      });
+      await page.goto(new URL("automations", suite.server.baseUrl).toString());
+      await waitForControlUiRoute(page, { routeId: "cron" });
+      // Wait for the real worker to finish preparing its cache, not just to register.
+      await expect
+        .poll(
+          async () =>
+            page.evaluate(async (base) => {
+              const active = (await navigator.serviceWorker.getRegistration())?.active;
+              return (
+                active?.state === "activated" &&
+                !!(await caches.match(new URL("__offline_shell__", base).href))
+              );
+            }, suite.server.baseUrl),
+          { timeout: 20_000 },
+        )
+        .toBe(true);
+      expect(
+        await page.evaluate(async () => {
+          const keys = await Promise.all(
+            (await caches.keys()).map(async (name) => {
+              return (await caches.open(name)).keys();
+            }),
+          );
+          return keys
+            .flat()
+            .some((request) => new URL(request.url).pathname.endsWith("/themes/native-ios.css"));
+        }),
+      ).toBe(false);
+      expect(nativePaletteRequests).toEqual([]);
+    });
+  });
+
   for (const device of [
     { formFactor: "phone", width: 390, height: 844, mode: "dark" },
     { formFactor: "pad", width: 1024, height: 1366, mode: "light" },

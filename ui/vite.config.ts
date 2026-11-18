@@ -523,7 +523,11 @@ export async function refreshControlUiBuildOutput(
       ...new Set([
         ...selectedBootAssets,
         ...publicAssets.filter(
-          (asset) => /\.(?:css|woff2)$/u.test(asset) && isControlUiVersionedPublicAsset(asset),
+          (asset) =>
+            // The native palette is versioned but only iOS embeds request it.
+            asset !== "themes/native-ios.css" &&
+            /\.(?:css|woff2)$/u.test(asset) &&
+            isControlUiVersionedPublicAsset(asset),
         ),
       ]),
     ]

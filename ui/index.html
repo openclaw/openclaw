@@ -109,6 +109,7 @@
           clawdash: "dash:light",
           system: "claw:system",
         };
+        var s;
         try {
           var keys = Object.keys(localStorage);
           var raw;
@@ -118,7 +119,7 @@
               if (raw) break;
             }
           }
-          var s = raw ? JSON.parse(raw) : null;
+          s = raw ? JSON.parse(raw) : null;
           // A hint only: startup still admits the account and exact snapshot.
           var bootScope =
             (location.protocol === "https:" ? "wss:" : "ws:") + "//" + location.host + bootBase;
@@ -148,6 +149,11 @@
           if (s && s.chatSendShortcut === "modifier-enter") {
             document.documentElement.setAttribute("data-openclaw-boot-send-shortcut", "modifier");
           }
+        } catch (e) {
+          // Native first paint does not depend on saved browser preferences.
+          if (!nativeIOS) return;
+        }
+        try {
           var t = nativeIOS ? "claw" : s && s.theme;
           var m = nativeIOS ? "system" : s && s.themeMode;
           if (typeof t !== "string") t = "";
