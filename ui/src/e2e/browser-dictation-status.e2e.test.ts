@@ -5,13 +5,13 @@ import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { rasterizeProofAnnotations } from "../test-helpers/proof-annotations.ts";
 import {
   captureComposerProof,
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { ONE_PIXEL_PNG_B64 } from "./new-session-page.test-support.ts";
 
 function catalog(transcription: boolean, realtime?: boolean) {
   return {
@@ -407,7 +407,7 @@ suite.define(() => {
       }),
   );
 
-  it("preserves the new-session dictation border beside the image-drop tint", () =>
+  it("restores the new-session image-drop tint after dictation", () =>
     suite.withPage(
       {
         permissions: ["microphone"],
@@ -416,66 +416,64 @@ suite.define(() => {
         reducedMotion: "reduce",
       },
       async ({ page }) => {
-        const { textarea, admit, emit } = await openDictation(page, { route: "new" });
-        await button(page, "Dictate", true).click();
-        await admit();
-        await emit("Describe this image");
+        const { gateway, textarea, admit, emit, close } = await openDictation(page, {
+          route: "new",
+        });
         const shell = page.locator(".new-session-page__composer");
         const input = shell.locator(":scope > .agent-chat__input");
-        await expect
-          .poll(() => input.getAttribute("class"))
-          .toContain("agent-chat__input--dictating");
-        const border = () =>
-          input.evaluate((element) => {
-            const style = getComputedStyle(element, "::after");
-            return {
-              opacity: Number(style.opacity),
-              background: style.backgroundImage,
-              inset: style.top,
-              zIndex: style.zIndex,
-            };
-          });
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const stage = process.env.OPENCLAW_PROOF_STAGE ?? "after";
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            page.locator(".new-session-page"),
-            [textarea],
-            {
-              elements: [input],
-              animations: "disabled",
-            },
-          );
-          await writeFile(path.join(suite.artifactDir, stage + "-dictation-clean.png"), frame.png);
-          const annotated = await rasterizeProofAnnotations(suite.browser, {
-            viewport: page.viewportSize()!,
-            scale: await page.evaluate(() => devicePixelRatio),
-            image: frame.png,
-            annotations: [
-              {
-                kind: "outline",
-                rect: frame.elements[0]!.bounds,
-                text:
-                  stage === "before"
-                    ? "Dictation border is hidden"
-                    : "Dictation border remains visible",
-                labelAt: { x: 330, y: 510 },
-                color: "#F5A66F",
-              },
-            ],
-          });
-          await writeFile(
-            path.join(suite.artifactDir, stage + "-dictation-annotated.png"),
-            annotated,
-          );
-          console.log("Dictation border proof:", suite.artifactDir);
-        }
-        await expect.poll(border).toMatchObject({ opacity: 1, inset: "-1px", zIndex: "5" });
-        expect((await border()).background).toContain("conic-gradient");
-        // Dictation owns ::after; the idle drop tint must stay on its own surface.
+        const tintOpacity = () =>
+          input.evaluate((element) => Number(getComputedStyle(element, "::before").opacity));
+        const draft = "Describe this image";
+
+        await button(page, "Dictate", true).click();
+        await admit();
+        await emit(draft);
+        await expectDraft(textarea, draft);
+        const stop = input.getByRole("button", { name: "Stop and keep text", exact: true });
+        const listening = input.locator(".agent-chat__dictation-phase", { hasText: "Listening…" });
+        await listening.waitFor({ state: "visible" });
         expect(
-          await input.evaluate((element) => Number(getComputedStyle(element, "::before").opacity)),
-        ).toBe(0);
+          await input.evaluate((element) => getComputedStyle(element, "::after").backgroundImage),
+        ).not.toContain("conic-gradient");
+        expect(await tintOpacity()).toBe(0);
+
+        const transfer = await page.evaluateHandle((base64) => {
+          const data = new DataTransfer();
+          data.items.add(
+            new File([Uint8Array.from(atob(base64), (char) => char.charCodeAt(0))], "pixel.png", {
+              type: "image/png",
+            }),
+          );
+          return data;
+        }, ONE_PIXEL_PNG_B64);
+        const drag = (type: string) => textarea.dispatchEvent(type, { dataTransfer: transfer });
+        try {
+          // Dictation locks attachments, so dragging an image must not obscure Listening.
+          await drag("dragenter");
+          await drag("dragover");
+          expect(await shell.getAttribute("data-attachment-drop-active")).toBeNull();
+          expect(await tintOpacity()).toBe(0);
+          expect(await listening.isVisible()).toBe(true);
+          await drag("dragleave");
+
+          await stop.click();
+          await gateway.waitForRequest("talk.session.close");
+          await emit(draft, true);
+          await close();
+          await expect.poll(() => textarea.isEditable()).toBe(true);
+
+          await drag("dragenter");
+          await drag("dragover");
+          await expect.poll(tintOpacity).toBeGreaterThan(0);
+          await expectDraft(textarea, draft);
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await captureFullPage(page, "dictation-image-drag.png");
+          }
+          await drag("dragleave");
+          await expect.poll(tintOpacity).toBe(0);
+        } finally {
+          await transfer.dispose();
+        }
       },
     ));
 
