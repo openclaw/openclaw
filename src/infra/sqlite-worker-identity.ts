@@ -244,13 +244,21 @@ export function assertExistingDatabaseIdentity(
   });
 }
 
-export function isSoleDatabaseFileDescriptor(descriptor: number, file: BigIntStats): boolean {
+export function isSoleDatabaseFileDescriptor(
+  descriptor: number,
+  file: BigIntStats,
+  additionalOwnedDescriptors?: ReadonlySet<number>,
+): boolean {
   if (process.platform !== "linux") {
     return false;
   }
   try {
     for (const name of readdirSync("/proc/self/fd")) {
-      if (!/^\d+$/u.test(name) || Number(name) === descriptor) {
+      if (
+        !/^\d+$/u.test(name) ||
+        Number(name) === descriptor ||
+        additionalOwnedDescriptors?.has(Number(name))
+      ) {
         continue;
       }
       try {

@@ -46,6 +46,7 @@ import {
   readSqliteDatabaseWriteTokenForPath as pathToken,
   retireSqliteDatabaseAdmissionForPath as retireAdmission,
   retainSqliteDatabaseAdmissionLocation as retainLocation,
+  retainSqliteDatabaseAdmissionLocationAsync as retainLocationAsync,
   revokeSqliteDatabaseAdmissions as revokeAdmissions,
   revokeSqliteDatabaseAdmissionsForPath as revokePath,
   trackSqliteDatabaseAdmissionWorker as trackWorker,
@@ -266,6 +267,59 @@ it("bounds cold session receipts by bytes without evicting hot receipts or reviv
   database.close();
   expect(recordsFor(location)).toEqual([]);
 });
+
+it.each(["host", "worker"])(
+  "preserves native admission during asynchronous acquisition until %s retirement",
+  async (owner) => {
+    const location = path.join(tempDirs.make("sqlite-admission-async-custody-"), "proof.sqlite");
+    fs.writeFileSync(location, "");
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const realpath = fs.promises.realpath;
+    using _ = vi.spyOn(fs.promises, "realpath").mockImplementationOnce(async () => {
+      entered.resolve();
+      await resume.promise;
+      return realpath(location);
+    });
+    using stat = vi.spyOn(fs, "fstat");
+    const pending = retainLocationAsync(location);
+    await entered.promise;
+    const extraDescriptor = stat.mock.calls[0]![0];
+    using database = createDatabase(location);
+    const original = recordsFor(location)[0]!;
+    const token = scopedToken(database, "active");
+    try {
+      resume.resolve();
+      await pending;
+      expect(recordsFor(location)[0]?.generationId).toBe(original.generationId);
+      expect(pathScopedTokens(location, ["active"])).toEqual([token]);
+      expect(fstatSync(extraDescriptor).isFile()).toBe(true);
+      database.exec("UPDATE proof SET value = 43");
+      expect(pathScopedTokens(location, ["active"])).not.toEqual([token]);
+    } finally {
+      database.close();
+      if (owner === "host") {
+        retireAdmission(location, { requireSoleDescriptor: process.platform === "linux" });
+      } else {
+        const relay = createSqliteDatabaseAdmissionRelay(() => {});
+        const worker = new Worker(
+          admissionWorker(
+            'exchange(() => retireSqliteDatabaseAdmissionForPath(workerData.location)); parentPort.postMessage("retired");',
+          ),
+          workerOptions(location, relay.port),
+        );
+        try {
+          expect((await once(worker, "message"))[0]).toBe("retired");
+        } finally {
+          await worker.terminate();
+          relay.finish();
+        }
+      }
+    }
+    expect(() => fstatSync(original.descriptor)).toThrow();
+    expect(() => fstatSync(extraDescriptor)).toThrow();
+  },
+);
 
 it("retires the final closed handle's facts while preserving open siblings and descriptor custody", () => {
   using fixture = databaseFixture("sqlite-admission-retention-");

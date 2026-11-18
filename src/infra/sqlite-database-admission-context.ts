@@ -147,7 +147,20 @@ export async function retainSqliteDatabaseAdmissionDescriptorAsync(
         if (!current.isFile() || readSqliteDatabaseAdmissionIdentity(current) !== key) {
           throw new Error("SQLite database changed while retaining its admission identity");
         }
-        return state.registry.retainDescriptor(canonicalPath, descriptor, opened);
+        const custody = state.registry.descriptors.get(key);
+        if (custody && custody.descriptor !== descriptor) {
+          // Native admission may win while filesystem work awaits. Closing the extra
+          // descriptor now could drop its SQLite locks; the joined owner retires both.
+          (custody.additionalDescriptors ??= new Set()).add(descriptor);
+        }
+        const currentRecord = state.registry.records.get(key);
+        return currentRecord && !isSqliteDatabaseAdmissionRetired(currentRecord)
+          ? currentRecord
+          : state.registry.retainDescriptor(
+              canonicalPath,
+              custody?.descriptor ?? descriptor,
+              opened,
+            );
       })();
       pendingDescriptors.set(key, pending);
       void pending

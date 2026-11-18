@@ -369,7 +369,10 @@ export class SqliteDatabaseAdmissionRegistry {
   private readonly locations = new Map<string, string>();
   private readonly published = new Map<string, PublishedAdmission>();
   private readonly scopeSweeps = new WeakMap<Admission, number>();
-  readonly descriptors = new Map<string, Pick<Admission, "descriptor" | "facts">>();
+  readonly descriptors = new Map<
+    string,
+    Pick<Admission, "descriptor" | "facts"> & { additionalDescriptors?: Set<number> }
+  >();
   private revision = 0;
   private retainProcessFacts = true;
 
@@ -497,10 +500,7 @@ export class SqliteDatabaseAdmissionRegistry {
       ),
     };
     this.records.set(record.identity, record);
-    this.descriptors.set(record.identity, {
-      descriptor,
-      facts: new Map(),
-    });
+    this.descriptors.set(record.identity, { ...retained, descriptor, facts: new Map() });
     this.observeLocation(location, record.identity);
     this.publish(record);
     return record;
@@ -509,14 +509,16 @@ export class SqliteDatabaseAdmissionRegistry {
   /** Only the joined lifecycle owner may release a retained descriptor. */
   retireDescriptor(identity: string, options: { requireSoleDescriptor?: boolean }): boolean {
     const record = this.records.get(identity);
-    const descriptor = this.descriptors.get(identity)?.descriptor ?? record?.descriptor;
+    const custody = this.descriptors.get(identity);
+    const descriptor = custody?.descriptor ?? record?.descriptor;
     if (descriptor === undefined) {
       return false;
     }
     const file = fs.fstatSync(descriptor, { bigint: true });
     if (
       file.nlink > 1n ||
-      (options.requireSoleDescriptor && !isSoleDatabaseFileDescriptor(descriptor, file))
+      (options.requireSoleDescriptor &&
+        !isSoleDatabaseFileDescriptor(descriptor, file, custody?.additionalDescriptors))
     ) {
       return false;
     }
@@ -524,6 +526,7 @@ export class SqliteDatabaseAdmissionRegistry {
       Atomics.store(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.retired, 1);
     }
     fs.closeSync(descriptor);
+    custody?.additionalDescriptors?.forEach((extra) => fs.closeSync(extra));
     this.descriptors.delete(identity);
     this.forget(identity);
     this.publish();
@@ -539,6 +542,8 @@ export class SqliteDatabaseAdmissionRegistry {
     for (const current of this.records.values()) {
       if (isSqliteDatabaseAdmissionRetired(current)) {
         if (readSqliteDatabaseGeneration(current, "retired") === 1) {
+          // A worker can retire the shared descriptor; its host still owns any extras.
+          this.descriptors.get(current.identity)?.additionalDescriptors?.forEach(fs.closeSync);
           this.descriptors.delete(current.identity);
         }
         this.forget(current.identity);
