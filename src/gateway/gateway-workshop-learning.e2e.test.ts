@@ -79,7 +79,7 @@ beforeAll(shareCoreWithWorkshopPluginForTest);
 
 describe("Gateway automatic Workshop learning", () => {
   it(
-    "sends one bounded review request and stops on a provider TPM rate limit",
+    "sends one review request and stops on a provider TPM rate limit",
     { timeout: 60_000 },
     async () => {
       const state = await createOpenClawTestState({
