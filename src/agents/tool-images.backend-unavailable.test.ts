@@ -13,7 +13,7 @@ const PNG_BASE64 = "iVBORw0KGgo=";
 
 async function importSanitizer() {
   vi.resetModules();
-  vi.doMock("../media/media-services.js", () => ({
+  vi.doMock("../media/image-ops.js", () => ({
     IMAGE_REDUCE_QUALITY_STEPS: [85, 75],
     MAX_IMAGE_INPUT_PIXELS: 25_000_000,
     buildImageResizeSideGrid: () => [1200],

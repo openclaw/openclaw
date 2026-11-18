@@ -1,9 +1,9 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeOpenAIResponsesFunctionCallId,
-  replaceCompactionReplayOwnerContent,
   shouldNormalizeOpenAIResponsesToolCallId,
-} from "@openclaw/ai/transports";
-import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
+} from "../../../packages/ai/src/transports/openai-responses-tool-call-id-shape.js";
+import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-replay.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { rewriteToolResultIds } from "../tool-call-id.js";
 

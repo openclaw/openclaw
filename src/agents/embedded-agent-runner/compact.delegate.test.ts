@@ -28,6 +28,7 @@ import {
   resolveModelMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
+import { registerNativeCompactionPolicyTests } from "./compact.native-policy.test-support.js";
 import type * as CompactionHooks from "./compaction-hooks.js";
 import type { PreparedCompactionSession } from "./run/compaction-accounting-bridge.js";
 
@@ -152,6 +153,11 @@ function createFixture(
 }
 
 describe("direct compactor through the context-engine delegate", () => {
+  registerNativeCompactionPolicyTests({
+    createFixture: () => createFixture("summary"),
+    runtime: () => ({ sessions, accessor, workspaceDir, accounting, delegate, requestBudgets }),
+  });
+
   it.each(["plain", "custom", "metadata"] as const)(
     "keeps full-history preparation in the native reader for default safeguard maintenance (shape=%s)",
     async (shape) => {
@@ -1003,7 +1009,8 @@ it("rebases prepared compaction metadata over an accepted descendant append", as
     const context = sanitizeCompactionReplayMessages(manager.buildSessionContext().messages);
     const { estimateContextTokens } =
       await import("../../../packages/agent-core/src/harness/compaction/compaction.js");
-    expect(result.result?.tokensAfter).toBe(estimateContextTokens(context).tokens);
+    // Reporting suppresses growth beyond the pre-compaction estimate; the commit stays countable.
+    expect(result.result?.tokensAfter).toBeUndefined();
     expect(fixture.recordCompaction).toHaveBeenCalledWith(
       expect.objectContaining({
         tokensAfter: estimateContextTokens(context).tokens,

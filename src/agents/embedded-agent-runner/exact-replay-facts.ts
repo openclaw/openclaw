@@ -85,7 +85,7 @@ export type ReplayBlockFact<S> = {
   omission?: string;
   duplicateInvalid: boolean;
   duplicateText?: ReplayTextFingerprint;
-  equality: string;
+  equality?: string;
   rawIndex: number;
 };
 
@@ -241,10 +241,10 @@ function collectBlock<S>(
     omission,
     duplicateInvalid: !record || type === "image",
     duplicateText:
-      type === "text" && typeof record?.text === "string"
+      message.role === "user" && type === "text" && typeof record?.text === "string"
         ? collectReplayTextFingerprint(record.text)
         : undefined,
-    equality: replayComparisonFingerprint(value),
+    equality: message.role === "assistant" ? replayComparisonFingerprint(value) : undefined,
     rawIndex,
   };
 }

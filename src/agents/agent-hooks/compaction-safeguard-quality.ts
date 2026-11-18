@@ -2,7 +2,7 @@
 import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import { copyString } from "../../../packages/agent-core/src/harness/utils/truncate.js";
 import type { Model } from "../../llm/types.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";

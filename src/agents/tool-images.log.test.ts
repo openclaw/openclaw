@@ -27,7 +27,7 @@ vi.mock("../logging/subsystem.js", () => {
   return { createSubsystemLogger: () => makeLogger() };
 });
 
-vi.mock("../media/media-services.js", () => ({
+vi.mock("../media/image-ops.js", () => ({
   buildImageResizeSideGrid: () => [2000],
   getImageMetadata: vi.fn(),
   IMAGE_REDUCE_QUALITY_STEPS: [85, 75, 65],

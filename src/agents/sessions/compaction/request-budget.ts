@@ -3,7 +3,7 @@ import {
   resolveSummaryFloorChars,
   type PreparedCompactionFloor,
 } from "../../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
-import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";

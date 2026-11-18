@@ -60,15 +60,6 @@ function options() {
 function prepareWithFactParity(entries: SessionEntry[], input: AgentCompactionPreparationOptions) {
   const facts = entries.map((entry, index): AgentCompactionPreparationEntryFact => {
     const fact = collectCompactionPreparationEntryFact(entry, index);
-    const message = getMessageFromEntryForCompaction(entry);
-    const pressure = (context: "current" | "retained" | "reset-retained") => {
-      const projected = projectSessionContextMessage({
-        entry,
-        context,
-        placement: fact.pendingBackground ? entry : undefined,
-      });
-      return projected ? collectMessageTokenPressureFact(projected) : undefined;
-    };
     return {
       ...fact,
       idempotencyKey:
@@ -77,12 +68,6 @@ function prepareWithFactParity(entries: SessionEntry[], input: AgentCompactionPr
         typeof entry.message.idempotencyKey === "string"
           ? entry.message.idempotencyKey
           : undefined,
-      tokenPressure: {
-        message: message ? collectMessageTokenPressureFact(message) : undefined,
-        current: pressure("current"),
-        retained: pressure("retained"),
-        "reset-retained": pressure("reset-retained"),
-      },
     };
   });
   const { systemPrompt, tools, ...scalarInput } = input;
@@ -100,6 +85,18 @@ function prepareWithFactParity(entries: SessionEntry[], input: AgentCompactionPr
           createCompactionReplacementProjector(entries, input.itemId)(preparation, ""),
           budget,
         );
+      },
+      (fact, context) => {
+        const entry = entries[fact.sourceIndex]!;
+        const message =
+          context === "message"
+            ? getMessageFromEntryForCompaction(entry)
+            : projectSessionContextMessage({
+                entry,
+                context,
+                placement: fact.pendingBackground ? entry : undefined,
+              });
+        return message ? collectMessageTokenPressureFact(message) : undefined;
       },
     );
   let expected: ReturnType<typeof prepareAgentCompactionWork>;

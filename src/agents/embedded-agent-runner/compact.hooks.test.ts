@@ -650,7 +650,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
         compacted: false,
         reason: expect.stringContaining("timed out"),
       });
-      expect(policies).toEqual([undefined]);
+      expect(policies).toEqual(["retry-invalid-once"]);
     } finally {
       vi.useRealTimers();
     }

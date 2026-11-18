@@ -34,10 +34,9 @@ export type PreparedCompactionMessageFact = {
   role: AgentMessage["role"];
   runtime: boolean;
   real: RealConversationMessageFact;
-  context: CompactionContextMessageFact;
+  context: Pick<CompactionContextMessageFact, "role" | "pairing">;
   floor: CompactionFloorMessageFact;
   failure?: ToolFailure;
-  identifiers: string[];
   ask: boolean | undefined;
   sourceAsk: boolean;
   conversation: ConversationMessageFact<PreparedCompactionMessageSource>[];

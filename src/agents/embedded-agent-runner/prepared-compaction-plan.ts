@@ -1,3 +1,7 @@
+import {
+  compactWithoutSummaryFromFacts,
+  formatRequiredAskContext,
+} from "../../../packages/agent-core/src/harness/compaction/compaction-assembly.js";
 import { getMessageFromEntryForCompaction } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
 import {
   collectCompactionFloorMessageFact,
@@ -5,11 +9,7 @@ import {
   renderCompactionFloor,
 } from "../../../packages/agent-core/src/harness/compaction/compaction-floor.js";
 import { collectCompactionPreparationEntryFact } from "../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
-import {
-  compactWithoutSummaryFromFacts,
-  formatRequiredAskContext,
-  MAX_COMPACTION_SUMMARY_CHARS,
-} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
   collectConversationMessageFact,
   collectConversationRangeDescriptors,
@@ -30,6 +30,7 @@ import { fitBackgroundResultDependencyFacts } from "../../config/sessions/sessio
 import {
   buildPreservedTurnsSectionFromFacts,
   collectCompactionContextMessageFact,
+  collectCompactionContextMessageIdentity,
   resolveRecentTurnsPreserve,
   selectPreservedRecentTurnIndexes,
 } from "../agent-hooks/compaction-safeguard-context.js";
@@ -99,10 +100,9 @@ export function collectPreparedCompactionEntryFact(
     role: value.role,
     runtime: isOpenClawRuntimeContextCustomMessage(value),
     real: collectRealConversationMessageFact(value),
-    context: collectCompactionContextMessageFact(value),
+    context: collectCompactionContextMessageIdentity(value),
     floor: collectCompactionFloorMessageFact(value),
     failure: collectToolFailureFact(value),
-    identifiers: extractOpaqueIdentifiers(extractCompactionMessageText(value)),
     ask: collectCompactionSafeguardAskFact(value),
     sourceAsk: value.role === "user" && Boolean(extractCompactionMessageText(value)),
     conversation: convertToLlm(sanitizeCompactionMessages([value])).map((projected) =>
@@ -162,12 +162,6 @@ export function collectPreparedCompactionEntryFact(
     summary,
     contextReplay,
     contextSummaries,
-    tokenPressure: {
-      message: message ? collectMessageTokenPressureFact(message) : undefined,
-      current: current ? collectMessageTokenPressureFact(current) : undefined,
-      retained: retained ? collectMessageTokenPressureFact(retained) : undefined,
-      "reset-retained": reset ? collectMessageTokenPressureFact(reset) : undefined,
-    },
     markers: {
       ...(entry.type === "custom" && entry.customType === "google-turn-ordering-bootstrap"
         ? { googleTurnOrdering: true as const }
@@ -247,6 +241,15 @@ export function prepareCompactionPlan(
         replacement(preparation.firstKeptEntryId, preparation.tokensBefore),
         budget,
       ),
+    (entry, context) => {
+      const message = readPreparedCompactionMessage(
+        context === "message"
+          ? entry.sourceIndex
+          : { seq: entry.sourceIndex, context, placed: entry.pendingBackground },
+        source.readEntry,
+      );
+      return message ? collectMessageTokenPressureFact(message) : undefined;
+    },
   );
   if (work.status === "skipped") {
     return work;
@@ -300,7 +303,7 @@ export function prepareCompactionPlan(
   const readMessage = (fact: PreparedCompactionMessageFact) => {
     const message = readPreparedCompactionMessage(fact.source, source.readEntry);
     if (!message) {
-      throw new Error("Compaction selected ask lost its source message");
+      throw new Error("Compaction selected message lost its source message");
     }
     return message;
   };
@@ -315,7 +318,7 @@ export function prepareCompactionPlan(
   const preservedTurnsSection = buildPreservedTurnsSectionFromFacts(
     history
       .filter((_message, index) => preservedIndexes.has(index))
-      .map((message) => message.context),
+      .map((message) => collectCompactionContextMessageFact(readMessage(message))),
     Math.floor((preparation.settings.maxSummaryChars ?? MAX_COMPACTION_SUMMARY_CHARS) / 2),
   );
   const summarizable = history.filter((_message, index) => !preservedIndexes.has(index));
@@ -403,7 +406,11 @@ export function prepareCompactionPlan(
         summary: {
           ...summary,
           identifiers: extractOpaqueIdentifiersFromFacts(
-            oracle.slice(-10).map((message) => message.identifiers),
+            oracle
+              .slice(-10)
+              .map((message) =>
+                extractOpaqueIdentifiers(extractCompactionMessageText(readMessage(message))),
+              ),
           ),
           preservedTurnsSection,
         },

@@ -20,6 +20,7 @@ import {
   SAFETY_MARGIN,
   estimateCompactionHistoryTokens,
   estimateCompactionHistoryTokensFromFacts,
+  type MessageTokenPressureFact,
 } from "../context-token-pressure.js";
 import { preflightManualCompactionPreparation } from "../manual-compaction-preflight.js";
 import type { SessionEntry } from "../session-manager-types.js";
@@ -117,7 +118,7 @@ export function prepareAgentCompactionWork(
   return work.status === "prepared" ? { ...work, contextMessages, projectReplacement } : work;
 }
 
-/** Fact-only planning; the replacement callback may reread just the selected retained rows. */
+/** Fact-only planning; payload estimates are requested at the same lazy points as the array owner. */
 export function prepareAgentCompactionWorkFromFacts(
   entries: readonly AgentCompactionPreparationEntryFact[],
   options: AgentCompactionFactPreparationOptions,
@@ -125,6 +126,10 @@ export function prepareAgentCompactionWorkFromFacts(
     preparation: CompactionFactPreparation,
     budget: CompactionRequestBudget,
   ) => number,
+  readTokenPressure: (
+    entry: AgentCompactionPreparationEntryFact,
+    context: "message" | "current" | "retained" | "reset-retained",
+  ) => MessageTokenPressureFact | undefined,
 ): AgentCompactionFactWorkPreparation {
   return prepareAgentCompactionSource(entries, options, {
     isPendingUser: (entry, key) =>
@@ -136,7 +141,7 @@ export function prepareAgentCompactionWorkFromFacts(
     historyEstimator: (budget) => () => {
       function* pressureFacts() {
         for (const { entry, context } of iterateSessionContextEntryFacts(entries)) {
-          const fact = entry.tokenPressure[context];
+          const fact = readTokenPressure(entry, context);
           if (fact) {
             yield fact;
           }
@@ -151,11 +156,10 @@ export function prepareAgentCompactionWorkFromFacts(
         state,
         constraints,
         constraints?.budget && budget
-          ? (entry) =>
-              estimateCompactionHistoryTokensFromFacts(
-                entry.tokenPressure.message ? [entry.tokenPressure.message] : [],
-                budget,
-              )
+          ? (entry) => {
+              const pressure = readTokenPressure(entry, "message");
+              return estimateCompactionHistoryTokensFromFacts(pressure ? [pressure] : [], budget);
+            }
           : undefined,
       ),
     emptyReplacementTokens: estimateEmptyReplacementTokens,

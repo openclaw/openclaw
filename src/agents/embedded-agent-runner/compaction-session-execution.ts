@@ -33,6 +33,7 @@ import {
 } from "../sessions/agent-session-compaction.js";
 import type { AgentSession } from "../sessions/agent-session.js";
 import { estimateTokens } from "../sessions/compaction/compaction.js";
+import type { CompactionSummaryOutputPolicy } from "../sessions/compaction/preparation.types.js";
 import { createStandaloneCompactionRequestBudget } from "../sessions/compaction/request-budget.js";
 import { getModelRegistryRuntime } from "../sessions/model-registry-runtime.js";
 import { DefaultResourceLoader } from "../sessions/resource-loader.js";
@@ -164,6 +165,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
       thinkLevel,
       providerStreamFn,
     );
+    const initialSummaryOutputPolicy: CompactionSummaryOutputPolicy =
+      params.summaryRefusal === "floor"
+        ? "deterministic"
+        : trigger === "manual" || resolveEffectiveCompactionMode(params.config) !== "default"
+          ? "none"
+          : "retry-invalid-once";
     const preparedCompaction = needsCompactionSessionAdapter(
       runtime,
       initialTransport.effectiveExtraParams,
@@ -180,6 +187,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             extraParams: initialTransport.effectiveExtraParams,
             apiKey: initialTransport.transportApiKey,
           }),
+          initialSummaryOutputPolicy,
         );
     // Explicit public callback/endpoint adapters alone materialize the full transcript.
     const preparedSessionManager = preparedCompaction
@@ -480,12 +488,18 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               })
             : undefined;
         let clientResult: Awaited<ReturnType<AgentSession["compact"]>> | undefined;
-        let viewResult: { tokensAfter: number; messageCountAfter: number } | undefined;
+        let viewResult:
+          | {
+              tokensAfter: number;
+              reportingTokensAfter: number | undefined;
+              messageCountAfter: number;
+            }
+          | undefined;
         // A timeout after generation is persistence; recovery would discard a real summary.
         let summaryReady = false;
         if (!serverResult) {
           let summarySignal: AbortSignal | undefined;
-          const compactClient = (summaryOutputPolicy: "none" | "deterministic" | undefined) =>
+          const compactClient = (summaryOutputPolicy: CompactionSummaryOutputPolicy) =>
             compactWithSafetyTimeout(
               async (signal, resetTimeout) => {
                 summarySignal = signal;
@@ -498,8 +512,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
                     thinkingLevel: mapThinkingLevel(
                       mapThinkingLevelForProvider(thinkLevel, effectiveModel),
                     ),
-                    summaryOutputPolicy:
-                      summaryOutputPolicy ?? (trigger === "manual" ? "none" : "retry-invalid-once"),
+                    summaryOutputPolicy,
                     onSummaryReady: () => {
                       summaryReady = true;
                     },
@@ -554,11 +567,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
             // The client watchdog starts here; refresh the delegated host watchdog with it.
             refreshCompactionWatchdogs();
             const outcome = await compactClient(
-              params.summaryRefusal === "floor" || serverAttempt === "context-overflow"
-                ? "deterministic"
-                : resolveEffectiveCompactionMode(params.config) === "default"
-                  ? undefined
-                  : "none",
+              serverAttempt === "context-overflow" ? "deterministic" : initialSummaryOutputPolicy,
             ).catch(async (error: unknown) => {
               // Caller Stop, run timeout, and the outer host deadline abort params.abortSignal
               // (#133260, #159105, #130993); manual /compact reports its own failure.
@@ -610,14 +619,14 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         const tokensBefore = serverResult?.usage.input_tokens ?? clientResult!.tokensBefore;
         const tokensAfter = serverResult
           ? serverTokensAfter
-          : (viewResult?.tokensAfter ??
-            estimateTokensAfterCompaction({
-              messagesAfter: session!.messages,
+          : estimateTokensAfterCompaction({
+              ...(viewResult
+                ? { estimatedTokensAfter: viewResult.reportingTokensAfter }
+                : { messagesAfter: session!.messages, estimateTokensFn: estimateTokens }),
               observedTokenCount,
               fullSessionTokensBefore: limitedTranscriptTokensBefore ?? 0,
-              estimateTokensFn: estimateTokens,
               requestBudget: accountingRecorder?.requestBudget,
-            }));
+            });
         const messageCountAfter = viewResult?.messageCountAfter ?? session!.messages.length;
         const compactedCount = Math.max(0, messageCountOriginal - messageCountAfter);
         if (!memoryTranscript && !accountingRecorder?.hostOwnsCompactionLifecycle) {

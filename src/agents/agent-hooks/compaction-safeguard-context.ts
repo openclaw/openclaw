@@ -1,6 +1,6 @@
 /** Preserves recent turns and renders bounded, atomic verbatim context sections. */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
   extractCompactionMessageText as extractMessageText,
   formatCompactionUserLabel,
@@ -77,9 +77,9 @@ export type CompactionContextMessageFact = {
   line: string | null;
 };
 
-export function collectCompactionContextMessageFact(
+export function collectCompactionContextMessageIdentity(
   message: AgentMessage,
-): CompactionContextMessageFact {
+): Pick<CompactionContextMessageFact, "role" | "pairing"> {
   const pairing = collectToolPairingMessageFact(message);
   if (pairing?.role === "assistant") {
     pairing.calls = pairing.calls.map((call) => ({
@@ -94,6 +94,14 @@ export function collectCompactionContextMessageFact(
   return {
     role: message.role,
     pairing,
+  };
+}
+
+export function collectCompactionContextMessageFact(
+  message: AgentMessage,
+): CompactionContextMessageFact {
+  return {
+    ...collectCompactionContextMessageIdentity(message),
     line: formatContextMessage(message),
   };
 }

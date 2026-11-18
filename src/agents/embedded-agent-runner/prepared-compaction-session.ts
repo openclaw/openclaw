@@ -96,6 +96,7 @@ export async function prepareEmbeddedCompactionSession(
   assertActive: () => void,
   systemPromptText: string,
   replayEnabled: boolean,
+  summaryOutputPolicy: CompactionSummaryOutputPolicy,
 ) {
   const { params, effectiveModel: model, provider } = runtime;
   const accounting = readCompactionAccountingRecorder(params.contextEngineRuntimeContext);
@@ -108,8 +109,8 @@ export async function prepareEmbeddedCompactionSession(
   const work = {
     itemId: runtime.diagId,
     settings,
+    // The SDK's explicit automatic-compaction entry point also prepares in manual mode.
     mode: "manual" as const,
-    summaryOutputPolicy: "none" as const,
     requestState:
       accounting?.pendingRequestState ??
       (runtime.trigger === "overflow" ? ("unresolved" as const) : undefined),
@@ -173,25 +174,34 @@ export async function prepareEmbeddedCompactionSession(
     // Only the first attempt can reuse eligibility facts; later attempts own fresh metadata.
     accounting.preparedSession.source = undefined;
   }
-  const value = await readPreparedSessionCompactionInWorker(
-    target,
-    {
-      kind: "plan",
-      source: preflightSource,
-      options: {
-        work,
-        safeguard: Boolean(safeguard),
-        recentTurnsPreserve: safeguard?.runtime.recentTurnsPreserve,
-        qualityGuardEnabled: safeguard?.runtime.qualityGuardEnabled ?? false,
+  const prepare = async (
+    outputPolicy: CompactionSummaryOutputPolicy,
+    signal: AbortSignal | undefined,
+    source?: typeof preflightSource,
+  ) => {
+    const value = await readPreparedSessionCompactionInWorker(
+      target,
+      {
+        kind: "plan",
+        source,
+        options: {
+          work: { ...work, summaryOutputPolicy: outputPolicy },
+          safeguard: Boolean(safeguard),
+          recentTurnsPreserve: safeguard?.runtime.recentTurnsPreserve,
+          qualityGuardEnabled: safeguard?.runtime.qualityGuardEnabled ?? false,
+        },
+        replay,
       },
-      replay,
-    },
-    params.abortSignal,
-  );
-  assertActive();
-  if (value.status !== "prepared" && value.status !== "skipped") {
-    throw new Error("Compaction transcript view could not prepare its source");
-  }
+      signal,
+    );
+    assertActive();
+    if (value.status !== "prepared" && value.status !== "skipped") {
+      throw new Error("Compaction transcript view could not prepare its source");
+    }
+    return value;
+  };
+  let preparedSummaryOutputPolicy = summaryOutputPolicy;
+  let value = await prepare(summaryOutputPolicy, params.abortSignal, preflightSource);
   let leafEntryId = value.status === "prepared" ? value.leafEntryId : null;
   const appendMetadata = async (
     event: Extract<SessionEntry, { type: "custom" | "thinking_level_change" }>,
@@ -243,7 +253,9 @@ export async function prepareEmbeddedCompactionSession(
   assertActive();
   setCompactionSafeguardRuntime(effects, safeguard?.runtime ?? null);
   return {
-    value,
+    get value() {
+      return value;
+    },
     effects,
     async execute(options: {
       signal: AbortSignal;
@@ -252,6 +264,13 @@ export async function prepareEmbeddedCompactionSession(
       summaryOutputPolicy: CompactionSummaryOutputPolicy;
       onSummaryReady: () => void;
     }) {
+      if (preparedSummaryOutputPolicy !== options.summaryOutputPolicy) {
+        options.signal.throwIfAborted();
+        // Timeout recovery owns a fresh cut under its deterministic summary policy.
+        value = await prepare(options.summaryOutputPolicy, options.signal);
+        preparedSummaryOutputPolicy = options.summaryOutputPolicy;
+        leafEntryId = value.status === "prepared" ? value.leafEntryId : leafEntryId;
+      }
       if (value.status === "skipped") {
         return value;
       }
@@ -406,6 +425,7 @@ export async function prepareEmbeddedCompactionSession(
         target,
         {
           kind: "finalize",
+          reportingBudget: accounting?.requestBudget,
           version,
           retainedSequences: plan.retainedSequences,
           preparation,
@@ -449,6 +469,7 @@ export async function prepareEmbeddedCompactionSession(
         status: "completed" as const,
         result: completed,
         tokensAfter: finalized.tokensAfter,
+        reportingTokensAfter: finalized.reportingTokensAfter,
         messageCountAfter: finalized.messageCountAfter,
       };
     },

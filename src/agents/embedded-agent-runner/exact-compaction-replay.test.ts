@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildProviderReplayContext } from "../../../packages/ai/src/transports/provider-replay-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -12,6 +12,7 @@ import {
 } from "./exact-compaction-replay.js";
 import { prepareCompactionReplay } from "./prepared-compaction-replay.js";
 import type { PreparedCompactionReplayOptions } from "./replay-history.types.js";
+import * as textFacts from "./replay-text-facts.js";
 
 const text = (value: string) => ({ type: "text" as const, text: value });
 const user = (content: string, timestamp = 1): AgentMessage => ({
@@ -110,6 +111,31 @@ async function replay(messages: AgentMessage[], config = options(), route = cont
 }
 
 describe("exact detached compaction replay", () => {
+  it("does not fingerprint tool payloads for user deduplication or assistant mirrors", () => {
+    const duplicate = vi.spyOn(textFacts, "collectReplayTextFingerprint");
+    const mirror = vi.spyOn(textFacts, "replayComparisonFingerprint");
+    try {
+      const message: AgentMessage = {
+        ...result(),
+        role: "toolResult",
+        toolCallId: "call_one",
+        toolName: "read",
+        timestamp: 2,
+        isError: false,
+        content: [text("AbC123+/".repeat(8192))],
+      };
+      collectExactReplaySourceFact(message, 0);
+      expect(duplicate).not.toHaveBeenCalled();
+      expect(mirror).not.toHaveBeenCalled();
+      collectExactReplaySourceFact(user("a retained user request"), 1);
+      expect(duplicate).toHaveBeenCalledTimes(1);
+      collectExactReplaySourceFact(assistant([text("assistant reply")]), 2);
+      expect(mirror).toHaveBeenCalledTimes(1);
+    } finally {
+      duplicate.mockRestore();
+      mirror.mockRestore();
+    }
+  });
   it("selects exact signature policy after route-independent Gateway preflight", () => {
     const signedText = {
       type: "text" as const,

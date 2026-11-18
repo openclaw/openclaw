@@ -4,7 +4,6 @@ import { formatByteSize, resolveIntegerOption } from "@openclaw/normalization-co
 import { LruCache } from "../infra/lru-cache.js";
 import type { ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } from "../media/image-processor-config.js";
 import {
   buildImageResizeSideGrid,
   getImageMetadata,
@@ -14,7 +13,8 @@ import {
   readImageMetadataFromHeader,
   resizeToJpeg,
   type ImageMetadata,
-} from "../media/media-services.js";
+} from "../media/image-ops.js";
+import { MAX_IMAGE_DOWNSCALE_SOURCE_PIXELS } from "../media/image-processor-config.js";
 import { isTextContentBlock } from "./content-blocks.js";
 import {
   DEFAULT_IMAGE_MAX_BYTES,

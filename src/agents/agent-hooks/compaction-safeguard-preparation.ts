@@ -1,8 +1,6 @@
 /** Pure safeguard input policy shared by array hooks and worker-local preparation. */
-import {
-  formatRequiredAskContext,
-  type CompactionPreparation,
-} from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { formatRequiredAskContext } from "../../../packages/agent-core/src/harness/compaction/compaction-assembly.js";
+import type { CompactionPreparation } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
 import {
   computeFileLists,
   extractCurrentCompactionUserRequest,

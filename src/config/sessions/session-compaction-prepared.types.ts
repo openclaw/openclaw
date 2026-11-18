@@ -55,6 +55,7 @@ export type SessionPreparedCompactionInput = Omit<
       }
     | {
         kind: "finalize";
+        reportingBudget?: PreparedCompactionPlan["requestBudget"];
         version: SessionTranscriptContextVersion;
         retainedSequences: number[];
         preparation: PreparedCompactionPlan["preparation"];
@@ -79,6 +80,7 @@ export type SessionPreparedCompactionBody =
       status: "finalized";
       transcriptMutationAt: number | null;
       tokensAfter: number;
+      reportingTokensAfter: number | undefined;
       messageCountAfter: number;
       retainedReplayMetrics: BeforeCompactionHookMetrics;
     }

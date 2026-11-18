@@ -1,4 +1,4 @@
-import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
+import { replaceCompactionReplayOwnerContent } from "../../../packages/ai/src/transports/provider-compaction-replay.js";
 import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";

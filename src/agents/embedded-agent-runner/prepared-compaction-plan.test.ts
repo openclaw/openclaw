@@ -11,15 +11,18 @@ import {
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
+import * as contextFacts from "../agent-hooks/compaction-safeguard-context.js";
 import {
   prepareCompactionSafeguardHistory,
   prepareCompactionSafeguardMessages,
   prepareCompactionSafeguardSections,
   prepareCompactionSafeguardSummary,
 } from "../agent-hooks/compaction-safeguard-preparation.js";
+import * as qualityFacts from "../agent-hooks/compaction-safeguard-quality.js";
 import { sanitizeCompactionMessages } from "../compaction-planning.js";
 import { prepareAgentCompactionWork } from "../sessions/compaction/preparation.js";
 import * as requestBudget from "../sessions/compaction/request-budget.js";
+import * as tokenPressure from "../sessions/context-token-pressure.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import {
   collectPreparedCompactionEntryFact,
@@ -50,6 +53,37 @@ const options = {
   },
   qualityGuardEnabled: true,
 };
+
+it("does not evaluate unselected pressure or text audits during source extraction", () => {
+  const pressure = vi.spyOn(tokenPressure, "collectMessageTokenPressureFact");
+  const context = vi.spyOn(contextFacts, "collectCompactionContextMessageFact");
+  const identifiers = vi.spyOn(qualityFacts, "extractOpaqueIdentifiers");
+  try {
+    const entry: SessionEntry = {
+      type: "message",
+      id: "tool",
+      parentId: null,
+      timestamp: new Date(0).toISOString(),
+      message: {
+        role: "toolResult",
+        toolCallId: "call_one",
+        toolName: "read",
+        content: [{ type: "text", text: "AbC123+/".repeat(8192) }],
+        timestamp: 1,
+        isError: false,
+      },
+    };
+    const facts = collectPreparedCompactionEntryFact(entry, 0);
+    expect(pressure).not.toHaveBeenCalled();
+    expect(context).not.toHaveBeenCalled();
+    expect(identifiers).not.toHaveBeenCalled();
+    expect(facts).not.toHaveProperty("tokenPressure");
+  } finally {
+    pressure.mockRestore();
+    context.mockRestore();
+    identifiers.mockRestore();
+  }
+});
 
 it("keeps long row-number selections separate from bounded textual facts", () => {
   const entries: SessionEntry[] = Array.from({ length: 20_000 }, (_, index) => ({
@@ -172,7 +206,7 @@ it.each([false, true])(
   },
 );
 
-it("reduces exact raw summary policy without rereading removed payloads or clipping the ask", () => {
+it("reduces exact raw summary policy with selected audits and an uncapped ask", () => {
   const ask = `Please retain the whole ask ${"context ".repeat(25_000)}exact ending`;
   const usage = {
     input: 0,
@@ -242,10 +276,7 @@ it("reduces exact raw summary policy without rereading removed payloads or clipp
   expect(JSON.stringify(facts)).not.toContain("opaque-arguments-".repeat(100));
   expect(JSON.stringify(facts)).not.toContain("opaque-result-".repeat(100));
   expect(JSON.stringify(facts)).not.toContain("opaque-details");
-  const readEntry = vi.fn((seq: number) => {
-    expect(seq).toBe(5);
-    return entries[seq]!;
-  });
+  const readEntry = vi.fn((seq: number) => entries[seq]!);
   const result = prepareFacts(facts, options, { readEntry });
   expect(result.status).toBe("prepared");
   if (result.status !== "prepared") {
@@ -295,7 +326,7 @@ it("reduces exact raw summary policy without rereading removed payloads or clipp
     ),
   );
   expect(result.plan.retainedSequences).toEqual([6]);
-  expect(readEntry).toHaveBeenCalledTimes(2);
+  expect(new Set(readEntry.mock.calls.map(([seq]) => seq))).toEqual(new Set([0, 1, 2, 3, 4, 5]));
 });
 
 const identity = (id: string) => ({ id, parentId: null, timestamp: new Date(0).toISOString() });

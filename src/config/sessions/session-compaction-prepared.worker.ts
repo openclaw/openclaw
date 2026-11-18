@@ -1,8 +1,12 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
-import { prepareCompactionEntryFacts } from "../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
-import { estimateContextTokens } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { estimateTokens } from "../../../packages/agent-core/src/harness/compaction/compaction-cut-point.js";
+import {
+  prepareCompactionEntryFacts,
+  estimateContextTokens,
+} from "../../../packages/agent-core/src/harness/compaction/compaction-preparation.js";
 import { iterateSessionContextEntryFacts } from "../../../packages/agent-core/src/harness/session/session.js";
 import { sanitizeCompactionReplayMessages } from "../../agents/compaction-replay.js";
+import { estimateCompactionMessageTokens } from "../../agents/embedded-agent-runner/compaction-hook-metrics.js";
 import {
   collectExactReplaySourceFact,
   resolveExactReplaySourcePolicy,
@@ -115,6 +119,12 @@ export async function readPreparedSessionCompaction(
       status: "finalized",
       transcriptMutationAt,
       tokensAfter,
+      reportingTokensAfter: operation.reportingBudget
+        ? estimateCompactedRequestTokens(messages, {
+            ...operation.reportingBudget,
+            pendingTokens: 0,
+          })
+        : estimateCompactionMessageTokens(messages, estimateTokens),
       messageCountAfter: messages.length,
       retainedReplayMetrics: replay.beforeHookMetrics,
       reads,
