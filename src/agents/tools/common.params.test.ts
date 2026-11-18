@@ -86,13 +86,11 @@ describe("readStringArrayParam", () => {
     ]);
   });
 
-  it("always trims and drops blanks despite scalar-string options", () => {
-    expect(
-      readStringArrayParam({ itemIds: [" first ", " "] }, "itemIds", {
-        trim: false,
-        allowEmpty: true,
-      }),
-    ).toEqual(["first"]);
+  it("keeps only explicit empty arrays with allowEmpty and always trims", () => {
+    const options = { trim: false, allowEmpty: true };
+    expect(readStringArrayParam({ itemIds: [" a ", " "] }, "itemIds", options)).toEqual(["a"]);
+    expect(readStringArrayParam({ item_ids: [] }, "itemIds", options)).toEqual([]);
+    expect(readStringArrayParam({ itemIds: " " }, "itemIds", options)).toBeUndefined();
   });
 });
 
