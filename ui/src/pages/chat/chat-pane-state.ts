@@ -199,6 +199,12 @@ export function chatSubmitState(
   const controlCommand = isChatControlCommand(state.chatMessage);
   const routePending = state.isRouteSessionPending?.() === true;
   return {
+    initialSubmission:
+      nativeChat &&
+      state.chatMessages.length === 1 &&
+      Boolean(
+        state.chatSubmissions?.readInitial(state.sessionKey, state.client, state.currentSessionId),
+      ),
     goalResumeBusy: isChatBusy(state) || hasDirectSessionRun(state),
     ...(routePending || (connectionPendingReason && !controlCommand) ? { canSend: false } : {}),
     submitDisabledReason:

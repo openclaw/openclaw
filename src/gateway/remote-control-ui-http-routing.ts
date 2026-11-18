@@ -123,6 +123,7 @@ export function resolveRemoteControlUiHttpRoute(
         "pluginIcon",
         "pluginActivityIcon",
         "pluginThemeArt",
+        "projectIcon",
         "workspaceIcon",
       ] as const
     ).some((route) => parseControlUiResourcePath(route, pathname, basePath).matched)
