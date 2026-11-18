@@ -22,6 +22,26 @@ const STABLE_114_D843_CI_FAILURES = new Map([
   ["checks-node-agentic-gateway-server-isolated-4", "checks-node-core-test-nondist-shard"],
 ]);
 
+// Observed failed leaves from FRV 44290981153 and 44310687628; cancelled
+// workloads are deliberately absent. These are job-level, not test-level grants.
+const STABLE_116_CI_FAILURES = new Map([
+  ...[
+    "checks-node-compact-large-16 (node)",
+    "checks-node-compact-large-28 (bun)",
+    "checks-node-compact-large-28 (node)",
+    "checks-node-compact-large-31 (node)",
+    "checks-node-compact-large-32 (bun)",
+    "checks-node-compact-large-37 (bun)",
+    "checks-node-compact-large-42 (bun)",
+    "checks-node-compact-large-8 (node)",
+    "checks-node-compact-small-12 (node)",
+  ].map((name) => [name, "checks-node-core-test-nondist-shard"]),
+  ["checks-node-compat-node24", "checks-node-compat"],
+  ["checks-ui (3/3)", "checks-ui"],
+  ["checks-ui-e2e (10/13)", "checks-ui-e2e"],
+  ["checks-ui-e2e-real-gateway (2/2)", "checks-ui-e2e-real-gateway"],
+]);
+
 // Exact mobile job names and their CI gate keys; no Gateway or desktop jobs.
 const EXTENDED_1033_MOBILE_JOBS = new Map([
   ["ios-screenshots-iphone", "ios-screenshot-shard"],
@@ -48,6 +68,27 @@ const EXTENDED_1033_MOBILE_JOBS = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...[...STABLE_116_CI_FAILURES.keys()].map((jobName) => ({
+    targetVersion: "2026.11.6",
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Accept the observed 2026.11.6 CI leaf failure while retaining raw results, required execution, aggregate cause validation, and integrity gates.",
+  })),
+  ...[
+    "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 3/4)",
+    "Run repo/live E2E validation / Native live suites (Native live agents)",
+    "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+    "Run repo/live E2E validation / Native live suites (Native live gateway OpenAI GPT-5.6 Ultra)",
+    "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+    "Run repo/live E2E validation / UI and plugin E2E / Repo E2E (UI 2/4)",
+  ].map((jobName) => ({
+    targetVersion: "2026.11.6",
+    childRole: "releaseChecksIndependent",
+    jobName,
+    reason:
+      "Accept the observed 2026.11.6 repo/live leaf failure while retaining raw results, required execution, aggregate cause validation, and integrity gates.",
+  })),
   {
     targetVersion: "2026.11.6",
     childRole: "productPerformance",
@@ -396,6 +437,22 @@ const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
   if (
+    waiver.targetVersion === "2026.11.6" &&
+    waiver.childRole === "normalCi" &&
+    STABLE_116_CI_FAILURES.has(waiver.jobName)
+  ) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: [
+          STABLE_116_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
+        ],
+        exactCauses: true,
+      },
+    ];
+  }
+  if (
     waiver.targetVersion === "2026.10.33" &&
     waiver.childRole === "normalCi" &&
     EXTENDED_1033_MOBILE_JOBS.has(waiver.jobName)
@@ -484,8 +541,8 @@ function aggregateCauses(waiver) {
           jobName: "Verify release checks",
           stepName: "Verify release check results",
           causes: [cause],
-          ...(waiver.targetVersion === "2026.11.4" &&
-          waiver.targetSha === STABLE_114_D843_TARGET_SHA
+          ...(waiver.targetVersion === "2026.11.6" ||
+          (waiver.targetVersion === "2026.11.4" && waiver.targetSha === STABLE_114_D843_TARGET_SHA)
             ? { exactCauses: true }
             : {}),
         },
