@@ -49,8 +49,7 @@ flowchart TD
 
 Recurring reports, reminders, and ambient checks are ordinary automation jobs.
 Each job owns its schedule, context, delivery policy, and history. Use
-`activeHours` and `idleOnly` when a check should respect quiet hours and foreground
-work; use scratch for a small checklist and `NO_REPLY` when nothing needs attention.
+an `activeHours` window for quiet hours, scratch for a small checklist and `NO_REPLY` when nothing needs attention.
 Existing heartbeat monitors migrate through [Doctor](/gateway/heartbeat).
 
 ## Core concepts

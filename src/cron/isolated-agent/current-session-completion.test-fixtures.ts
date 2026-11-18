@@ -126,7 +126,7 @@ async function createCompletionFixture(
     ...(sessionTarget === "isolated"
       ? {
           sourceConversation: { sessionKey, ...generation },
-          delivery: { mode: "announce", channel: "last" },
+          delivery: { mode: "announce" },
         }
       : {}),
   };

@@ -54,9 +54,6 @@ export function buildCronPayload(
         ? { timeoutSeconds: null }
         : {}),
     ...(lightContext !== undefined ? { lightContext } : {}),
-    ...(form.payloadSkipIfScratchEmpty || original?.skipIfScratchEmpty !== undefined
-      ? { skipIfScratchEmpty: form.payloadSkipIfScratchEmpty }
-      : {}),
     ...restrictions,
     ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
     ...(cloned?.allowUnsafeExternalContent !== undefined

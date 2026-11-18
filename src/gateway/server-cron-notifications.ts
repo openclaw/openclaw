@@ -489,7 +489,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           runtimeConfig,
           agentId,
           {
-            channel: params.channel,
+            channel: params.channel === "last" ? undefined : params.channel,
             to: params.to,
             accountId: params.accountId,
             threadId: params.threadId,

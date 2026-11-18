@@ -492,11 +492,7 @@ describe("heartbeat scratch task cron migration", () => {
         }),
       })),
     );
-    expect(
-      jobs.every(
-        (job) => job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty === undefined,
-      ),
-    ).toBe(true);
+    expect(jobs.every((job) => job.payload.kind === "agentTurn")).toBe(true);
     expect(jobs.find((job) => job.name === "calendar")?.state.nextRunAtMs).toBe(fixture.nowMs + 1);
     expect(jobs.find((job) => job.name === "inbox")?.state.nextRunAtMs).toBe(
       fixture.nowMs + 30 * 60_000,

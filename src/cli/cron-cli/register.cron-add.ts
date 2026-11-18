@@ -189,11 +189,6 @@ export function registerCronAddCommand(cron: Command) {
                   "Choose exactly one payload: --system-event, --message, --command, or --script",
                 );
               }
-              if (typeof opts.skipIfScratchEmpty === "boolean" && !message) {
-                throw new CronCliError(
-                  "--skip-if-scratch-empty/--no-skip-if-scratch-empty require --message",
-                );
-              }
               if (typeof opts.includeReasoning === "boolean" && !message) {
                 throw new CronCliError(
                   "--include-reasoning/--no-include-reasoning require --message",
@@ -262,9 +257,6 @@ export function registerCronAddCommand(cron: Command) {
                 thinking: parseCronThinkingOption(opts.thinking),
                 timeoutSeconds,
                 lightContext: opts.lightContext === true ? true : undefined,
-                ...(typeof opts.skipIfScratchEmpty === "boolean"
-                  ? { skipIfScratchEmpty: opts.skipIfScratchEmpty }
-                  : {}),
                 ...(typeof opts.includeReasoning === "boolean"
                   ? { includeReasoning: opts.includeReasoning }
                   : {}),
@@ -301,7 +293,6 @@ export function registerCronAddCommand(cron: Command) {
             const hasThreadId = typeof threadId === "number";
             const hasChatDeliveryTarget =
               deliveryPolicy.target !== undefined ||
-              deliveryPolicy.directPolicy !== undefined ||
               cmd.getOptionValueSource("channel") === "cli" ||
               typeof opts.to === "string" ||
               Boolean(accountId) ||

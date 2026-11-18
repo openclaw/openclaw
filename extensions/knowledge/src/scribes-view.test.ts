@@ -509,7 +509,6 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   const legacyJob = {
     ...legacy,
     payload: { kind: "agentTurn", message: earlier, thinking: "high", toolsAllow: ["read"] },
-    idleOnly: true,
   };
   const unedited = fixture({ sessions: reviewSession, jobs: [legacyJob] });
   // A send that fails is asked again on the next load.
@@ -546,7 +545,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   const prompt = String(sent[0]![1]!.message);
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
   expect(prompt).toContain(
-    'exactly as written: `{"thinking":"high","toolsAllow":["read"],"idleOnly":true,"failureAlert":{"after":2}}`. Pass `toolsAllowMode: "exact"`',
+    'exactly as written: `{"thinking":"high","toolsAllow":["read"],"failureAlert":{"after":2}}`. Pass `toolsAllowMode: "exact"`',
   );
   expect(prompt).toContain("- delivery and failure alert: as saved on the current automation");
   expect(prompt).toContain("Leave `enabled` out");

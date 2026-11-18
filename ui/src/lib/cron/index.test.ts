@@ -192,11 +192,11 @@ it("clears persisted delivery routing", async () => {
     {
       delivery: { mode: "announce", channel: "telegram", to: "123", accountId: "ops" },
     },
-    { deliveryChannel: "last", deliveryTo: " ", deliveryAccountId: " " },
+    { deliveryChannel: "", deliveryTo: " ", deliveryAccountId: " " },
   );
   expect(patchOf(await submit()).delivery).toMatchObject({
     mode: "announce",
-    channel: "last",
+    channel: null,
     to: null,
     accountId: null,
   });

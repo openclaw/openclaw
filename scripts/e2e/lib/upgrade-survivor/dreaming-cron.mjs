@@ -324,13 +324,11 @@ function assertMigratedHeartbeat(fixture, row, receipt) {
       kind: "agentTurn",
       message:
         "Review your automation scratch checklist and relevant session context. Do not infer or repeat old tasks from prior conversations. Take useful action only when needed. Use NO_REPLY when there is nothing to tell the user.",
-      skipIfScratchEmpty: true,
       timeoutSeconds: 600,
     },
     sessionTarget: "session:agent:main:main",
     sessionKey: "agent:main:main",
     wakeMode: "now",
-    idleOnly: true,
     delivery: { mode: "announce", target: "owner" },
   };
   delete expected.declarationKey;

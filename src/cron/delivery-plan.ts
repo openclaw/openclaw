@@ -20,22 +20,14 @@ import type { CronDelivery, CronJob, CronMessageChannel } from "./types.js";
 /** Normalized routing plan for a cron job's primary delivery behavior. */
 export type CronDeliveryPlan = Pick<
   CronDelivery,
-  "mode" | "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
+  "mode" | "target" | "channel" | "to" | "threadId" | "accountId"
 > & {
   source: "delivery";
   requested: boolean;
 };
 
-function resolveAnnounceChannel(params: {
-  channel?: CronMessageChannel;
-  to?: string;
-}): CronMessageChannel {
-  if (params.channel && params.channel !== "last") {
-    return params.channel;
-  }
-  // A prefixed recipient like "slack:C123" is enough to infer the channel when
-  // the cron config intentionally leaves channel at "last" or unset.
-  return resolveTargetPrefixedChannel(params.to) ?? params.channel ?? "last";
+function resolveAnnounceChannel(params: { channel?: CronMessageChannel; to?: string }) {
+  return params.channel ?? resolveTargetPrefixedChannel(params.to);
 }
 
 /**
@@ -59,7 +51,6 @@ export function resolveCronDeliveryPlan(
     const to = normalizeOptionalString(defaultDestination.to);
     return {
       mode: "announce",
-      directPolicy: delivery?.directPolicy,
       channel: resolveAnnounceChannel({
         channel: normalizeMessageChannel(defaultDestination.channel),
         to,
@@ -84,7 +75,6 @@ export function resolveCronDeliveryPlan(
     return {
       mode: resolvedMode,
       target: delivery.target,
-      directPolicy: delivery.directPolicy,
       channel: resolvedMode === "webhook" ? undefined : channel,
       to,
       threadId: resolvedMode === "webhook" ? undefined : deliveryThreadId,
@@ -99,7 +89,6 @@ export function resolveCronDeliveryPlan(
   // aligned with create-time normalization and direct service callers.
   return {
     mode: resolvedMode,
-    channel: resolvedMode === "announce" ? "last" : undefined,
     to: undefined,
     threadId: undefined,
     source: "delivery",
@@ -281,7 +270,7 @@ function isSameDeliveryTarget(
     channel: normalizeMessageChannel(delivery.channel),
     to: primaryTo,
   });
-  const failureChannelNormalized = failurePlan.channel ?? "last";
+  const failureChannelNormalized = failurePlan.channel === "last" ? undefined : failurePlan.channel;
 
   return (
     failureChannelNormalized === primaryChannelNormalized &&

@@ -99,7 +99,6 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
       .option("--clear-active-hours", "Remove the entire execution window", false)
       .option("--clear-access", "Remove the per-job Access selection", false)
-      .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
       .option(
         "--clear-thinking",
@@ -119,14 +118,13 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-thread-id", "Unset the Telegram forum topic thread id", false)
       .option("--clear-account", "Unset the per-job delivery account override", false)
       .option("--clear-delivery-target", "Remove dynamic owner targeting", false)
-      .option("--clear-direct-policy", "Remove the per-job direct-message policy", false)
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--failure-alert", "Enable failure alerts for this job")
       .option("--no-failure-alert", "Disable failure alerts for this job")
       .option("--failure-alert-after <n>", "Alert after N consecutive job errors")
       .option(
         "--failure-alert-channel <channel>",
-        `Failure alert channel (${getCronChannelOptions()})`,
+        `Failure alert channel (${getCronChannelOptions(true)})`,
       )
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-thread-id <id>", "Thread ID for failure alerts")
@@ -451,7 +449,6 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(thinking) ||
             Boolean(opts.clearThinking) ||
             typeof opts.lightContext === "boolean" ||
-            typeof opts.skipIfScratchEmpty === "boolean" ||
             typeof opts.includeReasoning === "boolean";
           const hasScriptSpecificPayloadField =
             Boolean(scriptPath) ||
@@ -484,10 +481,7 @@ export function registerCronEditCommand(cron: Command) {
           } else if (requestedPayloadKinds.length > 1) {
             throw new CronCliError("Choose at most one payload change");
           }
-          for (const [key, flag] of [
-            ["skipIfScratchEmpty", "skip-if-scratch-empty"],
-            ["includeReasoning", "include-reasoning"],
-          ] as const) {
+          for (const [key, flag] of [["includeReasoning", "include-reasoning"]] as const) {
             if (
               typeof opts[key] === "boolean" &&
               typeof opts.message !== "string" &&
@@ -516,7 +510,6 @@ export function registerCronEditCommand(cron: Command) {
             }
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
             assignIf(payload, "lightContext", opts.lightContext);
-            assignIf(payload, "skipIfScratchEmpty", opts.skipIfScratchEmpty);
             assignIf(payload, "includeReasoning", opts.includeReasoning);
           } else if (payloadKind === "command") {
             payload = {
@@ -607,7 +600,7 @@ export function registerCronEditCommand(cron: Command) {
                 delivery.target = null;
               }
               const mode = delivery.mode ?? existing.delivery?.mode;
-              if (deliveryPolicy.target === "owner" || deliveryPolicy.directPolicy != null) {
+              if (deliveryPolicy.target === "owner") {
                 const resolvedSessionTarget = sessionTarget ?? existing.sessionTarget;
                 if (
                   hasSystemEventPatch ||
@@ -615,12 +608,12 @@ export function registerCronEditCommand(cron: Command) {
                     (payloadKind ?? existing.payload.kind) !== "agentTurn")
                 ) {
                   throw new CronCliError(
-                    "--delivery-target/--direct-policy require an agentTurn job or a non-main job with chat delivery",
+                    "--delivery-target requires an agentTurn job or a non-main job with chat delivery",
                   );
                 }
                 if (mode === "webhook") {
                   throw new CronCliError(
-                    "--direct-policy requires chat delivery; use --announce or --no-deliver",
+                    "--delivery-target requires chat delivery; use --announce or --no-deliver",
                   );
                 }
               }

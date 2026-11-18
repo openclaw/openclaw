@@ -353,7 +353,6 @@ it("promotes implicit text payloads with agentTurn hints to agentTurn create job
   const options = {
     timeoutSeconds: 45,
     lightContext: true,
-    skipIfScratchEmpty: true,
     includeReasoning: false,
     allowUnsafeExternalContent: true,
   };

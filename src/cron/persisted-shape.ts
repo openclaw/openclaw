@@ -3,7 +3,8 @@ import {
   asSafeIntegerInRange,
   MAX_DATE_TIMESTAMP_MS,
 } from "@openclaw/normalization-core/number-coercion";
-import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
 import { AutomationLastMeaningfulResultSchema } from "../../packages/gateway-protocol/src/schema/cron-automation-result.js";
 import { CyberAccessProgramSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
@@ -16,6 +17,21 @@ import { isCronEventSchedule } from "./source-schedule.js";
 import { decodeCronStreamOperatorSource } from "./stream-operator-source.js";
 import { parseCronStreamSandboxTarget } from "./stream-sandbox-target.js";
 import type { CronJobState } from "./types.js";
+
+/** Refuse unrepaired definitions without changing their persisted data. */
+export function hasRetiredHeartbeatOptions(job: {
+  payload?: unknown;
+  delivery?: unknown;
+}): boolean {
+  const payload = asOptionalRecord(job.payload);
+  const delivery = asOptionalRecord(job.delivery);
+  return (
+    "idleOnly" in job ||
+    Boolean(payload && "skipIfScratchEmpty" in payload) ||
+    Boolean(delivery && "directPolicy" in delivery) ||
+    normalizeOptionalLowercaseString(delivery?.channel) === "last"
+  );
+}
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
   "nextRunAtMs",
@@ -113,9 +129,6 @@ export function getInvalidPersistedCronJobReason(
       (asRecord(candidate.payload).kind !== "agentTurn" &&
         asRecord(candidate.payload).kind !== "accessAgentTurn"))
   ) {
-    return "invalid-execution-policy";
-  }
-  if (candidate.idleOnly !== undefined && typeof candidate.idleOnly !== "boolean") {
     return "invalid-execution-policy";
   }
   if (candidate.activeHours !== undefined) {
@@ -306,7 +319,7 @@ export function getInvalidPersistedCronJobReason(
   }
   if (
     payloadKind === "agentTurn" &&
-    ["skipIfScratchEmpty", "includeReasoning"].some(
+    ["includeReasoning"].some(
       (field) => payloadRecord[field] !== undefined && typeof payloadRecord[field] !== "boolean",
     )
   ) {

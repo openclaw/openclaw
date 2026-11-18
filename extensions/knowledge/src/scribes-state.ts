@@ -50,7 +50,6 @@ export type ScribeJob = {
   payload?: { kind: string; message?: string } & Record<string, unknown>;
   activeHours?: unknown;
   pacing?: unknown;
-  idleOnly?: boolean;
   trigger?: unknown;
   delivery?: unknown;
   createdAtMs?: number;

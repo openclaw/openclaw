@@ -70,20 +70,18 @@ describe("cron form validation", () => {
     expect(errors.activeHoursTimezone).toBe("cron.errors.activeHoursTimezone");
   });
 
-  it("preserves an explicit direct-message block and a valid overnight window", () => {
+  it("accepts owner delivery and an overnight window", () => {
     const form = {
       ...DEFAULT_CRON_FORM,
       name: "Daily check",
       payloadText: "Check notes",
       deliveryMode: "announce" as const,
       deliveryTarget: "owner" as const,
-      deliveryDirectPolicy: "block" as const,
       activeHoursEnabled: true,
       activeHoursStart: "22:00",
       activeHoursEnd: "24:00",
       activeHoursTimezone: "user",
     };
     expect(validateCronForm(form)).toEqual({});
-    expect(validateCronForm({ ...form, deliveryDirectPolicy: "allow" })).toEqual({});
   });
 });

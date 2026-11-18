@@ -399,10 +399,7 @@ in the transcript and progress lane. Adaptive scheduling still uses `next_check`
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
-With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
-comments, headings, fence markers, and empty checklist stubs count as an empty
-checklist. Removing scratch with `--unset` is different: missing scratch does
-not suppress a run. Disable the job when it should stop regardless of scratch.
+Scratch does not decide whether a job runs. Disable the job to stop it.
 
 ### Command payloads
 

@@ -72,6 +72,17 @@ export async function retireHeartbeatWithDoctor(
     env,
     scratchFindings.flatMap((finding) => (finding.target ? [finding.target] : [])),
   );
+  for (const [agentId, job] of monitors) {
+    const source = heartbeatSources.get(agentId);
+    if (source?.directPolicy === "block" && job.delivery?.mode === "announce") {
+      const warning =
+        "Automation " +
+        job.id +
+        " was paused because the old heartbeat blocked direct messages. Review its delivery before enabling it.";
+      note(warning, "Heartbeat delivery changed");
+      onWarnings?.([warning]);
+    }
+  }
   const scratch = await maybeMigrateHeartbeatFilesToScratch({ cfg, env, shouldRepair: true });
   if (scratch.warnings.length) {
     throw new Error(scratch.warnings.join("\n"));

@@ -264,11 +264,9 @@ describe("Codex auth product proof", () => {
         sessionKey: "agent:main:main",
         sessionTarget: "session:agent:main:main",
         wakeMode: "now",
-        idleOnly: true,
         payload: {
           kind: "agentTurn",
           message: `Reply with ${PRODUCT_OUTPUT}.`,
-          skipIfScratchEmpty: true,
         },
         delivery: { mode: "none", target: "owner" },
         state: {},

@@ -40,7 +40,7 @@ const declaration = (overrides: Partial<CronJobCreate> = {}) =>
     displayName: "Daily report",
     owner: { agentId: "ops", sessionKey: "agent:ops:main" },
     payload: { kind: "agentTurn", message: "report" },
-    delivery: { mode: "announce", channel: "last" },
+    delivery: { mode: "announce" },
     ...overrides,
   });
 

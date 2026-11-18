@@ -31,6 +31,13 @@ describe("cron protocol conformance", () => {
     expect(Value.Check(CronDeliverySchema, { mode: "email" })).toBe(false);
   });
 
+  it("accepts automatic owner routing but rejects retired primary delivery options", () => {
+    const owner = { mode: "announce", target: "owner" };
+    expect(Value.Check(CronDeliverySchema, owner)).toBe(true);
+    expect(Value.Check(CronDeliverySchema, { ...owner, channel: " LAST " })).toBe(false);
+    expect(Value.Check(CronDeliverySchema, { ...owner, directPolicy: "block" })).toBe(false);
+  });
+
   it("accepts every core failover reason in state and run-history schemas", () => {
     for (const reason of FAILOVER_REASONS) {
       expect(Value.Check(CronJobStateSchema, { lastErrorReason: reason })).toBe(true);

@@ -53,7 +53,6 @@ type ProactiveDeliveryPolicy = {
   channel?: string;
   to?: string;
   accountId?: string;
-  directPolicy?: "allow" | "block";
 };
 
 type ProactiveDeliveryParams = {
@@ -371,9 +370,6 @@ async function resolveDeliveryTargetWithPolicy(
   const deliveryChatType =
     sessionChatTypeHint ??
     inferChatTypeFromTarget({ channel: resolvedTarget.channel, to: resolved.to, plugin });
-  if (deliveryChatType === "direct" && policy?.directPolicy === "block") {
-    return rejectDelivery("dm-blocked");
-  }
   if (
     ownerMode &&
     !isPositivelyDirectOwnerTarget({
@@ -483,9 +479,6 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
   } else if (targetResolution && isReservedTargetLiteralError(targetResolution.error)) {
     return rejectDelivery(ownerRouteMustBeDirect ? "no-route" : "no-target");
   }
-  if (routeResolvedTarget?.kind === "user" && policy?.directPolicy === "block") {
-    return rejectDelivery("dm-blocked");
-  }
   if (isRejectedOwnerTarget(routeResolvedTarget?.to ?? deliveryTo)) {
     return rejectDelivery("no-route");
   }
@@ -506,9 +499,6 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
   }).catch(() => undefined);
   if (!route) {
     return delivery;
-  }
-  if (route.chatType === "direct" && policy?.directPolicy === "block") {
-    return rejectDelivery("dm-blocked");
   }
   if (isRejectedOwnerTarget(route.to, normalizeChatType(route.chatType))) {
     return rejectDelivery("no-route");

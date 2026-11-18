@@ -17,8 +17,7 @@ Heartbeat configuration has moved to ordinary automation jobs. Run
 Doctor preserves the job's schedule, scratch, model policy, and delivery settings;
 edit or disable the resulting job in Automations instead of restoring this key.
 
-Use each job's `activeHours`, `idleOnly`, `payload.skipIfScratchEmpty`, and
-delivery policies for monitoring. New setup provisions one ordinary proactive
+Set each job’s active hours and delivery destination as needed. New setup provisions one ordinary proactive
 check for the ambient owner; reloads and restarts do not recreate deleted jobs.
 See [Heartbeat migration](/gateway/heartbeat) and
 [Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies).

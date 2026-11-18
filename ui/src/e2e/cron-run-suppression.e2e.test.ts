@@ -28,7 +28,7 @@ suite.define(() => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Check for pending work." },
-      delivery: { mode: "announce", channel: "last", bestEffort: true },
+      delivery: { mode: "announce", bestEffort: true },
       state: {},
     };
     const entries: CronRunsResult["entries"] = [

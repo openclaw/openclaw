@@ -65,9 +65,11 @@ it("resolves webhook mode without channel routing", () => {
 
 it("uses Synology Chat provider prefixes with underscores and short spelling", () => {
   for (const to of ["synology-chat:123", "synology_chat:123", "synology:123"]) {
-    expect(
-      resolveCronDeliveryPlan({ delivery: { mode: "announce", channel: "last", to } }),
-    ).toMatchObject({ mode: "announce", channel: "synology-chat", to });
+    expect(resolveCronDeliveryPlan({ delivery: { mode: "announce", to } })).toMatchObject({
+      mode: "announce",
+      channel: "synology-chat",
+      to,
+    });
   }
 });
 

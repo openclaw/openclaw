@@ -32,7 +32,7 @@ async function assertConfiguredAnnounceChannel(params: {
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel" | "failureAlert.channel";
 }) {
-  if (params.channel === "last") {
+  if (params.field !== "delivery.channel" && params.channel === "last") {
     return;
   }
   const normalizedChannel = normalizeMessageChannel(params.channel);
@@ -83,7 +83,7 @@ function assertEnabledAnnounceAccount(params: {
   accountId?: string;
   field: "delivery.accountId";
 }) {
-  if (!params.accountId || !params.channel || params.channel === "last") {
+  if (!params.accountId || !params.channel) {
     return;
   }
   // Aliases are valid delivery channels (`urbit` -> `tlon`) but config lives under

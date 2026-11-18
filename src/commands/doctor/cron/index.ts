@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasRetiredHeartbeatOptions } from "../../../cron/persisted-shape.js";
 import { resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
@@ -177,6 +178,12 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
+  if (rawJobs.some(hasRetiredHeartbeatOptions)) {
+    recordFinding({
+      message: "Stored automations use retired heartbeat options.",
+      requirement: "legacy-cron-store-shape",
+    });
+  }
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     recordFinding({
       message: line.replace(/^- /u, ""),
@@ -412,6 +419,11 @@ export async function maybeRepairLegacyCronStore(params: {
     }
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
+  if (rawJobs.some(hasRetiredHeartbeatOptions)) {
+    previewLines.push(
+      "- Remove retired heartbeat options; jobs without a safe replacement will be paused.",
+    );
+  }
   if (normalized.legacyTriggerScriptJobs.length > 0) {
     previewLines.push(
       `- ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} will be migrated to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}`,

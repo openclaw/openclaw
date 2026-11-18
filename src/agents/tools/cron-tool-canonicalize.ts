@@ -18,7 +18,6 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "toolBudget",
   "lightContext",
   "includeReasoning",
-  "skipIfScratchEmpty",
   "allowUnsafeExternalContent",
 ] as const;
 const CRON_FLAT_SCHEDULE_KEYS = [
@@ -51,7 +50,6 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "schedule",
   "pacing",
   "activeHours",
-  "idleOnly",
   "cyberAccessProgram",
   "trigger",
   "sessionTarget",
@@ -80,7 +78,6 @@ const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "owner",
   "pacing",
   "activeHours",
-  "idleOnly",
   "cyberAccessProgram",
   "payload",
   "schedule",
@@ -276,7 +273,6 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
         typeof payload.includeReasoning === "boolean" ||
-        typeof payload.skipIfScratchEmpty === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
       if (hasAgentTurnSignal) {

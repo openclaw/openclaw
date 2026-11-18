@@ -1,16 +1,4 @@
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
-import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
-import { createReplyOperation } from "../../sessions/session-controller.operation.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
-import { isCronExecutionIdle } from "../execution-idle.js";
-import { waitForCronExecutionIdle } from "../service/execution-idle.js";
-import { createCronServiceState, type CronIdleAdmissionWait } from "../service/state.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import * as h from "./run.test-harness.js";
@@ -28,7 +16,7 @@ function controlClock() {
 
 function makeParams(overrides: Record<string, unknown> = {}) {
   return makeIsolatedAgentParamsFixture({
-    job: makeIsolatedAgentJobFixture({ activeHours, idleOnly: true, delivery: { mode: "none" } }),
+    job: makeIsolatedAgentJobFixture({ activeHours, delivery: { mode: "none" } }),
     ...overrides,
   });
 }
@@ -73,113 +61,6 @@ describe("isolated automation actual-start policy", () => {
       expect(runner).toHaveBeenCalledOnce();
       expect(result).toMatchObject(deferredByWindow);
       expectNoEffect(providerEffect, onExecutionStarted, h.dispatchCronDeliveryMock);
-    },
-  );
-
-  it.for(["ready", "window-closed", "authority-revoked"] as const)(
-    "rechecks actual-start policy after foreground work settles (%s)",
-    async (afterWait, { signal }) => {
-      const clock = controlClock();
-      const waiting = createDeferred();
-      const providerEffect = vi.fn();
-      const onExecutionStarted = vi.fn();
-      const cancellation = new AbortController();
-      const activeSignal = AbortSignal.any([signal, cancellation.signal]);
-      let authorityCurrent = true;
-      const assertCurrent = () => {
-        if (!authorityCurrent) {
-          throw new Error("Scheduled source authority revoked");
-        }
-      };
-      const params: Parameters<typeof runAgent>[0] = makeParams({
-        abortSignal: activeSignal,
-        assertCurrent,
-        onExecutionStarted,
-      });
-      const activeJobMarker = markCronJobActive(params.job.id, { agentId: "default" });
-      const state = createCronServiceState({
-        scheduler: createTestGatewayScheduler(),
-        storePath: "/tmp/store.json",
-        cronEnabled: true,
-        defaultAgentId: "default",
-        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        enqueueSystemEvent: vi.fn(),
-        runIsolatedAgentJob: vi.fn(),
-        isExecutionIdle: (job, ownSessionKey, ownReplyOperation) => {
-          const idle = isCronExecutionIdle(
-            params.cfg,
-            job,
-            "default",
-            ownSessionKey,
-            ownReplyOperation,
-          );
-          if (!idle) {
-            waiting.resolve();
-          }
-          return idle;
-        },
-      });
-      const waitForIdle: CronIdleAdmissionWait = (ownSessionKey, abortSignal, ownReplyOperation) =>
-        waitForCronExecutionIdle(state, params.job, {
-          activeJobMarker,
-          ownSessionKey,
-          ownReplyOperation,
-          signal: abortSignal ?? activeSignal,
-          assertCurrent,
-        });
-      let foreground: ReplyOperation | undefined;
-      h.runEmbeddedAgentMock.mockImplementationOnce(async (runParams) => {
-        foreground = createReplyOperation({
-          sessionKey: "agent:default:foreground",
-          sessionId: "foreground",
-          resetTriggered: false,
-          turnKind: "visible",
-        });
-        await runParams.onExecutionStarted?.();
-        providerEffect();
-        return { payloads: [{ text: "Foreground work has settled" }], meta: { agentMeta: {} } };
-      });
-      const pending = runAgent({ ...params, waitForIdle });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            waiting.promise,
-            pending,
-            "Automation bypassed foreground idle admission",
-          ),
-          signal,
-        );
-        expectNoEffect(providerEffect, onExecutionStarted);
-        if (afterWait === "window-closed") {
-          clock.mockReturnValue(afterWindow);
-        } else if (afterWait === "authority-revoked") {
-          authorityCurrent = false;
-        }
-        foreground?.complete();
-        const result = await withinTest(pending, signal);
-        if (afterWait === "ready") {
-          expect(result.status, result.error).toBe("ok");
-          expect(providerEffect).toHaveBeenCalledOnce();
-          expect(onExecutionStarted).toHaveBeenCalledOnce();
-        } else {
-          expect(result).toMatchObject(
-            afterWait === "window-closed"
-              ? deferredByWindow
-              : {
-                  status: "error",
-                  executionStarted: false,
-                  error: "Scheduled source authority revoked",
-                },
-          );
-          expectNoEffect(providerEffect, onExecutionStarted, h.dispatchCronDeliveryMock);
-        }
-      } finally {
-        cancellation.abort();
-        foreground?.complete();
-        await Promise.allSettled([pending]);
-        clearCronJobActive(params.job.id, activeJobMarker);
-        await state.schedulerScope.stop();
-      }
     },
   );
 });

@@ -5,7 +5,6 @@ import type { SessionEventTarget } from "../../auto-reply/reply/session-event-co
 import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
-import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import {
   captureOpenClawStateReadContext,
   captureOpenClawStateWorkerContext,
@@ -20,7 +19,6 @@ import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types
 import { toPublicCronJob } from "../public-job.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
-import type { CronJobScratchState } from "../scratch-contract.js";
 import { cronStoreKey } from "../store/key.js";
 import { resolveCronStoreKeyAsync, resolveDefaultCronStorePath } from "../store/paths.js";
 import type { QuarantinedCronConfigJob } from "../types-shared.js";
@@ -95,14 +93,8 @@ export type CronSessionRunPreparation = {
   notices: Awaited<
     ReturnType<typeof import("../../infra/system-events.js").prepareAutomationSystemEvents>
   >;
-  scratch?: CronJobScratchState;
 };
 
-export type CronIdleAdmissionWait = (
-  ownSessionKey?: string,
-  signal?: AbortSignal,
-  ownReplyOperation?: ReplyOperationObservation,
-) => Promise<void>;
 export type CronIdleAdmissionSource = { signal: AbortSignal; assertCurrent: () => void };
 
 export type CronServiceDeps = {
@@ -124,11 +116,6 @@ export type CronServiceDeps = {
   hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
   /** Resident admission facts; normal reply admission owns recovery barriers. */
-  isExecutionIdle?: (
-    job: CronJob,
-    ownSessionKey?: string,
-    ownReplyOperation?: ReplyOperationObservation,
-  ) => boolean;
   /**
    * Loaded plugin instances that can serve requester-command schedules. The claim re-arms a
    * restartable schedule from an earlier Gateway process onto a matching one; without it, such
@@ -237,7 +224,6 @@ export type CronServiceDeps = {
   };
   runIsolatedAgentJob: (params: {
     occurrence: ScheduledOccurrence;
-    waitForIdle?: CronIdleAdmissionWait;
     deliveryAttemptFence: CronCompletionDeliveryFence | null;
     job: CronJob;
     admissionSource?: AdmittedRunContext["admissionSource"];
@@ -259,7 +245,6 @@ export type CronServiceDeps = {
   /** Shared-conversation work settles through the session controller's ordinary turn owner. */
   runSessionEvent?: (params: {
     occurrence: ScheduledOccurrence;
-    waitForIdle?: CronIdleAdmissionWait;
     sessionPreparation?: CronSessionRunPreparation;
     deliveryContext?: DeliveryContext;
     admissionSource: NonNullable<AdmittedRunContext["admissionSource"]>;

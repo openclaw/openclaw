@@ -92,7 +92,7 @@ DELIVERY: omitted=announce. Agent, command, and script jobs send their final vis
 
 FAILURE ALERTS: routed jobs notify on the first execution failure (1h cooldown; the same failure repeats at most daily); jobs owned by a conversation send that notice to its agent instead. failureAlert:false disables execution/delivery alerts, not auto-disable notices. bestEffort suppresses inherited execution alerts. Required-delivery failures use an alternate route, bypass after, and share the cooldown without incrementing the execution streak.
 
-Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly:true waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. false/unset uses normal admission. delivery.target:"owner" resolves the owner DM dynamically, never the last group; delivery.directPolicy:"block" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch.
+Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs). delivery.target:"owner" resolves the owner DM dynamically, never a group chat.
 
 Main-job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in reminder text.
 

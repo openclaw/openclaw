@@ -105,9 +105,6 @@ function mergePayloadFields(existing: CronPayload, patch: CronPayloadPatch): Cro
     if (typeof patch.lightContext === "boolean") {
       next.lightContext = patch.lightContext;
     }
-    if (typeof patch.skipIfScratchEmpty === "boolean") {
-      next.skipIfScratchEmpty = patch.skipIfScratchEmpty;
-    }
     if (typeof patch.includeReasoning === "boolean") {
       next.includeReasoning = patch.includeReasoning;
     }

@@ -245,7 +245,6 @@ export function createJob(
     schedule,
     ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     ...(input.activeHours !== undefined ? { activeHours: structuredClone(input.activeHours) } : {}),
-    ...(input.idleOnly !== undefined ? { idleOnly: input.idleOnly } : {}),
     ...(input.cyberAccessProgram !== undefined
       ? { cyberAccessProgram: input.cyberAccessProgram }
       : {}),
@@ -381,13 +380,6 @@ export function applyJobPatch(
       job.cyberAccessProgram = patch.cyberAccessProgram;
     }
   }
-  if ("idleOnly" in patch) {
-    if (patch.idleOnly == null) {
-      delete job.idleOnly;
-    } else {
-      job.idleOnly = patch.idleOnly;
-    }
-  }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;
   }
@@ -432,7 +424,6 @@ export function applyJobPatch(
       authoredDelivery &&
       (patch.delivery?.mode !== undefined ||
         authoredDelivery.target !== undefined ||
-        authoredDelivery.directPolicy !== undefined ||
         authoredDelivery.channel !== undefined ||
         authoredDelivery.to !== undefined ||
         authoredDelivery.threadId !== undefined ||
@@ -546,11 +537,6 @@ export function applyDeclarativeJobSpec(
     job.cyberAccessProgram = input.cyberAccessProgram;
   } else {
     delete job.cyberAccessProgram;
-  }
-  if (input.idleOnly !== undefined) {
-    job.idleOnly = input.idleOnly;
-  } else {
-    delete job.idleOnly;
   }
   job.payload =
     input.payload.kind === "script"

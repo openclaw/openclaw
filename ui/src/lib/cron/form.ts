@@ -217,12 +217,8 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     activeHoursStart: job.activeHours?.start ?? DEFAULT_CRON_FORM.activeHoursStart,
     activeHoursEnd: job.activeHours?.end ?? DEFAULT_CRON_FORM.activeHoursEnd,
     activeHoursTimezone: job.activeHours?.timezone ?? "",
-    idleOnly: job.idleOnly === true,
-    payloadSkipIfScratchEmpty: payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true,
     deliveryTarget:
       job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.target ?? "") : "",
-    deliveryDirectPolicy:
-      job.delivery && job.delivery.mode !== "webhook" ? (job.delivery.directPolicy ?? "") : "",
     triggerEnabled: job.trigger !== undefined,
     triggerScript: job.trigger?.script ?? "",
     triggerOnce: job.trigger?.once === true,
@@ -245,7 +241,7 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadLightContext: agentTurn?.lightContext === true,
     payloadIncludeReasoning: agentTurn?.includeReasoning === true,
     deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
-    deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
+    deliveryChannel: job.delivery?.channel ?? "",
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",
     deliveryBestEffort: job.delivery?.bestEffort ?? false,

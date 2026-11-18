@@ -34,7 +34,6 @@ export function cronAgentTurnPayloadSchema<
     timeoutSeconds: Type.Optional(params.timeoutSeconds),
     allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
     lightContext: Type.Optional(Type.Boolean()),
-    skipIfScratchEmpty: Type.Optional(Type.Boolean()),
     includeReasoning: Type.Optional(Type.Boolean()),
     toolsAllow: Type.Optional(params.toolsAllow),
     // Server-managed marker for auto-stamped defaults; persisted so CLI cron

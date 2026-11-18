@@ -60,7 +60,7 @@ openclaw doctor
     - When the dispatcher records intentional suppression, job state, run history, and finished events include `deliverySuppressionReason` (`empty`, `silent`, `heartbeat`, or `channel_transform`). This is separate from `lastDeliveryError` / `deliveryError`; required delivery failures also log an error when they happen.
     - For text-only isolated announcements, only a completed final that trims to uppercase `NO_REPLY` suppresses the text and fallback queued summary. Lowercase, wrapped forms, and trailing tokens remain visible. See [Silent token suppression](/cli/cron#silent-token-suppression) for the leading-line form and media behavior.
     - If the agent should message the user itself, check that the job has a usable route (`channel: "last"` with a previous chat, or an explicit channel/target).
-    - With `delivery.target: "owner"`, no resolved owner DM means delivery is unavailable; it does not skip execution or fall back to the last group conversation. `delivery.directPolicy: "block"` intentionally suppresses DM delivery. Inspect and edit the job's delivery settings.
+    - With `delivery.target: "owner"`, no resolved owner DM means delivery is unavailable; it does not skip execution or fall back to the last group conversation. Inspect and edit the job's delivery settings.
 
   </Accordion>
   <Accordion title="Automations or heartbeat appear to prevent /new-style rollover">

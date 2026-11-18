@@ -64,7 +64,6 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   /** Resolve the owner's current direct-message route at execution time. */
   target?: "owner";
-  directPolicy?: "allow" | "block";
   channel?: CronMessageChannel;
   to?: string;
   /** Explicit thread/topic id for channels that support threaded delivery. */
@@ -101,7 +100,6 @@ type CronFailureDestinationPatch = {
 /** Partial delivery update shape; null clears optional delivery destinations or fields. */
 export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
   target?: "owner" | null;
-  directPolicy?: "allow" | "block" | null;
   channel?: CronMessageChannel | null;
   to?: string | null;
   threadId?: string | number | null;
@@ -556,7 +554,6 @@ export type CronJobPatch = Partial<
     | "payloadSource"
     | "pacing"
     | "activeHours"
-    | "idleOnly"
     | "cyberAccessProgram"
     | "trigger"
   >
@@ -564,7 +561,6 @@ export type CronJobPatch = Partial<
   displayName?: string | null;
   pacing?: CronPacing | null;
   activeHours?: CronActiveHours | null;
-  idleOnly?: boolean | null;
   cyberAccessProgram?: CronJob["cyberAccessProgram"] | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;

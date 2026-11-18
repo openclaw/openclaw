@@ -261,7 +261,7 @@ describe("unstarted scheduled admission", () => {
 
   it.each(
     (["at", "every", "cron"] as const).flatMap((scheduleKind) =>
-      (["preflight", "session", "isolated"] as const).map((boundary) => ({
+      (["session", "isolated"] as const).map((boundary) => ({
         scheduleKind,
         boundary,
       })),
@@ -282,7 +282,6 @@ describe("unstarted scheduled admission", () => {
       );
       const sendWebhook = vi.fn(async () => ({ status: "delivered" as const }));
       const { cron, storePath, scheduler, events, tick } = await service({
-        isExecutionIdle: () => boundary !== "preflight" || !busy,
         runSessionEvent: run,
         runIsolatedAgentJob: run,
         sendCronWebhook: sendWebhook,
@@ -293,7 +292,6 @@ describe("unstarted scheduled admission", () => {
           name: `Idle ${scheduleKind} ${boundary}`,
           deleteAfterRun: false,
           schedule: schedule(scheduleKind, scheduler.now() + 1_000),
-          idleOnly: true,
           payload: { kind: "agentTurn", message: "Check once idle" },
           sessionTarget: boundary === "isolated" ? "isolated" : "main",
           delivery: { mode: "webhook", to: "https://example.invalid/completed" },
@@ -326,7 +324,7 @@ describe("unstarted scheduled admission", () => {
       expect(readCronRunRecordsForTests(job.id)).toEqual([]);
       expect(events.filter((event) => event.action === "finished")).toEqual([]);
       expect(sendWebhook).not.toHaveBeenCalled();
-      expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 0 : 1);
+      expect(run).toHaveBeenCalledTimes(1);
       expect(retained.state.admissionDeferred).toMatchObject({
         sinceMs: dueAt,
         attempts: 1,
@@ -338,10 +336,10 @@ describe("unstarted scheduled admission", () => {
       ).toEqual(retained.state.admissionDeferred);
       expect((await cron.status()).nextWakeAtMs).toBe(dueAt + 30_000);
       await tick(dueAt + 2_000);
-      expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 0 : 1);
+      expect(run).toHaveBeenCalledTimes(1);
       busy = false;
       await tick(dueAt + 30_000);
-      expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 1 : 2);
+      expect(run).toHaveBeenCalledTimes(2);
       expect(sendWebhook).toHaveBeenCalledOnce();
       expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
       const completed = cron.getJob(job.id)!;

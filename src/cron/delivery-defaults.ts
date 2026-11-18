@@ -125,7 +125,7 @@ type CronDeliveryRouteFields = Partial<
 /**
  * A configured default destination replaces the remembered session route of any
  * announce job that names no route of its own. `none` and `webhook` never gain a
- * chat destination, and any job routing field (channel other than `last`, `to`,
+ * chat destination, and any job routing field (channel, `to`,
  * `threadId`, `accountId`, or owner targeting) keeps the job on its own route.
  */
 export function cronDeliveryUsesDefaultDestination(

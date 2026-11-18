@@ -281,7 +281,7 @@ describe("Gateway automation session routing", () => {
             kind: "agentTurn",
             message: `Process this scheduled task and report what was handled: ${configuredEvent}`,
           },
-          delivery: { mode: "announce", channel: "last" },
+          delivery: { mode: "announce" },
         });
         await disconnectGatewayClient(gateway.client);
         await gateway.server.close({ reason: "heartbeat catalog-owner restart proof" });

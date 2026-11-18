@@ -132,7 +132,7 @@ function buildResolvedCronTraceTarget(
       to: resolvedDelivery.ok ? resolvedDelivery.to : (resolvedDelivery.to ?? null),
       accountId: resolvedDelivery.accountId,
       threadId: resolvedDelivery.threadId,
-      source: resolvedDelivery.mode === "implicit" ? "last" : "explicit",
+      source: resolvedDelivery.mode === "explicit" ? "explicit" : undefined,
     }),
     ...(!resolvedDelivery.ok ? { error: resolvedDelivery.error.message } : {}),
   };
@@ -149,12 +149,11 @@ export function buildCronDeliveryTrace(params: {
   // Trace both intended and resolved targets so run logs can explain fallback
   // delivery without leaking provider-specific raw routing internals.
   const intended = normalizeCronTraceTarget({
-    channel: params.deliveryPlan.channel ?? "last",
+    channel: params.deliveryPlan.channel,
     to: params.deliveryPlan.to ?? null,
     accountId: params.deliveryPlan.accountId,
     threadId: params.deliveryPlan.threadId,
-    source:
-      params.deliveryPlan.channel === "last" || !params.deliveryPlan.channel ? "last" : "explicit",
+    source: params.deliveryPlan.channel ? "explicit" : undefined,
   });
   const includeResolved =
     params.deliveryPlan.mode !== "none" || hasExplicitCronDeliveryTarget(params.deliveryPlan);

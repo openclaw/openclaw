@@ -713,30 +713,6 @@ describe("cron webhook optional output", () => {
     });
   });
 
-  it("does not deliver a skip before execution as output", async () => {
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "ran" }));
-    const sendCronWebhook = vi.fn(async () => ({ status: "delivered" as const }));
-    const h = await createHarness({ runIsolatedAgentJob, sendCronWebhook });
-    const job = await h.cron.add(
-      watcher({
-        trigger: undefined,
-        payload: { kind: "agentTurn", message: "Check the scratch", skipIfScratchEmpty: true },
-        delivery: { mode: "webhook", to: "https://example.invalid/hook" },
-      }),
-    );
-    await h.cron.writeScratch(job.id, { content: "" });
-
-    await h.cron.run(job.id, "force");
-
-    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-    expect(sendCronWebhook).not.toHaveBeenCalled();
-    expect(h.events.find((event) => event.action === "finished")).toMatchObject({
-      status: "skipped",
-      summary: "Automation scratch is explicitly empty",
-      deliveryStatus: "not-requested",
-    });
-  });
-
   it.each([
     { status: "ok", summary: " \n " },
     { status: "error", summary: undefined },

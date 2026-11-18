@@ -33,7 +33,7 @@ type CronDeliveryPreviewJob = Pick<CronStoredJob, "delivery" | "payload" | "sess
 
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
-    return "last";
+    return "automatic";
   }
   if (to) {
     return `${channel}:${to}`;
@@ -92,7 +92,7 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
     };
   }
 
-  const requestedChannel = plan.channel ?? "last";
+  const requestedChannel = plan.channel;
   if (!agentId) {
     return {
       preview: {
@@ -166,7 +166,7 @@ async function resolvePreparedCronDeliveryPreview(
     const detail =
       plan.mode === "none"
         ? `message tool target unresolved: ${resolved.error.message}`
-        : `${plan.target === "owner" ? "owner has no route: " : requestedChannel === "last" ? "last -> no route, will be blocked: " : ""}${resolved.error.message}`;
+        : `${plan.target === "owner" ? "owner has no route: " : !requestedChannel ? "automatic route unavailable: " : ""}${resolved.error.message}`;
     return {
       label: `${plan.mode} -> ${formatTarget(requestedChannel, plan.to ?? null)}`,
       detail:
@@ -183,11 +183,11 @@ async function resolvePreparedCronDeliveryPreview(
         ? "commits to the destination conversation; sends one external notification"
         : plan.target === "owner"
           ? "resolved from configured owner"
-          : requestedChannel !== "last"
+          : requestedChannel
             ? "explicit"
             : deliverySessionKey
-              ? `resolved from last, session ${deliverySessionKey}`
-              : "resolved from last, main session",
+              ? `resolved automatically from session ${deliverySessionKey}`
+              : "resolved automatically from main session",
   };
 }
 

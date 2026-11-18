@@ -7,13 +7,7 @@ export function hasExplicitCronDeliveryTarget(plan: {
   threadId?: string | number;
   accountId?: string;
 }): boolean {
-  return Boolean(
-    plan.target ||
-    (plan.channel && plan.channel !== "last") ||
-    plan.to ||
-    plan.threadId != null ||
-    plan.accountId,
-  );
+  return Boolean(plan.target || plan.channel || plan.to || plan.threadId != null || plan.accountId);
 }
 
 function assertNonBlankStringField(field: string, value: unknown) {

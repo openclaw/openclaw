@@ -365,7 +365,7 @@ it.each<InvalidPatch>([
     { payload: { kind: "script", script: "return {}" } },
     { cronConfig: { triggers: { enabled: false } } },
   ],
-  ["channel", explicitChannelJob, { delivery: { channel: "last" } }, options],
+  ["channel", explicitChannelJob, { delivery: { channel: null } }, options],
 ])("rejects invalid %s patch", (error, makeJob, patch, opts) => {
   expect(() => applyJobPatch(makeJob(), patch, opts)).toThrow(patchErrors[error]);
 });

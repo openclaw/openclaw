@@ -1028,7 +1028,6 @@ describe("gateway server cron", () => {
             end: `${String((hour + 3) % 24).padStart(2, "0")}:00`,
             timezone: "UTC",
           },
-          idleOnly: true,
         }),
       );
       expect(proactive.ok, JSON.stringify(proactive.error ?? null)).toBe(true);

@@ -248,7 +248,6 @@ function createCronPayloadSchema(params: {
         includeReasoning: Type.Optional(
           Type.Boolean({ description: "Include reasoning with a meaningful delivered result" }),
         ),
-        skipIfScratchEmpty: Type.Optional(Type.Boolean()),
         allowUnsafeExternalContent: Type.Optional(
           Type.Boolean({ description: "Allow untrusted external content in prompt" }),
         ),
@@ -299,7 +298,6 @@ function createCronDeliverySchema(): TSchema {
       {
         mode: optionalStringEnum(CRON_DELIVERY_MODES, { description: "Delivery mode" }),
         target: Type.Optional(Type.Union([Type.Literal("owner"), Type.Null()])),
-        directPolicy: Type.Optional(Type.Union([stringEnum(["allow", "block"]), Type.Null()])),
         channel: deliveryStringSchema("Delivery channel"),
         to: deliveryStringSchema("Delivery target"),
         threadId: Type.Optional(
@@ -436,12 +434,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
           Type.Union([CyberAccessProgramSchema, Type.Null()], {
             description:
               "Access for this scheduled agent turn: standard, daybreak_blue, or daybreak_red. Subject to current role and account grants at execution. Null clears the override.",
-          }),
-        ),
-        idleOnly: Type.Optional(
-          Type.Union([Type.Boolean(), Type.Null()], {
-            description:
-              "True waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. False/unset uses normal admission; null clears.",
           }),
         ),
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),

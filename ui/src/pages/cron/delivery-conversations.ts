@@ -186,7 +186,7 @@ export function createDeliveryConversations(deps: DeliveryConversationsDependenc
       mode !== "announce" ||
       route.target === "owner" ||
       !agentId ||
-      channel === "last"
+      !channel
     ) {
       return;
     }

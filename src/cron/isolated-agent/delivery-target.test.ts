@@ -216,7 +216,7 @@ describe("resolveDeliveryTarget", () => {
         new Error("Channel is required when multiple channels are configured: alpha, forum"),
       );
     }
-    const result = await resolveTarget({ channel: "last", to });
+    const result = await resolveTarget({ to });
     expect(result).toMatchObject({ channel, to: undefined });
     expectTargetError(result, message);
   });
@@ -225,7 +225,7 @@ describe("resolveDeliveryTarget", () => {
     setLastSessionEntry({ channel: "alpha", to: "room-denied" });
 
     const cfg = makeCfg({ channels: { alpha: { allowFrom: ["room-allowed"] } } });
-    const result = await resolveTarget({ channel: "last" }, cfg, { dryRun: true });
+    const result = await resolveTarget({}, cfg, { dryRun: true });
 
     expect(result).toMatchObject({ ok: true, channel: "alpha", to: "room-allowed" });
   });
@@ -406,7 +406,6 @@ describe("resolveDeliveryTarget", () => {
     });
 
     const result = await resolveTarget({
-      channel: "last",
       sessionKey: "agent:test:thread:42",
     });
 

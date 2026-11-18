@@ -18,7 +18,6 @@ export function mergeCronDelivery(
   const next: CronDelivery = {
     mode: existing ? existing.mode : implicitMode,
     target: existing?.target,
-    directPolicy: existing?.directPolicy,
     channel: existing?.channel,
     to: existing?.to,
     threadId: existing?.threadId,
@@ -38,7 +37,6 @@ export function mergeCronDelivery(
     }
     if (next.mode === "webhook") {
       next.target = undefined;
-      next.directPolicy = undefined;
       next.channel = undefined;
       next.threadId = undefined;
       next.accountId = undefined;
@@ -52,9 +50,6 @@ export function mergeCronDelivery(
   }
   if ("target" in patch) {
     next.target = patch.target ?? undefined;
-  }
-  if ("directPolicy" in patch) {
-    next.directPolicy = patch.directPolicy ?? undefined;
   }
   if ("to" in patch) {
     next.to = normalizeOptionalString(patch.to);
@@ -127,7 +122,6 @@ export function mergeCronDelivery(
     existing === undefined &&
     !("mode" in patch) &&
     next.target === undefined &&
-    next.directPolicy === undefined &&
     next.channel === undefined &&
     next.to === undefined &&
     next.threadId === undefined &&

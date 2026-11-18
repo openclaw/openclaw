@@ -111,14 +111,7 @@ function savedOptions(job: ScribeJob) {
       saved[field] = value;
     }
   }
-  for (const field of [
-    "activeHours",
-    "pacing",
-    "idleOnly",
-    "trigger",
-    "delivery",
-    "failureAlert",
-  ] as const) {
+  for (const field of ["activeHours", "pacing", "trigger", "delivery", "failureAlert"] as const) {
     if (job[field] !== undefined) {
       saved[field] = job[field];
     }

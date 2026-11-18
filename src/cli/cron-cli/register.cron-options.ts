@@ -30,8 +30,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--active-hours-end <HH:MM>", "Execution window end (exclusive; 24:00 allowed)")
     .option("--active-hours-timezone <zone>", "Execution window timezone (IANA|user|local)")
     .option("--access <program>", "Access for agent turns (standard|daybreak_blue|daybreak_red)")
-    .option("--idle-only", "Yield scheduled execution to foreground work")
-    .option("--no-idle-only", "Do not require an idle agent")
     .option("--cron <expr>", "Cron expression (5-field or 6-field with seconds)")
     .option("--on-exit <shell>", "Fire once when the watched command exits")
     .option("--on-exit-cwd <path>", "Working directory for the --on-exit watched command")
@@ -52,11 +50,6 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--trigger-once", "Disable after the first successful triggered run", false)
     .option("--system-event <text>", "System event payload (main session)")
     .option("--message <text>", "Agent message payload")
-    .option(
-      "--skip-if-scratch-empty",
-      "Skip agent turns with present, empty scratch (missing scratch still runs)",
-    )
-    .option("--no-skip-if-scratch-empty", "Run agent turns even with empty scratch")
     .option("--include-reasoning", "Include reasoning in agent job delivery")
     .option("--no-include-reasoning", "Keep reasoning out of agent job delivery")
     .option("--script <file|->", "Headless script payload file, or - for stdin")
@@ -103,12 +96,7 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
       "--delivery-target <target>",
       "Dynamic delivery target (owner: positively identified owner DM)",
     )
-    .option("--direct-policy <policy>", "Direct-message delivery policy (allow|block)")
-    .option(
-      "--channel <channel>",
-      `Delivery channel (${getCronChannelOptions()})`,
-      create ? "last" : undefined,
-    )
+    .option("--channel <channel>", `Delivery channel (${getCronChannelOptions()})`)
     .option("--to <dest>", "Delivery destination (E.164, Telegram chatId, or Discord channel/user)")
     .option("--thread-id <id>", "Telegram forum topic thread id")
     .option("--account <id>", "Channel account id for delivery (multi-account setups)")
@@ -124,8 +112,8 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
 export async function resolveCronExecutionPolicyOptions(
   opts: Record<string, unknown>,
   loadExistingJob?: () => Promise<CronJob>,
-): Promise<Pick<CronJobPatch, "activeHours" | "idleOnly" | "cyberAccessProgram">> {
-  const patch: Pick<CronJobPatch, "activeHours" | "idleOnly" | "cyberAccessProgram"> = {};
+): Promise<Pick<CronJobPatch, "activeHours" | "cyberAccessProgram">> {
+  const patch: Pick<CronJobPatch, "activeHours" | "cyberAccessProgram"> = {};
   if (opts.clearAccess && opts.access !== undefined) {
     throw new CronCliError("Use --access or --clear-access, not both");
   }
@@ -140,14 +128,6 @@ export async function resolveCronExecutionPolicyOptions(
       throw new CronCliError("--access must be standard, daybreak_blue, or daybreak_red");
     }
     patch.cyberAccessProgram = opts.access;
-  }
-  if (opts.clearIdleOnly && typeof opts.idleOnly === "boolean") {
-    throw new CronCliError("Use --idle-only/--no-idle-only or --clear-idle-only, not both");
-  }
-  if (opts.clearIdleOnly) {
-    patch.idleOnly = null;
-  } else if (typeof opts.idleOnly === "boolean") {
-    patch.idleOnly = opts.idleOnly;
   }
   const hasWindow = [opts.activeHoursStart, opts.activeHoursEnd, opts.activeHoursTimezone].some(
     (value) => value !== undefined,
@@ -188,8 +168,8 @@ export async function resolveCronExecutionPolicyOptions(
 
 export function parseCronDeliveryPolicyOptions(
   opts: Record<string, unknown>,
-): Pick<CronDeliveryPatch, "target" | "directPolicy"> {
-  const policy: Pick<CronDeliveryPatch, "target" | "directPolicy"> = {};
+): Pick<CronDeliveryPatch, "target"> {
+  const policy: Pick<CronDeliveryPatch, "target"> = {};
   if (opts.deliveryTarget !== undefined) {
     if (opts.clearDeliveryTarget) {
       throw new CronCliError("Use --delivery-target or --clear-delivery-target, not both");
@@ -205,20 +185,6 @@ export function parseCronDeliveryPolicyOptions(
     policy.target = "owner";
   } else if (opts.clearDeliveryTarget) {
     policy.target = null;
-  }
-  if (opts.directPolicy !== undefined) {
-    if (opts.clearDirectPolicy) {
-      throw new CronCliError("Use --direct-policy or --clear-direct-policy, not both");
-    }
-    if (opts.directPolicy !== "allow" && opts.directPolicy !== "block") {
-      throw new CronCliError("--direct-policy must be allow or block");
-    }
-    if (opts.webhook !== undefined) {
-      throw new CronCliError("--direct-policy requires chat delivery, not --webhook");
-    }
-    policy.directPolicy = opts.directPolicy;
-  } else if (opts.clearDirectPolicy) {
-    policy.directPolicy = null;
   }
   return policy;
 }

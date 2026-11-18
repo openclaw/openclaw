@@ -58,21 +58,10 @@ as schedules or read `HEARTBEAT.md`.
 
 ### Monitoring policies
 
-Use job-level policies for periodic checks that should respect quiet hours and
-agent-wide activity. They apply through ordinary scheduler and session admission;
-no separate heartbeat runner is involved.
+Use `activeHours: { start, end, timezone? }` to restrict execution to a timezone-aware
+window. Start is inclusive, end is exclusive, and overnight windows are supported.
 
-| Field                                    | Behavior                                                                                                               |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `activeHours: { start, end, timezone? }` | Restricts execution to a timezone-aware window. Start is inclusive; end is exclusive. Overnight windows are supported. |
-| `idleOnly: true`                         | Waits for agent-wide quiet, including other cron jobs and foreground sessions, without occupying a running slot.       |
-| `payload.skipIfScratchEmpty: true`       | Skips an agent turn with explicitly empty scratch. Missing scratch still runs.                                         |
-
-`idleOnly: true` checks the whole agent, not just the target session. On busy
-shared agents, continuations may defer indefinitely. Set `idleOnly: false` or
-leave it unset to use normal admission.
-
-Omitting these fields keeps ordinary automation defaults. A manual force-run
+A manual force-run
 bypasses cadence, but still respects active hours, authorization, lifecycle, and
 delivery restrictions. Starting foreground work does not replay side effects
 from an already-started run.

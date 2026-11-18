@@ -88,7 +88,9 @@ const CronScheduledToolPolicySchema = Type.Union([
     ownerAccountId: NonEmptyString,
   }),
 ]);
-const CronAnnounceChannelSchema = Type.Union([Type.Literal("last"), NonBlankString]);
+const CronJobChannelSchema = Type.String({
+  pattern: "^(?!\\s*[lL][aA][sS][tT]\\s*$)(?=[\\s\\S]*\\S)",
+});
 const CronRunDiagnosticSeveritySchema = stringLiteralUnion(["info", "warn", "error"]);
 const CronRunDiagnosticSourceSchema = stringLiteralUnion([
   "cron-preflight",
@@ -273,7 +275,7 @@ const CronPayloadPatchSchema = Type.Union([
 const CronFailureAlertSchema = closedObject({
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   after: Type.Optional(Type.Integer({ minimum: 1 })),
-  channel: Type.Optional(CronAnnounceChannelSchema),
+  channel: Type.Optional(NonBlankString),
   to: Type.Optional(NonBlankString),
   cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
   includeSkipped: Type.Optional(Type.Boolean()),
@@ -284,7 +286,7 @@ const CronFailureAlertSchema = closedObject({
 const CronFailureAlertPatchSchema = closedObject({
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
   after: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
-  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+  channel: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
   to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
   cooldownMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
   includeSkipped: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
@@ -307,7 +309,7 @@ const CronCompletionDestinationSchema = closedObject({
 });
 
 const CronDeliverySharedProperties = {
-  channel: Type.Optional(CronAnnounceChannelSchema),
+  channel: Type.Optional(CronJobChannelSchema),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   accountId: Type.Optional(NonEmptyString),
   bestEffort: Type.Optional(Type.Boolean()),
@@ -316,15 +318,11 @@ const CronDeliverySharedProperties = {
 
 const CronChatDeliveryProperties = {
   target: Type.Optional(Type.Literal("owner")),
-  directPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("block")])),
 };
 
 const CronDeliveryPatchSharedProperties = {
   target: Type.Optional(Type.Union([Type.Literal("owner"), Type.Null()])),
-  directPolicy: Type.Optional(
-    Type.Union([Type.Literal("allow"), Type.Literal("block"), Type.Null()]),
-  ),
-  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
+  channel: Type.Optional(Type.Union([CronJobChannelSchema, Type.Null()])),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
   accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   bestEffort: Type.Optional(Type.Boolean()),
@@ -536,7 +534,6 @@ export const CronJobSchema = closedObject({
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
   activeHours: Type.Optional(CronActiveHoursSchema),
-  idleOnly: Type.Optional(Type.Boolean()),
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
@@ -625,7 +622,6 @@ export const CronAddParamsSchema = closedObject({
   schedule: CronScheduleSchema,
   pacing: Type.Optional(CronPacingSchema),
   activeHours: Type.Optional(CronActiveHoursSchema),
-  idleOnly: Type.Optional(Type.Boolean()),
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
@@ -672,7 +668,6 @@ const CronJobPatchSchema = closedObject({
   schedule: Type.Optional(CronScheduleSchema),
   pacing: Type.Optional(Type.Union([CronPacingSchema, Type.Null()])),
   activeHours: Type.Optional(Type.Union([CronActiveHoursSchema, Type.Null()])),
-  idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),

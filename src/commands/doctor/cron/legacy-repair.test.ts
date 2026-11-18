@@ -13,8 +13,9 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
+import { recordCronRun } from "../../../cron/store/run-history.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
-import type { CronJob } from "../../../cron/types.js";
+import type { CronDeliveryTrace, CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -83,6 +84,66 @@ const updateDoctorEnv = {
   ...externalDoctorEnv(),
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
+
+it(
+  "backs up retired options, pins an actual delivery, and keeps jobs without traces",
+  withState(async (fixture) => {
+    const storePath = fixture.statePath("cron", "jobs.json");
+    const backed = job("backed", { delivery: { mode: "announce", channel: "last" } });
+    const untraced = job("untraced", { delivery: { mode: "announce", channel: "last" } });
+    const owner = job("owner", {
+      delivery: { mode: "announce", target: "owner", channel: "last" },
+    });
+    Object.assign(owner, { idleOnly: true });
+    Object.assign(owner.payload, { skipIfScratchEmpty: true });
+    Object.assign(owner.delivery!, { directPolicy: "block" });
+    await saveJobs(storePath, backed, untraced, owner);
+    const route = { channel: "telegram", to: "fixture-room", accountId: "ops", threadId: 42 };
+    const storeKey = cronStoreKey(storePath);
+    const time = Date.now() - 1000;
+    const saveTrace = (suffix: string, offset: number, delivery: CronDeliveryTrace) =>
+      recordCronRun({
+        storeKey,
+        jobId: backed.id,
+        runId: "cron:backed:" + suffix,
+        agentId: "main",
+        startedAt: time + offset,
+        endedAt: time + offset + 1,
+        status: "succeeded",
+        detail: { storeKey, delivery },
+      });
+    await saveTrace("delivered", 10, {
+      delivered: true,
+      resolved: { ok: true, channel: "telegram", to: "planned-only" },
+      receipts: [{ ...route, messageId: "fixture-receipt" }],
+    });
+    await saveTrace("failed", 20, {
+      delivered: false,
+      resolved: { ok: true, channel: "slack", to: "never-sent" },
+    });
+
+    const result = await repair(storePath);
+    expect(result.warnings).toEqual([]);
+    const prefix = "Saved pre-repair cron backup: ";
+    const backup = result.changes.find((line) => line.startsWith(prefix));
+    expect((await fs.stat(expectDefined(backup).slice(prefix.length))).size).toBeGreaterThan(0);
+    expect(result.changes.join("\n")).toContain("no previous delivery destination was recorded");
+    expect(result.changes.join("\n")).toContain('Paused automation "owner"');
+    const jobs = await readJobs(storePath);
+    expect(jobs.map((entry) => entry.id)).toEqual([backed.id, untraced.id, owner.id]);
+    expect(jobs[0]?.delivery).toEqual({ mode: "announce", ...route });
+    expect(jobs[1]).toMatchObject({ enabled: true, delivery: { mode: "announce" } });
+    expect(jobs[1]?.delivery).not.toHaveProperty("channel");
+    expect(jobs[2]).toMatchObject({
+      enabled: false,
+      delivery: { mode: "announce", target: "owner" },
+    });
+    expect(jobs[2]).not.toHaveProperty("idleOnly");
+    expect(jobs[2]?.payload).not.toHaveProperty("skipIfScratchEmpty");
+    expect(jobs[2]?.delivery).not.toHaveProperty("directPolicy");
+    expect((await repair(storePath)).changes).toEqual([]);
+  }),
+);
 
 it(
   "leaves canonical one-shot jobs untouched without a SQLite repair backup",

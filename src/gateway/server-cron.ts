@@ -12,9 +12,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listKnownSessionStoreAgentIdsAsync } from "../config/sessions/targets-runtime.js";
 import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
-import { isCronExecutionIdle } from "../cron/execution-idle.js";
 import { cronScriptFailureMetadata } from "../cron/script-failure.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
@@ -331,13 +329,6 @@ export function buildGatewayCronService(params: {
         reconcileStreamWatchers(),
         started ? refreshLegacyMonitorProjection() : undefined,
       ]);
-    },
-    isExecutionIdle: (job, ownSessionKey, ownReplyOperation) => {
-      const cfg = getRuntimeConfig();
-      const agentId = resolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));
-      return Boolean(
-        agentId && isCronExecutionIdle(cfg, job, agentId, ownSessionKey, ownReplyOperation),
-      );
     },
     resolveUserTimezone: () => getRuntimeConfig().agents?.defaults?.userTimezone,
     scheduler: params.scheduler,

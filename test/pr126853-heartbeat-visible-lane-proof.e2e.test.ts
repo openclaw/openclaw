@@ -241,7 +241,6 @@ describe("PR #126853 real Gateway lane proof", () => {
           schedule: { kind: "every", everyMs: 5 * 60_000 },
           sessionTarget: `session:${heartbeatSessionKey}`,
           wakeMode: "now",
-          idleOnly: true,
           payload: { kind: "agentTurn", message: heartbeatMarker },
           delivery: { mode: "none" },
         });

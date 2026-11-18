@@ -39,7 +39,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
         )
       : [];
     const configValue = currentConfigObject(runtimeConfig);
-    const channel = cron.cronForm.deliveryChannel.trim() || "last";
+    const channel = cron.cronForm.deliveryChannel.trim();
     modelSuggestions = normalizeSortedUniqueTrimmedStringList([
       ...page.cronModelSuggestions(),
       ...resolveConfiguredCronModelSuggestions(configValue),
@@ -58,7 +58,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
     ]);
     const accountTargets = normalizeTrimmedStringList(
-      (channel === "last"
+      (!channel
         ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
         : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
       ).map((account) => account.accountId),

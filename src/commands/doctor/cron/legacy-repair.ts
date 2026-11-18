@@ -8,6 +8,7 @@ import {
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { hasRetiredHeartbeatOptions } from "../../../cron/persisted-shape.js";
 import {
   CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
@@ -43,6 +44,7 @@ import {
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
 import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
+import { migrateRetiredHeartbeatOptions } from "./heartbeat-options.js";
 import { parseLegacyCronJobs } from "./legacy-json-shapes.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import {
@@ -121,14 +123,18 @@ export async function loadLegacyCronRepairState(params: {
     params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   await assertCronStateSchemaSupportedAsync(params.env);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
-  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
-    return null;
-  }
   const persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
 
   const loaded = params.readOnly
     ? await loadCronJobsStoreWithConfigJobsReadOnly(storePath, params.env)
     : await loadCronJobsStoreWithConfigJobs(storePath);
+  if (
+    params.onlyIfLegacyDetected &&
+    !legacyQuarantine &&
+    !loaded.configJobs.some(hasRetiredHeartbeatOptions)
+  ) {
+    return null;
+  }
   const runtimeDefaultAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
   const projectedOwnersByJobId = new Map(
     loaded.store.jobs.map((job) => [job.id, projectCronOwner(job, runtimeDefaultAgentId)]),
@@ -317,7 +323,12 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
+  const heartbeatOptionChanges = await migrateRetiredHeartbeatOptions(
+    state.storePath,
+    state.rawJobs,
+  );
   const storeChanged =
+    heartbeatOptionChanges.length > 0 ||
     (state.legacyImport?.count ?? 0) > 0 ||
     retirementChanges.length > 0 ||
     state.invalidConfigRows.length > 0 ||
@@ -405,7 +416,7 @@ export async function applyLegacyCronStoreRepair(params: {
     }
   }
 
-  changes.push(...retirementChanges);
+  changes.push(...retirementChanges, ...heartbeatOptionChanges);
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,

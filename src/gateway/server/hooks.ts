@@ -323,7 +323,7 @@ export function createGatewayHookDispatcher(params: {
         allowUnsafeExternalContent: value.allowUnsafeExternalContent,
         externalContentSource: value.externalContentSource,
       },
-      delivery: value.delivery,
+      delivery: { ...value.delivery, ...(value.channel === "last" && { channel: undefined }) },
       state: { nextRunAtMs: nowMs },
     };
     let hookEventTarget: HookEventTarget | undefined;

@@ -170,15 +170,10 @@ context from the conversation captured when the job was created. See
 Optional job policies preserve the useful monitoring behavior:
 
 - `activeHours` restricts execution to a timezone-aware window.
-- `idleOnly` gives foreground work priority through normal scheduler and session
-  admission.
 - `delivery.target: "owner"` resolves an explicitly identified owner DM. It does
-  not follow a group conversation as `channel: "last"` can.
-- `delivery.directPolicy` permits or blocks DM delivery.
+  not follow a group conversation.
 - `payload.includeReasoning` controls whether an ordinary job includes available
   model reasoning in delivery.
-- `payload.skipIfScratchEmpty` skips a check with explicitly empty scratch;
-  missing scratch is different from an empty checklist.
 
 These are per-job settings, not a replacement global heartbeat configuration.
 See [Automations](/automation/cron-jobs) for the canonical job reference.

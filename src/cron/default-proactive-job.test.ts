@@ -70,7 +70,7 @@ it("provisions only the ambient owner once in the selected partition without hos
         enabled: true,
         sessionTarget: "session:agent:main:main",
         schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "agentTurn", skipIfScratchEmpty: true },
+        payload: { kind: "agentTurn" },
         delivery: { mode: "announce", target: "owner" },
       });
       expect(getCronJobsStoreRevision(storePath)).toBeGreaterThan(before);

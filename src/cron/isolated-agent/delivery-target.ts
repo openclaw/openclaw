@@ -160,10 +160,7 @@ function stripSelectedProviderPrefix(params: { channel: string; to?: string }): 
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
-  jobPayload: Pick<
-    CronDeliveryPlan,
-    "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
-  > &
+  jobPayload: Pick<CronDeliveryPlan, "target" | "channel" | "to" | "threadId" | "accountId"> &
     Partial<Pick<CronStoredJob, "sessionKey" | "sessionTarget" | "sourceConversation">>,
   options?: {
     dryRun?: boolean;
@@ -172,9 +169,9 @@ export async function resolveDeliveryTarget(
     sourceGeneration?: CronDeliverySourceGeneration;
   },
 ): Promise<DeliveryTargetResolution> {
-  const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const requestedChannel = jobPayload.channel;
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
-  const allowMismatchedLastTo = requestedChannel === "last";
+  const allowMismatchedLastTo = requestedChannel === undefined;
   const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
   const source = jobPayload.sourceConversation;
   if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
@@ -237,9 +234,8 @@ export async function resolveDeliveryTarget(
       currentSessionKey: threadSessionKey,
       policy: {
         target: "owner",
-        channel: requestedChannel === "last" ? undefined : requestedChannel,
+        channel: requestedChannel,
         accountId: jobPayload.accountId,
-        directPolicy: jobPayload.directPolicy,
       },
     });
     return resolved.channel !== "none" && resolved.to
@@ -256,9 +252,6 @@ export async function resolveDeliveryTarget(
           channel: resolved.channel,
           accountId: resolved.accountId,
           mode: "explicit",
-          ...(resolved.reason === "dm-blocked"
-            ? { deliverySuppressionReason: "channel_transform" as const }
-            : {}),
           error: new Error(
             `Owner delivery unavailable (${resolved.reason ?? "no-route"}); configure an authorized owner DM or edit this automation's delivery`,
           ),
@@ -332,7 +325,7 @@ export async function resolveDeliveryTarget(
       mode,
       error:
         channelResolutionError ??
-        new Error("Channel is required when delivery.channel=last has no previous channel."),
+        new Error("No delivery channel could be resolved; set delivery.channel explicitly."),
     };
   }
 
@@ -519,19 +512,6 @@ export async function resolveDeliveryTarget(
     route && route.threadId === threadId
       ? route
       : await resolveRoute({ accountId, target: toCandidate, resolvedTarget, threadId });
-  if (
-    jobPayload.directPolicy === "block" &&
-    (resolvedTarget.kind === "user" ||
-      route?.chatType === "direct" ||
-      route?.peer.kind === "direct")
-  ) {
-    return {
-      ...failTarget(
-        new Error("Automation delivery to direct messages is blocked by delivery.directPolicy"),
-      ),
-      deliverySuppressionReason: "channel_transform",
-    };
-  }
   return {
     ok: true,
     channel,

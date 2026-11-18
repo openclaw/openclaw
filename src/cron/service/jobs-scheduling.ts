@@ -5,6 +5,7 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
+import { hasRetiredHeartbeatOptions } from "../persisted-shape.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import {
@@ -714,6 +715,7 @@ export function nextWakeAtMs(state: CronServiceState): number | undefined {
     if (
       isJobEnabled(job) &&
       hasCanonicalCronDeliveryMode(job.delivery) &&
+      !hasRetiredHeartbeatOptions(job) &&
       isTimeScheduledJob(job) &&
       hasScheduledNextRunAtMs(job.state.nextRunAtMs)
     ) {

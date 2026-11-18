@@ -185,11 +185,9 @@ openclaw automations scratch <job-id> --set "Check only for newly blocked work."
 openclaw automations disable <job-id>
 ```
 
-The default job sets `skipIfScratchEmpty`: explicitly empty scratch (blank lines,
-comments, headings, fence markers, or empty checklist stubs) skips a run. Missing
-scratch still runs. Use `--direct-policy block` to block DM delivery, or
-`--no-deliver` to disable runner fallback delivery. These policies are stored on
-the job, not under agent heartbeat configuration.
+The proactive check is a regular recurring automation. On a busy agent, it can
+run while another session is working. Choose a delivery destination or use
+`--no-deliver` to turn off automatic result delivery.
 
 Run `openclaw doctor --fix` to migrate supported July 2026 and later heartbeat
 configuration and checklists. After migration, edit or remove the job itself;

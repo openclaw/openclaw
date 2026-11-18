@@ -185,36 +185,6 @@ it.each([
   },
 );
 
-it("consumes a scratch-empty one-shot without replaying it after restart", async () => {
-  let now = atMs;
-  await using f = await fixture({ nowMs: () => now });
-  const job = await f.cron.add(
-    mainJob({
-      payload: { kind: "agentTurn", message: "Check the scratch", skipIfScratchEmpty: true },
-    }),
-  );
-  await f.cron.writeScratch(job.id, { content: "" });
-  await f.cron.run(job.id, "due");
-  expect(f.cron.getJob(job.id)).toMatchObject({
-    enabled: false,
-    state: {
-      lastStatus: "skipped",
-      lastError: undefined,
-      consecutiveSkipped: 1,
-      nextRunAtMs: undefined,
-    },
-  });
-  now += 90_000;
-  await f.restart(createTestGatewayScheduler());
-  await f.cron.writeScratch(job.id, { content: "Check the newly populated scratch" });
-  await f.tick(now);
-  expect(f.deps.runSessionEvent).not.toHaveBeenCalled();
-  expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-  expect(f.history(job.id)).toMatchObject([
-    { status: "skipped", summary: "Automation scratch is explicitly empty" },
-  ]);
-});
-
 it.each([false, true])(
   "retries lifecycle claim conflicts only before execution starts (started=%s)",
   async (executionStarted) => {

@@ -55,10 +55,7 @@ openclaw logs --follow
 ```
 
 Check that scheduling is enabled and the job has a next run. Its own
-`activeHours`, `idleOnly`, and `payload.skipIfScratchEmpty` policies can prevent
-an immediate start. Empty scratch means an explicitly stored checklist containing
-only blank lines, comments, headings, fence markers, or empty checklist stubs;
-missing scratch does not skip the run.
+`activeHours` window can prevent an immediate start.
 
 `cron: scheduler disabled; jobs will not run automatically` means the scheduler
 is disabled. `Automation migration is incomplete; run openclaw doctor --fix`
@@ -68,8 +65,7 @@ storage error.
 
 A missing owner DM no longer skips execution: ordinary automation delivery
 records the unavailable route. Review the job's channel, account, and owner or
-explicit recipient. `delivery.directPolicy: "block"` intentionally suppresses
-DM delivery; a successful quiet result is also distinct from a delivery failure.
+explicit recipient. A successful quiet result is distinct from a delivery failure.
 Do not restore retired `agents.defaults.heartbeat` settings to repair the job.
 
 A session event rejected by ordinary admission reports the reason. Resolve it

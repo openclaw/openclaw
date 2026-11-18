@@ -27,7 +27,7 @@ async function announce(
   options: {
     gateway?: NonNullable<Parameters<typeof makeCfg>[2]>["gateway"];
     entries?: Record<string, SessionEntry>;
-    delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
+    delivery?: { mode: "announce"; channel?: "telegram"; to?: string };
   } = {},
 ) {
   return withTempCronHome(async (home) => {
@@ -97,7 +97,7 @@ it("does not turn a silent reply into an inspection-link announcement", async ()
 it("refuses keyless delivery inherited from another conversation's shared main bucket", async () => {
   // #91613: main.lastTo belongs to whichever conversation last wrote the shared bucket.
   const { result, deps } = await announce([{ text: "implicit cron digest" }], {
-    delivery: { mode: "announce", channel: "last" },
+    delivery: { mode: "announce" },
     entries: {
       "agent:main:main": {
         sessionId: "main-session",

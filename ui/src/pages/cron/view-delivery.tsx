@@ -17,16 +17,13 @@ import {
 import { DurationRow } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
-  return [
-    { value: "last", label: "last", kind: "neutral" },
-    ...uniqueStrings(data.channels.filter(Boolean)).map((value) => ({
+  return uniqueStrings(data.channels.filter(Boolean)).map((value) => ({
+    value,
+    label:
+      data.channelMeta?.find((entry) => entry.id === value)?.label ||
+      data.channelLabels?.[value] ||
       value,
-      label:
-        data.channelMeta?.find((entry) => entry.id === value)?.label ||
-        data.channelLabels?.[value] ||
-        value,
-    })),
-  ];
+  }));
 }
 /** Where results go, in the order the Results section lists them. */
 function DeliveryRows(
@@ -88,18 +85,6 @@ function DeliveryRows(
               placeholder={t("cron.form.toPlaceholder")}
             />
           ) : undefined}
-          <CronSelect
-            {...props}
-            field="deliveryDirectPolicy"
-            label={t("cron.form.directPolicy")}
-            help={t("cron.form.directPolicyHelp")}
-            errorKey="deliveryDirectPolicy"
-            options={[
-              { value: "", label: t("cron.form.defaultPolicy") },
-              { value: "allow", label: t("cron.form.allowDirect") },
-              { value: "block", label: t("cron.form.blockDirect") },
-            ]}
-          />
           {props.isAgentTurn ? (
             <CronInput
               {...props}
@@ -158,7 +143,6 @@ const ADVANCED_FIELDS = [
   "activeHoursTimezone",
   "triggerScript",
   "deliveryMode",
-  "deliveryDirectPolicy",
   "deliveryTo",
   "failureAlertAfter",
   "failureAlertCooldownSeconds",
@@ -360,28 +344,26 @@ export function Advanced(
               />
             </>
           ) : undefined}
-          <ToggleRow
-            {...props}
-            field="idleOnly"
-            label={t("cron.form.idleOnly")}
-            help={t("cron.form.idleOnlyHelp")}
-          />
-          {props.isAgentTurn ? (
-            <ToggleRow
-              {...props}
-              field="payloadSkipIfScratchEmpty"
-              label={t("cron.form.skipIfScratchEmpty")}
-              help={t("cron.form.skipIfScratchEmptyHelp")}
-            />
-          ) : undefined}
           <TriggerRows {...props} />
         </SettingsSection>
         <SettingsSection title={t("cron.form.advancedResults")}>
-          <DeliveryRows {...props} channelOptions={channelOptions()} />
+          <DeliveryRows
+            {...props}
+            channelOptions={[
+              { value: "", label: t("cron.form.automaticChannel"), kind: "neutral" },
+              ...channelOptions(),
+            ]}
+          />
         </SettingsSection>
         {props.isAgentTurn ? (
           <SettingsSection title={t("cron.form.failureAlerts")}>
-            <FailureAlertRows {...props} channelOptions={channelOptions()} />
+            <FailureAlertRows
+              {...props}
+              channelOptions={[
+                { value: "last", label: "last", kind: "neutral" },
+                ...channelOptions(),
+              ]}
+            />
           </SettingsSection>
         ) : undefined}
       </div>

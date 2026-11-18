@@ -147,7 +147,6 @@ function convertMonitor(
     message: heartbeat?.prompt?.trim()
       ? migrateHeartbeatPrompt(heartbeat.prompt)
       : DEFAULT_PROACTIVE_PROMPT,
-    skipIfScratchEmpty: true,
     ...(previous?.payload.toolsAllow ? { toolsAllow: previous.payload.toolsAllow } : {}),
     ...(previous?.payload.toolsAllowIsDefault !== undefined
       ? { toolsAllowIsDefault: previous.payload.toolsAllowIsDefault }
@@ -162,7 +161,6 @@ function convertMonitor(
   job.sessionKey = session.sessionKey;
   job.sessionTarget = heartbeat?.isolatedSession ? "isolated" : `session:${session.sessionKey}`;
   job.wakeMode = "now";
-  job.idleOnly = true;
   job.activeHours = migrateActiveHours(heartbeat);
   job.delivery = {
     mode:
@@ -171,18 +169,18 @@ function convertMonitor(
         : "announce",
     ...(target === "owner"
       ? { target: "owner" as const }
-      : target !== "none"
+      : target !== "none" && target !== "last"
         ? { channel: target }
         : {}),
     ...(target !== "owner" && target !== "none" && heartbeat?.to ? { to: heartbeat.to } : {}),
     ...(heartbeat?.accountId ? { accountId: heartbeat.accountId } : {}),
-    ...(heartbeat?.directPolicy ? { directPolicy: heartbeat.directPolicy } : {}),
   };
+  const blocked = heartbeat?.directPolicy === "block" && job.delivery.mode === "announce";
   if (!previous || isGeneratedHeartbeatMonitor(previous)) {
     delete job.declarationKey;
   }
   if (!previous) {
-    job.enabled = enrolled && intervalMs !== null;
+    job.enabled = enrolled && intervalMs !== null && !blocked;
     const everyMs = intervalMs ?? 30 * 60 * 1000;
     job.schedule = {
       kind: "every",
@@ -193,7 +191,7 @@ function convertMonitor(
   } else {
     // Config was the generated monitor's desired state, not merely its create default.
     // Preserve independent disable state and unchanged anchors/slots at ownership transfer.
-    job.enabled = previous.enabled && enrolled && intervalMs !== null;
+    job.enabled = previous.enabled && enrolled && intervalMs !== null && !blocked;
     if (
       isGeneratedHeartbeatMonitor(previous) &&
       intervalMs !== null &&

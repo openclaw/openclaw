@@ -43,7 +43,6 @@ import { CommandLane } from "../../process/lanes.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
-import { isCronExecutionIdle } from "../execution-idle.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
@@ -220,11 +219,11 @@ async function runCronIsolatedAgentTurnInTrace(
             };
             const resolveUnstartedTerminalMetadata = () =>
               executionStarted ? undefined : { executionStarted: false, providerStarted: false };
-            let admissionDeferredReason: "busy" | "active-hours" | undefined;
+            let admissionDeferredReason: "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
             const resolveRecoveryClassification = (includePendingTools = false) =>
               resolveCronRecoveryClassification(ownReplyOperation, { includePendingTools });
-            const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
+            const resolveStartDeferral = (): "active-hours" | undefined => {
               const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
                 !isCronWithinActiveHours(
@@ -235,42 +234,23 @@ async function runCronIsolatedAgentTurnInTrace(
               ) {
                 return "active-hours";
               }
-              return params.job.idleOnly &&
-                !isCronExecutionIdle(
-                  cfg,
-                  params.job,
-                  prepared.context.agentId,
-                  prepared.context.runSessionKey,
-                  ownReplyOperation,
-                )
-                ? "busy"
-                : undefined;
+              return undefined;
             };
             const awaitStartPolicy = async (onAdmitted?: () => void) => {
               assertInvocationCurrent();
-              let deferral = resolveStartDeferral();
-              while (deferral === "busy" && params.waitForIdle) {
-                await params.waitForIdle(
-                  prepared.context.runSessionKey,
-                  abortSignal,
-                  ownReplyOperation,
-                );
-                assertInvocationCurrent();
-                deferral = resolveStartDeferral();
-              }
+              const deferral = resolveStartDeferral();
               if (!deferral) {
                 onAdmitted?.();
               }
               return deferral;
             };
-            const deferredResult = (reason: "busy" | "active-hours") =>
+            const deferredResult = (reason: "active-hours") =>
               prepared.context.withRunSession({
                 status: "skipped",
                 executionStarted: false,
                 admissionDeferred: true,
                 admissionDeferredReason: reason,
-                summary:
-                  "Automation admission deferred by its current window or foreground activity",
+                summary: "Outside this automation’s active hours",
               });
             const notifyExecutionStarted = async (info?: {
               lifecycleGeneration?: string;
@@ -304,9 +284,7 @@ async function runCronIsolatedAgentTurnInTrace(
               const deferral = await awaitStartPolicy(markStarted);
               if (deferral) {
                 admissionDeferredReason = deferral;
-                const error = new Error(
-                  "Automation admission deferred by its current window or foreground activity",
-                );
+                const error = new Error("Outside this automation’s active hours");
                 lifecycleAbortController.abort(error);
                 throw error;
               }

@@ -57,7 +57,6 @@ const sourcePlan = (
   });
 
 const unavailable = { ok: false, channel: "none", mode: "explicit" };
-const suppressed = { ok: false, deliverySuppressionReason: "channel_transform" };
 it.each([
   [
     "owner account",
@@ -67,8 +66,6 @@ it.each([
   ],
   ["missing owner", { target: "owner" }, { ...cfg, commands: {} }, unavailable],
   ["unknown account", { target: "owner", accountId: "missing" }, cfg, unavailable],
-  ["blocked owner", { target: "owner", channel: "beta", directPolicy: "block" }, cfg, suppressed],
-  ["blocked explicit", { channel: "beta", to: "user:bob", directPolicy: "block" }, cfg, suppressed],
 ] as const)(
   "resolves %s without inheriting the remembered group",
   async (_name, target, config, expected) => {

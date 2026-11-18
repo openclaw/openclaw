@@ -46,10 +46,7 @@ export type CronFormState = {
   activeHoursStart: string;
   activeHoursEnd: string;
   activeHoursTimezone: string;
-  idleOnly: boolean;
-  payloadSkipIfScratchEmpty: boolean;
   deliveryTarget: "" | "owner";
-  deliveryDirectPolicy: "" | "allow" | "block";
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
@@ -102,7 +99,6 @@ export type CronFieldKey =
   | "payloadThinking"
   | "timeoutSeconds"
   | "deliveryMode"
-  | "deliveryDirectPolicy"
   | "deliveryTo"
   | "failureAlertAfter"
   | "failureAlertCooldownSeconds";

@@ -546,14 +546,14 @@ describe("heartbeat cadence Doctor cutover", () => {
     {
       target: "owner",
       isolatedSession: false,
-      delivery: { mode: "announce", target: "owner", directPolicy: "block" },
+      delivery: { mode: "announce", target: "owner" },
     },
     {
       target: "last",
       isolatedSession: false,
-      delivery: { mode: "announce", channel: "last", to: "synthetic-room", directPolicy: "block" },
+      delivery: { mode: "announce", to: "synthetic-room" },
     },
-    { target: "none", isolatedSession: false, delivery: { mode: "none", directPolicy: "block" } },
+    { target: "none", isolatedSession: false, delivery: { mode: "none" } },
     {
       target: "telegram",
       isolatedSession: true,
@@ -562,19 +562,18 @@ describe("heartbeat cadence Doctor cutover", () => {
         channel: "telegram",
         to: "12345678:topic:42",
         accountId: "ops",
-        directPolicy: "block",
       },
     },
   ])(
-    "preserves quiet hours, execution policy, and $target delivery",
+    "preserves quiet hours and pauses legacy DM-blocked $target delivery",
     async ({ target, isolatedSession, delivery }) => {
       const f = fixture({
         every: "15m",
         target,
         isolatedSession,
+        directPolicy: "block",
         to: target === "telegram" ? "12345678:topic:42" : "synthetic-room",
         ...(target === "telegram" ? { accountId: "ops" } : {}),
-        directPolicy: "block",
         session: "agent:main:custom",
         model: "openai/gpt-5",
         lightContext: true,
@@ -584,9 +583,9 @@ describe("heartbeat cadence Doctor cutover", () => {
       });
       await retireHeartbeatWithDoctor(f.cfg, f.env);
       expect(readState(f)!.jobs[0]).toMatchObject({
+        enabled: target === "none",
         sessionTarget: isolatedSession ? "isolated" : "session:agent:main:custom",
         sessionKey: "agent:main:custom",
-        idleOnly: true,
         activeHours: { start: "22:00", end: "06:00", timezone: "America/New_York" },
         payload: {
           kind: "agentTurn",
@@ -594,7 +593,6 @@ describe("heartbeat cadence Doctor cutover", () => {
           model: "openai/gpt-5",
           lightContext: true,
           timeoutSeconds: 75,
-          skipIfScratchEmpty: true,
         },
         delivery,
       });
