@@ -29,7 +29,6 @@ import {
   isOpenClawMessageToolMirrorAssistantMessage,
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../shared/transcript-only-openclaw-assistant.js";
-import { projectAssistantCommentaryFallbacks } from "./chat-display-projection.commentary.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   extractAssistantTextForSilentCheck,
@@ -311,6 +310,32 @@ function hasVisibleAssistantReplyText(message: Record<string, unknown>): boolean
   });
 }
 
+function isCompletedAssistantMessage(message: Record<string, unknown>): boolean {
+  return (
+    message.role === "assistant" &&
+    (message.stopReason === "stop" || message.stopReason === "length")
+  );
+}
+
+/** Sanitized reasoning is display material without being a recovery-completing answer. */
+function hasAssistantHistoryMaterial(message: Record<string, unknown>): boolean {
+  return (
+    hasVisibleAssistantReplyText(message) ||
+    hasAssistantDisplayableNonTextContent(message) ||
+    hasTranscriptMediaFacts(message) ||
+    (Array.isArray(message.content) &&
+      message.content.some((block) => {
+        const entry = asOptionalRecord(block);
+        return (
+          isAssistantInternalReasoningContentType(entry?.type) &&
+          [entry?.thinking, entry?.text].some(
+            (value) => typeof value === "string" && value.trim().length > 0,
+          )
+        );
+      }))
+  );
+}
+
 function isDiagnosticOnlyAssistantError(value: unknown): boolean {
   const message = asOptionalRecord(value);
   return (
@@ -403,20 +428,9 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
         : (options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS),
     );
     if (
-      message.role === "assistant" &&
-      (message.stopReason === "stop" || message.stopReason === "length") &&
-      !hasVisibleAssistant &&
-      !unseenPending &&
-      pendingIndexes.length === 0 &&
-      // Commentary is not a final answer, but its fallback owner may retain it.
-      (!options?.includeCommentaryFallbacks ||
-        projectAssistantCommentaryFallbacks(message, Number.MAX_SAFE_INTEGER).fallbacks.length ===
-          0)
+      (!unseenPending && pendingIndexes.length === 0) ||
+      !hasVisibleAssistant
     ) {
-      messages.pop();
-      return;
-    }
-    if ((!unseenPending && pendingIndexes.length === 0) || !hasVisibleAssistant) {
       return;
     }
     // An incremental reader carries only a pending bit. It must reload raw
@@ -528,11 +542,7 @@ function projectEmptyAssistantErrorMessages(
 
 type ChatHistoryRecoveryOptions = Pick<
   ChatDisplayProjectionOptions,
-  | "maxChars"
-  | "stripEnvelope"
-  | "assistantErrorPending"
-  | "subagentCoordination"
-  | "includeCommentaryFallbacks"
+  "maxChars" | "stripEnvelope" | "assistantErrorPending" | "subagentCoordination"
 >;
 
 export function prepareChatHistoryRecoveryMessages(
@@ -620,7 +630,9 @@ export function projectChatDisplayMessagesWithState(
     : (options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS);
   const sanitizedMessages = sanitizeChatHistoryMessages(projectedErrors, normalizationMaxChars, {
     includeCommentaryFallbacks: options?.includeCommentaryFallbacks,
-  });
+  }).filter(
+    (message) => !isCompletedAssistantMessage(message) || hasAssistantHistoryMaterial(message),
+  );
   const commentaryFallbacksObserved =
     options?.includeCommentaryFallbacks === true &&
     sanitizedMessages.some(
