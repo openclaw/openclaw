@@ -5,14 +5,12 @@ const enRouteSubtitles = {
   subtitles: {
     device: "App settings and capabilities on this Mac.",
     devicePermissions: "Manage macOS access, location, and computer presence.",
-    agentsHome: "Who is on your team and what they are doing",
     agents: "Workspaces, tools, identities.",
     activity: "Recent sessions across people using this gateway.",
     meetings: "Meeting notes and transcripts across this gateway.",
     apps: "Companion apps for phone, watch, desktop, and browser.",
     portals: "Live previews from agent-run applications.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
-    workboard: "Agent work queue and session handoff.",
     worktrees: "Isolated agent task checkouts and recovery snapshots.",
     channels: "Channels and settings.",
     connection: "Manage how this browser connects to the Gateway.",
@@ -26,10 +24,8 @@ const enRouteSubtitles = {
     devices: "Manage paired devices and connection requests.",
     templates: "Explore and add official Templates.",
     cloudWorkers: "Manage repository snapshots and cloud devices.",
-    chat: "Gateway chat for quick interventions.",
     dashboards: "Tasks with saved dashboards.",
     custodian: "System setup and care.",
-    config: "Legacy settings route; opens Appearance.",
     profile: "Manage your name, avatar, and connected accounts.",
     communications: "Messages, text-to-speech, and meeting capture settings.",
     appearance: "Theme and UI settings.",
@@ -52,7 +48,6 @@ const enRouteSubtitles = {
     advanced: "Manage all settings, including the raw config.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
-    plugin: "Plugin-provided panel.",
   },
 } satisfies TranslationMap;
 
