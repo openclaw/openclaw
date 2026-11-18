@@ -498,10 +498,13 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       setDetailTab("history");
     }
     cron.cronCreateOpen = false;
-    startCronEdit(cron, job);
+    // Inspecting another run of the current saved job must not discard its draft.
+    if (cron.cronEditingJob !== job) {
+      startCronEdit(cron, job);
+      deliveryDirectory.openEditor();
+    }
     // Claim the run pane before awaiting to retire the previous job's history.
     void presentation.runTask((cronState) => loadCronRunsForJob(cronState, job.id, runId));
-    deliveryDirectory.openEditor();
   }
 
   function resetEditor(createOpen: boolean) {
