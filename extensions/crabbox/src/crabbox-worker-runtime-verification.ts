@@ -1,5 +1,31 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { CrabboxWorkerNodeRuntimePreparation } from "./crabbox-worker-node-enrollment.js";
+import { CRABBOX_SETUP_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
+
+/** Project grant-free metadata for the installed package preparation command. */
+export function createCrabboxWorkerBundlePreparation(
+  workerBundle: CrabboxWorkerNodeRuntimePreparation["workerBundle"] | undefined,
+  openclawVersion: string,
+) {
+  if (
+    workerBundle &&
+    (workerBundle.bundleHash === undefined) !== (workerBundle.protocolFeatures === undefined)
+  ) {
+    throw new Error("Worker bundle preparation requires both build hash and protocol features");
+  }
+  // Archive-only/offline callers do not carry an expanded-code identity.
+  return workerBundle?.bundleHash === undefined
+    ? undefined
+    : {
+        build: {
+          bundleHash: workerBundle.bundleHash,
+          openclawVersion,
+          protocolFeatures: workerBundle.protocolFeatures,
+        },
+        archive: { sha256: workerBundle.sha256, bytes: workerBundle.bytes },
+      };
+}
 
 export type CrabboxRuntimeInstallationIdentity = {
   nodeBootstrap: {
@@ -61,6 +87,12 @@ export function readCrabboxRuntimeInstallation(
 
 /** Shared native verification and result reporting, not a full installed-payload hash. */
 export const CRABBOX_RUNTIME_VERIFICATION_SOURCE = `
+  const prepareWorkerBundle = (verifyOnly) => {
+    if (!workerPreparation) return;
+    setPhase(verifyOnly ? "worker bundle verification" : "worker bundle preparation");
+    const result = spawnSync(process.execPath, [cli, "node", "prepare-worker-bundle", "--input", JSON.stringify(workerPreparation), ...(verifyOnly ? ["--verify-only"] : [])], { cwd: runtimeDir, env: nodeEnv, encoding: "utf8", timeout: ${CRABBOX_SETUP_TIMEOUT_MS}, maxBuffer: 1024 * 1024 });
+    if (result.error || result.status !== 0) throw subprocessError("Cloud worker expanded bundle " + (verifyOnly ? "verification" : "preparation") + " failed", result);
+  };
   const verifyRuntime = async (root, fresh = false) => {
     setPhase("runtime verification");
     if (!fs.lstatSync(root).isDirectory() || fs.realpathSync(root) !== root) throw new Error("Cloud worker bootstrap runtime path is unsafe");

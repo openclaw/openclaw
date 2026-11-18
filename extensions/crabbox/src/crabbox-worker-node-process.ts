@@ -4,6 +4,7 @@ import {
   crabboxMacosDesktopDirectory,
   createCrabboxMacosGuiLaunchScript,
 } from "./crabbox-worker-desktop-macos.js";
+import { createCrabboxXfceSessionEnvironment } from "./crabbox-worker-desktop-setup.js";
 import { createCrabboxWindowsDesktopNodeLauncher } from "./crabbox-worker-desktop-windows.js";
 import type { CrabboxOperatingSystem } from "./crabbox-worker-profile.js";
 import { wrapCrabboxNodeScript } from "./crabbox-worker-script.js";
@@ -305,7 +306,15 @@ type ResumeRequest = Parameters<NonNullable<WorkerProvider["resumeNode"]>>[0];
 export function createCrabboxNodeResumeScript(
   request: ResumeRequest,
   phase: "inspect" | "launch",
+  desktop = false,
 ): string {
+  const desktopEnvironment = desktop
+    ? [
+        "set -eu",
+        ...createCrabboxXfceSessionEnvironment(),
+        `exec "$1" -e 'process.stdout.write(JSON.stringify({DISPLAY:process.env.DISPLAY,DBUS_SESSION_BUS_ADDRESS:process.env.DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR:process.env.XDG_RUNTIME_DIR}))'`,
+      ].join("\n")
+    : undefined;
   const runtime = request.retainedRuntimeOnly ? undefined : request.runtime;
   const script = `const fs = require("node:fs");
 const path = require("node:path");
@@ -342,13 +351,20 @@ const { setTimeout: delay } = require("node:timers/promises");
   // The saved process receipt names the actual CLI, not a compile-cache respawn.
   const nodeEnv = { ...process.env, OPENCLAW_STATE_DIR: stateDir, NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_NO_RESPAWN: "1" };
   nodeEnv.PATH = path.dirname(process.execPath) + path.delimiter + path.join(runtimeDir, "node_modules", "openclaw", "dist", "worker-tools", "bin") + path.delimiter + (nodeEnv.PATH || "");
+  const desktopEnvironment = ${JSON.stringify(desktopEnvironment)};
+  if (desktopEnvironment) {
+    const desktop = spawnSync("bash", ["-c", desktopEnvironment, "bash", process.execPath], { env: nodeEnv, encoding: "utf8", timeout: 60000 });
+    if (desktop.status !== 0) throw new Error(desktop.stderr?.trim() || "Cloud worker XFCE session is unavailable");
+    delete nodeEnv.XDG_RUNTIME_DIR;
+    Object.assign(nodeEnv, JSON.parse(desktop.stdout));
+  }
   ${
     phase === "inspect"
       ? `// The supported read-only identity command may wait on runtime startup.
   // Return to the host owner before admitting a separate write invocation.
   const identity = spawnSync(process.execPath, [cli, "node", "identity", "--json"], { cwd: runtimeDir, env: nodeEnv, encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
   if (identity.status !== 0 || JSON.parse(identity.stdout).deviceId !== ${JSON.stringify(request.deviceId)}) throw new Error("Cloud worker saved device identity changed; resume refused");`
-      : `${createCrabboxNodeProcessRuntime(undefined, request.leaseId, request.deviceId)}
+      : `${createCrabboxNodeProcessRuntime(desktop ? "linux" : undefined, request.leaseId, request.deviceId)}
   let reused = reuseNodeProcess();
   ${
     runtime
