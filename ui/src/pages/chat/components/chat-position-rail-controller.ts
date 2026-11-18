@@ -193,7 +193,7 @@ export function createPositionRail(props: PositionRailParams) {
     );
   }
 
-  function refreshWindow(): void {
+  function refreshWindow(revealOffset?: number): void {
     if (connected && session) {
       const scroller = scrollElement;
       const focused = scroller?.ownerDocument.activeElement;
@@ -221,6 +221,16 @@ export function createPositionRail(props: PositionRailParams) {
           } finally {
             restoringFocus = false;
           }
+        }
+        // The browser can recenter a retained focused marker when the keyed window
+        // commits. Apply the explicit reader destination to the committed window.
+        if (
+          revealOffset !== undefined &&
+          scroller &&
+          scroller === scrollElement &&
+          viewportOffset === revealOffset
+        ) {
+          scroller.scrollTop = revealOffset;
         }
       });
     }
@@ -475,6 +485,7 @@ export function createPositionRail(props: PositionRailParams) {
     // Reader offsets can move the anchor without changing any intersections.
     syncVisibleMarks();
     syncTabStop();
+    const offsetBeforeReveal = viewportOffset;
     if (initialize || reader.followActive) {
       // An older queued frame must retain navigation until its final viewport is measured.
       reader.followActive = viewportResizePending || observationPending;
@@ -492,7 +503,7 @@ export function createPositionRail(props: PositionRailParams) {
     }
     const indexes = windowIndexes();
     if (!transcriptArraysEqual(indexes, renderedIndexes)) {
-      refreshWindow();
+      refreshWindow(viewportOffset === offsetBeforeReveal ? undefined : viewportOffset);
       syncTabStop();
     }
     // Reserve only the trailing space needed to keep this offset when the viewport grows.
