@@ -254,7 +254,9 @@ index rows and their revision together. A rolled-back batch publishes neither.
 The migration drops only trigger definitions and PostgreSQL's two corresponding
 trigger functions. It preserves indexed content, embeddings, revision values,
 and the search and vector projection triggers. Both engines advance their schema
-metadata in that transaction. A scoped SQLite backup retains the source and
+metadata in that transaction. For SQLite schemas 27–30, either table's revision
+trigger group may be absent. If present, the group must match the published
+definitions. A scoped SQLite backup retains the source and
 chunk tables with their historical triggers; rollback requires restoring the
 verified backup with its matching build, never lowering schema markers.
 

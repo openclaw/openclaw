@@ -39,9 +39,13 @@ const schemaV27 = fs.readFileSync(
   "utf8",
 );
 
-export function seedAgentV30Schema(database: DatabaseSync, version: number): void {
+export function seedAgentV27Schema(database: DatabaseSync, version = 27): void {
   database.exec(schemaV27);
   seedVersion(database, version);
+}
+
+export function seedAgentV30Schema(database: DatabaseSync, version: number): void {
+  seedAgentV27Schema(database, version);
   database.exec(`
     DROP INDEX idx_agent_transcript_event_parent;
     DROP INDEX idx_agent_session_windows_conversation;

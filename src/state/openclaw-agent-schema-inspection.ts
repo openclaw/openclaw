@@ -77,6 +77,7 @@ function isEmptyAgentStore(
     database,
     input.pathname,
     getOpenClawAgentMigrationSchema(metadata.schemaVersion),
+    { version: metadata.schemaVersion },
   );
   for (const table of readMainTableList(database, { includeInternal: true })) {
     if (table.type === "shadow" || table.name === "sqlite_schema") {

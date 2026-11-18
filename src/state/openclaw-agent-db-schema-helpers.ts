@@ -35,6 +35,7 @@ import {
 } from "./openclaw-agent-board-schema.js";
 import { ensureLegacySessionEntryValidityTriggers } from "./openclaw-agent-canonical-validation-migration.js";
 import { hasPendingAgentStartupColumns } from "./openclaw-agent-db-additive-columns.js";
+import { AGENT_MEMORY_REVISION_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
@@ -48,6 +49,7 @@ import {
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
 import type { DB } from "./openclaw-agent-db.generated.js";
+import { LEGACY_MEMORY_REVISION_SQLITE_TRIGGER_GROUPS } from "./openclaw-agent-memory-revision-migration.js";
 import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -222,24 +224,43 @@ export function assertOpenClawAgentSchemaContains(
   database: DatabaseSync,
   pathname: string,
   schemaSql: string,
-  participantSchema: "current" | "legacy" = "current",
-  allowStartupIndexRepair = false,
-  readTable?: SqliteTableContractReader,
-  requireCanonicalIndexes = false,
+  options: {
+    version?: number;
+    legacyParticipants?: boolean;
+    allowStartupIndexRepair?: boolean;
+    readTable?: SqliteTableContractReader;
+    requireCanonicalIndexes?: boolean;
+  } = {},
 ): boolean {
+  const {
+    version,
+    legacyParticipants,
+    allowStartupIndexRepair,
+    readTable,
+    requireCanonicalIndexes,
+  } = options;
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
+    // Schema 27's memory owner could rebuild sources independently of chunks.
+    // Before v31, each complete revision trigger group can be absent or exact.
+    optionalCanonicalTriggerGroups:
+      version !== undefined && version >= 27 && version < AGENT_MEMORY_REVISION_SCHEMA_VERSION
+        ? [
+            ...AGENT_SCHEMA_COMPATIBILITY.optionalCanonicalTriggerGroups,
+            ...LEGACY_MEMORY_REVISION_SQLITE_TRIGGER_GROUPS,
+          ]
+        : AGENT_SCHEMA_COMPATIBILITY.optionalCanonicalTriggerGroups,
     allowedMissingIndexes: requireCanonicalIndexes
       ? []
       : AGENT_SCHEMA_COMPATIBILITY.allowedMissingIndexes,
     allowedMissingTables: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingTables,
       // Legacy migration preflight precedes creation of the required v20 table.
-      ...(participantSchema === "legacy" ? ["session_transcript_cold_archives"] : []),
+      ...(legacyParticipants ? ["session_transcript_cold_archives"] : []),
     ],
     allowedMissingColumns: [
       ...AGENT_SCHEMA_COMPATIBILITY.allowedMissingColumns,
-      ...(participantSchema === "legacy" ? LEGACY_PARTICIPANT_OPTIONAL_COLUMNS : []),
+      ...(legacyParticipants ? LEGACY_PARTICIPANT_OPTIONAL_COLUMNS : []),
     ],
   };
   if (!allowStartupIndexRepair) {
@@ -274,15 +295,10 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
       `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(
-    database,
-    options.pathname,
-    OPENCLAW_AGENT_SCHEMA_SQL,
-    "current",
-    false,
+  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
     readTable,
-    options.requireCanonicalIndexes,
-  );
+    requireCanonicalIndexes: options.requireCanonicalIndexes,
+  });
 }
 
 function hasAnyCanonicalTable(database: DatabaseSync, schemaSql: string): boolean {
@@ -307,7 +323,7 @@ function repairAndAssertAgentSchemaGroup(
   repairCanonicalSqliteIndexes(database, pathname, schemaSql, {
     verifyPhysicalIntegrity: false,
   });
-  assertOpenClawAgentSchemaContains(database, pathname, schemaSql, "legacy");
+  assertOpenClawAgentSchemaContains(database, pathname, schemaSql, { legacyParticipants: true });
 }
 
 /** Ensure the additive session-key contract table inside the caller's transaction. */
@@ -425,12 +441,10 @@ export function assertAgentSchemaVersion(
       `OpenClaw agent database ${options.pathname} did not converge on schema version ${options.version}.`,
     );
   }
-  assertOpenClawAgentSchemaContains(
-    db,
-    options.pathname,
-    schemaSql,
-    options.version < 18 ? "legacy" : "current",
-  );
+  assertOpenClawAgentSchemaContains(db, options.pathname, schemaSql, {
+    version: options.version,
+    legacyParticipants: options.version < 18,
+  });
 }
 
 export function finishAgentSchemaMigration(

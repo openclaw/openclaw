@@ -1,7 +1,8 @@
 const revisionTables = ["memory_index_sources", "memory_index_chunks"] as const;
 const revisionEvents = ["insert", "update", "delete"] as const;
-export const LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS = revisionTables.flatMap((table) =>
-  revisionEvents.map((event) => ({
+export const LEGACY_MEMORY_REVISION_SQLITE_TRIGGER_GROUPS = revisionTables.map((table) => ({
+  tableName: table,
+  triggers: revisionEvents.map((event) => ({
     name: `${table}_revision_after_${event}`,
     table,
     sql: `CREATE TRIGGER IF NOT EXISTS ${table}_revision_after_${event}
@@ -10,7 +11,9 @@ BEGIN
   UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
 END;`,
   })),
-);
+}));
+export const LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS =
+  LEGACY_MEMORY_REVISION_SQLITE_TRIGGER_GROUPS.flatMap((group) => group.triggers);
 export const LEGACY_MEMORY_REVISION_TRIGGER_NAMES = LEGACY_MEMORY_REVISION_SQLITE_TRIGGERS.map(
   (trigger) => trigger.name,
 );

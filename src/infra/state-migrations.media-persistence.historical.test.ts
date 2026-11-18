@@ -22,6 +22,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { seedAgentV27Schema } from "../state/schema-migration.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   buildSqliteMemoryBodyFtsSchema,
@@ -250,6 +251,53 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
 });
+
+it.each(["chunks and sources", "chunks only", "sources only", "drifted and unknown"] as const)(
+  "checks the published schema-27 memory revision triggers (%s)",
+  async (layout) => {
+    const { env, dbPath } = createAgentPaths("media-persistence-v27-memory-");
+    const revisionTriggers = `SELECT name, sql FROM sqlite_schema
+      WHERE type = 'trigger' AND name GLOB 'memory_index_*_revision_after_*' ORDER BY name`;
+    let originalTriggers: ReturnType<typeof all>;
+    {
+      using db = openFixtureDatabase(dbPath);
+      seedAgentV27Schema(db);
+      if (layout === "chunks only" || layout === "sources only") {
+        const absent = layout === "chunks only" ? "sources" : "chunks";
+        db.exec(`DROP TRIGGER memory_index_${absent}_revision_after_insert;
+          DROP TRIGGER memory_index_${absent}_revision_after_update;
+          DROP TRIGGER memory_index_${absent}_revision_after_delete;`);
+      }
+      if (layout === "drifted and unknown") {
+        db.exec(`DROP TRIGGER memory_index_chunks_revision_after_insert;
+          CREATE TRIGGER memory_index_chunks_revision_after_insert AFTER INSERT ON memory_index_chunks
+          BEGIN UPDATE memory_index_state SET revision = revision + 2 WHERE id = 1; END;
+          CREATE TRIGGER memory_index_chunks_revision_after_extra AFTER INSERT ON memory_index_chunks
+          BEGIN UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1; END;`);
+      }
+      originalTriggers = all(db, revisionTriggers);
+    }
+
+    const result = await migrateLegacyMediaPersistence({
+      env: { ...env, OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+    });
+
+    using migrated = openFixtureDatabase(dbPath, true);
+    if (layout === "drifted and unknown") {
+      const warnings = result.warnings.join("\n");
+      expect(warnings).toContain(
+        "missing or drifted trigger memory_index_chunks_revision_after_insert",
+      );
+      expect(warnings).toContain("unexpected trigger memory_index_chunks_revision_after_extra");
+      expectVersion(migrated, 27);
+      expect(all(migrated, revisionTriggers)).toEqual(originalTriggers);
+    } else {
+      expect(result.warnings).toEqual([]);
+      expectVersion(migrated, OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(all(migrated, revisionTriggers)).toEqual([]);
+    }
+  },
+);
 
 function createHistoricalFixture() {
   const { env, dbPath } = createAgentPaths("media-persistence-historical-v14-");
