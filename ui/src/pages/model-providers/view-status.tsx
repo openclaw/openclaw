@@ -1,4 +1,4 @@
-import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import type { ModelAuthStatusProfile, ModelsProbeResult } from "../../api/types.ts";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -87,7 +87,18 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
   return card.catalogStatus === "ready" && !needsAuthAttention(card);
 }
 
-export function renderProviderStatus(card: ModelProviderCard) {
+export function probeStatus(result: ModelsProbeResult): {
+  kind: "ok" | "warn" | "danger";
+  label: string;
+} {
+  const partial = result.status === "ok" && result.results.some((target) => target.status !== "ok");
+  return {
+    kind: partial ? "warn" : result.status === "ok" ? "ok" : "danger",
+    label: t(`modelProviders.probe.status.${partial ? "partial" : result.status}`),
+  };
+}
+
+export function renderProviderStatus(card: ModelProviderCard, result?: ModelsProbeResult) {
   if (card.checkingModels) {
     return (
       <SettingsStatus
@@ -111,6 +122,11 @@ export function renderProviderStatus(card: ModelProviderCard) {
   }
   if (card.catalogStatus === "unavailable") {
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
+  }
+  // A successful catalog lists models; it does not prove inference access.
+  const checked = result && probeStatus(result);
+  if (checked && checked.kind !== "ok") {
+    return <SettingsStatus {...checked} />;
   }
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);

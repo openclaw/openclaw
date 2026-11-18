@@ -391,7 +391,9 @@ export function ProviderRow(props: ProviderRowProps) {
         </span>
         {/* The open row shows the full panel below; its empty chip cell collapses. */}
         <ProviderUsageChips usage={open() ? undefined : card().usage} />
-        <span class="provider-row__status">{renderProviderStatus(card())}</span>
+        <span class="provider-row__status">
+          {renderProviderStatus(card(), props.probeResults[card().id])}
+        </span>
         <Icon name="chevronDown" class="provider-row__chevron" />
       </button>
       <Show when={open()}>

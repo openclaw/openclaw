@@ -221,7 +221,6 @@ export function createModelProviders(
     setBusy: (key, value) => setBusy(key, value),
     setProbeResult: (cardId, result) =>
       (state.probeResults = updateRecordEntry(state.probeResults, cardId, result)),
-    setProbeError: (cardId, error) => setMessage(cardId, { kind: "error", text: error }),
     getConfig: () => context.runtimeConfig,
   });
   const discovery = createModelProviderDiscovery({
