@@ -325,10 +325,8 @@ export function registerParticipantSpawnCases(
                   });
                   expect(parentEnvelope).toEqual(originalParentEnvelope);
                   if (visible) {
-                    const owner =
-                      profileId === "alice"
-                        ? { type: "human", id: "alice" }
-                        : { type: "agent", id: "main" };
+                    // Selecting Bob's execution authority does not change Alice's request ownership.
+                    const owner = { type: "human", id: "alice" };
                     expect(entry?.owner?.actor).toMatchObject(owner);
                     if (!independent) {
                       expect(details.owner).toMatchObject(owner);
