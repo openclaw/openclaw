@@ -182,46 +182,50 @@ describe.each([
   });
 });
 
-it("builds the direct Arcee AI model catalog", async () => {
-  clearLiveCatalogCacheForTests();
-  const release = vi.fn(async () => undefined);
-  const data = [mini, preview, thinking].map((id) => ({ id, object: "model" }));
-  const fetchGuard = vi
-    .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
-    .mockImplementation(async ({ url }) => ({
-      response: Response.json({ data }),
-      finalUrl: url,
-      release,
-    }));
-  onTestFinished(() => {
-    fetchGuard.mockRestore();
+it.each([directUrl, "https://private.example/v1"])(
+  "builds the direct Arcee catalog at %s",
+  async (baseUrl) => {
     clearLiveCatalogCacheForTests();
-  });
-  const provider = await registerSingleProviderPlugin(arceePlugin);
-  const catalogProvider = await runSingleProviderCatalog(provider, {
-    resolveProviderApiKey: (id?: string) =>
-      id === "arcee" ? { apiKey: "test-key" } : { apiKey: undefined },
-  });
-  expect(catalogProvider).toMatchObject({
-    api: "openai-completions",
-    baseUrl: directUrl,
-    models: [
-      { id: preview },
-      { id: thinking, compat: { supportsTools: false, supportsReasoningEffort: false } },
-      { id: mini },
-    ],
-  });
-  expect(fetchGuard).toHaveBeenCalledOnce();
-  const request = fetchGuard.mock.calls[0]?.[0];
-  expect({
-    url: request?.url,
-    init: { ...request?.init, headers: Object.fromEntries(new Headers(request?.init?.headers)) },
-  }).toEqual({
-    url: "https://api.arcee.ai/api/v1/models",
-    init: { headers: { accept: "application/json", authorization: "Bearer test-key" } },
-  });
-  expect(release).toHaveBeenCalledOnce();
-});
+    const release = vi.fn(async () => undefined);
+    const data = [mini, preview, thinking].map((id) => ({ id, object: "model" }));
+    const fetchGuard = vi
+      .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+      .mockImplementation(async ({ url }) => ({
+        response: Response.json({ data }),
+        finalUrl: url,
+        release,
+      }));
+    onTestFinished(() => {
+      fetchGuard.mockRestore();
+      clearLiveCatalogCacheForTests();
+    });
+    const provider = await registerSingleProviderPlugin(arceePlugin);
+    const catalogProvider = await runSingleProviderCatalog(provider, {
+      config: { models: { providers: { arcee: { baseUrl, models: [] } } } },
+      resolveProviderApiKey: (id?: string) =>
+        id === "arcee" ? { apiKey: "test-key" } : { apiKey: undefined },
+    });
+    expect(catalogProvider).toMatchObject({
+      api: "openai-completions",
+      baseUrl,
+      models: [
+        { id: preview },
+        { id: thinking, compat: { supportsTools: false, supportsReasoningEffort: false } },
+        { id: mini },
+      ],
+    });
+    expect(fetchGuard).toHaveBeenCalledOnce();
+    const request = fetchGuard.mock.calls[0]?.[0];
+    expect({
+      url: request?.url,
+      init: { ...request?.init, headers: Object.fromEntries(new Headers(request?.init?.headers)) },
+    }).toEqual({
+      url: baseUrl + "/models",
+      init: { headers: { accept: "application/json", authorization: "Bearer test-key" } },
+    });
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
 
 it("keeps the configured OpenRouter catalog when both credentials exist", async () => {
   const provider = await registerSingleProviderPlugin(arceePlugin);

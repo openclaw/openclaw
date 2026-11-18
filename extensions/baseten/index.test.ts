@@ -378,3 +378,18 @@ it("prepares image input from the authenticated catalog and preserves live limit
     }),
   );
 });
+
+it("preserves the configured endpoint for the static catalog", async () => {
+  const provider = await registerSingleProviderPlugin(basetenPlugin);
+  const result = await provider.catalog?.run({
+    config: {
+      models: { providers: { baseten: { baseUrl: " https://private.example/v1 ", models: [] } } },
+    },
+    env: {},
+    resolveProviderAuth: () => ({ apiKey: KEY, mode: "api_key", source: "profile" }),
+    resolveProviderApiKey: () => ({ apiKey: KEY }),
+  });
+  expect(result).toMatchObject({
+    provider: { baseUrl: "https://private.example/v1", apiKey: KEY },
+  });
+});
