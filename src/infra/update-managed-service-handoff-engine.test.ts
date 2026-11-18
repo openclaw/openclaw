@@ -179,18 +179,23 @@ itUnix("restores a SQLite runtime that has no engine-aware sentinel method", asy
     async prepareState({ env, recoveryModulePath, sourceRuntimeImport }) {
       env.OPENCLAW_LOG_LEVEL = "debug";
       env.OPENCLAW_TEST_CONSOLE = "1";
+      // Emit the diagnostic during the probe so importing the fixture to finalize cannot satisfy it.
       await fs.appendFile(
         recoveryModulePath,
         `
-        ${sourceRuntimeImport}
-        const { resolveSqliteInspectionBudget } = await import(${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)});
-        resolveSqliteInspectionBudget("handoff fixture", "synthetic.sqlite", 1024);
+        const fixtureProbe = waitForGatewayUpdateRecovery;
+        waitForGatewayUpdateRecovery = async (...args) => {
+          ${sourceRuntimeImport}
+          const { resolveSqliteInspectionBudget } = await import(${JSON.stringify(new URL("./sqlite-readonly-worker.ts", import.meta.url).href)});
+          resolveSqliteInspectionBudget("handoff fixture", "synthetic.sqlite", 1024);
+          return fixtureProbe(...args);
+        };
         `,
       );
     },
   });
   expect(result.stdout.split("\n")[0]).toBe("OPENCLAW_UPDATE_HANDOFF_READY");
-  expect(result.stderr).toContain("SQLite handoff fixture for synthetic.sqlite");
+  expect(result.log).toContain("SQLite handoff fixture for synthetic.sqlite");
   expect(result.state).toMatchObject({ restored: true });
   expect(result.sentinel).toMatchObject({ payload: { status: "error" } });
   expect(result.log).not.toContain("could not be recorded");
