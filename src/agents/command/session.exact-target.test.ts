@@ -148,6 +148,7 @@ it.each(["work", "dashboard:incognito-work"])(
       const storePath = state.statePath("sessions.sqlite");
       const sessionKey = `agent:main:${key}`;
       const incognito = key.startsWith("dashboard:incognito-");
+      const memoryPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
       const cfg = {
         agents: { defaults: {} },
         session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
@@ -177,6 +178,7 @@ it.each(["work", "dashboard:incognito-work"])(
         expect(resolved).toMatchObject({
           sessionId: entry.sessionId,
           sessionKey,
+          storePath: incognito ? memoryPath : storePath,
           isNewSession: false,
           persistedThinking: "high",
           sessionEntry: { ...entry, lifecycleRevision: expect.any(String) },
@@ -184,11 +186,7 @@ it.each(["work", "dashboard:incognito-work"])(
         expect(list).not.toHaveBeenCalled();
         if (incognito) {
           expect(fs.existsSync(storePath)).toBe(false);
-          expect(
-            fs.existsSync(
-              resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-            ),
-          ).toBe(false);
+          expect(fs.existsSync(resolved.storePath)).toBe(false);
         }
       } finally {
         list.mockRestore();
