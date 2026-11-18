@@ -30,6 +30,7 @@ import {
 import { withPluginRuntimeGatewayRequestScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
@@ -43,6 +44,7 @@ import {
   registerHeadlessToolSearchCatalog,
   resolveToolSearchConfig,
 } from "../../tool-search.js";
+import { settleSubagentRegistryPersistenceWork } from "../registry/subagent-registry.persistence.test-support.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createSpawnOperatorSource,
@@ -344,9 +346,16 @@ export function registerDiskProfileCase(options: NativePluginSpawnTestOptions) {
       } finally {
         restoreActivePluginRegistrySnapshot(snapshot);
         clearPluginRegistryLoadCache();
-        // The private handoff store installs spies; do not leak its paths to the next case.
-        vi.restoreAllMocks();
-        vi.unstubAllEnvs();
+        try {
+          // Per-database cleanup retains readers; retire workers carrying this fixture
+          // guard before another case supplies database paths outside its root.
+          await settleSubagentRegistryPersistenceWork(() => options.settleRootWork(true));
+          await closeOpenClawStateDatabaseAsync();
+        } finally {
+          // The private handoff store installs spies; do not leak its paths to the next case.
+          vi.restoreAllMocks();
+          vi.unstubAllEnvs();
+        }
       }
     }
   });

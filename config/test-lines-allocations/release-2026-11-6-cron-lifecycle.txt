@@ -1,0 +1,3 @@
+18
+# Release repair: preserve terminal and ambiguous delivery diagnostics; settle
+# guarded collector workers before restoring the fixture environment.

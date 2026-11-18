@@ -21,7 +21,7 @@ it.each<
 >([
   ["permanent failure with route", permanentError, routed, 0, 1],
   ["transient failure with route", "rate limit exceeded", routed, 0, 1],
-  ["same incident during cooldown", permanentError, routed, 0, 1, 2],
+  ["same incident during cooldown", permanentError, routed, 0, 2, 2],
   ["no route", permanentError, { mode: "none" }, 1, 0],
   ["best-effort route", permanentError, { ...routed, bestEffort: true }, 1, 0],
 ])(
@@ -51,6 +51,11 @@ it.each<
       });
       expect(f.runCronFailureRepair).not.toHaveBeenCalled();
       expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
+      if (alerts) {
+        expect(f.sendCronFailureAlert.mock.lastCall?.[0].payload.text).toContain(
+          `was auto-disabled after ${priorFailures + 1} consecutive run failures.`,
+        );
+      }
       expect(f.enqueueSessionEvent).toHaveBeenCalledTimes(notices);
       if (notices) {
         expect(f.enqueueSessionEvent).toHaveBeenCalledWith(

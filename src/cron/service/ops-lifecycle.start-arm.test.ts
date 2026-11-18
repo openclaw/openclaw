@@ -166,7 +166,7 @@ it("joins a disabled scheduler borrow when stopped during its native command", a
     expect(state.schedulerStarted).toBe(false);
     expect(state.stopped).toBe(true);
     const exited = once(worker, "exit");
-    channel("openclaw.memory.critical").publish(undefined);
+    channel("openclaw.memory.critical").publish(true);
     await withinTest(exited, signal);
     expect(worker.threadId).toBe(-1);
   } finally {

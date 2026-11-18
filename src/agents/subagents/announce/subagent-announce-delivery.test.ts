@@ -1618,7 +1618,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     }
   });
 
-  const ambiguousCompletion = { delivered: false, disposition: "ambiguous" };
+  const ambiguousCompletion = { delivered: false, disposition: "ambiguous", reason: undefined };
   const suppressedCompletionReceipt = (reasons: string[]) => ({
     status: "suppressed",
     resultCount: 0,
@@ -1664,7 +1664,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
           },
         ],
       },
-      expected: ambiguousCompletion,
+      expected: { ...ambiguousCompletion, reason: "delivery_failed" },
     },
     {
       name: "partial send without per-payload details",
@@ -1674,7 +1674,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         sentBeforeError: true,
         errorMessage: "supplement failed",
       },
-      expected: ambiguousCompletion,
+      expected: { ...ambiguousCompletion, reason: "delivery_failed" },
     },
     { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
   ])("does not credit a $name automatic completion receipt", async (testCase) => {
@@ -1699,7 +1699,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
     expect(result.requesterVisibleFinalDelivered).toBeUndefined();
     if (expected?.disposition === "ambiguous") {
-      expect(result.reason).toBeUndefined();
+      expect(result.reason).toBe(expected.reason);
       expect(result.terminal).toBeUndefined();
     }
   });

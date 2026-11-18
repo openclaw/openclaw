@@ -417,7 +417,9 @@ describe("CronService failure repair", () => {
               to: "19098680",
               mode: "announce",
               payload: expect.objectContaining({
-                text: expect.stringContaining('Automation "continue PR work" failed 1 times'),
+                text: expect.stringContaining(
+                  'Automation "continue PR work" was auto-disabled after 1 consecutive run failures.',
+                ),
               }),
             }),
           );
