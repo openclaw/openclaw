@@ -21,8 +21,7 @@ import { captureSessionQueuedInputsForRestart } from "../config/sessions/session
 import { interruptOrphanedSessionPendingInputs } from "../config/sessions/session-pending-input-withdrawal.js";
 import {
   createRestartResumeMarker,
-  isRestartResumeMarkerInScope,
-  resolveRestartResumeScope,
+  outOfScopeRestartTarget,
 } from "../config/sessions/session-restart-resume-scope.js";
 import {
   derivePersistedSessionLifecyclePatch,
@@ -456,7 +455,6 @@ async function resumeRestartStore(
     { target, entries },
   );
   const summary = createRestartResumeSummary("startup");
-  const scope = resolveRestartResumeScope();
   const entryKeys = new Set(entries.map(({ sessionKey }) => sessionKey));
   for (const { sessionKey } of entries) {
     summary.record(
@@ -488,7 +486,7 @@ async function resumeRestartStore(
       const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? target.agentId;
       let authority: Awaited<ReturnType<typeof prepareSessionSystemTurnAuthority>> | undefined;
       let interrupted = false;
-      let scopeChanged: { sessionId: string } | undefined;
+      let stale: Parameters<typeof interruptOrphanedSessionPendingInputs>[0] | undefined;
       try {
         await waitForAgentInputAdmission(agentId, {
           sessionKey,
@@ -529,11 +527,7 @@ async function resumeRestartStore(
             // A marker from another scope belongs to an ended deployment generation, such
             // as an explicit stop. Clear it without resuming; its queued inputs are settled
             // below, like a crash's.
-            scopeChanged =
-              selected.resumeAfterRestart !== undefined &&
-              !isRestartResumeMarkerInScope(selected.resumeAfterRestart, scope)
-                ? { sessionId: selected.sessionId }
-                : undefined;
+            stale = outOfScopeRestartTarget(selected, { ...target, sessionKey });
             const recovered: InternalSessionEntry["resumeAfterRestart"] =
               selected.resumeAfterRestart ??
               (parked ||
@@ -551,8 +545,8 @@ async function resumeRestartStore(
                 selected.updatedAt >= performance.timeOrigin - LEGACY_RESTART_RESUME_WINDOW_MS)
                 ? { queuedInputIds: [] }
                 : undefined);
-            const marker = scopeChanged ? undefined : recovered;
-            if (!marker && !scopeChanged && !selected.mainRestartRecovery && !orphanedRun) {
+            const marker = stale ? undefined : recovered;
+            if (!marker && !stale && !selected.mainRestartRecovery && !orphanedRun) {
               return { result: undefined };
             }
             const entry = {
@@ -589,21 +583,16 @@ async function resumeRestartStore(
           },
         });
         if (!resumed) {
-          if (scopeChanged) {
+          if (stale) {
             // The cleared marker no longer keeps custody of the input queued behind it.
-            await interruptOrphanedSessionPendingInputs(
-              { ...target, sessionKey, sessionId: scopeChanged.sessionId },
-              () => signal.throwIfAborted(),
-            );
+            await interruptOrphanedSessionPendingInputs(stale, () => signal.throwIfAborted());
+            summary.record(agentId, sessionKey, "scope-changed");
+            continue;
           }
           summary.record(
             agentId,
             sessionKey,
-            scopeChanged
-              ? "scope-changed"
-              : interrupted
-                ? "orphaned-run-interrupted"
-                : "marker-not-current-or-legacy-ineligible",
+            interrupted ? "orphaned-run-interrupted" : "marker-not-current-or-legacy-ineligible",
           );
           continue;
         }

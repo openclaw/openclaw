@@ -30,3 +30,17 @@ export function isRestartResumeMarkerInScope(
 ): boolean {
   return marker.scope === scope;
 }
+
+/**
+ * The pending-input target of a session whose marker was written under another scope, so
+ * its queued inputs can be settled once the marker is cleared; otherwise undefined.
+ */
+export function outOfScopeRestartTarget<T extends object>(
+  entry: Pick<InternalSessionEntry, "resumeAfterRestart" | "sessionId">,
+  target: T,
+  scope = resolveRestartResumeScope(),
+): (T & { sessionId: string }) | undefined {
+  return entry.resumeAfterRestart && !isRestartResumeMarkerInScope(entry.resumeAfterRestart, scope)
+    ? { ...target, sessionId: entry.sessionId }
+    : undefined;
+}
