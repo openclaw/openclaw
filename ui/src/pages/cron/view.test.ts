@@ -119,7 +119,7 @@ describe("cron view editor", () => {
       { onFormChange },
     );
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
-    expect(findToggleByLabel(cronContainer, "Delete after run")).toBeNull();
+    expect(findToggleByLabel(cronContainer, "Delete after it runs")).toBeNull();
     selectSchedule(cronContainer, "every");
     expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
     const onExitFormChange = vi.fn();
@@ -128,7 +128,7 @@ describe("cron view editor", () => {
       { onFormChange: onExitFormChange },
     );
     expect(onExitContainer.querySelector(testId("cron-schedule-kind-on-exit"))).not.toBeNull();
-    expect(findToggleByLabel(onExitContainer, "Delete after run")).not.toBeNull();
+    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).not.toBeNull();
     expect(everyContainer.querySelector(testId("cron-schedule-kind-on-exit"))).toBeNull();
     selectSchedule(onExitContainer, "at");
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
@@ -183,8 +183,10 @@ describe("cron view editor", () => {
 
   it("waits for scheduler status before presenting trigger capability", async () => {
     const pending = await renderEditor({}, { status: null });
-    expect(findToggleByLabel(pending, "Condition trigger")).toBeNull();
-    expect(pending.textContent).not.toContain("disabled by cron.triggers.enabled");
+    expect(findToggleByLabel(pending, "Check a condition first")).toBeNull();
+    expect(pending.textContent).not.toContain(
+      "turned off for this Gateway (cron.triggers.enabled)",
+    );
   });
 
   it("keeps an existing trigger clearable when the operator disabled triggers", async () => {
@@ -194,7 +196,7 @@ describe("cron view editor", () => {
       { triggerEnabled: true, triggerScript: "json({ fire: true })" },
       { status, onFormChange },
     );
-    getButtonByText(configured, "Clear trigger").click();
+    getButtonByText(configured, "Clear check").click();
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 
@@ -221,7 +223,7 @@ describe("cron view editor", () => {
       fieldErrors: { triggerScript: "cron.errors.triggerScriptPayloadUnsupported" },
       canSubmit: false,
     });
-    expect(findToggleByLabel(container, "Condition trigger")).toBeNull();
+    expect(findToggleByLabel(container, "Check a condition first")).toBeNull();
     expect(container.querySelector("#cron-trigger-script")).toBeNull();
     expect(container.textContent).toContain("Script payloads cannot use condition triggers");
     const payload = getElement(container, "#cron-payload-text", HTMLPreElement);
@@ -229,7 +231,7 @@ describe("cron view editor", () => {
     await waitForSolid(() => expect(text(payload, ".hljs-keyword")).toBe("const"));
     expect(text(payload, ".hljs-string")).toBe("'check status'");
     expect(container.querySelector("textarea#cron-payload-text")).toBeNull();
-    getButtonByText(container, "Clear trigger").click();
+    getButtonByText(container, "Clear check").click();
     expect(onFormChange).toHaveBeenCalledWith({ triggerEnabled: false });
   });
 });
