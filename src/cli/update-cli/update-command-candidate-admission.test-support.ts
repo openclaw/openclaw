@@ -546,13 +546,21 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
     expect(listUpdateRuns({ limit: 1 })[0]?.reason).toBe("preflight-node-runtime-incompatible");
     const refusal = "Failing check node-runtime (node-runtime-preflight); key engines.node: ";
     expect(defaultRuntime.log).toHaveBeenCalledWith(
-      [
-        `${refusal}Required: openclaw@2026.3.23-2 Node >=22.19.0; detected: Node ${process.versions.node} at ${process.execPath}`,
-        `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
-        `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
-        `${refusal}Gateway install root: unresolved`,
-        `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
-      ].join("\n"),
+      expect.stringContaining(
+        [
+          `${refusal}Required: openclaw@2026.3.23-2 Node >=22.19.0; detected: Node ${process.versions.node} at ${process.execPath}`,
+          `${refusal}Update install root: ${fsSync.realpathSync(root)}`,
+          `${refusal}Update binary: ${path.join(root, "openclaw.mjs")}`,
+          `${refusal}Gateway install root: unresolved`,
+          `${refusal}${runtimeRecovery.expectedPlainRecovery("2026.3.23-2", "24.16.0", "absent", undefined, root)}`,
+        ].join("\n"),
+      ),
+    );
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      "Failing check node-runtime (node-runtime-preflight); key engines.node",
+    );
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      expect.stringContaining(`Updater Node ${process.versions.node} at ${process.execPath}.`),
     );
   });
 }

@@ -226,11 +226,8 @@ describe("update-cli", () => {
       });
       const oldPrefix = path.dirname(path.dirname(oldInstall.serviceNode));
       vi.mocked(update.runCommandWithTimeout).mockImplementation((argv, options) => {
-        const context =
-          typeof options === "object" && options !== null
-            ? [options.cwd ?? "", options.env?.PATH ?? ""]
-            : [];
-        const old = [...argv, ...context].some((value) => value.includes(oldPrefix));
+        // An absolute npm path owns the package operation even when PATH retains the service Node.
+        const old = argv[0]?.startsWith(oldPrefix + path.sep);
         return transports[old ? 0 : 1]!(argv, options);
       });
       await update.updateCommand({ yes: true }).catch((cause: unknown) => {
@@ -238,7 +235,7 @@ describe("update-cli", () => {
       });
       const target = launcherOverride ? oldInstall : shellInstall;
       const retained = launcherOverride ? shellInstall : oldInstall;
-      const node = launcherOverride ? oldInstall.serviceNode : process.execPath;
+      const node = oldInstall.serviceNode;
       expect(await installedVersion(target.root)).toBe("2026.5.20");
       expect(await installedVersion(retained.root)).toBe("2026.5.18");
       expect(await mocks.serviceReadCommand(process.env)).toEqual(
@@ -308,7 +305,16 @@ describe("update-cli", () => {
         reason: "preflight-node-runtime-incompatible",
       });
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-      expectNoSideEffects(recoverNode, mocks.serviceStop);
+      if (capability === "writable") {
+        expect(recoverNode).toHaveBeenCalledExactlyOnceWith({
+          engine: ">=26.12.1",
+          recovery: { env: {} },
+          timeoutMs: 1_800_000,
+        });
+      } else {
+        expect(recoverNode).not.toHaveBeenCalled();
+      }
+      expectNoSideEffects(mocks.serviceStop);
       expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
       expect(await installedVersion(fixture.root)).toBe("2026.5.18");
     },

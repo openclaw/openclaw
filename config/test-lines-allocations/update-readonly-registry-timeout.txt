@@ -1,0 +1,4 @@
+45
+# Exact net test LF growth for update runtime-contract fixture/assertion repairs
+# and deterministic registry-timeout read-only process and timeout-owner proof.
+# Reuses existing process cases; shared test-lines-baseline.txt stays unchanged.

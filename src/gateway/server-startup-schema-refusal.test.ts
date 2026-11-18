@@ -76,7 +76,8 @@ it.each([
       expect(refusal).toBeInstanceOf(Error);
       const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; It was written by OpenClaw 9999.1.1; it is newer than this Gateway (${VERSION}).`;
       await expect(handleGatewayStartupMaintenance(refusal)).rejects.toBe(exited);
-      const output = runtimeError.mock.calls.flat().join("\n");
+      // Refused profiles write directly to the pre-capture console, never the file sink.
+      const output = errorLog.mock.calls.flat().join("\n");
       expect(output).toContain(facts);
       expect(output).toContain("Refused by OpenClaw");
       expect(output).toContain("Use the newer install that supports these schemas");
@@ -99,21 +100,13 @@ it.each([
         "Doctor refused to continue",
         "Gateway refused startup",
       );
-      expect(runtimeError).toHaveBeenCalledExactlyOnceWith(`Gateway failed to start: ${message}`);
-      expect(runtimeError.mock.invocationCallOrder[0]).toBeLessThan(
-        exit.mock.invocationCallOrder[0]!,
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(errorLog).toHaveBeenCalledExactlyOnceWith(
+        expect.stringContaining(
+          JSON.stringify(`Gateway failed to start: ${message} Parked the managed LaunchAgent.`),
+        ),
       );
-      if (backendLogsOnly) {
-        expect(errorLog).not.toHaveBeenCalled();
-      } else {
-        expect(errorLog).toHaveBeenCalledOnce();
-        expect(errorLog.mock.calls.flat().join("\n")).toContain(
-          JSON.stringify(message).slice(1, -1),
-        );
-        expect(errorLog.mock.invocationCallOrder[0]).toBeLessThan(
-          exit.mock.invocationCallOrder[0]!,
-        );
-      }
+      expect(errorLog.mock.invocationCallOrder[0]).toBeLessThan(exit.mock.invocationCallOrder[0]!);
       expect(park).toHaveBeenCalledOnce();
       expect(exit).toHaveBeenCalledWith(78);
     }),

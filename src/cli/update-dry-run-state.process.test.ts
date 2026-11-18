@@ -123,13 +123,25 @@ function runUpdateProcess(
   });
 }
 
-async function expectUnrecordedPreview(root: string, before: string[]): Promise<void> {
+async function expectUnrecordedPreview(
+  root: string,
+  before: string[],
+  statusPreload?: string,
+): Promise<void> {
   expect(await snapshotTree(root)).toEqual(before);
 
-  const status = await runUpdateProcess(root, ["update", "status", "--timeout", "1", "--json"]);
+  const status = await runUpdateProcess(
+    root,
+    ["update", "status", "--timeout", "1", "--json"],
+    {},
+    statusPreload,
+  );
   expect(status.code, status.stderr).toBe(0);
-  const { activeRun, lastRun } = JSON.parse(status.stdout);
+  const { activeRun, lastRun, update } = JSON.parse(status.stdout);
   expect([activeRun, lastRun]).toEqual([undefined, undefined]);
+  if (statusPreload) {
+    expect(update.registry.error).toContain("TimeoutError: request timed out");
+  }
   expect(await snapshotTree(root)).toEqual(before);
 }
 
@@ -256,6 +268,11 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
       await fs.writeFile(
         preload,
         `import { channel } from "node:diagnostics_channel";
+// Exercise the status deadline without relying on the public registry or network timing.
+globalThis.fetch = async (_input, { signal }) => new Promise((_resolve, reject) => {
+  signal.throwIfAborted();
+  signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+});
 channel("openclaw.database.statement").subscribe(() => process.stderr.write("DATABASE_INSPECTION\\n"));
 // The launcher probes SQLite capabilities in memory before loading configuration.
 channel("sqlite.db.query").subscribe(({ database }) => {
@@ -298,7 +315,7 @@ channel("sqlite.db.query").subscribe(({ database }) => {
         expect(await fs.stat(path.join(stateDir, artifact)).catch(() => undefined)).toBeUndefined();
       }
       if (initialized) {
-        await expectUnrecordedPreview(root, before);
+        await expectUnrecordedPreview(root, before, preload);
       } else {
         expect(await snapshotTree(root)).toEqual(before);
       }

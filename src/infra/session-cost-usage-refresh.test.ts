@@ -8,6 +8,11 @@ import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "./agent-run-registry.js";
 import { refreshCostUsageCacheForAgent as refreshAgent } from "./session-cost-usage-aggregation.js";
@@ -196,19 +201,26 @@ async function withRefreshFixture(
       .map((file, index) => fs.writeFile(file, index === 0 ? firstRecord : userLine)),
   );
   await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
-    if (fakeTimers) {
-      vi.useFakeTimers();
-    }
-    const fixture = makeRefreshFixture(agentId, sessionFiles);
+    // Retain a real journal fact before virtual time drives refreshes; missing files cannot cache it.
+    const state = openOpenClawStateDatabase();
     try {
-      await run(fixture);
-    } finally {
-      try {
-        await fixture.close();
-      } finally {
-        fixture.refresh.mockReset();
-        vi.useRealTimers();
+      await expect(readAgentDeletionJournalStatusInWorker(agentId)).resolves.toBe("absent");
+      if (fakeTimers) {
+        vi.useFakeTimers();
       }
+      const fixture = makeRefreshFixture(agentId, sessionFiles);
+      try {
+        await run(fixture);
+      } finally {
+        try {
+          await fixture.close();
+        } finally {
+          fixture.refresh.mockReset();
+          vi.useRealTimers();
+        }
+      }
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(state.path);
     }
   });
 }

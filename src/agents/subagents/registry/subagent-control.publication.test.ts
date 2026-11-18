@@ -102,13 +102,21 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
     const announcementEntered = createDeferred();
     const continueAnnouncement = createDeferred();
     fixture.announce.mockImplementation(async (params) => {
-      const retained =
-        getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
-      expect(retained).toMatchObject({
-        source: source.authority.source,
-        scopes: ["operator.write"],
-      });
-      retained?.assertCurrent();
+      const caller = getPluginRuntimeGatewayRequestScope()?.client;
+      const retained = caller?.internal?.operatorRunAuthority;
+      expect(caller?.connect.scopes).toEqual(["operator.write"]);
+      if (ownerState === "revoked") {
+        expect(retained).toBeUndefined();
+        expect(caller?.authenticatedUserProfile).toBeUndefined();
+        expect(caller?.internal?.agentRuntimeIdentity).toBeUndefined();
+        expect(caller?.internal?.operatorRoleActor).toEqual({ kind: "system" });
+      } else {
+        expect(retained).toMatchObject({
+          source: source.authority.source,
+          scopes: ["operator.write"],
+        });
+        retained?.assertCurrent();
+      }
       if (ownerState === "replaced Gateway") {
         announcementEntered.resolve();
         await continueAnnouncement.promise;
@@ -178,13 +186,12 @@ it.each(["live", "revoked", "replaced child", "replaced Gateway"] as const)(
         ...rejectedRun,
         requesterSessionKey: "agent:main:main",
       });
-      if (ownerState !== "revoked") {
-        expect(fixture.announce).toHaveBeenCalledOnce();
-        if (ownerState !== "replaced Gateway") {
-          expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
-        }
-      } else {
-        expect(fixture.announce).not.toHaveBeenCalled();
+      expect(fixture.announce).toHaveBeenCalledOnce();
+      if (ownerState !== "replaced Gateway") {
+        expect(loadSubagentRegistryFromSqlite().get(runId)?.delivery?.status).toBe("delivered");
+      }
+      if (ownerState === "revoked") {
+        expect(source.authority.assertCurrent).toThrow();
         const entry = expectDefined(subagentRuns.get(runId), "failed registration");
         expect(() => subagentRuns.runWithCompletionAuthority(entry, () => "stale")).toThrow(
           /authority/,

@@ -126,7 +126,10 @@ describe("update-cli", () => {
     const serviceInstall = proof
       .commandCalls()
       .find(([argv]) => argv[2] === "gateway" && argv[3] === "install");
-    expect(serviceInstall?.[0].slice(0, 2)).toEqual([process.execPath, newInstall.entrypoint]);
+    expect(serviceInstall?.[0].slice(0, 2)).toEqual([
+      oldInstall.serviceNode,
+      newInstall.entrypoint,
+    ]);
     expect(mocks.serviceStop).toHaveBeenCalledOnce();
     expect(proof.getLogOutput()).toContain("Gateway: restarted and verified");
   });
@@ -316,7 +319,7 @@ describe("update-cli", () => {
     },
   );
 
-  it("refuses an incompatible service Node before using a compatible shell Node", async () => {
+  it("refuses an incompatible protected service Node despite a compatible shell Node", async () => {
     const servicePrefix = setup.tempDirs.make("openclaw-service-prefix-");
     const { nodeModules, root, serviceNode, serviceNpm, serviceNpmReal, entrypoint } =
       await setup.setupServicePackageAtPrefix({ prefix: servicePrefix });
@@ -325,6 +328,10 @@ describe("update-cli", () => {
     const serviceCommand = [serviceNode, entrypoint, "gateway"];
     setup.primeServiceCommand(serviceCommand);
     mocks.serviceLoaded.mockResolvedValue(true);
+    mocks.serviceDefinitionMutationCapability.mockResolvedValue({
+      kind: "sealed",
+      reason: "operator-managed launcher",
+    });
     setup.primeNpmChannelTag("latest", "2026.7.1");
     vi.mocked(modules.fetchNpmPackageTargetStatus).mockResolvedValue(
       packageTargetStatus({

@@ -93,6 +93,13 @@ describe("fetch timeouts", () => {
     expect(JSON.stringify(record)).not.toMatch(/user:pass|api-key=secret|#fragment/);
   });
 
+  it("returns the same timeout without logging for read-only callers", async () => {
+    const { signal } = timeout({ logTimeout: false });
+    await vi.advanceTimersByTimeAsync(25);
+    expect(signal).toMatchObject({ aborted: true, reason: timeoutError });
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("keeps timeout aborts visible to OpenAI SSE streams instead of cleanly ending", async ({
     signal,
   }) => {

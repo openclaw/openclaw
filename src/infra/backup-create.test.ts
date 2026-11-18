@@ -5,6 +5,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as backupResourceInventory from "../commands/backup-resource-inventory.js";
 import { backupRestoreCommand } from "../commands/backup-restore.js";
 import { backupVerifyCommand, verifyBackupArchive } from "../commands/backup-verify.js";
 import { backupCreateCommand } from "../commands/backup.js";
@@ -1000,17 +1001,25 @@ describe("createBackupArchive", () => {
       });
       await fs.symlink(firstDbPath, canonicalDbPath);
 
-      const originalRealpath = fs.realpath.bind(fs);
+      const sealInventory = backupResourceInventory.sealBackupResourceInventory;
       let retargeted = false;
-      const realpathSpy = vi.spyOn(fs, "realpath").mockImplementation(async (target) => {
-        const resolved = await originalRealpath(target);
-        if (!retargeted && path.resolve(String(target)) === path.resolve(canonicalDbPath)) {
-          retargeted = true;
-          await fs.unlink(canonicalDbPath);
-          await fs.symlink(secondDbPath, canonicalDbPath);
-        }
-        return resolved;
-      });
+      const inventorySpy = vi
+        .spyOn(backupResourceInventory, "sealBackupResourceInventory")
+        .mockImplementation((...args) => {
+          const inventory = sealInventory(...args);
+          // Earlier state reads also resolve this link; mutate only after backup owns its identity.
+          if (
+            !retargeted &&
+            inventory.coreDatabases.some(
+              (source) => source.sourcePath === canonicalDbPath && source.identity,
+            )
+          ) {
+            retargeted = true;
+            fsSync.unlinkSync(canonicalDbPath);
+            fsSync.symlinkSync(secondDbPath, canonicalDbPath);
+          }
+          return inventory;
+        });
 
       try {
         await expect(createStateArchive(outputDir)).rejects.toThrow(
@@ -1019,7 +1028,7 @@ describe("createBackupArchive", () => {
         expect(retargeted).toBe(true);
         expect(await fs.readdir(outputDir)).toEqual([]);
       } finally {
-        realpathSpy.mockRestore();
+        inventorySpy.mockRestore();
       }
     }),
   );

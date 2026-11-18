@@ -91,6 +91,8 @@ export async function fetchRegistryPackageDocument<T = unknown>(params: {
     signal: params.signal,
     operation: params.operation ?? "npm-registry-update-check",
     url,
+    // Status and preview reads surface this failure in their result, without writing state.
+    logTimeout: false,
   });
   let res: Response | undefined;
   try {

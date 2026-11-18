@@ -601,6 +601,8 @@ it.each(captures)(
     const baseline = baselineTransport
       ? baselineTransport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, { type: "backup.runs" });
+    // The mock assigns tasks at submission; asynchronous source preparation may finish out of order.
+    await baselineTask.submitted;
     const result = transport
       ? transport.startRead(location, authority)
       : executeExistingOpenClawStateRead(options, fixture.command);
