@@ -1,6 +1,6 @@
 # Solid 2 idioms
 
-Use this when writing or auditing rendering consumers. The installed rc.18
+Use this when writing or auditing rendering consumers. The installed
 `solid-js/CHEATSHEET.md`, `solid-js/types/client/flow.d.ts`, and
 `@solidjs/signals/dist/types/` own the API contract; Solid 1 examples are not a
 substitute. Examples below abbreviate code from the named OpenClaw modules.
@@ -249,7 +249,7 @@ identities. Never serialize a store proxy as the authoritative data model;
 
 ## Key lists by the lifetime you intend
 
-rc.18 callback arguments depend on `For`'s keying mode:
+`For` callback arguments depend on its keying mode:
 
 | Mode                        | Item          | Index    | Lifetime               |
 | --------------------------- | ------------- | -------- | ---------------------- |
@@ -291,7 +291,7 @@ control flow, not just the resulting markup.
 
 ## Async values and mutations
 
-rc.18 has **no `createAsync` export**. Pure async reads are computations returning
+Solid 2 has **no `createAsync` export**. Pure async reads are computations returning
 a Promise or AsyncIterable. Read all reactive dependencies before the first
 `await`; later reads are untracked.
 
@@ -381,7 +381,7 @@ captures the node and writes to it.
 
 ## Dev diagnostics are bug reports
 
-Treat these rc.18 dev warnings as real defects, not noise:
+Treat these Solid 2 dev warnings as real defects, not noise:
 
 - **Top-level reactive read in a component body.** The body runs once. Read in
   JSX, a memo, or an accessor.

@@ -7,8 +7,8 @@ it("distinguishes live Solid owners, disposed owners, and detached native DOM no
   const strings = [
     "Object",
     "_parent",
-    "De",
-    "He",
+    "pe",
+    "ke",
     "R",
     "smi number",
     "value",

@@ -103,7 +103,7 @@ bytes overlap other totals and exclude referenced values; they are not retained
 heap size. V8 compilation can grow heap even while DOM and live owners plateau.
 Before each GC the mock's request log is cleared and its count recorded; it must
 not masquerade as product retention. Heap measurements still include other
-mock/probe state. Owner counts use the installed rc.18 production object shape;
+mock/probe state. Owner counts use the installed Solid 2.0.0 production object shape;
 unknown flags are reported, never silently counted as live. These metrics are
 report-only until repeated evidence supports a stable budget.
 
