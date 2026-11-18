@@ -548,6 +548,33 @@ describe("renderUsage", () => {
     expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
+  it("shows the selected day's recorded-turn rate on the throughput tile, not the idle span", () => {
+    // One recorded one-minute turn on the selected day; the session itself
+    // spans 48 idle hours, which must not dilute the tile's rate.
+    const latency = { count: 1, avgMs: 60_000, p95Ms: 60_000, minMs: 60_000, maxMs: 60_000 };
+    const container = mountFixture(
+      {
+        totals: usageTotals(60_000, 30),
+        overview: createUsageOverview({ durationMs: 48 * 60 * 60 * 1000, durationCount: 1 }),
+        aggregates: {
+          ...buildAggregatesFromSessions([]),
+          latency,
+          dailyLatency: [{ date: "2026-05-14", ...latency }],
+        },
+      },
+      { startDate: "2026-05-01", endDate: "2026-05-14", selectedDays: ["2026-05-14"] },
+    );
+
+    const throughputValue = [
+      ...container.querySelectorAll(".usage-overview-card .usage-summary-card"),
+    ]
+      .find((card) =>
+        card.querySelector(".usage-summary-title")?.textContent?.startsWith("Throughput"),
+      )
+      ?.querySelector(".usage-summary-value");
+    expect(throughputValue?.textContent?.trim()).toBe("60.0K tok/min");
+  });
+
   it("retains an accepted zero overview and guards refresh until settlement, but not an error or retired result", async () => {
     const props = usageFixture({ totals: createEmptyCostUsageTotals() });
     const refresh = vi.fn();

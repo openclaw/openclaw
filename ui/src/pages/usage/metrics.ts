@@ -159,7 +159,9 @@ type UsageInsightStats = {
 /**
  * Active time for the current scope. Day selections narrow totals to those
  * days, so the denominator must come from the matching dailyLatency buckets;
- * without a day selection the full-range aggregate is already scoped right.
+ * when those buckets are unavailable the tiles keep their empty value instead
+ * of mixing unselected days' activity into the rate. Without a day selection
+ * the full-range aggregate is already scoped right.
  */
 export function usageActiveMs(
   input: {
@@ -168,10 +170,10 @@ export function usageActiveMs(
   },
   selectedDays: readonly string[],
 ): number {
-  if (selectedDays.length > 0 && input.dailyLatency?.length) {
+  if (selectedDays.length > 0) {
     const days = new Set(selectedDays);
     let activeMs = 0;
-    for (const day of input.dailyLatency) {
+    for (const day of input.dailyLatency ?? []) {
       if (days.has(day.date) && day.count > 0) {
         activeMs += day.avgMs * day.count;
       }
@@ -183,20 +185,22 @@ export function usageActiveMs(
 }
 
 /**
- * Throughput divides by active time — the assistant-turn durations already
- * shipped in aggregates.latency — not the wall-clock session span, which also
- * counts every idle gap between turns.
+ * Throughput divides by recorded turn time — the assistant-turn durations
+ * already shipped in aggregates.latency — not the wall-clock session span,
+ * which also counts every idle gap between turns.
  */
 export function usageThroughputStats(input: {
   totals: { totalTokens: number; totalCost: number } | null;
   activeMs: number;
 }): { throughputTokensPerMin?: number; throughputCostPerMin?: number } {
   const { totals, activeMs } = input;
+  if (!totals || activeMs <= 0) {
+    return { throughputTokensPerMin: undefined, throughputCostPerMin: undefined };
+  }
+  const perMinute = activeMs / 60000;
   return {
-    throughputTokensPerMin:
-      totals && activeMs > 0 ? totals.totalTokens / (activeMs / 60000) : undefined,
-    throughputCostPerMin:
-      totals && activeMs > 0 ? totals.totalCost / (activeMs / 60000) : undefined,
+    throughputTokensPerMin: totals.totalTokens / perMinute,
+    throughputCostPerMin: totals.totalCost / perMinute,
   };
 }
 

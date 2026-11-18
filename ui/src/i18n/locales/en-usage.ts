@@ -156,7 +156,7 @@ const enUsage = {
       sessions: "Sessions",
       sessionsInRange: "of {count} in range",
       throughput: "Throughput",
-      throughputHint: "Tokens per minute of active time.",
+      throughputHint: "Tokens per minute of recorded turn time.",
       tokensPerMinute: "tok/min",
       perMinute: "/ min",
       errorRate: "Error rate",
