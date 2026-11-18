@@ -74,13 +74,13 @@ it.each([
         refusal = error;
       }
       expect(refusal).toBeInstanceOf(Error);
-      const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; It was written by OpenClaw 9999.1.1; it is newer than this Gateway (${VERSION}).`;
+      const facts = `uses schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}; It was written by OpenClaw 9999.1.1; its version label is newer than this build's (${VERSION}).`;
       await expect(handleGatewayStartupMaintenance(refusal)).rejects.toBe(exited);
       const output = runtimeError.mock.calls.flat().join("\n");
       expect(output).toContain(facts);
       expect(output).toContain("Refused by OpenClaw");
-      expect(output).toContain("Use the newer install that supports these schemas");
-      expect(output).toContain("restore your pre-upgrade backup");
+      expect(output).toContain("Use a build that supports all schema versions listed above");
+      expect(output).toContain("restore a verified pre-upgrade backup");
       const doctor = new OpenClawDatabaseSchemaPreflightError(
         [
           {

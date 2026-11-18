@@ -79,12 +79,9 @@ export function createNewerSqliteSchemaVersionError(
   writerAppVersion?: string,
   context: SqliteSchemaErrorContext = "runtime",
 ): Error {
-  const newerWriter = isNewerSqliteWriterVersion(writerAppVersion);
-  const writerDetail = newerWriter
-    ? `; it is newer than this Gateway (${VERSION}).`
-    : context === "runtime"
-      ? "; run openclaw doctor --fix to inspect this database."
-      : ".";
+  const writerDetail = isNewerSqliteWriterVersion(writerAppVersion)
+    ? `; its version label is newer than this build's (${VERSION}).`
+    : ".";
   return new SqliteSchemaVersionError(
     "This OpenClaw build cannot open your existing data.\n" +
       `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
@@ -92,9 +89,7 @@ export function createNewerSqliteSchemaVersionError(
         ? `It was written by OpenClaw ${writerAppVersion}${writerDetail}\n`
         : "") +
       `Refused by ${describeRunningOpenClawBuild()}.\n` +
-      (newerWriter
-        ? `Use the newer install that supports schema ${schemaVersion} or newer, or run openclaw update to update this Gateway service before restarting. To use an older build, restore your pre-update backup created with openclaw backup create.\n`
-        : `Use a build that supports schema ${schemaVersion} or newer with this state directory. To use an older build, restore your pre-update backup created with openclaw backup create.\n`) +
+      `Use a build that supports schema ${schemaVersion} or newer with this state directory. Release labels alone do not determine schema support. To use an older build, restore a verified pre-update backup created with openclaw backup create and use its matching build.\n` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
 }

@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { expect, it } from "vitest";
+import { expectFamilyEqual } from "../../test/helpers/file-snapshots.js";
+import { formatCliFailureLines } from "../cli/failure-output.js";
 import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
+import { preflightOpenClawStateDatabasePath } from "../state/openclaw-database-preflight-state-path.js";
+import { snapshotSourceFamily } from "../state/openclaw-database-preflight.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -17,6 +23,85 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareDoctorDatabasePreflight } from "./doctor-database-preflight.js";
 
 const oldVersion = OPENCLAW_AGENT_SCHEMA_VERSION - 1;
+
+it.each(["state", "agent"] as const)(
+  "reports schema-based recovery for a lower-label %s writer without changing the database",
+  async (kind) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = { agents: { entries: { main: {} } }, plugins: { enabled: false } };
+      await state.writeConfig(cfg);
+      const pathname =
+        kind === "state"
+          ? openOpenClawStateDatabase({ env: state.env }).path
+          : openOpenClawAgentDatabase({ agentId: "main", env: state.env }).path;
+      await closeOpenClawAgentDatabasesAsync();
+      await closeStateDatabaseForTest();
+      const supported =
+        kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
+      // A different physical file models data written by another build, without cached admission.
+      const replacement = state.path("newer.sqlite");
+      fs.copyFileSync(pathname, replacement);
+      {
+        using writer = new DatabaseSync(replacement);
+        writer.exec(`PRAGMA journal_mode=DELETE; PRAGMA user_version=${supported + 1}`);
+        writer
+          .prepare("UPDATE schema_meta SET app_version = ? WHERE meta_key = 'primary'")
+          .run("2026.11.4");
+      }
+      fs.renameSync(replacement, pathname);
+      // The replaced file has no clean-close receipt from its writer.
+      fs.rmSync(`${pathname}.seal`, { force: true });
+      const before = snapshotSourceFamily(pathname);
+      const mode = fs.statSync(pathname).mode;
+      const open = () =>
+        kind === "state"
+          ? openOpenClawStateDatabase({ env: state.env })
+          : openOpenClawAgentDatabaseReadOnly({ agentId: "main", env: state.env });
+      let runtimeFailure: unknown;
+      try {
+        open();
+      } catch (error) {
+        runtimeFailure = error;
+      }
+      expect(runtimeFailure).toMatchObject({ name: "SqliteSchemaVersionError" });
+      const runtimeOutput = formatCliFailureLines({
+        title: "The CLI command failed.",
+        error: runtimeFailure,
+        argv: ["node", "openclaw", "status"],
+        env: {},
+      }).join("\n");
+      const doctorFailure = await prepareDoctorDatabasePreflight({
+        cfg,
+        preserveSourceArtifacts: true,
+      }).catch((error: unknown) => error);
+      expect(doctorFailure).toMatchObject({ name: "OpenClawDatabaseSchemaPreflightError" });
+      const messages = [runtimeOutput, String(doctorFailure)];
+      if (kind === "state") {
+        const preflight = await preflightOpenClawStateDatabasePath(pathname);
+        expect(preflight).toMatchObject({
+          status: "incompatible",
+          foundVersion: supported + 1,
+          targetVersion: supported,
+          requiresWrite: false,
+        });
+        messages.push(preflight.reason ?? "");
+      }
+      expectFamilyEqual(snapshotSourceFamily(pathname), before);
+      expect(fs.statSync(pathname).mode).toBe(mode);
+      for (const message of messages) {
+        expect(message).toContain(pathname);
+        expect(message).toContain(`this build supports ${supported}`);
+        expect(message).toContain("2026.11.4");
+        expect(message).toContain("Refused by OpenClaw");
+        expect(message).toContain("Use a build that supports");
+        expect(message).toMatch(/restore a verified pre-(?:update|upgrade) backup/);
+        expect(message).toContain("use its matching build");
+        expect(message).not.toMatch(/doctor --fix|at least as new as the writer|openclaw update/);
+      }
+    });
+  },
+);
+
 it.each([false, true])(
   "keeps an idle WAL agent store's update generation when preserving sources: %s",
   async (preserveSourceArtifacts) => {

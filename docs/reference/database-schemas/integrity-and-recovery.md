@@ -1511,17 +1511,18 @@ replace a complete backup. See [Downgrade](/install/updating#downgrade).
 
 ### The Gateway refuses to start with a newer schema version error
 
-A newer OpenClaw build wrote your databases, and the running build is older. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found.
+Your databases use a schema beyond the running build's support. The error names the refusing install — release version, commit, and install root — plus the schema it supports and the schema it found. The recorded writer's release label is supplementary: a source or development build can support a newer schema while carrying an equal, lower, or unrecognized label.
 
 Act on the install root, not the version. One release version string spans many `main` commits, schema levels, and same-version schema shapes, so two installs can both call themselves `2026.7.2` and still disagree about a database. A prerelease version may not exist on the `latest` npm tag at all: check `npm view openclaw dist-tags` before reinstalling, because the tag carrying the schema you need may be `beta`, and reinstalling from `latest` can move you further away.
 
 When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
-Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+Open the database with a build that supports its schema, or point the refusing build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
 
 Doctor, Gateway startup, update status, and offline `database preflight` prioritize
-this version refusal even when the older build cannot read the newer catalog.
-Install a compatible newer build, or restore the backup matching the older build;
+this schema refusal even when the running build cannot read the catalog.
+Use a build that supports every reported schema, or restore a verified pre-update
+backup with its matching build;
 `doctor --fix` cannot repair a newer schema. These refusals leave the database and
 its SQLite sidecars unchanged, including during `update status --json`.
 

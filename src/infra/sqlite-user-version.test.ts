@@ -56,7 +56,14 @@ it.each([false, true])(
 );
 
 it.each(["runtime", "doctor-maintenance"] as const)("handles %s writers", (kind) => {
-  for (const writer of ["9999.1.1", VERSION, undefined]) {
+  for (const writer of [
+    "2026.11.4",
+    VERSION,
+    "9999.1.1",
+    undefined,
+    "2026.11.6-dev.1",
+    "not-a-release",
+  ]) {
     const newer = writer === "9999.1.1";
     const error = createNewerSqliteSchemaVersionError("db", "/tmp/db", 12, 11, writer, kind);
 
@@ -65,13 +72,14 @@ it.each(["runtime", "doctor-maintenance"] as const)("handles %s writers", (kind)
     expect(error.message).toMatch(/uses newer schema version 12; this build supports 11/);
     expect(error.message).toContain(`OpenClaw ${VERSION} (aaaaaaa) installed at `);
     expect(error.message).toContain("supports schema 12 or newer");
-    expect(error.message).toMatch(/restore your pre-update backup.*openclaw backup create/);
+    expect(error.message).toMatch(/restore a verified pre-update backup.*openclaw backup create/);
+    expect(error.message).toContain("use its matching build");
     // Two builds sharing one release version can support different schemas (#115008).
     expect(error.message).not.toMatch(/Do not downgrade|Upgrade OpenClaw/);
-    expect(error.message.includes("newer than this Gateway")).toBe(newer);
-    expect(error.message.includes("doctor --fix")).toBe(kind === "runtime" && writer === VERSION);
+    expect(error.message.includes("version label is newer")).toBe(newer);
+    expect(error.message).not.toMatch(/doctor --fix|openclaw update|at least as new as the writer/);
     expect(error.message.includes("It was written")).toBe(
-      kind === "runtime" ? Boolean(writer) : newer,
+      Boolean(writer) && (kind === "runtime" || writer !== VERSION),
     );
     if (kind === "runtime") {
       const preflight = new OpenClawDatabaseSchemaPreflightError([
@@ -83,8 +91,13 @@ it.each(["runtime", "doctor-maintenance"] as const)("handles %s writers", (kind)
           writerAppVersion: writer,
         },
       ]);
-      expect(preflight.message.includes("newer than this Gateway")).toBe(newer);
-      expect(preflight.message.includes("Use the newer install")).toBe(newer);
+      expect(preflight.message.includes("version label is newer")).toBe(newer);
+      expect(preflight.message).toContain("uses schema 12; this build supports 11");
+      expect(preflight.message).toContain("supports all schema versions listed above");
+      expect(preflight.message).toMatch(/verified pre-upgrade backup.*use its matching build/);
+      expect(preflight.message).not.toMatch(
+        /doctor --fix|openclaw update|at least as new as the writer/,
+      );
     }
   }
 });

@@ -14,7 +14,7 @@ import type {
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "./openclaw-state-db-contract.js";
 import type { StateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
 
-/** Fatal refusal when persisted schemas were written by a newer build. */
+/** Fatal refusal when persisted schema versions exceed the supported versions. */
 export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
   constructor(
     readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
@@ -29,7 +29,7 @@ export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionErr
 function formatIncompatibleDatabase(database: IncompatibleOpenClawDatabase): string {
   const agent = database.agentId ? ` for agent ${database.agentId}` : "";
   const writer = isNewerSqliteWriterVersion(database.writerAppVersion)
-    ? `It was written by OpenClaw ${database.writerAppVersion}; it is newer than this Gateway (${VERSION}).`
+    ? `It was written by OpenClaw ${database.writerAppVersion}; its version label is newer than this build's (${VERSION}).`
     : `writer build ${database.writerAppVersion ?? "unknown"}.`;
   return `${database.kind} database${agent} ${database.path} uses schema ${database.foundVersion}; this build supports ${database.supportedVersion}; ${writer}`;
 }
@@ -48,9 +48,7 @@ function formatIncompatibleDatabaseSchemas(
     `${prefix} because ${incompatibleDatabases.length} OpenClaw database schema(s) are newer than this build. ` +
     `${incompatibleDatabases.map(formatIncompatibleDatabase).join(" ")} ` +
     `Refused by ${describeRunningOpenClawBuild()}. ` +
-    (incompatibleDatabases.some((database) => isNewerSqliteWriterVersion(database.writerAppVersion))
-      ? "Use the newer install that supports these schemas, or run openclaw update to update this Gateway service before restarting. To use an older build, stop the service and restore your pre-upgrade backup created with openclaw backup create. "
-      : "Run a build at least as new as the writer that supports these schemas, or stop the service and restore your pre-upgrade backup created with openclaw backup create. ") +
+    "Use a build that supports all schema versions listed above with this state directory. Release labels alone do not determine schema support. To use an older build, stop the service and restore a verified pre-upgrade backup created with openclaw backup create and use its matching build. " +
     `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`
   );
 }
