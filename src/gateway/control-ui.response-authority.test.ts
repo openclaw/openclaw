@@ -797,7 +797,7 @@ describe("saved message attachment response authority", () => {
       }
       try {
         if (kind === "stopped") {
-          receipt!.finish("cancelled");
+          receipt!.finish("cancelled", "failed");
           await receipt!.settled?.();
         }
         const query: Record<string, string> = receipt
@@ -833,7 +833,7 @@ describe("saved message attachment response authority", () => {
           : await request(ticketed, { ticketOnly: true });
         expect(followup.status).toBe(404);
       } finally {
-        receipt?.finish("cancelled");
+        receipt?.finish("cancelled", "failed");
         await receipt?.settled?.();
         if (!receipt) {
           await seed();

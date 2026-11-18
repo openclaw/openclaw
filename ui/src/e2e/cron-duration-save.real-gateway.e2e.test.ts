@@ -18,7 +18,11 @@ import {
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
-import { openPicker, pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import {
+  openChatModelPicker,
+  pickerValue,
+  selectPickerValue,
+} from "../test-helpers/select-picker-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -277,14 +281,17 @@ catalogSuite.define(() => {
         await page.locator('[data-test-id="cron-new-task"]').click();
         await page.locator("#cron-name").fill("Retain this draft");
         await page.locator("#cron-payload-text").fill("Do not submit this draft");
-        const picker = page.locator("openclaw-select-picker:has(#cron-payload-model-picker)");
+        const scope = page.locator(".cron-prompt__run-controls");
+        const menu = scope.locator(".chat-controls__model-menu");
         const modelOption = (id: string) =>
-          picker.locator(`[role="option"][data-value="fixture/${id}"]`);
+          menu.locator(`[data-chat-model-option="fixture/${id}"]`);
         const waitForModel = async (id: string) => {
           try {
             await expect
               .poll(async () => {
-                await openPicker(picker);
+                if (!(await menu.isVisible())) {
+                  await openChatModelPicker(scope);
+                }
                 return modelOption(id).count();
               })
               .toBe(1);
@@ -300,17 +307,15 @@ catalogSuite.define(() => {
             await withTimeout(
               page.evaluate(() => {
                 const pickerElement = document.querySelector(
-                  "openclaw-select-picker:has(#cron-payload-model-picker)",
+                  '.cron-prompt__run-controls [data-chat-model-select="true"]',
                 );
                 const values = Array.from(
-                  pickerElement?.querySelectorAll('[role="option"]') ?? [],
-                ).map((option) => option.getAttribute("data-value"));
+                  document.querySelectorAll(".cron-prompt__run-controls [data-chat-model-option]"),
+                  (option) => option.getAttribute("data-chat-model-option"),
+                );
                 return {
                   catalogPickerPresent: Boolean(pickerElement),
-                  catalogPickerExpanded:
-                    pickerElement
-                      ?.querySelector(".picker-select__trigger")
-                      ?.getAttribute("aria-expanded") ?? null,
+                  catalogPickerExpanded: pickerElement?.getAttribute("aria-expanded") ?? null,
                   catalogOptionCount: values.length,
                   catalogFixtureOptions: [
                     "anchor",
@@ -733,7 +738,7 @@ suite.define(() => {
           after: "",
           cooldown: "1.001",
           mode: "",
-          modeLabel: "Inherit global setting",
+          modeLabel: "Default",
         };
         expect({ loaded, savedFields, clonedFields }).toEqual({
           loaded: expectedFields,
@@ -770,14 +775,14 @@ suite.define(() => {
         await deliveryMode.locator(".picker-select__trigger").click();
         const inheritOption = deliveryMode.locator('[role="option"][data-value=""]');
         await inheritOption.waitFor({ state: "visible" });
-        expect(await inheritOption.textContent()).toContain("Inherit global setting");
+        expect(await inheritOption.textContent()).toContain("Default");
         await inheritOption.click();
         await expect.poll(() => pickerValue(deliveryMode)).toBe("");
         await expect
           .poll(() =>
             deliveryMode.locator(".picker-select__trigger .picker-select__label").textContent(),
           )
-          .toBe("Inherit global setting");
+          .toBe("Default");
         const cleared = await submitCronForm(evidence, "cron.update");
         expect(cleared.request.params).toMatchObject({
           patch: { failureAlert: { after: null, cooldownMs: null, mode: null } },

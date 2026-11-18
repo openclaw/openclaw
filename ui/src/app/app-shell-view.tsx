@@ -136,7 +136,9 @@ export function ApplicationShell(props: {
   );
   const shellConnectionStatus = createMemo(() => view().shellConnectionStatus);
   const footerStatus = createMemo(() =>
-    shellConnectionStatus() || view().connectionRecovery ? view().gatewayStatus : null,
+    view().chromeGatewayStatus.kind && (shellConnectionStatus() || view().connectionRecovery)
+      ? view().chromeGatewayStatus
+      : null,
   );
   function NavigationFallback() {
     return (
@@ -153,6 +155,9 @@ export function ApplicationShell(props: {
     );
   }
   const connectionAnnouncement = createMemo(() => {
+    if (view().floatingUpdateCard.refreshRequired) {
+      return "";
+    }
     const kind = shellConnectionStatus();
     return kind
       ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
@@ -446,6 +451,7 @@ export function ApplicationShell(props: {
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
+              "content--refresh-notice": view().floatingUpdateCard.refreshRequired,
             },
           ]}
           ref={(element) => {

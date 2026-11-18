@@ -1,13 +1,14 @@
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { createMemo, For } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
+import type { AgentSelectOption } from "../../components/agent-select-types.ts";
+import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
-import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
-import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
-import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { t } from "../../lib/reactive/i18n.ts";
+import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
+import { EnabledSwitch } from "./view-controls.tsx";
 import { Advanced } from "./view-delivery.tsx";
 import {
   collectBlockingFields,
@@ -15,19 +16,17 @@ import {
   errorIdForField,
   inputIdForField,
   CronSelect,
-  CronInput,
-  TrayInput,
+  FieldRow,
 } from "./view-fields.tsx";
+import { CronModelControls } from "./view-model-controls.tsx";
 import {
   ScheduleControls,
   ScheduleDetails,
-  ScheduleSummary,
+  ScheduleNote,
   TRAY_SCHEDULE_FIELDS,
   TrayErrors,
 } from "./view-schedule.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
-
-registerEnglishCatalog(registerPreferencesEnglish);
 
 type EditorProps = CronProps & {
   mode: CronPanelMode;
@@ -83,17 +82,6 @@ export function EditorActions(props: EditorProps & { onCancel: () => void }) {
       </button>
       {props.canManage ? (
         <>
-          {props.mode === "create" && props.form.scheduleKind !== "event" ? (
-            <button
-              type="button"
-              class="btn"
-              data-test-id="cron-submit-run"
-              disabled={props.busy || !props.canSubmit}
-              onClick={() => props.onSubmitRunNow()}
-            >
-              {t("cron.form.createAndRun")}
-            </button>
-          ) : undefined}
           <button
             type="button"
             class="btn primary"
@@ -113,74 +101,89 @@ export function EditorActions(props: EditorProps & { onCancel: () => void }) {
   );
 }
 
-export function Editor(props: EditorProps) {
+export function Editor(props: EditorProps & { phoneLayout: boolean }) {
   const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
     payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
   const sessionTarget = () => props.form.sessionTarget;
   const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
+  const formDisabled = () => props.busy || !props.canManage;
+  const editableJob = () =>
+    props.mode === "job" && props.phoneLayout && props.canManage ? props.editingJob : undefined;
   return (
     <>
-      <fieldset
-        class="cron-editor"
-        disabled={props.busy || !props.canManage}
-        aria-busy={props.busy ? "true" : "false"}
-      >
-        <PromptBlock {...props} payloadLocked={payloadLocked()} isAgentTurn={isAgentTurn()} />
-        <ScheduleDetails {...props} />
-        <div class="settings-group cron-editor-card">
-          <CronInput
+      <div class="cron-editor-layout">
+        <fieldset
+          class="cron-editor"
+          disabled={formDisabled()}
+          aria-busy={props.busy ? "true" : "false"}
+        >
+          <PromptBlock
             {...props}
-            field="agentId"
-            label={t("cron.form.agentId")}
-            help={t("cron.form.agentHelp")}
-            quietHelp
-            list="cron-agent-suggestions"
-            disabled={props.form.clearAgent}
-            placeholder={t("cron.form.agentPlaceholder")}
+            payloadLocked={payloadLocked()}
+            isAgentTurn={isAgentTurn()}
+            phoneLayout={props.phoneLayout}
           />
-          <CronSelect
-            {...props}
-            field="sessionTarget"
-            label={t("cron.form.runsIn")}
-            help={t("cron.form.sessionHelp")}
-            quietHelp
-            options={[
-              { value: "main", label: t("cron.form.mainSession") },
-              { value: "isolated", label: t("cron.form.isolatedSession") },
-              ...(knownSessionTarget() ? [] : [{ value: sessionTarget(), label: sessionTarget() }]),
-            ]}
-          />
+          <ScheduleDetails {...props} />
+        </fieldset>
+        <div class="settings-group cron-editor-card cron-editor-placement">
+          <Show when={editableJob()} keyed>
+            {(job) => (
+              <div class="settings-row cron-editor-active">
+                <span class="settings-row__title">{t("cron.detail.active")}</span>
+                <EnabledSwitch {...props} job={job} />
+              </div>
+            )}
+          </Show>
+          <fieldset class="cron-editor-section" disabled={formDisabled()}>
+            <AgentRow {...props} disabled={formDisabled()} />
+            <CronSelect
+              {...props}
+              field="sessionTarget"
+              label={t("cron.form.runsIn")}
+              help={t("cron.form.sessionHelp")}
+              quietHelp
+              options={[
+                { value: "main", label: t("cron.form.mainSession") },
+                { value: "isolated", label: t("cron.form.isolatedSession") },
+                ...(knownSessionTarget()
+                  ? []
+                  : [{ value: sessionTarget(), label: sessionTarget() }]),
+              ]}
+            />
+          </fieldset>
         </div>
-        <Advanced
-          {...props}
-          mode={props.mode}
-          isAgentTurn={isAgentTurn()}
-          supportsAnnounce={supportsAnnounce()}
-          selectedDeliveryMode={selectedDeliveryMode()}
-        />
-        {blockedByValidation() ? (
-          <div class="cron-form-status" role="status" aria-live="polite">
-            <div class="cron-form-status__title">{t("cron.form.cantAddYet")}</div>
-            <div class="cron-help">{t("cron.form.fillRequired")}</div>
-            <ul class="cron-form-status__list">
-              <For each={blockingFields()} keyed={(field) => field.inputId}>
-                {(field) => (
-                  <li>
-                    <button
-                      type="button"
-                      class="cron-form-status__link"
-                      onClick={() => focusFormField(field().inputId)}
-                    >
-                      {field().label}: {t(field().message)}
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </div>
-        ) : undefined}
-      </fieldset>
+        <fieldset class="cron-editor-section cron-editor-extra" disabled={formDisabled()}>
+          <Advanced
+            {...props}
+            mode={props.mode}
+            isAgentTurn={isAgentTurn()}
+            supportsAnnounce={supportsAnnounce()}
+            selectedDeliveryMode={selectedDeliveryMode()}
+          />
+          {blockedByValidation() ? (
+            <div class="cron-form-status" role="status" aria-live="polite">
+              <div class="cron-form-status__title">{t("cron.form.cantAddYet")}</div>
+              <div class="cron-help">{t("cron.form.fillRequired")}</div>
+              <ul class="cron-form-status__list">
+                <For each={blockingFields()} keyed={(field) => field.inputId}>
+                  {(field) => (
+                    <li>
+                      <button
+                        type="button"
+                        class="cron-form-status__link"
+                        onClick={() => focusFormField(field().inputId)}
+                      >
+                        {field().label}: {t(field().message)}
+                      </button>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
+          ) : undefined}
+        </fieldset>
+      </div>
       {props.editingJob && props.canManage ? (
         <CronScratchEditor
           jobId={props.editingJob.id}
@@ -190,8 +193,72 @@ export function Editor(props: EditorProps) {
       ) : undefined}
       {props.mode === "create" && props.canManage ? (
         <EditorActions {...props} onCancel={() => props.onClosePanel()} />
+      ) : props.mode === "job" && props.phoneLayout && props.editingJob ? (
+        <EditorActions {...props} onCancel={() => props.onCancelEdit()} />
       ) : undefined}
     </>
+  );
+}
+
+/**
+ * Which agent runs the automation. An empty id (or a cleared one) leaves the choice to the
+ * Gateway, which falls back to its default agent; a stored id missing from the roster is kept
+ * until another agent is picked.
+ */
+function AgentRow(props: CronProps & { disabled: boolean }) {
+  // Typing elsewhere in the form replaces it; only the agent fields rebuild the options.
+  const stored = createMemo(() => (props.form.clearAgent ? "" : props.form.agentId.trim()));
+  const choice = createMemo(() => {
+    const list = props.agentsList;
+    const agents = listSelectableAgents(list?.agents ?? []);
+    const byId = new Map(agents.map((agent) => [normalizeAgentId(agent.id), agent]));
+    const value = stored() ? normalizeAgentId(stored()) : "";
+    const unlisted = Boolean(list && value && !byId.has(value));
+    // System agents are not offered, but a job they own still names them.
+    const system = list?.agents.find((agent) => normalizeAgentId(agent.id) === value);
+    const options: AgentSelectOption[] = [
+      // Cron can inherit an owner from the session key or Gateway configuration.
+      { value: "", label: t("cron.form.defaultAgent") },
+      ...[...byId].map(([id, agent]) => ({ value: id, label: normalizeAgentLabel(agent), agent })),
+      ...(unlisted
+        ? [
+            system
+              ? { value, label: normalizeAgentLabel(system), agent: system }
+              : {
+                  value,
+                  label: stored(),
+                  agent: { id: value },
+                  badge: t("cron.form.agentNotFound"),
+                },
+          ]
+        : []),
+    ];
+    // An existing override can be cleared even if there is only one selectable agent.
+    const hasOverride = Boolean(props.editingJob?.agentId?.trim());
+    return {
+      options,
+      value,
+      visible: Boolean(list) && (agents.length !== 1 || unlisted || hasOverride),
+    };
+  });
+  return (
+    <Show when={choice().visible}>
+      <FieldRow
+        label={t("cron.form.agentId")}
+        controlId=""
+        control={
+          <openclaw-agent-select
+            prop:options={choice().options}
+            prop:value={choice().value}
+            prop:accessibleLabel={t("cron.form.agentId")}
+            prop:disabled={props.disabled}
+            prop:onSelect={(agentId: string) =>
+              props.onFormChange({ agentId, clearAgent: agentId === "" })
+            }
+          />
+        }
+      />
+    </Show>
   );
 }
 
@@ -203,6 +270,7 @@ function PromptBlock(
   props: CronProps & {
     payloadLocked: boolean;
     isAgentTurn: boolean;
+    phoneLayout: boolean;
   },
 ) {
   const lockedPayloadLabel = () =>
@@ -219,13 +287,6 @@ function PromptBlock(
       : props.form.payloadKind === "systemEvent"
         ? t("cron.form.systemEventHelp")
         : t("cron.form.agentTurnHelp");
-  const modelError = () => props.fieldErrors.payloadModel;
-  const modelOptions = createMemo(() =>
-    uniqueStrings(props.modelSuggestions).map((value) => {
-      const provider = providerIdFromModelRef(value);
-      return { value, label: value, provider: provider ?? undefined };
-    }),
-  );
   const nameError = () => props.fieldErrors.name;
   const payloadError = () => props.fieldErrors.payloadText;
   return (
@@ -316,46 +377,22 @@ function PromptBlock(
           <span class="cron-prompt__clock" aria-hidden="true">
             <Icon name="clock" />
           </span>
-          <ScheduleControls {...props} />
+          <div class="cron-editor-schedule">
+            <ScheduleControls {...props} phoneLayout={props.phoneLayout} />
+            <ScheduleNote {...props} />
+          </div>
           {props.isAgentTurn ? (
-            <span class="cron-prompt__run-controls">
-              <span class="cron-tray-picker" title={t("cron.form.modelHelp")}>
-                <ModelPicker
-                  id="cron-payload-model-picker"
-                  label={t("cron.form.model")}
-                  value={props.form.payloadModel}
-                  options={[
-                    { value: "", label: t("quickSettings.model.default") },
-                    ...modelOptions(),
-                  ]}
-                  custom={{
-                    id: inputIdForField("payloadModel"),
-                    label: t("cron.form.customModel"),
-                    placeholder: t("cron.form.modelPlaceholder"),
-                    invalid: Boolean(modelError()),
-                    describedBy: modelError() ? errorIdForField("payloadModel") : undefined,
-                  }}
-                  onChange={(payloadModel) => props.onFormChange({ payloadModel })}
-                />
-              </span>
-              <TrayInput
-                {...props}
-                field="payloadThinking"
-                label={t("cron.form.thinking")}
-                help={t("cron.form.thinkingHelp")}
-                errorKey="payloadThinking"
-                size="narrow"
-                list="cron-thinking-suggestions"
-                placeholder={t("cron.form.thinkingPlaceholder")}
-              />
+            <span class="cron-prompt__run-controls" data-picker-below>
+              <CronModelControls {...props} />
             </span>
           ) : undefined}
         </div>
-        <TrayErrors
-          fieldErrors={props.fieldErrors}
-          fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
-        />
-        <ScheduleSummary {...props} />
+        <div class="cron-editor-tray-errors">
+          <TrayErrors
+            fieldErrors={props.fieldErrors}
+            fields={[...TRAY_SCHEDULE_FIELDS, "payloadModel", "payloadThinking"]}
+          />
+        </div>
       </div>
     </div>
   );

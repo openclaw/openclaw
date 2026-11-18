@@ -152,11 +152,15 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       .getByRole("link", { name: "Settings", exact: true })
       .click();
     await page.getByRole("searchbox", { name: "Search settings", exact: true }).waitFor();
-    expect(new URL(page.url()).searchParams.get("view")).toBe("settings");
-    await page
-      .locator(".plugins-settings-breadcrumb")
-      .getByRole("link", { name: "Calendar Plus", exact: true })
-      .click();
+    // Settings open in Settings; going back returns to the catalog detail.
+    expect(new URL(page.url())).toMatchObject({
+      pathname: "/settings/plugins/calendar-plus",
+      search: "?view=settings&from=plugins",
+    });
+    await page.goBack();
+    await expect
+      .poll(() => new URL(page.url()).pathname)
+      .toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
     await page.getByRole("button", { name: "Disable Calendar Plus", exact: true }).waitFor();
     const inspectionReads = (await gateway.getRequests("plugins.inspect")).length;
     await gateway.setMethodResponse("plugins.uiDescriptors", {

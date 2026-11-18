@@ -112,6 +112,62 @@ function acceptedCaller(fixture: RecoveryFixture) {
 }
 
 describe("scheduled authenticated operator source", () => {
+  it("records why an admitted operator source cannot survive restart without changing its authority", async () => {
+    for (const reason of ["no-auth-method", "device-no-token", "shared-auth-no-generation"]) {
+      await withRecovery(async (fixture) => {
+        if (reason === "no-auth-method") {
+          fixture.client.authPolicy = undefined;
+        } else if (reason === "device-no-token") {
+          fixture.client.internal!.operatorDeviceTokenIdentity = undefined;
+        } else {
+          fixture.client.usesSharedGatewayAuth = true;
+          fixture.client.sharedGatewaySessionGeneration = undefined;
+        }
+        const caller = acceptedCaller(fixture);
+        const captured = expectDefined(await caller.capture(), "live operator authority");
+        using _ = {
+          [Symbol.dispose]() {
+            captured.release();
+            caller.release();
+          },
+        };
+        expect(captured.authority.recoverySnapshot).toBeUndefined();
+        const source = captureQueuedOperatorRecoverySource(captured.authority);
+        expect(source).toEqual({ kind: "unavailable", reason });
+        const serialized = JSON.stringify(source);
+        const persisted = decodeQueuedOperatorRecoverySource(JSON.parse(serialized));
+        expect(persisted).toEqual(source);
+        await expect(
+          restoreGatewayQueuedOperatorRecovery({
+            source: persisted,
+            context: fixture.context,
+            assertCurrent() {},
+          }),
+        ).rejects.toMatchObject({
+          constructor: Error,
+          message: "Queued operator authority cannot be recovered; submit a new request.",
+        });
+        expect(captured.authority.assertCurrent).not.toThrow();
+      });
+    }
+  });
+
+  it("decodes legacy unavailable sources and preserves the same recovery refusal", () =>
+    withRecovery(async (fixture) => {
+      const source = decodeQueuedOperatorRecoverySource({ kind: "unavailable" });
+      expect(source).toEqual({ kind: "unavailable" });
+      await expect(
+        restoreGatewayQueuedOperatorRecovery({
+          source,
+          context: fixture.context,
+          assertCurrent() {},
+        }),
+      ).rejects.toMatchObject({
+        constructor: Error,
+        message: "Queued operator authority cannot be recovered; submit a new request.",
+      });
+    }));
+
   it("refuses retained and recovered runs for an opaque role with no Gateway policy", () =>
     withRecovery(async (fixture) => {
       const principal: OpenClawIdTunnelPrincipal = {
@@ -536,7 +592,7 @@ describe("scheduled authenticated operator source", () => {
               resumed.release();
             }
           } else {
-            expect(captured).toEqual({ kind: "unavailable" });
+            expect(captured).toEqual({ kind: "unavailable", reason: "decode-failed" });
             await expect(
               restoreGatewayQueuedOperatorRecovery({
                 source: decodeQueuedOperatorRecoverySource(persisted),
@@ -715,7 +771,7 @@ describe("scheduled authenticated operator source", () => {
       }
     }));
   it.each(["before capture", "after admission", "after restoration"] as const)(
-    "revokes the original device authority on Gateway retirement %s",
+    "checks device retirement at new capture and restored owners while retaining admitted work (%s)",
     (timing) =>
       withRecovery(async (fixture) => {
         const caller = acceptedCaller(fixture);
@@ -739,7 +795,7 @@ describe("scheduled authenticated operator source", () => {
           );
           expect(fixture.client.invalidated).toBe(true);
           if (source) {
-            expectRevoked(source.authority);
+            (timing === "after admission" ? expectCurrent : expectRevoked)(source.authority);
           } else {
             await expect(caller.capture()).rejects.toThrow(
               "Gateway caller authority is no longer active",
@@ -776,7 +832,7 @@ describe("scheduled authenticated operator source", () => {
         }
       }),
   );
-  it("keeps accepted device authority through unrelated pairing traffic until Gateway retirement", () =>
+  it("keeps accepted device authority through pairing changes and device retirement", () =>
     withRecovery(async (fixture, stateDir) => {
       const device = pairedOperator();
       const caller = acceptedCaller(fixture);
@@ -798,7 +854,8 @@ describe("scheduled authenticated operator source", () => {
           "device-token-revoked",
         );
         expect(fixture.client.invalidated).toBe(true);
-        expectRevoked(accepted.authority);
+        expectCurrent(accepted.authority);
+        await expect(caller.capture()).rejects.toThrow();
       } finally {
         accepted.release();
         caller.release();

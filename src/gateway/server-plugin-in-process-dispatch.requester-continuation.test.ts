@@ -127,6 +127,7 @@ describe("accepted steering queue custody", () => {
                               "operator",
                             );
                             assertCurrent();
+                            expect(source.authority.reauthorize).toThrow();
                           }
                           if (boundary !== "rejected") {
                             lifecycle.onQueueAccepted?.(true);
@@ -137,8 +138,8 @@ describe("accepted steering queue custody", () => {
                   ),
                 ),
             ),
-          ).rejects.toThrow(boundary === "source-revoked" ? undefined : failure.message);
-          if (boundary === "rejected" || boundary === "source-revoked") {
+          ).rejects.toThrow(failure.message);
+          if (boundary === "rejected") {
             await vi.waitFor(() => expect(assertQueue).toThrow());
             return;
           }
@@ -171,7 +172,7 @@ describe("retained requester continuation", () => {
     ["device revoked", false],
     ["gateway replaced", false],
   ] as const)(
-    "fences requester selection when its retained owner is %s (origin: %s)",
+    "keeps admitted policy and fences closed requester owners (%s, origin: %s)",
     async (boundary, hasOrigin) =>
       withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
         const client = createOperatorClient({
@@ -275,10 +276,17 @@ describe("retained requester continuation", () => {
           } else {
             gatewayCurrent = false;
           }
-          expect(retained.assertCurrent).toThrow();
           const effect = vi.fn(async () => {});
-          await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
-          expect(effect).not.toHaveBeenCalled();
+          if (boundary === "device revoked") {
+            expect(retained.assertCurrent).not.toThrow();
+            expect(captured.operatorAuthority?.reauthorize).toThrow();
+            await captured.runWithRequester(effect);
+            expect(effect).toHaveBeenCalledOnce();
+          } else {
+            expect(retained.assertCurrent).toThrow();
+            await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
+            expect(effect).not.toHaveBeenCalled();
+          }
           expect(getGatewayToolCallerIdentity()).toBeUndefined();
         } finally {
           captured?.release();
@@ -440,10 +448,13 @@ describe("retained requester continuation", () => {
           return selection;
         });
         invalidateGatewayDeviceRevocation(context, "selected-bob-device", "operator");
-        expect(retained.assertCurrent).toThrow();
+        expect(retained.assertCurrent).not.toThrow();
+        expect(captured.operatorAuthority?.reauthorize).toThrow();
         const effect = vi.fn(async () => {});
-        await expect((async () => captured?.runWithRequester(effect))()).rejects.toThrow();
-        expect(effect).not.toHaveBeenCalled();
+        await captured.runWithRequester(effect);
+        expect(effect).toHaveBeenCalledOnce();
+        captured.release();
+        expect(retained.assertCurrent).toThrow();
         expect(getGatewayToolCallerIdentity()).toBeUndefined();
       } finally {
         captured?.release();

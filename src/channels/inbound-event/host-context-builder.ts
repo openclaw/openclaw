@@ -222,6 +222,7 @@ export function createHostChannelInboundEventContextBuilder<
             return;
           }
           bindCommandOwnerAuthority(built, {
+            channelPrincipal: ownerPrincipal,
             recoveryReference: authority.recoveryReference,
             operatorAuthority,
             isCurrent: () =>

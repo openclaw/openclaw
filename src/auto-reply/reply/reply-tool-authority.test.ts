@@ -310,6 +310,7 @@ it.each([
       const originalRevocation = new AbortController();
       const reconnectedRevocation = new AbortController();
       const cleanups: Array<() => void> = [];
+      let transportCurrent = true;
       const capture = async (
         client: typeof originalClient,
         signal: AbortSignal,
@@ -319,7 +320,7 @@ it.each([
         const caller = captureGatewayDeviceRevocation(
           context,
           { deviceId: "same-device", role: "operator" },
-          () => !signal.aborted,
+          () => transportCurrent && !signal.aborted,
           undefined,
           {
             dependencies: { client, context, authPolicyGeneration: "same-policy" },
@@ -388,6 +389,11 @@ it.each([
         await expect(inject()).resolves.toEqual(
           grant === undefined ? rejected : { status: "accepted" },
         );
+        transportCurrent = false;
+        await expect(inject()).resolves.toEqual(
+          grant === undefined ? rejected : { status: "accepted" },
+        );
+        transportCurrent = true;
         const otherAuthority = await capture(
           clientFor(otherProfileId),
           new AbortController().signal,
@@ -399,7 +405,7 @@ it.each([
             gatewayUiCommandTarget: { connId: "other-browser", profileId: otherProfileId },
           }),
         ).resolves.toEqual(rejected);
-        const acceptedMessages = grant === undefined ? 1 : 2;
+        const acceptedMessages = grant === undefined ? 1 : 3;
         expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
         expect(queueMessage).toHaveBeenLastCalledWith(
           "change strategy",

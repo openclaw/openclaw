@@ -262,6 +262,9 @@ const enPluginManagement = {
         "This credential comes from {name} in the Gateway environment. Change that environment variable at its source. Its value is never shown here.",
       source: "Source",
       provider: "Provider",
+      defaultProvider: "Default for this source",
+      enterProvider: "Enter another provider…",
+      customProvider: "Custom provider alias",
       identifier: "Identifier",
       sources: {
         env: "Environment",

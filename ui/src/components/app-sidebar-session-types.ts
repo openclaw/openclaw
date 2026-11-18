@@ -121,6 +121,7 @@ export type SidebarRecentSession = Readonly<{
   visuallyActive: boolean;
   hasActiveRun: boolean;
   backgroundProcessCount?: number;
+  subagentRunState?: GatewaySessionRow["subagentRunState"];
   /** Defaults to logical activity for rows without a live activity projection. */
   isRunVisuallyActive?: boolean;
   /** Raw Gateway liveness used for operations even when display status is terminal. */
@@ -239,6 +240,23 @@ export type SidebarSessionHovercardRow = Pick<
   | "workContext"
 > &
   Partial<Pick<SidebarRecentSession, "attention">>;
+
+/**
+ * A child shows its parent as working while its own run is visible, or while it is a
+ * yielded subagent waiting on its own command. Processes left by an ended or idle child
+ * stay on that child's row.
+ */
+export function childShowsParentWorking(
+  child: Pick<
+    SidebarRecentSession,
+    "isRunVisuallyActive" | "hasActiveRun" | "backgroundProcessCount" | "subagentRunState"
+  >,
+): boolean {
+  return (
+    (child.isRunVisuallyActive ?? child.hasActiveRun) ||
+    (child.subagentRunState === "paused" && (child.backgroundProcessCount ?? 0) > 0)
+  );
+}
 
 export const enum RowVisibilityReason {
   Any = 0,

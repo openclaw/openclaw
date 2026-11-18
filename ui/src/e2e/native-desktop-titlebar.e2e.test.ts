@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import {
   dockChatSidePanel,
   focusChatSidePanel,
@@ -160,6 +160,10 @@ async function keepsWindowControlsClear(page: Page, platform: "linux" | "windows
       .toEqual([]);
     for (const control of await controls.all()) {
       if (await control.isEnabled()) {
+        // Resting on a closed rail item opens its floating section peek, which stays open while
+        // the pointer is inside the sidebar. Start each trial click outside it so a slow click
+        // on a rail item cannot leave that peek covering the next header control.
+        await page.mouse.move(width - 1, 899);
         await control.click({ trial: true });
       }
     }
@@ -335,9 +339,9 @@ async function alignsNativeHeaders(
     expect(bar!.x).toBe(content!.x + 12);
     expect(title!.x).toBeGreaterThanOrEqual(bar!.x + bar!.width + 8);
   }
-  // People opens Activity; measure the Users panel back over the chat.
+  // Measure the Users panel on Activity before Sessions returns to the chat.
   await page.locator('[data-navigation-view="online"]').click();
-  await page.goBack();
+  await waitForControlUiRoute(page, { routeId: "activity" });
   const header = page.locator(".sidebar-panel-header");
   const toggle = macNavigation
     ? page.locator(".macos-titlebar-controls__sidebar")

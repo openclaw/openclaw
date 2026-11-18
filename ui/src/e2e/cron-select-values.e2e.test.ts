@@ -44,6 +44,61 @@ function cronResponses(jobs: CronJob[], snapshotRevision: string, enabled = true
 }
 
 suite.define(() => {
+  it("keeps Daily editable and saves the selected whole-hour window", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const job = gardenJob({
+        schedule: { kind: "cron", expr: "30 9 * * 1", tz: "America/New_York", staggerMs: 0 },
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
+        methodResponses: { ...cronResponses([job], "garden-schedule-list"), "cron.update": job },
+      });
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await editAutomation(page, job.id);
+
+      const part = (name: string) => page.locator(`[data-test-id="cron-schedule-${name}"]`);
+      const submit = page.locator('[data-test-id="cron-submit"]');
+      const timeZone = page.locator("#cron-cron-tz");
+      await part("frequency").click();
+      await part("frequency-custom").click();
+      await page.locator('[data-test-id="cron-advanced"]').click();
+      await timeZone.fill("Mars/Phobos");
+      await expect.poll(() => submit.isDisabled()).toBe(true);
+      await part("frequency").click();
+      await part("frequency-daily").click();
+      await expect.poll(() => part("frequency").textContent()).toContain("Daily");
+      await page.locator(".cron-form-status__link").filter({ hasText: "Time zone:" }).click();
+      expect(await timeZone.evaluate((element) => document.activeElement === element)).toBe(true);
+      await timeZone.fill("America/Toronto");
+      await expect.poll(() => submit.isDisabled()).toBe(false);
+
+      await part("days").click();
+      await part("day-5").click();
+      await part("day-1").click();
+      expect(await part("day-5").getAttribute("aria-pressed")).toBe("true");
+      expect(await part("frequency").textContent()).toContain("Daily");
+      await page.keyboard.press("Escape");
+
+      await part("frequency").click();
+      await part("frequency-hourly").click();
+      await part("hours").click();
+      await part("between").click();
+      const from = part("from");
+      expect(await from.locator('option[value="17"]').count()).toBe(0);
+      await from.selectOption("10");
+      await part("until").selectOption("18");
+      await page.keyboard.press("Escape");
+
+      await page.locator('[data-test-id="cron-submit"]').click();
+      expect((await gateway.waitForRequest("cron.update")).params).toMatchObject({
+        id: job.id,
+        patch: {
+          schedule: { kind: "cron", expr: "0 10-18 * * 5", tz: "America/Toronto", staggerMs: 0 },
+        },
+      });
+    });
+  });
+
   it("requires an explicit delivery choice before saving an unrepaired job", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1280, height: 1000 } },
@@ -70,7 +125,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}cron`);
         await editAutomation(page, job.id);
         await page.locator("#cron-name").fill("Renamed garden summary");
-        await page.locator(".cron-form-status__link").filter({ hasText: "Mode:" }).click();
+        await page.locator(".cron-form-status__link").filter({ hasText: "Send results:" }).click();
         const mode = page.locator("#cron-delivery-mode");
         expect(await mode.evaluate((element) => document.activeElement === element)).toBe(true);
         await page.evaluate(() => document.fonts.ready);
@@ -85,7 +140,7 @@ suite.define(() => {
         expect(await gateway.getRequests("cron.update")).toHaveLength(0);
 
         await mode.click();
-        await page.getByRole("option", { name: "None (internal)", exact: true }).click();
+        await page.getByRole("option", { name: "Don’t send", exact: true }).click();
         await expect
           .poll(() => page.locator('[data-test-id="cron-submit"]').isDisabled())
           .toBe(false);
@@ -99,6 +154,35 @@ suite.define(() => {
         expect(await gateway.getRequests("cron.update")).toHaveLength(1);
       },
     );
+  });
+
+  it("keeps a saved Custom expression editable when it becomes a simple schedule", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const job = gardenJob({
+        id: "garden-custom",
+        schedule: { kind: "cron", expr: "*/15 * * * *", tz: "America/New_York" },
+      });
+      const gateway = await installMockGateway(page, {
+        featureMethods: cronSidebarFeatureMethods,
+        methodResponses: {
+          ...cronResponses([job], "garden-custom-list"),
+          "cron.update": { ...job, schedule: { ...job.schedule, expr: "30 9 * * 1-5" } },
+        },
+      });
+      await page.goto(suite.server.baseUrl + "cron");
+      await editAutomation(page, job.id);
+      const expression = page.locator("#cron-cron-expr");
+      expect(await expression.inputValue()).toBe("*/15 * * * *");
+      await expression.fill("30 9 * * 1-5");
+      expect(await expression.isVisible()).toBe(true);
+      expect(await expression.evaluate((element) => document.activeElement === element)).toBe(true);
+      await page.locator('[data-test-id="cron-submit"]').click();
+      const request = await gateway.waitForRequest("cron.update");
+      expect(request.params).toMatchObject({
+        id: job.id,
+        patch: { schedule: { kind: "cron", expr: "30 9 * * 1-5", tz: "America/New_York" } },
+      });
+    });
   });
 
   it("shows the authoritative defaults in the create-form selects", async () => {
@@ -148,14 +232,14 @@ suite.define(() => {
       expect(await page.locator("#cron-delivery-channel").count()).toBe(0);
 
       await action.click();
-      await page.getByRole("option", { name: "Post to main timeline", exact: true }).click();
+      await page.getByRole("option", { name: "Post to main session", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("systemEvent");
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("main");
       await expect
         .poll(() =>
           page
             .getByText(
-              "Main adds the task to the agent’s timeline. Isolated starts a reply in a separate session.",
+              "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
               { exact: true },
             )
             .isVisible(),
@@ -164,7 +248,7 @@ suite.define(() => {
 
       const target = page.locator("#cron-session-target");
       await target.click();
-      await page.getByRole("option", { name: "Isolated session", exact: true }).click();
+      await page.getByRole("option", { name: "Its own session", exact: true }).click();
       await expect.poll(() => pickerValue("#cron-session-target")).toBe("isolated");
       await expect.poll(() => pickerValue("#cron-payload-kind")).toBe("agentTurn");
     });

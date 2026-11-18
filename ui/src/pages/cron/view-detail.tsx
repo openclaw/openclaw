@@ -4,10 +4,12 @@ import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { jobToForm } from "../../lib/cron/form.ts";
 import { formatCronCadence } from "../../lib/presenter.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { failedRunId } from "./route-model.ts";
 import { FailureDetails } from "./view-attention.tsx";
 import {
@@ -23,11 +25,16 @@ import { describeJobNextRun, describeJobSchedule, TriggerIndicator } from "./vie
 import { RunHistory } from "./view-runs.tsx";
 import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
+
 export function DetailView(
   props: CronProps & {
     mode: CronPanelMode;
   },
 ) {
+  // Keep control placement on the same breakpoint as cron.css.
+  const phoneLayout = createMediaQuery("(max-width: 640px)");
   // Status refresh updates the selected job's runtime facts in place.
   const selectedJob = createMemo(
     () => (props.mode === "job" ? (props.editingJob ?? undefined) : undefined),
@@ -61,6 +68,7 @@ export function DetailView(
           {...props}
           mode={props.mode}
           editing={editing()}
+          phoneLayout={phoneLayout()}
           selectedJob={selectedJob()}
         />
         <AdminRequired {...props} />
@@ -69,7 +77,7 @@ export function DetailView(
         <div id="cron-detail-panel" class="cron-tab-panel">
           {editing() ? (
             <>
-              <Editor {...props} mode={props.mode} />
+              <Editor {...props} mode={props.mode} phoneLayout={phoneLayout()} />
               <CronSuggestionLists {...props} />
             </>
           ) : (
@@ -107,6 +115,7 @@ function DetailHeader(
   props: CronProps & {
     mode: CronPanelMode;
     editing: boolean;
+    phoneLayout: boolean;
     selectedJob?: CronJob;
   },
 ) {
@@ -143,7 +152,14 @@ function DetailHeader(
           </div>
         ) : undefined}
       </div>
-      <Show when={props.mode === "job" ? props.selectedJob : undefined} keyed>
+      <Show
+        when={
+          props.mode === "job" && !(props.editing && props.phoneLayout)
+            ? props.selectedJob
+            : undefined
+        }
+        keyed
+      >
         {(job) => (
           <div class="cron-detail-actions">
             {props.canManage ? <EnabledSwitch {...props} job={job} /> : undefined}

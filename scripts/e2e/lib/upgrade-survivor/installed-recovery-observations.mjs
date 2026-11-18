@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { selectInstalledRecoveryCuts } from "./installed-recovery-cases.mjs";
+import { selectInstalledRecoveryCuts, serviceRecoveryCuts } from "./installed-recovery-cases.mjs";
 import { readDatabase } from "./observations.mjs";
 export { retirementCuts } from "./installed-recovery-cases.mjs";
 
@@ -47,8 +47,9 @@ export function writeInstalledRecoveryEvidence(file, value) {
 }
 
 export function startInstalledRecoveryRun(artifacts, cut = "") {
-  const selectedCuts =
-    cut === "older-runtime" ? [cut] : selectInstalledRecoveryCuts(cut).map(([, value]) => value);
+  const selectedCuts = serviceRecoveryCuts.includes(cut)
+    ? [cut]
+    : selectInstalledRecoveryCuts(cut).map(([, value]) => value);
   const summary = path.join(artifacts, "installed-recovery.json");
   // Invalidate an earlier PASS before install or helper preparation can fail.
   // Keep prior attempt files separate; only this current pointer is replaced.

@@ -7,14 +7,9 @@ import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { StatelessTemplateAddOptions } from "./add-stateless.js";
 import type { ClawHubCoordinate } from "./clawhub-source.js";
-import type { ChatTemplateAddInput } from "./gateway-add-input.js";
+import type { ChatTemplateAddInput, PreparedAgentChat } from "./gateway-add-input.js";
 
 type Initialization = NonNullable<SessionEntry["templateInitialization"]>;
-export type PreparedAgentChat = (() => Promise<void>) & {
-  assertCurrent?: () => Promise<void>;
-  complete?: (templateSetup?: SessionEntry["templateSetup"]) => Promise<void>;
-  checkpoint?: (initialization: Initialization) => Promise<void>;
-};
 export type AdmittedTemplateAgent = {
   agentId: string;
   workspace: string;

@@ -192,10 +192,14 @@ to the process and resets when it restarts. Large transcript windows use ordered
 independently checksummed chunks. Each uncompressed JSONL file, including its
 restoration metadata, is bounded to 64 MiB. Reads and restores process one chunk
 at a time; the window leaves SQLite only after every chunk is durable and verified.
-Restore preparation verifies the chunk manifest and compressed hashes before write
-admission. The transaction decodes each chunk once, consuming one record at a time;
-invalid records or mismatched totals roll back the entire restoration. Restore
-requests share the existing archive-worker queue across agent stores.
+Restore preparation verifies the chunk manifest and compressed hashes, then decodes
+and prepares each bounded batch before writer admission. Restoration retains the
+navigation rows and reuses their metadata, committing at most 256 archive records
+per transaction. Other sessions can write between batches. The cold marker remains
+until every record and chunk total is verified and committed, so readers continue
+using the complete archive. An interruption leaves the session cold; retrying
+replays the archive and rebuilds its search rows. Restore requests share the
+existing archive-worker queue across agent stores.
 One large window can exceed the normal background byte budget because its archive
 publication is atomic. Payload and search cleanup release the writer between
 units of at most 256 rows; embedded archive cleanup releases it after each chunk.

@@ -10,6 +10,7 @@ import {
 } from "../../app/gateway-observers.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -22,11 +23,12 @@ export type CronTestPage = HTMLElement & {
   context: ApplicationContext;
   routeSearch: string;
   cron: ReturnType<CronPageState["cron"]>;
-  cronModelSuggestions: string[];
+  /** Qualified refs of the manually selectable models the editor's catalog offers. */
+  cronCatalogModels: string[];
   deliveryDirectory: CronPageState["deliveryDirectory"];
   patchForm: CronPageState["actions"]["onFormChange"];
   closePanel: CronPageState["actions"]["onClosePanel"];
-  submitForm: (runNow?: boolean) => void;
+  submitForm: () => void;
   selectJob: CronPageState["actions"]["onSelectJob"];
   removeJob: CronPageState["actions"]["onRemove"];
   settle: () => Promise<void>;
@@ -208,13 +210,17 @@ export function createPage(
       state.setRouteSearch(value);
     },
   });
-  Object.defineProperty(page, "cronModelSuggestions", { get: () => state.cronModelSuggestions() });
+  Object.defineProperty(page, "cronCatalogModels", {
+    get: () =>
+      (state.cronModelCatalog()?.models ?? [])
+        .filter((entry) => entry.manualSelectionAllowed !== false)
+        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider)),
+  });
   Object.defineProperty(page, "cron", { get: () => state.cron() });
   Object.defineProperty(page, "deliveryDirectory", { get: () => state.deliveryDirectory });
   page.patchForm = state.actions.onFormChange;
   page.closePanel = state.actions.onClosePanel;
-  page.submitForm = (runNow = false) =>
-    runNow ? state.actions.onSubmitRunNow() : state.actions.onSubmit();
+  page.submitForm = state.actions.onSubmit;
   page.selectJob = state.actions.onSelectJob;
   page.removeJob = state.actions.onRemove;
   page.refreshView = () => state.publish();

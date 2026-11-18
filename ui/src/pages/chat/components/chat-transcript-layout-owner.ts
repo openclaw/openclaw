@@ -40,6 +40,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
+  private initialSubmission = false;
   /** Row-column offset held back from scrollTop while native scrolling is running. */
   rowShift = 0;
   private rowGeometry: readonly TranscriptRowGeometry[] = [];
@@ -61,8 +62,14 @@ export class TranscriptLayoutOwner {
     );
   }
 
+  get canYieldInitialPlacement(): boolean {
+    // Place the submitted turn and working row before paint during the handoff.
+    return !this.initialSubmission && this.rows.length > 1;
+  }
+
   configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {
     this.ready = !props.loading;
+    this.initialSubmission = props.initialSubmission === true;
     // Expanded and filtered rows are transient; the snapshot cannot restore them.
     this.rowLayout = transient ? undefined : props.widgetLayout;
     const theme = props.applicationContext?.theme;

@@ -24,6 +24,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowExecTargetRequirement,
 } from "../../cron/scheduled-tool-policy.js";
+import type { QueuedOperatorRecoverySource } from "../../gateway/operator-run-recovery-source.codec.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { PluginJsonValue as SessionPluginJsonValue } from "../../plugins/host-hook-json.js";
 import type { SessionBoardFace } from "../../shared/session-types.js";
@@ -709,6 +710,8 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   publicShare?: { id: string; sessionId: string; createdAt: number };
   /** Run that owns the current non-terminal Gateway lifecycle projection. */
   lifecycleRunId?: string;
+  /** Restart resume scope the latest run started under; see session-restart-resume-scope. */
+  lifecycleRestartScope?: string;
   /** Exact run that produced the latest terminal Gateway lifecycle projection. */
   lastRunId?: string;
   /** Run admitted by the session lane; overwritten at admission and checked by transcript writes. */
@@ -725,19 +728,12 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   };
   /** Private per-generation ownership for the pre-runtime checkout baseline capture. */
   sessionDiffBaselineCapture?: import("./session-diff-baseline-capture.js").SessionDiffBaselineCapture;
-  /** Written only by committed graceful shutdown, consumed by the next startup. */
+  /** Running root-session resume only; accepted queued input owns its own durable row. */
   resumeAfterRestart?: {
-    queuedInputIds: string[];
     /** Interrupted turn requester; revalidated before the replacement turn is admitted. */
-    operatorSource?: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
-    /** Original per-input limits, restored only after current source revalidation. */
-    queuedInputSources?: Record<
-      string,
-      {
-        runId: string;
-        source: import("../../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
-      }
-    >;
+    operatorSource?: QueuedOperatorRecoverySource;
+    /** Restart resume scope of the Gateway that wrote the marker; see session-restart-resume-scope. */
+    scope?: string;
   };
   /**
    * Latest authenticated source per person who sent input here, keyed by profile ID. Restored only

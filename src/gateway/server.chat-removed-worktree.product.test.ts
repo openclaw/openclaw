@@ -1,10 +1,11 @@
 import "../agents/prepared-model-runtime.js";
 import "./server-start.js";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as sandbox from "../agents/sandbox/context.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createProductState, productModelConfig } from "./server.chat-product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -30,6 +31,7 @@ it("explains a removed active session worktree before preparing its sandbox", as
       cfg,
       configPath: state.configPath,
       token: "synthetic-removed-worktree",
+      mode: "backend",
       scopes: ["operator.admin", "operator.read", "operator.write"],
       onEvent(event) {
         const payload = event.payload;
@@ -52,18 +54,46 @@ it("explains a removed active session worktree before preparing its sandbox", as
     expect(await client.request("worktrees.remove", { id: created.worktree.id })).toMatchObject({
       removed: true,
     });
+    await expect(fs.access(created.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(loadSessionEntry({ sessionKey, agentId: "main" })?.archivedAt).toBeUndefined();
     using preparation = vi.spyOn(sandbox, "resolveSandboxContext");
+    const scope = { sessionKey, agentId: "main" };
+    const entry = loadSessionEntry(scope);
+    if (!entry) {
+      throw new Error("Created session is missing");
+    }
+    const activity = { lastInteractionAt: 100, lastActivityAt: 200 };
+    await upsertSessionEntryCore(scope, { ...entry, ...activity });
+    for (const sourceTool of ["subagent_announce", "subagent_settle"]) {
+      await expect(
+        client.request(
+          "agent",
+          {
+            sessionKey,
+            expectedExistingSessionId: entry.sessionId,
+            message: "The child was interrupted.",
+            idempotencyKey: randomUUID(),
+            inputProvenance: { kind: "inter_session", sourceTool },
+          },
+          { expectFinal: true },
+        ),
+      ).rejects.toThrow("worktree was removed");
+      expect(loadSessionEntry(scope)).toMatchObject(activity);
+    }
     await client.request("chat.send", {
       sessionKey,
       message: "Continue the task.",
       deliver: false,
       idempotencyKey: randomUUID(),
     });
-    expect(await terminal.promise).toContain(
+    const errorMessage = await terminal.promise;
+    expect(errorMessage).toContain(
       "This session's worktree was removed by cleanup or deletion. Use Restore in Settings > Worktrees (worktrees.restore), or start a new session.",
     );
+    expect(errorMessage).toContain(created.worktree.id);
+    await expect(fs.access(created.worktree.path)).rejects.toMatchObject({ code: "ENOENT" });
     expect(preparation).not.toHaveBeenCalled();
+    expect(loadSessionEntry(scope)?.lastInteractionAt).toBeGreaterThan(activity.lastInteractionAt);
     // Bypassing admission must still refuse a removed binding at the projection owner.
     await expect(resolveLocalWorkspaceOwner({ cfg, agentId: "main", sessionKey })).rejects.toThrow(
       "Local sandbox managed workspace owner changed",

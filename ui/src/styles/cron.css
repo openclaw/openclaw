@@ -332,17 +332,19 @@
   gap: 2px;
   min-width: 0;
   margin-top: calc(-1 * var(--cron-prompt-radius));
-  padding: calc(var(--cron-prompt-radius) + 6px) 10px 8px 14px;
+  /* The clock lines up with the sheet's text; the row sits centered in the visible tray. */
+  padding: calc(var(--cron-prompt-radius) + 7px) 10px 7px 17px;
   border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
   corner-shape: var(--chat-composer-corner-shape);
   background: color-mix(in srgb, var(--text) 4.5%, var(--bg-content, var(--bg)));
 }
 
+/* Clock, schedule and run controls each center on the first 30px line. */
 .cron-prompt__controls {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
+  align-items: flex-start;
+  gap: 2px;
   min-width: 0;
   min-height: 30px;
 }
@@ -350,17 +352,29 @@
 .cron-prompt__clock {
   display: inline-flex;
   flex: 0 0 auto;
-  width: 14px;
-  height: 14px;
-  margin-inline-end: 4px;
+  align-items: center;
+  height: 30px;
+  margin-inline-end: 6px;
   color: var(--muted);
 }
 
 .cron-prompt__clock svg {
-  width: 100%;
-  height: 100%;
+  width: 14px;
+  height: 14px;
   stroke: currentColor;
   fill: none;
+}
+
+/* The schedule reads as one sentence: every word sits 18px from the next (8px padding,
+   2px gap, 8px padding). It fills the line and wraps within it, so the run controls keep
+   the end of the first line. */
+.cron-editor-schedule {
+  display: flex;
+  flex: 1 1 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  padding-block: 1px;
 }
 
 .cron-prompt__facts {
@@ -374,12 +388,37 @@
 }
 
 .cron-prompt__run-controls {
+  /* The session composer's pickers sit on the tray's 28px control row. */
+  --chat-composer-chip-height: 28px;
   display: inline-flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 2px;
   margin-inline-start: auto;
   min-width: 0;
+  min-height: 30px;
+}
+
+/* The composer's pickers take the tray's ink, as Chat's take the composer's.
+   Chat neutralizes its provider mark only inside its own composer (New Session
+   keeps brand color), so the tray follows its label here; chevrons match the
+   schedule selects beside them. */
+.cron-prompt__run-controls .chat-controls__inline-select-trigger {
+  --icon-interactive: var(--muted);
+}
+
+.cron-prompt__run-controls .chat-controls__trigger-provider-icon {
+  color: inherit;
+}
+
+.cron-prompt__run-controls .chat-controls__inline-select-chevron,
+.cron-prompt__run-controls .chat-controls__inline-select-chevron svg {
+  width: var(--chrome-icon-size);
+  height: var(--chrome-icon-size);
+}
+
+.cron-prompt__run-controls .chat-controls__inline-select-chevron svg {
+  stroke-width: var(--chrome-icon-stroke);
 }
 
 .cron-prompt__saved-text {
@@ -432,7 +471,7 @@
 .cron-prompt__name::placeholder,
 .cron-prompt__text::placeholder,
 .cron-tray-input::placeholder,
-.cron-advanced__card .settings-input::placeholder {
+.cron-advanced .settings-input::placeholder {
   color: var(--cron-placeholder);
 }
 
@@ -514,13 +553,50 @@
   min-width: 0;
 }
 
-.cron-tray-picker > openclaw-select-picker {
-  min-width: 0;
+.cron-tray-pair {
+  gap: 2px;
 }
 
-.cron-tray-picker .model-picker__custom {
-  height: 28px;
-  margin-top: 2px;
+/* The interval reads as a word: one or two digits keep one width, longer ones grow. */
+.cron-tray-pair > .cron-tray-input {
+  width: calc(4ch + 16px);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* Schedule values hug their text, so the sentence keeps even word spacing. */
+@supports (field-sizing: content) {
+  .cron-editor-schedule .cron-tray-input {
+    width: auto;
+    max-width: 100%;
+    field-sizing: content;
+  }
+
+  .cron-tray-pair > .cron-tray-input {
+    min-width: calc(2ch + 16px);
+  }
+}
+
+.cron-tray-note__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cron-tray-note__text svg {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  fill: none;
+}
+
+.cron-tray-picker > openclaw-select-picker {
+  min-width: 0;
 }
 
 .cron-prompt__edit {
@@ -528,6 +604,7 @@
 }
 
 .cron-prompt__tray .cron-tray-segmented {
+  padding: 0;
   border: 0;
   background: none;
   box-shadow: none;
@@ -535,6 +612,7 @@
 
 .cron-prompt__tray .cron-tray-segmented > .settings-segmented__btn {
   height: 28px;
+  padding: 0 8px;
   border-radius: calc(var(--radius-md) * 0.8);
   color: var(--muted-strong);
   font-size: 13px;
@@ -546,9 +624,9 @@
   color: var(--text-strong);
 }
 
-.cron-prompt__tray > .cron-error,
-.cron-prompt__tray > .cron-schedule-summary {
-  padding: 0 0 0 22px;
+/* Errors start where the sentence's words do: past the clock, its spacing and a part's padding. */
+.cron-editor-tray-errors > .cron-error {
+  padding-inline-start: 30px;
 }
 
 .cron-schedule-note {
@@ -660,6 +738,13 @@
   text-align: left;
 }
 
+/* Touch layouts enlarge the settings pickers' text; the Agent row's trigger matches "Runs in". */
+@media (pointer: coarse), (max-width: 640px) {
+  .cron-editor-placement .agent-select__trigger {
+    font-size: max(16px, var(--control-ui-touch-input-size, 1em));
+  }
+}
+
 /* Read-only script/command payload: a highlighted code block sized like the
    textarea it replaces, scrollable and focusable so keyboard users can reach it.
    `resize` needs an explicit height (not max-height) as the resize origin, so the
@@ -703,8 +788,8 @@
   margin-left: 3px;
 }
 
-.cron-editor input[aria-invalid="true"],
-.cron-editor textarea[aria-invalid="true"] {
+.cron-editor-layout input[aria-invalid="true"],
+.cron-editor-layout textarea[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
@@ -762,21 +847,21 @@
   transform: rotate(180deg);
 }
 
-.cron-advanced__desc {
-  margin: 14px 16px 0;
+/* One settings section per concern; pickers' menus and focus rings stay unclipped. */
+.cron-advanced__sections {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  min-width: 0;
+  margin-top: var(--space-1);
 }
 
-.cron-advanced__group + .cron-advanced__group {
-  margin-top: 6px;
+.cron-advanced__sections .settings-group {
+  overflow: visible;
 }
 
-.cron-advanced__heading {
-  margin: 14px 16px 2px;
-  color: var(--muted-strong);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.cron-advanced__sections .settings-section__header {
+  padding-inline: 16px;
 }
 
 .cron-trigger-icon {
@@ -1298,4 +1383,381 @@
 
 .cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
+}
+
+/* Schedule sentence: each part is quiet text that opens its own small menu. */
+.cron-sentence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cron-sentence__part {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.8);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: var(--cursor-action);
+}
+
+.cron-sentence__part:hover,
+.cron-sentence__part[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.cron-sentence__part:disabled {
+  cursor: default;
+  background: none;
+  opacity: 0.5;
+}
+
+.cron-sentence__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.cron-sentence__text svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+.cron-sentence__menu {
+  min-width: 180px;
+  padding: 6px;
+}
+
+.cron-sentence__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cron-sentence__choice {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.7);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.cron-sentence__choice:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.cron-sentence__choice[aria-pressed="true"] {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.cron-sentence__days {
+  display: flex;
+  gap: 4px;
+}
+
+.cron-sentence__day {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.cron-sentence__day[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.cron-sentence__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.cron-sentence__field input,
+.cron-sentence__field select {
+  min-width: 0;
+  width: 120px;
+}
+
+.cron-sentence__range {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+/* The layout wrappers keep the desktop tray and field spacing unchanged. */
+.cron-editor-layout,
+.cron-editor-extra {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cron-editor-section {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cron-editor-tray-errors,
+.cron-sentence__row {
+  display: contents;
+}
+
+.cron-sentence__label,
+.cron-scratch-chevron {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cron-page[data-view="edit"] {
+    --cron-phone-card: color-mix(in srgb, var(--text) 2%, var(--bg-content));
+    --cron-phone-control: color-mix(in srgb, var(--text) 6%, var(--bg-content));
+    --cron-phone-row-height: 48px;
+  }
+
+  .cron-page[data-view="edit"] .cron-tab-panel {
+    gap: var(--space-4);
+  }
+
+  .cron-page--create[data-view="edit"] .cron-detail-header {
+    margin-top: 0;
+  }
+
+  .cron-prompt--editing .cron-prompt__tray,
+  .cron-prompt--editing .cron-prompt__controls {
+    display: contents;
+  }
+
+  .cron-editor-schedule .cron-sentence {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .cron-prompt--editing .cron-prompt__clock,
+  .cron-editor-active .cron-detail-sub {
+    display: none;
+  }
+
+  .cron-prompt--editing .cron-prompt__run-controls {
+    position: relative;
+    z-index: 1;
+    order: 1;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin: calc(-1 * var(--cron-prompt-radius)) 0 0;
+    padding: calc(var(--cron-prompt-radius) + 7px) 10px 8px;
+    border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
+    background: var(--cron-phone-control);
+  }
+
+  .cron-editor-schedule,
+  .cron-editor-placement {
+    background: var(--cron-phone-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+  }
+
+  .cron-editor-schedule {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    gap: 0;
+    order: 2;
+    margin-top: var(--space-4);
+    padding-block: 4px;
+    min-inline-size: 0;
+  }
+
+  .cron-editor-placement {
+    padding-block: 4px;
+  }
+
+  .cron-editor-tray-errors {
+    order: 3;
+    display: block;
+  }
+
+  .cron-editor-tray-errors:empty {
+    display: none;
+  }
+
+  .cron-editor-tray-errors > .cron-error {
+    padding-inline: 17px;
+  }
+
+  .cron-editor-schedule .cron-tray-pair > .cron-tray-input {
+    min-width: calc(4ch + 16px);
+  }
+
+  .cron-tray-note__text {
+    margin-inline-start: auto;
+    padding: 0;
+    font-size: inherit;
+    text-align: end;
+  }
+
+  .cron-tray-note__text svg {
+    display: none;
+  }
+
+  .cron-editor-schedule .cron-sentence__row,
+  .cron-editor-placement .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: var(--space-2);
+    min-block-size: var(--cron-phone-row-height);
+    padding: 4px 16px;
+    border: 0;
+  }
+
+  .cron-sentence__label {
+    display: inline;
+    white-space: nowrap;
+    color: var(--text-strong);
+  }
+
+  .cron-editor-schedule .cron-sentence__part {
+    margin-inline-start: auto;
+    padding-inline: 8px;
+    background: var(--cron-phone-control);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .cron-editor-schedule .cron-sentence__text,
+  .cron-editor-schedule .cron-tray-input {
+    min-inline-size: 0;
+    white-space: nowrap;
+    text-align: end;
+  }
+
+  .cron-editor-schedule .cron-sentence__text svg {
+    display: none;
+  }
+
+  .cron-editor-schedule .cron-tray-input,
+  .cron-editor-placement .settings-input,
+  .cron-editor-placement .picker-select__trigger,
+  .cron-editor-placement .agent-select__trigger {
+    margin-inline-start: auto;
+    border-radius: var(--radius-md);
+    background: var(--cron-phone-control);
+  }
+
+  .cron-editor-placement .settings-row__text {
+    flex: 0 0 auto;
+  }
+
+  .cron-editor-placement .settings-row__title {
+    font-weight: 400;
+    white-space: nowrap;
+  }
+
+  .cron-editor-placement .settings-row__control {
+    width: auto;
+    max-width: 75%;
+    flex-wrap: nowrap;
+    flex: 0 1 auto;
+  }
+
+  .cron-editor-placement .cron-control {
+    width: auto;
+  }
+
+  .cron-editor-placement .settings-input {
+    width: 12ch;
+    text-align: end;
+  }
+
+  .cron-editor-placement .picker-select__trigger,
+  .cron-editor-placement .agent-select__trigger {
+    white-space: nowrap;
+  }
+
+  .cron-page[data-view="edit"] .cron-editor-actions {
+    margin-top: var(--space-3);
+  }
+
+  .cron-page[data-view="edit"] .cron-editor-actions > .btn {
+    flex: 1 1 0;
+    min-block-size: 46px;
+    border-radius: var(--radius-lg);
+  }
+
+  .cron-page[data-view="edit"] .cron-editor-actions > .btn--ghost {
+    background: var(--cron-phone-card);
+    border-color: var(--border);
+  }
+
+  .cron-page[data-view="edit"] .cron-submit-reason {
+    flex-basis: 100%;
+  }
+
+  .cron-page[data-view="edit"] .cron-advanced__summary,
+  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-block-size: 36px;
+    margin: 0;
+    padding: 5px 8px;
+    color: var(--text-strong);
+    font: inherit;
+    font-weight: 600;
+    letter-spacing: normal;
+    text-transform: none;
+    list-style: none;
+  }
+
+  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .cron-scratch-chevron {
+    display: inline-block;
+    inline-size: 14px;
+    block-size: 14px;
+  }
+
+  details[open] > summary > .cron-scratch-chevron {
+    transform: rotate(180deg);
+  }
 }
