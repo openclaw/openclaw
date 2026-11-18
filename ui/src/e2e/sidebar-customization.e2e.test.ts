@@ -643,8 +643,8 @@ suite.define(() => {
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
       // Collapsing the list retains the personal icon rail; its view buttons
-      // provide the matching expand controls. The panel owns collapse: the
-      // Sessions avatar opens the agent menu while its panel is open.
+      // provide the matching expand controls. The panel owns collapse; the
+      // agent avatar only opens the agent menu.
       const collapseButton = sidebar.getByRole("button", { name: "Collapse sidebar", exact: true });
       await collapseButton.click();
       await expect

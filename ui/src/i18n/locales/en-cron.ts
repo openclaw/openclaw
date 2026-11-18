@@ -300,12 +300,7 @@ const enCron = {
       includeReasoningHelp: "Adds the model’s reasoning to the results when it’s available.",
       model: "Model",
       customModel: "Custom model…",
-      modelPlaceholder: "openai/gpt-5.2",
-      modelHelp:
-        "Start typing to pick a known model, or enter a custom one. Routine jobs (summaries, triage, classification) run well on a lighter model — cheaper and faster than your default.",
       thinking: "Reasoning",
-      thinkingPlaceholder: "low",
-      thinkingHelp: "Use a suggested level or enter a provider-specific value.",
       failureAlerts: "Failure alerts",
       failureAlertSend: "Alerts",
       failureAlertInherit: "Default",

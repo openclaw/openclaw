@@ -4,10 +4,11 @@ import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { registerPreferencesEnglish } from "../../i18n/locales/en-preferences.ts";
 import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { jobToForm } from "../../lib/cron/form.ts";
 import { formatCronCadence } from "../../lib/presenter.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
 import { failedRunId } from "./route-model.ts";
 import { FailureDetails } from "./view-attention.tsx";
@@ -24,6 +25,9 @@ import { describeJobNextRun, describeJobSchedule, TriggerIndicator } from "./vie
 import { RunHistory } from "./view-runs.tsx";
 import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
+
+registerEnglishCatalog(registerPreferencesEnglish);
+
 export function DetailView(
   props: CronProps & {
     mode: CronPanelMode;
