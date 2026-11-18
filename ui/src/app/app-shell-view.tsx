@@ -446,6 +446,7 @@ export function ApplicationShell(props: {
               "content--systems": view().activeRoute === "systems",
               "content--custodian": view().activeRoute === "custodian",
               "content--workboard": view().workboardLayout,
+              "content--refresh-notice": view().floatingUpdateCard.refreshRequired,
             },
           ]}
           ref={(element) => {
