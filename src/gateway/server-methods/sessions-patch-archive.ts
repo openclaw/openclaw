@@ -6,6 +6,7 @@ import {
   type ErrorShape,
   type SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { SessionWorktreeLifecycleError } from "../../agents/worktrees/errors.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -306,6 +307,15 @@ async function prepareSessionPatchArchiveFromSource(
       throw new SessionMutationAuthorizationChangedError(current.error);
     }
   };
+  const sessionKeys = Array.from(
+    new Set([
+      target.key,
+      target.canonicalKey,
+      ...target.initialTarget.storeKeys,
+      canonicalKey,
+      ...selected.storeKeys,
+    ]),
+  );
   let transferred = false;
   try {
     const drain = await prepareSessionLifecycleDrain({
@@ -313,15 +323,7 @@ async function prepareSessionPatchArchiveFromSource(
       authorize: assertCurrent,
       context: params.context,
       storePath: target.storePath,
-      sessionKeys: Array.from(
-        new Set([
-          target.key,
-          target.canonicalKey,
-          ...target.initialTarget.storeKeys,
-          canonicalKey,
-          ...selected.storeKeys,
-        ]),
-      ),
+      sessionKeys,
       sessionId: entry?.sessionId,
       session: {
         ok: true,
@@ -340,6 +342,19 @@ async function prepareSessionPatchArchiveFromSource(
         Boolean(identity),
       ),
     });
+    try {
+      // An archived chat is hidden, so nothing would manage what it still runs.
+      await stopSessionExecProcesses(
+        entry?.sessionId ? [...sessionKeys, entry.sessionId] : sessionKeys,
+        assertCurrent,
+      );
+    } catch (error) {
+      drain.release();
+      sessionLog.warn(
+        `sessions.patch: archive could not stop processes for ${target.canonicalKey}: ${formatErrorMessage(error)}`,
+      );
+      return err(archiveUnavailableError(target.key, "stopping"));
+    }
     transferred = true;
     return ok({
       canonicalKey,

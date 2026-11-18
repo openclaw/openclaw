@@ -51,6 +51,7 @@ import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-
 import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v41-worker-loss-recovery.js";
 import {
   admitStateSchemaFacts,
+  parseStateSchemaContentVersion,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
 import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
@@ -129,12 +130,22 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
       "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
     )
     .get();
+  let contentVersion: number;
+  try {
+    const marker = content?.value_json;
+    if (marker !== undefined && marker !== null && typeof marker !== "string") {
+      throw new Error("Invalid PostgreSQL state content marker");
+    }
+    contentVersion = parseStateSchemaContentVersion(marker);
+  } catch {
+    throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
+  }
   // SQLite may publish the current header without a redundant content-version row.
   if (
     meta?.schema_version !== facts.version ||
     meta.role !== "global" ||
     meta.agent_id !== null ||
-    (content !== undefined && content.value_json !== String(facts.version))
+    contentVersion > facts.version
   ) {
     throw new Error(`PostgreSQL state metadata mismatch. ${recovery}`);
   }
@@ -144,23 +155,6 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   });
   publishStateRuntimeSchemaAdmission(db, true);
 }
-
-const statePostgresSchema = {
-  postgres: runtime.eagerSql,
-  postgresFragments: runtime.fragments.map((fragment): PostgresSchemaFragment => {
-    const { activation } = fragment;
-    if (activation !== "first-use" && activation !== "version-additive") {
-      throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
-    }
-    return {
-      id: fragment.id,
-      tables: fragment.tables,
-      sql: fragment.sql,
-      dependencies: fragment.dependencies,
-      activation,
-    };
-  }),
-};
 
 function statePostgresVersionSql(version: number): string {
   return `UPDATE schema_meta
@@ -176,6 +170,10 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchema = {
+    postgres: stateEngineSchema.postgres,
+    postgresFragments: stateEngineSchema.postgresFragments,
+  };
   const statePostgresSchemaV40 = {
     ...statePostgresSchema,
     postgres: withLegacyWorkerLossRecovery(statePostgresSchema.postgres),
@@ -428,11 +426,45 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
   ];
 }
 
-export const stateEngineSchema: StoreSchema = {
+export const stateEngineSchema: StoreSchema & {
+  postgres: string;
+  postgresFragments: PostgresSchemaFragment[];
+} = {
   id: "state",
   version: OPENCLAW_STATE_SCHEMA_VERSION,
   sqlite: "",
-  ...statePostgresSchema,
+  get postgres() {
+    const value = runtime.eagerSql;
+    Object.defineProperty(this, "postgres", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
+  get postgresFragments() {
+    const value = runtime.fragments.map((fragment): PostgresSchemaFragment => {
+      const { activation } = fragment;
+      if (activation !== "first-use" && activation !== "version-additive") {
+        throw new Error(`Unknown PostgreSQL state fragment activation: ${activation}`);
+      }
+      return {
+        id: fragment.id,
+        tables: fragment.tables,
+        sql: fragment.sql,
+        dependencies: fragment.dependencies,
+        activation,
+      };
+    });
+    Object.defineProperty(this, "postgresFragments", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
   get postgresMigrations() {
     // SQLite workers never need historical PostgreSQL schemas. Materialize once on first use.
     const value = createStatePostgresMigrations();

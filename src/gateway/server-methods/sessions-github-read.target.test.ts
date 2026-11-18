@@ -265,7 +265,7 @@ describe("registered guest publication target discovery", () => {
   );
 
   it.each(["connection", "worktree", "session worktree"] as const)(
-    "rejects a changed %s during repository discovery",
+    "keeps admitted reads across %s changes while fencing the selected workspace",
     async (change) => {
       await withWorktree(async (fixture, worktree) => {
         const identity = await managedWorktrees.resolveRepositoryIdentity(worktree.path);
@@ -292,7 +292,12 @@ describe("registered guest publication target discovery", () => {
           }
           pending.resolve(identity);
           await request;
-          expectFailure(respond, { code: "FORBIDDEN" });
+          if (change === "connection") {
+            expectReply(respond, expectedOptions(true));
+            expectFailure(await options(fixture));
+          } else {
+            expectFailure(respond, { code: "FORBIDDEN" });
+          }
           expect(respond).toHaveBeenCalledOnce();
         } finally {
           pending.resolve(identity);
@@ -390,7 +395,7 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
   );
 
   it.each(["scope", "role", "profile", "grant", "connection", "visibility", "lifecycle"] as const)(
-    "rejects %s loss during an awaited receipt read",
+    "keeps admitted reads across transport revocation while fencing %s changes",
     async (change) => {
       await withReadFixture(
         async (fixture) => {
@@ -427,7 +432,20 @@ describe.each(["options", "status"] as const)("registered guest sessions.github.
                 lifecycle: () => updateSession({ lifecycleRevision: "replaced-publication" }),
               }[change]();
               await release(receipt);
-              expectFailure(respond);
+              if (change === "grant" || change === "connection") {
+                expectReply(
+                  respond,
+                  method === "options"
+                    ? optionsResult({
+                        shared: null,
+                        sharedUnavailableReason: "unsupported_workspace",
+                      })
+                    : receipt,
+                );
+                expectFailure(await fixture[method]());
+              } else {
+                expectFailure(respond);
+              }
               expect(respond).toHaveBeenCalledOnce();
               expectNoPersonalReads(fixture);
             },

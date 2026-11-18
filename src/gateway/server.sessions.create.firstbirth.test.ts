@@ -14,7 +14,6 @@ import * as sessionReaders from "../config/sessions/session-transcript-worker-re
 import { resolveStateDir } from "../config/state-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { hasSqliteDatabaseSchemaAdmissionForPath } from "../infra/sqlite-database-admission.js";
-import { readDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { openOpenClawAgentSqliteWorkerStoreV2 } from "../state/openclaw-agent-worker-store.js";
 import { agentWorkerStoreFixtureEntrypoint } from "../state/openclaw-agent-worker-store.runtime.test-support.js";
 import type { AgentWorkerFixtureOperations } from "../state/openclaw-agent-worker-store.test-support.js";
@@ -56,10 +55,10 @@ test.for(["new database", "interrupted empty database"])(
       path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
     const configuredDatabasePath = databaseAt(stateDir);
     const databasePath = databaseAt(await fs.realpath(stateDir));
+    const { ws } = await openClient();
     testState.sessionStorePath = storeAt("{agentId}");
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, [agentId]: {} } };
     setRuntimeConfigSnapshot(loadGatewayTestConfig());
-    const { ws } = await openClient();
     if (scenario === "interrupted empty database") {
       await fs.mkdir(path.dirname(databasePath), { recursive: true });
       await fs.writeFile(databasePath, "");
@@ -145,7 +144,7 @@ test.for(["new database", "interrupted empty database"])(
         {
           path: configuredDatabasePath,
           physicalPath: databasePath,
-          identity: await readDatabasePathIdentity(databasePath),
+          identity: undefined,
           scope: undefined,
         },
       ]);

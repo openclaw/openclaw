@@ -76,13 +76,13 @@ describe.skipIf(!connection)("PostgreSQL worker provisioning source migration", 
         }),
       );
       expect(upgraded.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 40,
+        schema_version: stateEngineSchema.version,
       });
       expect(
         upgraded.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),
       ).toEqual(expected);
       fixture.invalidate();
-      expect(() => fixture.open(source)).toThrow(/newer|version.*40/iu);
+      expect(() => fixture.open(source)).toThrow(/newer|version.*41/iu);
       const reopened = fixture.open(stateEngineSchema);
       expect(
         reopened.prepare("SELECT * FROM worker_environments ORDER BY environment_id").all(),

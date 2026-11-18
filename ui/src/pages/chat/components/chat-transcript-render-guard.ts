@@ -43,6 +43,7 @@ function groupDependencies(group: MessageGroup): readonly unknown[] {
     group.replyCurrentSource?.key,
     group.replyCurrentSource?.message,
     group.visibleContent,
+    group.startsActivityGroup,
     group.timestamp,
     group.isStreaming,
     group.runId,
@@ -113,6 +114,7 @@ export function transcriptContextDependencies(
   props: Pick<
     ChatThreadProps,
     | "onRetryRun"
+    | "onStartNewSession"
     | "failedMessageEditSource"
     | "failureActionsRunId"
     | "modelCatalog"
@@ -124,6 +126,7 @@ export function transcriptContextDependencies(
   if (item.kind === "notice") {
     return [
       props.onRetryRun,
+      props.onStartNewSession,
       props.failedMessageEditSource,
       props.failureActionsRunId,
       item.modelChange ? props.modelCatalog : undefined,

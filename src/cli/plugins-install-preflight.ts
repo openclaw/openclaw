@@ -1,12 +1,12 @@
 // Resolve and validate plugin install requests without opening mutable runtime state.
 import fs from "node:fs";
+import { resolveUserFilesystemPath } from "../infra/home-dir.js";
 import { resolvePluginInstallRequestContext } from "../plugins/install-config.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import { resolvePluginInstallSourcePlan } from "../plugins/install-source-plan.js";
 import { resolveMarketplaceInstallShortcut } from "../plugins/marketplace.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveUserPath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { NON_CLAWHUB_INSTALL_FORCE_FLAG } from "./non-clawhub-install-acknowledgement.js";
 
@@ -112,8 +112,16 @@ export async function resolvePluginInstallPreflight(params: RunPluginInstallComm
     }
   }
 
-  if (marketplace && fs.existsSync(resolveUserPath(marketplace))) {
-    marketplace = resolveUserPath(marketplace);
+  if (marketplace) {
+    let localMarketplace: string | undefined;
+    try {
+      localMarketplace = resolveUserFilesystemPath(marketplace);
+    } catch {
+      // A source the filesystem cannot traverse is a marketplace name or URL.
+    }
+    if (localMarketplace && fs.existsSync(localMarketplace)) {
+      marketplace = localMarketplace;
+    }
   }
   const opts = { ...params.opts, marketplace };
   const optionError = marketplace

@@ -152,13 +152,15 @@ it.each(["missing", "different", "different account"] as const)(
 );
 
 it.each([
-  [undefined, false, false, false, false],
-  ["steer", true, false, true, false],
-  ["steer", false, true, false, false],
-  [undefined, false, false, false, true],
+  [undefined, false, false, false, false, false],
+  ["steer", true, false, true, false, false],
+  ["steer", false, true, false, false, false],
+  [undefined, false, false, false, true, false],
+  // A parent's ordinary reply-waiting send must still reach its busy child's current run.
+  [undefined, false, false, false, true, true],
 ] as const)(
-  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s",
-  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild) => {
+  "persists steering provenance: mode=%s alternateStore=%s hiddenRun=%s refreshedDisplay=%s ownChild=%s defaultTimeout=%s",
+  async (mode, alternateStore, hiddenRun, refreshedDisplay, ownChild, defaultTimeout) => {
     const runId = "hidden-sessions-send-steering-run";
     const sessionKey = ownChild
       ? "agent:leasing-ops:subagent:active-child"
@@ -259,7 +261,7 @@ it.each([
           mode,
           sessionKey,
           message: "[TASK-COMPLETE] re-portal occupancy ready",
-          timeoutSeconds: 0,
+          ...(defaultTimeout ? {} : { timeoutSeconds: 0 }),
         }),
       );
       let acknowledged = false;

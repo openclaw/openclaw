@@ -23,6 +23,8 @@ import {
   assertCurrentSessionTranscriptHeader,
   findSessionTranscriptHeader,
 } from "../../config/sessions/session-entry-codec.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
+import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import {
   resolveSessionTranscriptReadFence,
   withSessionContextAdmission,
@@ -49,7 +51,6 @@ import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-tur
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 import { SessionManagerBranching } from "./session-manager-branching.js";
 import { projectSessionModelContextEntries, buildInitialContext } from "./session-manager-codec.js";
-import { readSessionManagerCompaction } from "./session-manager-compaction-read.js";
 import {
   sessionManagerOpenCompaction,
   sessionManagerOpenTranscriptCohort,
@@ -66,21 +67,20 @@ import {
   readSessionManagerModelContextAsync,
 } from "./session-manager-incognito.js";
 import { receiveSessionManagerCommit } from "./session-manager-persistence-error.js";
-import { openSessionManagerBoundedView } from "./session-manager-reload.js";
+import * as reload from "./session-manager-reload.js";
 import type {
   SessionLeafControl,
   AppendPersistenceOptions,
   FileEntry,
   SessionEntry,
 } from "./session-manager-types.js";
-import {
-  sessionManagerFromCompactionSource,
-  sessionManagerReadTranscriptBranch,
-  type SessionManagerBoundedContext,
-  type SessionManagerBoundedContextLimits,
-  type SessionManagerPersistenceTarget,
-  type SessionManagerTranscriptCohort,
+import type {
+  SessionManagerBoundedContext,
+  SessionManagerBoundedContextLimits,
+  SessionManagerPersistenceTarget,
+  SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import {
   appendSessionTranscriptNote,
   withSessionManagerWrite,
@@ -97,8 +97,8 @@ export {
   buildSessionContext,
   getLatestCompactionEntry,
   migrateSessionEntries,
-  parseSessionEntries,
 } from "./session-manager-codec.js";
+export { parseSessionEntries } from "./session-manager-jsonl.js";
 export type {
   BranchSummaryEntry,
   CompactionEntry,
@@ -484,33 +484,34 @@ export class SessionManager extends SessionManagerBranching {
   /** @internal Read complete current context and compaction facts in one owner snapshot. */
   static async [sessionManagerOpenCompaction](
     target: SessionTranscriptRuntimeTarget,
-    options: { cwd?: string; signal?: AbortSignal; metadataOnly?: boolean } = {},
+    options: { cwd?: string; signal?: AbortSignal } = {},
   ) {
-    const { cwd, context, ...compaction } = await readSessionManagerCompaction(target, options);
+    const { cwd, signal } = options;
+    const limits = { compaction: true } as const;
+    const hydration = withSessionTranscriptHydrationCaller("compaction", () =>
+      prepareSessionTranscriptHydration(target, limits, signal),
+    );
+    const prepared = await hydration.read({ compaction: true });
+    if (prepared.kind !== "bounded" || !prepared.compaction) {
+      throw new Error("Expected a prepared compaction transcript");
+    }
+    const context = prepared.snapshot;
+    const header = findSessionTranscriptHeader(context.events);
     return {
-      ...compaction,
-      sessionManager: new SessionManager(cwd, compaction.sessionTarget, context.events, context),
+      ...prepared.compaction,
+      eventCount: context.totalEvents,
+      sessionManager: new SessionManager(
+        cwd ?? header?.cwd ?? process.cwd(),
+        prepared.compaction.sessionTarget,
+        context.events,
+        { ...context, limits },
+      ),
     };
   }
 
-  /** @internal The read worker supplies only the exact retained tail, under the original version. */
-  static [sessionManagerFromCompactionSource](
-    target: SessionTranscriptRuntimeTarget,
-    entries: readonly unknown[],
-    version: SessionTranscriptContextVersion,
-    cwd: string,
-  ): SessionManager {
-    const manager = new SessionManager(cwd, target, entries, undefined, version);
-    // This view may append a prepared compaction, but cannot rewrite an omitted prefix.
-    manager.boundedContextIncomplete = true;
-    manager.boundedContextLimits = { compaction: true };
-    const ids = [...manager.byId.keys()];
-    manager.adoptSelectedTranscriptPath(
-      manager.appendParentId,
-      ids.map((id, index) => [id, ids[index - 1] ?? null]),
-    );
-    return manager;
-  }
+  static [reload.adoptPreparedCompaction] = reload.createPreparedCompactionAdopter(
+    (...args) => new SessionManager(...args),
+  );
 
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
   static open(
@@ -573,7 +574,7 @@ export class SessionManager extends SessionManagerBranching {
       ...prepared: Parameters<SessionManagerTranscriptCohort["consume"]>
     ) => void,
   ): Promise<SessionManager> {
-    return openSessionManagerBoundedView(
+    return reload.openSessionManagerBoundedView(
       target,
       options,
       (cwd, captured, context, limits) => {
@@ -607,7 +608,7 @@ export class SessionManager extends SessionManagerBranching {
       signal?: AbortSignal;
     },
   ): Promise<SessionManager> {
-    return openSessionManagerBoundedView(
+    return reload.openSessionManagerBoundedView(
       target,
       options,
       (cwd, captured, context, limits) =>
@@ -672,11 +673,6 @@ export class SessionManager extends SessionManagerBranching {
     return readSessionManagerModelContextAsync(target, options, (context) =>
       SessionManager.fromSelectedEntries(context.events, options.cwd, context.version),
     );
-  }
-
-  /** The source snapshot's version, including writes beyond a selected admission prefix. */
-  getTranscriptSnapshotVersion(): Readonly<SessionTranscriptContextVersion> | undefined {
-    return this.transcriptVersion;
   }
 
   private static fromSelectedEntries(

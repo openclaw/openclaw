@@ -58,13 +58,7 @@ describe("requester settle watch admission", () => {
     setRuntimeConfigSnapshot(cfg);
     const receipt = createRequesterSettleReceiptAdmission({
       requester: { canonicalKey: REQUESTER_KEY, agentId: "main", storePath },
-      identity: { sessionId: "requester-session" },
-      storeSessionKey: REQUESTER_KEY,
-      storeAgentId: "main",
-      storePaths: () => [storePath],
-      isSourceCurrent: () => true,
       readCurrent: () => ({ sessionId: "requester-session" }),
-      isStoreCurrent: () => true,
     });
     const admission = prepareSystemAgentRunAdmission(
       cfg,

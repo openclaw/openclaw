@@ -44,13 +44,13 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
     const release = createDeferred();
     const nativeClosed = createDeferred();
     const nativeError = createDeferred<Error>();
-    const access = fs.access;
-    const heldAccess = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+    const stat = fs.stat;
+    const heldStat = vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
       if (args[0] === removedNode) {
         entered.resolve();
         await release.promise;
       }
-      return access(...args);
+      return stat(...args);
     });
     const supervisor = createProcessSupervisor();
     const closeScope = supervisor.acquireScopeCleanup("runtime-diagnosis", {
@@ -107,7 +107,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
       await shuttingDown;
     } finally {
       release.resolve();
-      heldAccess.mockRestore();
+      heldStat.mockRestore();
       await Promise.allSettled([starting, drainingScope, shuttingDown, closeScope()]);
       await supervisor.shutdown();
     }

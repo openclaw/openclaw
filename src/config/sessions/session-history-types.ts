@@ -118,10 +118,17 @@ export type ChatHistoryPageParams = {
   cliHistoryProjectsDir?: string;
 };
 
+/** A hidden wake that resumes work this session started: a background command, a restart, or a child. */
+type ProjectedContinuationSource = "exec" | "restart" | "subagent";
+
+/** Hidden input's meaning for the next visible row: `true` starts a turn, a source continues one. */
+export type PendingTurnBoundary = boolean | ProjectedContinuationSource;
+
 type SessionHistoryTranscriptMeta = {
   idempotencyKey?: string;
   seq?: number;
   turnBoundary?: boolean;
+  continuation?: { source: ProjectedContinuationSource };
   pluginSteering?: { pluginId: string; pluginName?: string; displayText?: string };
 };
 
@@ -140,7 +147,7 @@ export type PaginatedSessionHistory = {
 export type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
-  turnBoundaryPending: boolean;
+  turnBoundaryPending: PendingTurnBoundary;
   assistantErrorPending: boolean;
   transcriptPath?: string;
 };

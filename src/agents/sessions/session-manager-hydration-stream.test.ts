@@ -2,10 +2,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { serializeConversationWithinBudget } from "../../../packages/agent-core/src/harness/compaction/utils.js";
+import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import { replaceTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readPreparedSessionCompactionInWorker } from "../../config/sessions/session-compaction-prepared.js";
 import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
@@ -28,8 +31,289 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import {
+  prepareCompactionSafeguardHistory,
+  prepareCompactionSafeguardMessages,
+  prepareCompactionSafeguardSummary,
+} from "../agent-hooks/compaction-safeguard-preparation.js";
+import { sanitizeCompactionMessages } from "../compaction-planning.js";
+import { resolveImageSanitizationLimits } from "../image-sanitization.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
+import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { prepareAgentCompactionWork } from "./compaction/preparation.js";
 import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager, type SessionMessageEntry } from "./session-manager.js";
+
+it("prepares and rerenders captured rows without hydrating summarized history on the host", () =>
+  withOpenClawTestState({ label: "prepared-compaction-worker" }, async (state) => {
+    const target = makeTarget(state, "prepared-compaction");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const model = makeProviderModelFixture({
+      id: "fixture",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+    });
+    for (let index = 0; index < 20; index += 1) {
+      await source.appendMessageAsync(
+        makeUserMessage(index === 1 ? "漢字 source ".repeat(15_000) : "Request " + index, index),
+      );
+    }
+    await source.appendCustomEntryAsync("model-snapshot", {
+      timestamp: 1,
+      provider: model.provider,
+      modelApi: model.api,
+      modelId: model.id,
+    });
+    const before = source.getPersistedEntries();
+    const branch = source.getBranch();
+    const work = {
+      itemId: "prepared-fixture",
+      settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+      mode: "manual" as const,
+      summaryOutputPolicy: "none" as const,
+    };
+    const expected = prepareAgentCompactionWork(branch, work);
+    if (expected.status !== "prepared") {
+      throw new Error("Expected compactable native fixture");
+    }
+    const history = prepareCompactionSafeguardHistory({
+      messages: prepareCompactionSafeguardMessages(expected.preparation),
+      firstKeptEntryId: expected.preparation.firstKeptEntryId,
+      readBranch: () => branch,
+    });
+    const summary = prepareCompactionSafeguardSummary({
+      history,
+      preparation: expected.preparation,
+      qualityGuardEnabled: true,
+      splitTurnContextChars: 8000,
+    });
+    const operations: string[] = [];
+    let retainedBytes = 0;
+    let abortRetainedStream: AbortController | undefined;
+    const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
+      const run = pool.run.bind(pool);
+      return vi.spyOn(pool, "run").mockImplementation((input, options) => {
+        let planRequest = false;
+        const receive = options.onRequest;
+        return run(
+          async () => {
+            const request = typeof input === "function" ? await input() : input;
+            if (request.kind === "compaction-preparation") {
+              operations.push(request.operation.kind);
+              planRequest = request.operation.kind === "plan";
+            }
+            return request;
+          },
+          {
+            ...options,
+            ...(receive
+              ? {
+                  onRequest: async (value, context) => {
+                    if (planRequest) {
+                      // The paired native producer owns this hydration envelope.
+                      const chunk =
+                        value as import("../../config/sessions/session-transcript-hydration.types.js").SessionTranscriptHydrationChunk;
+                      retainedBytes += chunk.frames.reduce(
+                        (total, frame) => total + frame.data.byteLength,
+                        0,
+                      );
+                      abortRetainedStream?.abort(new Error("fixture retained stream cancelled"));
+                    }
+                    return await receive(value, context);
+                  },
+                }
+              : {}),
+          },
+        );
+      });
+    });
+    try {
+      const prepared = await readPreparedSessionCompactionInWorker(target, {
+        kind: "plan",
+        options: { work, qualityGuardEnabled: true },
+        replay: {
+          model,
+          policy: resolveTranscriptPolicy({
+            model,
+            modelApi: model.api,
+            provider: model.provider,
+            modelId: model.id,
+          }),
+          imageLimits: resolveImageSanitizationLimits(),
+          allowedToolNames: [],
+          signedThinkingProvider: false,
+          allowProviderOwnedThinkingReplay: false,
+          isOpenAIResponsesApi: true,
+          sessionId: target.sessionId,
+          replayEnabled: true,
+        },
+      });
+      if (prepared.status !== "prepared") {
+        throw new Error(
+          "Native preparation did not produce its bounded plan: " + JSON.stringify(prepared),
+        );
+      }
+      expect(prepared.plan.preparation.firstKeptEntryId).toBe(
+        expected.preparation.firstKeptEntryId,
+      );
+      expect(prepared.plan.retained.map((entry) => entry.id)).not.toContain(branch[0]!.id);
+      expect(prepared.beforeHookMetrics.messageCountOriginal).toBe(20);
+      expect(retainedBytes).toBeGreaterThan(0);
+      expect(retainedBytes).toBeLessThan(16 * 1024);
+      const expectedMessages = convertToLlm(
+        sanitizeCompactionMessages(summary.reconciliationMessages),
+      );
+      for (const maxChars of [4000, 8000, 16_000]) {
+        const rendered = await readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences: prepared.plan.selections.history,
+          version: prepared.version,
+          maxChars,
+        });
+        expect(rendered).toEqual({
+          kind: "compaction-preparation",
+          status: "rendered",
+          conversation: serializeConversationWithinBudget(expectedMessages, maxChars),
+        });
+      }
+      expect(operations).toEqual(["plan", "render", "render", "render"]);
+      abortRetainedStream = new AbortController();
+      await expect(
+        readPreparedSessionCompactionInWorker(
+          target,
+          {
+            kind: "plan",
+            options: { work, qualityGuardEnabled: true },
+            replay: {
+              model,
+              policy: resolveTranscriptPolicy({
+                model,
+                modelApi: model.api,
+                provider: model.provider,
+                modelId: model.id,
+              }),
+              imageLimits: resolveImageSanitizationLimits(),
+              allowedToolNames: [],
+              signedThinkingProvider: false,
+              allowProviderOwnedThinkingReplay: false,
+              isOpenAIResponsesApi: true,
+              sessionId: target.sessionId,
+              replayEnabled: true,
+            },
+          },
+          abortRetainedStream.signal,
+        ),
+      ).rejects.toThrow();
+      abortRetainedStream = undefined;
+      expect(source.getPersistedEntries()).toEqual(before);
+      expect(replaceTranscriptEventsSync(target, before)).toBe(true);
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences: prepared.plan.selections.history,
+          version: prepared.version,
+          maxChars: 4000,
+        }),
+      ).rejects.toThrow();
+    } finally {
+      spies.forEach((spy) => spy.mockRestore());
+    }
+  }));
+
+it("streams oversized compaction history without first materializing it in the reader", () =>
+  withOpenClawTestState({ label: "prepared-compaction-working-set" }, async (state) => {
+    const target = makeTarget(state, "oversized-preparation");
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const source = await SessionManager.openAsync(target);
+    const text = "x".repeat(1024 * 1024);
+    const messages = Array.from({ length: 18 }, (_, index) => ({
+      type: "message",
+      id: "large-" + index,
+      parentId: index ? "large-" + (index - 1) : null,
+      timestamp: new Date(index).toISOString(),
+      message: makeUserMessage(text, index),
+    }));
+    expect(
+      replaceTranscriptEventsSync(target, [source.getPersistedEntries()[0]!, ...messages]),
+    ).toBe(true);
+    await waitForSessionTranscriptProjection(target);
+    const before = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
+    if (before.kind !== "bounded" || !before.residentRows) {
+      throw new Error("Expected indexed compaction fixture");
+    }
+    const sequences = before.residentRows.slice(1).map((row) => row.rawSeq);
+    const last = sequences.at(-1)!;
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.storePath });
+    const writePayload = database.db.prepare(
+      "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
+    );
+    // Keep admitted byte/navigation facts, but make payload acquisition observably fail.
+    // A budget refusal must precede decoding, not arrive after allocating the full graph.
+    writePayload.run("{malformed", target.sessionId, last);
+    const model = makeProviderModelFixture({
+      id: "fixture",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://example.invalid/v1",
+    });
+    try {
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "plan",
+          options: {
+            work: {
+              itemId: "oversized-plan",
+              mode: "manual",
+              summaryOutputPolicy: "none",
+              settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 1 },
+            },
+            qualityGuardEnabled: true,
+          },
+          replay: {
+            model,
+            policy: resolveTranscriptPolicy({
+              model,
+              modelApi: model.api,
+              provider: model.provider,
+              modelId: model.id,
+            }),
+            imageLimits: resolveImageSanitizationLimits(),
+            allowedToolNames: [],
+            signedThinkingProvider: false,
+            allowProviderOwnedThinkingReplay: false,
+            isOpenAIResponsesApi: true,
+            sessionId: target.sessionId,
+            replayEnabled: true,
+          },
+        }),
+      ).rejects.toThrow("materialized preparation byte limit");
+      await expect(
+        readPreparedSessionCompactionInWorker(target, {
+          kind: "render",
+          sequences,
+          version: before.snapshot.version,
+          maxChars: 4000,
+        }),
+      ).rejects.toThrow("materialized preparation byte limit");
+    } finally {
+      writePayload.run(JSON.stringify(messages.at(-1)), target.sessionId, last);
+    }
+    // Declining optimization must leave the complete existing streamed host path usable.
+    const hydrated = await prepareSessionTranscriptHydration(target, { compaction: true }).read();
+    const events = hydrated.snapshot.events.slice(1);
+    expect(events).toHaveLength(messages.length);
+    expect(
+      events.every(
+        (event, index) =>
+          isRecord(event) &&
+          event.id === "large-" + index &&
+          isRecord(event.message) &&
+          event.message.content === text,
+      ),
+    ).toBe(true);
+  }));
 
 function makeTarget(state: OpenClawTestState, sessionId: string) {
   return sessionScope(path.join(state.agentDir("main"), "openclaw-agent.sqlite"), sessionId);

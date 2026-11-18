@@ -1,4 +1,6 @@
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
@@ -6,6 +8,8 @@ import { MessageChannel, Worker, type WorkerOptions } from "node:worker_threads"
 import { afterEach, assert, describe, expect, it as baseIt, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { createSqliteFamilyEngines } from "../infra/database-engine/selection-fixture.test-support.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
   readSqliteDatabaseWriteRevision,
@@ -149,6 +153,60 @@ describe("maintenance lease heartbeat", () => {
       expect(workers[0]?.threadId).toBe(-1);
     },
   );
+
+  it("releases an existing-schema lease refused by maintenance during heartbeat startup", async ({
+    state,
+  }) => {
+    const database = openOpenClawStateDatabase({ env: state.env });
+    const leaseOptions = {
+      ...options(state.env),
+      database: { ...options(state.env).database, schemaPolicy: "existing" as const },
+      leaseMs: 60_000,
+    };
+    const ownerPath = resolveGatewayStateOwnerPath(database.path);
+    const holder = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    await once(holder, "spawn");
+    const stopped = once(holder, "exit");
+    let entered = false;
+    heartbeatWorkers.beforeCreate = () => {
+      fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+      fs.writeFileSync(
+        ownerPath,
+        JSON.stringify({ ...defaultPayload(database.path), pid: holder.pid, startTime: undefined }),
+      );
+    };
+    try {
+      await expect(
+        withOpenClawStateLease(leaseOptions, async () => {
+          entered = true;
+        }),
+      ).rejects.toThrow();
+      expect(entered).toBe(false);
+      // Custody still blocks cleanup: no release or protected callback may bypass it.
+      expect(
+        database.db
+          .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+          .get("core:test-maintenance", "maintenance"),
+      ).toBeDefined();
+      fs.rmSync(ownerPath);
+      heartbeatWorkers.beforeCreate = undefined;
+      // Retry must release the original row, not wait for its minute-long expiry.
+      await expect(
+        withOpenClawStateLease({ ...leaseOptions, waitMs: 2_000 }, async (lease) => {
+          lease.assertOwned();
+          return "reacquired";
+        }),
+      ).resolves.toBe("reacquired");
+      expect(readLease(state.env)).toBeUndefined();
+    } finally {
+      heartbeatWorkers.beforeCreate = undefined;
+      fs.rmSync(ownerPath, { force: true });
+      holder.kill();
+      await stopped;
+    }
+  });
 
   it("preserves native renewal errors through worker and lease rejection", async ({ state }) => {
     const { db } = openOpenClawStateDatabase({ env: state.env });

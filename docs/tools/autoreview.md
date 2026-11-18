@@ -66,6 +66,14 @@ still cancel the review. The helper's timeout remains a per-pass limit, and
 an omitted timeout retains `openclaw agent exec`'s 600-second default for each
 pass. `/btw` retains its separate ten-minute parent deadline.
 
+Embedded runs, including nested Code Mode calls, publish the parent's finite
+execution deadline as a liveness allowance for the reply watchdog. For an
+unlimited parent, the allowance is the default 48-hour agent budget measured
+from tool execution start. This adds no tool abort timer: the parent's existing
+timeout, per-pass limits, Stop, and authority revocation still apply. A review
+that stays quiet beyond its allowance plus the watchdog's fifteen-minute quiet
+window can still be recovered as stalled.
+
 An allowed configured reviewer model is preserved. If the caller cannot use that
 configured preference, the Gateway selects the caller's existing permitted
 default before execution and the helper records the effective model. An explicit

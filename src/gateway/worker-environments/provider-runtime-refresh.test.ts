@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { NODE_WORKER_ENVIRONMENT_STOP_COMMAND } from "../../infra/node-commands.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { installWorkerPlacementReconcileGuard } from "../server-worker-placement-reconcile-guard.js";
@@ -45,6 +50,7 @@ describe("worker environment runtime upgrades", () => {
     bootstrapReceipt: WorkerAdmissionHandshake = support.BOOTSTRAP_RECEIPT,
     targetReceipt: WorkerAdmissionHandshake = currentReceipt,
     nodeRecovery = false,
+    providerCallTimeoutMs?: number,
   ) {
     const environmentId = "worker-runtime-upgrade";
     type Transition = Parameters<typeof testState.store.transition>[0];
@@ -164,11 +170,12 @@ describe("worker environment runtime upgrades", () => {
     >(async (request) => {
       request.assertCurrent();
     });
+    const inspect = vi.fn(async () => ({ status: "active" as const, sharedHost: false }));
     const provider = {
       ...(nodeRecovery
         ? {
             requiresNodeEnrollment: true as const,
-            inspect: async () => ({ status: "active" as const, sharedHost: false }),
+            inspect,
             resumeNode,
           }
         : {}),
@@ -207,12 +214,13 @@ describe("worker environment runtime upgrades", () => {
           nodeTunnelManager,
           placementStore: gate,
           ensureNodeWorkerBundle,
+          providerCallTimeoutMs,
           ...(nodeRecovery ? { prepareNodeRuntime, closeNodeRuntime } : {}),
         },
       );
       return { gate, service };
     };
-    const { service } = await bindService(placements);
+    const { gate, service } = await bindService(placements);
     return {
       environment,
       owner,
@@ -222,12 +230,14 @@ describe("worker environment runtime upgrades", () => {
       currentNodeRuntime,
       prepareNodeRuntime,
       closeNodeRuntime,
+      inspect,
       resumeNode,
       events,
       stop,
       install,
       ...provider,
       ensureNodeWorkerBundle,
+      gate,
       service,
       tunnelManager,
       nodeTunnelManager,
@@ -300,6 +310,89 @@ describe("worker environment runtime upgrades", () => {
         expect(h.placements.get(REQUEST.sessionId)?.generation).toBe(h.placement!.generation);
         expect(h.provision).not.toHaveBeenCalled();
         expect(h.destroy).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it.for(["placement preparation", "runtime preparation", "provider resume"] as const)(
+    "releases node upgrade resources on a provider timeout during %s without overlapping resumes",
+    async (phase, { signal }) => {
+      const timeoutMs = 20;
+      const h = await setupUpgrade(
+        "node",
+        "attached",
+        support.BOOTSTRAP_RECEIPT,
+        currentReceipt,
+        true,
+        timeoutMs,
+      );
+      const entered = createDeferred();
+      const unblock = createDeferred();
+      const pause = () => {
+        entered.resolve();
+        return unblock.promise;
+      };
+      const preparePlacement = h.gate.prepareWorkerRuntimeRefresh;
+      const releasePlacement = vi.fn();
+      vi.spyOn(h.gate, "prepareWorkerRuntimeRefresh").mockImplementationOnce(async (binding) => {
+        const authority = await preparePlacement(binding);
+        releasePlacement.mockImplementation(authority.release);
+        if (phase === "placement preparation") {
+          await pause();
+        }
+        return { ...authority, release: releasePlacement };
+      });
+      if (phase === "runtime preparation") {
+        h.prepareNodeRuntime.mockImplementationOnce(async () => {
+          await pause();
+          return h.currentNodeRuntime;
+        });
+      } else if (phase === "provider resume") {
+        h.resumeNode.mockImplementationOnce(async (request) => {
+          request.assertCurrent();
+          await pause();
+        });
+      }
+
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const request = { signal, assertCurrent() {} };
+      const first = h.service.resumeNode(h.owner.environmentId, {
+        ...request,
+        upgradeRuntime: true,
+      });
+      // Capture rejection before advancing the shared deadline.
+      const outcome = first.catch((error: unknown) => error);
+      let retry: ReturnType<typeof h.service.resumeNode> | undefined;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(entered.promise, first, "node upgrade did not reach the gate"),
+          signal,
+        );
+        await vi.advanceTimersByTimeAsync(timeoutMs);
+        expect(await withinTest(outcome, signal)).toMatchObject({
+          message: `Worker provider operation timed out after ${timeoutMs}ms`,
+        });
+        expect(releasePlacement).toHaveBeenCalledTimes(phase === "placement preparation" ? 0 : 1);
+        expect(h.closeNodeRuntime).toHaveBeenCalledTimes(phase === "provider resume" ? 1 : 0);
+
+        retry = h.service.resumeNode(h.owner.environmentId, request);
+        await nextEventLoopTurn();
+        expect(h.inspect).toHaveBeenCalledOnce();
+
+        unblock.resolve();
+        await expect(withinTest(retry, signal)).resolves.toBeUndefined();
+        expect(releasePlacement).toHaveBeenCalledOnce();
+        if (phase === "placement preparation") {
+          expect(h.prepareNodeRuntime).not.toHaveBeenCalled();
+          expect(h.closeNodeRuntime).not.toHaveBeenCalled();
+        } else {
+          expect(h.closeNodeRuntime).toHaveBeenCalledExactlyOnceWith(h.currentNodeRuntime);
+        }
+        expect(h.resumeNode).toHaveBeenCalledTimes(phase === "provider resume" ? 2 : 1);
+      } finally {
+        unblock.resolve();
+        vi.useRealTimers();
+        await Promise.allSettled([first, retry]);
       }
     },
   );

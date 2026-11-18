@@ -3,6 +3,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { worktreeRegistryPublication } from "../../agents/worktrees/registry-publication.js";
 import { insertRegistryWorktreeInDatabase } from "../../agents/worktrees/registry-run-end.worker.js";
+import {
+  admitWorktreeRunLeaseInDatabase,
+  releaseWorktreeRunLeaseInDatabase,
+} from "../../agents/worktrees/run-lease-store.kernel.js";
 import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { tryBeginGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
@@ -533,12 +537,16 @@ describe("placement recovery session admission with persisted placements", () =>
       const sessionPublication = source.endsWith("session");
       const { root, ref: orphanRef, read } = await orphanWorkspace("parked-orphan");
       await seedFailed(placements);
+      let targetReads = 0;
       const target = {
         ...REQUEST,
         sessionKey: `agent:${source === "shared-store session" ? "logical" : "physical"}:canonical-orphan`,
         agentId: "physical",
         storePath: path.join(root, "sessions.sqlite"),
-        ...(sessionPublication ? {} : { worktreeId: "parked-worktree" }),
+        get worktreeId() {
+          targetReads++;
+          return sessionPublication ? undefined : "parked-worktree";
+        },
       };
       let available = false;
       const resolveWorkspace = vi.fn(async () => {
@@ -571,6 +579,23 @@ describe("placement recovery session admission with persisted placements", () =>
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);
         unsubscribe = subscribe();
         publish("unrelated");
+        if (!sessionPublication) {
+          targetReads = 0;
+          runOpenClawStateWriteTransaction(
+            ({ db }) => {
+              admitWorktreeRunLeaseInDatabase(db, {
+                worktreeId: "unrelated",
+                token: "unrelated-run",
+                pid: process.pid,
+                startTime: null,
+                now: 1,
+              });
+              releaseWorktreeRunLeaseInDatabase(db, "unrelated", "unrelated-run");
+            },
+            { database: support.testState.stateDb },
+          );
+          expect(targetReads, "lease publications must not scan parked workspaces").toBe(0);
+        }
         await coordinated.reconcileActive();
         await coordinated.reconcileActive();
         expect(resolveWorkspace).toHaveBeenCalledTimes(1);

@@ -18,7 +18,6 @@ import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,
 } from "./chat-abort-handler.js";
-import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import {
   createAbortTestRunState,
@@ -165,7 +164,6 @@ it.each([
   "session",
   "stop",
   "stop-revoked",
-  "stop-leaf",
   "sessions",
   "queued",
   "terminal",
@@ -193,9 +191,6 @@ it.each([
       if (route === "stop-revoked") {
         throw refusal;
       }
-      if (route === "stop-leaf") {
-        throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
-      }
     }
   };
   const terminalFailure = route === "terminal" || route === "revoked";
@@ -216,7 +211,7 @@ it.each([
   });
   const pending = invokeChatAbortHandler({
     handler:
-      route === "stop" || route === "stop-revoked" || route === "stop-leaf"
+      route === "stop" || route === "stop-revoked"
         ? (options) =>
             handleDirectExternalChatSend({
               ...options,
@@ -246,13 +241,6 @@ it.each([
         error: { code: "FORBIDDEN", details: { reason: "fixture-revocation" } },
       });
     }
-  } else if (route === "stop-leaf") {
-    await pending;
-    expect(respond.mock.lastCall?.[2]).toMatchObject({
-      code: "INVALID_REQUEST",
-      details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
-      message: expect.stringContaining("could not be saved to history"),
-    });
   } else {
     await pending;
     expect(respond.mock.lastCall?.[2]).toBeUndefined();

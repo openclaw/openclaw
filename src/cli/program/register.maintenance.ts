@@ -340,21 +340,17 @@ export function registerMaintenanceCommands(
           opts.json === true,
         );
       }
-      return await runCommandWithRuntime(
-        defaultRuntime,
-        async () => {
-          const { triageCommand } = await import("../../commands/triage.js");
-          await triageCommand(defaultRuntime, {
-            json: opts.json === true,
-            noExport: opts.export === false,
-            run: opts.run === true,
-            ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
-            ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
-            ...(agent ? { agent } : {}),
-          });
-        },
-        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
-      );
+      return await runCommandWithRuntime(defaultRuntime, async () => {
+        const { triageCommand } = await import("../../commands/triage.js");
+        await triageCommand(defaultRuntime, {
+          json: opts.json === true,
+          noExport: opts.export === false,
+          run: opts.run === true,
+          ...(opts.nonInteractive === true ? { nonInteractive: true } : {}),
+          ...(typeof opts.updateResult === "string" ? { updateResult: opts.updateResult } : {}),
+          ...(agent ? { agent } : {}),
+        });
+      });
     });
 
   program

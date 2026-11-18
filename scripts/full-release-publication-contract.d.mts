@@ -199,9 +199,6 @@ export function createPublicationAdmission(
   observations: PublicationObservations,
   artifact: PublicationObservationArtifact,
   admittedAt: string,
-  options?: {
-    workflowPath?: string;
-  },
 ): PublicationAdmission;
 export function validatePublicationAdmissionBinding(
   record: Record<string, unknown>,

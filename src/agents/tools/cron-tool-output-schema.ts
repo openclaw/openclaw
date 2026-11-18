@@ -45,6 +45,7 @@ const CompactCronJobSchema = closedObject({
     Type.Literal("event"),
   ]),
   streamExecutionHost: job.streamExecutionHost,
+  reauthorizationRequired: job.reauthorizationRequired,
   schedule: Type.Optional(
     Type.Union(
       job.schedule.anyOf.filter((schema) =>
@@ -108,6 +109,7 @@ const CronStatusOutputSchema = closedObject({
   storage: Type.Optional(Type.Literal("sqlite")),
   sqlitePath: Type.Optional(Type.String()),
   jobs: Type.Optional(Type.Integer({ minimum: 0 })),
+  reauthorizationRequired: Type.Optional(Type.Integer({ minimum: 0 })),
   nextWakeAtMs: Type.Optional(nullableNumber),
 });
 

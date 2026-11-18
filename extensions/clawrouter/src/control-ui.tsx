@@ -564,7 +564,7 @@ export default defineControlUiPlugin({
       id: "pool",
       label: "ClawRouter",
       page: { id: "pool" },
-      icon: "layers",
+      icon: "clawrouter",
       order: 45,
     });
     return () => {

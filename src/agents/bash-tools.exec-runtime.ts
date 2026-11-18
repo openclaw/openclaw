@@ -3,8 +3,11 @@ import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import type { prepareWorkerGitHubBindingGrant } from "../gateway/worker-environments/worker-github-execution-identity.js";
-import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
+import type { prepareWorkerGitHubExecutionGrant } from "../gateway/worker-environments/worker-github-execution-identity.js";
+import {
+  captureDiagnosticToolExecutionAwaiting,
+  recordDiagnosticToolExecutionDeadline,
+} from "../infra/diagnostic-tool-execution-liveness.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../infra/exec-approvals.js";
 import {
@@ -56,6 +59,7 @@ import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exe
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
+  EXEC_OUTPUT_FILE_MAX_BYTES,
   joinExecFailureOutput,
   type ExecProcessOutcome,
   renderExecUpdateText,
@@ -71,6 +75,7 @@ import { GITHUB_PUBLIC_HOST } from "./github-host.js";
 import type { LocalGitHubAppExecution } from "./github-tool-identity.types.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { openPrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -186,6 +191,7 @@ export async function runExecProcess({
   eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
+  deadlineSource?: "default" | "explicit";
   /** Whether exec may return a supervised session for later continuation. */
   processContinuationAvailable?: boolean;
   /** Explicit `background: true` service, handed off rather than stopped at one-shot exit. */
@@ -214,6 +220,14 @@ export async function runExecProcess({
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
+  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
+  if (timeoutMs !== undefined) {
+    // Preparation can outlast the quiet window; spawn replaces this with its enforced deadline.
+    recordDiagnosticToolExecutionDeadline(startedAt + timeoutMs);
+  }
+  let phase: "preparing" | "running" = "preparing";
+  const deadlineSource = timeoutMs === undefined ? "none" : (opts.deadlineSource ?? "explicit");
+  captureDiagnosticToolExecutionAwaiting()(() => [{ kind: "exec", phase, deadlineSource }]);
   const sessionId = createProcessSessionId();
   const execCommand = opts.execCommand ?? opts.command;
   const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
@@ -330,7 +344,6 @@ export async function runExecProcess({
       }
     };
 
-  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
   let assertSandboxCurrent: (() => void) | undefined;
   let prepareSandboxCurrent: (() => Promise<void>) | undefined;
@@ -338,7 +351,7 @@ export async function runExecProcess({
   let terminateSandboxProcess: (() => Promise<void>) | undefined;
   let sandboxTermination: Promise<{ error: unknown } | undefined> | undefined;
   let secretEgressGrant: SecretEgressProcessGrant | undefined;
-  let githubGrant: Awaited<ReturnType<typeof prepareWorkerGitHubBindingGrant>>;
+  let githubGrant: Awaited<ReturnType<typeof prepareWorkerGitHubExecutionGrant>>;
   const githubStartup = new AbortController();
   const cancelGitHubStartup = () => githubStartup.abort(startupSignal?.reason);
   const onGitHubRevoked = () => {
@@ -551,7 +564,6 @@ export async function runExecProcess({
           const { startDurableExecProcess } = await import("./bash-process-durable.js");
           return await startDurableExecProcess(
             session,
-            opts.sessionId,
             {
               ...input,
               env: resolveExecLaunchEnv(input.env, false),
@@ -584,6 +596,11 @@ export async function runExecProcess({
       }
     });
 
+  // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
+  // GitHub App execution must not persist potentially credential-bearing raw output.
+  if (!opts.sandbox && !opts.durable && !opts.githubApp) {
+    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
+  }
   try {
     assertSourceActive?.();
     operatorAuthority?.assertCurrent();
@@ -602,9 +619,9 @@ export async function runExecProcess({
       if (startupSignal?.aborted) {
         cancelGitHubStartup();
       }
-      const { prepareWorkerGitHubBindingGrant } =
+      const { prepareWorkerGitHubExecutionGrant } =
         await import("../gateway/worker-environments/worker-github-execution-identity.js");
-      githubGrant = await prepareWorkerGitHubBindingGrant({
+      githubGrant = await prepareWorkerGitHubExecutionGrant({
         ...opts.githubApp,
         expectedProfileId: opts.githubApp.profileId,
         signal: githubStartup.signal,
@@ -712,6 +729,7 @@ export async function runExecProcess({
     prepareSandboxCurrent = undefined;
   }
   session.processActivity = managedRun.activity;
+  phase = "running";
   recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;

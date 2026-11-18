@@ -1,17 +1,16 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
+import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
-import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
 import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
-import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
+import { wrapStreamFnWithModelRequestGate } from "./model-request-hook.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -36,6 +35,11 @@ export async function prepareCompactionSessionAgent(params: {
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
   modelCallUrgency?: ModelCallUrgency;
+  contextTokenBudget: number;
+  /** Compaction request facts the `before_model_request` hook context carries. */
+  params: { sessionKey?: string };
+  trigger?: PluginHookAgentContext["trigger"];
+  resolvedMessageProvider?: string;
 }) {
   const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
@@ -50,6 +54,23 @@ export async function prepareCompactionSessionAgent(params: {
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
   }).streamFn;
+  // Summaries resend older history, so they pass the same final request gate as turns,
+  // at the same depth: provider/config payload wrappers applied below run first.
+  params.session.agent.streamFn = wrapStreamFnWithModelRequestGate(
+    params.session.agent.streamFn,
+    {
+      agentId: params.sessionAgentId,
+      ...(params.params.sessionKey ? { sessionKey: params.params.sessionKey } : {}),
+      sessionId: params.sessionId,
+      workspaceDir: params.effectiveWorkspace,
+      modelProviderId: params.provider,
+      modelId: params.modelId,
+      messageProvider: params.resolvedMessageProvider,
+      trigger: params.trigger,
+      contextTokenBudget: params.contextTokenBudget,
+    },
+    "compaction",
+  );
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,
@@ -104,21 +125,4 @@ export async function prepareCompactionSessionAgent(params: {
     },
   );
   return { ...extraParams, transportApiKey };
-}
-
-/** Bind one settings owner to the foreground agent and its resolved context budget. */
-export function createCompactionSessionSettings(runtime: PreparedCompactionRuntime) {
-  return createPreparedEmbeddedAgentSettingsManager({
-    agentId: runtime.sessionAgentId,
-    sessionId: runtime.params.sessionId,
-    cwd: runtime.effectiveCwd,
-    agentDir: runtime.agentDir,
-    cfg: runtime.params.config,
-    pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
-      config: runtime.params.config,
-      env: process.env,
-      workspaceDir: runtime.effectiveWorkspace,
-    }),
-    contextTokenBudget: runtime.contextTokenBudget,
-  });
 }

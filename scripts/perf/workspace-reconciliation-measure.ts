@@ -14,12 +14,19 @@
  * Use an external process timeout for baseline stalls. Fixture preparation and
  * cleanup are outside measurement. Filesystem choice belongs to --root/TMPDIR;
  * these owners do not read agent/session databases, so no database is padded.
+ * --workload replay --count 11175 --bytes 7420 --unchanged 50825 creates 62k
+ * synthetic files / 1.05 GB. First apply creates an ~83 MB incompressible journal;
+ * measure the same plan again after application. --revision pins only the apply
+ * owner for A/A and interleaved A/B comparisons; worker implementations are unchanged.
+ * Acceptance: replay preserves all files/conflicts and writes no journal. Report
+ * initial and replay pack bytes separately; this does not prove production plan identity.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay } from "node:perf_hooks";
@@ -34,15 +41,17 @@ const { values } = parseArgs({
   options: {
     root: { type: "string" },
     source: { type: "string" },
+    revision: { type: "string" },
     count: { type: "string", default: "20000" },
     bytes: { type: "string", default: "24576" },
+    unchanged: { type: "string", default: "0" },
     workload: { type: "string", default: "apply" },
     measure: { type: "string", default: "timing" },
     profile: { type: "string" },
   },
 });
 assert(values.root, "--root must name task-owned fixture storage");
-assert(["patch", "apply", "conflict-apply", "conflicts"].includes(values.workload));
+assert(["patch", "apply", "conflict-apply", "conflicts", "replay"].includes(values.workload));
 assert(["timing", "cpu", "allocation"].includes(values.measure));
 const count = parseStrictIntegerOption({
   raw: values.count,
@@ -56,8 +65,27 @@ const bytes = parseStrictIntegerOption({
   min: 80,
   fallback: 24576,
 });
+const unchanged = parseStrictIntegerOption({
+  raw: values.unchanged,
+  label: "--unchanged",
+  min: 0,
+  fallback: 0,
+});
 const source = path.resolve(values.source ?? fileURLToPath(new URL("../..", import.meta.url)));
 const sourceUrl = (relative: string) => pathToFileURL(path.join(source, "src", relative)).href;
+if (values.revision) {
+  const owner = "gateway/worker-environments/workspace-reconcile-apply.ts";
+  const original = execFileSync("git", ["show", `${values.revision}:src/${owner}`], {
+    cwd: source,
+    encoding: "utf8",
+  });
+  registerHooks({
+    load: (url, context, nextLoad) =>
+      url === sourceUrl(owner)
+        ? { format: "module-typescript", source: original, shortCircuit: true }
+        : nextLoad(url, context),
+  });
+}
 const { applyStagedWorkerWorkspace } = (await import(
   sourceUrl("gateway/worker-environments/workspace-reconcile-apply.ts")
 )) as typeof import("../../src/gateway/worker-environments/workspace-reconcile-apply.js");
@@ -97,22 +125,23 @@ try {
     }
     for (let index = 0; index < count; index++) {
       const entryPath = `dist/module-${Math.floor(index / 256)}/artifact-${index}.js`;
-      const content = Buffer.from(template);
+      const content = values.workload === "replay" ? randomBytes(bytes) : Buffer.from(template);
       content.write(`// generated output ${String(index).padStart(8, "0")}\n`);
       if (index % 256 === 0) {
         await fs.mkdir(path.dirname(path.join(stagingRoot, entryPath)), { recursive: true });
-        if (values.workload === "conflict-apply") {
+        if (values.workload === "conflict-apply" || values.workload === "replay") {
           await fs.mkdir(path.dirname(path.join(root, entryPath)), { recursive: true });
         }
       }
       await fs.writeFile(path.join(stagingRoot, entryPath), content);
-      entries.push({
+      const entry: WorkerWorkspaceManifestEntry = {
         path: entryPath,
         type: "file",
         mode: 0o644,
         size: bytes,
         sha256: hash(content),
-      });
+      };
+      entries.push(entry);
       if (values.workload === "conflict-apply") {
         await fs.writeFile(path.join(root, entryPath), index < half ? old : "local edit\n");
         baseEntries.push({
@@ -122,8 +151,32 @@ try {
           size: old.length,
           sha256: hash(old),
         });
+      } else if (values.workload === "replay") {
+        const previous = Buffer.from(content);
+        previous[previous.length - 1] = previous[previous.length - 1]! ^ 1;
+        await fs.writeFile(path.join(root, entryPath), previous);
+        baseEntries.push({ ...entry, sha256: hash(previous) });
       }
     }
+  }
+  const unchangedContent = Buffer.alloc(19050, 65);
+  for (let index = 0; index < unchanged; index++) {
+    const entryPath = `source/module-${Math.floor(index / 256)}/file-${index}.txt`;
+    for (const directory of [root, stagingRoot]) {
+      if (index % 256 === 0) {
+        await fs.mkdir(path.dirname(path.join(directory, entryPath)), { recursive: true });
+      }
+      await fs.writeFile(path.join(directory, entryPath), unchangedContent);
+    }
+    const entry: WorkerWorkspaceManifestEntry = {
+      path: entryPath,
+      type: "file",
+      mode: 0o644,
+      size: unchangedContent.length,
+      sha256: hash(unchangedContent),
+    };
+    entries.push(entry);
+    baseEntries.push(entry);
   }
   if (values.workload === "conflict-apply") {
     const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
@@ -154,6 +207,37 @@ process.exit(result.status ?? 1);
   const base = { version: 1 as const, baseCommit: null, entries: baseEntries };
   const current = { version: 1 as const, baseCommit: null, entries };
   const reconciliation = prepareWorkspaceReconciliation(base, current);
+  let journalWrites = 0;
+  let journalPackBytes = 0;
+  const apply = () =>
+    applyStagedWorkerWorkspace({
+      root,
+      stagingRoot,
+      baseManifestRef: `sha256:${"0".repeat(64)}`,
+      currentManifestRef: `sha256:${"1".repeat(64)}`,
+      current,
+      reconciliation,
+      assertCurrent: () => {},
+      journal: {
+        load: async () => undefined,
+        begin: async (journal) => {
+          journalWrites++;
+          journalPackBytes += journal.basePack.byteLength;
+        },
+        commit: async () => {},
+        abort: async () => {},
+      },
+      acceptance: { kind: "reconcile" },
+    });
+  let firstApplyPackBytes: number | undefined;
+  if (values.workload === "replay") {
+    const first = await apply();
+    assert.equal(first.conflictPaths.length, 0);
+    assert.equal(journalWrites, 1);
+    firstApplyPackBytes = journalPackBytes;
+    journalWrites = 0;
+    journalPackBytes = 0;
+  }
   const applyPaths = new Set(
     Array.from({ length: half }, (_, index) => `src/module-${index}/index.js`),
   );
@@ -208,29 +292,17 @@ process.exit(result.status ?? 1);
       });
       outcome = { patchBytes: patch.patch.byteLength, packBytes: patch.basePack.byteLength };
     } else {
-      const result = await applyStagedWorkerWorkspace({
-        root,
-        stagingRoot,
-        baseManifestRef: `sha256:${"0".repeat(64)}`,
-        currentManifestRef: `sha256:${"1".repeat(64)}`,
-        current,
-        reconciliation,
-        assertCurrent: () => {},
-        journal: {
-          load: async () => undefined,
-          begin: async () => {},
-          commit: async () => {},
-          abort: async () => {},
-        },
-        acceptance: { kind: "reconcile" },
-      });
-      assert.equal(result.manifest.entries.length, count);
+      const result = await apply();
+      assert.equal(result.manifest.entries.length, count + unchanged);
       if (values.workload === "conflict-apply") {
         assert.equal(result.conflictPaths.length, count);
       }
       outcome = {
         manifestEntries: result.manifest.entries.length,
         conflictCount: result.conflictPaths.length,
+        journalWrites,
+        journalPackBytes,
+        firstApplyPackBytes,
       };
     }
   } catch (error) {
@@ -268,7 +340,8 @@ process.exit(result.status ?? 1);
       workload: values.workload,
       measure: values.measure,
       count,
-      totalBytes: count * bytes,
+      unchanged,
+      totalBytes: count * bytes + unchanged * unchangedContent.length,
       wallMs,
       cpu,
       mainCpu,

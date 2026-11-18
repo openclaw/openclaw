@@ -313,6 +313,15 @@ it("keeps progress after accepted steers and before queued input", async () => {
   expect(container.querySelectorAll(".chat-working-indicator")).toHaveLength(1);
   expect(progress.textContent).toContain("5.6k output tokens");
   expect(progress.querySelector("openclaw-elapsed-time")?.textContent).toBe("30s");
+  // Active activity retains its disclosure even with a later input queued.
+  // Let the presentation gate settle, then inspect the recorded operation.
+  vi.mocked(Date.now).mockReturnValue(31_250);
+  await vi.waitFor(() => {
+    const activity = container.querySelector<HTMLElement>(".chat-activity-group")!;
+    expect(activity.hidden).toBe(false);
+  });
+  container.querySelector<HTMLButtonElement>(".chat-activity-group__summary")!.click();
+  await flushDeferredRowPrune();
   for (const id of ["latest-answer", "latest-tool", "earlier-steer", "latest-steer"]) {
     const preceding = container.querySelector(`[data-entry-id="${id}"]`)!;
     expect(preceding.compareDocumentPosition(progress) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(

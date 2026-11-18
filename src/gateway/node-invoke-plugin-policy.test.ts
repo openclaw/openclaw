@@ -530,21 +530,14 @@ describe("applyPluginNodeInvokePolicy", () => {
     });
   });
 
-  it("delivers plugin policy approvals to visible iOS reviewers", async (testContext) => {
+  it("passes plugin policy approval bindings to iOS delivery", async (testContext) => {
     const fixture = deliveryFixture(testContext);
     const { manager, context, handleRequested } = fixture;
     await fixture.run(async () => {
       context.pluginApprovalIosPushDelivery = { handleRequested };
       const { record, pending: resultPromise } = await fixture.request();
 
-      expect(handleRequested).toHaveBeenCalledTimes(1);
-      const deliveryOptions = handleRequested.mock.calls[0]?.[1];
-      const visible = (deviceId: string) =>
-        deliveryOptions?.isTargetVisible?.({
-          deviceId,
-          scopes: ["operator.approvals", "operator.read"],
-        });
-      expect([visible("device-owner"), visible("device-other")]).toEqual([true, false]);
+      expect(handleRequested).toHaveBeenCalledExactlyOnceWith(record);
 
       await expectApprovalResolution(resultPromise, manager, record);
     });

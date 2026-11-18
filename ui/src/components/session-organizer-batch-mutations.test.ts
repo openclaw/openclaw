@@ -525,7 +525,7 @@ describe("session organizer destructive confirmations", () => {
     {
       name: "regular session",
       rows: [sessionRow(0)],
-      text: "keeps an archived copy of its transcript",
+      text: "keeps an archived copy of its chat history",
     },
     {
       name: "incognito flag",
@@ -540,12 +540,12 @@ describe("session organizer destructive confirmations", () => {
     {
       name: "incognito selection",
       rows: [sessionRow(0, { incognito: true }), sessionRow(1, { incognito: true })],
-      text: "their transcripts without an archive",
+      text: "their chat history without an archive",
     },
     {
       name: "mixed selection",
       rows: [sessionRow(0), sessionRow(1, { incognito: true })],
-      text: "Regular transcripts are archived; incognito transcripts are deleted without an archive",
+      text: "Regular chat history is archived; incognito chat history is deleted without an archive",
     },
   ])("explains transcript retention for $name before deletion", async ({ rows, text }) => {
     const h = createHarness(destructiveHarness);
@@ -580,7 +580,7 @@ describe("session organizer destructive confirmations", () => {
     const pending = deleteSessionsBatch(h.host, rows, h.scope);
     const actions = await waitForConfirmDialogActions();
     expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      "Delete 2 sessions?This deletes the session entries but keeps archived copies of their transcripts.",
+      "Delete 2 sessions?This deletes the session entries but keeps archived copies of their chat history.",
     );
     answerConfirmDialog(actions, "confirm");
     await pending;
@@ -649,7 +649,7 @@ describe("session organizer destructive confirmations", () => {
     });
   });
 
-  it.each(["snapshot failure", "request rejection"] as const)(
+  it.each(["snapshot failure", "preserved refusal", "request rejection"] as const)(
     "surfaces one forced worktree removal %s after confirmed session deletion",
     async (failure) => {
       const h = worktreeHarness("snapshot-failed");
@@ -658,6 +658,16 @@ describe("session organizer destructive confirmations", () => {
         h.request.mockResolvedValueOnce({
           removed: true,
           snapshotError: "nested gitlink",
+        } as never);
+      } else if (failure === "preserved refusal") {
+        h.request.mockResolvedValueOnce({
+          removed: false,
+          preserved: {
+            state: "preserved",
+            reason: "nested gitlink",
+            attempts: 1,
+            nextAttemptAt: null,
+          },
         } as never);
       } else {
         h.request.mockRejectedValueOnce(rejection);
@@ -672,9 +682,13 @@ describe("session organizer destructive confirmations", () => {
       answerConfirmDialog(worktreeActions, "confirm");
       await pending;
 
-      expect(h.request).toHaveBeenCalledWith("worktrees.remove", { id: "wt-1", force: true });
+      expect(h.request).toHaveBeenCalledWith("worktrees.remove", {
+        id: "wt-1",
+        force: true,
+        retryPreserved: true,
+      });
       expect(h.publishSessionMutationError).toHaveBeenCalledOnce();
-      expectError(h, failure === "snapshot failure" ? "nested gitlink" : rejection);
+      expectError(h, failure === "request rejection" ? rejection : "nested gitlink");
     },
   );
 

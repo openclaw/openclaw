@@ -66,7 +66,7 @@ export function isBotMentioned(
 
   if (nickname) {
     const escapedNickname = escapeRegExp(nickname);
-    const nicknamePattern = new RegExp(`(^|\\s)${escapedNickname}(?=\\s|$|[,!?.])`, "i");
+    const nicknamePattern = new RegExp(`(^|[\\s*~])${escapedNickname}(?=$|[\\s*~,.!?;:])`, "i");
     if (nicknamePattern.test(messageText)) {
       return true;
     }
