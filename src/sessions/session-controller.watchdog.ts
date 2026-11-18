@@ -233,17 +233,20 @@ export function createSessionControllerWatchdog(params: {
   const decide = (at = now()) => decideSessionWatchdog(snapshot(at), at);
   const readPendingTools = () => {
     const stoppedAtMs = now();
-    return [...tools].slice(0, 5).map(({ toolName, toolCallId, startedAtMs, awaiting }) => {
-      const pending: SessionWatchdogError["pendingTools"][number] = {
-        toolName,
-        toolCallId,
-        elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
-      };
-      if (awaiting?.length) {
-        pending.awaiting = awaiting;
-      }
-      return pending;
-    });
+    return [...tools]
+      .slice(0, 5)
+      .map(({ toolName, toolCallId, startedAtMs, explicitDeadlineAtMs, awaiting }) => {
+        const pending: SessionWatchdogError["pendingTools"][number] = {
+          toolName,
+          toolCallId,
+          elapsedMs: Math.max(0, stoppedAtMs - startedAtMs),
+          explicitDeadline: explicitDeadlineAtMs !== undefined,
+        };
+        if (awaiting?.length) {
+          pending.awaiting = awaiting;
+        }
+        return pending;
+      });
   };
   const tick = async (at = now()): Promise<SessionWatchdogDecision> => {
     assessment.check(at);
