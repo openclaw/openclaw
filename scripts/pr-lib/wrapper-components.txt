@@ -2704,6 +2704,7 @@ src/agents/embedded-agent-helpers/user-facing-text.ts
 src/agents/embedded-agent-runner/cache-ttl-checkpoint.ts
 src/agents/exec-approval-result.ts
 src/agents/failover/assistant-request-failure-copy.ts
+src/agents/failover/billing-error-detail.ts
 src/agents/failover/classification-rules.ts
 src/agents/failover/classify-core.ts
 src/agents/failover/context-overflow-tables.ts
