@@ -180,6 +180,9 @@ reason `agent_run_terminal_timeout` or `idle_timeout_circuit_breaker`. These are
 terminal stops, not provider failures or requests to try another model. The
 existing run deadline and cost limits still apply.
 
+When a candidate returns a terminal error and the turn cannot be retried, the
+same logger records `returned_terminal_error`. The original error is surfaced.
+
 Local session-coordination errors also stop fallback. For example, when prepared
 session capability metadata changes, OpenClaw surfaces that error without trying
 another model. Changing providers cannot repair stale session authority.
