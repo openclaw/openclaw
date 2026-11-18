@@ -400,6 +400,21 @@ describe("existing-session browser routes", () => {
     }
   });
 
+  it("keeps ref semantics for labeled existing-session screenshots", async () => {
+    const response = await invoke("screenshot", {
+      labels: true,
+      ref: "btn-1",
+      type: "jpeg",
+      timeoutMs: 4321,
+    });
+
+    expectResponseContaining(response, { ok: true, labels: true });
+    expect(snapshotMock).not.toHaveBeenCalled();
+    expect(screenshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ uid: "btn-1", format: "jpeg", timeoutMs: 4321 }),
+    );
+  });
+
   it("routes close through profile selection state with exact call options", async () => {
     const ctrl = new AbortController();
     const response = await invoke(

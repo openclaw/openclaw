@@ -13,6 +13,7 @@ import { ProviderAuthConfigApplyError } from "../../shared/provider-auth-result.
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
 
 type AuthRunCall = { signal?: AbortSignal };
+type ResolvePluginProvidersCall = { providerRefs?: string[] };
 type PersistProviderAuthCall = Partial<Pick<ProviderAuthResult, "profiles">>;
 
 const mocks = vi.hoisted(() => ({
@@ -903,6 +904,35 @@ it("rejects unknown auth methods before a forced login can purge profiles", asyn
   ).rejects.toThrow("Unknown auth method");
 
   expectNoCalls(mocks.removeProviderAuthProfilesWithLock, runOauthAuth, runApiKeyAuth);
+});
+
+it("opens the provider picker when a CLI backend has no provider auth method", async () => {
+  const prompter = usePrompter(vi.fn(async () => "openai"));
+  mocks.isCliProvider.mockImplementation((provider: string) => provider === "claude-cli");
+  const openaiProvider = createProvider("openai", "OpenAI Codex");
+  mocks.resolvePluginProvidersCore.mockImplementation(
+    (params: ResolvePluginProvidersCall | undefined) =>
+      params?.providerRefs?.includes("claude-cli") ? [] : [openaiProvider],
+  );
+
+  await loginCommand({ provider: "claude-cli" });
+
+  expect(prompter.note).toHaveBeenCalledWith(
+    'Provider "claude-cli" uses its own CLI login. Select a provider with an OpenClaw auth flow.',
+    "Provider auth",
+  );
+  expect(prompter.select).toHaveBeenCalledWith(
+    expect.objectContaining({ message: "Select a provider" }),
+  );
+  expect(runProviderAuth).toHaveBeenCalledOnce();
+  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
+    1,
+    expect.objectContaining({ providerRefs: ["claude-cli"] }),
+  );
+  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
+    2,
+    expect.not.objectContaining({ providerRefs: expect.anything() }),
+  );
 });
 
 it("rejects pasted token expiries that cannot fit in the Date timestamp range", async () => {

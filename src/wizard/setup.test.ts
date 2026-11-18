@@ -675,6 +675,27 @@ describe("runSetupWizard", () => {
     },
   );
 
+  it("treats --import-source as import intent and continues after a recovered promotion", async () => {
+    const acknowledgePromotion = vi.fn(async () => {});
+    runSetupMigrationImport.mockResolvedValueOnce({
+      kind: "no-imported-inference",
+      acknowledgePromotion,
+    });
+
+    const prompter = buildWizardPrompter();
+    await runWizard({ importSource: "~/.hermes", flow: undefined }, createRuntime(), prompter);
+
+    expect(finalizeSetupWizard).toHaveBeenCalledOnce();
+    expect(acknowledgePromotion).toHaveBeenCalledOnce();
+    expect(runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expect(runSetupMigrationImport).toHaveBeenCalledOnce();
+    expectCall(runSetupMigrationImport, {
+      opts: expect.objectContaining({ importSource: "~/.hermes" }),
+    });
+    expect(prompter.select).toHaveBeenCalledOnce();
+    expectCall(prompter.select, { message: "Help make OpenClaw better?", initialValue: false });
+  });
+
   it("rejects an agent name when the import supplies an authored roster", async () => {
     const workspaceDir = await fs.realpath(await makeCaseDir("import-naming-"));
     const configPath = path.join(workspaceDir, "openclaw.json");
@@ -848,6 +869,33 @@ describe("runSetupWizard", () => {
     expect(prepareAuthChoice).not.toHaveBeenCalled();
     expect(ensureOnboardingConfig).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("re-prompts for auth when applyAuthChoice requests retry selection", async () => {
+    promptAuthChoiceGrouped.mockReset();
+    promptAuthChoiceGrouped
+      .mockResolvedValueOnce("demo-provider-one")
+      .mockResolvedValueOnce("demo-provider-two");
+    applyAuthChoice.mockImplementationOnce(async (args) => ({
+      config: {
+        ...args.config,
+        plugins: {
+          ...args.config.plugins,
+          entries: { ...args.config.plugins?.entries, "demo-provider-plugin": { enabled: true } },
+        },
+      },
+      retrySelection: true,
+    }));
+
+    await runWizard({ authChoice: undefined });
+
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(2);
+    expect(applyAuthChoice).toHaveBeenCalledTimes(2);
+    const retry = applyAuthChoice.mock.calls[1]?.[0];
+    expect(retry?.authChoice).toBe("demo-provider-two");
+    expect(retry?.config.plugins?.entries).toEqual({ "demo-provider-plugin": { enabled: true } });
+    expect(retry?.config.agents?.entries).toEqual({ main: {} });
+    expect(retry?.config.agents?.defaults?.workspace).toBe("/tmp/openclaw-workspace");
   });
 
   it("resolves gateway.auth.password SecretRef for local setup probe", async () => {

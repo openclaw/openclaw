@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -20,7 +21,10 @@ import {
 } from "../../scripts/code-mode-model-matrix.js";
 import { compareCodeModeMatrixResults } from "../../scripts/lib/code-mode-matrix-comparison.js";
 import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
-import { createGatewayMatrixWorkload } from "../../scripts/lib/code-mode-matrix-gateway.js";
+import {
+  collectGatewayMatrixTrace,
+  createGatewayMatrixWorkload,
+} from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -402,4 +406,167 @@ it("includes the exact process-helper bytes in the fixed workload fingerprint", 
   } finally {
     spy.mockRestore();
   }
+});
+
+const TASK_DELTAS = {
+  taskElapsedMs: -2000,
+  assistantTurns: null,
+  upstreamCalls: 0,
+  inputTokens: null,
+  outputTokens: null,
+  costUsd: null,
+};
+
+function comparisonRow(includeOutcomes = false) {
+  return {
+    id: "invoice-code-r1",
+    task: "invoices-auto-retention",
+    model: "openai/gpt-5.6-sol",
+    mode: "code",
+    repetition: 1,
+    gitSha: "baseline-sha",
+    passed: true,
+    elapsedMs: 20000,
+    oracle: includeOutcomes ? { identity: true } : undefined,
+    workload: {
+      promptSha256: "fixed-prompt",
+      fixtureSha256: "fixed-fixture",
+      settings: { executor: "node", thinking: "off", timeoutSeconds: 120 },
+    },
+    gateway: {
+      upstreamCalls: 1,
+      taskElapsedMs: 10000,
+      ...(includeOutcomes
+        ? {
+            traceAvailable: true,
+            behavior: { answer: true, complete: true },
+            interview: {
+              traceAvailable: true,
+              checks: { answered: true, priorReferenceUnavailable: true },
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+it("compares task time separately from startup and leaves unobserved metrics null", () => {
+  const baseline = comparisonRow();
+  const candidate = { ...comparisonRow(), gitSha: "candidate-sha", elapsedMs: 30000 };
+  candidate.gateway.taskElapsedMs = 8000;
+  const compared = compareCodeModeMatrixResults([baseline], [candidate]);
+  expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toEqual(TASK_DELTAS);
+});
+
+it("separates interview failure from the other outcome", () => {
+  const baseline = comparisonRow(true);
+  const candidate = comparisonRow(true);
+  candidate.passed = false;
+  candidate.gateway.taskElapsedMs = 8000;
+  expectDefined(candidate.gateway.interview, "interview").checks.priorReferenceUnavailable = false;
+  const compared = compareCodeModeMatrixResults([baseline], [candidate]);
+  const cell = expectDefined(compared.cells[0], "paired outcome comparison");
+  expect(cell).toMatchObject({
+    baselinePassed: true,
+    candidatePassed: false,
+    bothPassed: false,
+    deltas: null,
+  });
+  expect(cell.taskBehavior).toEqual({
+    baselinePassed: true,
+    candidatePassed: true,
+    bothPassed: true,
+    modelsMatched: true,
+    deltas: TASK_DELTAS,
+  });
+  expect(cell.interviewConsistency).toEqual({ baselinePassed: true, candidatePassed: false });
+  expect(compared).toMatchObject({ baselinePassed: 1, candidatePassed: 0 });
+  expect(compared.outcomes).toEqual({
+    taskBehavior: {
+      baseline: { passed: 1, failed: 0, unavailable: 0 },
+      candidate: { passed: 1, failed: 0, unavailable: 0 },
+    },
+    interviewConsistency: {
+      baseline: { passed: 1, failed: 0, unavailable: 0 },
+      candidate: { passed: 0, failed: 1, unavailable: 0 },
+    },
+  });
+});
+
+it.each([
+  { label: "zero placeholders", input: 0, output: 0, known: "none" },
+  { label: "provisional counters", input: 20, output: 3, known: "none" },
+  { label: "known then unavailable", input: 20, output: 3, known: "before" },
+  { label: "unavailable then known", input: 20, output: 3, known: "after" },
+])("does not qualify $label as measured savings", ({ input, output, known }) => {
+  const observed = matrixUsageEvent({
+    input: 100,
+    output: 10,
+    totalTokens: 110,
+    cost: { total: 0.002 },
+    usageReport: { state: "available" },
+  });
+  expect(collectGatewayMatrixTrace([observed])).toMatchObject({
+    usage: { input: 100, output: 10, total: 110 },
+    costUsd: 0.002,
+  });
+  const unavailable = matrixUsageEvent({
+    input,
+    output,
+    totalTokens: input + output,
+    cost: { total: 0.5 },
+    usageReport: { state: "unavailable" },
+  });
+  const trace = collectGatewayMatrixTrace([
+    ...(known === "before" ? [observed] : []),
+    unavailable,
+    ...(known === "after" ? [observed] : []),
+  ]);
+  expect(trace.usage).toBeUndefined();
+  expect(trace.costUsd).toBeUndefined();
+  const compared = compareCodeModeMatrixResults(
+    [{ ...comparisonRow(), usage: { input: 100, output: 10 }, costUsd: 0.002 }],
+    [{ ...comparisonRow(), gitSha: "candidate-sha", usage: trace.usage, costUsd: trace.costUsd }],
+  );
+  expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toMatchObject({
+    inputTokens: null,
+    outputTokens: null,
+    costUsd: null,
+  });
+});
+
+function matrixUsageEvent(usage?: Record<string, unknown>) {
+  return {
+    message: { role: "assistant", provider: "openai", model: "fixture", usage, content: [] },
+  };
+}
+
+it("does not turn missing usage or cost observations into zero-valued measurements", () => {
+  const observed = matrixUsageEvent({
+    input: 100,
+    output: 10,
+    totalTokens: 110,
+    cost: { total: 0.002 },
+  });
+  expect(collectGatewayMatrixTrace([observed])).toMatchObject({
+    usage: { input: 100, output: 10, total: 110 },
+    costUsd: 0.002,
+  });
+  const incomplete = collectGatewayMatrixTrace([observed, matrixUsageEvent()]);
+  expect(incomplete.usage).toBeUndefined();
+  expect(incomplete.costUsd).toBeUndefined();
+});
+
+it("retains genuinely measured zero usage and cost", () => {
+  const trace = collectGatewayMatrixTrace([
+    matrixUsageEvent({
+      input: 0,
+      output: 0,
+      totalTokens: 0,
+      cost: { total: 0, totalOrigin: "provider-billed" },
+      usageReport: { state: "available" },
+    }),
+  ]);
+  expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
+  expect(trace.costUsd).toBe(0);
 });
