@@ -1,7 +1,7 @@
 import type {
   WorkerGatewayToolCancelParams,
   WorkerGatewayToolInvokeParams,
-  WorkerGatewayToolResult,
+  WorkerGatewayToolInvokeResult,
   WorkerGatewayToolUpdateFrame,
   WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
@@ -25,7 +25,7 @@ export type WorkerGatewayToolRuntime = {
     request: WorkerGatewayToolInvokeParams,
     sink: WorkerGatewayToolSink,
     connectionSignal?: AbortSignal,
-  ): Promise<WorkerGatewayToolResult>;
+  ): Promise<WorkerGatewayToolInvokeResult>;
   cancel(request: WorkerGatewayToolCancelParams): { cancelled: boolean };
   abort(): void;
   close(): Promise<void>;

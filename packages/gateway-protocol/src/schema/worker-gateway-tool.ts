@@ -13,6 +13,8 @@ import {
 } from "./worker-protocol-primitives.js";
 
 export const WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE = "worker-gateway-tools-v1";
+export const WORKER_GATEWAY_MCP_GUEST_RESULT_PROTOCOL_FEATURE =
+  "worker-gateway-mcp-guest-result-v1";
 export const WORKER_GATEWAY_TOOL_METHODS = {
   invoke: "worker.gatewayTool.invoke",
   cancel: "worker.gatewayTool.cancel",
@@ -164,8 +166,13 @@ export const WorkerGatewayToolResultSchema = closedObject({
 });
 export const WorkerGatewayToolCancelResultSchema = closedObject({ cancelled: Type.Boolean() });
 
+const WorkerGatewayToolInvokeResultSchema = closedObject({
+  ...WorkerGatewayToolResultSchema.properties,
+  mcpGuestResult: Type.Optional(Type.Unknown()),
+  mcpBlockedReason: Type.Optional(LiveTextSchema),
+});
 export const WorkerGatewayToolResponseFrameSchema = workerResponseSchema(
-  WorkerGatewayToolResultSchema,
+  WorkerGatewayToolInvokeResultSchema,
 );
 export const WorkerGatewayToolCancelResponseFrameSchema = workerResponseSchema(
   WorkerGatewayToolCancelResultSchema,
@@ -198,6 +205,7 @@ export type WorkerToolSurface = Static<typeof WorkerToolSurfaceSchema>;
 export type WorkerGatewayToolInvokeParams = Static<typeof WorkerGatewayToolInvokeParamsSchema>;
 export type WorkerGatewayToolCancelParams = Static<typeof WorkerGatewayToolCancelParamsSchema>;
 export type WorkerGatewayToolResult = Static<typeof WorkerGatewayToolResultSchema>;
+export type WorkerGatewayToolInvokeResult = Static<typeof WorkerGatewayToolInvokeResultSchema>;
 export type WorkerGatewayToolResponseFrame = Static<typeof WorkerGatewayToolResponseFrameSchema>;
 export type WorkerGatewayToolCancelResponseFrame = Static<
   typeof WorkerGatewayToolCancelResponseFrameSchema
