@@ -41,7 +41,7 @@ import { createChatSendDashboardAuthority } from "./chat-send-dashboard-authorit
 import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
-import { acknowledgeCodexGoal } from "./chat-send-goal-ack.js";
+import { acknowledgeRuntimeGoal } from "./chat-send-goal-ack.js";
 import {
   createChatSendGoalCommitGuard,
   requiresRuntimeApprovedChatInput,
@@ -224,9 +224,9 @@ export async function handleChatSendWithStorage(
           sessionMutationCommitGuard,
         })
       : undefined;
-    const codexGoalCommitted = admission.codexGoalAdmission ? createDeferredCore() : undefined;
+    const runtimeGoalCommitted = admission.runtimeGoal ? createDeferredCore() : undefined;
     const userTurn = createGatewayChatUserTurnController({
-      onMessagePersisted: codexGoalCommitted?.resolve,
+      onMessagePersisted: runtimeGoalCommitted?.resolve,
       ...setup,
       client,
       commitInitialInput,
@@ -347,7 +347,7 @@ export async function handleChatSendWithStorage(
     phase?.mark("persist");
     let approvedInput: PersistedUserTurnMessage | undefined;
     const stageInput =
-      admission.codexGoalAdmission ||
+      admission.runtimeGoal ||
       Boolean(
         entry?.sessionId &&
         userTurn.baseInput.display !== false &&
@@ -613,7 +613,7 @@ export async function handleChatSendWithStorage(
     if (readGatewayRequestMutationAuthority(handlerOptions).family === "worker") {
       acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
     }
-    if (!admission.codexGoalAdmission) {
+    if (!admission.runtimeGoal) {
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
     phase?.finish();
@@ -683,10 +683,10 @@ export async function handleChatSendWithStorage(
     );
     dispatchHandoff?.finish();
     admittedCleanup.dispatched = true;
-    if (codexGoalCommitted) {
-      await acknowledgeCodexGoal({
+    if (runtimeGoalCommitted) {
+      await acknowledgeRuntimeGoal({
         dispatch,
-        committed: codexGoalCommitted.promise,
+        committed: runtimeGoalCommitted.promise,
         dispatched,
         ackPayload,
         respond,

@@ -5,7 +5,7 @@ import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import type { RespondFn } from "./types.js";
 
 /** Dispatch owns cleanup; a lost ACK reconciles through the durable Goal receipt. */
-export async function acknowledgeCodexGoal(params: {
+export async function acknowledgeRuntimeGoal(params: {
   dispatch: StartChatDispatchParams;
   committed: Promise<void>;
   dispatched: Promise<void>;
@@ -18,7 +18,7 @@ export async function acknowledgeCodexGoal(params: {
     const persisted = userTurn.recorder.hasPersisted() ? await userTurn.persist() : undefined;
     const result = persisted?.sessionTurnMutationResult?.result;
     if (!result || !persisted?.sessionEntry || !request.goalOperation) {
-      throw new Error("Codex Goal input was not committed; inspect the run before retrying.");
+      throw new Error("Goal input was not committed; inspect the run before retrying.");
     }
     await publishCommittedSessionGoalChange(context, {
       sessionKey: session.sessionKey,

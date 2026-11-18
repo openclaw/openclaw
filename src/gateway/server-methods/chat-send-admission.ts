@@ -57,7 +57,7 @@ import {
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
-  resolveCodexGoalAdmission,
+  resolveRuntimeGoalAdmission,
   withGoalChatPlacement,
   type PreparedGoalChatPlacement,
 } from "./chat-send-goal-admission.js";
@@ -193,7 +193,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
   let localInputAdmission = false;
-  let codexGoalAdmission: "local" | "worker" | undefined;
+  let runtimeGoal: "local" | "worker" | undefined;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
@@ -387,9 +387,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
-        codexGoalAdmission = resolveCodexGoalAdmission(params, latestSession, placement, acpMeta);
+        runtimeGoal = resolveRuntimeGoalAdmission(params, latestSession, placement, acpMeta);
         localInputAdmission =
-          !codexGoalAdmission &&
+          !runtimeGoal &&
           isLocalChatInputAdmission(
             params,
             latestSession,
@@ -404,10 +404,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
             sessionKeys: [sessionKey],
           }) === undefined;
         localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
-        if (request.goalOperation && !localGoalAdmission && !codexGoalAdmission) {
+        if (request.goalOperation && !localGoalAdmission && !runtimeGoal) {
           throw new SessionGoalOperationError(
             "invalid",
-            "Goal start or resume requires an idle built-in local session with recoverable history or a supported local or cloud-worker Codex session.",
+            "Goal start or resume requires an idle supported OpenClaw or Codex session with recoverable history and a matching execution placement.",
           );
         }
       }).catch((error: unknown) => {
@@ -471,8 +471,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedRunAbort.controller.abort(reason);
       },
     });
-    if (codexGoalAdmission && !capturedOperator.authority) {
-      throw new Error("Codex Goals require a current authenticated operator request.");
+    if (runtimeGoal && !capturedOperator.authority) {
+      throw new Error("Runtime-admitted Goals require a current authenticated operator request.");
     }
     admittedRunAbort.initializeTiming({ now: Date.now(), timeoutMs });
     workPhase?.finish();
@@ -706,7 +706,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }),
       localGoalAdmission,
       localInputAdmission,
-      codexGoalAdmission,
+      runtimeGoal,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };

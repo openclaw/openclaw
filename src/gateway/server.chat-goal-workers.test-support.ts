@@ -1,11 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { it, expect, vi, type MockInstance, type Mock } from "vitest";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { runEmbeddedAgent as executeEmbeddedAgent } from "../agents/embedded-agent.js";
 import { registerAgentHarness, getRegisteredAgentHarness } from "../agents/harness/registry.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import * as runtimePlugins from "../agents/runtime-plugins.js";
 import { installSessionPlacementAdmissionProvider } from "../agents/session-placement-admission.js";
+import { SessionManager } from "../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -36,7 +40,14 @@ import {
   advancePlacementFixtureToActive,
   createPlacementTurnClaimFixtureOps,
 } from "./worker-environments/placement-test-fixtures.js";
+import { admitWorkerTurnInput } from "./worker-environments/placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
+import type { WorkerTurnTunnelHandle } from "./worker-environments/tunnel-contract.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
+import {
+  createWorkerTurnTunnel,
+  credential,
+} from "./worker-environments/worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./worker-environments/workspace-operation-coordinator.js";
 
 type Scope = { agentId: string; sessionKey: string; sessionId: string; storePath: string };
@@ -67,15 +78,21 @@ export function registerWorkerGoalChatCases(
       expect.anything(),
     ]);
   };
-  it.each([
+  const codexModes = [
     "continue",
     "preparation-failed",
     "revoked",
     "claim-revoked",
     "claim-reassigned",
-  ] as const)(
-    "admits native worker Goal input and continuation through current placement (%s)",
-    async (mode) => {
+  ] as const;
+  it.each([
+    ...codexModes.map((mode) => ({ runtime: "codex" as const, mode })),
+    { runtime: "openclaw" as const, mode: "continue" as const },
+    { runtime: "openclaw" as const, mode: "preparation-failed" as const },
+    { runtime: "openclaw" as const, mode: "claim-revoked" as const },
+  ])(
+    "admits $runtime worker Goal input and continuation through current placement ($mode)",
+    async ({ runtime, mode }) => {
       const { sessionKey, sessionId, storePath } = scope();
       const context = getContext();
       const waitForDispatchEnd = async () => {
@@ -118,9 +135,25 @@ export function registerWorkerGoalChatCases(
         ...config.agents.entries,
         main: { ...config.agents.entries?.main, nativeRuntimeConsent: ["codex"] },
       };
+      if (runtime === "openclaw") {
+        config.agents.defaults = {
+          ...config.agents.defaults,
+          model: { primary: "goal-test/test-model" },
+        };
+        config.models = {
+          providers: {
+            "goal-test": {
+              api: "openai-responses",
+              baseUrl: "https://goal-model.example.test/v1",
+              apiKey: "synthetic-goal-key",
+              models: [modelDefinition("test-model")],
+            },
+          },
+        };
+      }
       await prepareGatewayReplyRuntimeForTest({ force: true, config });
       await patchSessionEntryCore(scope(), () => ({
-        agentHarnessId: "codex",
+        agentHarnessId: runtime,
         modelSelectionLocked: true,
       }));
       expect(getRegisteredAgentHarness("codex")?.harness.cloudPlacement?.mode).toBe("remote-exec");
@@ -133,6 +166,13 @@ export function registerWorkerGoalChatCases(
         nodeDeviceId: "worker-goal-node",
         sshEndpoint: null,
         attachedSessionIds: [sessionId],
+        bootstrapReceipt: {
+          ...createDispatchEnvironmentFixtures().attached.bootstrapReceipt,
+          protocolFeatures: [
+            ...createDispatchEnvironmentFixtures().attached.bootstrapReceipt.protocolFeatures,
+            WORKER_TURN_ADMISSION_PROTOCOL_FEATURE,
+          ],
+        },
       };
       const placementOwner = {
         environmentId: environment.environmentId,
@@ -141,7 +181,12 @@ export function registerWorkerGoalChatCases(
       await advancePlacementFixtureToActive(
         placements,
         openOpenClawStateDatabase(),
-        { agentId: "main", sessionKey, sessionId, executionMode: "remote-exec" },
+        {
+          agentId: "main",
+          sessionKey,
+          sessionId,
+          executionMode: runtime === "codex" ? "remote-exec" : "worker-turn",
+        },
         {
           ...placementOwner,
           workerBundleHash: environment.bootstrapReceipt.bundleHash,
@@ -157,22 +202,35 @@ export function registerWorkerGoalChatCases(
           get: () => environment,
           ensureRetainedRunning: unexpectedTransport,
           inspectTurnLease: async ({ assertCurrent }) => assertCurrent(),
-          acquireTurnCredential: unexpectedTransport,
-          acknowledgeCredentialDelivery: unexpectedTransport,
+          acquireTurnCredential: async () => ({
+            ...credential(),
+            ...placementOwner,
+            sessionId,
+            bundleHash: environment.bootstrapReceipt.bundleHash,
+          }),
+          acknowledgeCredentialDelivery: async () => true,
+          createGatewayTools: async ({ prepareTools }) => prepareTools?.([]) ?? [],
           destroy: unexpectedTransport,
           stopTunnel: async () => {},
-          startTunnel: async () => ({
-            ...placementOwner,
-            runWorkspaceCommand: async (command) => {
-              command.assertCurrent?.();
-              expect(JSON.parse(command.input ?? "null")).toEqual({ op: "discover" });
-              return workerCommandResult();
-            },
-            quiesceWorkspace: unexpectedTransport,
-            reconcileWorkspace: unexpectedTransport,
-            syncWorkspace: unexpectedTransport,
-            stop: async () => {},
-          }),
+          startTunnel: async () =>
+            runtime === "openclaw"
+              ? createWorkerTurnTunnel({
+                  ...placementOwner,
+                  launchTurn: launchWorkerTurn,
+                  reconcileWorkspace: unexpectedTransport,
+                })
+              : {
+                  ...placementOwner,
+                  runWorkspaceCommand: async (command) => {
+                    command.assertCurrent?.();
+                    expect(JSON.parse(command.input ?? "null")).toEqual({ op: "discover" });
+                    return workerCommandResult();
+                  },
+                  quiesceWorkspace: unexpectedTransport,
+                  reconcileWorkspace: unexpectedTransport,
+                  syncWorkspace: unexpectedTransport,
+                  stop: async () => {},
+                },
         },
         resolveWorkspace: async () => ({
           kind: "device-folder",
@@ -244,7 +302,108 @@ export function registerWorkerGoalChatCases(
         },
       } satisfies GatewayClient;
       const send = (input = request) => rpc("chat.send", input, undefined, operator);
+      let input: Parameters<typeof executeEmbeddedAgent>[0];
+      async function beforeModel() {
+        if (mode === "claim-revoked" || mode === "claim-reassigned") {
+          const current = await placements.getAsync(sessionId);
+          if (current?.state !== "active") {
+            throw new Error("Expected active worker before Goal promotion");
+          }
+          revokedClaim = projectPlacementTurnClaim(current);
+          if (!revokedClaim || !placements.validateTurnClaim(revokedClaim)) {
+            throw new Error("Expected live worker claim");
+          }
+        }
+      }
+      async function runModel() {
+        const calls = runEmbeddedAgent.mock.calls.length;
+        expect(loadSessionEntry(scope())?.goal?.status).toBe("active");
+        modelExecuted();
+        if (calls === 1 || calls === 4 || mode === "preparation-failed") {
+          await patchSessionEntryCore(scope(), (entry) => ({
+            goal: entry.goal && { ...entry.goal, status: calls === 1 ? "paused" : "complete" },
+          }));
+        }
+        return {
+          payloads: [{ text: "Checkpoint reached." }],
+          meta: {
+            durationMs: 1,
+            stopReason: "end_turn",
+            agentMeta: {
+              sessionId: input.sessionId,
+              provider: "test",
+              model: "test",
+              agentHarnessId: runtime,
+              usage: { input: 2, output: 1 },
+              lastCallUsage: { input: calls * 10, output: 1 },
+            },
+          },
+        };
+      }
+      async function launchWorkerTurn(launch: Parameters<WorkerTurnTunnelHandle["launchTurn"]>[0]) {
+        launch.onDispatchReady?.();
+        if (runEmbeddedAgent.mock.calls.length === 1) {
+          expectNoGoalInput();
+        }
+        if (runEmbeddedAgent.mock.calls.length === 2 && mode === "continue") {
+          expect(loadSessionEntry(scope())?.goal?.status).toBe("paused");
+        }
+        await beforeModel();
+        const admitted = await admitWorkerTurnInput(
+          {
+            ...placementOwner,
+            sessionId,
+            runId: input.runId,
+            turnClaim: launch.turnClaim,
+            credentialHash: credential().deliveryId,
+            bundleHash: environment.bootstrapReceipt.bundleHash,
+            rpcSetVersion: 1,
+            protocolFeatures: environment.bootstrapReceipt.protocolFeatures,
+            credentialExpiresAtMs: Date.now() + 60_000,
+          },
+          {
+            runEpoch: environment.ownerEpoch,
+            systemPrompt: launch.plan.assignment.systemPrompt ?? "",
+            prompt: input.prompt,
+            messages: [],
+          },
+          () => placements.validateTurnClaim(launch.turnClaim),
+        );
+        expect(admitted).toMatchObject({ ok: true, result: { outcome: "allow" } });
+        await runModel();
+        const manager = await SessionManager.openAsync({
+          ...scope(),
+        });
+        const leaf = await manager.appendMessageAsync(
+          makeAgentAssistantMessage({
+            content: [{ type: "text", text: "Checkpoint reached." }],
+            timestamp: Date.now(),
+            usage: {
+              input: runEmbeddedAgent.mock.calls.length * 10,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: runEmbeddedAgent.mock.calls.length * 10 + 1,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          }),
+        );
+        const seq = launch.plan.assignment.transcript.nextSeq;
+        await createWorkerSessionPlacementGate(placements).updateAckCursors({
+          claim: launch.turnClaim,
+          transcriptSeq: seq,
+          liveSeq: launch.plan.assignment.liveEvents.nextSeq,
+        });
+        return workerCommandResult({
+          stdout: JSON.stringify({
+            status: "completed",
+            transcriptLeafId: leaf,
+            transcriptNextSeq: seq + 1,
+          }),
+        });
+      }
       runEmbeddedAgent.mockImplementation(async (params) => {
+        input = params;
         prepared.resolve();
         await promote.promise;
         if (mode === "preparation-failed" && runEmbeddedAgent.mock.calls.length === 1) {
@@ -268,38 +427,9 @@ export function registerWorkerGoalChatCases(
             explicitSkillSelections: undefined,
           },
           async () => {
-            if (mode === "claim-revoked" || mode === "claim-reassigned") {
-              const current = await placements.getAsync(sessionId);
-              if (current?.state !== "active") {
-                throw new Error("Expected an active worker placement before Goal promotion");
-              }
-              revokedClaim = projectPlacementTurnClaim(current);
-              if (!revokedClaim || !placements.validateTurnClaim(revokedClaim)) {
-                throw new Error("Expected a live launcher-owned claim before Goal promotion");
-              }
-            }
+            await beforeModel();
             await params.userTurnTranscriptRecorder?.persistApproved();
-            modelExecuted();
-            if (calls === 1 || calls === 4 || mode === "preparation-failed") {
-              await patchSessionEntryCore(scope(), (entry) => ({
-                goal: entry.goal && { ...entry.goal, status: calls === 1 ? "paused" : "complete" },
-              }));
-            }
-            return {
-              payloads: [{ text: "Checkpoint reached." }],
-              meta: {
-                durationMs: 1,
-                stopReason: "end_turn",
-                agentMeta: {
-                  sessionId: params.sessionId,
-                  provider: "test",
-                  model: "test",
-                  agentHarnessId: "codex",
-                  usage: { input: 2, output: 1 },
-                  lastCallUsage: { input: calls * 10, output: 1 },
-                },
-              },
-            };
+            return await runModel();
           },
           undefined,
           params.preparedRunAdmission?.assertSourceCurrent,
@@ -373,7 +503,7 @@ export function registerWorkerGoalChatCases(
             sessionId,
             goalId: first.id,
             action: "resume",
-            operationId: "resume-native-goal",
+            operationId: randomUUID(),
             issuedAtMs: Date.now(),
           },
           undefined,
@@ -410,7 +540,18 @@ export function registerWorkerGoalChatCases(
           await placements.releaseTurn(replacementClaim);
         }
         const active = await placements.getAsync(sessionId);
-        expect(active?.state).toBe("active");
+        const lostWorkerClaim = runtime === "openclaw" && mode === "claim-revoked";
+        expect(active?.state).toBe(lostWorkerClaim ? "failed" : "active");
+        if (active?.state === "failed") {
+          // A launched worker that loses its claim remains failed under the existing owner.
+          expect(modelExecuted).not.toHaveBeenCalled();
+          expectNoGoalInput();
+          await placements.retireSessionPlacementAsync({
+            sessionId,
+            expectedState: "failed",
+            expectedGeneration: active.generation,
+          });
+        }
         if (active?.state === "active") {
           const draining = await placements.startDrain({
             sessionId,
