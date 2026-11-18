@@ -11,6 +11,11 @@
  *
  * --retry-entries 4000 measures recovery after review-base preparation fails,
  * with that many imported files partially staged at their pre-refresh entries.
+ * --snapshot measures canonical publication capture instead of prepare_pr. It edits
+ * 1,000 tracked and adds 1,000 untracked files, then verifies the captured tree and
+ * byte-identical source index. The guest resumes during canonical staging only on
+ * the candidate. Acceptance: zero snapshot-stage paused time, >=50% lower median
+ * pause, identical contents, no >=20% median/p95 total-time or CPU regression.
  * Reports native Git counts, lease-current read cost and longest async callback.
  * Run two baseline controls, then five interleaved A/B pairs. Allocation profiling
  * is a separate pass (--allocation), never mixed with unprofiled timing samples.
@@ -63,6 +68,7 @@ const { values } = parseArgs({
     "file-bytes": { type: "string", default: "17742" },
     "history-mib": { type: "string", default: "512" },
     "retry-entries": { type: "string", default: "0" },
+    snapshot: { type: "boolean", default: false },
     allocation: { type: "boolean", default: false },
     traffic: { type: "boolean", default: false },
     "native-image": { type: "string" },
@@ -162,6 +168,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
   if (nativeImage) {
     await docker(["run", "--detach", "--name", nativeName, "--network=none", "--cap-drop=ALL", ...(nativeEngine === "docker" ? ["--memory=256m", "--cpus=1"] : []), "--env", "GIT_AUTHOR_NAME=Fixture", "--env", "GIT_COMMITTER_NAME=Fixture", "--env", "GIT_AUTHOR_EMAIL=fixture@example.test", "--env", "GIT_COMMITTER_EMAIL=fixture@example.test", "--mount", "type=bind,src=" + f.projection + ",dst=" + f.projection, "--workdir", f.projection, nativeImage, "node", "-e", "const fs=require('fs');setInterval(()=>fs.appendFileSync('.git/pause-proof-heartbeat.jsonl',String(Date.now())+'\\n'),25)"]);
     onTestFinished(async () => { await docker(["rm", "--force", nativeName]); });
+    await docker(["exec", nativeName, "node", "-e", "require('fs').writeFileSync('.git/pause-proof-heartbeat.jsonl', String(Date.now()) + '\\n')"]);
     f.sandbox.backend!.runShellCommand = async ({ script, args, stdin }) => {
       const result = await docker(["exec", "--interactive", "--workdir", f.projection, nativeName, "sh", "-c", script, "sandbox-fixture", ...(args ?? [])], stdin, true);
       return { code: result.code, stdout: Buffer.from(result.stdout), stderr: Buffer.from(result.stderr) };
@@ -169,19 +176,34 @@ it("measures immutable object acquisition beside a live guest", async () => {
   }
   const runtime = await bindFixtureRuntime(f);
   using _projection = runtime.projection;
-  const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
-  await upstream("config", "gc.auto", "0");
-  await upstream("config", "uploadpack.allowFilter", "false");
-  await upstream("checkout", "topic/existing");
-  await fs.cp(path.join(fixtureRoot, "history"), path.join(f.upstream, "history"), { recursive: true });
-  await upstream("add", "history");
-  await upstream("-c", "pack.window=0", "commit", "-m", "Synthetic historical object population");
-  for (const name of Object.keys(seed.hashes)) {
-    await fs.writeFile(path.join(f.upstream, "history", name), "current synthetic contents\n");
+  const snapshotMode = process.env.OPENCLAW_PUBLICATION_PAUSE_SNAPSHOT === "1";
+  const { captureGitHubPublicationWorkspaceSnapshot } = await import("./github-publication-git-transport.js");
+  const snapshotFiles = Math.min(1000, seed.files);
+  const snapshotContents = "synthetic publication edit\n".padEnd(seed.fileBytes, "y");
+  if (snapshotMode) {
+    for (let index = 0; index < snapshotFiles; index++) {
+      await fs.writeFile(path.join(f.projection, "payload", String(Math.floor(index / 100)).padStart(4, "0"), String(index).padStart(6, "0") + ".txt"), snapshotContents);
+      await fs.writeFile(path.join(f.projection, "untracked-" + index + ".txt"), snapshotContents);
+    }
   }
-  await upstream("add", "history");
-  await upstream("commit", "-m", "Keep small current files");
-  let head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
+  const sourceIndex = path.resolve(f.cwd, await f.git("rev-parse", "--git-path", "index"));
+  const sourceIndexBytes = await fs.readFile(sourceIndex);
+  const upstream = (...args: string[]) => f.local!.git("-C", f.upstream, ...args);
+  let head = "";
+  if (!snapshotMode) {
+    await upstream("config", "gc.auto", "0");
+    await upstream("config", "uploadpack.allowFilter", "false");
+    await upstream("checkout", "topic/existing");
+    await fs.cp(path.join(fixtureRoot, "history"), path.join(f.upstream, "history"), { recursive: true });
+    await upstream("add", "history");
+    await upstream("-c", "pack.window=0", "commit", "-m", "Synthetic historical object population");
+    for (const name of Object.keys(seed.hashes)) {
+      await fs.writeFile(path.join(f.upstream, "history", name), "current synthetic contents\n");
+    }
+    await upstream("add", "history");
+    await upstream("commit", "-m", "Keep small current files");
+    head = await f.advanceHead({ "pr.txt": "current PR contents\n" });
+  }
   console.log("publication-pause: upstream history ready");
   const retryEntries = Number(process.env.OPENCLAW_PUBLICATION_PAUSE_RETRY_ENTRIES ?? 0);
   const retryFiles: Record<string, string> = {};
@@ -365,7 +387,9 @@ it("measures immutable object acquisition beside a live guest", async () => {
   let outcome: unknown;
   let failure: string | undefined;
   try {
-    outcome = await f.invoke();
+    outcome = snapshotMode
+      ? await captureGitHubPublicationWorkspaceSnapshot({ cwd: f.cwd })
+      : await f.invoke();
   } catch (error) {
     failure = String(error);
   }
@@ -405,7 +429,7 @@ it("measures immutable object acquisition beside a live guest", async () => {
     ? (await fs.readFile(path.join(f.projection, ".git/pause-proof-heartbeat.jsonl"), "utf8")).trim().split("\n").slice(Math.max(0, heartbeatStart - 1)).map(Number)
     : [];
   const report = {
-    fixture: seed, retryEntries, gitCommands, currentReads, longestTaskMs,
+    fixture: seed, snapshotMode, retryEntries, gitCommands, currentReads, longestTaskMs,
     qualification: nativeImage
       ? "Registered action with synthetic GitHub; native container, Git and workspace owners; filesystem type and synthetic database bytes reported separately"
       : "Registered action with synthetic GitHub and simulated container engine; real Git fetch and workspace owners; local filesystem, no native guest or btrfs claim",
@@ -431,6 +455,19 @@ it("measures immutable object acquisition beside a live guest", async () => {
       expect(counter.messages).toBeGreaterThan(0);
       expect(counter.unsupported).toBe(0);
     }
+  }
+  if (snapshotMode) {
+    const snapshot = outcome as { workspaceTree: string };
+    expect(await fs.readFile(sourceIndex)).toEqual(sourceIndexBytes);
+    const paths = (await f.git("ls-tree", "-r", "--name-only", snapshot.workspaceTree)).split("\n");
+    expect(paths.filter(name => name.startsWith("untracked-"))).toHaveLength(snapshotFiles);
+    for (const name of ["payload/0000/000000.txt", "untracked-0.txt"]) {
+      expect(await f.git("show", snapshot.workspaceTree + ":" + name)).toBe(snapshotContents);
+    }
+    expect(runtime.isPaused()).toBe(false);
+    report.verified = true;
+    await fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
+    return;
   }
   expect(outcome).toMatchObject({ status: "prepared", headCommit: head });
   expect(runtime.isPaused()).toBe(false);
@@ -604,6 +641,7 @@ try {
         OPENCLAW_VITEST_RUNTIME: "node",
         OPENCLAW_PUBLICATION_PAUSE_FIXTURE: path.resolve(values.fixture),
         OPENCLAW_PUBLICATION_PAUSE_OUTPUT: output,
+        OPENCLAW_PUBLICATION_PAUSE_SNAPSHOT: values.snapshot ? "1" : "0",
         OPENCLAW_PUBLICATION_PAUSE_ALLOCATION: values.allocation ? "1" : "0",
         OPENCLAW_PUBLICATION_PAUSE_TRAFFIC: values.traffic ? "1" : "0",
         OPENCLAW_PUBLICATION_PAUSE_RETRY_ENTRIES: values["retry-entries"],
