@@ -73,6 +73,7 @@ export async function createNodePackageFixture(
   receipts: FixtureReceiptChannel,
   postinstall = "",
   install: "bundle" | "npm" = "npm",
+  version = "2026.8.1",
 ): Promise<Buffer> {
   const root = makeTempDir("crabbox-bootstrap-package-");
   const packageRoot = path.join(root, "package");
@@ -80,7 +81,7 @@ export async function createNodePackageFixture(
   const files = {
     "package.json": JSON.stringify({
       name: "openclaw",
-      version: "2026.8.1",
+      version,
       scripts: { postinstall: "node install.cjs" },
     }),
     "install.cjs": `require("node:fs").writeFileSync("installed.json", JSON.stringify({ token: process.env.CRABBOX_WORKER_BOOTSTRAP_TOKEN, setupCode: process.env.CRABBOX_WORKER_SETUP_CODE, scriptsRan: true }));${postinstall}`,
@@ -97,7 +98,7 @@ await runNodeHostLauncher({ entryPath: process.argv[1], packageRoot: path.dirnam
 const args = process.argv.slice(2);
 const state = process.env.OPENCLAW_STATE_DIR;
 if (args[0] === "--version") {
-  console.log("OpenClaw 2026.8.1");
+  console.log(${JSON.stringify("OpenClaw " + version)});
 } else if (args[0] === "node" && args[1] === "identity") {
   console.log(JSON.stringify({ deviceId: fs.readFileSync(path.join(state, "saved-device"), "utf8") }));
 } else if (args[0] === "plugins" && args[1] === "enable") {
@@ -159,7 +160,7 @@ if (args[0] === "--version") {
       path.join(packageRoot, "node-runtime.json"),
       JSON.stringify({
         buildId: "fixture-runtime-build",
-        openclawVersion: "2026.8.1",
+        openclawVersion: version,
         install,
         platforms: [{ platform: process.platform, arch: process.arch, prefix: "" }],
       }),
