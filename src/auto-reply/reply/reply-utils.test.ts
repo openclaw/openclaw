@@ -340,6 +340,13 @@ it("preserves split malformed fenced code", () => {
   expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
 });
 
+it("streams whitespace-only chunks after visible text", () => {
+  const chunks = ["X", "\n\n", "```text", "\n", "a b", "\n", "```", " ", "done", "\n"];
+  const accumulator = createStreamingDirectiveAccumulator();
+  const streamed = chunks.map((chunk) => accumulator.consume(chunk)?.text ?? "").join("");
+  expect(streamed + (accumulator.consume("", { final: true })?.text ?? "")).toBe(chunks.join(""));
+});
+
 it("propagates explicit reply ids until the assistant message resets", () => {
   const accumulator = createStreamingDirectiveAccumulator();
   expect(accumulator.consume("[[reply_to: a]]")).toBeNull();
