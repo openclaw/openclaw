@@ -120,7 +120,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         catalogEntry(`native-refresh-${invocation === 1 ? 2 : 1}`),
       );
       if (writeFailure && invocation === 1) {
-        // Advisory persistence failure must still return a usable catalog; the next turn retries.
+        // Advisory persistence failure must return a usable catalog; later settlement can retry.
         continue;
       }
       const persisted = await readCurrentInstalledPluginIndex({ env: fixture.env });
@@ -144,4 +144,3 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     expect(rejectPublication).toBe(false);
   },
 );
-

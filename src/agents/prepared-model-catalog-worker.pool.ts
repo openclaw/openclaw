@@ -12,8 +12,8 @@ import { resolveWorkerPoolSize } from "../infra/worker-pool-sizing.js";
 import { WorkerTaskPool, WorkerTaskError } from "../infra/worker-task-pool.js";
 import type { WorkerTaskInput, WorkerTaskOptions } from "../infra/worker-task-pool.types.js";
 import { createPluginCaptureOwner } from "../plugins/plugin-capture-native-resource.client.js";
-import { createPluginSourceAdmissionPublisher } from "../plugins/plugin-source-admission-store.js";
 import type { PluginCaptureResourceRoot } from "../plugins/plugin-capture-native-resource.types.js";
+import { createPluginSourceAdmissionPublisher } from "../plugins/plugin-source-admission-store.js";
 
 export type PreparedModelCatalogWorkerData = {
   databaseEngineSelection?: DatabaseEngineSelection;
