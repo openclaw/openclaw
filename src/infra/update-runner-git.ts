@@ -29,7 +29,7 @@ import {
   runGitCleanCheckStep,
   readGitRollbackPreservation,
   runGitRollbackSteps,
-  runGitUpstreamStep,
+  runGitUpstreamSteps,
 } from "./update-runner-git-steps.js";
 import {
   fetchGitUpdateTarget,
@@ -525,19 +525,13 @@ export async function updateGitCheckout(params: {
       return await rollbackError("checkout-failed");
     }
     createdDevBranchDuringUpdate = activateBranch && preflight.localDevBranchExists === false;
-    if (createdDevBranchDuringUpdate && preflight.selectedDevUpstream) {
-      const upstreamArgs = [
-        "git",
-        "-C",
-        gitRoot,
-        "branch",
-        "--set-upstream-to",
+    if (createdDevBranchDuringUpdate) {
+      const upstreamStep = await runGitUpstreamSteps(
+        workStep("git-set-upstream", [], gitRoot),
         preflight.selectedDevUpstream,
-        DEV_BRANCH,
-      ];
-      const upstreamOptions = workStep("git-set-upstream", upstreamArgs, gitRoot);
-      const upstreamStep = await runGitUpstreamStep(upstreamOptions);
-      if (isFailedUpdateStep(upstreamStep)) {
+        preflight.selectedDevSource,
+      );
+      if (upstreamStep && isFailedUpdateStep(upstreamStep)) {
         return await rollbackError("checkout-failed");
       }
     }
