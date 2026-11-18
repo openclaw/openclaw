@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { readAgentTerminalSnapshot } from "../../agents/agent-terminal-snapshot.js";
 import { resolveDiagnosticModelResponse } from "../../agents/diagnostic-model-response.js";
@@ -19,11 +18,7 @@ import {
   withAgentRunLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
-import {
-  claimAgentRunContext,
-  getAgentRunContext,
-  releaseAgentRunContext,
-} from "../../infra/agent-run-registry.js";
+import { claimAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../infra/diagnostic-llm-content.js";
 import {
@@ -63,39 +58,15 @@ import type { CronRunExecutionParams } from "./run-execution.types.js";
 import { finalizeCronRun, resolveCronRecoveryClassification } from "./run-finalize.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { prepareCronRunContext, type PreparedCronRunContext } from "./run-prepare.js";
-import type { MutableCronSession } from "./run-session-state.js";
 import { applyCronRunUsage, recordCronRunUsage } from "./run-usage.js";
 import { logWarn } from "./run.runtime.js";
 import type { CronCompletedPromptRun, RunCronAgentTurnResult } from "./run.types.js";
-import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
+import { cleanupCronRunSessionAfterRun, disposeCronRunContext } from "./session-cleanup.js";
 
 const cronExecutorRuntimeLoader = createLazyImportLoader(() => import("./run-executor.runtime.js"));
 const cronOperatorSourceLoader = createLazyImportLoader(
   () => import("../../gateway/cron-operator-source.js"),
 );
-
-// Release the full session snapshot after persistence and delivery to avoid retaining skill prompts.
-async function disposeCronRunContext(params: {
-  runId: string;
-  sessionId: string;
-  cronSession: MutableCronSession;
-  ownsSessionRuntime: boolean;
-  runContextOwnerToken?: string;
-}): Promise<void> {
-  releaseAgentRunContext(params.runId, params.runContextOwnerToken);
-  if (params.ownsSessionRuntime) {
-    await retireSessionMcpRuntime({
-      sessionId: params.sessionId,
-      reason: "isolated-cron-dispose",
-      onError: (error, sid) => {
-        logWarn(
-          `[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`,
-        );
-      },
-    }).catch(() => {});
-  }
-  params.cronSession.store = {};
-}
 
 /** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
 export async function runCronIsolatedAgentTurn(
@@ -710,6 +681,7 @@ async function runCronIsolatedAgentTurnInTrace(
                       await disposeCronRunContext({
                         runId,
                         sessionId: initialSessionId,
+                        runSessionKey: prepared.context.runSessionKey,
                         cronSession: prepared.context.cronSession,
                         ownsSessionRuntime,
                         runContextOwnerToken,

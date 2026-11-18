@@ -1,8 +1,14 @@
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
+import { stopSessionExecProcesses } from "../../agents/bash-process-control.js";
+import { listExecSessionsForCancellation } from "../../agents/bash-process-registry.js";
 import { isSessionLifecycleChangedGatewayError } from "../../config/sessions/lifecycle.js";
+import { releaseAgentRunContext } from "../../infra/agent-run-registry.js";
+import { logWarn } from "../../logger.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronJob } from "../types.js";
+import type { MutableCronSession } from "./run-session-state.js";
 
 const gatewayCallRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/tools/in-process-gateway.js"),
@@ -77,4 +83,47 @@ function shouldDeleteCronRunSessionAfterRun(params: {
   agentSessionKey: string;
 }): boolean {
   return params.job.deleteAfterRun === true && isCronSessionKey(params.agentSessionKey);
+}
+
+/**
+ * An isolated run session (`:run:`) takes no turn after its run ends, so nothing would manage
+ * its services or leftover processes: stop them, as a hidden subagent's task end does. A run
+ * that yielded on a command keeps its processes; that command's exit continues it.
+ */
+async function stopEndedCronRunProcesses(runSessionKey: string, sessionId: string) {
+  const scopes = new Set([runSessionKey, sessionId]);
+  const inScope = listExecSessionsForCancellation().filter(
+    (session) => scopes.has(session.scopeKey) && !session.exited,
+  );
+  if (!isCronRunSessionKey(runSessionKey) || inScope.some((s) => s.resumesYieldedRun)) {
+    return;
+  }
+  await stopSessionExecProcesses(scopes, () => {}).catch((error: unknown) =>
+    logWarn(`[cron] Run session processes did not stop: ${String(error)}`),
+  );
+}
+
+// Release the full session snapshot after persistence and delivery to avoid retaining skill prompts.
+export async function disposeCronRunContext(params: {
+  runId: string;
+  sessionId: string;
+  runSessionKey: string;
+  cronSession: MutableCronSession;
+  ownsSessionRuntime: boolean;
+  runContextOwnerToken?: string;
+}): Promise<void> {
+  releaseAgentRunContext(params.runId, params.runContextOwnerToken);
+  await stopEndedCronRunProcesses(params.runSessionKey, params.sessionId);
+  if (params.ownsSessionRuntime) {
+    await retireSessionMcpRuntime({
+      sessionId: params.sessionId,
+      reason: "isolated-cron-dispose",
+      onError: (error, sid) => {
+        logWarn(
+          `[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`,
+        );
+      },
+    }).catch(() => {});
+  }
+  params.cronSession.store = {};
 }
