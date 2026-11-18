@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
-import type { AgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
-import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
-import type { PendingAgentDatabaseRecovery } from "../state/agent-database-startup.types.js";
+import type { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
   buildControlUiSessionEntryUrl as entryUrl,
   parseControlUiSessionReturnPath as parseReturn,
@@ -30,6 +29,11 @@ vi.mock(import("./control-ui-session-path-resolve.js"), async (importOriginal) =
   ...(await importOriginal()),
   resolveControlUiSessionPath: resolveSession,
 }));
+type AgentDatabasePreparation = Pick<
+  NonNullable<ReturnType<typeof getAgentDatabaseStartupAdmission>>,
+  "waitForAgentPreparation"
+>;
+
 const canonical = "/control/chat/main/launch-12345678aaaa40008000000000000001";
 const entry = entryUrl(canonical, "/control");
 const profile = { profileId: "viewer", displayName: "Viewer", hasAvatar: false, updatedAt: 1 };
@@ -80,19 +84,25 @@ describe("protected canonical session handoff", () => {
       pending: true,
     });
     recordAgentDatabaseAdmissions([refusal], { source: "startup" });
-    const pending: PendingAgentDatabaseRecovery = {
-      refusal,
-      completion: completion.promise,
-      readReady: readReady.promise,
-      startedAt: 0,
-      phase: "inspection",
-      phaseStartedAt: 0,
-      phaseDurationsMs: {},
+    let hasPendingAgents = true;
+    // Model the release preparation contract at the HTTP boundary, not the
+    // newer extracted observation owner. Read and write readiness stay distinct.
+    const startup = {
+      get hasPendingAgents() {
+        return hasPendingAgents;
+      },
+      waitForAgentPreparation: vi.fn<AgentDatabasePreparation["waitForAgentPreparation"]>(
+        (agentId, options) => {
+          if (agentId !== refusal.agentId) {
+            return undefined;
+          }
+          return racePromiseWithAbortSignal(
+            options?.forWrite === false ? readReady.promise : completion.promise,
+            options?.signal,
+          );
+        },
+      ),
     };
-    const startup = createAgentDatabaseStartupObservation(
-      new Map([[refusal.agentId, pending]]),
-      new AbortController().signal,
-    );
     resolveSession.mockImplementation(() => {
       entered.resolve();
       throw new AgentDatabaseAdmissionError(refusal);
@@ -106,10 +116,10 @@ describe("protected canonical session handoff", () => {
           agentId: "main",
           isCurrent: current,
         });
-        pending.readReady = undefined;
         readReady.resolve();
       },
       finish() {
+        hasPendingAgents = false;
         completion.resolve();
         readReady.resolve();
       },

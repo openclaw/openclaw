@@ -4,6 +4,15 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { writeHeapSnapshot } from "node:v8";
 
+/** Assert the retained population after giving unowned objects a collection turn. */
+export async function expectLiveObjects(
+  references: readonly WeakRef<object>[],
+  expected: number,
+): Promise<void> {
+  await collectForRetentionCheck("live-objects");
+  assert.equal(references.filter((reference) => reference.deref() !== undefined).length, expected);
+}
+
 /** Collects between jobs while the fixture keeps its real resource alive. */
 export async function collectForRetentionCheck(label: string): Promise<void> {
   const gc = globalThis.gc;

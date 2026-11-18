@@ -1,0 +1,2 @@
+# Preserve source-specific read readiness and cancellation when adapting the session-entry fixture to the release preparation interface.
+10
