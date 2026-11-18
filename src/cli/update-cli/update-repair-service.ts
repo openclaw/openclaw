@@ -3,6 +3,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  dataAtRiskVerifiedStep,
+  findUnverifiedDataAtRisk,
+  verifyUpdateStateConsistency,
+} from "../../infra/update-data-at-risk.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
@@ -14,6 +19,7 @@ import {
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
@@ -27,6 +33,11 @@ import {
   readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
+import {
+  formatDataAtRiskRefusal,
+  formatDataAtRiskResolved,
+  observeGatewayForGuidance,
+} from "./update-data-at-risk-guidance.js";
 import type { UpdateFinalizationPhase } from "./update-finalization-lifecycle.js";
 
 function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string {
@@ -49,19 +60,50 @@ export async function restoreRepairGateway(params: {
 }> {
   const { env, phase, originalRunId } = params;
   const runIds = [originalRunId, params.repairRunId];
-  const original = () => getUpdateRun(originalRunId, { env });
-  const risk = () => {
-    const recovery = original()?.verification.recovery;
-    return recovery?.serviceRestartSafe === false ? recovery.dataAtRisk : undefined;
-  };
-  const warning = risk();
-  if (warning) {
-    return {
-      restart: false,
-      warning: `Gateway remains stopped: ${warning}. Run openclaw gateway status --deep.`,
-    };
-  }
+  // A mark stays on its run; this repair's verification receipt resolves it.
+  const risk = () =>
+    findUnverifiedDataAtRisk(getUpdateRun(originalRunId, { env }), [
+      getUpdateRun(params.repairRunId, { env }),
+    ]);
   const service = resolveGatewayService();
+  const mark = risk();
+  if (mark) {
+    const verification = await verifyUpdateStateConsistency({
+      env,
+      formatCommand: (command) => formatCliCommand(command, env),
+      signal: phase.signal,
+    });
+    phase.assertCurrent();
+    if (verification.status !== "consistent") {
+      return {
+        restart: false,
+        warning: formatDataAtRiskRefusal({
+          runId: originalRunId,
+          mark,
+          verification,
+          gateway: await observeGatewayForGuidance({
+            service,
+            env,
+            config: params.config,
+            timeoutMs: params.timeoutMs,
+          }),
+          unchanged: "Repair left the Gateway and state as they were.",
+        }),
+      };
+    }
+    const resolved = formatDataAtRiskResolved({ runId: originalRunId, mark, verification });
+    recordUpdateRunStep(
+      params.repairRunId,
+      {
+        step: dataAtRiskVerifiedStep(originalRunId),
+        status: "completed",
+        endedAtMs: Date.now(),
+        detail: resolved,
+      },
+      { env },
+    );
+    defaultRuntime[params.json ? "error" : "log"](resolved);
+  }
   return await withGatewayServiceOperationLock(env, async (assertNative) => {
     const readPendingStop = () => {
       const pending = findUpdateGatewayStop(listUpdateRuns({ limit: 100 }, { env }));
@@ -78,7 +120,7 @@ export async function restoreRepairGateway(params: {
       const dataAtRisk = risk();
       if (dataAtRisk) {
         throw new Error(
-          `Gateway remains stopped: ${dataAtRisk}. Run openclaw gateway status --deep.`,
+          `Update ${originalRunId} recorded data at risk (${dataAtRisk}) that this repair did not verify; the Gateway was not started. Run \`${formatCliCommand("openclaw update repair", env)}\` again.`,
         );
       }
     };

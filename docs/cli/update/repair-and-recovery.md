@@ -119,8 +119,8 @@ After finalization, `openclaw update repair` starts and verifies a managed Gatew
 whose pending stop is recorded by the update. A Gateway stopped by the operator
 stays stopped. If recovery is refused or fails, repair names the reason and
 `openclaw gateway start` as the manual next step after resolving it; a successful
-automatic restart does not emit that warning. Named data-risk refusals keep the
-Gateway stopped and retain their recovery guidance.
+automatic restart does not emit that warning. A recorded data risk is verified
+first; see [Recorded data risk](#recorded-data-risk).
 If finalization succeeds but the service is absent or its ownership cannot be
 verified, repair completes with manual-start guidance instead of failing the
 completed maintenance. Interrupted handoff recovery checks the pending stop
@@ -469,13 +469,53 @@ contain the recovery fix. `update repair` remains the backstop if the helper als
 dies, such as after a reboot or a process-group kill. After finalization, repair
 starts and verifies a Gateway that the update left stopped. A later recorded
 start, running observation, completed managed restart, or settled run retires
-that stop intent, so a subsequent operator stop stays stopped. Recorded data risk, lost
-ownership, or failed identity checks still require operator attention; inspect
+that stop intent, so a subsequent operator stop stays stopped. Lost ownership or
+failed identity checks still require operator attention; inspect
 `openclaw update status` and `openclaw gateway status --deep` before restarting.
+Repair verifies a recorded data risk before it acts on it, as described below.
 
 If state ownership or a maintenance lock is held, repair refuses before that
-maintenance and reports `Stop the Gateway first (openclaw gateway stop)`. Stop
-the Gateway for the same profile/state directory before retrying.
+maintenance and reports `Stop the Gateway first (openclaw gateway stop --force)`.
+Stop the Gateway for the same profile/state directory before retrying; `--force`
+is required when the command runs from a non-interactive shell.
+
+### Recorded data risk
+
+An update records a data-at-risk mark (for example `rollback-state-unverified` or
+`state-migrated-no-rollback`) when a step fails after it may have changed state.
+Many such marks come from a failed read or timeout rather than evidence of damage,
+and published updaters, including 2026.10.33 and 2026.11.5, keep writing them.
+The update's report says the mark has not been verified, states whether the
+Gateway was running or stopped and which version is installed, and names
+`openclaw update repair`.
+
+When the update that stopped the Gateway carries a mark, repair finishes Doctor
+and plugin maintenance, then checks the state on disk against the installed
+version before it touches the Gateway. The check is read-only and runs beside a
+live Gateway without copying a database:
+
+- the shared and agent database schemas are not newer than the installed version
+  supports
+- no database is behind the installed version, so no migration is unfinished
+- no interrupted state restore directory and no unfinished update recovery remain
+
+If the state is consistent, repair prints
+`Update <run> recorded data at risk (<mark>); verification found ... so that mark is resolved.`,
+records the step `finalize:data-at-risk-verified:<run>` on its own run, and then
+starts and verifies a stopped Gateway or verifies one that is already running. The
+original run keeps its recorded mark; the repair step is what resolves it.
+
+If the state is inconsistent or cannot be read, repair leaves the Gateway and
+state as they were and reports the finding, the Gateway's current state, and one
+next step:
+
+| Finding                                                 | Next step                                                                         |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| A database is newer than the installed version supports | `openclaw update` to a version that supports it, or restore the pre-update backup |
+| A database is behind the installed version              | `openclaw doctor --fix` to finish the migration                                   |
+| An earlier update's state recovery is unfinished        | `openclaw update repair` to settle it                                             |
+| An interrupted state restore directory exists           | Keep it and follow [Interrupted state restore](#interrupted-state-restore)        |
+| A database could not be read                            | Retry `openclaw update repair` once the named reason is cleared                   |
 
 Repair exits nonzero with the original recovery command when an older package
 journal remains pending and the current CLI cannot settle it. It does not report
@@ -747,8 +787,9 @@ the Gateway and never successfully started or verified it again, successful
 standalone repair starts it through its service manager and verifies readiness.
 The existing helper `service-stop` step, or a recorded managed handoff followed
 by activation, provides this evidence together with current service state and
-verification facts; the service merely being stopped does not. A recorded named data risk prevents
-startup. Successful restoration reports `restart: true` and verified health in
+verification facts; the service merely being stopped does not. A recorded data risk
+prevents startup only when verification finds the state inconsistent or cannot read
+it; see [Recorded data risk](#recorded-data-risk). Successful restoration reports `restart: true` and verified health in
 JSON and update history, and a startup or health failure names
 `openclaw gateway status --deep`.
 If startup succeeded but readiness failed, a later repair retries verification

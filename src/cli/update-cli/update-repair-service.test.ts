@@ -9,6 +9,7 @@ import {
 } from "../../daemon/service.test-helpers.js";
 import * as portsProbe from "../../infra/ports-probe.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
+import * as dataAtRisk from "../../infra/update-data-at-risk.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
 import {
@@ -23,6 +24,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { VERSION } from "../../version.js";
 import * as healthApi from "../daemon-cli/restart-health.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
@@ -265,23 +267,14 @@ it.each([
   "recorded running Gateway",
   "completed managed restart",
   "later settled run",
-  "named data risk",
 ])("does not start a Gateway after %s", async (reason) => {
   seed(
     reason !== "operator stop",
-    reason === "named data risk"
-      ? {
-          recovery: {
-            serviceRestartSafe: false,
-            reason: "state-migration-started",
-            dataAtRisk: "session migration is incomplete",
-          },
-        }
-      : reason === "successful restart"
-        ? { serviceRunning: true, settled: true }
-        : reason === "recorded running Gateway"
-          ? { serviceRunning: true }
-          : {},
+    reason === "successful restart"
+      ? { serviceRunning: true, settled: true }
+      : reason === "recorded running Gateway"
+        ? { serviceRunning: true }
+        : {},
     reason !== "operator stop",
     reason === "completed managed restart",
   );
@@ -306,18 +299,104 @@ it.each([
       status: "warning",
       postUpdate: expect.objectContaining({
         doctor: expect.objectContaining({
-          warnings: [
-            expect.stringContaining(
-              reason === "named data risk"
-                ? "Gateway remains stopped: session migration is incomplete"
-                : "openclaw gateway start",
-            ),
-          ],
+          warnings: [expect.stringContaining("openclaw gateway start")],
         }),
       }),
     }),
   );
 });
+
+const markedRisk = {
+  recovery: {
+    serviceRestartSafe: false,
+    reason: "state-migration-started",
+    dataAtRisk: "rollback-state-unverified",
+  },
+} as const;
+
+it.each(["stopped", "running"] as const)(
+  "verifies a recorded data-at-risk mark against current state and restores the %s Gateway",
+  async (gateway) => {
+    const original = seed(true, markedRisk);
+    if (gateway === "running") {
+      vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
+    }
+
+    await repair(false);
+
+    expect(events).toEqual(
+      gateway === "stopped" ? ["finalized", "start", "verified"] : ["finalized", "verified"],
+    );
+    const repairRun = listUpdateRuns()[0]!;
+    expect(repairRun.status).toBe("succeeded");
+    expect(repairRun.steps).toContainEqual(
+      expect.objectContaining({
+        step: `finalize:data-at-risk-verified:${original}`,
+        status: "completed",
+      }),
+    );
+    // History is not rewritten: the original run keeps its recorded mark.
+    expect(getUpdateRun(original)?.verification.recovery).toMatchObject({
+      dataAtRisk: "rollback-state-unverified",
+    });
+    expect(defaultRuntime.log).toHaveBeenCalledWith(
+      `Update ${original} recorded data at risk (rollback-state-unverified); verification found the state schemas match installed OpenClaw ${VERSION} and no migration or restore is unfinished, so that mark is resolved.`,
+    );
+  },
+);
+
+it.each([
+  {
+    status: "inconsistent",
+    detail:
+      "the state database /state/openclaw.sqlite is at schema 99, newer than the 40 that installed OpenClaw supports",
+    nextAction: "Run `openclaw update` to install a version that supports this state.",
+    finding: "found that the state database",
+  },
+  {
+    status: "unverifiable",
+    detail: "the state databases could not be inspected: database is locked",
+    nextAction: "Retry `openclaw update repair` once the reason above is cleared.",
+    finding: "could not complete: the state databases could not be inspected",
+  },
+] as const)(
+  "keeps the Gateway as it was when a recorded mark is $status",
+  async ({ finding, ...verification }) => {
+    const original = seed(true, markedRisk);
+    vi.spyOn(dataAtRisk, "verifyUpdateStateConsistency").mockResolvedValue(verification);
+
+    await repair();
+
+    expect(service.start).not.toHaveBeenCalled();
+    expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    const repairRun = listUpdateRuns()[0]!;
+    expect(
+      repairRun.steps.some((step) => step.step.startsWith("finalize:data-at-risk-verified:")),
+    ).toBe(false);
+    const warning = `Update ${original} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw ${VERSION} ${finding}`;
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        restart: false,
+        status: "warning",
+        postUpdate: expect.objectContaining({
+          doctor: expect.objectContaining({
+            warnings: [
+              expect.stringMatching(
+                new RegExp(
+                  `^${escapeRegExp(warning)}.* The Gateway is stopped\\. Repair left the Gateway and state as they were\\. ${escapeRegExp(verification.nextAction)}$`,
+                ),
+              ),
+            ],
+          }),
+        }),
+      }),
+    );
+  },
+);
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 // #188303: a refused recovery after migrated state leaves the managed service stopped
 // (launchd boots it out); without named data risk, repair restarts it on the installed package.

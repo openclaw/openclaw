@@ -221,6 +221,18 @@ function installedRecoveryCurrent(value, sanitize) {
           "owed-status-after",
           "owed-retry-probe",
           "owed-next-check-probe",
+          // The data-at-risk cell's commands.
+          "marked-update",
+          "operator-start",
+          "operator-start-probe",
+          "marked-repair",
+          "marked-repair-probe",
+          "after-mark-update",
+          "after-mark-update-probe",
+          "inconsistent-update",
+          "inconsistent-repair",
+          "restored-repair",
+          "restored-repair-probe",
         ]
       : [
           "displacement",
