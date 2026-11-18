@@ -231,6 +231,7 @@ export class GatewayBrowserClient {
       },
       onGap: (info) => this.opts.onGap?.(info),
       onActivity: () => {
+        this.clearInboundSilenceProbe();
         this.lastInboundActivityAtMs = Date.now();
         this.firstUnansweredRequestAtMs = null;
       },
@@ -507,7 +508,8 @@ export class GatewayBrowserClient {
     );
   }
 
-  private checkInboundSilence(): void {
+  /** Probes a silent socket, or on wake an admitted one at once; any inbound frame keeps it. */
+  checkInboundSilence(wake?: boolean): void {
     const lastActivityAtMs = this.lastInboundActivityAtMs;
     if (!this.connected || lastActivityAtMs === null || this.maxInboundSilenceMs === null) {
       return;
@@ -520,14 +522,21 @@ export class GatewayBrowserClient {
     const now = Date.now();
     const probe = this.inboundSilenceProbe;
     if (probe && lastActivityAtMs === probe.activityAtMs) {
-      if (now >= probe.deadlineMs) {
-        this.clearInboundActivity();
-        this.forceReconnect("inbound silence probe timeout");
+      // Repeated wakes keep a running probe's deadline. A page suspended mid-probe
+      // wakes with an expired one and gets a fresh deadline.
+      if (now < probe.deadlineMs) {
+        return;
       }
-      return;
+      if (!wake) {
+        this.clearInboundActivity();
+        // resolveBrowserGatewayClose replaces a socket closed with this reason at once.
+        this.forceReconnect("inbound silence probe timeout");
+        return;
+      }
     }
     this.clearInboundSilenceProbe();
     if (
+      !wake &&
       now - lastActivityAtMs < this.maxInboundSilenceMs &&
       (this.firstUnansweredRequestAtMs === null ||
         now - this.firstUnansweredRequestAtMs < UNANSWERED_REQUEST_SILENCE_MS)
@@ -541,14 +550,15 @@ export class GatewayBrowserClient {
       abort,
     };
     // Health is scope-independent; avoid active integration probes. Any inbound
-    // frame, including an error response, proves liveness at the next check.
+    // frame, including an error response, proves liveness.
     void this.client
       .request(
         "health",
         { probe: false },
         { timeoutMs: INBOUND_SILENCE_PROBE_TIMEOUT_MS, signal: abort.signal },
       )
-      .catch(() => undefined);
+      // The timeout is the probe deadline; the once-a-second check would add up to a second.
+      .catch(() => this.checkInboundSilence());
   }
 
   private clearInboundSilenceProbe(): void {

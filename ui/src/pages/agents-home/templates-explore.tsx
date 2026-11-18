@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
@@ -17,7 +16,6 @@ import {
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -29,9 +27,10 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
-import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
-import { TemplateArtwork } from "./template-artwork.tsx";
+import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
+import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -61,13 +60,33 @@ const templateCategories = [
   ["other", "templatesCatalog.categoryOther", "layers"],
 ] as const satisfies readonly (readonly [string, string, IconName])[];
 const SECTION_SIZE = 8;
+// Enough placeholders and decoded artwork to cover a tall first screen.
+const SKELETON_SECTIONS = 4;
+const FIRST_SCREEN_SIZE = 24;
 type TemplateCategory = (typeof templateCategories)[number];
 type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
+type TemplateCatalog = {
+  entries: TemplateCatalogEntry[];
+  featured: TemplateCatalogEntry[];
+  sections: TemplateSection[];
+};
+
+function firstScreenArtwork(catalog: TemplateCatalog): string[] {
+  const entries = [
+    ...catalog.featured,
+    ...catalog.sections.flatMap((section) => section.entries),
+    ...catalog.entries,
+  ];
+  const urls = new Set(entries.flatMap((entry) => (entry.iconUrl ? [entry.iconUrl] : [])));
+  return [...urls].slice(0, FIRST_SCREEN_SIZE);
+}
 
 type TemplateAddProps = {
   onAdd: (entry: TemplateCatalogEntry) => void;
   addingPackageName: string | null;
   addDisabled: boolean;
+  /** The last Add that left nothing behind, shown on that Template's card. */
+  addFailure?: { entry: Pick<TemplateCatalogEntry, "packageName">; message: string } | null;
 };
 
 function TemplateCard(
@@ -114,42 +133,65 @@ function TemplateCard(
           )}
         </button>
       </div>
-      <Show when={props.entry.summary}>
-        <p class="agents-home__template-summary">{props.entry.summary}</p>
+      {/* Always present: a Template without a summary keeps the reserved lines. */}
+      <p class="agents-home__template-summary">{props.entry.summary}</p>
+      <Show when={props.addFailure?.entry.packageName === props.entry.packageName}>
+        <p class="agents-home__template-error" role="alert">
+          {props.addFailure?.message}
+        </p>
       </Show>
     </article>
   );
 }
 
-function TemplateCatalogSkeleton() {
-  let grid!: HTMLDivElement;
-  const [count, setCount] = createSignal(4);
-  const measure = createLayoutMeasurement(
-    () => count(),
-    () => {
-      const card = grid.firstElementChild?.getBoundingClientRect();
-      if (!card?.height) {
-        return undefined;
-      }
-      const style = getComputedStyle(grid);
-      const columns = style.gridTemplateColumns.split(" ").length;
-      const gap = Number.parseFloat(style.rowGap) || 0;
-      const available = window.innerHeight - grid.getBoundingClientRect().top;
-      const rows = Math.max(1, Math.ceil((available + gap) / (card.height + gap)));
-      return () => setCount(columns * rows);
-    },
-    { targets: () => [grid], fonts: true },
-  );
-  onSettled(() => observeWindowResize(window, measure));
+// Placeholder bars are drawn inline: the Control UI stylesheet is at its size ceiling.
+const placeholderBar = (width: string) => ({
+  background: `linear-gradient(var(--bg-accent), var(--bg-accent)) 0 / ${width} 12px no-repeat`,
+});
+
+/** Mirrors the loaded sections and cards so content arrives in place. */
+function TemplateCatalogSkeleton(props: { overview: boolean }) {
   return (
     <div
-      ref={(element) => (grid = element)}
-      class="plugin-catalog-grid"
+      class="plugin-catalog-results__body"
       role="status"
       aria-label={t("templatesCatalog.loading")}
     >
-      <Repeat count={count()}>
-        {() => <div class="agents-home__template-skeleton" aria-hidden="true" />}
+      <Repeat count={props.overview ? SKELETON_SECTIONS : 1}>
+        {() => (
+          <section
+            class={[
+              "plugin-catalog-section",
+              { "plugin-catalog-section--expandable": props.overview },
+            ]}
+            aria-hidden="true"
+          >
+            <header class="plugin-catalog-section__header">
+              <h2 style={{ width: "120px", ...placeholderBar("100%") }}>{"\u00a0"}</h2>
+            </header>
+            <div class="plugin-catalog-grid">
+              <Repeat count={props.overview ? SECTION_SIZE : FIRST_SCREEN_SIZE}>
+                {() => (
+                  <div class="agents-home__template-card oc-card" data-templates-placeholder>
+                    <div class="agents-home__template-head">
+                      <span class="agents-home__template-art" />
+                      <div class="agents-home__template-identity">
+                        <h3 style={placeholderBar("70%")}>{"\u00a0"}</h3>
+                        <span style={placeholderBar("40%")}>{"\u00a0"}</span>
+                      </div>
+                    </div>
+                    <p class="agents-home__template-summary">
+                      <span style={{ display: "block", ...placeholderBar("100%") }}>
+                        {"\u00a0"}
+                      </span>
+                      <span style={{ display: "block", ...placeholderBar("60%") }}>{"\u00a0"}</span>
+                    </p>
+                  </div>
+                )}
+              </Repeat>
+            </div>
+          </section>
+        )}
       </Repeat>
     </div>
   );
@@ -158,7 +200,6 @@ function TemplateCatalogSkeleton() {
 export function TemplatesExplore(
   props: TemplateAddProps & {
     onSelect?: (entry: TemplateCatalogEntry) => void;
-    feedback?: JSX.Element;
   },
 ) {
   const context = useApplication();
@@ -235,14 +276,20 @@ export function TemplatesExplore(
   const unavailable = () => gateway.connected && !canSearch();
   return (
     <openclaw-templates-explore>
-      <HubPageHeader
+      <PluginsHubHeader
+        actions={<TemplateUpload />}
         active="templates"
         subtitle={t("templatesCatalog.exploreDescription")}
         wide
         class="templates-catalog-header"
+        onSelect={(tab) => {
+          if (tab !== "templates") {
+            context.navigate(tab);
+          }
+        }}
       />
       <SettingsPage wide carapace>
-        <div class="agents-home">
+        <div class="agents-home" {...pluginsHubPanel("templates")}>
           <section
             class="agents-home__explore plugin-catalog-results"
             data-templates-explore
@@ -273,7 +320,6 @@ export function TemplatesExplore(
                 )}
               </For>
             </CatalogDiscoveryChips>
-            {props.feedback}
             <div class="plugin-catalog-results__body">
               <Show when={unavailable()}>
                 <InlineAlert tone="warning" role="status">
@@ -283,13 +329,12 @@ export function TemplatesExplore(
               <Show when={request()} keyed>
                 {(current) => {
                   const overview = !current.query.trim() && !current.category;
-                  const result = createMemo(async () => {
+                  const readCatalog = async (): Promise<TemplateCatalog> => {
                     if (current.ready) {
                       await current.ready;
                     }
                     if (!current.isCurrent()) {
-                      const sections: TemplateSection[] = [];
-                      return { entries: [], featured: [], sections };
+                      return { entries: [], featured: [], sections: [] };
                     }
                     if (overview) {
                       const catalog = await readTemplatesOverview(
@@ -346,6 +391,11 @@ export function TemplatesExplore(
                       featured,
                       sections: sections.filter((section) => section.entries.length > 0),
                     };
+                  };
+                  const result = createMemo(async () => {
+                    const catalog = await readCatalog();
+                    await preloadTemplateArtwork(firstScreenArtwork(catalog));
+                    return catalog;
                   });
                   return (
                     <Errored
@@ -358,7 +408,7 @@ export function TemplatesExplore(
                         </InlineAlert>
                       )}
                     >
-                      <Loading fallback={<TemplateCatalogSkeleton />}>
+                      <Loading fallback={<TemplateCatalogSkeleton overview={overview} />}>
                         <Show
                           when={
                             gateway.connected &&
@@ -390,6 +440,7 @@ export function TemplatesExplore(
                                     onAdd={props.onAdd}
                                     addingPackageName={props.addingPackageName}
                                     addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
                                   />
                                 )}
                               </For>
@@ -420,6 +471,7 @@ export function TemplatesExplore(
                                         onAdd={props.onAdd}
                                         addingPackageName={props.addingPackageName}
                                         addDisabled={props.addDisabled}
+                                        addFailure={props.addFailure}
                                       />
                                     )}
                                   </For>
@@ -450,6 +502,7 @@ export function TemplatesExplore(
                                     onAdd={props.onAdd}
                                     addingPackageName={props.addingPackageName}
                                     addDisabled={props.addDisabled}
+                                    addFailure={props.addFailure}
                                   />
                                 )}
                               </For>

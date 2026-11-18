@@ -42,6 +42,14 @@ registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
 
+Background commands belong to the session that started them, not to a run. A
+yield awaits every wake-armed command that is still running in the session,
+including commands that an earlier run started. A command exit becomes an
+ordinary exec wake turn in the child session. Like a tool handoff result, the
+wake continues the task that is paused in that session, whichever run paused it.
+Without a paused task, the wake stays a separate follow-up, and a hidden child
+that did not yield gets only a passive notice.
+
 Before admitting another turn in a yielded requester, the recovery owner transfers
 its ended execution's fence to the current durable child batch. The batch is
 revalidated before the write commits; absent or adopted batches, unrelated run
@@ -196,29 +204,26 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   it closes. Retiring the delivered child batch cannot revoke a still-running
   requester. A new direct user turn retires the automation entitlement, not the
   child batch’s separately retained completion source. Valid results can still
-  return under their original caller’s restrictions; they never borrow the new
-  turn’s identity or permissions.
+  return under live original custody or the System baseline; they never borrow
+  the new turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
-  separately from execution. Individual delivery and requester settlement use
-  that captured permission ceiling, not the async caller that later schedules
-  cleanup. Committed settlement, retirement, or source/Gateway revocation
-  releases it; provisional writes and same-task replacement cannot drop it.
-  Retained results do not retain usable authority after that release, and a
-  batch cannot combine incompatible operator sources. Cancellation-only batches
-  keep the existing cancellation caller's admission, rather than using the
-  revoked target to authorize a new turn. Mixed result/cancellation batches
-  require every original source to remain live and compatible. An explicit
-  delivery redrive captures its newly admitted caller while live and transfers
-  custody only after the new delivery generation commits; it does not reopen the
+  separately from execution. Individual delivery uses that live custody when
+  available, not the async caller that later schedules cleanup. A settlement batch
+  retains custody only when every member has the same live operator source and
+  permission ceiling. Missing, revoked, or mixed custody uses the System write-only
+  baseline; it does not refuse delivery or borrow a sibling's permissions.
+  Committed settlement, retirement, or source/Gateway revocation releases custody;
+  provisional writes and same-task replacement cannot drop it. Cancellation-only
+  notices without retained custody keep the independently admitted cancellation
+  caller. An explicit delivery redrive captures its newly admitted caller while live
+  and transfers custody only after the new delivery generation commits; it does not reopen the
   expired source. Restart still admits a
   fresh recovery owner rather than reviving the previous process capability.
-  Visible settlement cohorts use the host-only binding when every captured
-  requester session and lifecycle revision matches the current parent. Private
-  cohorts retain their strict requester identity checks. This lets a guest's own yielded session
-  resume under its existing session-write scope without granting `operator.write`.
-  Stale, mixed-incarnation, or unbound visible history does not gain this scope
-  alternative; its existing authorized recovery path stays unchanged. Copied
-  request fields cannot supply the host-only binding.
+  Settlement cohorts use the host-only binding to the current requester agent and
+  session key, regardless of the recorded store path, also after a reset or a
+  compaction successor. This lets a guest's own
+  yielded session resume under its existing session-write scope without granting
+  `operator.write`. Copied request fields cannot supply the host-only binding.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
   unrelated inter-session messages do not adopt that row. An ordinary
@@ -324,6 +329,17 @@ otherwise be silent, the shared reply pipeline can send a waiting acknowledgment
 The native subagent registry retains the completion obligation and wakes the
 requester through its accepted completion path; progress text is not proof that
 a child finished or that its result was delivered.
+
+A later turn can supply an explicit waiting acknowledgment while an earlier
+turn's active child completion is already armed. The acknowledgment ends only
+the current turn; it does not claim the child again or rearm its completion.
+Without an acknowledgment, or when the earlier children are paused or have no
+armed wake, `sessions_yield` reports the pending work and leaves the turn active.
+If that turn already delivered its reply through the message tool and at least
+one earlier child is active with an armed wake, the runtime ends the turn at the
+`already_pending` result instead, because that wake resumes the session. Paused
+or unarmed children resume nothing, so their result always leaves the turn
+active for the model to act on.
 
 When settlement resumes a top-level parent with automatic channel delivery,
 OpenClaw keeps the channel's typing indicator active while that continuation

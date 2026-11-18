@@ -14,6 +14,7 @@ import {
 } from "../../packages/openclaw-id-protocol/src/index.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { RebindCommitResult } from "../gateway/openclaw-id/service-rebind.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { throwExpectedCliError } from "./expected-cli-error.js";
 import { callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
 import { describeRebind, displayKey } from "./id-cli-rebind.js";
@@ -68,12 +69,15 @@ type PeopleLink = {
   };
 };
 
-async function readPeopleLink(opts: IdCliOpts): Promise<PeopleLink | undefined> {
+async function readPeopleLink(
+  opts: IdCliOpts,
+  signal?: AbortSignal,
+): Promise<PeopleLink | undefined> {
   const raw = await callGatewayFromCli(
     "openclawId.people",
     opts,
     {},
-    { scopes: ["operator.admin"] },
+    { scopes: ["operator.admin"], signal },
   );
   // SAFETY: openclawId.people answers { link } with the owner link view (owner-link-view.ts).
   const result = raw as { link?: PeopleLink };
@@ -151,16 +155,16 @@ function write(opts: IdCliOpts, json: unknown, text: string) {
   process.stdout.write(opts.json ? `${JSON.stringify(json, null, 2)}\n` : `${text}\n`);
 }
 
-async function runStatus(opts: IdCliOpts) {
+async function runStatus(opts: IdCliOpts, signal?: AbortSignal) {
   const raw = await callGatewayFromCli(
     "openclawId.status",
     opts,
     {},
-    { scopes: ["operator.read"] },
+    { scopes: ["operator.read"], signal },
   );
   // SAFETY: openclawId.status answers the status shape KeysStatus reads a subset of.
   const status = raw as KeysStatus;
-  const link = status.link?.linked ? await readPeopleLink(opts) : undefined;
+  const link = status.link?.linked ? await readPeopleLink(opts, signal) : undefined;
   const lines = [describeKeysState(status.status)];
   if (status.link?.hostname) {
     lines.push(`Claw: ${sanitizeTerminalText(status.link.hostname)}`);
@@ -190,7 +194,9 @@ async function runStatus(opts: IdCliOpts) {
       `Publication: ${link.publication.state}${link.publication.code ? ` (${link.publication.code})` : ""}`,
     );
   }
-  write(opts, { ...status, people: link ?? null }, lines.join("\n"));
+  if (!signal?.aborted) {
+    write(opts, { ...status, people: link ?? null }, lines.join("\n"));
+  }
 }
 
 async function waitForPublication(opts: IdCliOpts, bindingSeq: number) {
@@ -294,7 +300,16 @@ export function registerIdCli(program: Command) {
 
   addIdGatewayOptions(
     id.command("status").description("Show remote access, the claw's keys and publication"),
-  ).action(async (opts: IdCliOpts) => await runStatus(opts));
+  ).action(async (opts: IdCliOpts) => {
+    const signal = getAsyncWorkSignal();
+    try {
+      await runStatus(opts, signal);
+    } catch (error) {
+      if (!signal?.aborted) {
+        throw error;
+      }
+    }
+  });
 
   addIdGatewayOptions(
     id

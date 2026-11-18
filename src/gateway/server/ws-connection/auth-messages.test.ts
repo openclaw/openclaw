@@ -41,7 +41,7 @@ it.each<[Partial<MessageParams>, string, boolean?, string?]>([
       reason: "token_missing",
       client: { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
     },
-    "unauthorized: gateway token missing (paste in Control UI settings or openclaw doctor --generate-gateway-token; restart)",
+    "unauthorized: gateway token missing (paste in OpenClaw settings or openclaw doctor --generate-gateway-token; restart)",
     true,
   ],
   [

@@ -78,6 +78,37 @@ function requesterProfile(text: string) {
 
 describe("prepareChatSendUserTurn", () => {
   it.each([
+    { id: GATEWAY_CLIENT_IDS.CONTROL_UI, mode: GATEWAY_CLIENT_MODES.UI },
+    { id: GATEWAY_CLIENT_IDS.WEBCHAT_UI, mode: GATEWAY_CLIENT_MODES.WEBCHAT },
+    { id: GATEWAY_CLIENT_IDS.MACOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
+    { id: GATEWAY_CLIENT_IDS.IOS_APP, mode: GATEWAY_CLIENT_MODES.UI },
+    { id: GATEWAY_CLIENT_IDS.ANDROID_APP, mode: GATEWAY_CLIENT_MODES.UI },
+  ])("preserves slash prose and leading commands from $id", ({ id, mode }) => {
+    const prose = "Send /model to choose another model.\n/status is another example.";
+    const command = " \t/model openai/gpt-4o-mini";
+    for (const { text, kind, source, authorized } of [
+      { text: prose, kind: "normal", source: "message", authorized: false },
+      { text: command, kind: "text-slash", source: "text", authorized: true },
+    ]) {
+      const prepared = prepareTurn({
+        inputText: text,
+        request: { inboundMessage: text, clientInfo: createClientInfo({ id, mode }) },
+        attachments: { parsedMessage: text },
+      });
+      const ctx = finalizeInboundContext(prepared.ctx);
+      expect(ctx.commandText).toBe(text);
+      expect(ctx.agentText).toBe(text);
+      expect(ctx.CommandTurn).toMatchObject({
+        kind,
+        source,
+        authorized,
+        body: authorized ? "/model openai/gpt-4o-mini" : prose,
+      });
+      expect(prepared.isInternalTextSlashCommandTurn).toBe(authorized);
+    }
+  });
+
+  it.each([
     { profileId: "profile-ada", synthetic: false, verified: true },
     { profileId: "profile-ada", synthetic: true, verified: true },
     { profileId: "profile-ada", synthetic: false, verified: false },
@@ -152,6 +183,7 @@ describe("prepareChatSendUserTurn", () => {
           {
             target: {
               ...target,
+              inputId: "queued-requester-input",
               runId: "run-1",
               message: buildPersistedUserTurnMessage({ text: "hello", timestamp: 1 }),
               requestHash: "request:queued-requester",

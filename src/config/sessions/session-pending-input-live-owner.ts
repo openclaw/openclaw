@@ -1,5 +1,8 @@
+import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type { SessionPendingInputOwner } from "./session-pending-input-owner.types.js";
+import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import type {
   SessionPendingInputWorkerFacts,
@@ -32,8 +35,15 @@ export function hydratePendingInputWorkerOwner(
     workerDatabasePath: current.databasePath,
     sources: current.sources?.map(hydrate),
     assertCurrent,
+    assertReadCurrent: assertCurrent,
     finish: () => {
       throw new Error("Worker custody cannot finish its host owner");
+    },
+    release: () => {
+      throw new Error("Worker custody cannot release its host owner");
+    },
+    relinquish: () => {
+      throw new Error("Worker custody cannot relinquish its host owner");
     },
   });
   return hydrate(facts);
@@ -91,29 +101,42 @@ export function publishSessionPendingInputWorkerReceipt(
 }
 
 /** A promoted input stays protected while any of its admitted sources is still live. */
-export function collectForeignLiveSessionPendingInputEntries(params: {
-  scope: { databasePath: string; sessionId: string; sessionKey: string };
-  liveOwners: Iterable<SessionPendingInputOwner>;
-  currentOwner: SessionPendingInputOwner | undefined;
-  assertLifetimeCurrent: (owner: SessionPendingInputOwner) => void;
-}): ReadonlyMap<string, string> {
+export async function collectForeignLiveSessionPendingInputEntries(
+  params: {
+    readLiveOwners: () => Iterable<SessionPendingInputOwner>;
+    currentOwner: SessionPendingInputOwner | undefined;
+    assertActive: (owner: SessionPendingInputOwner) => void;
+  },
+  scope: { databasePath: string; sessionId: string; sessionKey: string },
+): Promise<ReadonlyMap<string, string>> {
   const entries = new Map<string, string>();
-  const current = params.currentOwner?.promotedOwner ?? params.currentOwner;
-  for (const source of params.liveOwners) {
-    const owner = source.promotedOwner ?? source;
-    if (
-      owner === current ||
-      entries.has(owner.transcriptInputId) ||
-      owner.workerDatabasePath !== params.scope.databasePath ||
-      owner.sessionId !== params.scope.sessionId ||
-      owner.sessionKey !== params.scope.sessionKey
-    ) {
+  const eligible = (owner: SessionPendingInputOwner) =>
+    owner !== (params.currentOwner?.promotedOwner ?? params.currentOwner) &&
+    !entries.has(owner.transcriptInputId) &&
+    owner.workerDatabasePath === scope.databasePath &&
+    owner.sessionId === scope.sessionId &&
+    owner.sessionKey === scope.sessionKey;
+  const sources = [...params.readLiveOwners()];
+  for (const source of sources) {
+    if (!eligible(source.promotedOwner ?? source)) {
       continue;
     }
     try {
       // Check the registered source, not all siblings: one may already have settled.
-      params.assertLifetimeCurrent(source);
-      entries.set(owner.transcriptInputId, owner.idempotencyKey);
+      params.assertActive(source);
+      if (source.authority) {
+        source.authority.assertLifetimeCurrent();
+      } else {
+        const checking = source.assertReadCurrent();
+        if (checking !== undefined) {
+          await checking;
+        }
+      }
+      params.assertActive(source);
+      const owner = source.promotedOwner ?? source;
+      if (eligible(owner)) {
+        entries.set(owner.transcriptInputId, owner.idempotencyKey);
+      }
     } catch {
       // Finished, cancelled, or superseded sources no longer protect an orphan.
     }
@@ -124,12 +147,12 @@ export function collectForeignLiveSessionPendingInputEntries(params: {
 export function finishPendingInputSources(
   sources: readonly SessionPendingInputOwner[],
   disposition: "cancelled" | "interrupted",
-  userInitiated?: true,
+  endCause: SessionPendingInputEndCause,
 ): void {
   const failures: unknown[] = [];
   for (const source of sources) {
     try {
-      source.finish(disposition, userInitiated);
+      source.finish(disposition, endCause);
     } catch (error) {
       failures.push(error);
     }
@@ -137,4 +160,39 @@ export function finishPendingInputSources(
   if (failures.length) {
     throw new AggregateError(failures, "Failed to finish collected input custody");
   }
+}
+
+export function releasePendingInputSources(sources: readonly SessionPendingInputOwner[]): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.release();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to release collected input custody");
+  }
+}
+
+export function relinquishPendingInputSources(sources: readonly SessionPendingInputOwner[]): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.relinquish();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to relinquish collected input custody");
+  }
+}
+
+export async function settlePendingInputReceipts(
+  receipts: readonly SessionPendingInputReceipt[],
+): Promise<void> {
+  const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));
+  throwIfSettledRejected(results, "Failed to settle collected input custody");
 }

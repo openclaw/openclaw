@@ -228,6 +228,7 @@ export const preservedModuleBuildSources = [
   "src/cli/one-shot-exit.ts",
   "src/cli/cron-cli.ts",
   "src/cli/runtime-cleanup-scope.ts",
+  "src/cli/run-main-service-installation.ts",
   "src/cli/runtime-cleanup.ts",
   "src/state/openclaw-state-db-cache.ts",
   "src/infra/worker-native-lifecycle.ts",
@@ -264,6 +265,7 @@ export const preservedModuleBuildSources = [
 
 // Source-relative script readers retain their exact input bytes in the prepared layout.
 export const preservedModuleBuildAssets = [
+  "src/infra/runtime-worker-loader.mjs",
   "scripts/e2e/lib/kitchen-sink-plugin/npm-version.txt",
   "test/fixtures/acp/owner-agent.mjs",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/agents.json",
@@ -413,6 +415,11 @@ export const vitestWorkerBuildEntries = {
   "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
   "infra/package-update-activation.process.test-support":
     "src/infra/package-update-activation.process.test-support.ts",
+  // The journaled kill sweep seals the built recovery helper, which only a compiled graph has.
+  "infra/package-update-release-switch.process.test-support":
+    "src/infra/package-update-release-switch.process.test-support.ts",
+  // The killed updater claims its lease and opens state through the same compiled workers.
+  "infra/update-run-kill.process.test-support": "src/infra/update-run-kill.process.test-support.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

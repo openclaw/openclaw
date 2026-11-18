@@ -650,10 +650,13 @@ function packPatchedDependencies(packageDir: string, dependencies: WorkspacePatc
   try {
     const artifacts: NpmLocalPackageArtifact[] = dependencies.map(
       ({ name, version, packageDir: source }) => {
+        // npm's tar writer cannot pack duplicate inodes from pnpm's hardlink store.
+        const packSource = path.join(outputDir, name);
+        fs.cpSync(source, packSource, { recursive: true });
         const result = spawnNpmSync(
           [
             "pack",
-            source,
+            packSource,
             "--json",
             "--loglevel=verbose",
             "--ignore-scripts",

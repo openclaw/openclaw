@@ -43,7 +43,6 @@ export async function buildAgentSessionPatch(params: {
   canonicalSessionKey: string;
   storePath: string;
   expectedExistingSessionId?: string;
-  hasRestoredCronContinuation: boolean;
   resetPolicy: ReturnType<typeof import("../../config/sessions.js").resolveSessionResetPolicy>;
   now: number;
   requestedSessionId?: string;
@@ -69,7 +68,6 @@ export async function buildAgentSessionPatch(params: {
     : undefined;
   const skipImplicitExpiry =
     params.expectedExistingSessionId !== undefined ||
-    params.hasRestoredCronContinuation ||
     params.freshEntry?.modelSelectionLocked === true ||
     (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
   const freshness: SessionFreshness | undefined = params.freshEntry

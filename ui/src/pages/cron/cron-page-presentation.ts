@@ -1,12 +1,4 @@
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createOptimisticStore,
-  createSignal,
-  refresh,
-} from "solid-js";
+import { action, createMemo, createOptimistic, createSignal } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
@@ -51,75 +43,19 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   );
   let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   let stopModelSuggestions: (() => void) | undefined;
-  // Receipts describe work already admitted by the plain owner. Reading them
-  // never starts an RPC or transfers its cancellation/publication authority.
-  type ReadReceipt = { state: CronState; epoch: number; result: Promise<unknown> };
-  const [jobsReceipt, setJobsReceipt] = createSignal<ReadReceipt | null>(null);
-  const [statusReceipt, setStatusReceipt] = createSignal<ReadReceipt | null>(null);
   let presentationLifetime = Promise.withResolvers<void>();
   const ownerScope = createMemo(() => deps.readState());
-  const ownerJobs = createMemo(() => deps.readState().cronJobs);
-  const ownerJobsError = createMemo(() => {
-    const state = deps.readState();
-    return state.cronJobsSnapshotRevision ? null : state.cronJobsError;
-  });
-  const ownerStatus = createMemo(() => deps.readState().cronStatus);
   const connectionEpoch = createMemo(() => {
     deps.readState();
     return deps.connection.epoch;
-  });
-  // Read computations outlive their scope so replacement does not retire a
-  // pending child while its parent is waiting to publish the new scope.
-  const jobsRead = createMemo(() => {
-    const state = ownerScope();
-    const epoch = connectionEpoch();
-    ownerJobs();
-    ownerJobsError();
-    const receipt = jobsReceipt();
-    return receipt?.state === state && receipt.epoch === epoch
-      ? receipt.result.then(() => {
-          // Keep last-good data on refresh failure; only a failed first read
-          // has no content to retain and belongs to the error boundary.
-          if (!state.cronJobsSnapshotRevision && state.cronJobsError) {
-            throw new Error(state.cronJobsError);
-          }
-          return state.cronJobs;
-        })
-      : Promise.resolve(state.cronJobs);
-  });
-  const statusRead = createMemo(() => {
-    const state = ownerScope();
-    const epoch = connectionEpoch();
-    ownerStatus();
-    const receipt = statusReceipt();
-    return receipt?.state === state && receipt.epoch === epoch
-      ? receipt.result.then(() => state.cronStatus)
-      : Promise.resolve(state.cronStatus);
   });
   // A reconnect retires presentation too: guesses and pending reads from the
   // previous connection must not attach to a same-ID job on its successor.
   const presentation = createMemo(() => {
     const state = ownerScope();
     const epoch = connectionEpoch();
-    const [jobs, setOptimisticJobs] = createOptimisticStore(
-      () => {
-        ownerJobs();
-        return state.cronJobs;
-      },
-      [],
-      { key: "id" },
-    );
     const [saving, setSaving] = createOptimistic(false);
-    return {
-      state,
-      epoch,
-      jobsRead,
-      statusRead,
-      jobs,
-      setOptimisticJobs,
-      saving,
-      setSaving,
-    };
+    return { state, epoch, saving, setSaving };
   });
   const [toggle, setToggle] = createSignal<{
     view: ReturnType<typeof presentation>;
@@ -138,44 +74,18 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     }
   }
 
-  function runCronRead<T>(kind: "jobs" | "status", task: (state: CronState) => Promise<T>) {
-    const state = deps.currentState();
-    const epoch = deps.connection.epoch;
-    const joinsJobsRead = kind === "jobs" && (state.cronLoading || state.cronJobsLoadingMore);
-    const result = runCronTask(task);
-    // Jobs' owner queues overlapping refreshes behind the original promise.
-    if (!joinsJobsRead) {
-      (kind === "jobs" ? setJobsReceipt : setStatusReceipt)({ state, epoch, result });
-    }
-    return result;
-  }
-
   const presentMutation = action(function* (
     view: ReturnType<typeof presentation>,
     pending: Promise<unknown>,
     retired: Promise<void>,
-    expected?: Pick<CronJob, "id" | "enabled">,
   ) {
     try {
       if (isCurrentPresentation(view)) {
         view.setSaving(true);
-        if (expected) {
-          view.setOptimisticJobs((rows) => {
-            const row = rows.find((entry) => entry.id === expected.id);
-            if (row) {
-              row.enabled = expected.enabled;
-            }
-          });
-          // The Gateway supplies updated revisions and next-run state.
-          affects(view.jobsRead);
-        }
       }
       // Retiring this presentation never cancels the owner's admitted write.
-      yield Promise.race([pending, retired]);
       // Admission/publication belong to the owner, outside this transaction.
-      if (isCurrentPresentation(view)) {
-        void refresh(view.jobs);
-      }
+      yield Promise.race([pending, retired]);
     } catch (error) {
       reportActionError(view, error);
     }
@@ -280,7 +190,6 @@ export function createCronPresentation(deps: CronPresentationDeps) {
     loadModels: loadModelSuggestions,
     resetModels,
     runTask: runCronTask,
-    read: runCronRead,
     async mutate(
       view: ReturnType<typeof presentation>,
       pending: Promise<unknown>,
@@ -295,7 +204,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       }
       try {
         await Promise.resolve();
-        return await presentMutation(view, pending, retired, expected);
+        return await presentMutation(view, pending, retired);
       } finally {
         setToggle((current) => (current === intent ? null : current));
       }
@@ -306,13 +215,6 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       const intent = toggle();
       return intent?.view === presentation() ? intent.jobId : null;
     },
-    reads: {
-      models: modelRead,
-      modelRequest: modelReceipt,
-      jobs: () => presentation().jobsRead(),
-      rows: () => presentation().jobs,
-      status: () => presentation().statusRead(),
-      scope: presentation,
-    },
+    reads: { models: modelRead, modelRequest: modelReceipt },
   };
 }

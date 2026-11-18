@@ -4475,9 +4475,6 @@ surfaces:
           - name: "Update run/status"
             coverageIds: [control-ui.update-run-status]
             description: "Covers Update run/status across Debug, Logs, Update, Activity, and related diagnostics, logs, update, and activity behavior."
-          - name: Activity summaries
-            coverageIds: [control-ui.activity-summaries]
-            description: Covers Activity summaries across Debug, Logs, Update, Activity, and related diagnostics, logs, update, and activity behavior.
           - name: RPC timing telemetry
             coverageIds: [control-ui.rpc-timing-telemetry]
             description: Covers RPC timing telemetry across Debug, Logs, Update, Activity, and related diagnostics, logs, update, and activity behavior.
@@ -4505,7 +4502,6 @@ surfaces:
           - Health/status/models
           - Live log tail
           - Update run/status
-          - Activity summaries
           - RPC timing telemetry
           - What it can do (today)
           - Chat behavior

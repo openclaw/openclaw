@@ -2031,7 +2031,7 @@ export const single = {
   );
 
   it("preflights targeted UI E2E specs with Playwright browser assets", () => {
-    const [spec] = runSpecs(["ui/src/pages/cron/run-transcript.e2e.test.ts"], {
+    const [spec] = runSpecs(["ui/src/pages/plugins/plugin-skills.e2e.test.ts"], {
       baseEnv: {},
     });
 

@@ -23,6 +23,12 @@ const MESSAGES: Readonly<Record<string, string>> = {
   not_linked: "Turn on remote access on the computer that runs this claw before inviting people.",
   unconfigured:
     "Remote access is not set up for this claw. Ask the person who manages it to finish setup.",
+  role_changed:
+    "This role’s administrator access changed. Review the current role before continuing.",
+  role_invalid:
+    "Use a role name of 1–64 lowercase letters, digits, - or _, starting with a letter. Rename the role in config.",
+  role_undefined:
+    "That role is no longer defined on this claw. Refresh this page and choose another role.",
   seq_conflict:
     "Access changed while you were making this update. Refresh this page and review the current access before trying again.",
   invite_not_pending:
@@ -40,7 +46,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   caps_escalation:
     "This browser can't give another device more owner permissions than it has. Use your recovery kit to grant them.",
   limit_reached:
-    "This claw has reached its limit for people or devices. Remove one to add another.",
+    "This access request exceeds a limit. Review the error details before changing access.",
   not_yet_valid:
     "This access approval is not valid yet. Check the date and time on your device and the computer running this claw.",
 };

@@ -37,7 +37,7 @@ const checkoutPopover = (page: Page) =>
   page.locator(".oc-popover.new-session-page__checkout-popover");
 const worktreeOption = (page: Page) =>
   checkoutPopover(page).getByRole("button", {
-    name: "New worktree Isolated copy of the repo",
+    name: "New worktree",
     exact: true,
   });
 const messageInput = (page: Page) => page.locator(".new-session-page__message");
@@ -159,7 +159,7 @@ async function expectPendingNewSession(page: Page, message: string) {
   await expect.poll(() => submittedPrompt.isVisible()).toBe(true);
   await pollLocatorText(submittedPrompt).toContain(message);
   await pollLocatorText(startup.locator('.chat-working-indicator[role="status"]')).toContain(
-    "Starting…",
+    "Starting",
   );
   expect(await messageInput(page).isVisible()).toBe(false);
 }
@@ -306,11 +306,9 @@ suite.define(() => {
       await expectFocus(name);
       await expectOpen(checkout, true);
       await name.fill("picker-inputs");
-      await checkout
-        .getByText("Creates branch openclaw/picker-inputs in a separate checkout.", {
-          exact: true,
-        })
-        .waitFor();
+      await expect
+        .poll(() => name.getAttribute("title"))
+        .toBe("Creates branch openclaw/picker-inputs in a separate checkout.");
 
       const box = await name.boundingBox();
       expect(box).not.toBeNull();
@@ -371,14 +369,13 @@ suite.define(() => {
           page,
           `worktree-branches-${branchesUnavailable ? "unavailable" : "limited"}.png`,
         );
-        await page
-          .getByText(
-            branchesUnavailable
-              ? "Branch suggestions are unavailable. Enter a branch or commit."
-              : "Suggestions are limited. Enter any branch or commit.",
-            { exact: true },
-          )
-          .waitFor({ state: "visible" });
+        if (branchesUnavailable) {
+          await page
+            .getByText("Branch suggestions are unavailable. Enter a branch or commit.", {
+              exact: true,
+            })
+            .waitFor({ state: "visible" });
+        }
         await page.keyboard.press("Escape");
         await messageInput(page).fill("start from the selected release");
         await startButton(page).click();
@@ -871,7 +868,11 @@ suite.define(() => {
           "agents.list": {
             agents: [
               agent("main", "Main", WORKSPACE),
-              agent("research", "Research", "/home/peter/research"),
+              {
+                ...agent("research", "Research", "/home/peter/research"),
+                description: "Researches project decisions.",
+                recommendedPrompts: ["Research a decision"],
+              },
             ],
             defaultId: "main",
             mainKey: "main",
@@ -904,6 +905,10 @@ suite.define(() => {
         "#new-session-project-trigger .new-session-page__trigger-label",
       );
       await pollLocatorText(folderLabel).toBe("research");
+      await pollLocatorText(page.locator(".agent-chat__description")).toBe(
+        "Researches project decisions.",
+      );
+      await pollLocatorText(page.locator(".agent-chat__suggestion")).toBe("Research a decision");
 
       await page.evaluate(() => {
         history.pushState(null, "", "new?agent=main&catalog=claude");
@@ -911,6 +916,10 @@ suite.define(() => {
       });
 
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
+      await expect.poll(() => page.locator(".agent-chat__description").count()).toBe(0);
+      expect(await page.locator(".agent-chat__welcome").textContent()).not.toContain(
+        "Research a decision",
+      );
       await pollLocatorText(folderLabel).toBe("openclaw");
       await messageInput(page).fill("retarget this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();

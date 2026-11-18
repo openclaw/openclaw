@@ -107,6 +107,7 @@ import * as attemptTurnState from "./run-attempt-turn-state.js";
 import { setAgentWorkspaceForTest } from "./run-attempt-workspace.test-support.js";
 import { writeExistingBinding } from "./run-attempt.existing-binding.test-support.js";
 import { registerSettledFinalizationTests } from "./run-attempt.settled-finalization.test-support.js";
+import { createSteeringRecorder } from "./run-attempt.steering.test-support.js";
 import { registerCodexUsageLimitTests } from "./run-attempt.usage-limits.test-support.js";
 import { registerCodexWorkspacePolicyTests } from "./run-attempt.workspace-policy.test-support.js";
 import {
@@ -391,7 +392,7 @@ function createGoogleCalendarRequest(
     }
     if (method === "config/read") {
       expect((params as { includeLayers?: boolean } | undefined)?.includeLayers).toBe(true);
-      return { config: {}, layers: [] };
+      return { config: {}, origins: {}, layers: [] };
     }
     if (
       method === "app/installed" &&
@@ -770,7 +771,7 @@ describe("runCodexAppServerAttempt", () => {
         : { enabled: true, backendId: "codex-test-sandbox", workspaceAccess: "rw" };
       const request = vi.fn(async (method: string, _requestParams?: unknown) => {
         if (method === "config/read") {
-          return execServer ? { config: {}, origins: {}, layers: [] } : { config: {}, layers: [] };
+          return { config: {}, origins: {}, layers: [] };
         }
         if (execServer && method === "configRequirements/read") {
           return { requirements: null };
@@ -1470,7 +1471,7 @@ describe("runCodexAppServerAttempt", () => {
     params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "config/read") {
-        return { config: {}, layers: [] };
+        return { config: {}, origins: {}, layers: [] };
       }
       if (method === "configRequirements/read") {
         return { requirements: null };
@@ -3484,13 +3485,11 @@ describe("runCodexAppServerAttempt", () => {
         timestamp: Date.now(),
         __openclaw: { senderId: sender.id, senderName: sender.name },
       };
-      params.userTurnTranscriptRecorder = {
+      params.userTurnTranscriptRecorder = createSteeringRecorder(
         message,
-        resolveMessage: async () => message,
-        getAdmissionReceipt: () => undefined,
-        markRuntimePersistencePending() {},
-        markRuntimePersisted() {},
-      } as unknown as EmbeddedRunAttemptParams["userTurnTranscriptRecorder"];
+        async () => undefined,
+        () => false,
+      );
       const run = runCodexAppServerAttempt(params);
       await vi.waitFor(
         () => expect(requestsFor(harness.requests, "turn/start")).toHaveLength(expectedTurnStarts),

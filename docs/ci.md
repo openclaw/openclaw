@@ -18,6 +18,18 @@ CI continues during Full Release Validation; the legacy release-priority variabl
 does not pause workflow admission. See [deferred CI recovery](https://github.com/openclaw/openclaw/blob/main/.agents/skills/release-openclaw-ci/SKILL.md#deferred-ci-recovery)
 for runs already deferred by older workflow revisions.
 
+The protected dependency publisher rebuilds a new hosted Linux pnpm store before
+saving it, preserving authenticated bootstrap archives and the full dependency
+inventory. Blacksmith, macOS, and independent code warming keep their current
+behavior. This prevents old packages from accumulating
+through prefix restores. Hosted Linux exact keys carry a `-fresh` suffix so the
+publisher replaces the old generation without waiting for a lockfile change.
+The unchanged restore prefix keeps old entries available during rollout and
+includes compact generations in later fallback restores. A five-pair hosted
+compute replay reduced the archive from 2.24 GB to
+957 MB and median extraction plus offline installation from 31.5 to 12.2 seconds.
+This does not measure WAN transfer, PR completion time, or billed savings.
+
 Gateway server tests use the same 16-file process bound in local full-suite runs
 and CI config/include selections. This retires the shared worker before retained
 module graphs exhaust a 16 GB runner on Bun. The CI shard keeps its original file
@@ -75,7 +87,7 @@ import graph.
 This page is an index. CI is documented on nine pages, one per reader
 job. Open the page that matches your task.
 
-Storage-engine PRs, scheduled main runs, and manual CI validations include three hosted PostgreSQL 17
+Storage-engine PRs, scheduled main runs, and manual CI validations include four hosted PostgreSQL 17
 [conformance shards](/help/testing/suites#postgresql-conformance), required by the CI gate when selected.
 They run in parallel with separate databases and unchanged three-worker test limits,
 with a 30-minute job budget each. The conformance runner models sequential configuration processes, three parallel file
@@ -88,7 +100,7 @@ Shard 1 reserves 150 seconds for the PR-only PostgreSQL 16 Gateway cron smoke,
 including its second worker preparation and service lifecycle. All callers use
 the same deterministic assignment, including runs without that extra smoke.
 Unknown targets retain a default weight. Inspect any assignment with
-`--shard 1/3 --list` (or `2/3`, `3/3`). Refresh measurements from successful natural
+`--shard 1/4 --list` (or `2/4`, `3/4`, `4/4`). Refresh measurements from successful natural
 runs as the suite changes. The latest two file samples track recent workload
 changes; configuration and preparation costs use observed medians. These are
 estimates, including inferred import/hook costs from verbose logs, not exact
@@ -99,13 +111,12 @@ The combined inventory matches the local full suite; a failure in one shard leav
 the others running and fails the aggregate gate.
 
 The PostgreSQL Scheduled Qualification workflow (`postgres-conformance-weekly.yml`) runs
-the same three conformance shards on main with digest-pinned images: PostgreSQL 17 daily
+the same four conformance shards on main with digest-pinned images: PostgreSQL 17 daily
 at 07:17 UTC, and PostgreSQL 16 and 18 every Monday at 06:43 UTC. Manual dispatch accepts
 `versions=all` (the default), `pg16`, `pg17`, or `pg18`. PostgreSQL 17 uses the same image
-pin as PR CI. The daily run adds three hosted jobs at roughly 25 minutes each
-(75 runner-minutes per day); Monday's weekly run retains six jobs. All runs use the same
-measured shard allocator with a 50-minute job budget and at most three jobs running at once.
-PR CI keeps its existing path selection and three PostgreSQL 17 shards.
+pin as PR CI. The daily run adds four hosted jobs; Monday's weekly run retains eight jobs. All runs use the same
+measured shard allocator with a 50-minute job budget and at most four jobs running at once.
+PR CI keeps its existing path selection and four PostgreSQL 17 shards.
 All versions start with `max_locks_per_transaction=512` for the conformance workload.
 Scheduled failures are visible in Actions through the workflow's failed jobs, with no additional notifications;
 the PR failure classifier continues to compare against hourly main CI's matching PostgreSQL 17 jobs.
@@ -148,8 +159,10 @@ complete discovery, runtime ownership, and first-shard WebKit selection.
 Full-inventory two-shard trials did not reduce measured runner minutes and exceeded the
 critical-path budget.
 
-Compact mocked Control UI E2E uses six 16-class jobs with four workers each,
-matching the four observed CPUs per runner and retaining 24 aggregate worker slots.
+Compact mocked Control UI E2E uses nine 16-class jobs with four workers each,
+matching the four observed CPUs per runner. Six shards reached the 20-minute test
+step on hosted AMD EPYC 7763 runners, which run about 1.36 times slower than plan;
+nine leave margin.
 Private source-server projects stay serial. The conditional browser-extension
 row, noncompact plans, and real-Gateway worker limits retain their existing rules.
 The Mantis chat recording runs in its dedicated evidence workflow and full release
@@ -437,7 +450,7 @@ Android native resource preparation uses the Mermaid renderer's filtered depende
 
 Android phone tests use up to four isolated JVMs on Blacksmith and retain [Gradle-owned cache expiry](/ci/runners#runner-backend-modes). The same four normal rows split phone tests from app lint: Wear owns Wear tests and lint plus third-party app lint, and Kotlin lint owns Play/shared lint. Upstream Blacksmith push and PR first attempts, including forks, overlap all four rows; the GitHub override, retries, manual dispatches, schedules, and other repositories retain two. All test and lint tasks remain selected.
 
-macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Ordinary native phases retain
+macOS Swift CI runs the app and independent package suites in separate [native phases](/ci/pipeline#macos-swift-phases), retaining every test and the existing concurrency limits. Full-validation release compilation shares the independent package matrix so it can overlap Linux build verification; app tests retain the exact Linux runtime artifact dependency. Ordinary native phases retain
 a 30-minute budget; full nonpublishing app-host recovery proof has 75 minutes to build
 and stage the exact runtime, exercise Retry, and verify a fresh-process relaunch.
 
@@ -475,7 +488,7 @@ Browser extension CI launches the installed, patched Chrome MCP dependency direc
 
 When an ordinary PR, push, or scheduled run already selects the public artifact build, current-target Control UI locale checks share that job's checkout and dependency setup. Source verification and locale parity run before generators, with their result settled after the existing build diagnostics. Source failures remain blocking; generated-locale drift retains its strict or advisory policy. Standalone selections, dispatches, frozen targets, and compatibility targets keep the separate locale job.
 
-When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
+When the public artifact build is already selected, current-target browser extension E2E and the selected production deployment fixtures run directly in `build-artifacts`, before mutable built-artifact verifiers. They reuse that exact checkout's public build without an extra checkout, runtime archive, or runner. Native-policy and published-driver consumers wait for this browser proof with the rest of the producer job. Standalone browser selections and frozen targets retain their local runtime build. Full-release repo E2E shards also reuse their restored production UI for deployment fixtures, without narrowing the complete UI inventory or replacing the separately owned mock/native-plugin bundle. Real-Gateway fixtures retain their separate private-QA preparation. The native-host, Doctor and SQLite built-CLI verifiers opt into the existing validated worker cache to reuse their identical runtime-only compiled worker graph sequentially within the producer job; TUI retains its separate heap configuration and worker preparation.
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports. Scheduled and push warming use ordinary CI's Bun policy, retaining the runtime owner's Node-only exceptions; explicit workflow dispatches prime both runtimes for full validation. Optional full Node runs may start colder between manual dual-runtime warmings. Both Linux cache backends retain the same seven Control UI seed files on Node and the pinned Bun fork, and hosted tooling and contract seeds keep their existing runtime owners. Ordinary CI remains restore-only.
 

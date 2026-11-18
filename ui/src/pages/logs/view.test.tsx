@@ -617,6 +617,26 @@ it("keeps an in-flight hidden append at the end when the page becomes visible", 
   }
 });
 
+it.each([
+  [true, "No log entries match these filters."],
+  [false, "No log entries yet."],
+] as const)(
+  "distinguishes an empty filter result from an empty log (retained: %s)",
+  (retained, message) => {
+    const props = createProps({
+      status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+      entries: retained ? [{ id: 0, raw, level: "info" }] : [],
+      filterText: "unmatched query",
+    });
+    const view = mountSolid(() => <LogsView {...props} />);
+    flush();
+    expect(
+      view.container.querySelector('[role="region"][aria-label="Logs"] [role="status"]')
+        ?.textContent,
+    ).toBe(message);
+  },
+);
+
 it("keeps one toolbar at phone width and moves page actions into a menu", async () => {
   vi.stubGlobal("matchMedia", (query: string) => ({
     matches: query === "(max-width: 640px)",

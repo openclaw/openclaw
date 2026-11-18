@@ -56,7 +56,7 @@ import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
 } from "./server/preauth-connection-budget.js";
-import type { ReadinessChecker, StartupChecker } from "./server/readiness.js";
+import type { PreparedReadinessChecker, StartupChecker } from "./server/readiness.js";
 import { GATEWAY_PER_MESSAGE_DEFLATE } from "./server/ws-compression.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import type { ArtifactTransferHttpCallback } from "./worker-environments/artifact-transfer-http.js";
@@ -113,7 +113,7 @@ export async function createGatewayHttpTransport(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
-  getReadiness?: ReadinessChecker;
+  getReadiness?: PreparedReadinessChecker;
   getStartup?: StartupChecker;
   isStartupPending?: () => boolean;
   waitForRequestRuntime?: () => Promise<void>;

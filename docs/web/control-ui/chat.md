@@ -78,12 +78,24 @@ composer; unarchive the session to continue the conversation.
 Commentary written alongside tool calls stays in place as its own row, and those
 calls join the activity group that follows it instead of appearing as separate rows.
 
-Tool activity shows a tool-specific icon beside its purpose or details instead of
-repeating the tool name. When no distinct purpose or detail is available, the row
-shows the tool label instead of leaving the text blank. Activity summaries stay
-dimmed until hover or keyboard focus brightens their text, without an icon tooltip;
-screen readers retain the exact tool identity. Expanding an activity group keeps the individual tool details
-and outcomes available. Completed group summaries retain their operation counts.
+Tool activity names the recorded action and its target, such as a file, command,
+or conversation. Consecutive eligible actions share a factual summary such as
+**Read files, ran commands**. Expand the group to inspect individual inputs,
+outputs, and outcomes. Narration and events with their own placement separate
+activity groups.
+
+Recorded actions inside Code Mode follow the same presentation rules. Their
+execution title and source remain available in the call details. An execution
+without representative child actions keeps its descriptive title in the activity
+row, including when it fails. Starting another Code Mode execution does not by
+itself start another visual group. Activity
+summaries stay dimmed until hover or keyboard focus brightens their text, without
+an icon tooltip; screen readers retain the exact tool identity. The **Worked for**
+header shows elapsed time without adding a tool-call counter when expanded.
+When a run finishes while you are reading earlier work, that work stays open
+and your reading position is preserved. If you are following the end of the
+conversation, completed work folds above the answer. Opening saved history keeps
+completed work folded until you expand it.
 The **Worked for** summary and reply metadata use the same saved elapsed time,
 from the initiating message to the last recorded output for that run. This includes
 request preparation and waiting, not just model execution. Starting another turn
@@ -98,6 +110,14 @@ confirmed a non-OpenClaw ClawHub publisher. Bundled and OpenClaw-published plugi
 keep their monochrome activity icons. Missing or unreadable logos fall back to
 the plugin activity icon, then the normal tool glyph; unknown tools use a puzzle
 icon. Unknown publisher metadata does not enable branding.
+
+Choose **View → Inline command trail (this browser)** in the session menu to show
+compact command, read, and search rows in conversation order while work is running.
+Command output advances in place; expand a row for captured output and details.
+Grouped tool activity remains the default, and completed dashboard turns keep their
+**Worked for…** folding. This preference stays in this browser for this Gateway.
+If the trail cannot load, grouped commands remain available. Turn the option off
+and on to retry; the error’s details retain the technical failure.
 
 A tool stops showing **Running** when its completion arrives, even while the
 parent turn continues. If that completion does not establish success or failure,
@@ -138,35 +158,28 @@ the agent speaking: it appears as ordinary assistant text at the end of that
 reply, with Markdown, and stays there after the agent resumes. Put answers in
 normal assistant text; the acknowledgment is meant as a brief waiting status.
 
-While the handoff waits on child sessions, its working line names them in place
-of the working text. With one child it reads **Waiting on** and that child's
-name, then the time since your message. With several it reads, for example,
-**Waiting on 3 sessions · 1 needs your input · 9m**, and a list below it shows
-each child with its status in words: **Needs your input**, **Paused**,
-**Running**, **Failed**, **Stopped**, or **Done**. Children that asked for your
-attention come first, then paused ones. The list is open while the agent waits; select the line to close or reopen
-it. It names subagents and child sessions alike, including children that finished
-during the wait. Each name, here and in the **Resumed** list, links to that
-child's session; Cmd-, Ctrl-, or middle-click opens it in a new tab. A child the
-chat's own subagent list does not include, or a pane that cannot open sessions,
-shows the name as plain text. **Needs your input** is the child's own attention request, the
-same one the sidebar shows. A child that called `sessions_yield` and waits for a
-continuation reads **Paused**, and the line counts it, as in **Waiting on 3
-sessions · 1 paused · 9m**; with one child it reads **Waiting on** its name and
-**Paused**. A paused child keeps the waiting line open even when no other child
-is running, without showing the parent as working, until it continues, finishes,
-or is stopped; once it runs again it reads **Running**. While every remaining
-child is paused, the line shows no time. After the agent resumes, if the only
-children left are paused, the reply ends with a quiet note instead of a waiting
-line: **CI action pins is paused**, with the name linked, or **2 sessions are
-paused**. A child with its own work still running reads **Running** and keeps the
-waiting line. The time stays on the same clock across handoffs and resumes.
-Until the subagent list is available, the existing working indicator remains as
-a fallback. Its wait clock measures the
-current idle interval from the parent’s latest recorded run end, even if the
-handoff is outside loaded history. A later parent update starts a new idle
-interval; this is not the original request duration or a child’s runtime. Child
-activity without a completed parent turn does not invent a parent wait.
+While a confirmed handoff waits on child sessions, its status reads **Wait for
+subagents**. This status belongs to the turn that actually handed off; it has no
+parent-idle elapsed clock. Child activity by itself does not create a waiting
+status on a completed parent turn.
+
+When the parent resumes, the handoff records a **Resumed** rule with the duration
+of that completed handoff. Its duration stays the same after reload. Expanding
+the rule lists the child sessions it waited on and their current status, such as
+**Running**, **Paused**, **Needs your input**, **Failed**, **Stopped**, or **Done**.
+Each name links to the child's session when the chat's own access-scoped child
+list includes it and this pane can open sessions; otherwise it stays plain text.
+Cmd-, Ctrl-, or middle-click opens a linked child in a new tab.
+
+A parent update that receives `already_pending` from `sessions_yield` has not
+created another handoff. After that update settles, it does not leave a stale
+waiting status or start a new idle clock, even while an earlier child continues.
+The intervening user message starts a request of its own, so it does not mark
+the original handoff as resumed. A later automatic child completion gets a rule
+such as **Resumed · 2s later · Agent finished**, rather than inventing a new confirmed
+handoff or child list. Its settled duration and the completed reply remain
+after reload.
+
 The parent’s own working indicator remains visible while the parent is actively
 working. There is no additional waiting-status line above the composer. Tool rows
 you opened stay open through the handoff. A `sessions_yield` waiting for an
@@ -182,7 +195,16 @@ same block, with one footer at the end. Below a spoken acknowledgment, a thin
 select it to see the children it waited on and their current status. Until the
 chat's own subagent list has loaded, the rule shows the wait time alone. Tool activity that
 resumes with nothing written in between joins the activity row from before the
-handoff. In dashboard sessions, tool activity recorded after the resumed
+handoff, unless a **Resumed** rule marks the resume.
+
+Work the agent picks up again on its own continues the block it belongs to, with
+or without a handoff: when a background command finishes, when the Gateway
+restarts during a run, or when a subagent of this session finishes. A thin rule
+such as **Resumed · 3m later · Background command finished** marks each place it
+picked up again; the other labels are **Gateway restarted** and **Agent
+finished**. An answer the agent already gave stays in place above the rule. A
+heartbeat, a scheduled automation, or a message from another person or session
+still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
 so the answer stays last; a step that failed there stays where it happened. The
 working indicator
@@ -195,12 +217,14 @@ block, for example when the request is older than the loaded history, both
 lines describe the resumed run alone. A message you send after the handoff
 starts a block of its own, with that run's own clock and closing line.
 
-In the tool activity, a subagent's launch row shows the label its launch gave
-it, when it gave one, rather than its instructions, followed by **running**
-while it works and by its duration once it has finished. A subagent that failed
-or timed out reads **failed** instead, and one that was stopped reads
-**stopped**. Selecting the name opens that subagent in the **Subagents** panel;
-the rest of the row still expands the launch's details. The panel labels elapsed
+In the tool activity, a subagent's launch row records the launch itself, such
+as **Launched Atlas**, using the label its launch gave it rather than its
+instructions. Consecutive launches share one row. A later row reports how each
+subagent ended: **Atlas finished**, **Atlas timed out**, **Atlas failed** or
+**Atlas stopped**, placed when that result arrived. Stopping a subagent and
+listing subagents read **Stopped** and **Listed subagents**. Selecting a name
+opens that subagent in the **Subagents** panel; the rest of the row still
+expands the call's details. The panel labels elapsed
 work as **Duration** and shows **No subagents yet.** before any are listed. Collapsed activity counts subagents on
 their own, such as **1 other operation · 3 subagents**. A launch that was
 refused started no subagent and is counted with the other operations. While the
@@ -248,11 +272,49 @@ In the macOS Web experience and Tauri desktop app on macOS, Linux, and Windows, 
 Collapsing the panel leaves only expand-sidebar beside the rail, which keeps New session and search; the content header still starts with back/forward.
 Drag an empty area of the titlebar row to move the window; its buttons keep their normal actions.
 
+## Inline command trail
+
+In the conversation menu, choose **View → Inline command trail (this browser)**
+to show commands, file reads, and searches in the conversation as they run.
+Each row keeps its status and a preview of its latest output; expand it
+for tool details and more captured output. The preview shows at most three visual
+rows, keeping the newest text visible when lines wrap. Truncated capture has its
+own notice. Inline commands start compact even with Full
+verbosity, and your manual expand or collapse choices take precedence. Finished
+commands stay visible while the turn continues.
+Turning the trail off restores ordinary disclosure defaults and keeps your manual choices.
+Edits and other tools keep their existing views.
+Compact previews keep the captured text's line structure, including JSON.
+Expanded output retains its usual formatting.
+
+For running Codex commands, the preview continues following recent stdout after
+the 10,000-character capture limit. This live tail is bounded to 600 characters
+and three visible rows. **View captured beginning** opens the retained prefix,
+which can differ from the recent output shown in the live tail.
+Completion and Stop retire the live tail. Completed output and saved history
+keep their existing capture limits. If an interrupted command has no saved tool
+result, its partial output may be unavailable after terminal reconciliation or
+reload.
+
+Completed dashboard turns still fold their intermediate work into **Worked for…**.
+Open that disclosure to inspect the chronological trail again. Channel sessions
+and speech bubbles keep their existing completion behavior. The preference
+persists in this browser for this Gateway; grouped activity remains the default.
+Live Codex stdout is delivered to panes that enable the inline trail. Switching
+it on during a running command recovers the latest bounded output, including
+when the command has stopped producing new text. The default grouped view does
+not subscribe to this live stdout stream. Channel verbosity stays independent.
+If the inline trail cannot load, the conversation stays available in grouped
+view and reports an error. Turn the option off and back on to retry.
+
 ## Slash-command feedback
 
 Type `/` to open the command menu. `/steer` guides the agent’s current reply;
 `/redirect` restarts the agent’s reply with a new message. `/clear` clears the
 conversation. The `/help` result uses the heading **Available commands**.
+
+While `/steer` or `/redirect` is in progress, the status reads **Steering…** or
+**Redirecting…**. A finished action shows **Steered.** or **Redirected.**
 
 Command failures explain what could not be done and what to try next. For example,
 `/model` shows “Couldn’t load model details. Try again.” when model details cannot
@@ -494,7 +556,11 @@ start a turn in that session. These out-of-root previews are read-only.
 
 In Chat and New session, provider groups retain their expanded or collapsed state when you close and reopen the same model picker. Closing clears the search text without resetting those toggles. Reloading the page initializes the groups from the selected model again.
 
-For providers without recommendations, the model picker initially shows up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+
+On desktop, hover a model row to reveal its favorite star in the trailing column. On the selected row, the star replaces the check while hovered. Arrow-key navigation does not reveal stars. Favorites become available in the provider rail immediately, without closing the picker; model order within each provider stays stable until reopening. Removing the last favorite removes **Favorites** and returns to the selected model’s provider without changing the model.
+
+Drag provider icons to reorder the rail, or focus an icon and press **Alt+Arrow**. The order is saved in this browser and survives reloading. While the picker is open and search is not focused, **/** focuses search and **1–9** selects the corresponding available option. The number labels stay hidden; context-window values remain visible.
 
 While composing text with an input method in model search, Enter, Escape, and arrow keys stay with the input method. They do not select a model, clear the search, or move the highlighted model until composition finishes. Open tooltips also leave Escape to the input method.
 
@@ -516,23 +582,30 @@ an invalid source folder.
 
 ## Mobile composer
 
-On phones, tapping the compact composer focuses the text field and opens the
-keyboard in the same gesture. The expanded editor keeps your draft and selection
-while you use its controls.
+Only phone-sized layouts collapse an empty, unfocused composer to one line.
+Wider windows keep the editor and its controls expanded, even when navigation
+uses a drawer. Clicking or focusing the compact composer expands it; on phones,
+tapping also opens the keyboard in the same gesture. The expanded editor keeps
+your draft and selection while you use its controls, and stays open when you
+leave a typed draft.
 
 ## Composer predictions
 
 Enable **Settings → Labs → Composer predictions** to try optional next-message
 suggestions. The experiment is off by default. After a reply finishes in the
 active conversation, OpenClaw can make one additional model request and show a
-possible follow-up as muted text in an empty composer. It may show no suggestion.
+possible follow-up as muted text in an empty composer. The suggestion is written
+as your reply: when the assistant asks a question or offers options, it answers
+with the recommended choice. It may show no suggestion, for example while the
+assistant is still working or after an error.
 It does not predict on every keystroke. Each active browser tab can make its own
 prediction request. Read-only, imported, and incognito conversations do not show
 predictions.
 
-Press **Tab** or select **Use suggestion** to copy the suggestion into your draft.
-This never sends it: you can edit or undo it before sending normally. **Escape**,
-**Dismiss suggestion**, or typing your own message dismisses it. Suggestions are
+The small **Tab to complete** badge follows the suggestion without wrapping within the badge.
+Press **Tab** to copy the suggestion into your draft.
+This never sends it: you can edit or undo it before sending normally. **Escape**
+or typing your own message dismisses it. Suggestions are
 not saved as messages or collaborator drafts until you accept them. Switching
 conversations, hiding the page, or starting another turn discards pending results.
 
@@ -544,8 +617,10 @@ The Labs model selector offers:
 - **Default model**: use the agent's configured default model, ignoring the
   conversation's model override.
 
-Predictions use bounded recent text from the current conversation in an isolated,
-tool-free request. They cannot run tools, retrieve memory, or send messages. An
+Predictions use your recent messages in the current conversation (up to 16) and
+the assistant's final reply, in an isolated, tool-free request with low
+reasoning. Tool calls, tool results and the assistant's progress updates are
+skipped, and long messages keep their endings. They cannot run tools, retrieve memory, or send messages. An
 unavailable selected model skips the suggestion rather than silently switching
 to another model. Enabling the experiment can add model usage and cost; existing
 model configuration, provider credentials, and session access rules still apply.
@@ -792,8 +867,9 @@ large numbers, and escape sequences. Raw keeps the usual long-code preview,
 reveal control, and word wrapping.
 
 Unfinished streaming fences, invalid JSON, and JSON beyond the tree rendering
-budget stay readable as source. User-message fences and passive previews remain
-plain code without interactive controls.
+budget stay readable as source. User-message fences remain plain code that wraps
+long lines; when a line wraps, a toggle in the block's corner switches to
+horizontal scrolling and back. Passive previews have no interactive controls.
 
 ## Chat behavior
 
@@ -977,7 +1053,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - User-message bubbles carry transcript actions: a hover rewind button (confirm popover with a "Don't ask again" option) plus right-click **Rewind to here** and **Fork from here**. Rewind repoints the session to the state just before that message and returns its text to the composer for edit and resend (`sessions.rewind`, `operator.admin`). Files still loading for a draft that rewind replaces are discarded, so they cannot attach to the restored prompt. If you edit the composer or select another file while rewind is pending, your newer draft and attachments stay in place, even if that file is still loading. Fork creates a new session from the active-path prefix before the message, opens it, and seeds its composer with the same text (`sessions.fork`, `operator.write`). A local **Fork from here** on a Draft conversation keeps the copy in Draft. If Draft creation is disabled, the fork is refused without changing the original; you can continue working in the existing Draft conversation. Both actions disable with an explanatory tooltip while the agent is working, apply only to persisted user messages, and are rejected for sessions whose conversation is owned by an external agent harness. Rewind moves chat context only — files and other tool side effects are not reverted — and the pre-rewind transcript remains preserved in the append-only session store. When that store contains multiple transcript branches, open **Versions** from the session **⋯** menu in the active desktop chat header, or from **Details → Versions** on mobile. Each version shows a plain-text preview of its latest message, message count, and recency. A checkmark on the right identifies the current version. A note at the top of the list explains that rewinds or repairs preserve conversation copies. Long histories scroll inside the submenu, and navigating away closes it, including with browser Back. Selecting an inactive version switches the current session back to that preserved path (`sessions.branches.list`, `operator.read`; `sessions.branches.switch`, `operator.admin`). Generated images and files on preserved branches are kept with their messages, so they load again after you switch back. The branch menu refreshes as messages are saved, including replies after a rewind, without a page reload. Branch switching is also unavailable while the agent is working, and selecting the already-active branch is a typed no-op error at the RPC boundary. Open chats follow rewinds and branch switches from other tabs without losing their unsent drafts.
     - For GitHub sessions, **Details → Pull requests** lists pull requests associated with the session’s working branch instead of placing separate bars above the composer. Mentioning or linking a PR in conversation does not create a banner. The sidebar and session hovercard separately include recorded PR publications from the session and its accessible descendants; these task results do not change which branch the publishing controls target. Branch-based PR rows stop appearing when the checkout becomes detached or returns to the default branch; the publication flow separately retains its applicable recorded result. Compact rows show the PR title and status. Open a row’s actions menu for its repository and number, code changes, **Checks**, and **CI monitoring**. The section lists every returned PR, with live (open/draft) PRs first. **Checks** shows passed/failed/running/skipped totals and named checks, with failed and running work first. Expand a GitHub Actions job to inspect its ordered steps, statuses, and durations; skipped checks stay in a collapsed group. Check details load on demand rather than on every background summary refresh. CI details follow the commit shown on the row until the session PR snapshot refreshes. Job links open GitHub for full logs. Checks from other CI services remain visible without invented step details. Use **Back** to return from Checks or CI monitoring to the PR actions. The Gateway polls only sessions visible in a connected Control UI and pushes changed snapshots through `controlUi.sessionPullRequests.changed`; it uses the explicit Control UI GitHub credential or the shared process-environment fallback for this read-only preview. When the GitHub API rate limit is hit, rows keep the last known status and show a warning that the status may be out of date; dismissing a row hides it for that session in the current browser profile. On desktop, **Environment** keeps the branch and Worktree badge on the first line, with available diff counts and **Create PR** below. Its ellipsis menu shows eligible publishers under **Publish as**, with a checkmark on the selected account, plus **Hide**. When counters are unavailable, **Create PR** stays available without invented counts. A sole personal account still requires the explicit **Publish as @account** action in the menu. The menu preserves confirmation details, errors, and recovery for the original request; **Retry** opens those recovery controls rather than creating a new publication. **Review** opens the existing publication details when applicable. After publication succeeds, Environment returns to its branch row and the receipt and detected PR appear in **Pull requests**. Mobile keeps its separate publication page with its account selector and publication controls. Connection setup stays in Settings. The controller records read, publish, and confirmation activity separately. Publication only begins after an explicit request. Shared publication status reads the existing receipt instead of replaying Publish. Reconnect restores the latest applicable shared receipt, and a lost acknowledgement can be looked up by its original invocation key. Committed receipt changes refresh that scoped view through session events, without another polling loop. If GitHub cannot refresh a cached PR snapshot, the row marks that state unavailable instead of presenting it as current. Automatic PR refresh hints wait for five seconds of quiet per session; explicit refresh requests are sent immediately. The Gateway coalesces forced refreshes for each watched session within a ten-second window, with one trailing refresh, while switching sessions or hiding the tab updates the watched set immediately. Local Git facts are shared by checkout across sessions and clients; refresh revalidates the relevant refs and staged index instead of discarding unchanged facts. Unstaged-only diff counts update on the five-minute fallback. Recovery keeps an unfinished Git transaction pending without blocking settlement of publication receipts for independent workspaces. The Gateway-owned broker derives the repository and branch from session ownership, verifies the selected connection rather than using the preview credential, and returns the pull request URL or an actionable typed failure. Personal publication requires an idle, reconciled workspace and current write access to the session. Repository-only sessions publish an accepted Git-normalized checkpoint while their worker is idle or after Stop, without creating a Gateway checkout. Remote sessions sourced from a Gateway worktree still require **Stop cloud device…** first. It never follows another participant’s later turn or falls back to another account; unfinished personal publication needs same-owner confirmation after a Gateway restart. See [Publish with your account](/concepts/user-model#publish-with-your-account). The unpublished controls are hidden while an open or draft PR exists for that branch. For Gateway-source checkouts, they also stay hidden once the branch’s PR is merged and the pushed tip still matches the merged head. The branch row comes from local Git or the repository session’s recorded URL and branch, so it stays available while GitHub is rate limited and carries the same stale-status warning, since “no PR found” cannot be trusted until the limit resets.
     - Screen-reader announcements for **Pull requests** use separate count and per-PR CI summaries, outside the interactive rows. Unchanged CI polls and row reordering leave those summaries unchanged. Changes to a PR's CI state or check totals update its summary, including progress while checks are still pending and two PRs exchanging failing and passing states.
-    - The **CI monitoring** page provides **Auto-fix CI & address comments**, **Auto-merge when ready**, and **Auto-archive on merge or close**. Each opt-in creates a separate, durable agent automation for the PR whose monitoring page you opened, checked every five minutes while the Gateway runs. Additional PRs in the session are not included and do not block that PR’s auto-merge. These checks use the session agent and consume model usage; they continue when the browser is closed and survive Gateway restarts. Repair and merge runs use the named session and normal repository workflow, verifying the selected PR’s checkout without disturbing unrelated work. A conversation reset does not change their PR target. Merge readiness includes required reviews and checks—not just the green CI total—and never grants an approval or bypass. Archive runs independently, verifies the PR is merged or closed, uses the archive API’s exact-session-ID guard, and defers if the session has other active work or PRs; normal archive behavior can clean up its managed worktree. Changing a toggle requires automation administration permission. Turning one off requests cancellation of its current run and prevents future runs, but does not undo effects already accepted by GitHub. Toggles update immediately while saving in the background, without adding status rows or reloading the panel. Other toggles remain usable while one saves. The monitoring page reports only errors and blockers, including scheduler pauses and run failures. After an uncertain save, use **Try again** to refresh the saved state before making another change.
+    - The **CI monitoring** page provides **Auto-fix CI & address comments**, **Auto-merge when ready**, and **Auto-archive on merge or close**. Each opt-in creates a separate, durable agent automation for the PR whose monitoring page you opened, checked every five minutes while the Gateway runs. Additional PRs in the session are not included and do not block that PR’s auto-merge. They continue when the browser is closed and survive Gateway restarts. Auto-fix reads current GitHub feedback and failing checks before starting the session agent; unchanged resolved feedback stays quiet without a model turn. Successful agent completion or a new commit does not by itself mark unresolved feedback handled. After a successful turn leaves the same observation unhandled, Auto-fix reports a blocker instead of repeatedly spending model usage; new feedback, checks, or a new head are still observed. Read failures retain the previous observation for retry. Exact feedback and failing-check receipts persist independently of expiring run history once the settled payload has been observed. If that payload outcome expires or is unavailable before observation, Auto-fix pauses for manual review without replacing the original attempt. If its bounded recipe state fills up, Auto-fix pauses model work and reports that manual review is needed rather than replaying forgotten feedback or claiming it resolved. Repair, merge, and archive agent turns consume model usage. Repair and merge runs use the named session and normal repository workflow, verifying the selected PR’s checkout without disturbing unrelated work. A conversation reset does not change their PR target. Merge readiness includes required reviews and checks—not just the green CI total—and never grants an approval or bypass. Archive runs independently, verifies the PR is merged or closed, uses the archive API’s exact-session-ID guard, and defers if the session has other active work or PRs; normal archive behavior can clean up its managed worktree. Changing a toggle requires automation administration permission. Turning one off requests cancellation of its current run and prevents future runs, but does not undo effects already accepted by GitHub. Toggles update immediately while saving in the background, without adding status rows or reloading the panel. Other toggles remain usable while one saves. The monitoring page reports only errors and blockers, including scheduler pauses and run failures. After an uncertain save, use **Try again** to refresh the saved state before making another change.
     - The session diff panel shows what a session's checkout actually changed: **Changes** in **Details → Environment**, or **Code changes** in a pull request’s actions, opens a per-file viewer with normalized added/deleted/modified counts, collapsible files, wrapping and unified/split layouts with source syntax highlighting, file copy/open/editor actions, and "N unmodified lines" markers between hunks. The scope controls switch between all changes, uncommitted work, and individual commits while showing how far the branch is ahead of its merge base; committed branches also provide a copyable local sync command. For a local managed workspace with an accepted source base, all changes and branch history use that base, including after a base refresh when shared default-branch refs lag. Uncommitted work remains relative to HEAD, and an individual commit shows its actual changes against its first parent. Diffs are computed server-side through the `sessions.diff` Gateway method; binary and oversized files degrade to stats-only entries, and the button only appears when the connected Gateway advertises `sessions.diff`. Incomplete results show a warning even when no files could be displayed; only a complete empty result reports no changes. Review follows the session checkout once a new worktree is prepared and shows no changes before then. It keeps the current diff visible while refreshing. Cold checkouts keep the loading state visible while the Gateway computes one shared diff; reads that exceed two seconds return a pending response and the panel polls for the completed result. API clients can request this behavior with `poll: true` and retry responses marked `computing: true`; those responses do not indicate an empty diff. Poll callers share completed cold responses for up to one second. Once a versioned diff is cached, subsequent polls use the normal blocking freshness check, as do requests without `poll`.
     - Every Chat pane has a title bar. On desktop, click the session title to rename it. On mobile, the title opens Details; use the session actions to rename the conversation. The workspace control copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
     - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. Search at the top covers session files, artifacts, and the project tree. Searches are bounded and may be incomplete even when no matches appear; **Browse files** clears the search and returns to the file browser so you can open folders directly. Surrounding whitespace is ignored while spaces inside the query remain literal; filter chips show changed files, read files, or artifacts, and collapsible groups share one scroll region. **Show in files** from Review clears search and filters so the destination project directory is visible. For an active repository-only session it reads the node checkout. After Stop it exposes retained changed-file previews; unchanged upstream files, editing, and full diffs require the worker to run again. The stopped diff panel explains this limitation. Reopen it with ⇧⌘B or choose **Files** from the **Panels** launcher or its **+** menu.
@@ -1094,6 +1170,23 @@ reply to the current Control UI conversation. ClawHub supplies the official
 designation, and the Gateway checks installation status; the agent cannot assign
 those badges. A search with no official match or an unavailable catalog returns
 an explanation in chat.
+
+When the agent already knows the exact plugin, for example one that a Template
+declares, it names the ClawHub package instead of searching:
+
+```json
+{
+  "action": "send",
+  "clawhub": { "plugin": "@expediagroup/expedia-openclaw" }
+}
+```
+
+`plugin` is the exact package name and cannot be combined with `query` or
+`kind`. The chat shows only that plugin's card, never a similar search result.
+A community plugin is shown without the official badge, and its button reads
+**View details** instead of **Install**; install it from the plugin overview.
+A name that ClawHub does not know, or that is not a plugin, shows no card and
+returns an explanation. Searches still return official plugins and skills only.
 
 ### Source previews and copying code
 
@@ -1239,14 +1332,7 @@ view. References that change earlier Markdown can also reset the view.
 Completed lists also stay cached as later blocks arrive; loose or nested list
 continuations remain together until the list ends.
 
-Browser results for X and Twitter posts use a wider card with the author, handle,
-available post text, and preview image. **Open post** and **More actions** stay
-visible on touch screens. Text and social images reuse the anonymous page preview;
-when metadata is unavailable, the card keeps the post link and handle. It does
-not load an X embed script or require an X account.
-
-**Copy URL** in browser tab cards also works on plain HTTP connections where the
-browser does not provide its Clipboard API.
+Browser tool calls keep their normal expandable results without automatic page-preview cards. Visiting a page, including an X or Twitter post, does not add a card to the conversation. Links, media, and widgets deliberately included in the assistant’s reply remain visible.
 
 If the browser rejects a text clipboard write, starting another text or image
 copy cancels its delayed fallback. Code blocks replaced during streaming and

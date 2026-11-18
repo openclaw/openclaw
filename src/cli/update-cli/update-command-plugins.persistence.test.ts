@@ -2,9 +2,16 @@ import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { recoverInstalledPluginConfigIds } from "../../commands/doctor/shared/installed-plugin-id-recovery.js";
 import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin-id-recovery.test-support.js";
+import { ConfigReadOnlyError } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../../infra/install-package-dir.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
 import { resolvePluginInstallTransactionRequest } from "../../plugins/install-transaction.js";
@@ -13,6 +20,7 @@ import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.j
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../plugins/test-helpers/managed-npm-plugin.js";
 import { beginUpdatePluginCohort } from "../../plugins/update-cohort-recovery.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -219,6 +227,147 @@ it("retains published artifacts when install commit cleanup fails", async () => 
     }
   });
 });
+
+it.each([
+  { outcome: "owes the step", shape: "a cohort whose rollback restores the package" },
+  { outcome: "fails", shape: "a cohort whose rollback fails", rollbackFails: true },
+  { outcome: "fails", shape: "a cohort that also restores channel config", configChanged: true },
+  {
+    outcome: "fails",
+    shape: "a cohort and a refused config write",
+    failure: new ConfigReadOnlyError(),
+  },
+  {
+    outcome: "fails",
+    shape: "a cohort and a revoked requester",
+    failure: new UpdateRequesterRevokedError(),
+  },
+  {
+    outcome: "fails",
+    shape: "a cohort and an unsettled child",
+    failure: new CommandProcessCleanupError(),
+  },
+  { outcome: "fails", shape: "no cohort", cohort: false },
+])(
+  "$outcome when convergence throws after replacing a package with $shape",
+  async ({
+    outcome,
+    rollbackFails = false,
+    configChanged = false,
+    failure = new Error("plugin registry exploded"),
+    cohort = true,
+  }) => {
+    await withOpenClawTestState({ label: "updater-plugin-work-failed" }, async (state) => {
+      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+      const originalConfig = await fs.readFile(state.configPath, "utf8");
+      const fence = { assertCurrent() {} };
+      const { runId } = createUpdateRun({ trigger: "cli" }, { env: state.env });
+      const runtime = {
+        root: state.root,
+        nodePath: process.execPath,
+        version: "2026.10.9",
+        buildId: "fixture",
+      };
+      if (cohort) {
+        await beginUpdatePluginCohort({
+          runId,
+          installKey: state.root,
+          from: runtime,
+          to: { ...runtime, version: "2026.10.10" },
+          env: state.env,
+          fence,
+        });
+      }
+      const plugin = { stateDir: state.stateDir, packageName: "@example/owed", pluginId: "owed" };
+      const installPath = writeManagedNpmPlugin({ ...plugin, version: "1.0.0" });
+      const next = writeManagedNpmPlugin({
+        ...plugin,
+        stateDir: state.path("next"),
+        version: "2.0.0",
+      });
+      const records = {
+        owed: {
+          source: "npm" as const,
+          spec: "@example/owed@1.0.0",
+          version: "1.0.0",
+          installPath,
+        },
+      };
+      await seedInstalledPluginIndex(records, {
+        config: { plugins: { enabled: false } },
+        env: state.env,
+      });
+      const installedVersion = async () =>
+        JSON.parse(await fs.readFile(`${installPath}/package.json`, "utf8")).version;
+      const replaced: { deferred?: boolean; version?: string } = {};
+      mocks.convergence.mockImplementationOnce(async (owner) => {
+        const sink = resolvePluginInstallTransactionRequest(owner)?.transactionSink;
+        replaced.deferred = sink !== undefined;
+        // The package directory owner replaces the plugin in place. Only a cohort defers the
+        // commit and keeps the backup; without one the replacement is final here.
+        const install = {
+          sourceDir: next,
+          targetDir: installPath,
+          mode: "update" as const,
+          timeoutMs: 10_000,
+          copyErrorPrefix: "Failed to publish fixture plugin",
+          hasDeps: false,
+          depsLogMessage: "",
+        };
+        const published = await installPackageDir(
+          sink ? requestDeferredPackageDirInstall(install) : install,
+        );
+        replaced.version = await installedVersion();
+        const transaction = resolvePackageDirInstallTransaction(published);
+        if (sink && transaction) {
+          sink.push(
+            rollbackFails
+              ? {
+                  commit: () => transaction.commit(),
+                  rollback: async () => {
+                    throw new Error("backup is gone");
+                  },
+                }
+              : transaction,
+          );
+        }
+        throw failure;
+      });
+      const update = updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configChanged,
+        pluginInstallRecords: records,
+        configWriteOptions: {},
+        ...(cohort ? { cohort: { runId, env: state.env, fence } } : {}),
+      });
+      if (outcome === "owes the step") {
+        await expect(update).resolves.toMatchObject({
+          status: "warning",
+          changed: false,
+          warnings: [
+            {
+              reason: "plugin-convergence",
+              message: "plugin registry exploded",
+              guidance: ["openclaw update repair"],
+            },
+          ],
+        });
+      } else if (rollbackFails) {
+        await expect(update).rejects.toThrow("Plugin install transaction rollback failed");
+      } else {
+        await expect(update).rejects.toBe(failure);
+      }
+      expect(replaced).toEqual({ deferred: cohort, version: "2.0.0" });
+      // An owed step leaves the previous package, record and config. Without a cohort the new
+      // package stays under the old record, which is why that shape keeps failing.
+      expect(await installedVersion()).toBe(rollbackFails || !cohort ? "2.0.0" : "1.0.0");
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(records);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    });
+  },
+);
 
 async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
   // Config-write custody uses a host control store outside the profile database.

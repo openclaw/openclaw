@@ -1,6 +1,7 @@
 ---
 summary: "What experimental flags mean in OpenClaw and which ones are currently documented"
 title: "Experimental features"
+doc-schema-version: 1
 read_when:
   - You see an `.experimental` config key and want to know whether it is stable
   - You want to try preview runtime features without confusing them with normal defaults
@@ -32,6 +33,7 @@ available for user-installed browser code.
 | OpenClaw ID             | `gateway.openclawId.enabled`                                            | You want to open this claw from your other devices through OpenClaw ID, without opening a port                                    | [OpenClaw ID remote access](#openclaw-id-remote-access)                                |
 | Speech bubbles          | `gateway.controlUi.experimental.chatBubbles`                            | You want to try conversation bubbles and compact activity; Home defaults on while the lab is enabled                              | [Chat](/web/control-ui/chat)                                                           |
 | Tool Search             | `tools.toolSearch.enabled`                                              | You want to control the global Tool Search default, which is enabled                                                              | [Tool Search](/tools/tool-search)                                                      |
+| Usage-ranked tool index | `agents.defaults.experimental.usageRankedToolIndex`                     | You want frequently and recently used tools to take priority in bounded prompt indexes                                            | [Usage-ranked tool index](#usage-ranked-tool-index)                                    |
 
 ## Control UI Labs
 
@@ -40,6 +42,7 @@ Control UI switch. Enabling or disabling a lab patches the saved Gateway
 config immediately without restarting the Gateway.
 
 Labs includes Speech bubbles, Decision assistance, Code Mode, Tool Search for all models,
+Usage-ranked tool index,
 Templates, This computer’s desktop, OpenClaw ID remote access, and Cloud device desktop. Under the default reload mode,
 desktop availability updates in connected Control UI pages. Code Mode and Tool
 Search changes take effect for future agent runs. The Cloud device desktop lab
@@ -63,14 +66,130 @@ agent. Turning the switch off blocks new Add operations, but existing agents
 continue running. Local project authoring and inspection do not require the
 switch. An Add already admitted before the switch changes can finish safely.
 
-Code Mode remains disabled until you turn on its Labs switch or explicitly set
-`tools.codeMode` to `true` or `"auto"`. The Labs switch writes `"auto"`, so it
-engages only for models marked as preferred Code Mode performers; it does not
-force Code Mode on for every model.
+When `tools.codeMode` is absent, Code Mode uses `"auto"`: it engages only for
+models marked as preferred Code Mode performers. The Labs switch writes `"auto"`
+when on and `false` when off; it does not force Code Mode on for every model.
+An explicitly authored object without `enabled` stays off. Agent and model
+overrides take precedence.
 
 Tool Search is enabled by default when `tools.toolSearch` is unset.
 Turning its Labs switch off disables the global default; turning it on restores
 that default.
+
+## Usage-ranked tool index
+
+This opt-in prefers frequently and recently used tools when a bounded prompt
+index cannot show every tool. Enable **Settings → Labs → Usage-ranked tool
+index**, or set the Boolean in config:
+
+```json5
+{
+  agents: {
+    defaults: {
+      experimental: { usageRankedToolIndex: true },
+    },
+  },
+}
+```
+
+The default is **off**; only explicit `true` enables it. The embedded OpenClaw
+runtime ranks the [Code Mode index](/tools/code-mode), the
+[Tool Search deferred-schema directory](/tools/tool-search), and the
+[MCP tool directory](/tools/tool-search#mcp-tool-directory) in the `tool_search`
+description, including MCP servers installed as plugins. Codex-native surfaces
+are not ranked, and Claude CLI runs keep Claude's native `ToolSearch`. The lab
+does not enable Code Mode or Tool Search, authorize any tool, or change search
+results. Core coding tools retain their pinned places. Each surface reserves part
+of its existing budget for new tools, and selected entries render in canonical
+order.
+
+Successful calls contribute to a score with a 14-day half-life. Failed,
+cancelled, pending, client-delegated, and incognito calls do not count. Nested
+calls count the target tool rather than the Tool Search or Code Mode wrapper.
+MCP calls, including Code Mode `MCP` namespace calls, count under their exact
+catalog ID, such as `mcp:granola:granola__list_meetings`, never under a
+same-named OpenClaw or client tool. Scores follow that ID, so renaming an MCP
+server produces new IDs that start without history; the old IDs expire with
+normal retention.
+Subagents inherit the parent's frozen preference, filtered to their own
+available catalog; calls contribute to the agent that executes them.
+
+Rankings stay frozen during a prompt series. Calls update stored scores without
+rewriting the prompt prefix. A new session or reset, committed compaction, model
+or route change, or harness/surface switch can refresh the snapshot. Config and
+catalog refreshes still enforce current tool policy without re-ranking surviving
+tools. Toggling the lab affects ranking at the next such boundary. Turning it
+off does not erase saved scores; use reset below to clear them.
+
+### Inspect, import, or reset
+
+These commands require a running Gateway and `operator.admin` access. The agent
+defaults to `main`; use `--agent <id>` for another configured agent. Import and
+inspection are available even while the lab is off, so you can preview past
+usage before opting in.
+
+```bash
+openclaw tools usage status --agent main
+openclaw tools usage import --agent main --since 90 --dry-run --json
+openclaw tools usage import --agent main --since 90
+openclaw tools usage status --agent main --session agent:main:example --limit 20 --json
+openclaw tools usage reset --agent main
+```
+
+- `status` reports the row count, current decayed top scores, retention, and last
+  import time. `--limit` accepts 1–100 (default 20). `--session` additionally
+  reports that session's frozen snapshot, which can differ from current scores.
+- `import` scans retained transcripts from the last `--since` days (1–90,
+  default 90), resolves names against the current authorized agent catalog, and
+  imports only history not already covered by live recording or an earlier
+  import. MCP calls are counted when history names their exact catalog ID, or
+  when their recorded result identifies the MCP server that owns the name.
+  Calls whose name also belongs to an OpenClaw tool, or to a server whose safe
+  name needed a collision suffix, are reported as unknown tools. Repeating the same import does not count the same history twice.
+  The report includes scanned and counted calls, exclusions, errors,
+  cancellations, pending calls, wrappers, and top scores. Missing or archived
+  history that cannot be scanned is reported rather than inferred. Nested results
+  omitted by transcript size limits are reported as unknown outcomes, not guessed
+  to be successful. `--dry-run` previews the import without writing scores or import metadata.
+- `reset` clears learned scores and invalidates pending counts. It does not
+  rewrite active frozen prompts, delete transcripts, or turn off the lab. New
+  successful calls can start learning again while the lab remains enabled.
+- `--json` returns the complete report. Standard Gateway connection flags such
+  as `--url`, `--token`, and `--timeout` are available on every subcommand.
+
+The corresponding admin-only Gateway methods are `toolUsage.status`
+(`agentId?`, `limit?`, `sessionKey?`), `toolUsage.import` (`agentId?`,
+`sinceDays?`, `dryRun?`), and `toolUsage.reset` (`agentId?`). There is no
+model-facing management tool.
+
+### Storage and privacy
+
+Usage rows contain only tool IDs, decayed scores, and timestamps. They contain
+no arguments, results, session IDs, or per-call history. Import bookkeeping
+stores import coverage boundaries and a 90-day participation receipt for each
+live-recorded run, using the run ID already stamped on transcript messages.
+Receipts contain no calls or payloads. Imports fill gaps while recording was disabled
+without adding live-recorded runs again. Unstamped results after live recording began
+are reported as unknown provenance rather than guessed.
+Rows expire 90 days after their last counted successful call, and agent removal
+removes that agent's usage. Expired rows never affect ranking or status; physical
+pruning happens on usage writes and the Gateway’s hourly maintenance sweep, even
+while the lab is disabled. Calls accumulate in a run-local map; existing transcript
+commits persist batches without a separate writer request. A custom/shared
+transcript store cannot write another database's counters, so those runs and late
+completions use the existing run-settlement writer. Orderly shutdown waits for it.
+Selecting a new ranking snapshot still reads stored scores at the prompt-series
+boundary. A crash or failed commit may lose unflushed counts. Imports exclude
+active runs and committed live-run receipts; a foreign-store run that crashes
+before its receipt commits can remain eligible for historical import.
+Import reads existing transcripts from the configured session store, including
+custom/shared stores, while counting only the selected agent’s sessions. It does
+not retain another copy of their content.
+
+This is **operator-owned storage**, not a promise of device-local storage: the
+agent database may use operator-managed PostgreSQL. No usage data is sent to
+Foundation telemetry or added to OpenTelemetry attributes. Selected tool names
+still reach the model provider as part of the prompt.
 
 ## Decision assistance
 
@@ -270,6 +389,96 @@ No service URL has a production default yet; the Gateway reports
 `unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
 [`openclawId` configuration keys](/gateway/config-gateway) for the full list.
 
+### Member roles
+
+OpenClaw ID members use their membership role's definition in
+`gateway.roles.definitions`, not a named role assigned to their Gateway profile.
+When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
+writes any missing presets without overwriting owner-edited definitions. Installing
+presets uses the standard config writer: it rewrites the config file as JSON and
+removes JSON5 comments.
+
+The presets are:
+
+- `operator`: other people's sessions are writable, all agents are allowed, and
+  scopes are `operator.read`, `operator.write`, `operator.approvals`,
+  `operator.questions`, and `operator.talk`.
+- `guest`: other people's sessions are viewable, all agents are allowed, and
+  `operator.sessions.write` allows starting and continuing their own work.
+  `sandbox: "required"` runs their sessions' exec and file tools in a per-person
+  sandbox.
+- `viewer`: other people's sessions are viewable, all agents are allowed, and the
+  only scope is `operator.sessions.read`. Viewers can read visible conversations,
+  but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Operator remains the default invite role. A sandbox-required member's new sessions,
+forks, checkpoint branches, delegated children, and authorized scheduled or
+recovered work retain the sandbox requirement even without named-role enforcement.
+For those sessions' exec and file tools, an unavailable sandbox backend or failed
+provisioning is an error, not a fallback to a host or node target. The **Access**
+invite form warns when the selected role requires a sandbox and the configured
+Docker or Podman backend is unavailable. See [Sandboxing](/gateway/sandboxing)
+for setup.
+
+The sandbox requirement does not contain every execution path. Before inviting
+someone you do not trust with the machine, review the
+[sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions):
+
+- Select the [QuickJS Code Mode executor](/tools/code-mode/executors#choose-an-executor);
+  the default Node executor runs cells in the Gateway process.
+- Exclude [CLI backends](/gateway/cli-backends) with the role's
+  [modelPolicy](/gateway/operator-scopes#model-policy); their native tools and
+  sandboxing are separate from session exec and file tools.
+- Keep such roles off worker profiles, which can receive the agent's shared
+  GitHub identity independently of the session sandbox setting.
+- Do not add `operator.write` or `operator.admin` if the person must not invoke
+  commands directly on paired nodes outside a session. The stock guest preset
+  has neither scope; node command policy and approvals still apply.
+
+Also review shared transcripts and Gateway-brokered GitHub publication in that
+exclusions list: a session sandbox does not limit what shared conversations reveal
+or what the shared publication account can do.
+
+Presets are ordinary editable definitions, not reserved names or a hardcoded
+permission ceiling. Custom definitions may include `operator.admin`. A member
+whose role has no definition cannot connect or start retained/recovered work.
+Editing a definition reconnects affected members with current permissions;
+removing one denies that role. Missing presets are installed again on the next
+activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
+clearing a stored profile role with `null` remains allowed.
+
+On **Access**, choose an invite's role from the claw's defined roles. **Operator**
+is selected when it is defined; otherwise the first role alphabetically is selected.
+Each option describes access to other people's sessions, sandbox requirements, and
+administrator access. Roles with `operator.admin` are marked **Administrator access**
+and require confirmation before creating an invite. With no roles defined, add a
+definition in config before inviting anyone; there is no role-definition editor here.
+Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting with a
+letter. Other configured names are shown as unavailable rather than renamed.
+Approving a request grants exactly the role named in its invite.
+
+From an approved owner browser, choose **Change role** on a member, select a defined
+role, and save. The browser signs the membership change with its owner device key.
+The member's devices disconnect and reconnect with the new limits. Members whose
+role was deleted are marked **Blocked** with the missing role's name; choose another
+role to restore access. Members who can load the Access plugin see their own role,
+not other people's access or owner controls. The plugin currently requires
+`operator.read`; session-read-only members, including the Viewer preset, cannot
+open it.
+
+Preset installation never sets or changes `gateway.roles.default` or
+`gateway.roles.assignments`. Without a default, other sign-in methods keep their
+existing behavior, including device-token-only reconnects. Existing team Gateways
+keep their default and enforcement. Owner devices and nodes are unchanged.
+A preset-write failure is logged and reported in OpenClaw ID service status;
+undefined member roles remain refused and owners retain access. Nothing is written
+while OpenClaw ID is off. Startup finishes installing presets before publishing
+its runtime policy, including when `gateway.reload.mode` is `"off"`. If runtime
+reload policy prevents a saved activation from applying, service status asks you
+to restart the Gateway to finish turning on member roles. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+
+### Managing remote access
+
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
@@ -278,9 +487,14 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 - **Access**, under **Pages**: the **Remote access** page from the bundled
   `openclaw-id-access` plugin (enabled by default). It shows who may reach this
   claw through OpenClaw ID; its **People** section lets you invite someone,
-  approve or deny their request, and remove members. Use an approved owner
+  approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+- **Member names**: an approved member is named from their OpenClaw ID account,
+  or from the part of their email before the `@` when the account reports no
+  name. Their first visit opens a new session, which asks for a name and photo
+  before it offers a composer; they can skip it and set both later in
+  **Settings → Profile**. Both are stored only in this Gateway's profile.
 - **Your devices**, in the account menu: view approved owner browsers and choose
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
@@ -304,16 +518,66 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 
 ### Sign in with OpenClaw ID
 
-Sign-in uses an OpenID Connect authorization code flow with PKCE for the public
-client `clientId`, in a popup. It works only in a Control UI opened on the
-Gateway machine (direct loopback). The Gateway builds the authorization URL and
-redeems the code, because the issuer does not serve CORS; it keeps nothing but
-the short-lived pending sign-in. The popup returns to
-`<Control UI origin>/openclaw-id/callback`, so register that redirect for the
-client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port). The
-browser keeps the account and its ID token until the token expires or you sign
-out. While signed in, **Turn on remote access** gets its link code from your account
-instead of asking you to paste one.
+Sign-in uses the public client `clientId`. Where it works depends on how the
+Control UI reaches the Gateway:
+
+- **On the Gateway machine (direct loopback):** an OpenID Connect authorization
+  code flow with PKCE, in a popup. The Gateway builds the authorization URL and
+  redeems the code, because the issuer does not serve CORS; it keeps nothing but
+  the short-lived pending sign-in. The popup returns to
+  `<Control UI origin>/openclaw-id/callback`, so register that redirect for the
+  client (`http://127.0.0.1/openclaw-id/callback` matches any loopback port).
+- **Through a personal sign-in** (Tailscale Serve, Cloudflare Access or another
+  trusted proxy, an enterprise principal: any connection whose profile comes from
+  a verified identity of its own): the issuer cannot redirect to that origin, so the
+  Gateway runs a device sign-in (RFC 8628). The Control UI shows a code; you open
+  OpenClaw ID, sign in and confirm it, and the Gateway polls until you do. The
+  issuer must offer the device grant to the client.
+- Shared token or password connections, members and owner devices over the
+  OpenClaw ID tunnel, and connections without a personal profile cannot sign in.
+
+The browser keeps the account and its ID token until the token expires or you sign
+out. Signing in only proves which OpenClaw ID account the browser holds; on its own
+it grants nothing.
+
+### Link OpenClaw ID to your profile
+
+Through a personal sign-in, **Settings → Profile → Identity → OpenClaw ID → Link**
+runs the same device sign-in and records the account on your profile. Both sides are
+proven on one connection, so there is no "who are you?" picker. Owner devices of the
+claw's OpenClaw ID owner account then arrive as you (your name, sessions, personal
+instructions and My GitHub) instead of the shared owner. Their owner authority still
+comes from each device's certificate, and linking grants or removes nothing.
+
+If this browser already signed in with OpenClaw ID through the same personal sign-in,
+**Link** uses that sign-in and asks for no second code. The Gateway reuses only an ID
+token it received from the issuer itself for your profile and that has not expired.
+Without one, for example after the sign-in expired or the Gateway restarted, **Link**
+shows one device code as before.
+
+- One profile per account: linking an account already linked to another profile, or to
+  a member's profile, is refused. Merging profiles in **Users** carries the link.
+- **Unlink** returns owner devices to the shared owner on their next connection.
+  Sessions they already created are not rewritten. While signed in, **Turn on remote access**
+  gets its link code from your account instead of asking you to paste one.
+
+### Invite someone who already has a profile
+
+On **Access → Invite someone**, optionally choose **Existing person on this claw**.
+The picker lists personal profiles that have no OpenClaw ID linked yet, such as a
+teammate's Tailscale profile. It never offers the shared owner profile.
+
+The approval card says **Will join as** the selected person. Your selection and
+approval are enough: the member does not need to confirm the profile or match its
+email. Approval links their OpenClaw ID to that profile, so their name and existing
+conversations stay together. The selection alone gives no access, and the member's
+permissions still come from their approved membership role.
+
+The selection stays on this Gateway; it is not in the invite link or signed invite.
+If the selected profile was deleted, merged away, or linked to another account
+before approval, the Gateway uses the normal member-profile path and shows why on
+Access. Leave **Create a new person** selected for the usual invite behavior.
+This option is hidden while the OpenClaw ID lab is off.
 
 ### How the tunnel reaches the Gateway
 
@@ -341,17 +605,23 @@ instead of asking you to paste one.
   the supervisor's IPC channel. It strips client forwarding and identity headers
   and passes the device key it authenticated in the QUIC handshake.
 - Requests that come through this ingress are always treated as relayed, never
-  as direct loopback, even though they arrive on the local host. Linking a claw
-  and other root ceremonies are allowed only on direct loopback.
+  as direct loopback, even though they arrive on the local host. Root
+  ceremonies never run over the tunnel: linking a claw needs direct loopback or
+  an admin's personal sign-in, and moving to new keys needs direct loopback.
 
 <a id="make-a-claw-reachable" />
 
 ### Turn on remote access
 
 With the lab on, sign in with OpenClaw ID from the account menu, then choose
-**Turn on remote access**. It works only in OpenClaw on the computer that runs
-this claw (direct loopback). If setup asks for a **Link code**, get one from the
-**Add a claw** page at `https://claws.<loaderDomain>/link` and paste it into setup:
+**Turn on remote access**. It works in OpenClaw on the computer that runs this
+claw (direct loopback), or for an **admin** signed in through a personal sign-in
+(Tailscale Serve, Cloudflare Access or another trusted proxy, an enterprise
+principal), so a remote claw needs no SSH tunnel. It is refused for shared token
+or password connections over the network, members, people whose role is not an
+administrator, and anything over the OpenClaw ID tunnel. If setup asks for a
+**Link code**, get one from the **Add a claw** page at
+`https://claws.<loaderDomain>/link` and paste it into setup:
 
 1. The Gateway creates the claw id and its signing key, and reports the tunnel's
    endpoint key.
@@ -367,6 +637,18 @@ this claw (direct loopback). If setup asks for a **Link code**, get one from the
 5. With a link code, the Gateway registers the claw with
    Discovery and publishes its descriptor and membership snapshot. Without one,
    the claw is linked locally and can be published later.
+
+Through a personal sign-in, setup also links the OpenClaw ID you signed in with to
+your profile, as **Link OpenClaw ID to your profile** does, so your owner devices
+arrive as you. If that link is refused (for example, the account is already linked
+to another profile), remote access stays on and you can link from
+**Settings → Profile**. The Gateway log records who ran each step and over which
+identity (`openclaw-id: remote access …` with the route, auth method, profile and
+verified user), and emits a matching `security.event`.
+
+**Move to new keys** (`openclaw id rebind`) stays on the computer that runs the
+claw: it is a recovery path, including after remote access was misused, and it
+works with remote access off.
 
 ### Membership
 

@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal.js";
+import { openClawIdRecoveryPrincipalSchema } from "../gateway/openclaw-id/tunnel-principal-schema.js";
 import type { OpenClawIdTunnelPrincipal } from "../gateway/openclaw-id/tunnel-principal.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 

@@ -50,8 +50,8 @@ import {
   canonicalSessionKeyMigrationRequiredError,
   readWithCanonicalSessionReaderContinuation,
 } from "./session-canonical-key.js";
+import { readSessionColdMetadataInDatabase } from "./session-cold-storage-inventory.js";
 import { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
-import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { readSessionCreationReceipt } from "./session-creation-receipts.js";
 import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import { prepareSessionEntryInspectionSnapshot } from "./session-entry-inspection-snapshot.worker.js";
@@ -343,9 +343,10 @@ export function readExactSessionEntriesWithLifecycle(
             ...(request.manualCompact
               ? {
                   manualCompact: {
-                    archive: readSessionColdTranscript(
-                      database.db,
+                    ...readSessionColdMetadataInDatabase(
+                      database,
                       request.manualCompact.sessionId,
+                      request.readCustody,
                     ),
                     refusedSource: sourceGuard.read(
                       database,

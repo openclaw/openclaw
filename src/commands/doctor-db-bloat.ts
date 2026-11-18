@@ -3,7 +3,7 @@ import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import { captureSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";

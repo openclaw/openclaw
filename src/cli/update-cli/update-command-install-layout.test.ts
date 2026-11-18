@@ -123,10 +123,15 @@ it.each([
     });
     expect(renderUpdateRunReport(run).markdown).toContain(action);
     expect(isReportableUpdateRun(run)).toBe(false);
-    const publicOrigin = { ...run.origin };
-    delete publicOrigin.windowsUserSid;
-    expect(output[0]).toMatchObject({ runId: run.runId, run: { origin: publicOrigin } });
+    // The run keeps its driver's boot namespace; the printed run carries the process identity.
+    const { windowsUserSid: _sid, driver, ...publicOrigin } = run.origin;
+    const { namespace: _namespace, ...publicDriver } = driver ?? {};
+    expect(output[0]).toMatchObject({
+      runId: run.runId,
+      run: { origin: { ...publicOrigin, ...(driver ? { driver: publicDriver } : {}) } },
+    });
     expect(JSON.stringify(output)).not.toContain(windowsUserSid);
+    expect(JSON.stringify(output)).not.toContain('"namespace"');
     await expect(fs.readFile(path.join(root, "package.json"), "utf8")).resolves.toContain(
       '"2026.9.4"',
     );

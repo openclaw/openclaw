@@ -261,13 +261,14 @@ suite.define(() => {
     await captureUiProof(suite, requester.page, "github-reconnect", "before.png");
     await screen.execute("reconnect-github", { action: "github_identity_settings" });
     await Promise.all(deliveries);
-    await expect
-      .poll(() => new URL(requester.page.url()).pathname)
-      .toBe("/settings/agents/main/tools");
+    await expect.poll(() => new URL(requester.page.url()).pathname).toBe("/settings/profile");
     await requester.gateway.waitForRequest("tools.github.status", {
       match: { agentId: "main", selectedScope: "agent" },
     });
-    const identity = requester.page.locator("openclaw-github-identity");
+    // Every agent's account is reconnected in Profile, on that agent's row.
+    const identity = requester.page.locator(
+      '#settings-profile-github-connections [data-agent-id="main"]',
+    );
     await identity.waitFor();
     await identity.scrollIntoViewIfNeeded();
     await captureUiProof(suite, requester.page, "github-reconnect", "after.png");

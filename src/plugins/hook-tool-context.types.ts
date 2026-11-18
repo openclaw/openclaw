@@ -16,6 +16,11 @@ export type PluginHookToolRequesterContext = {
   readonly senderIsOwner?: boolean;
   /** Provider-native role ids when the channel supplies them. */
   readonly roleIds?: readonly string[];
+  /**
+   * Paired device id of the Gateway connection that sent this turn, after the Gateway
+   * verified the device signature. Never taken from request params or client info.
+   */
+  readonly deviceId?: string;
 };
 
 export type PluginHookToolContext = {
