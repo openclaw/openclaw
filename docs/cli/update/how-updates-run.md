@@ -1728,10 +1728,100 @@ carry a `package-publication-recovery` warning. The journal's printed recovery
 command does the same by hand: `repair` aborts the publication and `retire`
 removes the recovery directory.
 
-A killed update usually also leaves its update run unreconciled. That is a
-separate check: `openclaw update` then stops with `Update <id> has unfinished
-recovery`, and `openclaw update repair` reconciles the run. Repair settles the
-publication in the same pass, so one repair is enough before the next update.
+A killed update usually also leaves the plugin recovery it reserved, which is a
+separate check from the publication. `openclaw update repair` settles it and
+then finishes what the killed update left: it runs Doctor and plugin convergence
+for the installed version and restarts a Gateway the update had stopped.
+
+The next `openclaw update` settles that recovery itself, after the publication,
+when nothing needs an operator:
+
+- the installation is a package install, or a source checkout that still holds
+  exactly the build the killed update installed (see below);
+- the killed update was a command-line `openclaw update`, not one the Gateway
+  started, whose recorded process is no longer running;
+- the update lease store still holds that process's lease, so claiming the
+  installation shows its child processes are gone too. When a restart emptied
+  that store, the update instead checks the boot each of that update's
+  processes recorded. If every one ran on this same Linux or macOS machine in an
+  earlier boot, none of them can still be running, and the update claims the
+  installation as usual before it settles anything.
+
+It settles the plugin and configuration changes the way repair does. When the
+version from before that update is still installed they are rolled back, and
+when the Gateway was verified on the version it installed they are kept. The
+update prints what it settled, continues, and records an
+`interrupted-update-recovery` warning in its run history.
+
+A source checkout's version does not show whether the killed update had
+replaced its build. An update of a checkout in place records the commit and
+build it activates before it reserves its plugin recovery. The next update
+settles that recovery only when all of these still hold:
+
+- the killed update recorded that activation, for the same build its plugin
+  recovery targets;
+- the checkout is still at that commit and has no local changes;
+- its build is complete, was made from that commit, and is that same build.
+
+Then the checkout runs the killed update's build, and the update treats it like
+a package install that has the candidate installed. A checkout that was pulled,
+edited or rebuilt by hand, or a run recorded by an older updater, keeps the
+refusal below. Updates through the Git release layout never reserve plugin
+recovery, so they are unaffected.
+
+Some killed updates also leave work that repair finishes and an update that
+finds its core already current would skip:
+
+- the killed update replaced the installed version and was not confirmed
+  finished;
+- it had begun rolling its plugin changes back on the version it installed;
+- it stopped the Gateway and never started it again.
+
+In those cases the update then finishes the installed version the way
+`openclaw update repair` does: it runs Doctor and plugin convergence for that
+version, and restarts and verifies a Gateway the killed update had stopped. This
+happens before the update checks for a newer version. That work is recorded on a
+separate repair run, exactly as repair records it, because the update's own run
+does not exist yet at that point. The update adds an
+`interrupted-update-finalization` warning that names that run, prints no
+separate result, and then continues. A stopped Gateway is restarted only when
+the update would restart it anyway. With `--no-restart` the update refuses,
+because the history cannot show whether the killed update or an operator
+stopped it. If Doctor, plugin convergence or the Gateway restart fails, or Doctor
+maintenance has to wait, the update stops. It names `openclaw update repair` and
+leaves the installation as repair would leave it.
+
+Otherwise the update stops with `Update <id> has unfinished recovery`. When
+repair can settle the recovery, the message adds the reason and the command:
+
+- **The killed update stopped the Gateway and this update was run with
+  `--no-restart`.** Run `openclaw update repair`, which settles the recovery,
+  then restarts and verifies the Gateway.
+- **The Gateway started the update**, or a managed helper adopted it. Wait if
+  the Gateway is still finishing it; otherwise run `openclaw update repair`.
+- **An update is still recorded as running** and its process is not known to
+  have exited, or another updater holds the installation. Wait for it; run
+  `openclaw update repair` if it has stopped.
+- **The update lease store no longer holds the killed update's lease.** The
+  store was removed or replaced, or another command already claimed the
+  installation. That includes an earlier `openclaw update` that claimed it and
+  then refused for one of the reasons above, so a second attempt reports this
+  reason. After a restart the update also refuses this way when the boot record
+  cannot show the killed update's processes gone: the killed update ran an
+  older version that did not record its boot, the machine has no stable
+  identity, it runs on Windows or inside a container, or one of that update's
+  processes recorded no boot. Run `openclaw update repair`.
+- **The recovery could not be settled.** The message includes the cause. Run
+  `openclaw update repair`.
+- **The installation is a source checkout that cannot show the killed update's
+  build.** The message names the reason: no recorded activation, a commit or
+  build that differs from it, or local changes. Run `openclaw update repair`.
+- **The recovery belongs to another installation.** Run `openclaw update repair`
+  from that installation.
+- **A dry run** changes nothing. Run `openclaw update`.
+
+Recovery that `openclaw update repair` cannot settle either keeps the plain
+refusal without a command.
 
 The updater does not settle the leftover when another updater still holds the
 installation, when the lease store is missing or was replaced, when the

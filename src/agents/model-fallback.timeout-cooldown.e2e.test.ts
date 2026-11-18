@@ -5,8 +5,12 @@ import type {
   EmbeddedRunAttemptResult,
 } from "./embedded-agent-runner/run/types.js";
 import { resetFallbackSkipCacheForTest } from "./fallback-skip-cache.test-support.js";
+import { AgentHarnessModelRequestPolicyError } from "./harness/errors.js";
+import type { ModelFallbackStepFields } from "./model-fallback-observation.js";
 import { createFallbackE2eMocks } from "./model-fallback.e2e.test-support.js";
+import { createModelFallbackAttemptMocks } from "./model-fallback.run-embedded.attempts.test-support.js";
 import {
+  RATE_LIMIT_ERROR_MESSAGE,
   createEmbeddedFallbackEntryRunner,
   makeModelFallbackConfig,
   readFallbackUsageStats,
@@ -116,3 +120,90 @@ it.each(["idle", "request", "backup-profile", "fallback-model"] as const)(
     });
   },
 );
+
+const { mockPrimaryFailureThenFallbackSuccess, mockPrimaryErrorThenFallbackSuccess } =
+  createModelFallbackAttemptMocks(runEmbeddedAttemptMock);
+async function runEntryGuard(
+  workspace: { agentDir: string; workspaceDir: string },
+  name: string,
+  options: Parameters<typeof runEmbeddedEntryFallback>[2] = {},
+) {
+  const work = new AsyncWorkScope();
+  try {
+    return await work.run(() => runEmbeddedEntryFallback(workspace, name, options));
+  } finally {
+    await work.drain();
+  }
+}
+it("does not rotate credentials or run a second model after a confirmed deployment denial", async () => {
+  await withModelFallbackWorkspace(async (workspace) => {
+    await writeFallbackMultiProfileAuthStore(workspace.agentDir);
+    const denial = new AgentHarnessModelRequestPolicyError();
+    mockPrimaryFailureThenFallbackSuccess(() =>
+      makeEmbeddedRunnerAttempt({ terminal: { kind: "failed", source: "prompt", error: denial } }),
+    );
+    await expect(runEntryGuard(workspace, "request-policy-denial")).rejects.toBe(denial);
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledOnce();
+    const stats = await readFallbackUsageStats(workspace.agentDir);
+    expect(stats["openai:p1"]?.cooldownUntil).toBeUndefined();
+    expect(stats["openai:p1"]?.failureCounts).toBeUndefined();
+  });
+});
+it("preserves attempt timeout fallback eligibility after committed tool effects", async () => {
+  await withModelFallbackWorkspace(async (workspace) => {
+    await writeFallbackMultiProfileAuthStore(workspace.agentDir);
+    mockPrimaryFailureThenFallbackSuccess(() =>
+      makeEmbeddedRunnerAttempt({
+        terminal: { kind: "timeout", phase: "prompt", source: "run_budget", aborted: true },
+        lastAssistant: buildEmbeddedRunnerAssistant({ stopReason: "aborted" }),
+        toolMetas: [{ toolName: "write", replaySafe: false }],
+      }),
+    );
+    await runEntryGuard(workspace, "attempt-timeout");
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedAttemptMock.mock.calls[0]?.[0].provider).toBe("openai");
+  });
+});
+it("does not replay thrown transcript turn assertions through retries or model fallback", async () => {
+  await withModelFallbackWorkspace(async (workspace) => {
+    await writeFallbackMultiProfileAuthStore(workspace.agentDir);
+    const message =
+      'Transcript idempotency key "channel-user:v1:conflicting-input" conflicts with the admitted message.';
+    runEmbeddedAttemptMock.mockRejectedValue(new Error(message));
+    const result = await runEntryGuard(workspace, "transcript-assertion", {
+      runId: "announce:requester-settle:test:transcript-assertion",
+      fallbacksOverride: ["groq/mock-2", "groq/mock-3"],
+    }).catch((error: unknown) => error);
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledOnce();
+    expect(result).toBeInstanceOf(Error);
+    expect(result).toMatchObject({ message });
+    expect(fallbackMocks.suspendSessionMock).not.toHaveBeenCalled();
+  });
+});
+it("keeps a pinned model on its rate-limit surface instead of escalating to fallback", async () => {
+  await withModelFallbackWorkspace(async (workspace) => {
+    await writeFallbackMultiProfileAuthStore(workspace.agentDir);
+    mockPrimaryErrorThenFallbackSuccess(RATE_LIMIT_ERROR_MESSAGE);
+    const steps: ModelFallbackStepFields[] = [];
+    await expect(
+      runEntryGuard(workspace, "user-model-override-rate-limit", {
+        fallbacksOverride: [],
+        modelFallbackAvailability: { kind: "disabled_by_model_override" },
+        onFallbackStep: (step) => steps.push(step),
+      }),
+    ).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "rate_limit",
+      provider: "openai",
+      model: "mock-1",
+      rateLimitRetriesExhausted: 3,
+      suspend: true,
+    });
+    expect(runEmbeddedAttemptMock.mock.calls.length).toBeGreaterThan(2);
+    expect(
+      runEmbeddedAttemptMock.mock.calls.every(([attempt]) => attempt.provider === "openai"),
+    ).toBe(true);
+    expect(steps.map((step) => step.fallbackStepFinalOutcome)).toEqual(["chain_exhausted"]);
+    expect(steps[0]?.fallbackStepToModel).toBeUndefined();
+  });
+});

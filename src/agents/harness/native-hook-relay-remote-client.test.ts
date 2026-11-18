@@ -37,8 +37,9 @@ it.skipIf(process.platform === "win32")(
           "pre_tool_use",
           "--remote-credential",
           credential,
+          // The relay deadline includes this cold TypeScript process start.
           "--timeout",
-          "1000",
+          "8000",
         ],
         { input: "{}", encoding: "utf8", timeout: 10_000, killSignal: "SIGKILL" },
       );

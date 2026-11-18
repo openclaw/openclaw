@@ -9,6 +9,7 @@ import { resolveAgentWorkspaceDir, resolveSessionAgentIdsStrict } from "../agent
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
+import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { NormalizedUsage } from "../agents/usage.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -30,6 +31,9 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-w
 
 type ForkOutcome = Parameters<SubagentForkedTurnParams<unknown>["onSettled"]>[0];
 
+/** Core tools a plugin fork may run under the source session's own policy. */
+const FORK_SESSION_TOOLS = new Set(["read", "ls", "exec"]);
+
 /**
  * Plugin adapter over the core session fork owner: resolves the caller's identity, its own
  * tools, the `through` anchor and the model, then runs `runSessionFork` with the plugin as owner.
@@ -50,17 +54,21 @@ export async function runPluginForkedTurn<T>(
   const params = { ...request, tools: [...request.tools] };
   const { scope, pluginId, context, assertConversationAccess, runtimeLifetime } = deps;
   const { resolveGatewayContext } = deps;
-  // Trust rule: a plugin may let a fork run only tools it uniquely registered, never core tools
-  // or another plugin's tools. The source session's policy is checked again below.
+  // Trust rule: a plugin may let a fork run tools it uniquely registered, plus read, ls and exec.
+  // Those three never join the plugin grant, which widens the session's tool profile: the
+  // source session's own policy must already allow them (checked below), and exec runs only on
+  // the owner's turns. Other core tools and other plugins' tools are refused.
   // Host-captured registration of the calling plugin; a reload or disable revokes it.
   const assertOwnerCurrent = scope?.assertSystemOwnerCurrent;
   if (!assertOwnerCurrent) {
     throw new Error("Plugin forked turns require a live plugin registration.");
   }
   assertOwnerCurrent();
+  const isSessionTool = (tool: string) => FORK_SESSION_TOOLS.has(normalizeToolPolicyName(tool));
+  const sessionTools = params.tools.filter(isSessionTool).map(normalizeToolPolicyName);
   const runtimePluginToolGrant = resolvePluginSubagentToolsAlsoAllow({
     pluginId,
-    toolsAlsoAllow: params.tools,
+    toolsAlsoAllow: params.tools.filter((tool) => !isSessionTool(tool)),
   });
   if (Boolean(params.provider) !== Boolean(params.model)) {
     throw new Error("Plugin forked turn model overrides need both provider and model.");
@@ -107,7 +115,10 @@ export async function runPluginForkedTurn<T>(
           agentId,
           assertActive: assertCurrent,
         });
-        if (!target.entry?.sessionId || target.entry.sessionId !== params.through.sessionId) {
+        if (!target.entry?.sessionId) {
+          throw new Error(`No active session context for "${params.sessionKey}".`);
+        }
+        if (params.through && target.entry.sessionId !== params.through.sessionId) {
           throw new Error(
             `Session "${params.sessionKey}" was reset or replaced after the requested entry.`,
           );
@@ -122,9 +133,9 @@ export async function runPluginForkedTurn<T>(
             sessionId: target.entry.sessionId,
             entry: target.entry,
           },
-          entryId: params.through.entryId,
+          ...(params.through ? { entryId: params.through.entryId } : {}),
           prompt: params.prompt,
-          tools: runtimePluginToolGrant?.toolNames ?? [],
+          tools: [...(runtimePluginToolGrant?.toolNames ?? []), ...sessionTools],
           runtimePluginToolGrant,
           ...(params.provider && params.model
             ? { override: { provider: params.provider, model: params.model } }

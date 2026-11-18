@@ -50,7 +50,7 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  const host = new AppSidebarOwner(context, props);
   // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
   host.sessionPullRequests = {
     summary: (_sessionKey, _worktreeId, initial) => initial,
@@ -129,46 +129,6 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
   expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
   expect(art?.style.maskImage).toBe(sessionIconMask("bot", 1.75));
   expect(dom.query(".session-glyph")).toBe(glyph);
-});
-
-it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
-  const { host, context, dom } = await createCachedHost();
-  host.sidebarAgentsMode = "roster";
-  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
-  host.restoreSidebarSnapshot({
-    ...emptySnapshot,
-    mode: "roster",
-    navigationView: "pages",
-    pageScopeId: context.agentSelection.state.scopeId,
-    pages: snapshotSessions([
-      ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
-      projectSidebarSession({ key: "agent:main:archived", hasBoard: true, archived: true }),
-    ]),
-  });
-  host.invalidate();
-  await host.updateComplete;
-  await waitForSolid(() =>
-    expect(
-      dom.present(
-        `.sidebar-pages [data-session-key="${dashboardKeys[0]}"]`,
-        '.sidebar-pages [data-session-key="agent:main:archived"]',
-        ".sidebar-pages .sidebar-session-sort",
-      ),
-    ).toEqual([true, false, false]),
-  );
-  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
-  const routes = entries
-    .map((entry) => entry.getAttribute("data-sidebar-entry"))
-    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
-  const routeLabels = routes.map(
-    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
-  );
-  expect(routeLabels.length).toBeGreaterThan(4);
-  expect(routeLabels).not.toContain("");
-  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
-  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
-    dashboardKeys.map((key) => `session:${key}`),
-  );
 });
 
 it("paints the restored roster and workspace before live data arrives", async () => {

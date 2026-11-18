@@ -131,6 +131,7 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     inlineProviderModels: readonly InlineModelEntry[];
     createStores: (
       publishedModels?: ReadonlyMap<string, readonly Model[]>,
+      selectedModel?: { provider: string; modelId: string },
     ) => PreparedModelRuntimeStores;
     /** Bounded metadata shared by runs; replacing the model/auth generation drops the memo. */
     routeModelResolutionMemo?: Map<string, Promise<Model>>;
