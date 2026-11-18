@@ -26,7 +26,7 @@ import {
   CONVERSATION_ACCESS_SURFACE_ENTRY,
   PLUGIN_MANIFEST_CONTRACT_KEYS,
 } from "./manifest-contract-keys.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 type PluginCapabilityManifest = {
