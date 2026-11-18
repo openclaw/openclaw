@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { ok } from "@openclaw/normalization-core/result";
-import { readStoredSessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
+import {
+  EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION,
+  readStoredSessionRowTranscriptProjection,
+} from "../../gateway/session-row-transcript-preview.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
@@ -667,7 +670,7 @@ export function readSessionRowDatabaseFacts(
               const { entry } = selected;
               const storedTranscript =
                 selected.row.row_transcript_window_id === null
-                  ? { lastMessagePreview: null, lastAssistantMessage: null, terminalModel: null }
+                  ? EMPTY_SESSION_ROW_TRANSCRIPT_PROJECTION
                   : readStoredSessionRowTranscriptProjection({
                       json: selected.row.row_transcript_json,
                       updatedAt: selected.row.row_transcript_updated_at,
@@ -680,6 +683,7 @@ export function readSessionRowDatabaseFacts(
                 hasBoard:
                   selected.row.session_key === sessionKey && selected.row.board_present === 1,
                 transcriptPreview: storedTranscript?.lastMessagePreview,
+                transcriptHasMessages: storedTranscript?.hasMessages,
                 transcriptAssistantMessage: storedTranscript
                   ? storedTranscript.lastAssistantMessage
                   : "unknown",

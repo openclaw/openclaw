@@ -154,7 +154,7 @@ export function ChatThread(input: ChatThreadInput) {
                   ]}
                   ref={[elementRef(input.bindViewport)]}
                 >
-                  {!heldWarmBoot && (
+                  {!heldWarmBoot && input.props.selectedSession?.hasMessages === true && (
                     <div class="chat-thread-content">
                       <div class="chat-thread-inner">
                         <ChatConversationLoading route />
@@ -313,7 +313,7 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
     if (!renderReady()) {
       return (
         <div class="chat-thread-inner">
-          <ChatConversationLoading route />
+          {input.props.selectedSession?.hasMessages === true && <ChatConversationLoading route />}
         </div>
       );
     }

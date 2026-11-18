@@ -1,4 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -47,6 +48,7 @@ import {
 } from "./session-row-projection.test-support.js";
 import { terminalAssistantMessage } from "./session-row-terminal-message.test-support.js";
 import * as transcriptBackfill from "./session-row-transcript-backfill.js";
+import { applyGatewaySessionRowMode } from "./session-utils-display.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -56,6 +58,31 @@ type TranscriptMessage = Parameters<
 
 const cfg = { agents: { entries: { main: {} } } };
 const display = { includeDerivedTitles: true, includeLastMessage: true };
+
+it("publishes empty and saved history facts from the transcript owner", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot(cfg);
+    const target = { agentId: "main", sessionKey: "agent:main:empty", sessionId: "empty" };
+    const query = { agentId: target.agentId, key: target.sessionKey };
+    replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const empty = observeSessionRowBackfill([target.sessionKey]);
+    using projection = await createTestProjection({ cfg });
+    await projection.ensureMaterialized();
+    projection.describe(query);
+    await withinTest(empty, signal);
+    expect(projection.snapshot(query).row?.hasMessages).toBe(false);
+    const saved = observeSessionRowBackfill([target.sessionKey], projection);
+    await appendTranscript(target, { role: "user", content: "First saved message" });
+    await projection.ensureMaterialized();
+    await withinTest(saved, signal);
+    expect(projection.snapshot(query).row?.hasMessages).toBe(true);
+    for (const mode of ["sidebar", "dashboard", "compact"] as const) {
+      const row = { ...expectDefined(projection.snapshot(query).row, "saved session row") };
+      applyGatewaySessionRowMode(row, mode);
+      expect(row.hasMessages).toBe(true);
+    }
+  });
+});
 
 async function withStreamingProjection(
   run: (fixture: {

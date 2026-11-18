@@ -20,7 +20,10 @@ const suite = createControlUiE2eSuite({
 });
 const sessionId = "b1c2cd3c-1234-4321-9876-123456789abc";
 const sessionKey = `agent:main:chat:${sessionId}`;
-const row = createControlUiSessionRow(sessionKey, "Loading geometry", 1, { model: "gpt-4.1" });
+const row = createControlUiSessionRow(sessionKey, "Loading geometry", 1, {
+  model: "gpt-4.1",
+  hasMessages: true,
+});
 const readyText = "The conversation history is now available.";
 const viewports = [
   { width: 1105, height: 954 },
@@ -79,7 +82,7 @@ suite.define(() => {
           await gateway.resolveDeferred("connect");
           await gateway.waitForRequest("chat.startup");
           await gateway.resolveDeferred("chat.startup");
-          await page.getByText(readyText, { exact: true }).waitFor();
+          await page.locator(".chat-text").getByText(readyText, { exact: true }).waitFor();
           const composer = page
             .locator(".agent-chat__input--chat")
             .filter({ visible: true })
@@ -167,7 +170,9 @@ suite.define(() => {
             );
             route.release();
             await gateway.waitForRequest("chat.startup");
-            expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
+            expect(
+              await page.locator(".chat-text").getByText(readyText, { exact: true }).count(),
+            ).toBe(0);
             const pending = await capture(page, composer, directory, "history-pending");
             expect
               .soft(await page.locator(".chat-thread .loading-skeleton__composer").count())
@@ -178,7 +183,7 @@ suite.define(() => {
               expect.soft(await history.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
             }
             await gateway.resolveDeferred("chat.startup");
-            await page.getByText(readyText, { exact: true }).waitFor();
+            await page.locator(".chat-text").getByText(readyText, { exact: true }).waitFor();
             const ready = await capture(page, composer, directory, "ready");
             await writeFile(
               path.join(directory, "geometry.json"),
