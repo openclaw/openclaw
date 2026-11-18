@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
@@ -16,7 +17,6 @@ export function registerPreparedReplyThinkingCases(
     async (source) => {
       const sessionEntry: SessionEntry = {
         sessionId: "session-thinking",
-        sessionFile: "/tmp/session-thinking.jsonl",
         thinkingLevel: "high",
         updatedAt: 1,
       };
@@ -54,14 +54,13 @@ export function registerPreparedReplyThinkingCases(
   ] as const)(
     "resolves Talk preference %s against the selected consult model",
     async (requested, expected) => {
-      const catalog = [
+      const catalog: ModelCatalogEntry[] = [
         {
           provider: "anthropic",
           id: "synthetic-thinking-model",
           name: "Synthetic thinking model",
           reasoning: true,
           thinkingLevelMap: { off: null, minimal: null },
-          compat: { thinkingLevels: ["low", "medium", "high"], defaultThinkingLevel: "medium" },
         },
       ];
       await runPrepared({
