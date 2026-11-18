@@ -1,10 +1,9 @@
-import { createMemo, createSignal, Show } from "solid-js";
-import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
-import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
+import { createMemo, Show } from "solid-js";
+import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { AttachmentPreview } from "../chat/components/chat-attachments.tsx";
-import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
 import type { ChatCommentAction } from "../chat/components/chat-selection-annotations.tsx";
 import { ConnectMachineDialog } from "./connect-machine-dialog-view.tsx";
+import { NewSessionModelControlView } from "./model-control-view.tsx";
 import type { PaletteSessionDraft } from "./palette-session-draft.ts";
 import { PaletteSessionSettingsView } from "./palette-session-settings-view.tsx";
 
@@ -18,38 +17,33 @@ export function PaletteSessionControls(props: DraftProps) {
   return <Show when={view()}>{(settings) => <PaletteSessionSettingsView {...settings()} />}</Show>;
 }
 
-/** The composer's own add menu, limited to this draft's attachment sources. */
-export function PaletteSessionAddMenu(props: DraftProps) {
-  const inputHandle = createChatAttachmentInputHandle();
-  const [open, setOpen] = createSignal(false);
-  const attachments = createMemo(() => {
+/** The existing New Session model picker; effort keeps following ordinary defaults. */
+export function PaletteSessionModel(props: DraftProps) {
+  const view = createMemo(() => {
     void props.revision;
-    return props.draft.attachmentProps();
+    return props.draft.settingsView();
   });
   return (
-    <Show when={attachments()}>
-      {(current) => (
-        <>
-          <ChatAttachmentInputs {...current()} inputHandle={inputHandle} />
-          <ChatComposerPlusMenu
-            menu={{
-              attachments: current(),
-              inputHandle,
-              disabled: props.draft.messageLocked,
-              open: open(),
-              view: "root",
-              toolOverrides: undefined,
-              onOpenChange: setOpen,
-              onViewChange: () => {},
-            }}
-          />
-        </>
+    <Show when={view()}>
+      {(settings) => (
+        <NewSessionModelControlView
+          control={settings().options.draft.place.modelControl}
+          options={{
+            agent: settings().options.draft.place.selectedAgent(),
+            agentId: settings().options.draft.place.agentId,
+            context: settings().options.context,
+            sending: props.draft.messageLocked,
+          }}
+          showEffort={false}
+        />
       )}
     </Show>
   );
 }
 
-export function PaletteSessionAttachments(props: DraftProps) {
+export function PaletteSessionAttachments(
+  props: DraftProps & { onOpenImage: (item: ImageLightboxItem) => void },
+) {
   const preview = createMemo(() => {
     void props.revision;
     const attachments = props.draft.attachmentProps();
@@ -69,7 +63,11 @@ export function PaletteSessionAttachments(props: DraftProps) {
           props.draft.removeComment(event.detail)
         }
       >
-        <AttachmentPreview {...preview()!} readRevision={props.revision} />
+        <AttachmentPreview
+          {...preview()!}
+          readRevision={props.revision}
+          onOpenImage={props.onOpenImage}
+        />
       </div>
     </Show>
   );

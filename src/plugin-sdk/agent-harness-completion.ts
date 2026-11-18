@@ -67,8 +67,11 @@ export async function deliverAgentHarnessCompletion(params: {
   /** Current source owner may admit new delivery work; accepted work keeps its own lifecycle. */
   isSourceSessionAdmissionAllowed: () => boolean;
   signal?: AbortSignal;
-  /** Plugin-owned historical locator can narrow admission, never grant ownership. */
-  expectedRequester?: { sessionId: string; lifecycleRevision?: string };
+  /**
+   * @deprecated Ignored. A completion goes to the requester session key, also after a reset
+   * or a compaction successor. Kept for one release so that older plugins still compile.
+   */
+  expectedRequester?: { sessionId?: string; lifecycleRevision?: string };
 }): Promise<AgentHarnessCompletionDelivery> {
   const scope = assertAgentHarnessCompletionScope(params.scope);
   const run = () =>
@@ -105,7 +108,6 @@ async function deliverAgentHarnessCompletionBound(
   const announceType = params.announceType?.trim() || "Agent harness task";
   const statusLabel = params.statusLabel?.trim() || params.status;
   const eventStatus = params.status === "succeeded" ? "ok" : "error";
-  const expectedRequester = params.expectedRequester;
   const requesterCurrent = await captureRequesterSessionEntryCurrent(
     requesterSessionKey,
     scope.requesterAgentId,
@@ -114,7 +116,6 @@ async function deliverAgentHarnessCompletionBound(
   try {
     const requester = await loadRequesterSessionEntry(requesterSessionKey, scope.requesterAgentId);
     const requesterSessionId = requester.entry?.sessionId;
-    const requesterLifecycleRevision = requester.entry?.lifecycleRevision;
     const isRequesterCurrent = (rejectRetiredCustody = false) => {
       if (completionCustody) {
         try {
@@ -126,20 +127,12 @@ async function deliverAgentHarnessCompletionBound(
           return false;
         }
       }
-      let current: ReturnType<typeof readRequesterCurrent>;
+      // The session key is the address. A reset or a compaction successor stays current.
       try {
-        current = readRequesterCurrent();
+        return readRequesterCurrent() !== undefined;
       } catch {
         return false;
       }
-      return (
-        Boolean(requesterSessionId) &&
-        current?.sessionId === requesterSessionId &&
-        current?.lifecycleRevision === requesterLifecycleRevision &&
-        (!expectedRequester ||
-          (current?.sessionId === expectedRequester.sessionId &&
-            current?.lifecycleRevision === expectedRequester.lifecycleRevision))
-      );
     };
     const isSourceSessionEffectsAllowed = () =>
       !signal?.aborted && isRequesterCurrent() && params.isSourceSessionAdmissionAllowed();
@@ -189,8 +182,6 @@ async function deliverAgentHarnessCompletionBound(
           scope,
           sourceSessionKey: childSessionKey,
           sourceRunId: buildAnnounceIdempotencyKey(params.announceId),
-          requesterSessionId,
-          requesterLifecycleRevision,
           isSourceCurrent: isSourceSessionEffectsAllowed,
         },
         async () => {
@@ -198,8 +189,6 @@ async function deliverAgentHarnessCompletionBound(
           const assertCurrent = assertHarnessCompletionSourceAdmission({
             requesterSessionKey,
             requesterAgentId: scope.requesterAgentId,
-            requesterSessionId,
-            requesterLifecycleRevision,
             sourceSessionKey: childSessionKey,
             sourceRunId,
           });

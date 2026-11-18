@@ -211,6 +211,21 @@ function entryMatches(
   if (sameAssistantPersistenceReceipt(left.identity, right.identity)) {
     return true;
   }
+  // Cached user sends retain their send identity even after the local pending
+  // owner is gone. Promote only an unrecorded copy, never two durable rows.
+  if (
+    left.identity?.role === "user" &&
+    right.identity?.role === "user" &&
+    !left.identity.isImported &&
+    !right.identity.isImported &&
+    left.identity.idempotencyKey &&
+    right.identity.idempotencyKey &&
+    left.identity.sendId === right.identity.sendId &&
+    ((!left.identity.id && left.identity.sequence === null) ||
+      (!right.identity.id && right.identity.sequence === null))
+  ) {
+    return true;
+  }
   if (
     left.identity?.role === "assistant" &&
     right.identity?.role === "assistant" &&

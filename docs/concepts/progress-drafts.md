@@ -370,6 +370,8 @@ matching what the draft shows.
 
 Narration belongs to the current turn. Ending or replacing that turn cancels its
 pending utility-model request and prevents late results from updating the draft.
+If the channel's progress callback is no longer available, narration stops and
+clears its retry timer without interrupting the Gateway or other turns.
 Tool activity that accumulates during a narration request is reconsidered when
 that request finishes, so an eligible status update needs no additional event.
 

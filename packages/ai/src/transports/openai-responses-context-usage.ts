@@ -35,6 +35,7 @@ type PreparedContext = Context & {
     projection: "transport" | "provider";
     includeSystemPrompt: boolean;
     input: ResponseInput;
+    itemRecovery: boolean;
   };
 };
 
@@ -52,7 +53,6 @@ export function takeResponsesContextUsageInput(
     prepared.messages !== context.messages ||
     prepared.systemPrompt !== context.systemPrompt ||
     prepared.identity.sessionId !== options.sessionId ||
-    prepared.identity.authProfileId !== options.authProfileId ||
     prepared.projection !== "transport" ||
     prepared.includeSystemPrompt !== options.includeSystemPrompt ||
     options.replayResponsesItemIds !== true ||
@@ -62,6 +62,9 @@ export function takeResponsesContextUsageInput(
     (prepared.includeSystemPrompt && context.preparedSystemPrompt)
   ) {
     return undefined;
+  }
+  if (prepared.itemRecovery) {
+    options.onItemRecovery?.();
   }
   return options.mutableInput ? cloneResponsesInputForPayloadHook(prepared.input) : prepared.input;
 }
@@ -202,11 +205,18 @@ export function resolveResponsesContextUsageBoundary(
     }
     const convert =
       projection === "transport" ? convertResponsesMessages : convertProviderResponsesMessages;
+    let itemRecovery = false;
     const input = convert(
       model,
       { messages: messages.filter(isProviderMessage), systemPrompt },
       OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
-      { ...identity, includeSystemPrompt: includeSystemPrompt === true },
+      {
+        ...identity,
+        includeSystemPrompt: includeSystemPrompt === true,
+        onItemRecovery: () => {
+          itemRecovery = true;
+        },
+      },
     );
     if (requestContext) {
       // Non-enumerable: text/media/history transforms replace context via spreads.
@@ -215,6 +225,7 @@ export function resolveResponsesContextUsageBoundary(
         configurable: true,
         value: {
           model,
+          itemRecovery,
           messages: requestContext.messages,
           systemPrompt,
           identity,

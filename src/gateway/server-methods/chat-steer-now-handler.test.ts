@@ -172,7 +172,11 @@ async function fixture(interruptible: boolean, signal: AbortSignal, fallback = f
       retry: start,
       retryWithdrawnSteer: assertCurrent !== undefined,
       text: "Use the correction.",
-      options: { waitForTranscriptCommit: true, assertCurrent },
+      options: {
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: fallback ? 120_000 : undefined,
+        assertCurrent,
+      },
     });
   };
   const attempt = expectDefined(await start(), "steering attempt");
@@ -259,7 +263,7 @@ async function fixture(interruptible: boolean, signal: AbortSignal, fallback = f
       await attempt.outcome;
       operation.complete();
       retireSessionControllerInput(input);
-      receipt.finish("cancelled");
+      receipt.finish("cancelled", "failed");
       await receipt.settled?.();
       await disposeSessionReadContexts();
     },

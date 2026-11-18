@@ -42,7 +42,7 @@ it("exports every medium transcript through the production 512 MiB worker", asyn
       async (index, update) => {
         if ("reset" in update) {
           contents[index] = [];
-        } else {
+        } else if ("page" in update) {
           contents[index]!.push(...update.page.lines);
         }
       },

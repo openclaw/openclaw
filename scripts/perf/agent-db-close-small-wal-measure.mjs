@@ -155,10 +155,10 @@ try {
       const { retainSessionHistoryWorkerDatabase } = await import(
         sourceUrl("src/config/sessions/session-transcript-worker-runtime.ts")
       );
-      const { historyLane, projectionLane, maintenanceLane } = await import(
+      const { historyLane, sessionStoreLane } = await import(
         sourceUrl("src/config/sessions/session-transcript-worker-resources.ts")
       );
-      for (const lane of [historyLane, projectionLane, maintenanceLane]) {
+      for (const lane of [historyLane, sessionStoreLane]) {
         const held = retainSessionHistoryWorkerDatabase(opts, lane);
         historyReaders.push(held);
         assert(

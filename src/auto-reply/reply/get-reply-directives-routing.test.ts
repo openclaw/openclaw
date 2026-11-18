@@ -18,19 +18,153 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
       : undefined,
 }));
 
+describe("message-start command admission", () => {
+  it.each([
+    "Send /model to choose another model.",
+    "Use /model openai/gpt-4o-mini for this example.",
+    "Use /fixture for this example.",
+    "Please /think high explain this.",
+    "Please /fast on explain this.",
+    "Please /verbose on explain this.",
+    "Please /trace on explain this.",
+    "Please /reasoning on explain this.",
+    "Please /elevated on explain this.",
+    "Please /exec security=deny ask=always explain this.",
+    "Please /queue collect explain this.",
+    "Please /status explain this.",
+    "Please /help explain this.",
+    "Please /commands explain this.",
+    "Please /whoami explain this.",
+    "Please /id explain this.",
+    "> /model openai/gpt-4o-mini",
+    '" /model openai/gpt-4o-mini"',
+    "```text\n/model openai/gpt-4o-mini\n```",
+    "First line\n/model openai/gpt-4o-mini",
+  ])("keeps slash mentions as ordinary text: %j", async (body) => {
+    const ctx = buildTestCtx({
+      Body: body,
+      CommandBody: body,
+      CommandAuthorized: true,
+    });
+    const result = await route(ctx, {
+      cfg: {
+        commands: { text: true },
+        agents: {
+          defaults: {
+            models: { "openai/gpt-4o-mini": { alias: "fixture" } },
+            modelPolicy: { allow: ["openai/gpt-4o-mini", "tencent-tokenhub/hy-3d-retopology"] },
+          },
+        },
+      },
+      // The prose word "to" fuzzy-matches this visible synthetic catalog entry.
+      preparedModelCatalog: {
+        entries: [
+          { provider: "tencent-tokenhub", id: "hy-3d-retopology", name: "Synthetic retopology" },
+        ],
+        routeVariants: [],
+      },
+    });
+    expect(result.cleanedBody).toBe(body);
+    expect(result.inlineCommand).toBeUndefined();
+    expect(result.inlineStatusRequested).toBe(false);
+    expect(result.directives).toMatchObject({
+      cleaned: body,
+      hasThinkDirective: false,
+      hasFastDirective: false,
+      hasVerboseDirective: false,
+      hasTraceDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasExecDirective: false,
+      hasQueueDirective: false,
+      hasModelDirective: false,
+      hasStatusDirective: false,
+    });
+  });
+
+  it.each([
+    { body: "/model openai/gpt-4o-mini explain this", source: "text" as const },
+    { body: " \n\t/fixture explain this", source: "text" as const },
+    { body: "/model openai/gpt-4o-mini", source: "native" as const },
+  ])("keeps explicit model selections supported: $body ($source)", async ({ body, source }) => {
+    const result = await route(
+      buildTestCtx({
+        Body: body,
+        CommandBody: body,
+        CommandSource: source,
+        CommandAuthorized: true,
+      }),
+      {
+        cfg: {
+          commands: { text: true },
+          agents: { defaults: { models: { "openai/gpt-4o-mini": { alias: "fixture" } } } },
+        },
+      },
+    );
+    expect(result.directives).toMatchObject({
+      hasModelDirective: true,
+      rawModelDirective: body.includes("/fixture") ? "fixture" : "openai/gpt-4o-mini",
+    });
+    expect(result.cleanedBody.trim()).toBe(source === "native" ? "" : "explain this");
+  });
+
+  it.each([
+    "<@BOT> (Bek (Ops)) /think high explain this",
+    " \t/think high explain this <@BOT> (Bek (Ops))",
+  ])("preserves group addressing around a leading directive: %j", async (body) => {
+    const result = await route(
+      buildTestCtx({
+        Body: body,
+        CommandBody: body,
+        Provider: "slack",
+        Surface: "slack",
+        ChatType: "group",
+        CommandAuthorized: true,
+        WasMentioned: true,
+      }),
+    );
+    expect(result.directives).toMatchObject({ hasThinkDirective: true, thinkLevel: "high" });
+    expect(result.cleanedBody).toContain("explain this");
+    expect(result.cleanedBody).not.toContain("/think");
+  });
+
+  it("keeps leading whitespace and chained directives with a task supported", async () => {
+    const body =
+      " \t/think high /fast on /verbose on /reasoning on /exec security=deny /queue collect explain this";
+    const result = await route(
+      buildTestCtx({ Body: body, CommandBody: body, CommandAuthorized: true }),
+    );
+    expect(result.cleanedBody.trim()).toBe("explain this");
+    expect(result.directives).toMatchObject({
+      hasThinkDirective: true,
+      thinkLevel: "high",
+      hasFastDirective: true,
+      fastMode: true,
+      hasVerboseDirective: true,
+      verboseLevel: "on",
+      hasReasoningDirective: true,
+      reasoningLevel: "on",
+      hasExecDirective: true,
+      execSecurity: "deny",
+      hasQueueDirective: true,
+      queueMode: "collect",
+    });
+  });
+});
+
 describe("sender-owned directive projection", () => {
   it.each([
     {
       name: "selects an inline shortcut when the rendered mention trails the text",
-      rawText: "Please /help continue <@BOT> (Bek (Ops))",
-      commandText: "Please /help continue",
+      rawText: "/help Please continue <@BOT> (Bek (Ops))",
+      commandText: "/help Please continue",
       expected: "Please continue <@BOT> (Bek (Ops))",
     },
     {
       name: "keeps direct-message attachment context after a multiline sender shortcut",
-      rawText: "<@BOT> (Bek (Ops)) Please /help\ncontinue\n[slack attachment unavailable]",
-      commandSourceText: "<@BOT> (Bek (Ops)) Please /help\ncontinue",
-      commandText: "Please /help continue",
+      rawText: "<@BOT> (Bek (Ops)) /help Please\ncontinue\n[slack attachment unavailable]",
+      commandSourceText: "<@BOT> (Bek (Ops)) /help Please\ncontinue",
+      commandText: "/help Please",
       expected: "<@BOT> (Bek (Ops)) Please\ncontinue\n[slack attachment unavailable]",
       isGroup: false,
     },
@@ -38,7 +172,7 @@ describe("sender-owned directive projection", () => {
       name: "rejects prepared metadata that does not reconstruct the command body",
       rawText: "unrelated sender text",
       commandSourceText: "<@BOT> (Bek (Ops)) different /help text",
-      commandText: "Please /help continue",
+      commandText: "/help Please continue",
       agentText: "[Forwarded message]\nPlease /help continue",
       expected: "[Forwarded message]\nPlease /help continue",
       rejected: true,
@@ -70,8 +204,8 @@ describe("sender-owned directive projection", () => {
     ["preserves model prose and forwarded status", prose, forwardedStatus, false],
     [
       "removes only sender status",
-      `${prose} /status`,
-      `${prose} /status\n[Forwarded message]\n/status marker\n${tail}`,
+      `/status ${prose}`,
+      `/status ${prose}\n[Forwarded message]\n/status marker\n${tail}`,
       true,
       forwardedStatus,
     ],

@@ -141,6 +141,12 @@ export function createManagedWorktreeOwnerPolicy(
         ),
       ];
       const states = new Map<string, ReturnType<typeof state>>();
+      const census: Pick<WorktreeCleanupOwnerPolicy, "readOwnerState"> = {
+        readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
+      };
+      if (ownerIds.length === 0) {
+        return census;
+      }
       try {
         const context = resolveSessionWorkerPlacementContext();
         if (!context.workerSessionPlacementService?.listAsync) {
@@ -185,9 +191,7 @@ export function createManagedWorktreeOwnerPolicy(
       } catch {
         // A failed census supplies no authority to remove a session-owned checkout.
       }
-      return {
-        readOwnerState: (kind, id) => (kind === "session" ? (states.get(id) ?? "active") : "other"),
-      };
+      return census;
     },
     readOwnerState: (kind, id) => state(kind, id),
     withOwnerCleanup: async (record, run, signal) => {

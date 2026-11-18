@@ -106,6 +106,7 @@ it.each([false, undefined])(
           enabled: enabled ?? true,
           agentId: "watcher",
           declarationKey: "template:watcher:weekly",
+          sessionTarget: "isolated",
         });
         expect(onSetupEvent).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
@@ -143,73 +144,81 @@ it.each([false, undefined])(
   },
 );
 
-it("adds an isolated last-channel automation to the main session without delivery", async () => {
-  await withOpenClawTestState({ label: "template-multi-channel-add" }, async (fixture) => {
-    const manifestPath = fixture.statePath("CLAW.md");
-    await writeFile(
-      manifestPath,
-      `---\n${JSON.stringify({
-        schemaVersion: 1,
-        agent: { id: "watcher" },
-        automations: [
-          {
-            id: "hourly",
-            schedule: { cron: "0 * * * *", timezone: "UTC" },
-            session: "isolated",
-            message: "Summarize active incidents.",
-            delivery: { mode: "announce", channel: "last" },
-          },
-        ],
-      })}\n---\n`,
-    );
-    const source = await readTemplateManifestFile(manifestPath);
-    assert(source.ok, JSON.stringify(source.diagnostics));
-    let config = baseConfig();
-    setRuntimeConfigSnapshot(config);
-    const plan = await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} });
-    expect(projectTemplateAddScheduledJobs(plan).jobs[0]?.proposed).toMatchObject({
-      session: "main",
-      delivery: "none",
-    });
-    const run = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = new CronService({
-      storePath: fixture.statePath("cron", "jobs.json"),
-      scheduler: createTestGatewayScheduler(),
-      cronEnabled: true,
-      defaultAgentId: "main",
-      log: createNoopLogger(),
-      enqueueSystemEvent: vi.fn(),
-      runSessionEvent: run,
-      runIsolatedAgentJob: run,
-      // The scheduler rejects announce-to-last jobs once two channels are configured.
-      listConfiguredChannels: () => ["discord", "telegram"],
-    });
-    await cron.start();
-    try {
-      const result = await applyTemplateAddPlanStateless(plan, {
-        config,
-        consentPlanIntegrity: plan.planIntegrity,
-        getCurrentConfig: () => config,
-        commitConfig: async (transform) => {
-          config = transform(config);
-          setRuntimeConfigSnapshot(config);
-        },
-        cronGateway: createTemplateCronAdapter(cron),
+it.each(["main", "isolated"] as const)(
+  "preserves the declared %s session for a last-channel automation without delivery",
+  async (session) => {
+    await withOpenClawTestState({ label: "template-multi-channel-add" }, async (fixture) => {
+      const manifestPath = fixture.statePath("CLAW.md");
+      await writeFile(
+        manifestPath,
+        `---\n${JSON.stringify({
+          schemaVersion: 1,
+          agent: { id: "watcher" },
+          automations: [
+            {
+              id: "hourly",
+              schedule: { cron: "0 * * * *", timezone: "UTC" },
+              session,
+              message: "Summarize active incidents.",
+              delivery: { mode: "announce", channel: "last" },
+            },
+          ],
+        })}\n---\n`,
+      );
+      const source = await readTemplateManifestFile(manifestPath);
+      assert(source.ok, JSON.stringify(source.diagnostics));
+      let config = baseConfig();
+      setRuntimeConfigSnapshot(config);
+      const plan = await buildGatewayTemplateAddPlan(source, { config, sourceMcpServers: {} });
+      expect(projectTemplateAddScheduledJobs(plan).jobs[0]?.proposed).toMatchObject({
+        session,
+        delivery: "none",
       });
-      expect(result.status, result.error?.message).toBe("complete");
-      expect(await cron.list({ includeDisabled: true })).toEqual([
-        expect.objectContaining({
-          declarationKey: "template:watcher:hourly",
-          sessionTarget: "session:agent:watcher:main",
-          delivery: { mode: "none" },
-        }),
-      ]);
-    } finally {
-      cron.stop();
-      await cron.waitForIdle();
-    }
-  });
-});
+      const runSessionEvent = vi.fn(async () => ({ status: "ok" as const }));
+      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+      const cron = new CronService({
+        storePath: fixture.statePath("cron", "jobs.json"),
+        scheduler: createTestGatewayScheduler(),
+        cronEnabled: true,
+        defaultAgentId: "main",
+        log: createNoopLogger(),
+        enqueueSystemEvent: vi.fn(),
+        runSessionEvent,
+        runIsolatedAgentJob,
+        // The scheduler rejects announce-to-last jobs once two channels are configured.
+        listConfiguredChannels: () => ["discord", "telegram"],
+      });
+      await cron.start();
+      try {
+        const result = await applyTemplateAddPlanStateless(plan, {
+          config,
+          consentPlanIntegrity: plan.planIntegrity,
+          getCurrentConfig: () => config,
+          commitConfig: async (transform) => {
+            config = transform(config);
+            setRuntimeConfigSnapshot(config);
+          },
+          cronGateway: createTemplateCronAdapter(cron),
+        });
+        expect(result.status, result.error?.message).toBe("complete");
+        const jobs = await cron.list({ includeDisabled: true });
+        expect(jobs).toEqual([
+          expect.objectContaining({
+            declarationKey: "template:watcher:hourly",
+            sessionTarget: session === "main" ? "session:agent:watcher:main" : "isolated",
+            delivery: { mode: "none" },
+          }),
+        ]);
+        expect(await cron.run(jobs[0]!.id, "force")).toMatchObject({ ran: true });
+        expect(runSessionEvent).toHaveBeenCalledTimes(session === "main" ? 1 : 0);
+        expect(runIsolatedAgentJob).toHaveBeenCalledTimes(session === "isolated" ? 1 : 0);
+      } finally {
+        cron.stop();
+        await cron.waitForIdle();
+      }
+    });
+  },
+);
 
 async function portableSource(
   fixture: OpenClawTestState,

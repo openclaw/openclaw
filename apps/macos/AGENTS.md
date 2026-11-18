@@ -12,5 +12,6 @@
 - Strings changed: `pnpm native:i18n:verify`.
 - Generate localization inventory only with `pnpm native:i18n:baseline`; never edit translation memory.
 - Native test isolation: follow `docs/platforms/mac/dev-setup.md#run-native-tests-safely`; never launch tests or the app against the operator's Gateway or `~/.openclaw`.
+- Visual PR evidence: follow the shared [PR visual-proof standard](../../.agents/skills/openclaw-pr-maintainer/references/media.md#pr-visual-proof); it does not apply to store/release screenshots.
 - Tests own unique defaults suites, temporary files, and nonpersistent WebKit stores; clean up resources.
 - Local pure-logic filters must avoid AppDefaults, Keychain, windows, and operator state.

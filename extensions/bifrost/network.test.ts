@@ -50,7 +50,15 @@ const server = createServer((req, res) => {
   requests.push({ path: req.url ?? "", headers: { ...req.headers } });
   res.setHeader("Content-Type", "application/json");
   if (req.url === "/v1/models") {
-    res.end(JSON.stringify({ data: [{ id: MODEL_ID, context_window: 32768 }] }));
+    res.end(
+      JSON.stringify({
+        data: [
+          { id: "first-voice", architecture: { output_modalities: ["audio"] } },
+          { id: MODEL_ID, context_window: 32768, architecture: { output_modalities: ["text"] } },
+          { id: "unclassified" },
+        ],
+      }),
+    );
     return;
   }
   res.writeHead(404).end(JSON.stringify({ error: "Unknown fixture endpoint" }));
@@ -148,6 +156,16 @@ it("selects the discovered nested model ID with its reported context", async () 
   expect(config.models?.providers?.bifrost?.models).toEqual([
     expect.objectContaining({ id: MODEL_ID, contextWindow: 32768 }),
   ]);
+  expect(config.models?.providers?.bifrost?.models[0]?.inference?.chat).not.toBe(false);
+});
+
+it("automatically selects only a declared chat model in noninteractive setup", async () => {
+  const config = await runNonInteractive({
+    config: providerConfig({ auth: "none" }),
+    opts: { customBaseUrl: baseUrl, customNoAuth: true },
+  });
+  expect(config?.agents?.defaults?.model).toMatchObject({ primary: `bifrost/${MODEL_ID}` });
+  expect(config?.models?.providers?.bifrost?.models[0]?.inference?.chat).not.toBe(false);
 });
 
 it("preserves configured routing headers during anonymous catalog refresh", async () => {

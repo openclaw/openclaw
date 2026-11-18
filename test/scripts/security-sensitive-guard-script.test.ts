@@ -115,6 +115,8 @@ function runGuard(options: Options = {}) {
     "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": {
       role_name: options.approverRole ?? "maintain",
     },
+    "GET /orgs/openclaw/teams/openclaw-secops/memberships/contributor": { httpError: 404 },
+    "GET /orgs/openclaw/teams/openclaw-secops/memberships/maintainer": { httpError: 404 },
     ...options.routes,
   };
   writeFileSync(
@@ -134,11 +136,13 @@ function runGuard(options: Options = {}) {
     for (const source of [
       "scripts/github/security-sensitive-guard.mjs",
       "scripts/github/dependency-guard.mjs",
+      "scripts/github/dependency-manifests.mjs",
       "scripts/github/security-review-policy.mjs",
       "scripts/github/security-review-rollout.mjs",
       "scripts/github/guard-review.mjs",
       "scripts/github/guard-shared.mjs",
       "scripts/lib/bounded-response.mjs",
+      "scripts/lib/release-version.mjs",
     ]) {
       const target = path.join(root, source);
       mkdirSync(path.dirname(target), { recursive: true });
@@ -157,6 +161,7 @@ function runGuard(options: Options = {}) {
       env: {
         PATH: process.env.PATH,
         GITHUB_TOKEN: "fixture-token",
+        GH_APP_TOKEN: "fixture-members-token",
         GITHUB_EVENT_PATH: eventPath,
         GITHUB_REPOSITORY: "openclaw/openclaw",
         GITHUB_RUN_ID: "123",
@@ -499,6 +504,7 @@ categories:
     paths: ["custom/product.ts"]
 dependencies:
   manifests: ["**/package.json"]
+  release-manifests: ["package.json"]
   lockfiles: ["**/pnpm-lock.yaml"]
   other: ["custom/dependency-policy"]
 `;

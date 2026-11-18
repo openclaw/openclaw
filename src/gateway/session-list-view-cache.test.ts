@@ -106,7 +106,7 @@ it("charges shared current encodings once and replaces their cost with identity 
   const view = cache.get("encoded");
   const emptyBytes = view.bytes;
   cache.setRows(view, rows, true);
-  expect(view.bytes - emptyBytes).toBe(16 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
+  expect(view.bytes - emptyBytes).toBe(48 + encoded.length * 2 + Buffer.byteLength(`[${encoded}]`));
   const shared = cache.get("shared");
   cache.setRows(shared, [encodedRow], true);
   await flushReports();
@@ -128,11 +128,11 @@ it("coalesces a turn of retention updates into one report with the final counter
   cache.clear();
   cache.setRows(cache.get("final"), [row, row], false);
   await flushReports();
-  expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_050 }]);
+  expect(reports).toEqual([{ views: 1, refs: 2, estimatedBytes: 1_082 }]);
   cache.clear();
   await flushReports();
   expect(reports).toEqual([
-    { views: 1, refs: 2, estimatedBytes: 1_050 },
+    { views: 1, refs: 2, estimatedBytes: 1_082 },
     { views: 0, refs: 0, estimatedBytes: 0 },
   ]);
 });

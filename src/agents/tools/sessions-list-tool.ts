@@ -73,6 +73,7 @@ const SessionsListToolSchema = Type.Object({
   workspaceDir: SessionsListParamsSchema.properties.workspaceDir,
   group: SessionsListParamsSchema.properties.group,
   pinned: SessionsListParamsSchema.properties.pinned,
+  hasBoard: SessionsListParamsSchema.properties.hasBoard,
   messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
@@ -93,7 +94,7 @@ const SessionsListOutputSchema = Type.Object(
     enrichmentOmitted: Type.Optional(
       Type.Boolean({
         description:
-          "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
+          "Inline messages and chat previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
     sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
@@ -271,6 +272,7 @@ export function createSessionsListTool(opts?: {
             workspaceDir,
             group: typeof params.group === "string" ? params.group : undefined,
             pinned: typeof params.pinned === "boolean" ? params.pinned : undefined,
+            hasBoard: typeof params.hasBoard === "boolean" ? params.hasBoard : undefined,
             includeDerivedTitles: false,
             includeLastMessage: false,
             includeGlobal: !restrictToSpawned,
@@ -446,6 +448,7 @@ export function createSessionsListTool(opts?: {
           archived: entry.archived === true,
           pinned: entry.pinned === true,
           sidebarRoot: entry.sidebarRoot === true,
+          ...(typeof entry.hasBoard === "boolean" ? { hasBoard: entry.hasBoard } : {}),
           ...(rowLabel ? { label: rowLabel } : {}),
           ...(entry.createdActor
             ? { createdActor: projectInventoryActor(entry.createdActor) }

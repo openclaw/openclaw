@@ -1,8 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
@@ -24,10 +31,15 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
+import { observeMediaGenerationSettlement } from "../media-generation-activity.observer.test-support.js";
+import {
+  admitMediaHandle,
+  resetGeneratedMediaTaskActivityForTests,
+} from "../media-generation-activity.test-support.js";
 import * as taskRuntime from "../media-generation-task-status.js";
 import { prepareWorkspaceBuildGroup } from "../prepared-model-runtime.facts.js";
 import { discardPreparedPluginGeneration } from "../prepared-model-runtime.plugin-lifetime.js";
+import * as announcements from "../subagents/announce/subagent-announce-delivery.js";
 import { runWithAgentWorkspaceReadiness } from "../workspace-readiness.js";
 import { createImageGenerateTool } from "./image-generate-tool.js";
 import {
@@ -244,6 +256,129 @@ afterEach(() => {
 });
 afterAll(cleanupPluginLoaderFixturesForTest);
 
+it("requires durable review custody before buying an image", async () => {
+  const fixture = createNativeFixture("image");
+  fixture.resumeProvider.resolve();
+  fixture.resumeGeneration.resolve();
+  await fixture.withEnvironment(async () => {
+    const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
+    try {
+      await withPluginRuntimeRegistryScope(acquired.registry, async () => {
+        const tool = createImageGenerateTool({ config: fixture.config });
+        expect(tool).not.toBeNull();
+        await expect(
+          tool!.execute("review-without-session", {
+            prompt: "A candidate",
+            deliveryMode: "review",
+          }),
+        ).rejects.toThrow("Review-before-delivery requires a durable chat session");
+        expect(fixture.connections[0]!.generated).toBe(0);
+      });
+    } finally {
+      await acquired.release();
+    }
+  });
+});
+
+it.each([false, true])(
+  "keeps image delivery modes distinct with review first=%s",
+  async (reviewFirst) => {
+    const fixture = createNativeFixture("image", true);
+    await fixture.withEnvironment(async () => {
+      setRuntimeConfigSnapshot(fixture.config);
+      const sessionKey = "agent:main:dashboard:delivery-identity";
+      await replaceSessionEntry(
+        {
+          agentId: "main",
+          sessionKey,
+          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+        },
+        { sessionId: "delivery-identity", updatedAt: 1 },
+      );
+      const reference = path.join(fixture.dir, "reference.png");
+      fs.writeFileSync(reference, png);
+      vi.spyOn(announcements, "deliverSubagentAnnouncement").mockResolvedValue({
+        delivered: true,
+        path: "direct",
+      });
+      const completeTaskRun = imageGenerationTaskLifecycle.completeTaskRun.bind(
+        imageGenerationTaskLifecycle,
+      );
+      const failTaskRun = imageGenerationTaskLifecycle.failTaskRun.bind(
+        imageGenerationTaskLifecycle,
+      );
+      const completed = vi
+        .spyOn(imageGenerationTaskLifecycle, "completeTaskRun")
+        .mockImplementation(completeTaskRun);
+      const failed = vi
+        .spyOn(imageGenerationTaskLifecycle, "failTaskRun")
+        .mockImplementation(failTaskRun);
+      const settlement = observeMediaGenerationSettlement({
+        completeOperation: completed,
+        failOperation: failed,
+      });
+      const acquired = await acquirePluginRegistryForInspection({ config: fixture.config });
+      let started = 0;
+      try {
+        await withPluginRuntimeRegistryScope(acquired.registry, async () => {
+          const tool = createImageGenerateTool({
+            config: fixture.config,
+            workspaceDir: fixture.dir,
+            agentSessionKey: sessionKey,
+            requesterAgentId: "main",
+            requesterOrigin: { channel: "webchat" },
+          });
+          expect(tool).not.toBeNull();
+          const request = { prompt: "The same referenced candidate", image: reference, count: 1 };
+          const first = await tool!.execute("first-mode", {
+            ...request,
+            ...(reviewFirst ? { deliveryMode: "review" } : {}),
+          });
+          if (asRecord(first.details)?.status === "started") {
+            started++;
+          }
+          const second = await tool!.execute("second-mode", {
+            ...request,
+            ...(!reviewFirst ? { deliveryMode: "review" } : {}),
+          });
+          if (asRecord(second.details)?.status === "started") {
+            started++;
+          }
+          expect(first.details).toMatchObject({ status: "started", taskId: expect.any(String) });
+          expect(second.details).toMatchObject({ status: "started", taskId: expect.any(String) });
+          expect(asRecord(second.details)?.taskId).not.toBe(asRecord(first.details)?.taskId);
+          const review = reviewFirst ? first : second;
+          const retry = await tool!.execute("exact-review-retry", {
+            ...request,
+            deliveryMode: "review",
+          });
+          if (asRecord(retry.details)?.status === "started") {
+            started++;
+          }
+          expect(retry.details).toMatchObject({
+            duplicateGuard: true,
+            active: true,
+            task: { taskId: asRecord(review.details)?.taskId },
+          });
+          fixture.resumeProvider.resolve();
+          fixture.resumeGeneration.resolve();
+          // Await both real terminal publications, not a one-second provider-start race.
+          expect(await settlement.wait(2)).toEqual(["succeeded", "succeeded"]);
+          expect(fixture.connections[0]!.generated).toBe(2);
+          expect(failed).not.toHaveBeenCalled();
+        });
+      } finally {
+        fixture.resumeProvider.resolve();
+        fixture.resumeGeneration.resolve();
+        await settlement.wait(started);
+        await acquired.release();
+        await vi.waitFor(() => expect(fixture.connections[0]!.disposals).toBe(1));
+        clearRuntimeConfigSnapshot();
+      }
+    });
+  },
+);
+
 describe.each(["image", "music", "video"] as const)(
   "prepared %s job registration resources",
   (kind) => {
@@ -383,13 +518,15 @@ describe.each(["image", "music", "video"] as const)(
           fs.writeFileSync(referencePath, png);
           const prepared = await prepareSnapshot(fixture, first.registry);
           const { snapshot } = prepared;
-          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockResolvedValue({
-            taskId: "preflight-image-task",
-            detach: true,
-            runId: "preflight-image-run",
-            requesterSessionKey: "agent:main:discord:direct:synthetic-media",
-            taskLabel: "Synthetic media edit",
-          });
+          const createTask = vi.spyOn(lifecycle, "createTaskRun").mockImplementation(async () =>
+            admitMediaHandle({
+              taskId: "preflight-image-task",
+              detach: true,
+              runId: "preflight-image-run",
+              requesterSessionKey: "agent:main:discord:direct:synthetic-media",
+              taskLabel: "Synthetic media edit",
+            }),
+          );
           const loadReference = webMedia.loadWebMedia;
           const reference = vi
             .spyOn(webMedia, "loadWebMedia")

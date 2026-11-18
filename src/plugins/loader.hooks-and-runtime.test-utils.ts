@@ -1486,7 +1486,7 @@ ${channelPluginSource({
     expect(registry.typedHooks).toStrictEqual([]);
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
-        "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
+        "plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
     expect(blockedDiagnostics).toHaveLength(9);

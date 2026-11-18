@@ -15,9 +15,7 @@ const worker = vi.hoisted(() => ({
 }));
 vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/worker-task-server.js")>()),
-  serveWorkerTasks: (
-    read: (input: SkillsDiscoveryInput) => SkillsDiscoveryOutput | Promise<SkillsDiscoveryOutput>,
-  ) => {
+  serveWorkerTasks: (read: NonNullable<typeof worker.read>) => {
     worker.read = read;
   },
 }));
@@ -55,6 +53,7 @@ it("scans workspace and prepared plugin skills without loading metadata discover
   }
   const result = await worker.read({
     kind: "scan",
+    nativeMode: "auto",
     path: "",
     requests: [
       {
@@ -127,4 +126,11 @@ it("scans workspace and prepared plugin skills without loading metadata discover
       ]),
     },
   });
+  await expect(
+    worker.read({
+      kind: "library",
+      nativeMode: "off",
+      input: { kind: "selection", selections: [], revisions: [], stateDir: workspaceDir },
+    }),
+  ).resolves.toEqual({ kind: "library", result: { kind: "selection", entries: [] } });
 });

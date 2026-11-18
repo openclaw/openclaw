@@ -64,6 +64,7 @@ export function prepareMemoryPendingInputStore(
   return {
     sessionActor: binding,
     assertCurrent: assertOpen,
+    assertReadCurrent: assertOpen,
     withAdmission<T>(operation: () => Promise<T>, _reentrant: boolean): Promise<T> {
       assertOpen();
       return operation();

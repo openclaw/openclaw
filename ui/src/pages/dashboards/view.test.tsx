@@ -36,6 +36,7 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
     error: null,
     basePath,
     fallbackAgentId: "main",
+    agents: [{ id: "main", name: "Molty" }],
     mainKey: "main",
     globalScope: false,
   };
@@ -123,7 +124,7 @@ it.each([
   });
   if (outcome === "empty") {
     expect(container.querySelector(selector)?.textContent).toContain(
-      "Dashboards created in your sessions appear here.",
+      "Ask your agent to make a dashboard in any conversation.",
     );
   }
   if (outcome === "error") {
@@ -147,6 +148,19 @@ it.each([
 
   const trigger = container.querySelector('button[aria-label="Filter by author"]');
   expect(trigger?.classList.contains("active")).toBe(active);
+});
+
+it("names an agent-authored dashboard by its agent", () => {
+  const { container } = mountSolid(() => (
+    <DashboardsView
+      data={routeData([dashboard])}
+      readReady={() => undefined}
+      filters={filters}
+      handlers={handlers}
+    />
+  ));
+
+  expect(container.querySelector(".dashboard-card__author-name")?.textContent).toBe("Molty");
 });
 
 it.each(["", "/openclaw"])("navigates dashboard links with base path %s", (basePath) => {

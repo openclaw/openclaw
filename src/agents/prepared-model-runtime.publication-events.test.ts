@@ -6,6 +6,30 @@ import {
 } from "./prepared-model-runtime.publication-events.js";
 
 describe("catalog attempt status publication", () => {
+  it("publishes diagnostic recovery while another acquisition remains failed", () => {
+    const reporter = createCatalogAttemptReporter(
+      {},
+      { key: "synthetic", pluginFingerprint: "synthetic", credentials: {} },
+      () => true,
+      () => {},
+    );
+    const catalog = reporter.withRefreshStatus({ entries: [], routeVariants: [] });
+    reporter.failed(new Error("provider failed"), ["fixture"]);
+    reporter.failed(new Error("native failed"), ["fixture"], "native");
+    const listener = vi.fn();
+    const unregister = registerPreparedModelRuntimePublicationListener(listener);
+    try {
+      reporter.published(["fixture"], "provider");
+      expect(catalog.refreshFailed).toBe(true);
+      expect(catalog.refreshFailures).toEqual([{ acquisition: "native", provider: "fixture" }]);
+      expect(listener).toHaveBeenCalledWith(
+        expect.objectContaining({ phase: "catalog-published", refreshStatusChanged: true }),
+      );
+    } finally {
+      unregister();
+    }
+  });
+
   it.each(["provider", "native"] as const)(
     "separates %s auth rejection from refresh failure",
     (kind) => {

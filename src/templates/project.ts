@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { lstat, mkdir, readdir, realpath, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
+import { resolveFilesystemPath } from "../infra/home-dir.js";
 import { templateContainedRelativePath } from "./path-containment.js";
 import { readTemplateManifestFile } from "./reader.js";
 import { isCanonicalClawHubPackageName, portableTemplatePathKey } from "./schema-portability.js";
@@ -109,7 +111,7 @@ async function isConfinedManifestFile(root: string): Promise<boolean> {
 }
 
 async function discoverTemplateProjectRoot(projectPath: string): Promise<string> {
-  const input = resolve(projectPath);
+  const input = resolveFilesystemPath(projectPath);
   const inputStat = await stat(input).catch(() => undefined);
   if (!inputStat) {
     throw new TemplateProjectError(
@@ -162,7 +164,7 @@ export async function createTemplateProject(
   projectPath: string,
   options: { name?: string; agentId?: string } = {},
 ): Promise<{ root: string; packageJson: TemplateProjectPackageJson; filesWritten: string[] }> {
-  const root = resolve(projectPath);
+  const root = resolveFilesystemPath(projectPath);
   const initialState = await pathState(root);
   if (initialState === "occupied") {
     throw new TemplateProjectError(
@@ -207,13 +209,12 @@ export async function createTemplateProject(
   const createdPaths: string[] = [];
   await mkdir(root, { recursive: true });
   try {
-    await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-    });
+    await using packageFile = await fs.open(packageJsonPath, "wx");
     createdPaths.push(packageJsonPath);
-    await writeFile(templateMarkdownPath, templateMarkdown, { encoding: "utf8", flag: "wx" });
+    await writeFile(packageFile, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+    await using templateFile = await fs.open(templateMarkdownPath, "wx");
     createdPaths.push(templateMarkdownPath);
+    await writeFile(templateFile, templateMarkdown, "utf8");
   } catch (error) {
     await Promise.allSettled(createdPaths.map((path) => unlink(path)));
     if (initialState === "missing") {
@@ -227,6 +228,7 @@ export async function createTemplateProject(
 export async function validateTemplateProject(
   projectPath: string,
 ): Promise<TemplateProjectValidationResult> {
+  // Discovery resolves the path for I/O; this spelling only labels its failures.
   let root = resolve(projectPath);
   const failure = (
     code: string,
@@ -405,21 +407,26 @@ export async function validateTemplateProject(
     const visit = async (directory: string): Promise<void> => {
       const entries = await readdir(resolve(root, directory), { withFileTypes: true });
       for (const entry of entries) {
-        entryCount += 1;
+        const path = directory ? `${directory}/${entry.name}` : entry.name;
+        const selected =
+          !entry.isDirectory() && selectedPathKeys.has(projectPathKey(path, caseInsensitive));
+        // Selected files are already bounded by the reader's workspace and bundled limits.
+        if (!selected) {
+          entryCount += 1;
+        }
         if (entryCount > MAX_PROJECT_ENTRIES) {
           throw new TemplateProjectError(
             "project_too_many_entries",
-            `Template projects may contain at most ${MAX_PROJECT_ENTRIES} entries outside excluded dependency and source-control trees.`,
+            `Template projects may contain at most ${MAX_PROJECT_ENTRIES} folders and unselected files outside excluded dependency and source-control trees.`,
           );
         }
-        const path = directory ? `${directory}/${entry.name}` : entry.name;
         if (entry.isDirectory()) {
           if (entry.name === ".git" || entry.name === "node_modules") {
             excluded.push(`${path}/`);
           } else {
             await visit(path);
           }
-        } else if (!selectedPathKeys.has(projectPathKey(path, caseInsensitive))) {
+        } else if (!selected) {
           excluded.push(path);
         }
       }

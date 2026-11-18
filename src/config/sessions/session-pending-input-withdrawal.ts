@@ -27,10 +27,7 @@ import {
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
 type WithdrawalScope = SessionAccessScope & { agentId: string; sessionId: string };
-type WithdrawalSelection =
-  | { runId: string }
-  | { inputIds: readonly string[] }
-  | { lifecycleGeneration: string };
+type WithdrawalSelection = { runId: string } | { inputIds: readonly string[] };
 
 class PendingInputOwnedError extends Error {
   constructor(readonly inputIds: string[]) {
@@ -82,9 +79,10 @@ async function withdrawSessionPendingInputs(
   const input: SessionPendingInputWithdrawal = {
     sessionKey: logical.sessionKey,
     sessionId: target.sessionId,
+    endCause: "delete",
     ...selection,
   };
-  const captured = captureSessionStoreReadTarget(
+  const captured = await captureSessionStoreReadTarget(
     target,
     "Pending input withdrawal changed its captured database owner",
   );
@@ -92,7 +90,12 @@ async function withdrawSessionPendingInputs(
   const withdraw = async () => {
     const resolved = await prepareSqliteScope(target);
     assertCurrent();
-    const { options, identity, assertCurrent: assertSourceCurrent } = captured.resolve(resolved);
+    const {
+      options,
+      identity,
+      assertCurrent: assertSourceCurrent,
+    } = await captured.resolve(resolved);
+    assertCurrent();
     if (!identity.key.startsWith("file:")) {
       return !("inputIds" in input)
         ? false
@@ -191,33 +194,20 @@ export async function dismissRetiredSessionPendingInputs(
   return result;
 }
 
-/** Startup settlement never resumes input that lost its process owner. */
-export async function interruptOrphanedSessionPendingInputs(
-  scope: WithdrawalScope,
-  assertCurrent: () => void,
-): Promise<void> {
-  await withdrawSessionPendingInputs(
-    scope,
-    { lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    assertCurrent,
-  );
-}
-
 export async function listOrphanedSessionPendingInputTargets(
   scope: Omit<WithdrawalScope, "sessionKey" | "sessionId">,
-  queuedInputIds: readonly string[],
 ) {
   const captured = {
     ...scope,
     sessionKey: "",
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const target = captureSessionStoreReadTarget(
+  const target = await captureSessionStoreReadTarget(
     captured,
     "Orphaned input discovery changed its captured database owner",
   );
   const resolved = await prepareSqliteScope(captured);
-  const { options, identity, source, assertReadCurrent } = target.resolve(resolved);
+  const { options, identity, source, assertReadCurrent } = await target.resolve(resolved);
   if (!identity.key.startsWith("file:")) {
     return [];
   }
@@ -226,7 +216,6 @@ export async function listOrphanedSessionPendingInputTargets(
       env: captured.env,
       source,
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      queuedInputIds,
     }),
   );
   assertReadCurrent();
