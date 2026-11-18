@@ -8,6 +8,35 @@ import { createProjectPreparationFixture } from "./project-preparation.test-supp
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("prepared snapshot inspection", () => {
+  it("captures eligible setup output from its prepared HOME manifest", async () => {
+    const f = await createProjectPreparationFixture(
+      tempDirs.make("snapshot-generated-project-"),
+      "#!/bin/sh\nprintf generated > generated.txt\n",
+    );
+    const owner = await f.preparedOperation();
+    try {
+      const prepared = (await owner.project.prepare(f)).preparedWorkspace!;
+      expect(prepared.preparedManifestRef).not.toBe(prepared.sourceManifestRef);
+      await expect(
+        fs.access(
+          path.join(
+            f.home,
+            ".openclaw-worker",
+            "manifests",
+            prepared.preparedManifestRef.slice(7) + ".json",
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(
+        owner.project.inspectPreparedWorkspace!({ snapshot: true, runScript: f.runScript }),
+      ).resolves.toMatchObject(prepared);
+      expect(await fs.readFile(path.join(prepared.workspaceDir, "generated.txt"), "utf8")).toBe(
+        "generated",
+      );
+    } finally {
+      owner.close();
+    }
+  });
   it.each([
     "unchanged",
     "completion",

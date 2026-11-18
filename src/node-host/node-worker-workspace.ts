@@ -172,6 +172,11 @@ export class NodeWorkerWorkspaceRuntime {
     await probe.cleanup();
   }
 
+  /** End content-only startup reuse before admitted code can change prepared files. */
+  invalidateSnapshotPreparation(): void {
+    this.prepared.invalidateSnapshotPreparation();
+  }
+
   /** Only the fresh provisioning owner may register, before Gateway readiness is committed. */
   async prepare(
     input: NodeWorkerPreparedWorkspaceInput,

@@ -435,6 +435,7 @@ setInterval(() => {}, 1000);
 
     expect(ensure).toHaveBeenCalledWith({
       input,
+      beforeCodeExecution: expect.any(Function),
       gatewayUrl: "wss://gateway.example/tenant",
       gatewayTlsFingerprint: "aa:".repeat(31) + "aa",
       gatewayCloudflareAccess: {
@@ -987,6 +988,7 @@ setInterval(() => {}, 1000);
   it("preserves a typed workspace transfer failure across node invoke", async () => {
     const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
     const workspace = {
+      invalidateSnapshotPreparation: vi.fn(),
       exec: vi.fn(async () => {
         throw Object.assign(
           new NodeWorkerWorkspaceTransferError(
@@ -1027,6 +1029,7 @@ setInterval(() => {}, 1000);
       { code: "ECONNRESET" },
     );
     const workspace = {
+      invalidateSnapshotPreparation: vi.fn(),
       exec: vi.fn(async () => {
         throw new NodeWorkerWorkspaceTransferError(
           "workspace-transfer-failed: transfer did not complete",

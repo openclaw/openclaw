@@ -383,7 +383,7 @@ const runSetup = (command, workspaceDir, homeDir, phase) => {
     const completion = JSON.parse(completionBytes);
     const envelope = completion.schema === "openclaw.prepared-completion.v1" ? completion : undefined;
     if (completion.schema !== undefined && !envelope) throw new Error("Prepared completion version is unsupported");
-    if (envelope && (Object.keys(envelope).sort().join(",") !== "baseCommit,nodeToolchain,preparedManifestRef,schema,sourceManifestRef" || !envelope.nodeToolchain || typeof envelope.nodeToolchain !== "object" || envelope.baseCommit !== baseCommit || envelope.sourceManifestRef !== sourceManifestRef || !/^sha256:[a-f0-9]{64}$/.test(envelope.preparedManifestRef))) throw new Error("Prepared completion identity is invalid");
+    if (envelope && (Object.keys(envelope).some(key => !["baseCommit", "preparedManifestRef", "schema", "sourceManifestRef", "nodeToolchain", "bootstrapNodeToolchain"].includes(key)) || (!envelope.nodeToolchain && !envelope.bootstrapNodeToolchain) || [envelope.nodeToolchain, envelope.bootstrapNodeToolchain].some(fact => fact !== undefined && (!fact || typeof fact !== "object")) || envelope.baseCommit !== baseCommit || envelope.sourceManifestRef !== sourceManifestRef || !/^sha256:[a-f0-9]{64}$/.test(envelope.preparedManifestRef))) throw new Error("Prepared completion identity is invalid");
     const preparedManifestRef = envelope ? envelope.preparedManifestRef : completionManifestRef;
     if (input.expectedCompletionManifestRef && input.expectedCompletionManifestRef !== completionManifestRef) throw new Error("Prepared completion changed during inspection");
     if (verified?.completionManifestRef && verified.completionManifestRef !== completionManifestRef) throw new Error("Prepared completion changed during preparation");
@@ -396,7 +396,7 @@ const runSetup = (command, workspaceDir, homeDir, phase) => {
     manifestEntries(sourceBytes, baseCommit);
     if ((input.snapshot || verified === undefined) && manifest(workspaceDir, baseCommit, [preparedManifestRef, sourceManifestRef], homeDir) !== preparedManifestRef) throw new Error("Prepared project completed workspace changed");
     phase("retainedManifest");
-    previous = { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, completionManifestRef, nodeToolchain: envelope?.nodeToolchain, baseCommit, sourceBytes, preparedBytes, completedManifest, completionDirectory, manifestRoot };
+    previous = { workspaceDir, homeDir, sourceManifestRef, preparedManifestRef, completionManifestRef, nodeToolchain: envelope?.nodeToolchain, bootstrapNodeToolchain: envelope?.bootstrapNodeToolchain, baseCommit, sourceBytes, preparedBytes, completedManifest, completionDirectory, manifestRoot };
     if (inspectOnly) {
       if (input.snapshot) {
         const seedRoot = ownedDirectory(workerRoot, "git-seeds");
@@ -408,9 +408,8 @@ const runSetup = (command, workspaceDir, homeDir, phase) => {
         git(seed, ["fsck", "--full", "--strict", "--no-reflogs", input.baseCommit]);
         const machineManifests = ownedDirectory(workerRoot, "manifests");
         readManifest(path.join(machineManifests, sourceDigest + ".json"), sourceManifestRef);
-        readManifest(path.join(machineManifests, preparedManifestRef.slice(7) + ".json"), preparedManifestRef);
       }
-      const validatedMachineCaches = input.snapshot ? await (${INSPECT_PROJECT_MACHINE_CACHES_JS})(machineHome, homeDir, envelope?.nodeToolchain, input.snapshotWorkerBundle) : undefined;
+      const validatedMachineCaches = input.snapshot ? await (${INSPECT_PROJECT_MACHINE_CACHES_JS})(machineHome, homeDir, envelope?.nodeToolchain, input.snapshotWorkerBundle, envelope?.bootstrapNodeToolchain) : undefined;
       if (input.snapshot) {
         // Current artifacts and the complete removal plan are verified before any
         // deletion. Obsolete owned cache bytes need no additional Git/content scan.
@@ -539,7 +538,21 @@ const runSetup = (command, workspaceDir, homeDir, phase) => {
   if (setupFailure) return { recipePreparation, setupFailure };
   // Hooks may mutate a selected image-owned toolchain. A new completion witness
   // must still describe the verified bytes; unchanged reuse remains inspection-only.
-  if (nodeToolchain && (fresh || changed)) await (${INSPECT_NODE_TOOLCHAIN_JS})(machineHome, nodeToolchain);
+  let bootstrapNodeToolchain = previous?.bootstrapNodeToolchain;
+  if (fresh || changed) {
+    const inspectNodeToolchain = (${INSPECT_NODE_TOOLCHAIN_JS});
+    if (nodeToolchain) await inspectNodeToolchain(machineHome, nodeToolchain);
+    bootstrapNodeToolchain = undefined;
+    // The running bootstrap selects its own cache; repository Node is independent.
+    // Do not turn other directories into admissions by scanning their names.
+    const root = path.join(machineHome, ".openclaw-worker", "toolchains", "node");
+    const selected = /^([0-9]+[.][0-9]+[.][0-9]+)-linux-(x64|arm64)-([a-f0-9]{64})\\/bin\\/node$/.exec(path.relative(root, process.execPath));
+    if (process.platform === "linux" && selected && fs.existsSync(path.join(path.dirname(process.execPath), "..", ".archive.tgz"))) {
+      bootstrapNodeToolchain = nodeToolchain?.version === selected[1] && nodeToolchain.arch === selected[2] && nodeToolchain.archiveSha256 === selected[3]
+        ? nodeToolchain
+        : await inspectNodeToolchain(machineHome, { version: selected[1], platform: "linux", arch: selected[2], archiveSha256: selected[3] });
+    }
+  }
   ownedDirectory(directory, "workspace");
   ownedDirectory(directory, "home");
   ownedDirectory(ownedDirectory(homeDir, ".openclaw-worker"), "manifests");
@@ -555,7 +568,7 @@ const runSetup = (command, workspaceDir, homeDir, phase) => {
     const completionDirectory = ownedDirectory(completionRoot, sourceManifestRef.slice(7), true);
     // Publish this content-addressed pair last. Root B/P artifacts alone cannot
     // turn an interrupted setup into a reusable completed environment.
-    const completionBytes = nodeToolchain ? Buffer.from(JSON.stringify({ schema: "openclaw.prepared-completion.v1", baseCommit: input.baseCommit, sourceManifestRef, preparedManifestRef, nodeToolchain })) : preparedBytes;
+    const completionBytes = nodeToolchain || bootstrapNodeToolchain ? Buffer.from(JSON.stringify({ schema: "openclaw.prepared-completion.v1", baseCommit: input.baseCommit, sourceManifestRef, preparedManifestRef, ...(nodeToolchain ? { nodeToolchain } : {}), ...(bootstrapNodeToolchain ? { bootstrapNodeToolchain } : {}) })) : preparedBytes;
     completionManifestRef = "sha256:" + crypto.createHash("sha256").update(completionBytes).digest("hex");
     fs.writeFileSync(path.join(completionDirectory, completionManifestRef.slice(7) + ".json"), completionBytes, { flag: "wx", mode: 0o600 });
   }

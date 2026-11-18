@@ -12,27 +12,41 @@ export const PreparedNodeToolchain = z.strictObject({
 
 export const ValidatedMachineCaches = z.strictObject({
   nodeToolchain: PreparedNodeToolchain.optional(),
+  bootstrapNodeToolchain: PreparedNodeToolchain.optional(),
   workerBundle: z.strictObject({ bundleHash: z.string().regex(/^[a-f0-9]{64}$/u) }).optional(),
 });
 
 /** Snapshot-only inspection of machine caches outside the prepared workspace manifest. */
-export const INSPECT_PROJECT_MACHINE_CACHES_JS = `async (machineHome, homeDir, nodeToolchain, workerBundle) => {
+export const INSPECT_PROJECT_MACHINE_CACHES_JS = `async (machineHome, homeDir, nodeToolchain, workerBundle, bootstrapNodeToolchain) => {
   const fs = require("node:fs"), path = require("node:path");
   const { spawnSync } = require("node:child_process");
   const root = path.join(machineHome, ".openclaw-worker");
   const facts = {};
   if (fs.existsSync(path.join(root, "toolchains"))) {
-    if (!nodeToolchain) throw new Error("Snapshot Node cache has no completed preparation admission");
-    facts.nodeToolchain = await (${INSPECT_NODE_TOOLCHAIN_JS})(machineHome, nodeToolchain);
-    const key = nodeToolchain.version + "-linux-" + nodeToolchain.arch + "-" + nodeToolchain.archiveSha256;
+    const installations = new Map();
+    for (const [owner, expected] of Object.entries({ bootstrapNodeToolchain, nodeToolchain })) {
+      if (!expected) continue;
+      const key = expected.version + "-linux-" + expected.arch + "-" + expected.archiveSha256;
+      let inspected = installations.get(key);
+      if (!inspected) {
+        inspected = await (${INSPECT_NODE_TOOLCHAIN_JS})(machineHome, expected);
+        installations.set(key, inspected);
+      } else if (expected.inventorySha256 !== inspected.inventorySha256) throw new Error("Completed Node cache inventories disagree");
+      facts[owner] = inspected;
+    }
+    if (!installations.size) throw new Error("Snapshot Node cache has no completed preparation admission");
     const owned = (directory, names) => {
       const stat = fs.lstatSync(directory);
       if (!stat.isDirectory() || fs.realpathSync(directory) !== directory || fs.readdirSync(directory).sort().join("\\0") !== names.sort().join("\\0")) throw new Error("Snapshot Node cache contains unknown state");
     };
     owned(path.join(root, "toolchains"), ["node"]);
-    owned(path.join(root, "toolchains", "node"), [key]);
+    owned(path.join(root, "toolchains", "node"), [...installations.keys()]);
+  } else if (nodeToolchain || bootstrapNodeToolchain) throw new Error("Completed Node cache is unavailable");
+  const selected = nodeToolchain ?? bootstrapNodeToolchain;
+  if (selected) {
+    const key = selected.version + "-linux-" + selected.arch + "-" + selected.archiveSha256;
     if (fs.realpathSync(path.join(homeDir, ".local", "bin", "node")) !== path.join(root, "toolchains", "node", key, "bin", "node")) throw new Error("Prepared Node selection changed");
-  } else if (nodeToolchain) throw new Error("Completed Node cache is unavailable");
+  }
   const bundles = fs.readdirSync(root).filter(name => /^[a-f0-9]{64}$/.test(name));
   if (bundles.length) {
     if (!workerBundle || bundles.length !== 1 || bundles[0] !== workerBundle.bundleHash) throw new Error("Snapshot worker cache is not the current bundle");

@@ -1,2 +1,3 @@
 # Project setup credential boundaries, snapshot inventory integrity, and startup reuse regressions.
-498
+# Includes prepared-HOME output, both Node cache owners, and invoke/prewarm invalidation.
+824

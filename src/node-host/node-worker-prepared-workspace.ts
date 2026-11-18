@@ -38,6 +38,7 @@ function projectPreparedWorkspace(row: NodeWorkerPreparedWorkspaceRow) {
 export class NodeWorkerPreparedWorkspaceRuntime {
   readonly store?: NodeWorkerPreparedWorkspaceStore;
   readonly root: string;
+  private snapshotStartupOpen = true;
   constructor(
     home: string,
     options: Pick<OpenClawStateDatabaseOptions, "env" | "path">,
@@ -52,6 +53,10 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     if (enabled) {
       this.store = new NodeWorkerPreparedWorkspaceStore(options);
     }
+  }
+
+  invalidateSnapshotPreparation(): void {
+    this.snapshotStartupOpen = false;
   }
 
   resolveCommand(input: NodeWorkerWorkspaceExecInput, row: NodeWorkerPreparedWorkspaceRow) {
@@ -105,7 +110,10 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           preparedManifestRef: string;
         },
         hashMemo: WorkspaceHashMemo,
-        snapshot?: Extract<NodeWorkerPreparedWorkspaceInput, { action: "bind" }>["initialSnapshot"],
+        initialSnapshot?: Extract<
+          NodeWorkerPreparedWorkspaceInput,
+          { action: "bind" }
+        >["initialSnapshot"],
       ) => {
         const { manifest: source } = await readWorkspaceManifest(
           workspace.homeDir,
@@ -117,6 +125,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           workspace.preparedManifestRef,
           signal,
         );
+        const snapshot = this.snapshotStartupOpen ? initialSnapshot : undefined;
         if (
           !source.baseCommit ||
           source.baseCommit !== prepared.baseCommit ||

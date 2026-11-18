@@ -359,6 +359,7 @@ export class NodeWorkerBundleInstaller {
     gatewayTlsFingerprint?: string;
     gatewayCloudflareAccess?: CloudflareAccessCredentials;
     signal?: AbortSignal;
+    beforeCodeExecution?: () => void;
   }): Promise<WorkerAdmissionHandshake> {
     const { input } = request;
     if (input.prefetch && (this.#prefetch || this.#foreground > 0)) {
@@ -526,6 +527,7 @@ export class NodeWorkerBundleInstaller {
         if (input.bundlePrewarm) {
           const prewarmSignal = params.signal;
           if (!this.#prewarmedBundles.has(destination)) {
+            params.beforeCodeExecution?.();
             await prewarmNodeWorkerBundle({
               directory: destination,
               bundleHash: input.build.bundleHash,

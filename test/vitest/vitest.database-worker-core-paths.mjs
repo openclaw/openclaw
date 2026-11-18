@@ -1450,6 +1450,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/node-host/runner.inventory.test.ts",
   "src/node-host/node-worker-workspace-retention.test.ts",
   "src/node-host/node-worker-prepared-workspace.test.ts",
+  "src/node-host/node-worker-snapshot-startup.test.ts",
   "src/node-host/node-worker-prepared-workspace-publication.test.ts",
   "src/state/agent-deletion-journal.snapshot.test.ts",
   "src/state/agent-deletion-journal.startup.test.ts",

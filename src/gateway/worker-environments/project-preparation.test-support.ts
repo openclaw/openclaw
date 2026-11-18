@@ -29,7 +29,13 @@ export async function runProjectScriptWithGitProbe(
     options: cp.SpawnSyncOptionsWithStringEncoding,
   ) => cp.SpawnSyncReturns<string> | undefined,
   manifestProbe?: typeof probe,
-  guest?: { platform: string; arch: string; env: NodeJS.ProcessEnv; fetch: typeof fetch },
+  guest?: {
+    platform: string;
+    arch: string;
+    execPath?: string;
+    env: NodeJS.ProcessEnv;
+    fetch: typeof fetch;
+  },
 ): Promise<string> {
   let stdout = "";
   let stderr = "";
@@ -37,7 +43,7 @@ export async function runProjectScriptWithGitProbe(
     env: guest?.env ?? { PATH: process.env.PATH, HOME: home },
     platform: guest?.platform ?? process.platform,
     arch: guest?.arch ?? process.arch,
-    execPath: process.execPath,
+    execPath: guest?.execPath ?? process.execPath,
     umask: () => {},
     exitCode: 0,
     stdout: { write: (text: string) => (stdout += text) },

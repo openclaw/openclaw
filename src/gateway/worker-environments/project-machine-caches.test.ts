@@ -12,6 +12,7 @@ import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
 } from "../../shared/worker-bundle-hash.js";
 import { DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS } from "../../shared/worker-bundle-limits.js";
+import { NODE_TOOLCHAIN_INSTALL_SH } from "./node-toolchain.js";
 import {
   createProjectPreparationFixture,
   runProjectScriptWithGitProbe,
@@ -21,17 +22,27 @@ import { prepareWorkerProjectSnapshot, workerProjectSeedKey } from "./workspace-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const version = "24.21.0";
 
-async function fixture(setup?: string) {
+async function fixture(setup?: string, node?: "bootstrap" | "separate" | "same") {
   const root = tempDirs.make("snapshot-node-admission-");
-  const f = await createProjectPreparationFixture(root, setup, false, { ".nvmrc": "24\n" });
+  const selectedVersion = node === "separate" ? "22.23.3" : version;
+  const f = await createProjectPreparationFixture(
+    root,
+    setup,
+    false,
+    node === "bootstrap" ? {} : { ".nvmrc": selectedVersion },
+  );
   const tools = path.join(root, "tools");
-  const releaseName = `node-v${version}-linux-x64`;
+  const releaseName = `node-v${selectedVersion}-linux-x64`;
   const release = path.join(root, releaseName);
   await fs.mkdir(path.join(release, "bin"), { recursive: true });
   await fs.mkdir(tools);
-  await fs.writeFile(path.join(release, "bin", "node"), `#!/bin/sh\necho v${version}\n`, {
-    mode: 0o755,
-  });
+  await fs.writeFile(
+    path.join(release, "bin", "node"),
+    `#!/bin/sh\nif [ "$1" = --version ]; then echo v${selectedVersion}; else exec '${process.execPath}' "$@"; fi\n`,
+    {
+      mode: 0o755,
+    },
+  );
   await fs.writeFile(
     path.join(release, "bin", "npm-cli.js"),
     "// official fixture package entry\n",
@@ -63,10 +74,42 @@ async function fixture(setup?: string) {
         (typeof url === "string" ? url : url instanceof URL ? url.href : url.url).endsWith(
           "index.json",
         )
-          ? JSON.stringify([{ version: `v${version}`, files: ["linux-x64"] }])
-          : `${archiveSha256}  node-v${version}-linux-x64.tar.gz\n`,
+          ? JSON.stringify([{ version: `v${selectedVersion}`, files: ["linux-x64"] }])
+          : `${archiveSha256}  node-v${selectedVersion}-linux-x64.tar.gz\n`,
       ),
   };
+  let bootstrap: { version: string; archiveSha256: string; cache: string } | undefined;
+  if (node) {
+    const bootstrapVersion = node === "same" ? selectedVersion : "24.22.1";
+    const bootstrapName = `node-v${bootstrapVersion}-linux-x64`;
+    const bootstrapArchive = path.join(root, "bootstrap.tgz");
+    if (node === "same") {
+      await fs.copyFile(archive, bootstrapArchive);
+    } else {
+      await fs.mkdir(path.join(root, bootstrapName, "bin"), { recursive: true });
+      await fs.writeFile(
+        path.join(root, bootstrapName, "bin/node"),
+        `#!/bin/sh\nif [ "$1" = --version ]; then echo v${bootstrapVersion}; else exec '${process.execPath}' "$@"; fi\n`,
+        { mode: 0o755 },
+      );
+      execFileSync("tar", ["-czf", bootstrapArchive, "-C", root, bootstrapName]);
+    }
+    const digest = createHash("sha256")
+      .update(await fs.readFile(bootstrapArchive))
+      .digest("hex");
+    await fs.writeFile(
+      path.join(tools, "curl"),
+      `#!/bin/sh\nurl=; output=; while [ $# -gt 0 ]; do case "$1" in https:*) url=$1;; -o) shift; output=$1;; esac; shift; done\ncase "$url" in */v${bootstrapVersion}/*) cp '${bootstrapArchive}' "$output";; *) cp '${archive}' "$output";; esac\n`,
+      { mode: 0o755 },
+    );
+    const bin = execFileSync("sh", ["-s"], {
+      env: guest.env,
+      input: `${NODE_TOOLCHAIN_INSTALL_SH}\nopenclaw_install_node '${bootstrapVersion}' '${digest}'`,
+      encoding: "utf8",
+    }).trim();
+    bootstrap = { version: bootstrapVersion, archiveSha256: digest, cache: path.dirname(bin) };
+    Object.assign(guest, { execPath: path.join(bin, "node") });
+  }
   const runScript = (script: string) =>
     runProjectScriptWithGitProbe(script, f.home, () => undefined, undefined, guest);
   const owner = await f.preparedOperation();
@@ -82,12 +125,71 @@ async function fixture(setup?: string) {
     ".openclaw-worker",
     "toolchains",
     "node",
-    `${version}-linux-x64-${archiveSha256}`,
+    `${selectedVersion}-linux-x64-${archiveSha256}`,
   );
-  return { ...f, root, owner, prepared, cache, runScript, archiveSha256 };
+  return { ...f, root, owner, prepared, cache, runScript, archiveSha256, bootstrap };
 }
 
 describe("native snapshot machine cache admission", () => {
+  it.each(["unknown cache", "changed bootstrap"] as const)(
+    "rejects unverified machine state alongside two admitted toolchains: %s",
+    async (change) => {
+      const f = await fixture(undefined, "separate");
+      try {
+        if (change === "unknown cache") {
+          await fs.mkdir(path.join(path.dirname(f.cache), "unadmitted"));
+        } else {
+          await fs.appendFile(path.join(f.bootstrap!.cache, "bin/node"), "# changed\n");
+        }
+        await expect(
+          f.owner.project.inspectPreparedWorkspace!({ snapshot: true, runScript: f.runScript }),
+        ).rejects.toThrow(
+          change === "unknown cache" ? "contains unknown state" : "not completely verified",
+        );
+      } finally {
+        f.owner.close();
+      }
+    },
+  );
+  it.each(["bootstrap", "separate", "same"] as const)(
+    "admits installer-produced bootstrap and repository Node caches: %s",
+    async (mode) => {
+      const f = await fixture(undefined, mode);
+      try {
+        f.owner.close();
+        f.owner = await f.preparedOperation();
+        await f.owner.project.prepare({ ...f, runScript: f.runScript });
+        const result = await f.owner.project.inspectPreparedWorkspace!({
+          snapshot: true,
+          runScript: f.runScript,
+        });
+        expect(result).toMatchObject({
+          validatedMachineCaches: {
+            bootstrapNodeToolchain: {
+              version: f.bootstrap!.version,
+              archiveSha256: f.bootstrap!.archiveSha256,
+            },
+            ...(mode === "bootstrap"
+              ? {}
+              : {
+                  nodeToolchain: {
+                    version: mode === "separate" ? "22.23.3" : version,
+                    archiveSha256: f.archiveSha256,
+                  },
+                }),
+          },
+        });
+        if (mode === "bootstrap") {
+          expect(result).not.toHaveProperty("validatedMachineCaches.nodeToolchain");
+        }
+        expect(
+          await fs.readdir(path.join(f.home, ".openclaw-worker/toolchains/node")),
+        ).toHaveLength(mode === "separate" ? 2 : 1);
+      } finally {
+        f.owner.close();
+      }
+    },
+  );
   it.each([
     "complete",
     "retained-commit",

@@ -295,6 +295,7 @@ export async function handleInvoke(
     const command = frame.command ?? "";
     if (!SNAPSHOT_STARTUP_COMMANDS.has(command)) {
       runtime.workerBundleInstaller?.invalidateSnapshotPreparation?.();
+      runtime.workerWorkspace?.invalidateSnapshotPreparation();
     }
     const response = createNodeInvokeResponder(invocationClient, frame);
     if (

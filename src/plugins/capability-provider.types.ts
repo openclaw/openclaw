@@ -72,15 +72,18 @@ export type {
 
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
+type WorkerValidatedNodeToolchain = {
+  version: string;
+  platform: "linux";
+  arch: "x64" | "arm64";
+  archiveSha256: string;
+  inventorySha256: string;
+};
+
 /** Snapshot inspection facts derived by native cache owners, never an execution grant. */
 export type WorkerValidatedMachineCaches = {
-  nodeToolchain?: {
-    version: string;
-    platform: "linux";
-    arch: "x64" | "arm64";
-    archiveSha256: string;
-    inventorySha256: string;
-  };
+  nodeToolchain?: WorkerValidatedNodeToolchain;
+  bootstrapNodeToolchain?: WorkerValidatedNodeToolchain;
   workerBundle?: { bundleHash: string };
 };
 
