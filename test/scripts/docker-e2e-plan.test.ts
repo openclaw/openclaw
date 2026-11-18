@@ -697,6 +697,36 @@ describe("scripts/lib/docker-e2e-plan", () => {
     }
   });
 
+  it("runs the plugin publication cell through the published-driver wrapper", () => {
+    const plan = planFor({ selectedLaneNames: ["published-driver-plugin-publication"] });
+    expect(plan.lanes).toHaveLength(1);
+    expect(plan.lanes[0]).toMatchObject({
+      name: "published-driver-plugin-publication",
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-driver-plugin-publication",
+      imageKind: "bare",
+      live: false,
+      resources: ["docker", "npm", "service"],
+      stateScenario: "empty",
+      timeoutMs: 20 * 60 * 1000,
+    });
+    expect(plan.needs).toMatchObject({ bareImage: true, package: true });
+    const fixture = tempDirs.make("plugin-publication-lane-");
+    const wrapper = join(fixture, "scripts/e2e/published-driver-update-docker.sh");
+    mkdirSync(dirname(wrapper), { recursive: true });
+    writeFileSync(
+      wrapper,
+      'printf "%s|%s\\n" "$OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION" "$3"\n',
+    );
+    const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+    const result = execFileSync(
+      "/bin/bash",
+      ["-c", scripts["test:docker:published-driver-plugin-publication"]],
+      { cwd: fixture, encoding: "utf8" },
+    );
+    // The cell pins the published updater it was measured against.
+    expect(result).toBe("1|2026.11.5\n");
+  });
+
   it.each(["older-runtime", "live-gateway", "owed-plugin-retry"])(
     "keeps packaged %s recovery independent of survivor baseline expansion",
     (cut) => {

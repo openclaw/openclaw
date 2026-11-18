@@ -63,6 +63,7 @@ import { formatCliCommand } from "../command-format.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { readPackageVersion } from "./shared.js";
 import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
+import { publishPluginRecordsWithoutConfigWrite } from "./update-command-plugin-records.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   createOwedPluginStepWarning,
@@ -551,73 +552,86 @@ async function updatePluginsAfterCoreUpdateWithLease(
       ? restoreDoctorConfigEnvRefs(baselineSource, baselineReferences)
       : baselineSource;
     const changedPaths = collectChangedConfigPaths(baseline, nextConfig).paths;
-    await transformConfigFileWithRetry({
-      writeOptions: {
-        ...mutationWriteOptions,
-        observe: false,
+    const beforeCommit = async () => {
+      assertCurrent();
+      await params.configWriteOptions.beforeCommit?.();
+      assertCurrent();
+      await assertRecoveryCurrent();
+      assertCurrent();
+    };
+    const recordsOnly =
+      changedPaths.length === 0 &&
+      (await publishPluginRecordsWithoutConfigWrite({
+        previousInstallRecords: pluginInstallRecords,
+        nextInstallRecords,
+        nextConfig,
+        deferredPluginMigrations: params.configWriteOptions.deferredPluginMigrations,
         assertCurrent,
-        beforeCommit: async () => {
-          assertCurrent();
-          await params.configWriteOptions.beforeCommit?.();
-          assertCurrent();
-          await assertRecoveryCurrent();
-          assertCurrent();
+        beforeCommit,
+      }));
+    if (!recordsOnly) {
+      await transformConfigFileWithRetry({
+        writeOptions: {
+          ...mutationWriteOptions,
+          observe: false,
+          assertCurrent,
+          beforeCommit,
+          inputBase: "source",
+          skipPluginValidation: true,
         },
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
-      transform: (current, { snapshot }) => {
-        const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
-        const currentConfig = currentReferences
-          ? restoreDoctorConfigEnvRefs(current, currentReferences)
-          : current;
-        const candidate = structuredClone(currentConfig);
-        for (const changedPath of changedPaths) {
-          const before = getConfigValueAtPath(baseline, changedPath);
-          const after = getConfigValueAtPath(nextConfig, changedPath);
-          const value = getConfigValueAtPath(currentConfig, changedPath);
-          const parentChanged = changedPath.slice(0, -1).some((_, index) => {
-            const parent = changedPath.slice(0, index + 1);
-            return (
-              isRecord(getConfigValueAtPath(baseline, parent)) &&
-              !isRecord(getConfigValueAtPath(currentConfig, parent))
-            );
+        transform: (current, { snapshot }) => {
+          const currentReferences = prepareDoctorConfigReferenceSource(snapshot);
+          const currentConfig = currentReferences
+            ? restoreDoctorConfigEnvRefs(current, currentReferences)
+            : current;
+          const candidate = structuredClone(currentConfig);
+          for (const changedPath of changedPaths) {
+            const before = getConfigValueAtPath(baseline, changedPath);
+            const after = getConfigValueAtPath(nextConfig, changedPath);
+            const value = getConfigValueAtPath(currentConfig, changedPath);
+            const parentChanged = changedPath.slice(0, -1).some((_, index) => {
+              const parent = changedPath.slice(0, index + 1);
+              return (
+                isRecord(getConfigValueAtPath(baseline, parent)) &&
+                !isRecord(getConfigValueAtPath(currentConfig, parent))
+              );
+            });
+            if (
+              !isDeepStrictEqual(value, after) &&
+              (parentChanged || !isDeepStrictEqual(value, before))
+            ) {
+              throw new PluginFinalizationConfigConflictError(changedPath);
+            }
+            if (after === undefined) {
+              unsetConfigValueAtPath(candidate, [...changedPath]);
+            } else {
+              setConfigValueAtPath(candidate, changedPath, structuredClone(after));
+            }
+          }
+          setDeferredPluginMigrationConfigFacts(
+            candidate,
+            getDeferredPluginMigrationConfigFacts(nextConfig),
+          );
+          return { nextConfig: candidate };
+        },
+        commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
+          const { configWrite } = await commitPluginInstallRecordsWithConfig({
+            beforePersistentEffect: assertCurrent,
+            previousInstallRecords: pluginInstallRecords,
+            nextInstallRecords,
+            nextConfig: candidate,
+            baseHash,
+            writeOptions,
           });
-          if (
-            !isDeepStrictEqual(value, after) &&
-            (parentChanged || !isDeepStrictEqual(value, before))
-          ) {
-            throw new PluginFinalizationConfigConflictError(changedPath);
-          }
-          if (after === undefined) {
-            unsetConfigValueAtPath(candidate, [...changedPath]);
-          } else {
-            setConfigValueAtPath(candidate, changedPath, structuredClone(after));
-          }
-        }
-        setDeferredPluginMigrationConfigFacts(
-          candidate,
-          getDeferredPluginMigrationConfigFacts(nextConfig),
-        );
-        return { nextConfig: candidate };
-      },
-      commit: async ({ nextConfig: candidate, baseHash, writeOptions }) => {
-        const { configWrite } = await commitPluginInstallRecordsWithConfig({
-          beforePersistentEffect: assertCurrent,
-          previousInstallRecords: pluginInstallRecords,
-          nextInstallRecords,
-          nextConfig: candidate,
-          baseHash,
-          writeOptions,
-        });
-        return {
-          config: configWrite.nextConfig,
-          persistedHash: configWrite.persistedHash,
-          persistedSourceConfig: configWrite.persistedSourceConfig,
-          afterWrite: configWrite.afterWrite,
-        };
-      },
-    });
+          return {
+            config: configWrite.nextConfig,
+            persistedHash: configWrite.persistedHash,
+            persistedSourceConfig: configWrite.persistedSourceConfig,
+            afterWrite: configWrite.afterWrite,
+          };
+        },
+      });
+    }
     if (!params.json) {
       for (const change of convergence.configChanges) {
         runtime.log(theme.muted(change));

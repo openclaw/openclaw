@@ -282,8 +282,10 @@ it.each([
           );
           vi.spyOn(postCoreConvergence, "runPostCorePluginConvergence").mockImplementation(
             async ({ cfg: pluginConfig }) => ({
-              config: pluginConfig,
-              configChanges: [],
+              // A real config change: without one, publication writes records only and
+              // never reaches the config write this flow fences.
+              config: { ...pluginConfig, plugins: { ...pluginConfig.plugins, allow: ["fixture"] } },
+              configChanges: ["Reconciled fixture policy."],
               installedPluginIdRecovery: new Map(),
               changes: [],
               warnings: [],

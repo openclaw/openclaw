@@ -501,6 +501,16 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 35 * 60 * 1000,
   }),
+  // A published updater's first update with official npm plugins while openclaw.json is a link to
+  // a read-only file: plugin convergence changes no config, so the update must succeed. Local
+  // cells took 6-7 minutes inside the script's 1125 s envelope. No CI workflow selects it yet.
+  // OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT=corrupt-plugin runs the same cell by hand with one
+  // corrupt plugin tarball instead.
+  npmLane("published-driver-plugin-publication", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],
     stateScenario: "empty",

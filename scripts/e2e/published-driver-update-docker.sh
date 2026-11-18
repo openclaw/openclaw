@@ -43,7 +43,12 @@ IMAGE_NAME="$(docker_e2e_resolve_image openclaw-published-driver-update-e2e)"
 docker_e2e_build_or_reuse "$IMAGE_NAME" published-driver-update \
   "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" bare
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
-DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT -e OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX -e OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE)
+DRIVER_ARGS=(-e GITHUB_EVENT_NAME -e OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE -e OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT -e OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX -e OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP -e OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE -e OPENCLAW_PUBLISHED_DRIVER_PLUGIN_FAULT)
+# The plugin publication cell drives its own first update with official npm plugins installed.
+CELL_ENTRY=published-driver.mjs
+if [ "${OPENCLAW_PUBLISHED_DRIVER_PLUGIN_PUBLICATION:-0}" = "1" ]; then
+  CELL_ENTRY=published-driver-plugin-publication.mjs
+fi
 if [ "${OPENCLAW_PUBLISHED_DRIVER_SCOPED_RESTORE:-0}" = "1" ]; then
   fixture_root="${DOCKER_E2E_HARNESS_ROOT_DIR:-$ROOT_DIR}"
   DRIVER_ARGS+=(-v "$fixture_root/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:/app/test/fixtures/sqlite/openclaw-agent-schema-v26.sql:ro")
@@ -65,5 +70,5 @@ docker_e2e_run_with_harness \
   -v "$ARTIFACT_DIR:/tmp/published-driver-artifacts" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
-  node scripts/e2e/lib/upgrade-survivor/published-driver.mjs \
+  node "scripts/e2e/lib/upgrade-survivor/$CELL_ENTRY" \
     /tmp/openclaw-current.tgz /tmp/published-driver-artifacts "$DRIVER_TAG"

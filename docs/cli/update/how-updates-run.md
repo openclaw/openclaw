@@ -915,6 +915,15 @@ Required database migrations, refused or invalid configuration, Doctor refusals,
 and Gateway readiness are never owed. They still block completion. A failed or
 rolled-back update owes nothing, including a step recorded before it failed.
 
+When plugin convergence changes no config, the updater publishes the plugin
+install records without writing the config file. The file keeps its bytes,
+including its `meta.lastTouchedVersion` stamp, and a config file the update
+cannot replace, such as a link to a provisioned read-only file, cannot fail
+that publication. Other writes in the same update, such as a requested channel
+change or a Doctor repair, still need a writable config. Plugin convergence
+that does change config needs a config write too, and a refused write still
+fails the update.
+
 A plugin or Doctor failure is owed only when the updater can show what it left
 behind. These failures still fail the command, and roll back a replaced core:
 
@@ -976,8 +985,10 @@ updater runs these steps and still drops a failed shell completion refresh
 without a record. It records no plugin step either. Plugin convergence runs in
 the new version's own process, which keeps that first update only when the
 previously installed updater retained the plugin set before activation, and
-otherwise fails as before. The post-plugin Doctor pass behaves as it did in the
-previously installed updater whenever that updater runs the pass itself.
+otherwise fails as before. A convergence that changes no config writes no
+config file, so its plugin publication does not fail on a config the update
+cannot write. The post-plugin Doctor pass behaves as it did in the previously
+installed updater whenever that updater runs the pass itself.
 
 <a id="durable-serving-recovery" />
 

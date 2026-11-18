@@ -4,7 +4,12 @@ import { recoverInstalledPluginConfigIds } from "../../commands/doctor/shared/in
 import { seedRecoveryOwner } from "../../commands/doctor/shared/installed-plugin-id-recovery.test-support.js";
 import { ConfigReadOnlyError } from "../../config/config-write-guard.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
+import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  recordDeferredPluginMigrations,
+  type DeferredPluginMigration,
+} from "../../infra/deferred-plugin-migrations.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -17,9 +22,13 @@ import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.
 import { resolvePluginInstallTransactionRequest } from "../../plugins/install-transaction.js";
 import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
+import * as registryRefresh from "../../plugins/registry-refresh.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "../../plugins/test-helpers/managed-npm-plugin.js";
-import { beginUpdatePluginCohort } from "../../plugins/update-cohort-recovery.js";
+import {
+  beginUpdatePluginCohort,
+  settleUpdatePluginCohort,
+} from "../../plugins/update-cohort-recovery.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   withOpenClawTestState,
@@ -369,6 +378,172 @@ it.each([
   },
 );
 
+it.each([
+  { config: "writable", change: false },
+  { config: "writable", change: true },
+  { config: "writable", change: true, cohort: true },
+  { config: "symlinked", change: false },
+  { config: "symlinked", change: false, cohort: true },
+  { config: "symlinked", change: false, pendingMigration: true },
+  { config: "symlinked", change: true },
+])(
+  "publishes plugin records for a $config config: change=$change cohort=$cohort pendingMigration=$pendingMigration",
+  async ({ config, change, cohort = false, pendingMigration = false }) => {
+    await withOpenClawTestState({ label: `updater-unchanged-config-${config}` }, async (state) => {
+      // A pending Canvas migration: its paths read as valid only with the update's facts.
+      const pending: DeferredPluginMigration = {
+        pluginId: "canvas",
+        reason: "Canvas document migration is unfinished.",
+        command: "openclaw doctor --fix",
+        requiresStateMigration: true,
+        configPaths: [["canvasHost"]],
+        validationExcludedPaths: [["canvasHost"]],
+      };
+      const prepared = await prepareUpdate(state, {
+        plugins: { enabled: false },
+        ...(pendingMigration ? { canvasHost: { root: "/retained/canvas-documents" } } : {}),
+      });
+      if (pendingMigration) {
+        await recordDeferredPluginMigrations({ pending: [pending] });
+        prepared.configSnapshot = await readConfigFileSnapshot({
+          deferredPluginMigrations: [pending],
+        });
+        expect(prepared.configSnapshot.valid).toBe(true);
+        expect((await readConfigFileSnapshot()).valid).toBe(false);
+      }
+      if (config === "symlinked") {
+        // A provisioned config: the update can read it but never replace it.
+        const managed = state.path("managed-config");
+        await fs.mkdir(managed);
+        await fs.rename(state.configPath, `${managed}/openclaw.json`);
+        await fs.symlink(`${managed}/openclaw.json`, state.configPath);
+      }
+      const original = await fs.readFile(state.configPath, "utf8");
+      const runId = cohort ? createUpdateRun({ trigger: "cli" }, { env: state.env }).runId : "";
+      const fence = { assertCurrent() {} };
+      if (cohort) {
+        const runtime = { root: state.root, nodePath: process.execPath, buildId: "fixture" };
+        await beginUpdatePluginCohort({
+          runId,
+          installKey: state.root,
+          from: { ...runtime, version: "2026.10.9" },
+          to: { ...runtime, version: "2026.10.10" },
+          env: state.env,
+          fence,
+        });
+      }
+      // The cohort ledger tracks managed npm records, so the fixture is one.
+      const installPath = writeManagedNpmPlugin({
+        stateDir: state.stateDir,
+        packageName: "@example/next",
+        pluginId: "next",
+        version: "1.0.0",
+      });
+      const next = {
+        next: {
+          source: "npm" as const,
+          spec: "@example/next@1.0.0",
+          version: "1.0.0",
+          installPath,
+        },
+      };
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+        ...convergenceResult(cfg),
+        changes: ["Installed fixture next."],
+        ...(change
+          ? {
+              config: {
+                ...cfg,
+                plugins: { ...cfg.plugins, entries: { next: { enabled: false } } },
+              },
+              configChanges: ["Disabled fixture next."],
+            }
+          : {}),
+        installRecords: next,
+      }));
+      const run = () =>
+        updatePluginsAfterCoreUpdate({
+          ...prepared,
+          configChanged: false,
+          configWriteOptions: pendingMigration ? { deferredPluginMigrations: [pending] } : {},
+          ...(cohort ? { cohort: { runId, env: state.env, fence } } : {}),
+        });
+      // The updater binds cohort publications to the run, as convergePostCoreUpdatePlugins does.
+      const update = cohort
+        ? withPluginCohortConfigCapture(
+            { runId, installKey: state.root, env: state.env, assertCurrent() {} },
+            run,
+          )
+        : run();
+      const refused = change && config !== "writable";
+      if (refused) {
+        // A real change against a config the update may not write still fails the update.
+        await expect(update).rejects.toThrow("is a symlink");
+      } else {
+        const result = await update;
+        expect(result, JSON.stringify(result.warnings)).toMatchObject({
+          status: "ok",
+          changed: true,
+        });
+      }
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(refused ? {} : next);
+      const saved = await fs.readFile(state.configPath, "utf8");
+      if (change && !refused) {
+        expect(JSON.parse(saved).plugins.entries).toEqual({ next: { enabled: false } });
+      } else {
+        // Nothing to commit to the file: it keeps its bytes, writer stamp included.
+        expect(saved).toBe(original);
+      }
+      if (cohort) {
+        // Rollback restores a config it published and leaves an unwritten one alone.
+        await settleUpdatePluginCohort({ runId, env: state.env, fence, action: "rollback" });
+        expect(await fs.readFile(state.configPath, "utf8")).toBe(original);
+      }
+      if (config === "symlinked") {
+        expect((await fs.lstat(state.configPath)).isSymbolicLink()).toBe(true);
+      }
+    });
+  },
+);
+
+it.each([
+  { edit: "a valid unrelated setting", invalid: false },
+  { edit: "an invalid value", invalid: true },
+])("publishes records-only around a later config edit with $edit", async ({ invalid }) => {
+  await withOpenClawTestState({ label: "updater-unchanged-config-raced" }, async (state) => {
+    const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+    mocks.convergence.mockImplementationOnce(async ({ cfg }) => ({
+      ...convergenceResult(cfg),
+      changes: ["Installed fixture next."],
+      installRecords: { next: { source: "archive" } },
+    }));
+    const edited = { plugins: { enabled: false }, gateway: { port: invalid ? "invalid" : 19002 } };
+    const result = await updatePluginsAfterCoreUpdate({
+      ...prepared,
+      configChanged: false,
+      // An editor outside the config lock writes after the updater found nothing to change.
+      configWriteOptions: {
+        beforeCommit: async () => {
+          await fs.writeFile(state.configPath, JSON.stringify(edited));
+        },
+      },
+    });
+    // Records match the config they were published against: an invalid edit defers them.
+    expect(result.status).toBe(invalid ? "warning" : "ok");
+    if (invalid) {
+      expect(result.warnings).toContainEqual(
+        expect.objectContaining({ reason: "plugin-config-conflict" }),
+      );
+    }
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual(
+      invalid ? {} : { next: { source: "archive" } },
+    );
+    expect(JSON.parse(await fs.readFile(state.configPath, "utf8"))).toEqual(edited);
+  });
+});
+
 async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
   // Config-write custody uses a host control store outside the profile database.
   const control = state.path("control");
@@ -563,6 +738,37 @@ it("prints each skipped plugin and its reason after the update counts", async ()
   });
 });
 
+it("refuses records-only publication when update authority is revoked before the index write", async () => {
+  await withOpenClawTestState({ label: "updater-records-only-revoked" }, async (state) => {
+    const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    const controller = new AbortController();
+    const assertCurrent = () => controller.signal.throwIfAborted();
+    mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => ({
+      ...convergenceResult(candidate),
+      changes: ["Installed fixture next."],
+      installRecords: { next: { source: "archive" } },
+    }));
+    const refresh = vi.spyOn(registryRefresh, "refreshPluginRegistryAfterConfigMutation");
+    await expect(
+      withPluginLifecycleLease({ assertCurrent }, () =>
+        updatePluginsAfterCoreUpdate({
+          ...prepared,
+          configChanged: false,
+          // Another updater takes over after the decision, before any persistent effect.
+          configWriteOptions: { beforeCommit: () => controller.abort(new Error("revoked")) },
+          assertCurrent,
+        }),
+      ),
+    ).rejects.toThrow("revoked");
+    expect(refresh).not.toHaveBeenCalled();
+    expect(await fs.readFile(state.configPath, "utf8")).toBe(originalConfig);
+    expect(await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env })).toEqual(
+      {},
+    );
+  });
+});
+
 it("rolls back the tentative index after a config failure under a live owner", async () => {
   await withOpenClawTestState({ label: "updater-plugin-config-failed" }, async (state) => {
     const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
@@ -572,8 +778,10 @@ it("rolls back the tentative index after a config failure under a live owner", a
     const assertCurrent = () => controller.signal.throwIfAborted();
     mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => {
       await Promise.resolve();
+      // A real config change, so the refusal lands after the tentative index write.
       return {
         ...convergenceResult(candidate),
+        config: { ...candidate, plugins: { ...candidate.plugins, allow: ["next"] } },
         installRecords: { next: { source: "archive" } },
       };
     });
@@ -609,9 +817,11 @@ it.each([true, false])(
         const snapshot = prepared.configSnapshot;
         expect(snapshot.valid).toBe(true);
         expect(snapshot.sourceConfig.browser?.executablePath).toBe("${BROWSER_BIN}");
-        mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) =>
-          convergenceResult(candidate),
-        );
+        // An unrelated real change makes the update write the file either way.
+        mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => ({
+          ...convergenceResult(candidate),
+          config: { ...candidate, plugins: { ...candidate.plugins, allow: ["fixture"] } },
+        }));
         await updatePluginsAfterCoreUpdate({
           ...prepared,
           configWriteOptions: {
