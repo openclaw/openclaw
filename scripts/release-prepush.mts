@@ -120,9 +120,14 @@ export function canonicalReleaseBranch(branch: string): string {
 }
 
 export function refreshMain(): void {
-  execFileSync("git", ["fetch", "--tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
-    stdio: "inherit",
-  });
+  // Shallow boundaries can hide the shared ancestor even after fetching main.
+  const historyArgs =
+    git(["rev-parse", "--is-shallow-repository"]) === "true" ? ["--unshallow"] : [];
+  execFileSync(
+    "git",
+    ["fetch", ...historyArgs, "--tags", "origin", "refs/heads/main:refs/remotes/origin/main"],
+    { stdio: "inherit" },
+  );
 }
 
 export function refreshReleaseBranch(branch: string): string | undefined {
