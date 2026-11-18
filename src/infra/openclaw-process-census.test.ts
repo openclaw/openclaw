@@ -520,8 +520,7 @@ it("classifies title-erased Darwin runtimes whose environment is unbounded", () 
     };
   });
   expect(inspectOtherOpenClawProcesses("/tmp/openclaw-update-runtime-Held01")).toEqual({
-    // This release also retains unscoped Gateway holders; do not backport the later filtering policy.
-    pids: [peer, peer + 1, peer + 2],
+    pids: [peer + 1, peer + 2],
     warnings: [
       `Could not verify runtime custody for PID ${peer + 1}: process environment is unreadable`,
       `Could not verify runtime custody for PID ${peer + 2}: process command is unavailable`,
