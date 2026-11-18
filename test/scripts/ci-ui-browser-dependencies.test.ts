@@ -48,7 +48,7 @@ export default { test: {
     ["node", 'printf "%s\\n" "$@" > "$UI_BROWSER_ARGS"'],
     // Keep the install's apt drop-in and mirror edits away from the host.
     ["id", "echo 1000"],
-    ["sudo", "cat > /dev/null"],
+    ["sudo", '[ "$1" = -n ] && shift; [ "$1" = env ] && exec "$@"; [ "$1" != tee ] || cat > /dev/null'],
   ] as const) {
     workflow.writeExecutable(local(`bin/${command}`), ["#!/bin/sh", body]);
   }
