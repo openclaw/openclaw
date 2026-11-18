@@ -185,6 +185,7 @@ export class MemoryDB {
       const schema = createMemoryTableSchema(this.vectorDim);
       const columns: Record<string, Arrow.Data> = {};
       for (const field of schema.fields) {
+        // SAFETY: createMemoryTableSchema enumerates exactly the StoredMemoryRow keys.
         const value = storedEntry[field.name as keyof StoredMemoryRow];
         const builder = makeBuilder({ type: field.type });
         if (value == null) {
