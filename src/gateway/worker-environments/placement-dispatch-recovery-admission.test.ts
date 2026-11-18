@@ -432,6 +432,11 @@ describe("placement recovery session admission with persisted placements", () =>
     }
 
     expect(await readCleanupRef(orphanRoot)).toBe(cleanupRef);
+    const pendingRoot = roots.find((root) => !inventoryRoots().includes(root));
+    if (!pendingRoot) {
+      throw new Error("Expected an unswept checkout before foreground admission");
+    }
+    await git(pendingRoot, "update-ref", cleanupRef, tree);
     const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground-request");
     if (!foreground) {
       throw new Error("Foreground fixture could not acquire Gateway admission");
@@ -439,6 +444,7 @@ describe("placement recovery session admission with persisted placements", () =>
     try {
       await coordinated.reconcileActive();
       expect(await readCleanupRef(orphanRoot)).toBe(cleanupRef);
+      expect(await readCleanupRef(pendingRoot)).toBe(cleanupRef);
     } finally {
       foreground.release();
     }
@@ -448,6 +454,7 @@ describe("placement recovery session admission with persisted placements", () =>
     }
     expect(new Set(inventoryRoots())).toEqual(new Set(roots));
     expect(await readCleanupRef(orphanRoot)).toBe("");
+    expect(await readCleanupRef(pendingRoot)).toBe("");
   });
 
   it("retries startup orphan cleanup after a busy placement becomes inactive", async () => {

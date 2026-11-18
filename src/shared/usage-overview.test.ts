@@ -345,3 +345,141 @@ it("rejects non-decimal query thresholds", () => {
     ]);
   }
 });
+
+function report(
+  summary: Partial<SessionCostSummary>,
+  dayBucket: UsageDailyBucket = utc,
+  options: UsageOverviewOptions = {},
+) {
+  const rows = [{ key: "session", agentId: "main", usage: usage(summary) }];
+  return buildUsageOverview({ rows, options, dayBucket });
+}
+
+it.each([
+  ["America/Los_Angeles", "2026-11-01T08:30Z", "2026-11-01T10:30Z", 1, 90, 2, 30],
+  ["Pacific/Chatham", "2026-09-26T13:15Z", "2026-09-26T14:15Z", 2, 45, 3, 15],
+] as const)(
+  "allocates elapsed messages through %s's DST transition",
+  (timeZone, start, end, firstHour, firstMinutes, secondHour, secondMinutes) => {
+    const messages = firstMinutes + secondMinutes;
+    const result = report(
+      {
+        firstActivity: Date.parse(start),
+        lastActivity: Date.parse(end),
+        totalTokens: messages,
+        messageCounts: { ...zeroMessages, total: messages, errors: messages },
+      },
+      { mode: "time-zone", timeZone },
+    );
+    const expected = Array<number>(24).fill(0);
+    expected[firstHour] = firstMinutes;
+    expected[secondHour] = secondMinutes;
+    expect(result.overview).toMatchObject({
+      hourlyMessages: expected,
+      hourlyErrors: expected,
+      hourTokens: expected,
+    });
+  },
+);
+
+it("prefers valid positive token quarters for selection and ignores malformed coordinates", () => {
+  const quarter = {
+    date: "2026-02-01",
+    quarterIndex: 40,
+    ...usage({ totalTokens: 100, output: 100 }),
+  };
+  const summary = {
+    totalTokens: 100,
+    firstActivity: Date.parse("2026-02-01T10:00:00Z"),
+    lastActivity: Date.parse("2026-02-01T12:00:00Z"),
+    utcQuarterHourTokenUsage: [
+      quarter,
+      { ...quarter, date: "2026-13-01" },
+      { ...quarter, date: "2026-02-31" },
+      { ...quarter, quarterIndex: 96 },
+    ],
+  };
+  expect(report(summary, undefined, { selectedHours: [10] }).overview.total).toBe(1);
+  expect(report(summary, undefined, { selectedHours: [11] }).overview.total).toBe(0);
+  expect(report(summary).overview.hourTokens[10]).toBe(100);
+  expect(
+    report(summary, { mode: "time-zone", timeZone: "Asia/Singapore" }).overview.hourTokens[18],
+  ).toBe(100);
+  const fallback = { ...summary, utcQuarterHourTokenUsage: [{ ...quarter, totalTokens: 0 }] };
+  expect(report(fallback, undefined, { selectedHours: [12] }).overview.total).toBe(1);
+});
+
+it("places an instant fallback in one hour and sums precise message quarters", () => {
+  const instant = Date.parse("2026-03-15T10:00:00Z");
+  const result = report({
+    totalTokens: 100,
+    firstActivity: instant,
+    lastActivity: instant,
+    messageCounts: { ...zeroMessages, total: 15, errors: 5 },
+    utcQuarterHourMessageCounts: [0, 3].map((quarterIndex, index) =>
+      Object.assign({}, zeroMessages, {
+        date: "2026-03-15",
+        quarterIndex,
+        total: index ? 5 : 10,
+        errors: index ? 3 : 2,
+      }),
+    ),
+  });
+  expect([
+    result.overview.hourTokens[10],
+    result.overview.hourlyMessages[0],
+    result.overview.hourlyErrors[0],
+    result.overview.hourlyMessages[10],
+  ]).toEqual([100, 15, 5, 0]);
+});
+
+it.each(["tokens", "cost"] as const)(
+  "uses selected-day %s for comparison rows without changing canonical totals",
+  (sort) => {
+    const rows = [
+      { key: "first", total: 100, selected: 90 },
+      { key: "second", total: 1000, selected: 1 },
+    ].map(({ key, total, selected }) => ({
+      key,
+      agentId: "main",
+      usage: usage({
+        firstActivity: 1,
+        totalTokens: total,
+        totalCost: total / 10,
+        activityDates: ["2026-02-01", "2026-02-02"],
+        dailyBreakdown: [daily("2026-02-01", selected), daily("2026-02-02", total - selected)],
+      }),
+    }));
+    const before = structuredClone(rows);
+    const options = { selectedDays: ["2026-02-01"], selectedSessions: ["second", "first"], sort };
+    const compact = overview(rows, options);
+    const amounts = (entries: SessionUsageEntry[]) =>
+      entries.map((entry) => [entry.key, entry.usage?.totalTokens, entry.usage?.totalCost]);
+    expect(amounts(compact.sessions)).toEqual([
+      ["first", 90, 9],
+      ["second", 1, 0.1],
+    ]);
+    expect(amounts(compact.overview.selectedRows)).toEqual([
+      ["second", 1, 0.1],
+      ["first", 90, 9],
+    ]);
+    expect(amounts(overview(rows, options, false).sessions)).toEqual([
+      ["first", 100, 10],
+      ["second", 1000, 100],
+    ]);
+    expect(rows).toEqual(before);
+  },
+);
+
+it("weights overall and daily latency by unequal reply counts", () => {
+  const date = "2026-03-12";
+  const quick = { count: 2, avgMs: 50, minMs: 20, maxMs: 90, p95Ms: 80 };
+  const slow = { count: 1, avgMs: 120, minMs: 120, maxMs: 120, p95Ms: 120 };
+  const result = aggregate(
+    { latency: quick, dailyLatency: [{ date, ...quick }] },
+    { latency: slow, dailyLatency: [{ date, ...slow }] },
+  );
+  const weighted = { count: 3, avgMs: 220 / 3, minMs: 20, maxMs: 120, p95Ms: 120 };
+  expect(result.latency).toEqual(weighted);
+  expect(result.dailyLatency).toEqual([{ date, ...weighted }]);
+});
