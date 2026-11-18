@@ -1,4 +1,5 @@
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
+import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
 
 /** Immutable transcript identity issued by the SQLite append transaction. */
 export type TranscriptEntryAnchor = Readonly<{
@@ -13,6 +14,23 @@ export type TranscriptEntryAnchor = Readonly<{
   activeMessagePosition: number;
   idempotencyKey?: string;
 }>;
+
+/**
+ * Order an admitted source against a bounded context read of the same chat.
+ * An earlier transcript precedes the current one. Within a transcript, only
+ * the same generation's sequence numbers identify the read's captured prefix.
+ * This describes ordering; it grants no read or write authority.
+ */
+export function transcriptEntryPrecedesContextTail(
+  entry: TranscriptEntryAnchor,
+  context: { sessionId: string; version?: SessionTranscriptContextVersion },
+): boolean {
+  return (
+    entry.sessionId !== context.sessionId ||
+    (entry.generation === context.version?.generation &&
+      entry.rawSeq <= (context.version.rawSeq ?? 0))
+  );
+}
 
 export function sameTranscriptEntryAnchor(
   left: TranscriptEntryAnchor,

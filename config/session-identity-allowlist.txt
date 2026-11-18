@@ -606,7 +606,7 @@ src/auto-reply/reply/goal-continuation.ts	2
 src/auto-reply/reply/model-selection.ts	2
 src/auto-reply/reply/queue/drain.ts	3
 src/auto-reply/reply/queue/state.ts	4
-src/auto-reply/reply/reply-agent-turn-preparation.ts	21
+src/auto-reply/reply/reply-agent-turn-preparation.ts	20
 src/auto-reply/reply/reply-input-admission.ts	9
 src/auto-reply/reply/reply-input-placement.ts	3
 src/auto-reply/reply/reply-tool-authority-cohort.ts	8

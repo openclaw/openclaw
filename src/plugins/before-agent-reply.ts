@@ -59,11 +59,14 @@ export function runBeforeAgentReplyForTurn(params: {
     return Promise.resolve(undefined);
   }
   const scope = beforeAgentReplyObserver.getStore();
-  if (scope?.shouldDispatch && (!scope.runId || scope.runId === params.runId)) {
-    scope.runId ??= params.runId;
-    if (!scope.shouldDispatch()) {
-      return Promise.resolve(undefined);
-    }
+  // Nested runs inherit async context. Select and bind the observer once, before
+  // preparation can yield, so a child cannot checkpoint its parent's admission.
+  const observer = scope && (!scope.runId || scope.runId === params.runId) ? scope : undefined;
+  if (observer) {
+    observer.runId ??= params.runId;
+  }
+  if (observer?.shouldDispatch?.() === false) {
+    return Promise.resolve(undefined);
   }
   const context = { ...params.context, trigger };
   const inherited = readClaimingHookAdmission(context);
@@ -81,16 +84,6 @@ export function runBeforeAgentReplyForTurn(params: {
       }
       await params.awaitSessionDiffBaseline?.();
       assertCurrent?.();
-      const observerScope = beforeAgentReplyObserver.getStore();
-      // Nested agent runs inherit async context. Bind recovery to the first runner
-      // so a hook-spawned child cannot checkpoint its parent's admitted turn.
-      const observer =
-        observerScope && (!observerScope.runId || observerScope.runId === params.runId)
-          ? observerScope
-          : undefined;
-      if (observer && !observer.runId) {
-        observer.runId = params.runId;
-      }
       if ((await observer?.beforeDispatch?.()) === false) {
         return undefined;
       }
