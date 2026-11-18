@@ -1,4 +1,4 @@
-import { dynamic } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -28,6 +28,7 @@ import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
 import type { GroupedMessagePresentation } from "./chat-message-bubble-presentation.ts";
 import { ExpandedToolCardContent } from "./chat-message-deferred.tsx";
+import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon, ToolIcon, syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
@@ -73,7 +74,7 @@ function resolveToolRowText(
 
 function ToolRowLink(props: {
   kind: "file" | "subagent";
-  label: string;
+  label: JSX.Element;
   onOpen: () => void;
   openLabel?: string;
 }) {
@@ -179,6 +180,12 @@ function SessionLaunchRowContent(props: {
   subagent: SpawnedSubagent | null;
   onOpen?: () => void;
 }) {
+  const name = () => (
+    <SubagentName
+      name={props.launch.label ?? ""}
+      sessionKey={props.launch.kind === "subagent" ? props.launch.childKey : undefined}
+    />
+  );
   return (
     <>
       <span class="chat-tool-row__verb">
@@ -187,15 +194,11 @@ function SessionLaunchRowContent(props: {
       <Show when={props.launch.label}>
         <Show
           when={props.onOpen}
-          fallback={
-            <span class="chat-tool-row__title chat-tool-row__subagent-name">
-              {props.launch.label}
-            </span>
-          }
+          fallback={<span class="chat-tool-row__title chat-tool-row__subagent-name">{name()}</span>}
         >
           <ToolRowLink
             kind="subagent"
-            label={props.launch.label!}
+            label={name()}
             openLabel={t(
               props.launch.kind === "chat"
                 ? "chat.toolCards.openChildChat"

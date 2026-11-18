@@ -14,6 +14,7 @@ import {
 } from "../chat-spawned-subagent.ts";
 import { descendantCards } from "./chat-activity-operations.ts";
 import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
+import { SubagentName } from "./chat-subagent-badge.tsx";
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
@@ -245,7 +246,12 @@ export function LifecycleOperations(props: {
                             entries()[Number(part().value)]?.key &&
                             entries()[Number(part().value)]?.open
                           }
-                          fallback={entries()[Number(part().value)]?.name}
+                          fallback={
+                            <SubagentName
+                              name={entries()[Number(part().value)]?.name ?? ""}
+                              sessionKey={entries()[Number(part().value)]?.key}
+                            />
+                          }
                         >
                           <button
                             type="button"
@@ -255,7 +261,10 @@ export function LifecycleOperations(props: {
                               entry.open?.(entry.key!);
                             }}
                           >
-                            {entries()[Number(part().value)]?.name}
+                            <SubagentName
+                              name={entries()[Number(part().value)]?.name ?? ""}
+                              sessionKey={entries()[Number(part().value)]?.key}
+                            />
                           </button>
                         </Show>
                       </Show>

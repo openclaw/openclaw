@@ -1,0 +1,36 @@
+.chat-subagent-avatar {
+  position: relative;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-sm);
+  color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
+  background: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
+}
+
+.chat-subagent-avatar > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.chat-subagent-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+
+.chat-subagent-name > .chat-subagent-avatar {
+  width: 18px;
+  height: 18px;
+}
+
+.chat-subagent-name__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -52,23 +52,6 @@
   outline-offset: 2px;
 }
 
-.chat-details-subagents__avatar {
-  position: relative;
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: var(--radius-sm);
-  color: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-ink, 32% 65%));
-  background: hsl(var(--subagent-avatar-hue) var(--subagent-avatar-tint, 22% 30% / 0.35));
-}
-
-.chat-details-subagents__avatar > svg {
-  width: 14px;
-  height: 14px;
-}
-
 .chat-details-subagents__badge {
   position: absolute;
   right: -2px;
