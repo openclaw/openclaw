@@ -115,7 +115,15 @@ test.for(["new database", "interrupted empty database"])(
         gate.entered,
         opening,
         "Agent schema creation did not reach its integrity gate",
-      );
+      ).catch((error: unknown) => {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        throw new Error(
+          `${error.message}; integrity checks=${gate.count()}; observed workers=${gate.workers.size}`,
+          { cause: error },
+        );
+      });
       // Catalog admission precedes canonical schema creation at this worker gate.
       expect(hasSqliteDatabaseSchemaAdmissionForPath(databasePath)).toBe(true);
       const key = `agent:${agentId}:dashboard:first-birth`;
