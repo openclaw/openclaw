@@ -413,15 +413,14 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   }
 
   requiresModelSetup(
-    state: Omit<
-      Parameters<typeof requiresChatModelSetup>[0],
-      "modelSelectionPolicy" | "catalogRetired" | "catalogInitialized"
-    >,
+    state: Omit<Parameters<typeof requiresChatModelSetup>[0], "modelCatalogState">,
   ): boolean {
     return requiresChatModelSetup({
       ...state,
-      modelSelectionPolicy: this.metadataState.modelSelectionPolicy,
-      catalogInitialized: this.metadataState.hasSnapshot && !this.metadataState.retired,
+      modelCatalogState: {
+        ...this.metadataState,
+        initialized: this.metadataState.hasSnapshot && !this.metadataState.retired,
+      },
     });
   }
 
