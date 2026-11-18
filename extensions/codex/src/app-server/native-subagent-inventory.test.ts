@@ -775,6 +775,35 @@ describe("native pending assignment inventory through registered monitor admissi
     },
   );
 
+  it("stops retrying retirement after persistent write failures", async () => {
+    const { f, client, parent } = await startAssignment();
+    try {
+      f.deliver.mockResolvedValue({ delivered: false, path: "none", recoveryBlocked: true });
+      let retirementWrites = 0;
+      interceptMutation(f, async (mutation, commit) => {
+        if (mutation.kind === "consume-native-subagent-assignment" && mutation.undelivered) {
+          retirementWrites += 1;
+          return false;
+        }
+        return await commit();
+      });
+      await completeChild(client, "Result");
+      await parent.unregister();
+      for (let attempt = 0; attempt < 6; attempt += 1) {
+        await vi.runOnlyPendingTimersAsync();
+      }
+      expect(retirementWrites).toBe(7);
+      expect(f.deliver).toHaveBeenCalledOnce();
+      await vi.runOnlyPendingTimersAsync();
+      expect(retirementWrites).toBe(7);
+      expect(await f.assignments()).toHaveLength(1);
+      expect(await readVisibleSessionTranscriptMessageEntries(f.identity)).toEqual([]);
+    } finally {
+      client.close();
+      vi.clearAllTimers();
+    }
+  });
+
   it.each([
     ["observed turn", "child-turn", false],
     ["canonical locator", "child-turn", true],
