@@ -13,6 +13,8 @@ export type UpdateDoctorMigrationCapture = {
   /** Captured SQLite sources admitted by this Doctor session. */
   openedSqlitePaths?: Set<string>;
   expected(pathname: string): string | null | undefined;
+  /** The generation an index rebuilt over the expected WAL frames binds without a commit. */
+  rebuiltIndex(pathname: string): string | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;

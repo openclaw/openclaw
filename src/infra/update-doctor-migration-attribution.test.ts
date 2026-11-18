@@ -401,7 +401,7 @@ it.each(["while Doctor reads it", "after admission", "after a same-content commi
         return;
       }
       migrate(database, pathname);
-      expect(read(database)).toEqual([7, 8].map((value) => ({ value, migrated: null })));
+      expect(read(database)).toEqual([{ value: 7 }, { value: 8 }]);
     });
     if (timing === "after a same-content commit") {
       expect(receipt).toMatchObject({ unchanged: false });
@@ -970,7 +970,13 @@ it.each(["captured-generation", null, undefined])(
         backupPath: "/synthetic/relocated/scoped.bak",
       };
     });
-    const capture = { expected: () => generation, assertCurrent() {}, accept() {}, refuse };
+    const capture = {
+      expected: () => generation,
+      rebuiltIndex: () => undefined,
+      assertCurrent() {},
+      accept() {},
+      refuse,
+    };
     runWithDoctorMigrationBackup(backup, () =>
       runWithUpdateDoctorMigrationCapture(capture, () => {
         const getBackup = () =>

@@ -300,11 +300,13 @@ async function inspectUpdateDatabaseGenerations(
             committed: inventorySchema,
             physical: inventorySchema,
             emptyReaderAlternates: z.record(z.string(), z.string()),
+            rebuiltIndexAlternates: z.record(z.string(), z.string()),
           })
         : inventorySchema.transform((committed) => ({
             committed,
             physical: committed,
             emptyReaderAlternates: {},
+            rebuiltIndexAlternates: {},
           })),
     );
     if (

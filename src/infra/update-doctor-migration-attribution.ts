@@ -205,6 +205,8 @@ function* updateSqliteMigrationSteps<T>(
       }
       // Empty-reader alternates preserve the shipped admission semantics. Native
       // descriptor closes belong to the isolated reader while this owner holds locks.
+      // An outside reader can rebuild a retained index over unchanged frames.
+      const rebuilt = capture.rebuiltIndex(key);
       let before: string | null | undefined = expected === null ? null : undefined;
       if (expected !== null) {
         yield {
@@ -212,7 +214,7 @@ function* updateSqliteMigrationSteps<T>(
             before =
               opened || mode === "exclusive"
                 ? readSqliteGeneration(pathname)
-                : readMatchingUpdateDatabaseGeneration(pathname, expected);
+                : readMatchingUpdateDatabaseGeneration(pathname, expected, rebuilt);
           },
           async readAsync(signal) {
             const { readUpdateSqliteDatabaseGenerationPairIsolated } =
@@ -224,14 +226,19 @@ function* updateSqliteMigrationSteps<T>(
             before =
               opened || mode === "exclusive"
                 ? observed
-                : observed === expected || pair.emptyReaderAlternates[pathname] === expected
+                : observed === expected ||
+                    pair.emptyReaderAlternates[pathname] === expected ||
+                    (rebuilt !== undefined && observed === rebuilt)
                   ? (observed ?? undefined)
                   : undefined;
           },
         };
       }
       assertCurrent();
-      if (before === undefined || (!opened && mode === "exclusive" && before !== expected)) {
+      if (
+        before === undefined ||
+        (!opened && mode === "exclusive" && before !== expected && before !== rebuilt)
+      ) {
         throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
       }
       capture.openedSqlitePaths?.add(key);
@@ -384,7 +391,11 @@ function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, created:
   const before = created && expected === null ? null : readSqliteGeneration(pathname);
   assertCurrent();
   // Session settlement owns the final postimage of paths this Doctor already opened.
-  if (!capture.openedSqlitePaths?.has(key) && before !== expected) {
+  if (
+    !capture.openedSqlitePaths?.has(key) &&
+    before !== expected &&
+    before !== capture.rebuiltIndex(key)
+  ) {
     capture.refuse("Migration companion changed after update capture.");
     throw new Error("Database migration companion no longer matches its capture.");
   }

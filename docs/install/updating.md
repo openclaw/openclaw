@@ -597,6 +597,14 @@ the stale backup. Existing integrity, schema, and maintenance-ownership checks
 still apply, as do checks for writes after maintenance admission. The candidate must contain
 this repair; the installed updater's capture and backup checks are unchanged.
 Empty WAL-index transitions without write evidence remain rollback-eligible.
+An outside read-only SQLite open, such as a monitoring script using `mode=ro`, can
+rebuild the WAL index over retained frames after Doctor admits a database. The
+rebuild resets only the index change counter, so Doctor still accepts that
+database at migration publication when its file identity, committed content and
+last commit checksum are unchanged, and automatic restoration stays available.
+Any commit after admission, including one that restores identical content, still
+refuses. The Doctor of the version being installed owns this check, so updates
+from older releases benefit once the target contains it.
 
 The post-plugin Doctor runs for plugin changes, deferred model retirement, and
 pending deferred plugin migrations. Before each Doctor, the updater observes its
