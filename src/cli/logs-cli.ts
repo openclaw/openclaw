@@ -91,8 +91,8 @@ const LOCAL_FALLBACK_NOTICE = "Local Gateway RPC unavailable; reading configured
 const JOURNAL_FALLBACK_NOTICE =
   "Local Gateway RPC unavailable; reading active systemd gateway journal instead.";
 const JOURNAL_CURSOR_PREFIX = "-- cursor: ";
-const JOURNAL_MAX_LIMIT = 5000;
-const JOURNAL_MAX_BYTES = 1_000_000;
+const LOGS_MAX_LIMIT = 5000;
+const LOGS_MAX_BYTES = 1_000_000;
 
 async function fetchGatewayLogs(
   opts: LogsRequestOptions,
@@ -180,8 +180,8 @@ async function readSystemdJournalFallback(params: {
   if (service.status !== "running" || typeof service.pid !== "number") {
     return null;
   }
-  const limit = resolveIntegerOption(params.limit, 1, { min: 1, max: JOURNAL_MAX_LIMIT });
-  const maxBytes = resolveIntegerOption(params.maxBytes, 1, { min: 1, max: JOURNAL_MAX_BYTES });
+  const limit = resolveIntegerOption(params.limit, 1, { min: 1, max: LOGS_MAX_LIMIT });
+  const maxBytes = resolveIntegerOption(params.maxBytes, 1, { min: 1, max: LOGS_MAX_BYTES });
   const unitOverride = process.env.OPENCLAW_SYSTEMD_UNIT?.trim();
   const unitName = unitOverride
     ? unitOverride.endsWith(".service")
@@ -281,8 +281,8 @@ export function registerLogsCli(program: Command) {
   const logs = program
     .command("logs")
     .description("Tail gateway file logs via RPC")
-    .option("--limit <n>", "Max lines to return", "200")
-    .option("--max-bytes <n>", "Max bytes to read", "250000")
+    .option("--limit <n>", "Max lines to return (up to 5000)", "200")
+    .option("--max-bytes <n>", "Max bytes to read (up to 1000000)", "250000")
     .option("--follow", "Follow log output", false)
     .option("--interval <ms>", "Polling interval in ms", "1000")
     .option("--json", "Emit JSON log lines", false)
@@ -347,8 +347,11 @@ export function registerLogsCli(program: Command) {
       parseLogsPositiveInt(opts.interval, 1000, "--interval"),
       1000,
     );
-    const limit = parseLogsPositiveInt(opts.limit, 200, "--limit");
-    const maxBytes = parseLogsPositiveInt(opts.maxBytes, 250_000, "--max-bytes");
+    const limit = Math.min(parseLogsPositiveInt(opts.limit, 200, "--limit"), LOGS_MAX_LIMIT);
+    const maxBytes = Math.min(
+      parseLogsPositiveInt(opts.maxBytes, 250_000, "--max-bytes"),
+      LOGS_MAX_BYTES,
+    );
     let gatewayCursor: number | undefined;
     let gatewayFile: string | undefined;
     let journalCursor: string | undefined;
