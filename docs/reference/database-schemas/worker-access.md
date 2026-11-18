@@ -2952,6 +2952,9 @@ capture a mutation witness and to accept their result. They wait for the history
 worker outside that reservation, so a slow or failed read cannot block later
 transcript writes. Acceptance checks the physical source, current authority,
 committed-write receipt and native mutation witness before synchronous consumption.
+The receipt covers the selected session key and transcript ID, so certified writes
+to other conversations do not reject an unchanged snapshot. Unscoped writes and
+schema changes still invalidate the receipt.
 One intervening mutation retries the read once; continued mutation refuses stale
 consumption. A caller already holding the writer retains its existing custody.
 These scheduling changes require no schema, stored-data, configuration, or update

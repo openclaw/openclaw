@@ -5,7 +5,7 @@ import Testing
 struct LogLocatorTests {
     @Test func `structured logs follow the selected state directory`() async throws {
         let fm = FileManager()
-        let root = fm.temporaryDirectory.appendingPathComponent("openclaw-log-locator-\(UUID().uuidString)")
+        let root = temporaryDirectoryForTests().appendingPathComponent("openclaw-log-locator-\(UUID().uuidString)")
         defer { try? fm.removeItem(at: root) }
 
         for directory in ["production/logs", "test/logs", "fallback/tmp/openclaw-\(getuid())"] {

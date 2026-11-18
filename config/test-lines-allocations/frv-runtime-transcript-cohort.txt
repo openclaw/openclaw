@@ -1,0 +1,2 @@
+# Scoped transcript-read regression: sibling commits remain readable; same-session writes reject stale snapshots. Includes two repaired E2E fixture contract lines.
+54

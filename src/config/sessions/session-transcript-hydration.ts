@@ -354,6 +354,7 @@ export function prepareSessionTranscriptHydration(
                   assertSource,
                   signal,
                   "history.hydration",
+                  { sessionKey: target.sessionKey, sessionId: scope.sessionId },
                 ),
             );
           },

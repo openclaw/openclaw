@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as packageFilesystem from "./package-update-filesystem.js";
+import { publishWithoutPathExchange } from "./package-update-swap.assertions.test-support.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createNativePackageSwapFixture,
@@ -19,7 +20,8 @@ const restorePackageRoot = packageFilesystem.restoreNpmPackageRoot;
 const movePackageRoot = packageFilesystem.movePackageRoot;
 let wait: ReturnType<typeof vi.fn<(ms: number) => Promise<void>>>;
 beforeEach(() => {
-  // Select the Windows rename policy without changing fs-safe's native platform.
+  // Select both Windows publication and rename policy without changing fs-safe's native platform.
+  publishWithoutPathExchange();
   vi.spyOn(packageFilesystem, "backupNpmPackageRoot").mockImplementation(
     (source, destination, assertCurrent, warnings) =>
       backupPackageRoot(source, destination, assertCurrent, warnings, "win32"),

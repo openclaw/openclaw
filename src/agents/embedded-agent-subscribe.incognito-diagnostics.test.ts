@@ -1,4 +1,6 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   createMessageEndContext,
   createMessageUpdateContext,
@@ -10,6 +12,7 @@ const { appendRegularFile } = vi.hoisted(() => ({
   appendRegularFile: vi.fn(async () => undefined),
 }));
 
+// mock-isolation: Observe diagnostic appends without writing private stream fixtures.
 vi.mock("../infra/fs-safe.js", () => ({ appendRegularFile }));
 
 beforeEach(() => {
@@ -20,9 +23,10 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("Incognito raw-stream diagnostic boundary", () => {
-  it.each([false, true])(
+  it.for([false, true])(
     "keeps all stream content private without suppressing live delivery (Incognito: %s)",
-    async (incognito) => {
+    async (incognito, { signal }) => {
+      using mkdir = vi.spyOn(fs, "mkdir");
       const sessionKey = `agent:main:dashboard:${incognito ? "incognito-" : ""}synthetic`;
       for (const phase of ["commentary", "final_answer"] as const) {
         const message = {
@@ -52,6 +56,8 @@ describe("Incognito raw-stream diagnostic boundary", () => {
         assistantMessageEvent: { type: "thinking_delta", delta: "synthetic private reasoning" },
       });
       expect(thinkingContext.emitReasoningStream).toHaveBeenCalled();
+      // Stream delivery does not await best-effort diagnostics; join their directory preparation.
+      await withinTest(Promise.all(mkdir.mock.results.map(({ value }) => value)), signal);
       expect(appendRegularFile).toHaveBeenCalledTimes(incognito ? 0 : 5);
     },
   );
