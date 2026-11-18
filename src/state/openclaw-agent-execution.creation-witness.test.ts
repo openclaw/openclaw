@@ -73,7 +73,7 @@ it("prepares an agent database while its original creation witness is retained",
   ).resolves.toMatchObject({ entries: [] });
 });
 
-it.each(["cancelled", "revoked"] as const)(
+it.for(["cancelled", "revoked"] as const)(
   "does not create a database after queued preparation is %s",
   async (outcome, { signal }) => {
     const options = fixture();
