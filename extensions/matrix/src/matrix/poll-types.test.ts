@@ -146,7 +146,7 @@ it.each([
 it("formats disclosed poll results with vote totals", () => {
   const text = formatPollResultsAsText({
     ...parsedPoll,
-    entries: parsedPoll.answers.map((answer, index) => ({ ...answer, votes: 1 - index })),
+    entries: parsedPoll.answers.map(({ id, text }, index) => ({ id, text, votes: 1 - index })),
     totalVotes: 1,
     closed: false,
   });
