@@ -162,7 +162,7 @@ function describeFailure(result: CommandResult): string {
 }
 
 /** The asset GBrain publishes for this host, or undefined where it ships none (Intel macOS, ARM Linux). */
-export function gbrainReleaseAsset(platform: string, arch: string): string | undefined {
+function gbrainReleaseAsset(platform: string, arch: string): string | undefined {
   if (platform === "darwin" && arch === "arm64") {
     return "gbrain-darwin-arm64";
   }

@@ -2109,7 +2109,9 @@ command. A killed update usually also leaves the plugin recovery it reserved,
 which is a separate check. The next `openclaw update` settles that as well when
 no operator is needed: on a package install, the killed update was a
 command-line `openclaw update` whose process has exited, and the update lease
-store still holds its lease. It reports an `interrupted-update-recovery` warning.
+store still holds its lease. On Linux and macOS hosts a restart that cleared
+that store does not block it: the killed update recorded the boot it ran in,
+which shows its processes gone. It reports an `interrupted-update-recovery` warning.
 If the killed update had replaced the installed version without confirming it,
 had begun rolling back on it, or left the Gateway stopped, the update first
 finishes that version as `openclaw update repair` does (Doctor, plugin
