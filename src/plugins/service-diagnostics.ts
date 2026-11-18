@@ -14,7 +14,6 @@ import {
 } from "../logging/diagnostic-stability.js";
 import { resolveRuntimeServiceBuildId } from "../version.js";
 import type { PluginRuntimeCapabilityLease } from "./capability-lease.js";
-import { DIAGNOSTICS_EXPORTER_PLUGIN_IDS } from "./diagnostics-exporters.js";
 import { onPluginMetrics } from "./plugin-metrics.js";
 import type { OpenClawPluginServiceContext } from "./plugin-registration.types.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
@@ -30,7 +29,8 @@ export function createPluginServiceDiagnostics(
   lease: PluginRuntimeCapabilityLease,
 ): TrustedExporterInternalDiagnostics | undefined {
   const isDiagnosticsExporter =
-    entry.pluginId === entry.id && DIAGNOSTICS_EXPORTER_PLUGIN_IDS.includes(entry.id);
+    entry.pluginId === entry.id &&
+    (entry.id === "diagnostics-otel" || entry.id === "diagnostics-prometheus");
   if (
     !isDiagnosticsExporter ||
     (entry.origin !== "bundled" && entry.trustedOfficialInstall !== true)

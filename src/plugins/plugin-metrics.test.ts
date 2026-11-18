@@ -114,7 +114,7 @@ afterEach(() => {
 });
 
 describe("api.metrics", () => {
-  it("requires both an enabled exporter and permission for the specific plugin", () => {
+  it("requires operator permission for this specific live producer", () => {
     const config: OpenClawConfig = {
       plugins: {
         entries: {
@@ -130,25 +130,28 @@ describe("api.metrics", () => {
       expect(createApi(id, config).metrics).toBeUndefined();
     }
     expect(
-      createApi("allowed", { plugins: { entries: { allowed: { allowMetrics: true } } } }).metrics,
-    ).toBeUndefined();
-    expect(
       createApi("allowed", config, { activateGlobalSideEffects: false }).metrics,
     ).toBeUndefined();
     expect(createApi("allowed", config, { registrationMode: "discovery" }).metrics).toBeUndefined();
   });
 
-  it("preserves exporter enablement rules after the operator opts in the producer", () => {
-    for (const [exporter, enabled] of [
-      ["diagnostics-prometheus", false],
-      ["diagnostics-otel", true],
-    ] as const) {
-      const config: OpenClawConfig = {
-        plugins: { entries: { [exporter]: { enabled }, producer: { allowMetrics: true } } },
-      };
-      expect(Boolean(createApi("producer", config).metrics)).toBe(enabled);
-      expect(createApi("other", config).metrics).toBeUndefined();
-    }
+  it("starts and stops exporting from the same producer when the exporter changes", async () => {
+    const producer = createApiWithRecord("producer", {
+      plugins: { entries: { producer: { allowMetrics: true } } },
+    });
+    const metrics = registerInLoader(producer, [{ name: "jobs", type: "gauge", help: "Jobs" }]);
+    markPluginRegistryActive(producer.registry);
+    const gauge = metrics.gauge("jobs");
+    gauge.set({}, 1);
+    const first = subscribeAsExporter();
+    gauge.set({}, 2);
+    first.lease.revoke();
+    gauge.set({}, 3);
+    const next = subscribeAsExporter();
+    gauge.set({}, 4);
+    expect(names(first.received)).toEqual([["openclaw_plugin_producer_jobs", 2]]);
+    expect(names(next.received)).toEqual([["openclaw_plugin_producer_jobs", 4]]);
+    await getPluginInstance(producer.record)!.dispose();
   });
 
   it("delivers host-prefixed samples to the trusted exporter listener", () => {

@@ -17,12 +17,7 @@ import { resolveUserPath } from "../utils.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
-import {
-  normalizePluginId,
-  normalizePluginsConfig,
-  resolveEffectiveEnableState,
-} from "./config-state.js";
-import { DIAGNOSTICS_EXPORTER_PLUGIN_IDS } from "./diagnostics-exporters.js";
+import { normalizePluginId, normalizePluginsConfig } from "./config-state.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
   clearPluginRunContext,
@@ -266,7 +261,6 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
     const instance =
       getPluginInstance(record) ??
       new PluginInstance(record.id, { record, registry: state.registry });
-    const pluginPolicy = normalizePluginsConfig(params.config.plugins);
     const api = buildPluginApi({
       id: record.id,
       name: record.name,
@@ -295,20 +289,12 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
             registerSubagentProfile,
           }
         : {}),
-      // Only the live registry owns the process-wide plugin metric families, and only
-      // for a plugin explicitly opted in by the operator, with an enabled exporter.
+      // Exporters can start or stop without reloading this producer. Grant the recorder
+      // on operator opt-in; the broker forwards samples only while an exporter listens.
       ...(registrationMode === "full" &&
       registryParams.activateGlobalSideEffects !== false &&
-      pluginPolicy.entries[normalizePluginId(record.id)]?.allowMetrics === true &&
-      DIAGNOSTICS_EXPORTER_PLUGIN_IDS.some(
-        (id) =>
-          resolveEffectiveEnableState({
-            id,
-            origin: "bundled",
-            config: pluginPolicy,
-            rootConfig: params.config,
-          }).enabled,
-      )
+      normalizePluginsConfig(params.config.plugins).entries[normalizePluginId(record.id)]
+        ?.allowMetrics === true
         ? {
             metrics: createPluginMetricsApi(record.id, registryParams.logger, {
               onDispose: (dispose) => instance.lifecycle.onDispose(dispose),

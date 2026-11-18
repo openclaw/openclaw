@@ -1363,7 +1363,7 @@ Enabling Prometheus alone exports core metrics, not every plugin's metrics. To a
 }
 ```
 
-This controls plugin-published metrics, not core measurements or a plugin's own HTTP routes. Anyone who can read the shared scrape can read these metrics; don't put secrets or personal identifiers in labels. The opt-in does not enable the plugin or an exporter. With only `diagnostics-otel` enabled, opted-in samples are not exported today.
+This controls plugin-published metrics, not core measurements or a plugin's own HTTP routes. Anyone who can read the shared scrape can read these metrics; don't put secrets or personal identifiers in labels. The opt-in does not enable the plugin or an exporter. An opted-in plugin can register before Prometheus starts. Samples recorded with no listener are discarded, not buffered. Starting or stopping the exporter does not require the producer to restart. Today only `diagnostics-prometheus` exports these families.
 
 Plugin code can use the optional API:
 
