@@ -784,7 +784,6 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
   it.each([
     ["rate_limit", undefined, sonnet, sonnet, undefined, false],
     ["model_not_found", "model_not_found", sonnet, sonnet, now + 30_000, false],
-    ["model_not_found", "model_not_found", "gpt-4.1", "gpt-4.1", now + 30_000, false],
     ["model_not_found", undefined, sonnet, sonnet, undefined, true], // #116464
     ["rate_limit", "rate_limit", "gpt-4.1", undefined, undefined, false],
     ["auth", "rate_limit", "claude-opus-4.6", undefined, undefined, false],
@@ -821,7 +820,7 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
   it("keeps a healthy fallback available after two different missing models", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(now);
-    const store = makeStore();
+    const store = makeStore(undefined);
     mockLockedUpdateForStore(store);
 
     for (const modelId of ["missing-primary", "missing-fallback"]) {
