@@ -1,5 +1,6 @@
 import { createMemo, Loading, onSettled } from "solid-js";
 import type { AgentSelectElement } from "../../components/agent-select.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
@@ -220,11 +221,13 @@ export function NewSessionPlaceControls(props: {
             !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
               props.params.place.repositoryState.checkoutPending ? (
                 <span
-                  class="new-session-page__checkout-skeleton new-session-page__skeleton-row"
+                  class="new-session-page__checkout-skeleton"
                   role="status"
                   aria-label={t("newSession.checkingPlace")}
                 >
-                  <span class="new-session-page__skeleton-icon" aria-hidden="true" />
+                  <span class="new-session-page__target-icon" aria-hidden="true">
+                    <Icon name="gitBranch" />
+                  </span>
                   <span
                     class="new-session-page__skeleton-bar"
                     aria-hidden="true"

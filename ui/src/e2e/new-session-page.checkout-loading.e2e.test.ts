@@ -61,6 +61,18 @@ suite.define(() => {
           );
         }
         expect(await skeleton.isVisible()).toBe(width <= 768);
+        const pendingIcon =
+          width <= 768
+            ? await skeleton.locator(".new-session-page__target-icon svg").boundingBox()
+            : null;
+        const pendingLabel =
+          width <= 768
+            ? await skeleton.locator(".new-session-page__skeleton-bar").boundingBox()
+            : null;
+        if (width <= 768) {
+          expect(pendingIcon).not.toBeNull();
+          expect(await skeleton.locator(".new-session-page__picker-chevron").count()).toBe(0);
+        }
         const shifts = await observeLayoutShifts(page);
         await gateway.resolveDeferred("projects.checkoutOptions", {
           current: false,
@@ -75,6 +87,17 @@ suite.define(() => {
           message: await message.boundingBox(),
         };
         expect(after).toEqual(before);
+        if (pendingIcon && pendingLabel) {
+          expect(
+            await checkout.locator(".new-session-page__target-icon svg").boundingBox(),
+          ).toEqual(pendingIcon);
+          expect(
+            (await checkout.locator(".new-session-page__trigger-label").boundingBox())?.x,
+          ).toBe(pendingLabel.x);
+          expect(await checkout.locator(".new-session-page__picker-chevron").isVisible()).toBe(
+            true,
+          );
+        }
         const observed = await shifts.evaluate((observer) => observer.read());
         // Count even recent-input shifts: the same reply may arrive after the input window.
         expect(observed.entries.reduce((sum, entry) => sum + entry.value, 0)).toBe(0);

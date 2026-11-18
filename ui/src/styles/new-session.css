@@ -395,7 +395,8 @@ span.new-session-page__select {
   stroke-width: 1.5px;
 }
 
-.new-session-page__trigger > .new-session-page__target-icon {
+.new-session-page__trigger > .new-session-page__target-icon,
+.new-session-page__checkout-skeleton > .new-session-page__target-icon {
   align-items: center;
   justify-content: center;
   flex: 0 0 14px;
@@ -403,7 +404,8 @@ span.new-session-page__select {
   height: 14px;
 }
 
-.new-session-page__trigger > .new-session-page__target-icon svg {
+.new-session-page__trigger > .new-session-page__target-icon svg,
+.new-session-page__checkout-skeleton > .new-session-page__target-icon svg {
   stroke-width: 1.5px;
 }
 
@@ -2002,6 +2004,13 @@ span.new-session-page__select {
 /* Horizontal trays need no placeholder; stacked controls must retain their row. */
 .new-session-page__checkout-skeleton {
   display: none;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+}
+
+.new-session-page__checkout-skeleton .new-session-page__skeleton-bar {
+  animation: new-session-placeholder-pulse 1.4s ease-in-out infinite;
 }
 
 .new-session-page__picker-panel > .new-session-page__skeletons {
@@ -2114,7 +2123,8 @@ span.new-session-page__select {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .new-session-page__skeleton-row {
+  .new-session-page__skeleton-row,
+  .new-session-page__checkout-skeleton .new-session-page__skeleton-bar {
     animation: none;
   }
 }
