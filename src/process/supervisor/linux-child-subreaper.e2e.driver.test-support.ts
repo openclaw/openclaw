@@ -94,8 +94,17 @@ async function main(): Promise<void> {
 
   const signalDrain = owner.drain("SIGTERM");
   log("drain(SIGTERM) on the running adopted orphan returned " + String(signalDrain));
-  await delay(300);
-  const cleanupDrain = owner.drain();
+  // Elapsed time is not exit evidence on a loaded runner: keep observing the
+  // owner until strict cleanup completes or the deadline expires.
+  const cleanupDeadline = Date.now() + 5_000;
+  let cleanupDrain = false;
+  while (Date.now() < cleanupDeadline) {
+    cleanupDrain = owner.drain();
+    if (cleanupDrain) {
+      break;
+    }
+    await delay(20);
+  }
   log("drain() after orphan exit returned " + String(cleanupDrain));
   if (!cleanupDrain) {
     throw new Error("strict cleanup did not complete (ECHILD extinction not reached)");

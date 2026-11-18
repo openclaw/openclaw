@@ -40,7 +40,7 @@ function childPids(): number[] {
 }
 
 /** Parent-id enumeration from /proc stat files, the kernel-independent floor. */
-export function childPidsFromProcStat(): number[] {
+function childPidsFromProcStat(): number[] {
   const children: number[] = [];
   let sawStatFile = false;
   for (const entry of readdirSync("/proc")) {
