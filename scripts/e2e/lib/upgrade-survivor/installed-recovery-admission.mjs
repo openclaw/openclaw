@@ -284,8 +284,20 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   const repaired = await run("reboot-repair", ["update", "repair", "--yes", "--json"]);
   check("reboot: openclaw update repair exits 0", repaired.status === 0, `exit ${repaired.status}`);
   check("reboot: repair settles the recovery", cohort(rebootKilled.runId) === null);
+  const repairedRow = runs().find((entry) => entry.run_id === rebootKilled.runId);
+  check(
+    "reboot: repair retires and acknowledges the killed run",
+    repairedRow?.status === "failed" &&
+      repairedRow.reason === "abandoned" &&
+      hasStep(repairedRow, "reconcile:acknowledged"),
+    JSON.stringify([repairedRow?.status, repairedRow?.reason]),
+  );
   const afterRepair = await serving("reboot-repair");
-  check("reboot: Gateway serves after repair", afterRepair, "not serving");
+  check(
+    "reboot: Gateway serves the version the killed update installed",
+    afterRepair?.version === rebootKilled.version,
+    JSON.stringify(afterRepair),
+  );
   fs.rmSync(next1.target, { force: true });
 
   // 2. History: 99 older routine runs, recorded by the real CLI, then the killed run.
@@ -344,7 +356,10 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   const created = after.filter((row) => !historyBefore.has(row.run_id));
   check(
     "history: one repair-shaped run finished the killed update",
-    created.filter((row) => hasStep(row, "finalize:repair-continuation")).length === 1,
+    created
+      .filter((row) => hasStep(row, "finalize:repair-continuation"))
+      .map((row) => row.status)
+      .join(",") === "succeeded",
     created.map((row) => row.run_id).join(","),
   );
   const finalServing = await serving("history-next-update");

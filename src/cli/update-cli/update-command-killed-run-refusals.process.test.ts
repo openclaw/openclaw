@@ -192,6 +192,7 @@ describe.skipIf(process.platform === "win32")("next update after a killed update
         } else {
           mocks.root.mockResolvedValue(killed.slot);
           await updateRepairCommand({ json: true, yes: true });
+          expect(mocks.proceed).not.toHaveBeenCalled();
         }
 
         expect(loadPluginCohortRecovery(killed.runId)).toBeUndefined();

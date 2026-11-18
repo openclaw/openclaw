@@ -8,6 +8,7 @@ set -euo pipefail
 PACKAGE_TGZ=""
 AUTO_PREPUBLISH_PLUGIN_REGISTRY_ROOT=""
 UPGRADE_SCENARIO_STAGE=""
+MACHINE_ID_FILE=""
 WORKER_RUNTIME_HOST_ROOT=""
 LIMITS_SUMMARY=""
 run_completed="0"
@@ -52,6 +53,9 @@ cleanup_outer() {
   fi
   if [ -n "$UPGRADE_SCENARIO_STAGE" ]; then
     rm -rf "$UPGRADE_SCENARIO_STAGE"
+  fi
+  if [ -n "$MACHINE_ID_FILE" ]; then
+    rm -f "$MACHINE_ID_FILE"
   fi
   if [ -n "$WORKER_RUNTIME_HOST_ROOT" ]; then
     if [ "$exit_status" -eq 0 ] && [ "$run_completed" = "1" ]; then
@@ -356,11 +360,12 @@ fi
 if [ "$SCENARIO" = package-installed-recovery ] &&
   [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = killed-run-admission ]; then
   # A monitoring-agent shape: the host's PID namespace and a stable machine identity.
-  # Only one such cell may run at a time on a Docker host: it can see other containers' processes.
-  machine_id_file="$(mktemp "${TMPDIR:-/tmp}/openclaw-machine-id.XXXXXX")"
-  node -e 'process.stdout.write(require("node:crypto").randomBytes(16).toString("hex") + "\n")' >"$machine_id_file"
-  chmod 0644 "$machine_id_file"
-  DOCKER_RUN_USER_ARGS+=(--pid=host -v "$machine_id_file:/etc/machine-id:ro")
+  # The container can see and, under the same uid, signal host processes: this explicit
+  # cell belongs on a dedicated or disposable Docker host, never a shared CI runner.
+  MACHINE_ID_FILE="$(mktemp "${TMPDIR:-/tmp}/openclaw-machine-id.XXXXXX")"
+  node -e 'process.stdout.write(require("node:crypto").randomBytes(16).toString("hex") + "\n")' >"$MACHINE_ID_FILE"
+  chmod 0644 "$MACHINE_ID_FILE"
+  DOCKER_RUN_USER_ARGS+=(--pid=host -v "$MACHINE_ID_FILE:/etc/machine-id:ro")
 fi
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
