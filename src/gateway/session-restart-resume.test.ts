@@ -25,7 +25,6 @@ import {
   readSessionPendingInput,
 } from "../config/sessions/session-pending-input-history.js";
 import * as pendingInputWithdrawal from "../config/sessions/session-pending-input-withdrawal.js";
-import { GATEWAY_RESTART_RESUME_SCOPE_ENV } from "../config/sessions/session-restart-resume-scope.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
@@ -907,14 +906,8 @@ it.for([
       const name = `scoped-${live}-${written ?? "none"}-${startup ?? "none"}`;
       const target = { agentId: "main", sessionKey: `agent:main:${name}`, sessionId: name };
       replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: Date.now() });
-      const previousScope = process.env[GATEWAY_RESTART_RESUME_SCOPE_ENV];
-      const setScope = (scope: string | undefined) => {
-        if (scope === undefined) {
-          delete process.env[GATEWAY_RESTART_RESUME_SCOPE_ENV];
-        } else {
-          process.env[GATEWAY_RESTART_RESUME_SCOPE_ENV] = scope;
-        }
-      };
+      const setScope = (scope: string | undefined) =>
+        vi.stubEnv("OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE", scope);
       // The live work at shutdown: a claimed agent run, or a session turn.
       const runId = `${name}-run`;
       const claim =
@@ -984,7 +977,7 @@ it.for([
         expect(
           vi
             .mocked(context.logGateway.warn)
-            .mock.calls.some(([line]) => String(line).includes("was not sent after restart")),
+            .mock.calls.some(([line]) => line.includes("was not sent after restart")),
         ).toBe(resumes);
         expect(await readSessionPendingInput(target, queued.inputId)).toMatchObject({
           state: "cancelled",
@@ -992,7 +985,7 @@ it.for([
           message: { content: "Sent while the turn was running" },
         });
       } finally {
-        setScope(previousScope);
+        vi.unstubAllEnvs();
         admission.mockRestore();
         resume.mockRestore();
         dispatch.mockRestore();

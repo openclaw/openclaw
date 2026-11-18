@@ -8,9 +8,9 @@ type RestartResumeMarker = NonNullable<InternalSessionEntry["resumeAfterRestart"
  * that ends work on purpose (for example an explicit stop) starts the next Gateway
  * with a new token.
  */
-export const GATEWAY_RESTART_RESUME_SCOPE_ENV = "OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE";
+const GATEWAY_RESTART_RESUME_SCOPE_ENV = "OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE";
 
-export function resolveRestartResumeScope(
+function resolveRestartResumeScope(
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
   return env[GATEWAY_RESTART_RESUME_SCOPE_ENV]?.trim() || undefined;
