@@ -326,7 +326,8 @@ vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
 });
 
 // mock-isolation: Capture console setup without changing process-wide logging.
-vi.mock("../../logging/console.js", () => ({
+vi.mock("../../logging/console.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logging/console.js")>()),
   setConsoleSubsystemFilter: mocks.setConsoleSubsystemFilter,
   setConsoleTimestampPrefix: () => undefined,
 }));
@@ -1185,11 +1186,13 @@ describe("gateway run option collisions", () => {
     expect(parkCurrentLaunchAgentForMaintenance).toHaveBeenCalledOnce();
     expect(offerInvalidConfigRecovery).not.toHaveBeenCalled();
     if (error instanceof OpenClawDatabaseSchemaPreflightError) {
-      expect(gatewayErrorMessages).toEqual([`${error.message} Parked the managed LaunchAgent.`]);
-      expect(gatewayErrorMessages[0]).toMatch(
+      expect(gatewayErrorMessages).toEqual([]);
+      expect(runtimeErrors[0]).toMatch(
         /schema 999;.*was written by OpenClaw 9999\.1\.1;.*openclaw update/s,
       );
-      expect(runtimeErrors).toEqual([`Gateway failed to start: ${error.message}`]);
+      expect(runtimeErrors).toEqual([
+        `Gateway failed to start: ${error.message} Parked the managed LaunchAgent.`,
+      ]);
     } else {
       expect(runtimeErrors.join("\n")).toContain("newer");
       expect(runtimeErrors.join("\n")).toContain("restore your pre-update backup");
