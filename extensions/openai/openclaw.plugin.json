@@ -131,7 +131,8 @@
               "supportsReasoningEffort": true,
               "supportedReasoningEfforts": ["low", "medium", "high", "xhigh", "max"],
               "supportsTemperature": false,
-              "codeMode": "preferred"
+              "codeMode": "preferred",
+              "cachesInstructions": false
             }
           },
           {

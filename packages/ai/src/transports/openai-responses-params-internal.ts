@@ -144,8 +144,8 @@ export function buildOpenAIResponsesParams(
   const promptCacheKey = compat.supportsPromptCacheKey
     ? resolvePromptCacheKey(options, cacheRetention)
     : undefined;
-  // Continuation compares input prefixes, so keep the changing system prompt in
-  // instructions on routes that support it. Other routes embed it in input.
+  // Routes that support and cache instructions carry the system prompt there.
+  // Other routes embed it in input, where a changed prompt ends continuation.
   let instructions = payloadPolicy.usesInstructionsField
     ? buildOpenAIResponsesInstructionsText(context)
     : undefined;

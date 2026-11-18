@@ -87,6 +87,7 @@ function isOpenAIResponsesApi(api: string | undefined): boolean {
 function readCompatPayloadBoolean(
   compat: unknown,
   key:
+    | "cachesInstructions"
     | "supportsInstructions"
     | "supportsPromptCacheKey"
     | "supportsResponsesContinuation"
@@ -361,8 +362,11 @@ export function resolveOpenAIResponsesPayloadPolicy(
   // Verified native OpenAI/xAI routes default instructions on; compat overrides.
   // Other endpoints could silently drop this field and the system prompt.
   // Stored-continuation support does not prove instructions support.
+  // A model that never caches instructions gets the prompt as a cacheable input item.
   const instructionsCompat = readCompatPayloadBoolean(model.compat, "supportsInstructions");
-  const usesInstructionsField = instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint;
+  const usesInstructionsField =
+    (instructionsCompat ?? capabilities.usesVerifiedInstructionsEndpoint) &&
+    readCompatPayloadBoolean(model.compat, "cachesInstructions") !== false;
 
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,

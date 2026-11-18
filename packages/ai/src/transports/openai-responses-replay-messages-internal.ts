@@ -38,6 +38,7 @@ import {
   OPENAI_RESPONSES_REASONING_REPLAY_META_KEY,
   OPENAI_RESPONSES_REPLAY_ITEM_ID_MAX_LENGTH,
   RESPONSES_RETAINED_USER,
+  RESPONSES_SYSTEM_PROMPT,
   type OpenAIResponsesReasoningReplayMetadata,
   type ReplayableResponseOutputMessage,
   type ReplayableResponseReasoningItem,
@@ -329,18 +330,6 @@ function convertResponsesMessagesWithStyle(
   const transformedMessages = orderResponsesAsyncToolResults(
     transformMessages(replayPlan.messages),
   );
-  const includeSystemPrompt = options?.includeSystemPrompt ?? true;
-  if (includeSystemPrompt && context.systemPrompt) {
-    messages.push(
-      buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
-        {
-          type: "input_text",
-          text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
-            .instructions,
-        },
-      ]),
-    );
-  }
   // The compact endpoint's output is already canonical provider input, not
   // internal user content to normalize or reinterpret as text/image blocks.
   if (replayPlan.compactedWindow) {
@@ -353,28 +342,46 @@ function convertResponsesMessagesWithStyle(
     });
     messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook(window) : window));
   }
-  let replayMessages = replayPlan.compaction
-    ? [replayPlan.compaction, ...transformedMessages]
-    : transformedMessages;
+  if (replayPlan.compaction) {
+    messages.push(
+      options?.mutableInput
+        ? cloneResponsesInputForPayloadHook(replayPlan.compaction)
+        : replayPlan.compaction,
+    );
+  }
+  // OpenAI drops input placed before a compaction item, so the system prompt follows
+  // the checkpoint. It stays in the stored prefix: continuation deltas never repeat it,
+  // and a changed prompt changes that prefix, which forces a full replay.
+  if ((options?.includeSystemPrompt ?? true) && context.systemPrompt) {
+    messages.push(
+      Object.assign(
+        buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
+          {
+            type: "input_text",
+            text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
+              .instructions,
+          },
+        ]),
+        { [RESPONSES_SYSTEM_PROMPT]: true },
+      ),
+    );
+  }
+  let replayMessages = transformedMessages;
   // Responses continuation requires the complete prior input before tool output.
   // Each carrier stays with its preceding user/checkpoint; moving it past an
   // appended steering user would rewrite the already admitted request prefix.
-  const isCarrier = (message: (typeof replayMessages)[number]) =>
-    "role" in message && hasRuntimeContextMarker(message);
+  const isCarrier = (message: (typeof replayMessages)[number]) => hasRuntimeContextMarker(message);
   if (replayMessages.some(isCarrier)) {
     const anchored: typeof replayMessages = [];
-    // A canonical window is already emitted above; its checkpoint anchors an otherwise userless tail.
-    let insertionIndex = replayPlan.compactedWindow ? 0 : undefined;
+    // A checkpoint is already emitted above; it anchors an otherwise userless tail.
+    let insertionIndex = replayPlan.compactedWindow || replayPlan.compaction ? 0 : undefined;
     for (const message of replayMessages) {
       if (isCarrier(message) && insertionIndex !== undefined) {
         anchored.splice(insertionIndex++, 0, message);
         continue;
       }
       anchored.push(message);
-      if (
-        !isCarrier(message) &&
-        ("role" in message ? message.role === "user" : message.type === "compaction")
-      ) {
+      if (!isCarrier(message) && message.role === "user") {
         insertionIndex = anchored.length;
       }
     }
@@ -645,16 +652,11 @@ function convertResponsesMessagesWithStyle(
   for (const msg of replayMessages) {
     // The recovery receipt anchors only the rejected past. New output keeps its IDs.
     if (
-      "role" in msg &&
       msg.role === "assistant" &&
       replayPlan.itemRecovery &&
       readOpenAIResponsesItemRecoveryAnchor(msg.providerReplay) === replayPlan.itemRecovery.anchor
     ) {
       pastRecoveryBoundary = true;
-    }
-    if (!("role" in msg)) {
-      messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook([msg]) : [msg]));
-      continue;
     }
     recoveryAnchor =
       !pastRecoveryBoundary || (msg.role === "toolResult" && recoveredCalls?.has(msg.toolCallId))

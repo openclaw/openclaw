@@ -15,7 +15,10 @@ import {
   getOpenAIResponsesCompactionOutputError,
   isOpenAIResponsesCompactionOutput,
 } from "./openai-responses-compaction-window.js";
-import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
+import {
+  RESPONSES_SYSTEM_PROMPT,
+  type OpenAIResponsesOptions,
+} from "./openai-responses-contracts.js";
 import { supportsNativeOpenAIResponsesEndpoint } from "./openai-responses-endpoint.js";
 import {
   buildOpenAIResponsesCompactSystemMessage,
@@ -29,25 +32,32 @@ export async function postOpenAIResponsesCompaction(params: {
   request: ReturnType<typeof buildOpenAIResponsesParams>;
   options: OpenAIResponsesOptions | undefined;
 }): Promise<OpenAIResponsesCompactEndpointResult & { modelUsage: Usage }> {
+  const native = supportsNativeOpenAIResponsesEndpoint(params.model);
+  const input = params.request.input ?? [];
+  // Public OpenAI accepts `instructions`, which keeps the prompt out of the returned window
+  // (https://developers.openai.com/api/reference/resources/responses/methods/compact);
+  // a prompt carried in input would be retained and then replayed beside the current one.
+  const systemItem = native
+    ? input.find((item) => Reflect.get(item, RESPONSES_SYSTEM_PROMPT))
+    : undefined;
   const instructions =
     typeof params.request.instructions === "string" && params.request.instructions.length > 0
       ? params.request.instructions
-      : undefined;
-  // Public OpenAI accepts `instructions`, which keeps the prompt out of the returned window
-  // (https://developers.openai.com/api/reference/resources/responses/methods/compact);
-  // xAI and other compatible routes require it first in input.
+      : systemItem?.type === "message" && Array.isArray(systemItem.content)
+        ? systemItem.content
+            .flatMap((part) => (part.type === "input_text" ? [part.text] : []))
+            .join("")
+        : undefined;
+  // xAI and other compatible routes require the prompt first in input.
   const body =
-    instructions && !supportsNativeOpenAIResponsesEndpoint(params.model)
+    instructions && !native
       ? {
           model: params.request.model,
-          input: [
-            buildOpenAIResponsesCompactSystemMessage(params.model, instructions),
-            ...(params.request.input ?? []),
-          ],
+          input: [buildOpenAIResponsesCompactSystemMessage(params.model, instructions), ...input],
         }
       : {
           model: params.request.model,
-          input: params.request.input,
+          input: systemItem ? input.filter((item) => item !== systemItem) : params.request.input,
           ...(instructions ? { instructions } : {}),
         };
   const response = await params.client.post<unknown>("/responses/compact", {

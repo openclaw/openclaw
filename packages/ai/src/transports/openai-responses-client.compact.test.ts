@@ -73,11 +73,15 @@ function expectCompactBody(body: unknown) {
 
 beforeEach(() => sdkState.post.mockReset());
 
-it("keeps instructions outside the retained user/assistant window, even with fewer users than input", async () => {
+it.each([
+  ["instructions", officialOpenAIModel],
+  // Normal requests carry this prompt in input; the compact call must still keep it out.
+  ["an input item", { ...officialOpenAIModel, compat: { cachesInstructions: false } }],
+])("keeps a prompt sent as %s outside the retained window", async (_name, requestModel) => {
   const usage = { input_tokens: 8_614, output_tokens: 736, dropped_message_count: 3 };
   const output = [retainedUser, outputMessage("Retained answer."), compactionItem];
   mockCompactResponse(output, usage);
-  const result = await compact(officialOpenAIModel, context, "session-1");
+  const result = await compact(requestModel, context, "session-1");
 
   // The prompt stays out of input, so the endpoint cannot retain it in the window.
   expectCompactBody({
@@ -89,7 +93,7 @@ it("keeps instructions outside the retained user/assistant window, even with few
     item: compactionItem,
     historyMode: "retained-users",
     usage,
-    model: officialOpenAIModel,
+    model: requestModel,
     replayMetadata: {
       source: "openai-responses",
       provider: "openai",

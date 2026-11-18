@@ -74,6 +74,11 @@ export const ModelCompatSchema = z
      */
     supportsInstructions: z.boolean().optional(),
     /**
+     * Whether the model caches top-level `instructions`. Set false to send the system prompt as
+     * a cacheable input item instead. Default: true.
+     */
+    cachesInstructions: z.boolean().optional(),
+    /**
      * Whether the provider supports `stream_options: { include_usage: true }` for token usage in
      * streaming responses. Default: true.
      */
