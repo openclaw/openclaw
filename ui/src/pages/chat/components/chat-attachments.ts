@@ -169,10 +169,7 @@ function recoverDroppedTextPaste(e: ClipboardEvent, text: string) {
   }, 0);
 }
 
-export function handleChatAttachmentPaste(
-  e: ClipboardEvent,
-  props: ChatAttachmentControlsProps,
-) {
+export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
   if (!e.clipboardData || !props.onAttachmentsChange) {
     return;
   }
