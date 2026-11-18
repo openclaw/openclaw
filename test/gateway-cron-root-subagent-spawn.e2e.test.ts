@@ -20,6 +20,7 @@ it("a child spawned by a cron-root run continues and reports back after the pare
 }) => {
   const parentReturned = createDeferredCore();
   const reported = createDeferredCore();
+  const reportCommitted = createDeferredCore();
   let childRunId: string | undefined;
   const childRequests: number[] = [];
   const call = (id: string, name: string, args: object) => [
@@ -77,6 +78,16 @@ it("a child spawned by a cron-root run continues and reports back after the pare
   const client = await connectProofClient(instance, {
     role: "operator",
     scopes: ["operator.admin", "operator.read", "operator.write"],
+    onEvent: (event) => {
+      const payload = event.payload as { state?: string; message?: unknown } | undefined;
+      if (
+        event.event === "chat" &&
+        payload?.state === "final" &&
+        JSON.stringify(payload.message ?? "").includes("Worker reported.")
+      ) {
+        reportCommitted.resolve();
+      }
+    },
   });
   cleanup.push(() => disconnectGatewayClient(client));
   const runId = randomUUID();
@@ -95,4 +106,8 @@ it("a child spawned by a cron-root run continues and reports back after the pare
   ).resolves.toMatchObject({ status: "ok" });
   await withinTest(reported.promise, signal);
   expect(childRequests).toEqual([0, 1]);
+  // The report turn commits into the cron session, not just reaches the model.
+  await withinTest(reportCommitted.promise, signal);
+  const history = await client.request("chat.history", { sessionKey: params.sessionKey });
+  expect(JSON.stringify(history)).toContain("Worker reported.");
 });

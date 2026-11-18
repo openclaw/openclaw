@@ -539,7 +539,7 @@ export async function launchCronRunQueueResult(
                 }
               }
             };
-            // A cron-root caller's request fence ends with its run; the launched job keeps its own.
+            // A cron-root caller's request fence ends with its run; the launched job has its own admission.
             return runOutsideGuardedFetchRequestAuthority(() =>
               state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run(),
             );
