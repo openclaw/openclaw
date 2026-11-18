@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildBackupArchivePath } from "../infra/backup-archive-path-policy.js";
@@ -20,8 +20,8 @@ import { backupVerifyCommand, verifyBackupArchive } from "./backup-verify.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
-vi.mock("tar", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("tar")>();
+vi.mock("tar/raw", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("tar/raw")>();
   return { ...actual, t: vi.fn(actual.t), x: vi.fn(actual.x) };
 });
 

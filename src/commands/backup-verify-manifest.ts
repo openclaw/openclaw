@@ -4,7 +4,7 @@ import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import * as tar from "tar";
+import * as tar from "tar/raw";
 import { z } from "zod";
 import {
   isArchivePathWithin,
