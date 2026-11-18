@@ -508,6 +508,48 @@ it.each([
   },
 );
 
+it.each([false, true])(
+  "binds records-only publication to the planned config link (link re-pointed=%s)",
+  async (repointed) => {
+    await withOpenClawTestState({ label: "updater-records-only-link" }, async (state) => {
+      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+      // A provisioned config behind a link, read for write as the update plans it.
+      const managed = state.path("managed-config");
+      await fs.mkdir(managed);
+      await fs.rename(state.configPath, `${managed}/openclaw.json`);
+      await fs.writeFile(`${managed}/other.json`, JSON.stringify({ gateway: { port: 19003 } }));
+      await fs.symlink(`${managed}/openclaw.json`, state.configPath);
+      const planned = await readConfigFileSnapshotForWrite();
+      mocks.convergence.mockImplementationOnce(async ({ cfg }) => {
+        if (repointed) {
+          // The provisioner re-points the link to another valid config mid-update.
+          await fs.rm(state.configPath);
+          await fs.symlink(`${managed}/other.json`, state.configPath);
+        }
+        return {
+          ...convergenceResult(cfg),
+          changes: ["Installed fixture next."],
+          installRecords: { next: { source: "archive" } },
+        };
+      });
+      const update = updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configSnapshot: planned.snapshot,
+        configChanged: false,
+        configWriteOptions: planned.writeOptions,
+      });
+      if (repointed) {
+        await expect(update).rejects.toThrow("config target changed since last load");
+      } else {
+        await expect(update).resolves.toMatchObject({ status: "ok", changed: true });
+      }
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual(repointed ? {} : { next: { source: "archive" } });
+    });
+  },
+);
+
 it.each([
   { edit: "a valid unrelated setting", invalid: false },
   { edit: "an invalid value", invalid: true },

@@ -24,16 +24,20 @@ export async function publishPluginRecordsWithoutConfigWrite(params: {
   nextConfig: OpenClawConfig;
   /** The pending generation every other update read uses; without it such config reads invalid. */
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  /** The planned config target; a re-pointed link must not receive these records. */
+  assertConfigPathForWrite?: () => void;
   assertCurrent: () => void;
   beforeCommit: () => Promise<void>;
 }): Promise<boolean> {
   const readUnchanged = async () => {
+    params.assertConfigPathForWrite?.();
     const snapshot = await readConfigFileSnapshot({
       observe: false,
       skipPluginValidation: true,
       suppressFutureVersionWarning: true,
       deferredPluginMigrations: params.deferredPluginMigrations,
     });
+    params.assertConfigPathForWrite?.();
     params.assertCurrent();
     return snapshot.valid ? snapshot : undefined;
   };

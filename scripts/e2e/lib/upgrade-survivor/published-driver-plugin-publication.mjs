@@ -264,6 +264,22 @@ async function observe(label, port, token, commandEnv) {
   return facts;
 }
 
+/** History must be readable and name this update's own run, with nothing left owed. */
+function assertRecorded(facts, updateRun, status) {
+  const history = facts.updateStatus;
+  assert(history && !("runStatusError" in history), "Update history is readable");
+  assert.equal(history.lastRun?.runId, updateRun?.runId, "Status reports this update's run");
+  assert.equal(history.lastRun?.status, status);
+  assert.deepEqual(history.owedSteps ?? [], [], "Nothing is owed");
+  assert.deepEqual(
+    (history.lastRun?.steps ?? []).filter(
+      (step) => step.step.startsWith("finalize:owed:") && step.status === "skipped",
+    ),
+    [],
+    "The run holds no owed step",
+  );
+}
+
 function assertConverged(facts, target, lagging) {
   assert.equal(facts.coreVersion, target);
   assert.equal(facts.servingVersion, target, "Gateway serves the updated core");
@@ -274,8 +290,6 @@ function assertConverged(facts, target, lagging) {
     assert.deepEqual(facts.plugins[id], { version: expected, diskVersion: expected }, id);
     assert.deepEqual(facts.loaded[id], { version: expected, status: "loaded" }, id);
   }
-  assert.notEqual(facts.updateStatus?.lastRun?.status, "failed", "No failed update record");
-  assert.deepEqual(facts.updateStatus?.owedSteps ?? [], [], "Nothing is owed");
 }
 
 const registries = [];
@@ -313,27 +327,40 @@ try {
     0,
   );
   assert.equal(await run("seed-doctor", "openclaw", ["doctor", "--fix", "--non-interactive"]), 0);
+  // The published plugin packages that match the driver. Installs use unqualified specs, as a
+  // user would, so the update may move them; a baseline registry pins what `latest` means.
+  const fixtures = path.join(runtime, "fixtures");
+  fs.mkdirSync(fixtures, { recursive: true });
+  const baseline = plugins.flatMap((spec) => [
+    spec,
+    driverVersion,
+    npmPack(`${spec}@${driverVersion}`, path.join(fixtures, "published")),
+  ]);
+  const baselineRegistry = await startRegistry("baseline", baseline, `latest=${driverVersion}`);
+  registries.push(baselineRegistry);
   for (const spec of plugins) {
     const id = spec.split("/")[1];
     assert.equal(
-      await run(`plugin-install-${id}`, "openclaw", ["plugins", "install", `npm:${spec}`]),
+      await run(
+        `plugin-install-${id}`,
+        "openclaw",
+        ["plugins", "install", `npm:${spec}`],
+        registryEnv(baselineRegistry.url),
+      ),
       0,
     );
   }
+  await baselineRegistry.stop();
+  registries.pop();
   assert.equal(await run("install-service", "openclaw", ["gateway", "install", "--force"]), 0);
 
   // A future core cut from the candidate, and the same future version of each plugin.
-  const fixtures = path.join(runtime, "fixtures");
-  fs.mkdirSync(fixtures, { recursive: true });
   const core = path.join(fixtures, "openclaw-core.tgz");
   const target = packFirstHopUpdateFixture(candidate, core, 0).targetVersion;
-  const futures = plugins.flatMap((spec) => [
+  const futures = plugins.flatMap((spec, index) => [
     spec,
     target,
-    futurePlugin(
-      npmPack(`${spec}@${driverVersion}`, path.join(fixtures, "published")),
-      path.join(fixtures, `${spec.split("/")[1]}-future.tgz`),
-    ),
+    futurePlugin(baseline[index * 3 + 2], path.join(fixtures, `${spec.split("/")[1]}-future.tgz`)),
   ]);
   // The corrupt fault serves a truncated target for one plugin on the first update only.
   const served = futures.map((entry, index) => {
@@ -385,6 +412,7 @@ try {
     assert.equal(fs.readFileSync(configPath, "utf8"), configBefore);
   }
   assertConverged(afterFirst, target, fault === "corrupt-plugin" ? corruptPlugin : undefined);
+  assertRecorded(afterFirst, first.run, "succeeded");
   await firstRegistry.stop();
   registries.pop();
 
@@ -404,7 +432,12 @@ try {
     result: parseJsonOutput("retry-update"),
   });
   assert.equal(retryExit, 0, "The next update succeeds");
-  assertConverged(await observe("after-retry", port, token, retryEnv), target, undefined);
+  const afterRetry = await observe("after-retry", port, token, retryEnv);
+  assertConverged(afterRetry, target, undefined);
+  const retried = parseJsonOutput("retry-update");
+  // The next update has no newer core: already current, or a recorded success.
+  assertRecorded(afterRetry, retried?.run, retried?.run?.status);
+  assert(["skipped", "succeeded"].includes(retried?.run?.status), "The next update is clean");
   log("plugin publication cell passed");
 } catch (error) {
   failure = error;

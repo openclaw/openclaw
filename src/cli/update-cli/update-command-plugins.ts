@@ -566,6 +566,7 @@ async function updatePluginsAfterCoreUpdateWithLease(
         nextInstallRecords,
         nextConfig,
         deferredPluginMigrations: params.configWriteOptions.deferredPluginMigrations,
+        assertConfigPathForWrite: params.configWriteOptions.assertConfigPathForWrite,
         assertCurrent,
         beforeCommit,
       }));
