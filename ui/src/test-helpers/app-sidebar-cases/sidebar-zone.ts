@@ -223,7 +223,6 @@ it("keeps Pages flat and rail pins independently ordered", async () => {
   // A child's page shows the parent's sidebar: the parent, then each child, the open one current.
   sidebar.activeRouteId = "plugin";
   sidebar.activePluginTabId = "example/notes";
-  onTestFinished(() => context.router.stop());
   await context.router.navigate("plugin", context, undefined, {
     pathname: "/plugin",
     search: "?plugin=example&id=notes",
