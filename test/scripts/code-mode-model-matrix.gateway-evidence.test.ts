@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { expectDefined } from "@openclaw/normalization-core";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -18,7 +19,13 @@ import {
   runCodeModeModelMatrix,
   type CodeModeMatrixCellResult,
 } from "../../scripts/code-mode-model-matrix.js";
-import { createGatewayMatrixWorkload } from "../../scripts/lib/code-mode-matrix-gateway.js";
+import { compareCodeModeMatrixResults } from "../../scripts/lib/code-mode-matrix-comparison.js";
+import * as gatewayFixtures from "../../scripts/lib/code-mode-matrix-gateway-fixtures.js";
+import {
+  collectGatewayMatrixTrace,
+  createGatewayMatrixWorkload,
+  requireGatewayMatrixTools,
+} from "../../scripts/lib/code-mode-matrix-gateway.js";
 import {
   BUILD_STAMP_FILE,
   RUNTIME_POSTBUILD_STAMP_FILE,
@@ -334,5 +341,322 @@ it.each([
     expect(rows.map(({ executor: selected, workload }) => [selected, workload])).toEqual(
       baselineRows.slice(0, calls).map(({ workload }) => [executor, workload]),
     );
+  },
+);
+
+it("compares only complete, unique cells with the same workload identity", () => {
+  const baseline = {
+    id: "fixture-code-inventory-1",
+    model: "openai/fixture",
+    mode: "code",
+    task: "inventory-join",
+    repetition: 1,
+    passed: true,
+    gitSha: "baseline",
+    elapsedMs: 10,
+    workload: createGatewayMatrixWorkload("inventory-join", 1, "off", 10, "node"),
+  };
+  const candidate = { ...baseline, gitSha: "candidate", elapsedMs: 8 };
+  expect(compareCodeModeMatrixResults([baseline], [candidate])).toMatchObject({
+    total: 1,
+    cells: [{ baselineSha: "baseline", candidateSha: "candidate", bothPassed: true }],
+  });
+  expect(() => compareCodeModeMatrixResults([baseline, baseline], [candidate])).toThrow(
+    "Duplicate comparison cell",
+  );
+  expect(() => compareCodeModeMatrixResults([baseline], [candidate, candidate])).toThrow(
+    "Duplicate comparison cell",
+  );
+  expect(() => compareCodeModeMatrixResults([baseline], [])).toThrow("same model/mode/task");
+  expect(() =>
+    compareCodeModeMatrixResults([baseline], [{ ...candidate, workload: undefined }]),
+  ).toThrow("fixed workload fingerprints");
+  for (const workload of [
+    { ...candidate.workload, promptSha256: "different-prompt" },
+    { ...candidate.workload, fixtureSha256: "different-fixture" },
+    {
+      ...candidate.workload,
+      settings: { ...candidate.workload.settings, timeoutSeconds: 11 },
+    },
+  ]) {
+    expect(() => compareCodeModeMatrixResults([baseline], [{ ...candidate, workload }])).toThrow(
+      "workload changed",
+    );
+  }
+});
+
+it("includes the exact process-helper bytes in the fixed workload fingerprint", () => {
+  const fixture = gatewayFixtures.createGatewayMatrixFixture("process-contracts", 1);
+  const firstHelper = {
+    ...fixture,
+    processHelperSource: 'console.log("probe"); setTimeout(() => {}, 2000);\n',
+  };
+  const secondHelper = {
+    ...fixture,
+    processHelperSource: 'console.log("probe"); setTimeout(() => {}, 3000);\n',
+  };
+  const spy = vi.spyOn(gatewayFixtures, "createGatewayMatrixFixture");
+  try {
+    spy.mockReturnValue(firstHelper);
+    const baseline = createGatewayMatrixWorkload("process-contracts", 1, "off", 120);
+    spy.mockReturnValue(secondHelper);
+    const candidate = createGatewayMatrixWorkload("process-contracts", 1, "off", 120);
+    expect(candidate.promptSha256).toBe(baseline.promptSha256);
+    expect(candidate.settings).toEqual(baseline.settings);
+    expect(candidate.fixtureSha256).not.toBe(baseline.fixtureSha256);
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it("counts one underlying shell outcome through direct exec with error=true", () => {
+  const input = { command: "node ./process-probe.mjs" };
+  const result = { status: "failed", exitCode: 1, aggregated: "synthetic process failure" };
+  const trace = collectGatewayMatrixTrace([
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "invoke", name: "exec", arguments: input }],
+      },
+    },
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolCallId: "invoke",
+        toolName: "exec",
+        isError: true,
+        details: result,
+        content: [{ type: "text", text: JSON.stringify(result) }],
+      },
+    },
+  ]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "exec", input, result, isError: true, eventIndex: 1 }),
+  ]);
+  expect(trace.activities[0]?.parentId).toBeUndefined();
+  expect(trace.calls.map((call) => call.name)).toEqual(["exec"]);
+  expect(trace.outcomes.map((outcome) => outcome.name)).toEqual(["exec"]);
+});
+
+const TASK_DELTAS = {
+  taskElapsedMs: -2000,
+  assistantTurns: null,
+  upstreamCalls: 0,
+  inputTokens: null,
+  outputTokens: null,
+  costUsd: null,
+};
+
+function comparisonRow(includeOutcomes = false) {
+  return {
+    id: "invoice-code-r1",
+    task: "invoices-auto-retention",
+    model: "openai/gpt-5.6-sol",
+    mode: "code",
+    repetition: 1,
+    gitSha: "baseline-sha",
+    passed: true,
+    elapsedMs: 20000,
+    oracle: includeOutcomes ? { identity: true } : undefined,
+    workload: {
+      promptSha256: "fixed-prompt",
+      fixtureSha256: "fixed-fixture",
+      settings: { executor: "node", thinking: "off", timeoutSeconds: 120 },
+    },
+    gateway: {
+      upstreamCalls: 1,
+      taskElapsedMs: 10000,
+      ...(includeOutcomes
+        ? {
+            traceAvailable: true,
+            behavior: { answer: true, complete: true },
+            interview: {
+              traceAvailable: true,
+              checks: { answered: true, priorReferenceUnavailable: true },
+            },
+          }
+        : {}),
+    },
+  };
+}
+
+it("compares task time separately from startup and leaves unobserved metrics null", () => {
+  const baseline = comparisonRow();
+  const candidate = { ...comparisonRow(), gitSha: "candidate-sha", elapsedMs: 30000 };
+  candidate.gateway.taskElapsedMs = 8000;
+  const compared = compareCodeModeMatrixResults([baseline], [candidate]);
+  expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toEqual(TASK_DELTAS);
+});
+
+it("separates interview failure from the other outcome", () => {
+  const baseline = comparisonRow(true);
+  const candidate = comparisonRow(true);
+  candidate.passed = false;
+  candidate.gateway.taskElapsedMs = 8000;
+  expectDefined(candidate.gateway.interview, "interview").checks.priorReferenceUnavailable = false;
+  const compared = compareCodeModeMatrixResults([baseline], [candidate]);
+  const cell = expectDefined(compared.cells[0], "paired outcome comparison");
+  expect(cell).toMatchObject({
+    baselinePassed: true,
+    candidatePassed: false,
+    bothPassed: false,
+    deltas: null,
+  });
+  expect(cell.taskBehavior).toEqual({
+    baselinePassed: true,
+    candidatePassed: true,
+    bothPassed: true,
+    modelsMatched: true,
+    deltas: TASK_DELTAS,
+  });
+  expect(cell.interviewConsistency).toEqual({ baselinePassed: true, candidatePassed: false });
+  expect(compared).toMatchObject({ baselinePassed: 1, candidatePassed: 0 });
+  expect(compared.outcomes).toEqual({
+    taskBehavior: {
+      baseline: { passed: 1, failed: 0, unavailable: 0 },
+      candidate: { passed: 1, failed: 0, unavailable: 0 },
+    },
+    interviewConsistency: {
+      baseline: { passed: 1, failed: 0, unavailable: 0 },
+      candidate: { passed: 0, failed: 1, unavailable: 0 },
+    },
+  });
+});
+
+it.each([
+  { label: "zero placeholders", input: 0, output: 0, known: "none" },
+  { label: "provisional counters", input: 20, output: 3, known: "none" },
+  { label: "known then unavailable", input: 20, output: 3, known: "before" },
+  { label: "unavailable then known", input: 20, output: 3, known: "after" },
+])("does not qualify $label as measured savings", ({ input, output, known }) => {
+  const observed = matrixUsageEvent({
+    input: 100,
+    output: 10,
+    totalTokens: 110,
+    cost: { total: 0.002 },
+    usageReport: { state: "available" },
+  });
+  expect(collectGatewayMatrixTrace([observed])).toMatchObject({
+    usage: { input: 100, output: 10, total: 110 },
+    costUsd: 0.002,
+  });
+  const unavailable = matrixUsageEvent({
+    input,
+    output,
+    totalTokens: input + output,
+    cost: { total: 0.5 },
+    usageReport: { state: "unavailable" },
+  });
+  unavailable.message.content.push({
+    type: "toolCall",
+    id: "unavailable",
+    name: "exec",
+    arguments: { code: "return await matrix_read({});" },
+  });
+  const trace = collectGatewayMatrixTrace([
+    ...(known === "before" ? [observed] : []),
+    unavailable,
+    {
+      customType: "openclaw.nested-tool.v1",
+      details: {
+        parentToolCallId: "unavailable",
+        toolName: "matrix_read",
+        input: {},
+        result: { content: [], details: { value: 1 } },
+        isError: false,
+      },
+    },
+    {
+      message: {
+        role: "toolResult",
+        toolCallId: "unavailable",
+        toolName: "exec",
+        details: { status: "completed", value: 1 },
+      },
+    },
+    ...(known === "after" ? [observed] : []),
+  ]);
+  expect(trace.calls).toMatchObject([{ id: "unavailable", name: "exec" }]);
+  expect(trace.outcomes).toMatchObject([
+    { id: "unavailable", details: { status: "completed", value: 1 } },
+  ]);
+  expect(trace.activities).toEqual([
+    expect.objectContaining({ name: "matrix_read", result: { value: 1 } }),
+  ]);
+  expect(trace.usage).toBeUndefined();
+  expect(trace.costUsd).toBeUndefined();
+  const compared = compareCodeModeMatrixResults(
+    [{ ...comparisonRow(), usage: { input: 100, output: 10 }, costUsd: 0.002 }],
+    [{ ...comparisonRow(), gitSha: "candidate-sha", usage: trace.usage, costUsd: trace.costUsd }],
+  );
+  expect(expectDefined(compared.cells[0], "paired comparison cell").deltas).toMatchObject({
+    inputTokens: null,
+    outputTokens: null,
+    costUsd: null,
+  });
+});
+
+function matrixUsageEvent(usage?: Record<string, unknown>) {
+  return {
+    message: {
+      role: "assistant",
+      provider: "openai",
+      model: "fixture",
+      usage,
+      content: [] as { type: string; id: string; name: string; arguments: { code: string } }[],
+    },
+  };
+}
+
+it("does not turn missing usage or cost observations into zero-valued measurements", () => {
+  const observed = matrixUsageEvent({
+    input: 100,
+    output: 10,
+    totalTokens: 110,
+    cost: { total: 0.002 },
+  });
+  expect(collectGatewayMatrixTrace([observed])).toMatchObject({
+    usage: { input: 100, output: 10, total: 110 },
+    costUsd: 0.002,
+  });
+  const incomplete = collectGatewayMatrixTrace([observed, matrixUsageEvent()]);
+  expect(incomplete.usage).toBeUndefined();
+  expect(incomplete.costUsd).toBeUndefined();
+});
+
+it("retains genuinely measured zero usage and cost", () => {
+  const trace = collectGatewayMatrixTrace([
+    matrixUsageEvent({
+      input: 0,
+      output: 0,
+      totalTokens: 0,
+      cost: { total: 0, totalOrigin: "provider-billed" },
+      usageReport: { state: "available" },
+    }),
+  ]);
+  expect(trace.usage).toEqual({ input: 0, output: 0, total: 0 });
+  expect(trace.costUsd).toBe(0);
+});
+
+it.each(["registered", "wrong-plugin"] as const)(
+  "requires the fixture's registered capability: %s",
+  (registration) => {
+    const required = ["exec", "matrix_invoice_export"];
+    const tools = [
+      { id: "exec", source: "core" },
+      {
+        id: "matrix_invoice_export",
+        source: "plugin",
+        pluginId: registration === "registered" ? "code-mode-matrix-fixture" : "unrelated-plugin",
+      },
+    ];
+    const check = () => requireGatewayMatrixTools({ groups: [{ tools }] }, required);
+    if (registration === "registered") {
+      expect(check()).toEqual(required);
+    } else {
+      expect(check).toThrow("preflight failed before model call: matrix_invoice_export");
+    }
   },
 );

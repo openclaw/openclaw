@@ -1,7 +1,10 @@
 import { StatementSync } from "node:sqlite";
 import { expect } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { preparePersonalProfileAction } from "./personal-profile-authorization.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -30,15 +33,29 @@ export async function expectReceiptBackedPersonalGitHubAuthority(options: {
     action.assertCurrent();
     expect(reads.queries).toEqual([]);
 
+    options.disconnect();
+    expect(() => action.assertCurrent()).not.toThrow();
+    await expect(preparePersonalProfileAction(options)).rejects.toThrow(
+      "current authenticated human",
+    );
+    expect(reads.queries).toEqual([]);
+
     options.merge();
     reads.queries.length = 0;
     expect(() => action.assertCurrent()).toThrow("Personal profile owner changed");
     expect(reads.queries).toEqual([]);
-
-    options.disconnect();
-    expect(() => action.assertCurrent()).toThrow("current authenticated human");
-    expect(reads.queries).toEqual([]);
   } finally {
     reads.restore();
   }
+}
+
+export function blockPersonalGitHubProfile(config: OpenClawConfig, owner: string) {
+  config.gateway = {
+    roles: {
+      definitions: { blocked: { scopes: [], agents: [], sessions: { others: "none" } } },
+      default: "blocked",
+    },
+  };
+  setUserProfileRole(owner, "blocked");
+  invalidateOperatorRolePolicy(owner);
 }
