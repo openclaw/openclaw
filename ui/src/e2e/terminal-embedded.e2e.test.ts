@@ -51,7 +51,7 @@ suite.define(() => {
           JSON.parse(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null")
             ?.buildId === "replacement-build",
       );
-      await page.getByText("Server updated", { exact: true }).waitFor();
+      await page.getByText("OpenClaw was updated", { exact: true }).waitFor();
 
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       expect(await page.locator("openclaw-terminal-panel").count()).toBe(0);

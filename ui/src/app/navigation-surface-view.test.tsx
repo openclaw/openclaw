@@ -35,7 +35,7 @@ describe("OpenClaw shell update affordance", () => {
     await vi.waitFor(() =>
       expect(
         view.container.querySelector(".refresh-notice__surface")?.getAttribute("aria-label"),
-      ).toContain("Refresh for full capabilities"),
+      ).toContain("Reload to get the latest version."),
     );
     const card = view.container.querySelector("openclaw-sidebar-update-card");
     card!.querySelector<HTMLButtonElement>(".refresh-notice__surface")!.click();
