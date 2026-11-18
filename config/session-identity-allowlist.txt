@@ -277,7 +277,6 @@ src/agents/auth-profiles/oauth-refresh-peers.ts	1
 src/agents/auth-profiles/runtime-read.ts	3
 src/agents/auth-profiles/store-update.ts	2
 src/agents/auth-profiles/usage-write.ts	1
-src/agents/bash-process-durable-notify.ts	4
 src/agents/bash-tools.exec-approval-followup-state.ts	2
 src/agents/bash-tools.exec-approval-followup.ts	18
 src/agents/bash-tools.exec-approval-output.ts	1

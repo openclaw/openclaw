@@ -35,6 +35,18 @@ writers close. Already accepted transcript writes still drain. A provider that
 ignores cancellation stops blocking the stream consumer after this grace, but
 unsettled underlying work remains retained until it actually closes.
 
+A supervisor can end resume at a boundary it chooses by setting
+`OPENCLAW_GATEWAY_RESTART_RESUME_SCOPE` to an opaque token, for example one per
+deployment. Shutdown records the token with each marker, and startup resumes only
+markers recorded under the same token. When the supervisor stops work on purpose
+and starts the next Gateway with a different token, the stopped work does not run
+again: its marker is cleared, the session's queued input ends without running (its
+sender sees that the Gateway restarted before it ran), and the startup summary
+counts the session as `scope-changed`. When a token is set, a marker without one
+counts as another scope's. Without the variable, every graceful restart resumes as
+described above. The scope covers shutdown markers only: crash recovery of unmarked
+runs and of queued input does not consult it.
+
 The recovery input stays intact in the agent transcript but is hidden from the
 Control UI chat feed, including queued, live, and reloaded history. The continued
 answer remains visible as its own turn. This is not the separate update outcome

@@ -142,6 +142,42 @@ describe("cron creator authority grants", () => {
     ).toBe(false);
   });
 
+  it("does not infer external origin from scoped creation authority", () => {
+    const scope = createScope(
+      "scoped-external",
+      { kind: "external", channel: "discord" },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    const grant = mint(scope, undefined, undefined, undefined, "requester");
+    expect(provenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerScopedCreation: true,
+    });
+  });
+
+  it("records a channel owner's external origin without granting runtime authority", () => {
+    let current = true;
+    const scope = createScope(
+      "telegram-owner",
+      { kind: "external", channel: "telegram" },
+      { source: "channel-owner", isCurrent: () => current },
+    );
+    const grant = mint(scope, undefined, undefined, undefined, "requester");
+    expect(provenance(grant, scope.runId)).toEqual({
+      capturesRuntimeAuthority: false,
+      callerOrigin: { kind: "external", channel: "telegram" },
+    });
+    expect(consume(grant).authority).toBeUndefined();
+    current = false;
+    expect(() => mint(scope, undefined, undefined, undefined, "requester")).toThrow(
+      "no longer active",
+    );
+  });
+
   it("rejects run substitution and transports private runtime authority only once", () => {
     const scope = createScope("run-authority");
     const runtimeAuthority = {

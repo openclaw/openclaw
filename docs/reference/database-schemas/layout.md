@@ -266,6 +266,12 @@ and the ordered manifest hash; each child records its sequence range, counts,
 file hash, and sizes. Backups embed each chunk in its own blob. Parents without
 children keep the original single-file representation.
 
+Interrupted file-archive cleanup is discovered incrementally: each maintenance
+pass examines at most 128 archive records and 65,536 transcript rows, resuming by
+session ID and event sequence. Discovery wraps after the final archive; restarting
+the process resets its position. Newly archived transcripts are cleaned immediately.
+Cleanup still commits in batches of at most 256 rows and yields between batches.
+
 The default archive directory is
 `~/.openclaw/agents/<agentId>/sessions/cold/`, with filenames
 `<sha256>.jsonl.zst`. A database in a directory named `agent` uses its sibling
@@ -483,6 +489,18 @@ write failures warn once per driver run and do not abort commands or finalizatio
 step and outcome writes retain their existing failure behavior. Encoding
 reserves space for exact identity bytes before bounding and redacting other
 origin diagnostics.
+
+An update of a source checkout that replaces the checkout's build in place
+records optional `origin.gitActivation` in the same `origin_json` column, before
+it reserves its plugin recovery: `sha` (the activated commit), `buildId` (the
+activated build) and `previousBuildId` (the build it replaced, or `null`). The
+next `openclaw update` reads it only for a killed run and only together with the
+checkout on disk; it never grants execution authority. It is an exact retained
+receipt like the driver identities: when the origin outgrows its byte budget,
+driver `namespace` values are dropped first and the activation stays exact.
+Public history projections omit it. This is
+additive JSON metadata with no new columns, tables, or schema versions; older
+readers drop the key, and runs without it keep the earlier behavior.
 
 The ledger owns abandonment classification and terminalization. Automatic
 recovery requires more than 30 minutes since both `updated_at_ms` and the latest

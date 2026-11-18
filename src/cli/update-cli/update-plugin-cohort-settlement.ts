@@ -20,7 +20,10 @@ import {
 } from "../../infra/state-lease-process-owner.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
-import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import {
+  readBuiltGatewayBuildId,
+  verifyGitUpdateRecovery,
+} from "../../infra/update-git-runtime.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
@@ -50,7 +53,9 @@ import {
   UpdateRecoveryRequiredError,
 } from "../../infra/update-run-recovery.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
+import { gitCleanCheckArgs } from "../../infra/update-runner-git-commands.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -85,6 +90,49 @@ function hasPackageRecoveryAuthority(installKey: string): boolean {
   } catch {
     return true;
   }
+}
+
+/**
+ * A checkout's version cannot show whether a killed update had replaced its build,
+ * so its cohort settles like a package's only while the checkout still holds exactly
+ * the build that update recorded activating: that commit, no local changes, and a
+ * build made from it with that build ID. Returns why not, or undefined.
+ */
+async function inspectGitActivation(
+  root: string,
+  run: UpdateRunRecord,
+  { from, to }: PluginCohortRecoveryPair["reservation"],
+  timeoutMs: number,
+): Promise<string | undefined> {
+  const activation = run.origin.gitActivation;
+  if (!activation) {
+    return " that did not record which build it activated";
+  }
+  if (activation.buildId !== to.buildId || activation.previousBuildId !== from.buildId) {
+    return " whose recorded build does not match its plugin recovery";
+  }
+  // Read-only probes must not refresh the checkout's index.
+  const git = (argv: string[]) =>
+    runCommandWithTimeout(argv, { cwd: root, timeoutMs, env: { GIT_OPTIONAL_LOCKS: "0" } });
+  const head = await git(["git", "-C", root, "rev-parse", "HEAD"]);
+  if (head.code !== 0 || head.stdout.trim() !== activation.sha) {
+    return ", and the checkout is no longer at the commit that update activated";
+  }
+  // The updater's own clean check, showing untracked files whatever the local config says.
+  const clean = gitCleanCheckArgs(root);
+  clean.splice(clean.indexOf("--porcelain") + 1, 0, "--untracked-files=normal");
+  const status = await git(clean);
+  if (status.code !== 0 || status.stdout.trim()) {
+    return ", and the checkout has local changes";
+  }
+  // The check the updater itself trusts before restarting a checkout's Gateway.
+  const build = await verifyGitUpdateRecovery({ root, sha: activation.sha });
+  if (!build.serviceRestartSafe) {
+    return ", and its build is missing, incomplete or not built from the checked-out commit";
+  }
+  return build.buildId === activation.buildId
+    ? undefined
+    : ", and its build is not the one that update activated";
 }
 
 /**
@@ -333,10 +381,8 @@ export async function inspectInterruptedUpdateRecovery(
         : undefined;
     };
     /** What the installation and update history say; read again under the claim. */
-    const inspectHistory = () => {
-      if (installKind !== "package") {
-        // A checkout can hold the new sources under the old version and build identity,
-        // so nothing here shows whether that update had replaced the installed core.
+    const inspectHistory = async () => {
+      if (installKind !== "package" && installKind !== "git") {
         return refuse("It was left by an update of a source checkout.");
       }
       if (resolveUpdateInstallRoot(pair.cohort.installKey) !== installKey) {
@@ -362,6 +408,13 @@ export async function inspectInterruptedUpdateRecovery(
           `Wait for it to finish; if it has stopped, run ${repair}, then retry ${update}.`,
         );
       }
+      const checkout =
+        installKind === "git"
+          ? await inspectGitActivation(root, run, pair.reservation, options.busyTimeoutMs)
+          : undefined;
+      if (checkout) {
+        return refuse(`It was left by an update of a source checkout${checkout}.`);
+      }
       if (findUpdateGatewayStop([run])?.started !== false) {
         return run;
       }
@@ -373,7 +426,7 @@ export async function inspectInterruptedUpdateRecovery(
           )
         : (refuseOtherRecovery() ?? run);
     };
-    const history = inspectHistory();
+    const history = await inspectHistory();
     if (history instanceof Error) {
       return { pair, refuse, inspectHistory, refuseOtherRecovery, refused: history };
     }
@@ -456,7 +509,7 @@ export async function inspectInterruptedUpdateRecovery(
           // Another command settled it between the inspection and this claim.
           return "settled" as const;
         }
-        const history = inspectHistory();
+        const history = await inspectHistory();
         if (history instanceof Error) {
           throw history;
         }

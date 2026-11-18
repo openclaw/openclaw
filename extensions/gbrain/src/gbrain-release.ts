@@ -53,7 +53,7 @@ async function getJson(url: string): Promise<Record<string, unknown> | undefined
 }
 
 /** True when an attestation bundle binds `digest` to `asset` and GBrain's release workflow. */
-export function attestsGbrainRelease(bundle: unknown, asset: string, digest: string): boolean {
+function attestsGbrainRelease(bundle: unknown, asset: string, digest: string): boolean {
   const payload = asOptionalRecord(asOptionalRecord(bundle)?.dsseEnvelope)?.payload;
   if (typeof payload !== "string") {
     return false;

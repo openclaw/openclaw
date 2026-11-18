@@ -518,8 +518,13 @@ canonical-main admission, protected environments, commands, and 120-minute deadl
 Plugin Prerelease prepares hourly extension jobs for the repository-wide Boat
 backend. Its manifest translates the resolved physical two-CPU Blacksmith class
 to `boat` (four CPUs, 8 GiB) and the four-CPU class to `boat-large` (eight CPUs,
-16 GiB). Logical planner labels and test concurrency stay unchanged. Manual
-dispatches retain their existing `ubuntu-24.04` override; runner groups, coverage,
+16 GiB). Canonical scheduled first attempts use the same account start budget
+as ordinary CI: at most 20 jobs per run, with daily, hourly, and minute headroom.
+Missing or unavailable limits select no Boat jobs. Overflow retains the resolved
+Blacksmith class; inactive matrices consume no allowance. This is a snapshot,
+not an atomic reservation across concurrent workflows. Logical planner labels
+and test concurrency stay unchanged. Manual dispatches and retries use
+`ubuntu-24.04`; runner groups, coverage,
 runtime policies, artifact identities and deadlines are unchanged.
 
 ### Boat build qualification

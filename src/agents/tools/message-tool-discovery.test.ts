@@ -41,9 +41,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import {
   buildMessageToolDescription,
-  buildMessageToolSchema,
   hasMessageToolSourceConversation,
-  resolveMessageToolActionSchemaActions,
   resolveEffectiveCurrentChannelContextForRequest,
   resolveMessageToolDiscoveryAsync,
   resolveMessageToolDiscovery,
@@ -80,8 +78,7 @@ function catalog(channels: PreparedMessageToolCatalog["channels"]): PreparedMess
   return { version: 1, channels, getChannel: (id) => channels.find((entry) => entry.id === id) };
 }
 function discover(params: MessageToolDiscoveryParams) {
-  const actions = resolveMessageToolActionSchemaActions(params);
-  const schema = buildMessageToolSchema(params, actions);
+  const { actions, schema } = resolveMessageToolDiscovery(params);
   return {
     actions,
     schema,
