@@ -344,6 +344,7 @@ export async function prepareBoundGitHubPublication(params: {
         pullRequest: inspected.result,
         identity: await params.refreshIdentity(),
         assertCurrent,
+        requirePublicRepositories: inspected.requirePublicRepositories,
       });
     }
     assertCurrent();

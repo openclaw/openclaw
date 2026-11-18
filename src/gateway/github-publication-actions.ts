@@ -271,6 +271,7 @@ export async function performSessionGitHubAction(options: Options): Promise<void
         pullRequest: inspection.result,
         identity,
         assertCurrent,
+        requirePublicRepositories: inspection.requirePublicRepositories,
       });
       assertCurrent();
       return pullRequestState(current, pullRequest, binding, inspection.result.author.accountId);

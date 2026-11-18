@@ -68,6 +68,7 @@ export async function fixture(
     unpublishedProjectWork?: boolean;
     baseBranch?: string;
     projectFork?: boolean;
+    linked?: boolean;
   } = {},
 ) {
   const original = { ...mocks.findWorktree("session", "unused"), id: randomUUID() };
@@ -85,10 +86,12 @@ export async function fixture(
     expect(priorPublication.status).toBe("published");
     f.externalWrites.length = 0;
   }
-  await syncCanonicalGitHubIdentity({
-    identity: { accountId: 101, login: "contributor" },
-    authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
-  });
+  if (options.linked !== false) {
+    await syncCanonicalGitHubIdentity({
+      identity: { accountId: 101, login: "contributor" },
+      authenticationAlias: { kind: "email", email: "publication-guest@example.test" },
+    });
+  }
   const upstream = path.join(path.dirname(local.cwd), "upstream");
   const upstreamGit = (...args: string[]) => local.git("-C", upstream, ...args);
   const commitUpstream = async (message: string, files: Record<string, string>) => {
