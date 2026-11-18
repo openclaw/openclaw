@@ -85,3 +85,15 @@ export {
 } from "../gateway/channel-status-patches.js";
 
 export { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
+
+export type { GatewayPublicationReaderV1 } from "../gateway/publication-reader.js";
+
+/** Attest a closed publication-reader device without impersonating a human profile. */
+export async function prepareGatewayPublicationReaderV1(
+  ...args: Parameters<
+    typeof import("../gateway/publication-reader.js").prepareGatewayPublicationReaderV1
+  >
+): Promise<import("../gateway/publication-reader.js").GatewayPublicationReaderV1> {
+  const runtime = await import("../gateway/publication-reader.js");
+  return runtime.prepareGatewayPublicationReaderV1(...args);
+}
