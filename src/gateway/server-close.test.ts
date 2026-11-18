@@ -249,7 +249,9 @@ describe("createGatewayCloseHandler", () => {
         // Advance the owner's grace and both retained-work joins.
         await vi.advanceTimersByTimeAsync(15_000);
         let settled = false;
-        void closing.then(() => { settled = true; });
+        void closing.then(() => {
+          settled = true;
+        });
         await Promise.resolve();
         expect(settled).toBe(false);
         expect(database.db.isOpen).toBe(true);

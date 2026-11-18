@@ -1009,44 +1009,42 @@ describe("capability cli", () => {
     },
   );
 
-  it.each(["image", "image-model"])(
-    "cancels pending %s execution",
-    async (kind) => {
-      const scope = new AsyncWorkScope();
-      let cancelled = false;
-      const waitForAbort = (signal?: AbortSignal) => {
-        expect(signal).toBeDefined();
-        const { promise, reject } = Promise.withResolvers<never>();
-        signal?.addEventListener("abort", () => {
+  it.each(["image", "image-model"])("cancels pending %s execution", async (kind) => {
+    const scope = new AsyncWorkScope();
+    let cancelled = false;
+    const waitForAbort = (signal?: AbortSignal) => {
+      expect(signal).toBeDefined();
+      const { promise, reject } = Promise.withResolvers<never>();
+      signal?.addEventListener(
+        "abort",
+        () => {
           cancelled = true;
           reject(signal.reason);
-        }, { once: true });
-        scope.beginClose(new Error("interrupted"));
-        return promise;
-      };
-      await scope.track(() => {
-          const describeImage =
-            kind === "image" ? mocks.describeImageFile : mocks.describePreparedImageWithModel;
-          describeImage.mockImplementationOnce((_params, execution) =>
-            waitForAbort(execution?.signal),
-          );
-          return runCapability(
-            "image",
-            "describe",
-            "--file",
-            "photo.jpg",
-            ...(kind === "image-model" ? ["--model", "ollama/vision"] : []),
-            "--json",
-          );
-      });
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-      expect(mocks.runtime.log).not.toHaveBeenCalled();
-      expect(mocks.runtime.error).not.toHaveBeenCalled();
-      expect(cancelled).toBe(true);
-      await scope.drain();
-    },
-  );
-
+        },
+        { once: true },
+      );
+      scope.beginClose(new Error("interrupted"));
+      return promise;
+    };
+    await scope.track(() => {
+      const describeImage =
+        kind === "image" ? mocks.describeImageFile : mocks.describePreparedImageWithModel;
+      describeImage.mockImplementationOnce((_params, execution) => waitForAbort(execution?.signal));
+      return runCapability(
+        "image",
+        "describe",
+        "--file",
+        "photo.jpg",
+        ...(kind === "image-model" ? ["--model", "ollama/vision"] : []),
+        "--json",
+      );
+    });
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.runtime.log).not.toHaveBeenCalled();
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(cancelled).toBe(true);
+    await scope.drain();
+  });
 
   it("defaults tts status to gateway transport", async () => {
     await runCapability("tts", "status", "--json");

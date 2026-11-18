@@ -22,7 +22,6 @@ import {
   stringify,
   type Scalar,
 } from "yaml";
-
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 

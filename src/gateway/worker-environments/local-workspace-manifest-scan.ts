@@ -540,9 +540,14 @@ export async function executeLocalWorkspaceManifestRead(
     root: action.target === "canonical" ? row.projection_path : action.canonicalRoot,
     baseCommit: row.base_commit,
     includePaths: action.target === "projection" ? canonicalPaths : undefined,
-    gitIgnore: action.target === "canonical"
-      ? await readLocalWorkspaceGitExclusions(action.canonicalRoot, row.projection_path, canonicalPaths)
-      : undefined,
+    gitIgnore:
+      action.target === "canonical"
+        ? await readLocalWorkspaceGitExclusions(
+            action.canonicalRoot,
+            row.projection_path,
+            canonicalPaths,
+          )
+        : undefined,
     preserveDirectories,
     buildCacheInputs: new Set(retained),
     reuseFile: fingerprintScan.reuseFile,

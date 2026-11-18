@@ -266,7 +266,8 @@ export async function prepareSkillResourceDelivery(
   const discovery: Skill[] = [];
   for (const skill of candidates) {
     if (!skill.filePath.startsWith("node://")) {
-      const selected = snapshot.resolvedSkills?.some((entry) => entry.filePath === skill.filePath) ||
+      const selected =
+        snapshot.resolvedSkills?.some((entry) => entry.filePath === skill.filePath) ||
         explicitSelections.some((selection) => matchesExplicitSelection(skill, selection)) ||
         pins.some((selection) => selection.name === skill.name);
       (selected ? required : discovery).push(skill);

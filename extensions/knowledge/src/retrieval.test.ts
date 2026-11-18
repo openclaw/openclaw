@@ -510,17 +510,22 @@ it("editing a legacy page removes approval metadata through journaled publicatio
   }
 });
 
-it.each(["keyword_rows_v1_%", "keyword_fts_v1_%"])("repopulates a missing tracked index table %s", async (tablePattern) => {
-  const f = await fixture();
-  await f.put("upgrade_note_1", "Upgrade sentinel", "lanternword body");
-  expect(await f.total({ query: "lanternword" })).toBe(1);
-  // Simulate the previous version: FTS rows and a matching state row, no tracking table.
-  f.store.withDatabase((db) => {
-    for (const { name } of db
-      .prepare("SELECT name FROM sqlite_master WHERE name LIKE ? AND (sql LIKE 'CREATE VIRTUAL%' OR name LIKE 'keyword_rows_v1_%')")
-      .all(tablePattern)) {
-      db.exec(`DROP TABLE ${String(name)}`);
-    }
-  });
-  expect(await f.total({ query: "lanternword" })).toBe(1);
-});
+it.each(["keyword_rows_v1_%", "keyword_fts_v1_%"])(
+  "repopulates a missing tracked index table %s",
+  async (tablePattern) => {
+    const f = await fixture();
+    await f.put("upgrade_note_1", "Upgrade sentinel", "lanternword body");
+    expect(await f.total({ query: "lanternword" })).toBe(1);
+    // Simulate the previous version: FTS rows and a matching state row, no tracking table.
+    f.store.withDatabase((db) => {
+      for (const { name } of db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE name LIKE ? AND (sql LIKE 'CREATE VIRTUAL%' OR name LIKE 'keyword_rows_v1_%')",
+        )
+        .all(tablePattern)) {
+        db.exec(`DROP TABLE ${String(name)}`);
+      }
+    });
+    expect(await f.total({ query: "lanternword" })).toBe(1);
+  },
+);

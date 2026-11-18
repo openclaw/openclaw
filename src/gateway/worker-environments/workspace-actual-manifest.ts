@@ -222,13 +222,7 @@ export async function scanActualWorkspaceManifest(
   const ignored = params.gitIgnore?.paths;
   const isExcluded = async (relative: string): Promise<boolean> => {
     const retainedInput = retained.has(relative) || (await isStagedInput(relative));
-    if (
-      isDerivedWorkspacePath(
-        relative,
-        retainedInput,
-        params.buildCacheInputs !== undefined,
-      )
-    ) {
+    if (isDerivedWorkspacePath(relative, retainedInput, params.buildCacheInputs !== undefined)) {
       return true;
     }
     if (!ignored?.size || retainedInput || params.gitIgnore?.retainedPaths.has(relative)) {

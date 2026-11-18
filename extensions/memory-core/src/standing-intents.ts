@@ -40,8 +40,9 @@ async function withSweepSlot<T>(run: () => Promise<T>): Promise<T> {
   if (sweeps.active >= 2) {
     await new Promise<void>((resolve) => sweeps.waiting.push(resolve));
   } else sweeps.active += 1;
-  try { return await run(); }
-  finally {
+  try {
+    return await run();
+  } finally {
     const next = sweeps.waiting.shift();
     if (next) next();
     else sweeps.active -= 1;
@@ -160,11 +161,13 @@ export function startStandingIntentMaintenance(params: {
         atMs: nextDueAt ?? scheduler.now(),
         async run() {
           try {
-            await withSweepSlot(() => executeStandingIntent(
-              { agentId: target.agentId, assertCurrent: () => scheduler.signal.throwIfAborted() },
-              { type: "sweep", input: { nowMs: scheduler.now() } },
-              target.options,
-            ));
+            await withSweepSlot(() =>
+              executeStandingIntent(
+                { agentId: target.agentId, assertCurrent: () => scheduler.signal.throwIfAborted() },
+                { type: "sweep", input: { nowMs: scheduler.now() } },
+                target.options,
+              ),
+            );
           } catch (error) {
             if (!scheduler.signal.aborted) {
               params.warn(`memory-core: standing intent maintenance failed: ${String(error)}`);

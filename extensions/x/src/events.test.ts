@@ -5,7 +5,8 @@ import { createXTestApi as createXApiClient } from "./test-support/api-client.js
 import { budgetApi, post } from "./test-support/events.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
-const event = (payload: unknown) => JSON.stringify({ data: { event_type: "post.mention.create", payload } });
+const event = (payload: unknown) =>
+  JSON.stringify({ data: { event_type: "post.mention.create", payload } });
 
 function streamFixture(options: Partial<Parameters<typeof runXEvents>[0]> = {}) {
   const abort = new AbortController();
