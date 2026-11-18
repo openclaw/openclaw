@@ -1,2 +1,2 @@
-# Native startup/binding continuity, bounded diagnostics, provider-confirmed loss persistence, and actionable retained-state refusal guidance.
-330
+# Native startup/binding continuity, diagnostic readiness and teardown, provider-confirmed loss persistence, and actionable retained-state refusal guidance.
+456

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter, once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { withTempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
@@ -13,6 +14,7 @@ import {
   sendNativeResponse,
 } from "./app-server/thread-native.test-support.js";
 import { buildCodexRuntimeThreadConfig } from "./app-server/thread-requests.js";
+import * as processRegistration from "./app-server/transport-process-registration.js";
 import { deriveCodexWorkerConfigurationVersion } from "./node-app-server-command.js";
 import { createCodexNodeAppServerCommand } from "./node-app-server.js";
 import * as nodeExecRuntime from "./node-exec-server.runtime.js";
@@ -24,6 +26,130 @@ afterEach(() => {
 });
 
 describe("Codex worker model process", () => {
+  it.for([false, true])(
+    "holds startup diagnostics until framed readiness, including registration failure=%s",
+    async (registrationFails, { signal }) => {
+      await withTempWorkspace(
+        { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "codex-worker-startup-" },
+        async ({ dir }) => {
+          const root = await fs.realpath(dir);
+          const state = path.join(root, "state");
+          const configDir = path.join(state, "codex-runtime");
+          const sessionId = "startup-order";
+          const rules = path.join(
+            root,
+            ".openclaw-worker",
+            "codex",
+            createHash("sha256").update(sessionId).digest("hex"),
+            "rules",
+          );
+          await fs.mkdir(configDir, { recursive: true, mode: 0o700 });
+          await fs.mkdir(rules, { recursive: true });
+          // The pinned native binary reports malformed rules on stderr before initialize.
+          await fs.writeFile(path.join(rules, "startup.rules"), "not valid starlark !!!");
+          const helperPath = path.join(configDir, "autodev-token.mjs");
+          const config = `model = "codex-test-model"\nmodel_provider = "autodev"\n[model_providers.autodev]\nname = "AutoDev"\nbase_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\nrequires_openai_auth = false\nsupports_websockets = false\n[model_providers.autodev.auth]\ncommand = "node"\nargs = [${JSON.stringify(helperPath)}]\n`;
+          const helper = "process.stdout.write('synthetic-worker-bearer\\n')\n";
+          const version = deriveCodexWorkerConfigurationVersion(config, helperPath, helper);
+          await fs.writeFile(path.join(configDir, "config.toml"), config, { mode: 0o600 });
+          await fs.writeFile(helperPath, helper, { mode: 0o600 });
+          await fs.writeFile(path.join(configDir, "version"), version, { mode: 0o600 });
+          vi.stubEnv("OPENCLAW_STATE_DIR", state);
+          setManagedCodexPluginRoot(fileURLToPath(new URL("../", import.meta.url)));
+          const prepareRegistration = processRegistration.prepareCodexAppServerProcessRegistration;
+          const startupLine = Promise.withResolvers<string>();
+          vi.spyOn(
+            processRegistration,
+            "prepareCodexAppServerProcessRegistration",
+          ).mockImplementationOnce(async () => {
+            const register = await prepareRegistration();
+            return async (child) => {
+              const lines = createInterface({ input: child.stderr });
+              const firstLine = once(lines, "line", { signal });
+              const registered = register(child);
+              void registered.catch(() => {});
+              try {
+                const [line] = await firstLine;
+                startupLine.resolve(String(line));
+                await registered;
+                if (registrationFails) {
+                  throw new Error("Synthetic process registration failure");
+                }
+              } finally {
+                lines.close();
+              }
+            };
+          });
+          const controller = new AbortController();
+          const wire: string[] = [];
+          const diagnostic = Promise.withResolvers<unknown>();
+          const release = vi.fn();
+          const command = createCodexNodeAppServerCommand();
+          const running = command.handle(
+            JSON.stringify({
+              authorization: "session-full",
+              placement: {
+                cwd: root,
+                environmentId: "startup-environment",
+                sessionId,
+                ownerEpoch: 1,
+                sessionKey: "agent:main:startup-order",
+              },
+            }),
+            {
+              emitChunk: async () => {},
+              onInput: () => {},
+              signal: AbortSignal.any([controller.signal, signal]),
+              frames: {
+                send: async (frame) => {
+                  wire.push("data");
+                  diagnostic.resolve(JSON.parse(Buffer.from(frame).toString("utf8")));
+                },
+                onMessage: () => {
+                  // The node host queues its ready frame at this registration boundary.
+                  wire.push("ready");
+                  return () => {};
+                },
+              },
+            },
+            {
+              sessionKey: "agent:main:startup-order",
+              sendNodeEvent: async () => undefined,
+              prepareExecAuthorization: () => () => {},
+              acquireManagedWorkspaceAsync: async () => ({
+                workspaceDir: root,
+                homeDir: root,
+                release,
+              }),
+            },
+          );
+          void running.catch(() => {});
+          try {
+            await expect(Promise.race([startupLine.promise, running])).resolves.toEqual(
+              expect.stringContaining('"level":"ERROR"'),
+            );
+            if (registrationFails) {
+              await expect(running).rejects.toThrow("Synthetic process registration failure");
+              expect(wire).toEqual([]);
+            } else {
+              await expect(Promise.race([diagnostic.promise, running])).resolves.toMatchObject({
+                method: "openclaw/workerDiagnostic",
+                params: { event: "native_stderr", level: "ERROR" },
+              });
+              expect(wire.slice(0, 2)).toEqual(["ready", "data"]);
+            }
+          } finally {
+            controller.abort();
+            await expect(running).rejects.toThrow();
+            await command.onDisconnect?.();
+          }
+          expect(release).toHaveBeenCalledOnce();
+          expect(command.hasActiveWork?.()).toBe(false);
+        },
+      );
+    },
+  );
+
   it("gates native resource readiness, resumes exact state, and retains failed-cleanup custody", async ({
     signal,
     onTestFinished,

@@ -13,6 +13,7 @@ import { createBoundedLineFramer } from "openclaw/plugin-sdk/process-runtime";
 import { sanitizeEnvVars } from "openclaw/plugin-sdk/sandbox";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   resolveManagedCodexAppServerStartOptions,
   resolveManagedCodexNativeCommand,
@@ -226,6 +227,7 @@ export async function runCodexNodeAppServer(params: {
     void failed.promise.catch(() => {});
     const onAbort = () => failed.reject(new Error("Worker app-server cancelled"));
     signal.addEventListener("abort", onAbort, { once: true });
+    const framedReady = createDeferred<void>();
     let outgoing: Promise<void> = Promise.resolve();
     try {
       child = await createStdioTransport(
@@ -253,7 +255,12 @@ export async function runCodexNodeAppServer(params: {
           spawned.once("close", (code, exitSignal) => closed.resolve({ code, signal: exitSignal }));
           spawned.once("error", failed.reject);
           spawned.stdin.on("error", failed.reject);
-          diagnostics = createWorkerDiagnosticForwarder((frame) => frames.send(frame));
+          diagnostics = createWorkerDiagnosticForwarder(async (frame) => {
+            // Drain/classify immediately; the existing bounded pump waits for node-host readiness.
+            await racePromiseWithAbortSignal(framedReady.promise, signal);
+            signal.throwIfAborted();
+            await frames.send(frame);
+          });
           spawned.stderr.on("data", (chunk: Buffer) => diagnostics?.append(chunk));
           spawned.once("exit", (code, exitSignal) => diagnostics?.nativeExit(code, exitSignal));
           outgoing = (async () => {
@@ -422,6 +429,8 @@ export async function runCodexNodeAppServer(params: {
         });
         return operation;
       });
+      // onMessage queues the node-host ready frame before any diagnostic data can be exported.
+      framedReady.resolve();
       const outcome = await Promise.race([closed.promise, failed.promise]);
       await outgoing;
       // A native exit is distinct from the transport owner's cancellation/close.
