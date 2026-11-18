@@ -150,6 +150,8 @@ type ReplyMediaSourcePreparationParams = {
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
+  /** Owner authority for this turn; owner-internal media reads skip the sender overlay. */
+  senderIsOwner?: boolean;
   sandboxRoot?: string;
   sandboxContainerWorkdir?: string;
   mediaAccess?: OutboundMediaAccess;
@@ -264,6 +266,7 @@ export function createReplyMediaSourcePreparer(
       requesterSenderName: params.requesterSenderName,
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
+      senderIsOwner: params.senderIsOwner,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
       groupSpace: params.groupSpace,

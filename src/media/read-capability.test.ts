@@ -229,6 +229,60 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     expect(result.localRoots).not.toContain("/Users/peter/Pictures");
   });
 
+  it("waives the sender wildcard for an owner turn on the internal surface", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        allow: ["read"],
+        toolsBySender: { "*": { deny: ["read"] } },
+      },
+    };
+
+    for (const identity of [
+      // Production reply-media call sites omit the provider when the session key is set.
+      { sessionKey: "agent:main:webchat:owner", senderIsOwner: true },
+      { messageProvider: "webchat", senderIsOwner: true },
+    ]) {
+      const result = resolveAgentScopedOutboundMediaAccess({
+        cfg,
+        ...identity,
+        requesterSenderId: "owner",
+        mediaSources: ["/Users/peter/Pictures/photo.png"],
+      });
+      expect.soft(result.readFile).toBeTypeOf("function");
+      expect.soft(result.localRoots).toContain(path.resolve("/Users/peter/Pictures"));
+    }
+  });
+
+  it.each([
+    {
+      name: "a non-owner WebChat requester",
+      identity: { sessionKey: "agent:main:webchat:guest", senderIsOwner: false },
+    },
+    {
+      name: "an owner on an external channel",
+      identity: { sessionKey: "agent:main:requestchat:group:ops", senderIsOwner: true },
+    },
+    {
+      name: "a WebChat requester without the owner fact",
+      identity: { sessionKey: "agent:main:webchat:owner" },
+    },
+  ])("keeps the sender wildcard for $name", ({ identity }) => {
+    const result = resolveAgentScopedOutboundMediaAccess({
+      cfg: {
+        tools: {
+          allow: ["read"],
+          toolsBySender: { "*": { deny: ["read"] } },
+        },
+      } as OpenClawConfig,
+      ...identity,
+      requesterSenderId: "owner",
+      mediaSources: ["/Users/peter/Pictures/photo.png"],
+    });
+
+    expect(result.readFile).toBeUndefined();
+    expect(result.localRoots).not.toContain(path.resolve("/Users/peter/Pictures"));
+  });
+
   it("keeps host reads enabled when agent sender policy allows the requester", () => {
     const cfg: OpenClawConfig = {
       tools: {

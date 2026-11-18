@@ -50,11 +50,16 @@ describe("WebChat reply media workspace ownership", () => {
     return { cfg, workspaceDir };
   }
 
-  async function seedScope(cfg: OpenClawConfig, entry: Partial<SessionEntry>) {
+  async function seedScope(
+    cfg: OpenClawConfig,
+    entry: Partial<SessionEntry>,
+    requesterContext?: Parameters<typeof seedWebchatReplyMediaScope>[0]["requesterContext"],
+  ) {
     const scope = await seedWebchatReplyMediaScope({
       cfg,
       agentId: "main",
       sessionKey: TEST_SESSION_KEY,
+      requesterContext,
       sessionEntry: { sessionId: "media-session", updatedAt: 1, ...entry },
     });
     onTestFinished(scope.release);
@@ -210,6 +215,30 @@ describe("WebChat reply media workspace ownership", () => {
     await expect(fs.stat(testState.statePath("media", "outbound"))).rejects.toMatchObject({
       code: "ENOENT",
     });
+  });
+
+  it("waives the sender read denial only for an operator.admin requester", async () => {
+    const { cfg } = createMediaTestContext({ allowRead: true });
+    cfg.tools = { ...cfg.tools, toolsBySender: { "*": { deny: ["read"] } } };
+    const selected = testState.statePath("worktrees", "owner-policy");
+    const source = await writeMedia(path.join(selected, "owner.png"));
+    const requester = { Provider: "webchat", Surface: "webchat", SenderId: "owner" };
+    const owner = await seedScope(
+      cfg,
+      { sessionRoot: selected, permissionMode: "full" },
+      { ...requester, GatewayClientScopes: ["operator.admin", "operator.write"] },
+    );
+    const [ownerPayload] = await normalize(owner, [source]);
+    await expectImage(ownerPayload?.mediaUrls?.[0]);
+
+    const limited = await seedScope(
+      cfg,
+      { sessionRoot: selected, permissionMode: "full" },
+      { ...requester, GatewayClientScopes: ["operator.read", "operator.write"] },
+    );
+    const [limitedPayload] = await normalize(limited, [source]);
+    expect(limitedPayload?.mediaUrls).toBeUndefined();
+    expect(limitedPayload?.text).toContain("owner.png: Delivery failed.");
   });
 
   it("preserves unmounted sandbox containment in full mode", async () => {

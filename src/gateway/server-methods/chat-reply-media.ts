@@ -31,6 +31,7 @@ import {
   captureChannelReadAuthority,
   withChannelReadAuthority,
 } from "../../shared/channel-read-authority.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { loadIncognitoGatewaySessionEntryReadOnly } from "../session-utils.js";
@@ -60,6 +61,7 @@ export type WebchatReplyMediaRequesterContext = Pick<
   | "GroupSpace"
   | "Provider"
   | "Surface"
+  | "GatewayClientScopes"
 >;
 
 type WebchatReplyMediaScope = {
@@ -74,6 +76,7 @@ type WebchatReplyMediaScope = {
 };
 
 function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterContext) {
+  const messageProvider = requester?.Surface ?? requester?.Provider;
   return {
     requesterSenderId: requester?.SenderId,
     requesterSenderName: requester?.SenderName,
@@ -81,7 +84,13 @@ function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterCon
     requesterSenderE164: requester?.SenderE164,
     groupChannel: requester?.GroupChannel,
     groupSpace: requester?.GroupSpace,
-    messageProvider: requester?.Surface ?? requester?.Provider,
+    messageProvider,
+    // Same scope rule as command-auth: an operator.admin client on the internal
+    // surface owns the turn, so the media read skips the toolsBySender overlay the
+    // turn's own tools already skip. Every other requester keeps the sender policy.
+    senderIsOwner:
+      isInternalMessageChannel(messageProvider) &&
+      requester?.GatewayClientScopes?.includes("operator.admin") === true,
   };
 }
 

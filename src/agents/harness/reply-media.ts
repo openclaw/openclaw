@@ -28,6 +28,7 @@ export function bindHarnessReplyMedia(params: {
     requesterSenderName: attempt.senderName ?? undefined,
     requesterSenderUsername: attempt.senderUsername ?? undefined,
     requesterSenderE164: attempt.senderE164 ?? undefined,
+    senderIsOwner: attempt.senderIsOwner,
     sourceReplyDeliveryMode: attempt.sourceReplyDeliveryMode,
     runId: attempt.runId,
     reasoningLevel: attempt.reasoningLevel,

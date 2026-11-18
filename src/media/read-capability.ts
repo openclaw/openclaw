@@ -5,6 +5,7 @@ import {
   resolveGroupToolPolicy,
 } from "../agents/agent-tools.policy.js";
 import { resolvePathFromInput } from "../agents/path-policy.js";
+import { isInternalOwnerRequester } from "../agents/requester-tool-policy.js";
 import { resolveManagedMediaRoot } from "../agents/sandbox-paths.js";
 import { resolveSenderToolPolicy } from "../agents/sender-tool-policy.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../agents/tool-fs-policy.js";
@@ -14,6 +15,8 @@ import { resolveWorkspaceRoot } from "../agents/workspace-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenResult } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { parseSessionDeliveryRoute } from "../routing/session-key.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveConfigDir } from "../utils.js";
 import { createBoundedOutboundMediaReadFile, readOutboundMediaFile } from "./bounded-read-file.js";
 import {
@@ -33,6 +36,12 @@ export type HostOutboundMediaAccess = OutboundMediaAccess & {
   openFile?: (filePath: string, options: { maxBytes: number }) => Promise<OpenResult | undefined>;
 };
 
+/** Channel segment of a channel-scoped session key (`agent:<id>:<channel>:<peer>`). */
+function sessionKeyChannel(sessionKey: string | undefined): string | undefined {
+  const rest = parseAgentSessionKey(sessionKey)?.rest;
+  return rest?.split(":")[0]?.trim().toLowerCase() || undefined;
+}
+
 type OutboundHostMediaPolicyContext = {
   sessionKey?: string;
   messageProvider?: string;
@@ -44,6 +53,8 @@ type OutboundHostMediaPolicyContext = {
   requesterSenderName?: string | null;
   requesterSenderUsername?: string | null;
   requesterSenderE164?: string | null;
+  /** Owner authority on an internal surface; tools already skip the sender overlay there. */
+  senderIsOwner?: boolean;
 };
 
 function getManagedMediaLocalRoots(mediaSources?: readonly string[]): readonly string[] {
@@ -152,11 +163,23 @@ function resolveAgentScopedMediaAccess(
   });
   // Denied readers must lose workspace roots as well as callbacks: loaders can
   // otherwise fall back to native reads from those roots.
+  // An owner turn on an internal surface already skips the sender overlay for tools
+  // (senderPolicyMode "never"); its reply media must read under the same authority.
+  // Session-scoped call sites omit the provider, so read the channel from the session
+  // key the same way the sender policy resolver prefers its route.
+  const requesterProvider =
+    parseSessionDeliveryRoute(params.sessionKey)?.channel ??
+    params.messageProvider ??
+    sessionKeyChannel(params.sessionKey);
+  const senderOverlayApplies = !isInternalOwnerRequester({
+    messageProvider: requesterProvider,
+    senderIsOwner: params.senderIsOwner,
+  });
   const mediaReadAllowed = isToolAllowedByPolicies("read", [
     globalPolicy,
     agentPolicy,
     groupPolicy,
-    senderPolicy,
+    ...(senderOverlayApplies ? [senderPolicy] : []),
   ]);
   const registeredMedia = resolvedWorkspaceDir
     ? captureAgentWorkspaceOutboundMedia(resolvedWorkspaceDir)
