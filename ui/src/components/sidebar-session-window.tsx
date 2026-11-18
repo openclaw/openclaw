@@ -44,6 +44,7 @@ export function createSidebarSessionWindow(
       session: row,
       fullyShown: host().isSessionChildrenFullyShown(row.key),
     }).map(describe);
+    const loading = row.loadingChildren && children.length === 0;
     const errors = (row.childLoadParentKeys ?? [row.key]).map(
       (key) => host().sessionData.childSessionErrorsByParent.get(key) ?? "",
     );
@@ -54,8 +55,8 @@ export function createSidebarSessionWindow(
         children.reduce((height, child) => height + child.height, 0) +
         Math.max(0, children.length - 1) * 2 +
         (children.length < row.children.length ? 30 : 0) +
-        (row.loadingChildren && children.length === 0 ? 30 : 0),
-      signature: [preview, children.map((child) => child.signature), row.loadingChildren, errors],
+        (loading ? 30 : 0),
+      signature: [preview, children.map((child) => child.signature), loading, errors],
     };
   };
   const inputs = createMemo(() => {
@@ -172,7 +173,13 @@ export function createSidebarSessionWindow(
           return;
         }
         if (layout !== nextLayout) {
-          measured.clear();
+          // A layout change need not resize mounted rows. Retain their delivered
+          // measurements; unmounted rows will be measured when they return.
+          for (const key of measured.keys()) {
+            if (!mounted.has(key)) {
+              measured.delete(key);
+            }
+          }
         }
         layout = nextLayout;
         viewportHeight = nextHeight;
