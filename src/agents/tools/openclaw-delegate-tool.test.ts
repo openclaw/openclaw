@@ -1,12 +1,12 @@
 import { setImmediate as yieldToScheduler } from "node:timers/promises";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
-import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
+import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,

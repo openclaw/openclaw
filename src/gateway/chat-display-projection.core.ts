@@ -427,10 +427,7 @@ export function createChatHistoryRecoveryProjection(options?: ChatHistoryRecover
         ? Number.MAX_SAFE_INTEGER
         : (options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS),
     );
-    if (
-      (!unseenPending && pendingIndexes.length === 0) ||
-      !hasVisibleAssistant
-    ) {
+    if ((!unseenPending && pendingIndexes.length === 0) || !hasVisibleAssistant) {
       return;
     }
     // An incremental reader carries only a pending bit. It must reload raw
