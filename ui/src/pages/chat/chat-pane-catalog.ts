@@ -243,12 +243,21 @@ export abstract class ChatPaneCatalog extends ChatPaneTaskSuggestions {
         .map((item) => this.catalogItemMessage(item))
         .filter((message) => message !== null);
       // Poll the latest window without dropping already-loaded older history when
-      // the windows overlap. A gap/reset replaces it rather than inventing continuity.
+      // the complete retained tail still matches. A gap/rewind replaces it and
+      // adopts the new window's cursor rather than inventing continuity.
       const firstId = refresh && messages.length > 0 ? catalogMessageId(messages[0]) : undefined;
       const overlap = firstId
         ? this.history.catalogMessages.findIndex((message) => catalogMessageId(message) === firstId)
         : -1;
-      const retainedHistory = refresh && overlap >= 0;
+      const retainedTail = this.history.catalogMessages.slice(overlap);
+      const retainedHistory =
+        refresh &&
+        overlap >= 0 &&
+        messages.length >= retainedTail.length &&
+        retainedTail.every((message, index) => {
+          const id = catalogMessageId(message);
+          return id !== null && id === catalogMessageId(messages[index]);
+        });
       const nextMessages = older
         ? this.prependUniqueCatalogMessages(messages)
         : retainedHistory

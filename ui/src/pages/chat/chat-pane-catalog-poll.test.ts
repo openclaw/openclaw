@@ -296,3 +296,49 @@ it("does not turn a generic Gateway catalog into a Session Share poller", async 
   expect(await pane.pollCatalogSession()).toBe(false);
   expect(lists).toBe(1);
 });
+
+it.each([
+  ["rewound tail", [3, 2]],
+  ["changed tail", [6, 5, 2]],
+])("replaces an overlapping %s and adopts its fresh older cursor", async (_name, latestIds) => {
+  const key = { catalogId: "openclaw", hostId: "gateway:team", threadId: "remote-session" };
+  const fixture = createMountedPanes([]);
+  const client = fixture.state.client!;
+  const original = client.request.bind(client);
+  const page = (ids: number[], nextCursor?: string): SessionsCatalogReadResult => ({
+    ...key,
+    items: ids.map((id) => ({ id: String(id), type: "agentMessage", text: `answer ${id}` })),
+    nextCursor,
+  });
+  let latest = page([4, 3, 2, 1], "stale-older");
+  const cursors: Array<string | undefined> = [];
+  vi.spyOn(client, "request").mockImplementation(async (method, ...args) => {
+    if (method === "sessions.catalog.list") {
+      return catalogList(key, [
+        {
+          threadId: key.threadId,
+          status: "live",
+          archived: false,
+          canContinue: false,
+          canArchive: false,
+        },
+      ]);
+    }
+    if (method === "sessions.catalog.read") {
+      const cursor = (args[0] as { cursor?: string }).cursor;
+      cursors.push(cursor);
+      return cursor ? page([1]) : latest;
+    }
+    return original(method, ...args);
+  });
+  const pane = fixture.mount(buildCatalogSessionKey(key, "main"));
+  await vi.waitFor(() => expect(pane.history.catalogMessages).toHaveLength(4));
+  latest = page(latestIds, "fresh-older");
+  await expect(pane.pollCatalogSession()).resolves.toBe(true);
+  expect(pane.history.catalogMessages.map(catalogMessageId)).toEqual(
+    latestIds.toReversed().map(String),
+  );
+  expect(pane.history.catalogCursor).toBe("fresh-older");
+  await expect(pane.loadCatalogSession(key, true)).resolves.toBe(true);
+  expect(cursors).toEqual([undefined, undefined, "fresh-older"]);
+});
