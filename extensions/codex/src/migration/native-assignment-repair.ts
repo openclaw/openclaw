@@ -102,26 +102,15 @@ async function normalizeRow(entry: BindingRow, params: Params, warnings: string[
           sessionId: current.entry.sessionId,
           ...(identity[1] === "session-key" ? { sessionKey: current.sessionKey } : {}),
         });
-        let unknownLifecycle = false;
-        assignments = assignments.filter((assignment) => {
-          if (
-            currentKey !== entry.key ||
-            assignment.owner.sessionId !== current.entry.sessionId ||
-            assignment.owner.connectionFingerprint !== fingerprint
-          ) {
-            return false;
-          }
-          if (!assignment.owner.lifecycleRevision || !current.entry.lifecycleRevision) {
-            unknownLifecycle = true;
-            return true;
-          }
-          return assignment.owner.lifecycleRevision === current.entry.lifecycleRevision;
-        });
-        if (unknownLifecycle) {
-          warnings.push(
-            `Preserved Codex assignments with unknown lifecycle evidence in ${entry.key}.`,
-          );
-        }
+        // Native recovery requires equal lifecycle revisions, including both absent
+        // for legacy owners. A one-sided revision cannot be delivered after reset.
+        assignments = assignments.filter(
+          (assignment) =>
+            currentKey === entry.key &&
+            assignment.owner.sessionId === current.entry.sessionId &&
+            assignment.owner.connectionFingerprint === fingerprint &&
+            assignment.owner.lifecycleRevision === current.entry.lifecycleRevision,
+        );
       } else {
         warnings.push(
           `Preserved Codex assignments with unknown requester evidence in ${entry.key}.`,
