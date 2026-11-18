@@ -115,6 +115,10 @@ it("reserves delivery slots for prompted and explicit skills before additional d
     modelVisible: true,
   });
   expect(delivery?.skills.some((skill) => skill.name === "guide-256")).toBe(false);
+  await fs.rm(path.join(workspace, "skills", "guide-001"), { recursive: true });
+  const refreshed = await prepare(snapshot, [selected("zz-explicit", hidden)]);
+  expect(refreshed?.skills).toHaveLength(256);
+  expect(refreshed?.skills.some((skill) => skill.name === "guide-255")).toBe(true);
 });
 
 it("recreates stable session paths and prompt bytes independent of delivery order", async () => {

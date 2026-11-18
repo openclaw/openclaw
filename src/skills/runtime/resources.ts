@@ -261,11 +261,21 @@ export async function prepareSkillResourceDelivery(
       }),
     ),
   ];
-  let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
+  // Select slots before reading trees so optional discovery cannot exhaust delivery.
+  const required: Skill[] = [];
+  const discovery: Skill[] = [];
   for (const skill of candidates) {
-    if (skill.filePath.startsWith("node://")) {
-      continue;
+    if (!skill.filePath.startsWith("node://")) {
+      const selected = snapshot.resolvedSkills?.some((entry) => entry.filePath === skill.filePath) ||
+        explicitSelections.some((selection) => matchesExplicitSelection(skill, selection)) ||
+        pins.some((selection) => selection.name === skill.name);
+      (selected ? required : discovery).push(skill);
     }
+  }
+  const deliverySlots = Math.max(SKILL_RESOURCE_MAX_SKILLS, required.length);
+  let manifests: Awaited<ReturnType<typeof readSkillLibrarySelectionManifests>>;
+  for (const skill of [...required, ...discovery]) {
+    if (skills.length === deliverySlots) break;
     const pin = snapshot.librarySelections?.find((selection) => selection.name === skill.name);
     const explicitlySelected = explicitSelections.some((selection) =>
       matchesExplicitSelection(skill, selection),
@@ -338,17 +348,7 @@ export async function prepareSkillResourceDelivery(
       files,
     });
   }
-  // Discovery is optional; prompted, explicit, and pinned resources keep their slots.
-  const required = new Set(
-    skills.filter(
-      (skill) => skill.modelVisible || pins.some((selection) => selection.name === skill.name),
-    ),
-  );
-  let discoverySlots = Math.max(0, SKILL_RESOURCE_MAX_SKILLS - required.size);
-  const delivery = {
-    version: 1 as const,
-    skills: skills.filter((skill) => required.has(skill) || discoverySlots-- > 0),
-  };
+  const delivery = { version: 1 as const, skills };
   if (!Value.Check(SkillResourceDeliverySchema, delivery)) {
     throw new Error("Selected skill catalog exceeds the worker resource contract.");
   }
