@@ -58,7 +58,7 @@ import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isEndedSubagentMessageWait } from "./subagent-run-liveness.js";
 
 const pendingRequesterTransitions = new WeakMap<
   object,
@@ -324,7 +324,8 @@ export function scheduleRequesterSettleWake(
     (id) => {
       const member = params.runs.get(id);
       return member?.requesterSettleWake &&
-        member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration
+        member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration &&
+        (pauseNotice || !isEndedSubagentMessageWait(member))
         ? [member]
         : [];
     },

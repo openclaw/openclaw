@@ -37,6 +37,7 @@ import {
 } from "../registry/subagent-requester-settle-identity.js";
 import { isClaimedByLiveRequesterTurn } from "../registry/subagent-requester-turn-liveness.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { isEndedSubagentMessageWait } from "../registry/subagent-run-liveness.js";
 import { captureRequesterContinuationCaller } from "../requester-cron-authority.js";
 import { transferRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { getSubagentDepthFromSessionStoreInWorker } from "../spawn/subagent-depth.js";
@@ -165,16 +166,21 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     settledBatch = [currentSettledEntry];
   } else if (frozenBatchRunIds && frozen) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
-    // Retired rows no longer own completion, but every surviving frozen member
-    // must be terminal before this batch can wake its requester.
+    // Retired rows no longer own completion.
     settledBatch = subagentRuns.selectCompletionAuthorityBatch(
       frozenBatchRunIds.map((runId) => runsById.get(runId)).filter(hasCurrentWake),
       currentSettledEntry,
     );
-    if (!settledBatch.every(isRequesterSettleMemberReady)) {
+    // Message waits keep their future completion without holding ready siblings.
+    if (
+      !settledBatch.every(
+        (entry) => isRequesterSettleMemberReady(entry) || isEndedSubagentMessageWait(entry),
+      )
+    ) {
       params.onDescendantsPending?.();
       return false;
     }
+    settledBatch = settledBatch.filter(isRequesterSettleMemberReady);
   } else {
     // An unfrozen wave cannot absorb a different requester-yield generation.
     settledBatch = selectConnectedSettledSubagentWave(
