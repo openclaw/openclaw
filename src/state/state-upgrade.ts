@@ -26,7 +26,9 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { getMediaDir } from "../media/store-path.js";
 import { VERSION } from "../version.js";
-import { createRetainedAgentDatabaseMatcher } from "./agent-deletion-discovery.js";
+import { createRetainedAgentDatabaseMatcherFromSnapshot } from "./agent-deletion-discovery.js";
+import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
+import type { AgentDatabaseDeletionSnapshot } from "./agent-deletion-journal.types.js";
 import { buildAgentDatabaseByCopy } from "./openclaw-agent-db-swap.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
@@ -108,44 +110,59 @@ function openReadOnly(pathname: string): DatabaseSync {
 function discoverDatabases(stateDir: string, env: NodeJS.ProcessEnv) {
   const targets: DatabaseTarget[] = [];
   const retainedAgentRoots: string[] = [];
-  const realStateDir = fs.realpathSync(stateDir);
-  const add = (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
-    if (!isSqliteFile(pathname)) {
-      return;
-    }
-    // Accepted edge case: the swap cannot rename across a symlinked directory, so a
-    // database there keeps the previous upgrade path (Doctor) instead.
-    if (
-      path.relative(realStateDir, fs.realpathSync(path.dirname(pathname))) !==
-      path.relative(stateDir, path.dirname(pathname))
-    ) {
-      return;
-    }
-    const version = withRecoveredSource(pathname, (readable) => {
-      const db = openReadOnly(readable);
-      try {
-        return readVersion(db, kind);
-      } finally {
-        db.close();
-      }
-    });
-    targets.push({ kind, agentId, path: pathname, version });
-  };
-  add("state", path.join(stateDir, "state", "openclaw.sqlite"));
   let agents: string[] = [];
   try {
     agents = fs.readdirSync(path.join(stateDir, "agents"));
   } catch {
     // No agents yet.
   }
+  let deletionSnapshot: AgentDatabaseDeletionSnapshot | undefined;
+  const realStateDir = fs.realpathSync(stateDir);
+  const add = (kind: DatabaseTarget["kind"], pathname: string, agentId?: string) => {
+    if (!isSqliteFile(pathname)) {
+      return;
+    }
+    // The swap cannot rename across a symlinked directory. Shared-state history
+    // still classifies agent stores even when this database stays with Doctor.
+    const canSwap =
+      path.relative(realStateDir, fs.realpathSync(path.dirname(pathname))) ===
+      path.relative(stateDir, path.dirname(pathname));
+    if (!canSwap && (kind !== "state" || agents.length === 0)) {
+      return;
+    }
+    const version = withRecoveredSource(pathname, (readable) => {
+      const db = openReadOnly(readable);
+      try {
+        const schemaVersion = readVersion(db, kind);
+        if (kind === "state" && schemaVersion !== 0 && agents.length > 0) {
+          // Startup has file-only custody, not a runtime schema lease. Reuse this
+          // raw inspection handle and resolve recorded paths against the live source.
+          deletionSnapshot = readAgentDatabaseDeletionWorkerSnapshot(db, pathname, "maintenance");
+        }
+        return schemaVersion;
+      } finally {
+        db.close();
+      }
+    });
+    if (canSwap) {
+      targets.push({ kind, agentId, path: pathname, version });
+    }
+  };
+  add("state", path.join(stateDir, "state", "openclaw.sqlite"));
   // An uninitialized shared store keeps the normal bootstrap path.
   if (targets.some((target) => target.kind === "state" && target.version === 0)) {
     return { targets, retainedAgentRoots };
   }
   const config = readUpgradeConfig(resolveConfigPath(env, stateDir));
   const retained = agents.length
-    ? createRetainedAgentDatabaseMatcher(env, () =>
-        resolveConfiguredAgentDatabaseTargets(config, { env }),
+    ? createRetainedAgentDatabaseMatcherFromSnapshot(
+        env,
+        () =>
+          resolveConfiguredAgentDatabaseTargets(config, {
+            env,
+            registeredDatabases: deletionSnapshot?.registeredAgentDatabases ?? [],
+          }),
+        deletionSnapshot,
       )
     : undefined;
   for (const agentId of agents) {

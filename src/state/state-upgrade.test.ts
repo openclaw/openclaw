@@ -4,6 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   OPENCLAW_STATE_SCHEMA_VERSION,
@@ -296,10 +297,19 @@ it.each([
   { completed: true, survivingOwner: false },
   { completed: false, survivingOwner: false },
   { completed: true, survivingOwner: true },
-])("preserves deletion ownership during startup: %j", async ({ completed, survivingOwner }) => {
+  { completed: true, survivingOwner: true, customStore: true },
+  { completed: true, survivingOwner: false, symlinkState: true },
+])("preserves deletion ownership during startup: %j", async (scenario) => {
+  const { completed, survivingOwner, customStore, symlinkState } = scenario;
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-retained-"));
   dirs.push(stateDir);
-  fs.mkdirSync(path.join(stateDir, "state"));
+  if (symlinkState) {
+    const sharedDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-linked-state-"));
+    dirs.push(sharedDir);
+    fs.symlinkSync(sharedDir, path.join(stateDir, "state"), "junction");
+  } else {
+    fs.mkdirSync(path.join(stateDir, "state"));
+  }
   const agentDir = path.join(stateDir, "agents", "retained", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
   const retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
@@ -316,7 +326,7 @@ it.each([
   const state = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
   state.exec(
     "PRAGMA user_version = " +
-      OPENCLAW_STATE_SCHEMA_VERSION +
+      (OPENCLAW_STATE_SCHEMA_VERSION - (symlinkState ? 1 : 0)) +
       "; CREATE TABLE config_machine_state(state_key TEXT, value_json TEXT); CREATE TABLE diagnostic_events(scope TEXT, event_key TEXT, payload_json TEXT, created_at INTEGER, sequence INTEGER, PRIMARY KEY(scope,event_key)); CREATE TABLE agent_deletion_journal(agent_id TEXT, cleanup_completed INTEGER, delete_files INTEGER, phase TEXT, agent_dir TEXT, database_paths_json TEXT);",
   );
   state
@@ -329,45 +339,81 @@ it.each([
   };
   fs.writeFileSync(
     env.OPENCLAW_CONFIG_PATH,
-    JSON.stringify(survivingOwner ? { agents: { list: [{ id: "survivor", agentDir }] } } : {}),
+    JSON.stringify(
+      survivingOwner
+        ? {
+            agents: {
+              list: [{ id: "survivor", agentDir }, ...(customStore ? [{ id: "other" }] : [])],
+            },
+            ...(customStore ? { session: { store: path.join(stateDir, "custom.json") } } : {}),
+          }
+        : {},
+    ),
   );
-  if (survivingOwner) {
-    expect(isStateUpgradePending(env)).toBe(true);
-    expect(fs.readFileSync(retainedPath)).toEqual(before);
-    return;
-  }
-  expect(isStateUpgradePending(env)).toBe(false);
-  expect(await upgradeStateDirectory({ env, log: { info() {}, warn() {} } })).toEqual({
-    status: "current",
-  });
-  expect(fs.readFileSync(retainedPath)).toEqual(before);
-  const liveDir = path.join(stateDir, "agents", "live", "agent");
-  fs.mkdirSync(liveDir, { recursive: true });
-  const livePath = path.join(liveDir, "openclaw-agent.sqlite");
-  const live = new DatabaseSync(livePath);
-  live.exec(
-    "CREATE TABLE retained_value(value TEXT); INSERT INTO retained_value VALUES ('synthetic'); PRAGMA user_version = " +
-      (OPENCLAW_AGENT_SCHEMA_VERSION - 1),
-  );
-  live.close();
-  let copiedRetiredStore: boolean | undefined;
-  const result = await upgradeStateDirectory({
-    env,
-    log: { info() {}, warn() {} },
-    runChain: async ({ stateDir: shadow }) => {
-      copiedRetiredStore = fs.existsSync(path.join(shadow, "agents", "retained"));
-      throw new Error("exercise the real fallback for the live sibling");
-    },
-  });
-  expect(result).toMatchObject({ status: "upgraded", mode: "fallback" });
-  expect(copiedRetiredStore).toBe(false);
-  expect(fs.readFileSync(retainedPath)).toEqual(before);
-  const upgraded = new DatabaseSync(livePath, { readOnly: true });
+  // Match startup custody: raw inventory is allowed, runtime database reentry is not.
+  const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
   try {
-    expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+    if (survivingOwner) {
+      expect(isStateUpgradePending(env)).toBe(true);
+      expect(fs.readFileSync(retainedPath)).toEqual(before);
+      return;
+    }
+    expect(isStateUpgradePending(env)).toBe(false);
+    expect(await upgradeStateDirectory({ env, log: { info() {}, warn() {} } })).toEqual({
+      status: "current",
     });
+    expect(fs.readFileSync(retainedPath)).toEqual(before);
+    const liveDir = path.join(stateDir, "agents", "live", "agent");
+    fs.mkdirSync(liveDir, { recursive: true });
+    const livePath = path.join(liveDir, "openclaw-agent.sqlite");
+    const live = new DatabaseSync(livePath);
+    live.exec(
+      "CREATE TABLE retained_value(value TEXT); INSERT INTO retained_value VALUES ('synthetic'); PRAGMA user_version = " +
+        (OPENCLAW_AGENT_SCHEMA_VERSION - 1),
+    );
+    live.close();
+    if (symlinkState) {
+      const statePath = path.join(stateDir, "state", "openclaw.sqlite");
+      const sharedBefore = fs.readFileSync(statePath);
+      await expect(
+        upgradeStateDirectory({
+          env,
+          log: { info() {}, warn() {} },
+          runChain: async ({ stateDir: shadow }) => {
+            expect(fs.existsSync(path.join(shadow, "agents", "retained"))).toBe(false);
+            // Stop before publication: this case owns discovery and copy exclusion.
+            throw Object.assign(new Error("stop after inspecting the private copy"), {
+              code: "EIO",
+            });
+          },
+        }),
+      ).rejects.toThrow("stop after inspecting the private copy");
+      expect(fs.readFileSync(retainedPath)).toEqual(before);
+      expect(fs.readFileSync(statePath)).toEqual(sharedBefore);
+      expect(fs.lstatSync(path.join(stateDir, "state")).isSymbolicLink()).toBe(true);
+      return;
+    }
+    let copiedRetiredStore: boolean | undefined;
+    const result = await upgradeStateDirectory({
+      env,
+      log: { info() {}, warn() {} },
+      runChain: async ({ stateDir: shadow }) => {
+        copiedRetiredStore = fs.existsSync(path.join(shadow, "agents", "retained"));
+        throw new Error("exercise the real fallback for the live sibling");
+      },
+    });
+    expect(result).toMatchObject({ status: "upgraded", mode: "fallback" });
+    expect(copiedRetiredStore).toBe(false);
+    expect(fs.readFileSync(retainedPath)).toEqual(before);
+    const upgraded = new DatabaseSync(livePath, { readOnly: true });
+    try {
+      expect(upgraded.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+      });
+    } finally {
+      upgraded.close();
+    }
   } finally {
-    upgraded.close();
+    await lock?.release();
   }
 });
