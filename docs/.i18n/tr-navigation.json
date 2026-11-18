@@ -2,15 +2,1079 @@
   "language": "tr",
   "tabs": [
     {
-      "tab": "Baslangic",
+      "tab": "Başlangıç",
       "groups": [
         {
-          "group": "Genel bakis",
-          "pages": ["tr/index"]
+          "group": "Genel bakış",
+          "pages": [
+            "tr/index"
+          ]
         },
         {
-          "group": "Ilk adimlar",
-          "pages": ["tr/start/getting-started", "tr/start/wizard"]
+          "group": "İlk adımlar",
+          "pages": [
+            "tr/start/getting-started"
+          ]
+        },
+        {
+          "group": "Kurulum kılavuzları ve başvuru",
+          "pages": [
+            "tr/start/openclaw"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Kurulum",
+      "groups": [
+        {
+          "group": "Kurulum genel bakışı",
+          "pages": [
+            "tr/install/index"
+          ]
+        },
+        {
+          "group": "Çalışma zamanları",
+          "pages": [
+            "tr/install/node"
+          ]
+        },
+        {
+          "group": "Bakım",
+          "pages": [
+            "tr/install/backups",
+            {
+              "group": "Güncelleme",
+              "pages": [
+                "tr/install/updating/update-methods"
+              ]
+            },
+            {
+              "group": "Geçiş",
+              "pages": [
+                "tr/install/migrating"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Kapsayıcılar",
+          "pages": [
+            "tr/install/docker",
+            {
+              "group": "Docker",
+              "pages": [
+                "tr/install/docker/environment-variables"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Barındırma",
+          "pages": [
+            "tr/vps",
+            {
+              "group": "Uygulama platformları",
+              "pages": [
+                "tr/install/cloudflare"
+              ]
+            },
+            {
+              "group": "Bulut sunucuları",
+              "pages": [
+                "tr/install/azure"
+              ]
+            },
+            {
+              "group": "Kendi sunucunuzda ve yerel barındırma",
+              "pages": [
+                "tr/install/ansible"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Gelişmiş kurulum",
+          "pages": [
+            "tr/start/setup"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Kanallar",
+      "groups": [
+        {
+          "group": "Genel bakış",
+          "pages": [
+            "tr/channels/index"
+          ]
+        },
+        {
+          "group": "Yaygın mesajlaşma",
+          "pages": [
+            "tr/channels/googlechat",
+            {
+              "group": "Discord",
+              "pages": [
+                "tr/channels/discord"
+              ]
+            },
+            {
+              "group": "iMessage",
+              "pages": [
+                "tr/channels/imessage"
+              ]
+            },
+            {
+              "group": "Matrix",
+              "pages": [
+                "tr/channels/matrix"
+              ]
+            },
+            {
+              "group": "Microsoft Teams",
+              "pages": [
+                "tr/channels/msteams"
+              ]
+            },
+            {
+              "group": "Slack",
+              "pages": [
+                "tr/channels/slack"
+              ]
+            },
+            {
+              "group": "Telegram",
+              "pages": [
+                "tr/channels/telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Geliştirici ve öz barındırma",
+          "pages": [
+            "tr/channels/a2a"
+          ]
+        },
+        {
+          "group": "Bölgesel platformlar",
+          "pages": [
+            "tr/channels/line",
+            {
+              "group": "Feishu",
+              "pages": [
+                "tr/channels/feishu"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Yapılandırma",
+          "pages": [
+            "tr/channels/pairing"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Ajanlar",
+      "groups": [
+        {
+          "group": "Ajan çalışma zamanı",
+          "pages": [
+            "tr/concepts/architecture"
+          ]
+        },
+        {
+          "group": "Ajan çalışma alanı",
+          "pages": [
+            "tr/concepts/agent-workspace"
+          ]
+        },
+        {
+          "group": "Oturumlar ve bellek",
+          "pages": [
+            "tr/concepts/main-session",
+            {
+              "group": "Bellek",
+              "pages": [
+                "tr/concepts/memory",
+                {
+                  "group": "Active Memory",
+                  "pages": [
+                    "tr/concepts/active-memory/enabling"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Çoklu ajan",
+          "pages": [
+            "tr/concepts/multi-agent"
+          ]
+        },
+        {
+          "group": "Mesajlar ve teslimat",
+          "pages": [
+            "tr/concepts/messages"
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Yetenekler",
+      "groups": [
+        {
+          "group": "Genel bakış",
+          "pages": [
+            "tr/tools/index"
+          ]
+        },
+        {
+          "group": "Pluginler",
+          "pages": [
+            "tr/tools/plugin"
+          ]
+        },
+        {
+          "group": "Plugin kılavuzları",
+          "pages": [
+            "tr/plugins/agentsapi",
+            {
+              "group": "Codex",
+              "pages": [
+                "tr/plugins/codex-computer-use",
+                {
+                  "group": "Codex harness",
+                  "pages": [
+                    "tr/plugins/codex-harness/placement"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Toplantılar ve aramalar",
+              "pages": [
+                "tr/plugins/meeting-plugins",
+                {
+                  "group": "Google Meet",
+                  "pages": [
+                    "tr/plugins/google-meet/transports"
+                  ]
+                },
+                {
+                  "group": "Sesli arama",
+                  "pages": [
+                    "tr/plugins/voice-call/configuration"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Modeller ve bellek",
+              "pages": [
+                "tr/plugins/apple-fm"
+              ]
+            },
+            {
+              "group": "Gizli bilgiler ve kasalar",
+              "pages": [
+                "tr/plugins/onepassword"
+              ]
+            },
+            {
+              "group": "Otomasyon ve entegrasyonlar",
+              "pages": [
+                "tr/plugins/admin-http-rpc"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Plugin oluşturma",
+          "pages": [
+            "tr/plugins/building-plugins",
+            {
+              "group": "Kanal pluginleri",
+              "pages": [
+                "tr/plugins/sdk-channel-plugins/message-adapter"
+              ]
+            },
+            {
+              "group": "Sağlayıcı pluginleri",
+              "pages": [
+                "tr/plugins/sdk-provider-plugins/model-catalogs"
+              ]
+            },
+            {
+              "group": "Plugin kancaları",
+              "pages": [
+                "tr/plugins/hooks/reference"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Skills",
+          "pages": [
+            "tr/tools/skills"
+          ]
+        },
+        {
+          "group": "Otomasyon",
+          "pages": [
+            "tr/automation/index",
+            {
+              "group": "Otomasyonlar",
+              "pages": [
+                "tr/automation/cron-jobs/how-it-works"
+              ]
+            },
+            {
+              "group": "Kancalar",
+              "pages": [
+                "tr/automation/hooks/writing-hooks"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Araçlar",
+          "pages": [
+            {
+              "group": "Kod çalıştırma ve onaylar",
+              "pages": [
+                "tr/tools/apply-patch"
+              ]
+            },
+            {
+              "group": "Medya ve belgeler",
+              "pages": [
+                "tr/tools/media-overview",
+                {
+                  "group": "Metinden konuşmaya",
+                  "pages": [
+                    "tr/tools/tts/quickstart"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Araç katalogları ve iş akışları",
+              "pages": [
+                "tr/tools/code-mode",
+                {
+                  "group": "Code Mode",
+                  "pages": [
+                    "tr/tools/code-mode/quickstart"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Bağlam ve akıl yürütme",
+              "pages": [
+                "tr/tools/loop-detection"
+              ]
+            },
+            {
+              "group": "Sohbet ve arayüz araçları",
+              "pages": [
+                "tr/tools/ask-user"
+              ]
+            },
+            {
+              "group": "Sayfalara göz atma ve sayfa alma",
+              "pages": [
+                "tr/tools/browser",
+                {
+                  "group": "Tarayıcı",
+                  "pages": [
+                    "tr/tools/browser/setup"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Web araması",
+              "pages": [
+                "tr/tools/web"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Ajan koordinasyonu",
+          "pages": [
+            "tr/tools/agent-send",
+            {
+              "group": "Alt ajanlar",
+              "pages": [
+                "tr/tools/subagents/slash-command"
+              ]
+            },
+            {
+              "group": "ACP ajanları",
+              "pages": [
+                "tr/tools/acp-agents/quickstart"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Modeller",
+      "groups": [
+        {
+          "group": "Genel bakış",
+          "pages": [
+            "tr/providers/index"
+          ]
+        },
+        {
+          "group": "Kavramlar ve yapılandırma",
+          "pages": [
+            "tr/concepts/models",
+            {
+              "group": "Model sağlayıcıları",
+              "pages": [
+                "tr/concepts/model-providers/quick-rules"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Sağlayıcılar",
+          "pages": [
+            {
+              "group": "Sohbet ve kodlama modelleri",
+              "pages": [
+                "tr/providers/alibaba",
+                {
+                  "group": "OpenAI",
+                  "pages": [
+                    "tr/providers/openai/setup"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Konuşma ve ses",
+              "pages": [
+                "tr/providers/azure-speech"
+              ]
+            },
+            {
+              "group": "Görsel, video ve müzik",
+              "pages": [
+                "tr/providers/comfy"
+              ]
+            },
+            {
+              "group": "Ağ geçitleri ve yönlendiriciler",
+              "pages": [
+                "tr/providers/claude-max-api-proxy"
+              ]
+            },
+            {
+              "group": "Yerel çalışma zamanları",
+              "pages": [
+                "tr/providers/ds4",
+                {
+                  "group": "Ollama",
+                  "pages": [
+                    "tr/providers/ollama/setup"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Platformlar",
+      "groups": [
+        {
+          "group": "Platformlara genel bakış",
+          "pages": [
+            "tr/platforms/index"
+          ]
+        },
+        {
+          "group": "macOS eşlikçi uygulaması",
+          "pages": [
+            {
+              "group": "Kurulum",
+              "pages": [
+                "tr/platforms/mac/dev-setup"
+              ]
+            },
+            {
+              "group": "Çalışma zamanı",
+              "pages": [
+                "tr/platforms/mac/bundled-gateway"
+              ]
+            },
+            {
+              "group": "Özellikler",
+              "pages": [
+                "tr/platforms/mac/voicewake"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Gateway ve operasyonlar",
+      "groups": [
+        {
+          "group": "Gateway",
+          "pages": [
+            "tr/gateway/index",
+            {
+              "group": "Yapılandırma",
+              "pages": [
+                "tr/gateway/configuration",
+                {
+                  "group": "Yapılandırma",
+                  "pages": [
+                    "tr/gateway/configuration/common-tasks"
+                  ]
+                },
+                {
+                  "group": "Ajanlar",
+                  "pages": [
+                    "tr/gateway/config-agents/workspace-and-bootstrap"
+                  ]
+                },
+                {
+                  "group": "Kanallar",
+                  "pages": [
+                    "tr/gateway/config-channels/shared-policies"
+                  ]
+                },
+                {
+                  "group": "Araçlar",
+                  "pages": [
+                    "tr/gateway/config-tools/tool-policy"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Kimlik doğrulama ve gizli bilgiler",
+              "pages": [
+                "tr/gateway/authentication",
+                {
+                  "group": "Gizli bilgi yönetimi",
+                  "pages": [
+                    "tr/gateway/secrets/runtime-model"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Sağlık ve tanılama",
+              "pages": [
+                "tr/gateway/health",
+                {
+                  "group": "Doctor",
+                  "pages": [
+                    "tr/gateway/doctor/running"
+                  ]
+                },
+                {
+                  "group": "OpenTelemetry",
+                  "pages": [
+                    "tr/gateway/opentelemetry/setup"
+                  ]
+                },
+                {
+                  "group": "Sorun giderme",
+                  "pages": [
+                    "tr/gateway/troubleshooting/updates-and-rollbacks"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Ölçeklendirme ve operasyonlar",
+              "pages": [
+                "tr/gateway/gateway-lock",
+                {
+                  "group": "Cloud Workers",
+                  "pages": [
+                    "tr/gateway/cloud-workers/warm-images"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Güvenlik ve korumalı alanda çalıştırma",
+              "pages": [
+                "tr/gateway/security/index",
+                {
+                  "group": "Korumalı alanda çalıştırma",
+                  "pages": [
+                    "tr/gateway/sandboxing/what-gets-sandboxed"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Protokoller ve API'ler",
+              "pages": [
+                "tr/gateway/clients",
+                {
+                  "group": "Gateway protokolü",
+                  "pages": [
+                    "tr/gateway/protocol/transport"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Modeller ve yerel sağlayıcılar",
+              "pages": [
+                "tr/gateway/cli-backends"
+              ]
+            },
+            {
+              "group": "Ağ ve keşif",
+              "pages": [
+                "tr/network"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Uzaktan erişim",
+          "pages": [
+            "tr/gateway/remote"
+          ]
+        },
+        {
+          "group": "Güvenlik",
+          "pages": [
+            "tr/security/network-proxy"
+          ]
+        },
+        {
+          "group": "Node'lar ve medya",
+          "pages": [
+            "tr/nodes/index",
+            {
+              "group": "Medya yetenekleri",
+              "pages": [
+                "tr/nodes/media-understanding"
+              ]
+            },
+            {
+              "group": "Node özellikleri",
+              "pages": [
+                "tr/nodes/computer-use",
+                {
+                  "group": "Konuşma modu",
+                  "pages": [
+                    "tr/nodes/talk/realtime-sessions"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Web arayüzleri",
+          "pages": [
+            "tr/web/index",
+            {
+              "group": "Kontrol Arayüzü",
+              "pages": [
+                "tr/web/control-ui/connect-and-pair"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Başvuru",
+      "groups": [
+        {
+          "group": "CLI komutları",
+          "pages": [
+            "tr/cli/index",
+            {
+              "group": "Hizmeti çalıştırma",
+              "pages": [
+                "tr/cli/daemon",
+                {
+                  "group": "Gateway",
+                  "pages": [
+                    "tr/cli/gateway/running"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Kurulum ve bakım",
+              "pages": [
+                "tr/cli/backup",
+                {
+                  "group": "Güncelleme",
+                  "pages": [
+                    "tr/cli/update/status-and-history"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Tanılama ve güvenlik",
+              "pages": [
+                "tr/cli/doctor",
+                {
+                  "group": "Doctor",
+                  "pages": [
+                    "tr/cli/doctor/running"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Ajanlar, modeller ve oturumlar",
+              "pages": [
+                "tr/cli/agent"
+              ]
+            },
+            {
+              "group": "Olaylar ve denetim kayıtları",
+              "pages": [
+                "tr/cli/audit"
+              ]
+            },
+            {
+              "group": "Kanallar ve mesajlaşma",
+              "pages": [
+                "tr/cli/channels"
+              ]
+            },
+            {
+              "group": "Araçlar ve yürütme",
+              "pages": [
+                "tr/cli/approvals"
+              ]
+            },
+            {
+              "group": "Yapılandırma",
+              "pages": [
+                "tr/cli/config"
+              ]
+            },
+            {
+              "group": "Pluginler ve Skills",
+              "pages": [
+                "tr/cli/plugins",
+                {
+                  "group": "Plugin CLI",
+                  "pages": [
+                    "tr/cli/plugins/authoring"
+                  ]
+                },
+                {
+                  "group": "İlke",
+                  "pages": [
+                    "tr/cli/policy/authoring"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Arayüzler",
+              "pages": [
+                "tr/cli/attach"
+              ]
+            },
+            {
+              "group": "Yardımcı araçlar",
+              "pages": [
+                "tr/cli/acp",
+                {
+                  "group": "MCP",
+                  "pages": [
+                    "tr/cli/mcp/serve"
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "group": "RPC ve API",
+          "pages": [
+            "tr/reference/rpc"
+          ]
+        },
+        {
+          "group": "Codex çalışma zamanı başvurusu",
+          "pages": [
+            "tr/plugins/codex-harness-reference",
+            {
+              "group": "Codex harness başvurusu",
+              "pages": [
+                "tr/plugins/codex-harness-reference/supervision"
+              ]
+            },
+            {
+              "group": "Codex harness çalışma zamanı",
+              "pages": [
+                "tr/plugins/codex-harness-runtime/recovery"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Plugin başvurusu",
+          "pages": [
+            "tr/plugins/plugin-inventory"
+          ]
+        },
+        {
+          "group": "Plugin SDK başvurusu",
+          "pages": [
+            "tr/plugins/sdk-overview",
+            {
+              "group": "Plugin SDK genel bakışı",
+              "pages": [
+                "tr/plugins/sdk-overview/imports"
+              ]
+            },
+            {
+              "group": "Plugin bildirimi",
+              "pages": [
+                "tr/plugins/manifest/models"
+              ]
+            },
+            {
+              "group": "Plugin giriş noktaları",
+              "pages": [
+                "tr/plugins/sdk-entrypoints/tool-policy-and-sandbox"
+              ]
+            },
+            {
+              "group": "Plugin çalışma zamanı yardımcıları",
+              "pages": [
+                "tr/plugins/sdk-runtime/config-and-utilities"
+              ]
+            },
+            {
+              "group": "Ajan harness pluginleri",
+              "pages": [
+                "tr/plugins/sdk-agent-harness/core-ownership"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Plugin iç yapısı",
+          "pages": [
+            "tr/plugins/architecture",
+            {
+              "group": "Plugin mimarisinin iç yapısı",
+              "pages": [
+                "tr/plugins/architecture-internals/load-pipeline"
+              ]
+            },
+            {
+              "group": "Plugin SDK geçişi",
+              "pages": [
+                "tr/plugins/sdk-migration/how-to-migrate"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Şablonlar",
+          "pages": [
+            "tr/reference/AGENTS.default",
+            {
+              "group": "Geliştirme ajanı şablonları",
+              "pages": [
+                "tr/reference/templates/AGENTS.dev"
+              ]
+            },
+            {
+              "group": "Kullanımdan kaldırılan çalışma alanı dosyaları",
+              "pages": [
+                "tr/reference/templates/HEARTBEAT"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Teknik başvuru",
+          "pages": [
+            "tr/agent-runtime-architecture",
+            {
+              "group": "Oturum yönetiminin ayrıntıları",
+              "pages": [
+                "tr/reference/session-management-compaction/store"
+              ]
+            },
+            {
+              "group": "Veritabanı şemaları",
+              "pages": [
+                "tr/reference/database-schemas/layout"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Şemalar ve biçimlendirme",
+          "pages": [
+            "tr/concepts/typebox"
+          ]
+        },
+        {
+          "group": "Proje ve katkıda bulunma",
+          "pages": [
+            "tr/reference/credits",
+            {
+              "group": "Proje bakım betikleri",
+              "pages": [
+                "tr/reference/scripts/pr-preparation"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Sürümler",
+      "groups": [
+        {
+          "group": "Sürüm notları",
+          "pages": [
+            "tr/releases/index"
+          ]
+        },
+        {
+          "group": "Sürüm süreci",
+          "pages": [
+            "tr/reference/RELEASING",
+            {
+              "group": "Tam sürüm doğrulaması",
+              "pages": [
+                "tr/reference/full-release-validation/dispatch"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Katkıda bulunma",
+      "groups": [
+        {
+          "group": "Olgunluk",
+          "pages": [
+            "tr/maturity/scorecard"
+          ]
+        },
+        {
+          "group": "Test ve CI",
+          "pages": [
+            "tr/reference/test",
+            {
+              "group": "Testler",
+              "pages": [
+                "tr/reference/test/local"
+              ]
+            },
+            {
+              "group": "CI",
+              "pages": [
+                "tr/ci/pipeline",
+                {
+                  "group": "Kapsam ve yönlendirme",
+                  "pages": [
+                    "tr/ci/scope-and-routing/selection"
+                  ]
+                },
+                {
+                  "group": "Sürüm doğrulaması",
+                  "pages": [
+                    "tr/ci/release-validation/full-release-validation"
+                  ]
+                }
+              ]
+            },
+            {
+              "group": "Kalite güvence araçları",
+              "pages": [
+                "tr/concepts/qa-e2e-automation/command-surface"
+              ]
+            },
+            {
+              "group": "Test kılavuzu",
+              "pages": [
+                "tr/help/testing/suites"
+              ]
+            },
+            {
+              "group": "Canlı test kılavuzu",
+              "pages": [
+                "tr/help/testing-live/quick-smokes"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "tab": "Yardım",
+      "groups": [
+        {
+          "group": "Buradan başlayın",
+          "pages": [
+            "tr/help/index"
+          ]
+        },
+        {
+          "group": "SSS",
+          "pages": [
+            "tr/help/faq",
+            {
+              "group": "SSS konuları",
+              "pages": [
+                "tr/help/faq/what-is-openclaw"
+              ]
+            },
+            {
+              "group": "İlk çalıştırma SSS",
+              "pages": [
+                "tr/help/faq-first-run/quick-start"
+              ]
+            }
+          ]
+        },
+        {
+          "group": "Tanılama",
+          "pages": [
+            "tr/help/environment"
+          ]
+        },
+        {
+          "group": "Topluluk ve meta",
+          "pages": [
+            "tr/start/lore"
+          ]
         }
       ]
     }

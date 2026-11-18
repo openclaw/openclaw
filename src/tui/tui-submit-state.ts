@@ -1,12 +1,16 @@
-import { isChatStopCommandText } from "../gateway/chat-abort.js";
+import { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 
 export type TuiPendingSubmit =
   | { phase: "sending"; runId: string; draftText: string }
   | { phase: "accepted"; runId: string; draftText: string | null };
 
-export type TuiChatSubmitAdmission =
+export type TuiSessionActionAdmission =
   | { status: "allowed" }
   | { status: "blocked"; reason: "disconnected" }
+  | { status: "blocked"; reason: "session-loading" };
+
+export type TuiChatSubmitAdmission =
+  | TuiSessionActionAdmission
   | { status: "blocked"; reason: "pending" }
   | { status: "blocked"; reason: "session-transition"; command: "new" | "reset" };
 
@@ -14,6 +18,7 @@ export type TuiChatSubmitBlock = Exclude<TuiChatSubmitAdmission, { status: "allo
 
 /** Session-transition state captured when Enter reached the submit coalescer. */
 export type TuiChatSubmitSnapshot = {
+  historyLoaded: boolean;
   sessionTransition: "new" | "reset" | null;
   sessionTransitionEpoch: number;
 };
@@ -92,26 +97,71 @@ export function reconcilePendingSubmitHistory(
   return true;
 }
 
-export function resolveTuiChatSubmitAdmission(params: {
+/** History selection owns the target before session-dependent work can begin. */
+export function resolveTuiSessionActionAdmission(params: {
   isConnected: boolean;
-  activeChatRunId: string | null;
-  pendingSubmit: TuiPendingSubmit | null;
-  message: string;
-}): TuiChatSubmitAdmission {
+  historyLoaded: boolean;
+}): TuiSessionActionAdmission {
   if (!params.isConnected) {
     return { status: "blocked", reason: "disconnected" };
   }
+  return params.historyLoaded
+    ? { status: "allowed" }
+    : { status: "blocked", reason: "session-loading" };
+}
+
+export function tuiSessionActionBlockedMessage(
+  admission: Exclude<TuiSessionActionAdmission, { status: "allowed" }>,
+  local: boolean,
+): string {
+  return admission.reason === "session-loading"
+    ? "session history not ready — wait or retry /session"
+    : local
+      ? "local runtime not ready — message not sent"
+      : "not connected to gateway — message not sent";
+}
+
+export function resolveTuiChatSubmitAdmission(params: {
+  isConnected: boolean;
+  historyLoaded: boolean;
+  activeChatRunId: string | null;
+  pendingSubmit: TuiPendingSubmit | null;
+  message: string;
+  transition: {
+    active: "new" | "reset" | null;
+    boundary: "new" | "reset" | null;
+    epoch: number;
+  };
+  snapshot?: TuiChatSubmitSnapshot;
+  allowDuringPending: boolean;
+}): TuiChatSubmitAdmission {
+  const { snapshot, transition } = params;
+  const sessionAdmission = resolveTuiSessionActionAdmission({
+    isConnected: params.isConnected,
+    historyLoaded: params.historyLoaded && snapshot?.historyLoaded !== false,
+  });
+  if (sessionAdmission.status === "blocked" && sessionAdmission.reason === "disconnected") {
+    return sessionAdmission;
+  }
+  const transitionCommand = snapshot
+    ? (snapshot.sessionTransition ??
+      (snapshot.sessionTransitionEpoch !== transition.epoch
+        ? (transition.active ?? transition.boundary)
+        : null))
+    : transition.active;
+  if (transitionCommand) {
+    return { status: "blocked", reason: "session-transition", command: transitionCommand };
+  }
+  if (sessionAdmission.status === "blocked") {
+    return sessionAdmission;
+  }
   if (
-    isChatStopCommandText(params.message) &&
+    isAbortRequestText(params.message) &&
     (params.activeChatRunId || params.pendingSubmit?.phase === "accepted")
   ) {
     return { status: "allowed" };
   }
-  return params.pendingSubmit ? { status: "blocked", reason: "pending" } : { status: "allowed" };
-}
-
-export function disconnectedTuiChatSubmitMessage(local: boolean): string {
-  return local
-    ? "local runtime not ready — message not sent"
-    : "not connected to gateway — message not sent";
+  return params.pendingSubmit && !params.allowDuringPending
+    ? { status: "blocked", reason: "pending" }
+    : { status: "allowed" };
 }

@@ -1,8 +1,8 @@
+import { FAST_MODE_AUTO_PROGRESS_KIND } from "../../../auto-reply/reply-payload.js";
 import {
-  FAST_MODE_AUTO_PROGRESS_KIND,
-  type ReplyPayload,
-} from "../../../auto-reply/reply-payload.js";
-import { emitAgentActivityEvent } from "../../../infra/agent-activity-events.js";
+  emitAgentActivityEvent,
+  type AgentItemEventData,
+} from "../../../infra/agent-activity-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveFastModeModelAutoOnSeconds } from "../../../shared/fast-mode.js";
 import {
@@ -53,6 +53,11 @@ export function createEmbeddedRunProgressController(params: {
     fastAutoOnSeconds?: number;
   }) => {
     const summary = formatFastModeAutoProgressText(payload);
+    const data = {
+      kind: "status",
+      title: "Fast",
+      phase: "update",
+    } satisfies Partial<AgentItemEventData>;
     try {
       emitAgentActivityEvent({
         runId: params.attempt.runId,
@@ -60,9 +65,7 @@ export function createEmbeddedRunProgressController(params: {
         stream: "item",
         data: {
           itemId: `fast-mode-auto:${payload.enabled ? "on" : "off"}`,
-          kind: "status",
-          title: "Fast",
-          phase: "update",
+          ...data,
           status: "running",
           summary,
         },
@@ -73,12 +76,7 @@ export function createEmbeddedRunProgressController(params: {
     try {
       await params.attempt.onAgentEvent?.({
         stream: "item",
-        data: {
-          kind: "status",
-          title: "Fast",
-          phase: "update",
-          summary,
-        },
+        data: { ...data, summary },
         ...(params.attempt.sessionKey ? { sessionKey: params.attempt.sessionKey } : {}),
       });
     } catch (error) {
@@ -93,61 +91,48 @@ export function createEmbeddedRunProgressController(params: {
       log.debug(`embedded run fast mode auto progress failed: ${formatErrorMessage(error)}`);
     }
   };
+  const resolveCurrentFastMode = () =>
+    resolveFastModeForElapsed({
+      mode: params.attempt.fastMode,
+      startedAtMs: fastModeStartedAtMs,
+      fastAutoOnSeconds: fastModeAutoOnSeconds,
+    });
   const maybeAnnounceFastModeAutoOff = async () => {
     if (params.attempt.fastMode !== "auto" || fastModeAutoProgressState.offAnnounced) {
       return;
     }
-    const next = resolveFastModeForElapsed({
-      mode: "auto",
-      startedAtMs: fastModeStartedAtMs,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
+    const next = resolveCurrentFastMode();
     if (next.enabled) {
       return;
     }
     fastModeAutoProgressState.offAnnounced = true;
     await emitFastModeAutoProgress(next);
   };
-  const notifyToolResult = async (payload: ReplyPayload) => {
-    await params.attempt.onToolResult?.(payload);
-  };
-  const notifyAgentEvent = async (
-    event: Parameters<NonNullable<RunEmbeddedAgentParams["onAgentEvent"]>>[0],
-  ) => {
-    await params.attempt.onAgentEvent?.(event);
-  };
   const resolveAttemptFastMode = (): boolean | undefined => {
-    const resolved = resolveFastModeForElapsed({
-      mode: params.attempt.fastMode,
-      startedAtMs: fastModeStartedAtMs,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
+    const resolved = resolveCurrentFastMode();
     return resolved.mode === undefined ? undefined : resolved.enabled;
   };
   const resolveAttemptFastModeParam = (): EmbeddedRunFastModeParam | undefined => {
     if (params.attempt.fastMode === "auto") {
       return resolveAttemptFastMode;
     }
-    return resolveAttemptFastMode();
-  };
-  const maybeEmitFastModeAutoReset = async () => {
-    if (
-      params.attempt.fastMode !== "auto" ||
-      !fastModeAutoProgressState.offAnnounced ||
-      fastModeAutoProgressState.resetAnnounced
-    ) {
-      return;
-    }
-    fastModeAutoProgressState.resetAnnounced = true;
-    await emitFastModeAutoProgress({
-      enabled: true,
-      elapsedSeconds: 0,
-      fastAutoOnSeconds: fastModeAutoOnSeconds,
-    });
+    return params.attempt.fastMode;
   };
   const maybeEmitFastModeAutoResetBestEffort = async () => {
     try {
-      await maybeEmitFastModeAutoReset();
+      if (
+        params.attempt.fastMode !== "auto" ||
+        !fastModeAutoProgressState.offAnnounced ||
+        fastModeAutoProgressState.resetAnnounced
+      ) {
+        return;
+      }
+      fastModeAutoProgressState.resetAnnounced = true;
+      await emitFastModeAutoProgress({
+        enabled: true,
+        elapsedSeconds: 0,
+        fastAutoOnSeconds: fastModeAutoOnSeconds,
+      });
     } catch (error) {
       log.warn(`embedded run fast mode auto reset progress failed: ${formatErrorMessage(error)}`);
     }
@@ -159,10 +144,8 @@ export function createEmbeddedRunProgressController(params: {
     fastModeStartedAtMs,
     maybeAnnounceFastModeAutoOff,
     maybeEmitFastModeAutoResetBestEffort,
-    notifyAgentEvent,
     notifyExecutionPhase,
     notifyRunProgress,
-    notifyToolResult,
     resolveAttemptFastModeParam,
   };
 }

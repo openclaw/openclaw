@@ -1,12 +1,5 @@
 import type { BoardFace } from "../board/settings.ts";
 
-type SessionNavigationHandoff = {
-  pathname: string;
-  sessionKey: string;
-  client: object | null;
-  hello: object | null;
-};
-
 type SessionNavigationHandoffOwner = {
   readonly snapshot: {
     readonly client: object | null;
@@ -29,18 +22,14 @@ type SessionNavigationIntentOwner = {
 };
 const sessionNavigationHandoffs = new WeakMap<
   SessionNavigationHandoffOwner,
-  SessionNavigationHandoff
+  {
+    pathname: string;
+    sessionKey: string;
+    client: object | null;
+    hello: object | null;
+  }
 >();
 const sessionNavigationIntents = new WeakMap<SessionNavigationIntentOwner, object>();
-
-function announceSessionNavigationIntent(intent: SessionNavigationIntent): boolean {
-  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
-    cancelable: true,
-    detail: intent,
-  });
-  globalThis.dispatchEvent(event);
-  return event.defaultPrevented;
-}
 
 export function runSessionNavigationIntent(
   owner: SessionNavigationIntentOwner,
@@ -65,7 +54,12 @@ export function runSessionNavigationIntent(
       return intent.commit();
     },
   };
-  if (!announceSessionNavigationIntent(guarded)) {
+  const event = new CustomEvent(SESSION_NAVIGATION_INTENT_EVENT, {
+    cancelable: true,
+    detail: guarded,
+  });
+  globalThis.dispatchEvent(event);
+  if (!event.defaultPrevented) {
     guarded.commit();
   }
 }

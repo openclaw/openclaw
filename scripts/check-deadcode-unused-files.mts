@@ -21,27 +21,24 @@ const KNIP_SCANS = [
   },
 ] as const;
 
-/** Parses compact Knip output into unused file paths. */
 export function parseKnipCompactUnusedFiles(output: string) {
   const files = [];
   let inUnusedFilesSection = false;
-  let sawUnusedFilesSection = false;
 
   for (const line of output.split(/\r?\n/u)) {
     if (/^Unused files \(\d+\)$/u.test(line)) {
       inUnusedFilesSection = true;
-      sawUnusedFilesSection = true;
       continue;
     }
-    if (inUnusedFilesSection && line.trim() === "") {
-      break;
+    if (line.trim() === "" || /^.+ \(\d+\)$/u.test(line)) {
+      inUnusedFilesSection = false;
+    }
+    if (!inUnusedFilesSection) {
+      continue;
     }
 
     const separatorIndex = line.lastIndexOf(": ");
-    if (separatorIndex === -1 || (sawUnusedFilesSection && !inUnusedFilesSection)) {
-      continue;
-    }
-    const file = line.slice(separatorIndex + 2).trim();
+    const file = line.slice(separatorIndex === -1 ? 0 : separatorIndex + 2).trim();
     if (isLikelyRepoFilePath(file)) {
       files.push(file);
     }
@@ -50,7 +47,6 @@ export function parseKnipCompactUnusedFiles(output: string) {
   return uniqueSorted(files);
 }
 
-/** Rejects every unused file reported by Knip. */
 export function checkUnusedFiles(output: string) {
   const files = parseKnipCompactUnusedFiles(output);
   return {
@@ -67,7 +63,6 @@ export function checkUnusedFiles(output: string) {
   };
 }
 
-/** Validates both Knip process completion and the unused-file report. */
 export function checkKnipUnusedFileScanResult(result: KnipRunResult) {
   if (result.errorCode || result.status === null || result.status !== 0) {
     return {

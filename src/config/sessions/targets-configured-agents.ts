@@ -11,8 +11,7 @@ export function listConfiguredSessionStoreAgentIds(cfg: OpenClawConfig): string[
     if (!raw || raw === "*") {
       return;
     }
-    const normalized = normalizeAgentId(raw);
-    ids.add(normalized);
+    ids.add(normalizeAgentId(raw));
   };
 
   addAcpAgentId(cfg.acp?.defaultAgent);

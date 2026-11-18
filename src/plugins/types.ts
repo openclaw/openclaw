@@ -7,12 +7,8 @@
 export type { AgentHarness } from "../agents/harness/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type {
-  CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
-  CliBackendNativeToolMode,
   CliBackendPlugin,
-  CliBackendSideQuestionToolMode,
-  CliBackendToolAvailabilityEnforcement,
   CliBundleMcpMode,
   PluginTextTransforms,
 } from "./cli-backend.types.js";
@@ -62,10 +58,7 @@ export type {
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
-export type {
-  ProviderAuthOptionBag,
-  ProviderResolveSyntheticAuthContext,
-} from "./provider-external-auth.types.js";
+export type { ProviderResolveSyntheticAuthContext } from "./provider-external-auth.types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 export type {
   ProviderDefaultThinkingPolicyContext,

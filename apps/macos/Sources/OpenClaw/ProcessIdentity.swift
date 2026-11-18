@@ -1,6 +1,13 @@
 import Darwin
 import Foundation
 
+@_silgen_name("csops")
+func csops(
+    _: pid_t,
+    _: UInt32,
+    _: UnsafeMutableRawPointer?,
+    _: Int) -> Int32
+
 struct ProcessIdentity: Encodable {
     struct Birth: Equatable {
         let pid: Int32
@@ -33,6 +40,24 @@ struct ProcessIdentity: Encodable {
     let executablePath: String
     let arguments: [String]
     let cwd: Directory
+
+    static func codeDirectoryHash(pid: Int32) -> Data? {
+        var bytes = [UInt8](repeating: 0, count: 20)
+        let result = bytes.withUnsafeMutableBytes {
+            csops(pid, 5, $0.baseAddress, $0.count)
+        }
+        return result == 0 ? Data(bytes) : nil
+    }
+
+    static func executablePath(pid: Int32) -> String? {
+        var buffer = [CChar](repeating: 0, count: Int(PATH_MAX))
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        // Drop trailing null and decode as UTF-8.
+        let trimmed = buffer.prefix { $0 != 0 }
+        let bytes = trimmed.map { UInt8(bitPattern: $0) }
+        return String(bytes: bytes, encoding: .utf8)
+    }
 
     /// Nil means the process is gone; denied or incomplete inspection throws instead.
     static func birth(pid: Int32) throws -> Birth? {

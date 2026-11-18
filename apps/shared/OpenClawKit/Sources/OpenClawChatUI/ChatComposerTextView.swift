@@ -60,6 +60,7 @@ struct ChatComposerTextView: NSViewRepresentable {
     var maxHeight: CGFloat = 88
     var onSend: () -> Void
     var onPasteImageAttachment: (_ data: Data, _ fileName: String, _ mimeType: String) -> Void
+    var onPasteFiles: ([URL]) -> Void
     var onKeyCommand: (
         _ command: ChatComposerKeyCommand,
         _ context: ChatComposerKeyCommandContext) -> Bool = { _, _ in false }
@@ -69,10 +70,7 @@ struct ChatComposerTextView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let textView = ChatComposerTextViewFactory.makeConfiguredTextView()
-        guard let composerTextView = textView as? ChatComposerNSTextView else {
-            preconditionFailure("ChatComposerTextViewFactory must return ChatComposerNSTextView")
-        }
+        let composerTextView = ChatComposerTextViewFactory.makeConfiguredTextView()
         composerTextView.delegate = context.coordinator
 
         composerTextView.string = self.text
@@ -83,6 +81,7 @@ struct ChatComposerTextView: NSViewRepresentable {
             self.onSend()
         }
         composerTextView.onPasteImageAttachment = self.onPasteImageAttachment
+        composerTextView.onPasteFiles = self.onPasteFiles
         composerTextView.onKeyCommand = self.onKeyCommand
 
         let scroll = NSScrollView()
@@ -92,7 +91,7 @@ struct ChatComposerTextView: NSViewRepresentable {
         scroll.autohidesScrollers = true
         scroll.scrollerStyle = .overlay
         scroll.hasHorizontalScroller = false
-        scroll.documentView = textView
+        scroll.documentView = composerTextView
         return scroll
     }
 
@@ -102,6 +101,7 @@ struct ChatComposerTextView: NSViewRepresentable {
         textView.placeholder = self.placeholder
         if textView.textColor != self.textColor { textView.textColor = self.textColor }
         textView.onPasteImageAttachment = self.onPasteImageAttachment
+        textView.onPasteFiles = self.onPasteFiles
         textView.onKeyCommand = self.onKeyCommand
         textView.isEditable = self.isEnabled
         textView.isSelectable = self.isEnabled
@@ -190,7 +190,7 @@ enum ChatComposerTextViewFactory {
 
     /// Internal for @testable import coverage of composer text view defaults.
     @MainActor
-    static func makeConfiguredTextView() -> NSTextView {
+    static func makeConfiguredTextView() -> ChatComposerNSTextView {
         let textView = ChatComposerNSTextView()
         textView.drawsBackground = false
         textView.isRichText = false
@@ -217,7 +217,7 @@ enum ChatComposerTextViewFactory {
     }
 }
 
-private final class ChatComposerNSTextView: NSTextView {
+final class ChatComposerNSTextView: NSTextView {
     var placeholder = "" {
         didSet {
             if self.placeholder != oldValue { self.needsDisplay = true }
@@ -226,6 +226,7 @@ private final class ChatComposerNSTextView: NSTextView {
 
     var onSend: (() -> Void)?
     var onPasteImageAttachment: ((_ data: Data, _ fileName: String, _ mimeType: String) -> Void)?
+    var onPasteFiles: (([URL]) -> Void)?
     var onKeyCommand: ((_ command: ChatComposerKeyCommand, _ context: ChatComposerKeyCommandContext) -> Bool)?
 
     override func draw(_ dirtyRect: NSRect) {
@@ -288,14 +289,11 @@ private final class ChatComposerNSTextView: NSTextView {
     }
 
     override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
-        if !self.handleImagePaste(from: pboard, matching: type) {
-            return super.readSelection(from: pboard, type: type)
-        }
-        return true
+        self.handleAttachmentPaste(from: pboard, matching: type) || super.readSelection(from: pboard, type: type)
     }
 
     override func paste(_ sender: Any?) {
-        if !self.handleImagePaste(from: NSPasteboard.general, matching: nil) {
+        if !self.handleAttachmentPaste(from: NSPasteboard.general, matching: nil) {
             super.paste(sender)
         }
     }
@@ -304,49 +302,30 @@ private final class ChatComposerNSTextView: NSTextView {
         self.paste(sender)
     }
 
-    private func handleImagePaste(
+    private func handleAttachmentPaste(
         from pasteboard: NSPasteboard,
         matching preferredType: NSPasteboard.PasteboardType?) -> Bool
     {
+        // Finder may also advertise an image preview. Prefer the original file
+        // URL so every file uses the view model's admission and owner pinning.
+        let urls = ChatComposerPasteSupport.fileURLs(from: pasteboard, matching: preferredType)
+        if !urls.isEmpty {
+            self.onPasteFiles?(urls)
+            return true
+        }
         let attachments = ChatComposerPasteSupport.imageAttachments(from: pasteboard, matching: preferredType)
-        if !attachments.isEmpty {
-            self.deliver(attachments)
-            return true
-        }
-
-        let fileReferences = ChatComposerPasteSupport.imageFileReferences(from: pasteboard, matching: preferredType)
-        if !fileReferences.isEmpty {
-            self.loadAndDeliver(fileReferences)
-            return true
-        }
-
-        return false
-    }
-
-    private func deliver(_ attachments: [ChatComposerPasteSupport.ImageAttachment]) {
         for attachment in attachments {
             self.onPasteImageAttachment?(
                 attachment.data,
                 attachment.fileName,
                 attachment.mimeType)
         }
-    }
-
-    private func loadAndDeliver(_ fileReferences: [ChatComposerPasteSupport.FileImageReference]) {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self, fileReferences] in
-            let attachments = ChatComposerPasteSupport.loadImageAttachments(from: fileReferences)
-            guard !attachments.isEmpty else { return }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.deliver(attachments)
-            }
-        }
+        return !attachments.isEmpty
     }
 }
 
 enum ChatComposerPasteSupport {
     typealias ImageAttachment = (data: Data, fileName: String, mimeType: String)
-    typealias FileImageReference = (url: URL, fileName: String, mimeType: String)
 
     static var readablePasteboardTypes: [NSPasteboard.PasteboardType] {
         [.fileURL] + preferredImagePasteboardTypes.map(\.type)
@@ -356,12 +335,14 @@ enum ChatComposerPasteSupport {
         from pasteboard: NSPasteboard,
         matching preferredType: NSPasteboard.PasteboardType? = nil) -> [ImageAttachment]
     {
-        let dataAttachments = self.imageAttachmentsFromRawData(in: pasteboard, matching: preferredType)
+        let dataAttachments = (pasteboard.pasteboardItems ?? []).enumerated().compactMap { index, item in
+            self.imageAttachment(from: item, index: index, matching: preferredType)
+        }
         if !dataAttachments.isEmpty {
             return dataAttachments
         }
 
-        if let preferredType, !self.matchesImageType(preferredType) {
+        if let preferredType, !self.preferredImagePasteboardTypes.contains(where: { $0.type == preferredType }) {
             return []
         }
 
@@ -373,57 +354,15 @@ enum ChatComposerPasteSupport {
         }
     }
 
-    static func imageFileReferences(
+    static func fileURLs(
         from pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [FileImageReference]
+        matching preferredType: NSPasteboard.PasteboardType? = nil) -> [URL]
     {
-        guard self.matchesFileURL(preferredType) else { return [] }
-        return self.imageFileReferencesFromFileURLs(in: pasteboard)
-    }
-
-    static func loadImageAttachments(from fileReferences: [FileImageReference]) -> [ImageAttachment] {
-        fileReferences.compactMap { reference in
-            guard let data = try? Data(contentsOf: reference.url), !data.isEmpty else {
-                return nil
-            }
-            return (
-                data: data,
-                fileName: reference.fileName,
-                mimeType: reference.mimeType)
-        }
-    }
-
-    private static func imageFileReferencesFromFileURLs(in pasteboard: NSPasteboard) -> [FileImageReference] {
+        guard self.matches(preferredType, candidate: .fileURL) else { return [] }
         guard let urls = pasteboard.readObjects(forClasses: [NSURL.self]) as? [URL], !urls.isEmpty else {
             return []
         }
-
-        return urls.enumerated().compactMap { index, url -> FileImageReference? in
-            guard url.isFileURL,
-                  let type = UTType(filenameExtension: url.pathExtension),
-                  type.conforms(to: .image)
-            else {
-                return nil
-            }
-
-            let mimeType = type.preferredMIMEType ?? "image/\(type.preferredFilenameExtension ?? "png")"
-            let fileName = url.lastPathComponent.isEmpty
-                ? self.defaultFileName(index: index, ext: type.preferredFilenameExtension ?? "png")
-                : url.lastPathComponent
-            return (url: url, fileName: fileName, mimeType: mimeType)
-        }
-    }
-
-    private static func imageAttachmentsFromRawData(
-        in pasteboard: NSPasteboard,
-        matching preferredType: NSPasteboard.PasteboardType?) -> [ImageAttachment]
-    {
-        let items = pasteboard.pasteboardItems ?? []
-        guard !items.isEmpty else { return [] }
-
-        return items.enumerated().compactMap { index, item in
-            self.imageAttachment(from: item, index: index, matching: preferredType)
-        }
+        return urls.filter(\.isFileURL)
     }
 
     private static func imageAttachment(from image: NSImage, index: Int) -> ImageAttachment? {
@@ -481,15 +420,6 @@ enum ChatComposerPasteSupport {
     {
         guard let preferredType else { return true }
         return preferredType == candidate
-    }
-
-    private static func matchesFileURL(_ preferredType: NSPasteboard.PasteboardType?) -> Bool {
-        guard let preferredType else { return true }
-        return preferredType == .fileURL
-    }
-
-    private static func matchesImageType(_ preferredType: NSPasteboard.PasteboardType) -> Bool {
-        self.preferredImagePasteboardTypes.contains { $0.type == preferredType }
     }
 
     private static func defaultFileName(index: Int, ext: String) -> String {

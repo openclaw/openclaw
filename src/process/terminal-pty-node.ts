@@ -1,32 +1,53 @@
-import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { toErrorObject } from "../infra/errors.js";
-import { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
+import { runWithMainThreadTask } from "../infra/main-thread-stall.js";
+import { resolveNodeRuntimeExecutableAsync } from "../infra/node-runtime-executable.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { killProcessTree, signalPtySessionTree } from "./kill-tree.js";
-import { decodeTerminalPtyEvent, type TerminalPtyControl } from "./terminal-pty-protocol.js";
+import { BrokerChild } from "./spawn-broker/child.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
+import { spawnProcess } from "./spawn-utils.js";
+import type { TerminalPtyControl, TerminalPtyEvent } from "./terminal-pty-protocol.js";
 import type { TerminalPtyHandle, TerminalPtySpawnParams } from "./terminal-pty.js";
 
 const STARTUP_TIMEOUT_MS = 10_000;
 const CLEANUP_TIMEOUT_MS = 2_000;
 
-/** Keeps native PTY I/O on Node while the Gateway or node host runs on Bun. */
+/** Owns native PTY I/O and inherited exec resource policy outside the Gateway. */
 export async function spawnNodeTerminalPty(
   params: TerminalPtySpawnParams,
   beforeSpawn?: () => void,
+  initiateSpawn?: SpawnInitiation,
+  prepareCurrent?: () => Promise<void>,
 ): Promise<TerminalPtyHandle> {
-  const node = resolveNodeRuntimeExecutable();
+  const node = await resolveNodeRuntimeExecutableAsync();
   if (!node) {
-    throw new Error("A Node executable is required for terminals on Bun; add node to PATH.");
+    throw new Error("A Node executable is required for this terminal helper; add node to PATH.");
   }
   const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
-  const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {
-    stdio: ["ignore", "pipe", "pipe", "ipc"],
-    serialization: "json",
-    env: process.env,
-  });
+  const broker = getSpawnBroker();
+  const child = runWithMainThreadTask(
+    "process:spawn",
+    () =>
+      spawnProcess(node, resolveRuntimeWorkerArgv(worker, node), {
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        serialization: "json",
+        env: process.env,
+      }),
+    "pty-helper",
+  );
+  const brokerChild = child instanceof BrokerChild ? child : undefined;
+  if (brokerChild) {
+    try {
+      await brokerChild.ready();
+    } catch (error) {
+      await brokerChild.waitForClose();
+      throw error;
+    }
+  }
   const stdout = child.stdout;
   const stderrPipe = child.stderr;
   if (!stdout || !stderrPipe) {
@@ -41,12 +62,12 @@ export async function spawnNodeTerminalPty(
   let startupError: Error | undefined;
   let stderr = "";
   let paused = false;
-  let subscribed = false;
   let ptyPid: number | undefined;
   let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
   let helperExit: typeof exited;
   let outputEnded = false;
   let ipcClosed = false;
+  let preparation: Promise<void> | undefined;
 
   const fail = (error: Error) => {
     if (exited) {
@@ -68,22 +89,45 @@ export async function spawnNodeTerminalPty(
       }, CLEANUP_TIMEOUT_MS);
     }
   };
-  const send = (message: TerminalPtyControl) => {
+  const send = (message: TerminalPtyControl, initiate?: SpawnInitiation) => {
     if (!child.connected) {
       return;
     }
-    child.send(message, (error) => {
+    const done = (error: Error | null) => {
       if (error) {
         fail(error);
       }
-    });
+    };
+    if (brokerChild) {
+      brokerChild.send(message, undefined, undefined, done, initiate);
+    } else {
+      const launch = () => child.send(message, done);
+      if (initiate) {
+        initiate(launch);
+      } else {
+        launch();
+      }
+    }
+  };
+  // The broker queues IPC. Check authority when the final launch frame is written.
+  const authorizeLaunch: SpawnInitiation = (launch) => {
+    beforeSpawn?.();
+    return initiateSpawn
+      ? initiateSpawn(
+          launch,
+          ready.promise.then(
+            () => {},
+            () => broker?.waitForCleanup(),
+          ),
+        )
+      : launch();
   };
   const timeout = setTimeout(
     () => fail(new Error("Terminal Node worker startup timed out")),
     STARTUP_TIMEOUT_MS,
   );
   const finish = () => {
-    if (exited || !helperExit || !outputEnded || !ipcClosed) {
+    if (exited || preparation || !helperExit || !outputEnded || !ipcClosed) {
       return;
     }
     ready.reject(
@@ -109,28 +153,64 @@ export async function spawnNodeTerminalPty(
     finish();
   });
   stdout.on("error", fail);
-  stdout.once("close", () => {
+  const finishOutput = () => {
     outputEnded = true;
     finish();
-  });
-  stdout.once("end", () => {
-    outputEnded = true;
-    finish();
-  });
+  };
+  stdout.once("close", finishOutput);
+  stdout.once("end", finishOutput);
   child.once("disconnect", () => {
     ipcClosed = true;
     finish();
   });
-  child.on("message", (raw: unknown) => {
-    const message = decodeTerminalPtyEvent(raw);
-    if (!message) {
-      fail(new Error("Invalid terminal worker message"));
-      return;
-    }
-    if (message.type === "boot") {
+  if (brokerChild && broker) {
+    brokerChild.once("close", () => {
+      if (helperExit) {
+        return;
+      }
+      // Broker loss closes the transport without an exit receipt; its owner retains the tree cleanup.
+      void broker
+        .waitForCleanup()
+        .catch((error: unknown) => {
+          startupError = toErrorObject(error, "Terminal Node worker cleanup failed");
+        })
+        .then(() => {
+          clearTimeout(timeout);
+          clearTimeout(cleanupTimer);
+          helperExit = { exitCode: 1 };
+          finish();
+        });
+    });
+  }
+  // The version-matched PTY helper is the sole writer on this private IPC channel.
+  child.on("message", (message: TerminalPtyEvent) => {
+    if (message.type === "boot" || message.type === "prepared") {
       try {
-        beforeSpawn?.();
-        send({ type: "start", params });
+        if (message.type === "boot") {
+          if (initiateSpawn || prepareCurrent) {
+            beforeSpawn?.();
+            send({ type: "prepare", params });
+          } else {
+            send({ type: "start", params }, authorizeLaunch);
+          }
+        } else {
+          if (!initiateSpawn && !prepareCurrent) {
+            throw new Error("Terminal launch authority is unavailable");
+          }
+          // Accepted preparation retains caller resources even if the helper closes first.
+          const launch = async () => {
+            await prepareCurrent?.();
+            if (!startupError) {
+              send({ type: "launch" }, authorizeLaunch);
+            }
+          };
+          preparation = launch()
+            .catch((error: unknown) => fail(toErrorObject(error, "PTY launch denied")))
+            .finally(() => {
+              preparation = undefined;
+              finish();
+            });
+        }
       } catch (error) {
         fail(toErrorObject(error, "PTY launch denied"));
       }
@@ -183,21 +263,19 @@ export async function spawnNodeTerminalPty(
     },
     resume: () => {
       paused = false;
-      if (subscribed) {
+      if (stdout.listenerCount("data") > 0) {
         stdout.resume();
       }
     },
     onData: (listener) => {
       stdout.on("data", listener);
-      subscribed = true;
       if (!paused) {
         stdout.resume();
       }
       return {
         dispose() {
           stdout.off("data", listener);
-          subscribed = stdout.listenerCount("data") > 0;
-          if (!subscribed) {
+          if (stdout.listenerCount("data") === 0) {
             stdout.pause();
           }
         },

@@ -1,49 +1,42 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
-import { renderMessageAttachment } from "./chat-message-attachments.ts";
+import { createComponent, createSignal, getOwner } from "solid-js";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
+import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
+import { managedSource, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
+beforeAll(async () => {
+  // Admission, not cold Vite transformation of the lazy excerpt parser, is under test.
+  await import("../../../lib/chat/pasted-text-excerpt.ts");
+});
+
 const observations: Array<{ element: Element; show: () => void }> = [];
 const subscribers = new Set<() => void>();
-const containers = new Set<HTMLElement>();
+const views = new Set<ReturnType<typeof mountSolid>>();
 
 beforeEach(() => {
-  vi.stubGlobal(
-    "IntersectionObserver",
-    class {
-      constructor(private readonly callback: IntersectionObserverCallback) {}
-      observe(element: Element) {
-        observations.push({
-          element,
-          show: () =>
-            this.callback(
-              [{ target: element, isIntersecting: true } as IntersectionObserverEntry],
-              this as unknown as IntersectionObserver,
-            ),
-        });
-      }
-      disconnect() {}
-    },
-  );
+  stubManualIntersectionObserver((element, notify) => {
+    observations.push({ element, show: () => notify(true) });
+  });
 });
 
 afterEach(() => {
-  for (const container of containers) {
-    render(null, container);
-    container.remove();
+  for (const view of views) {
+    view.unmount();
   }
   for (const subscriber of subscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
-  containers.clear();
+  views.clear();
   subscribers.clear();
   observations.length = 0;
   vi.unstubAllGlobals();
@@ -62,24 +55,36 @@ function mount(
   onOpenSidebar?: (content: SidebarContent) => void,
   presentation: "inline" | "card" | "preview" = "inline",
 ) {
-  const container = document.body.appendChild(document.createElement("div"));
-  containers.add(container);
   let current = item;
-  const update = () =>
-    render(
-      renderMessageAttachment(
-        current,
-        { ...options, onRequestUpdate: update },
-        onOpenSidebar,
-        undefined,
-        presentation,
-      ),
-      container,
-    );
+  const propsForItem = (): { item: AttachmentItem; options: ImageRenderOptions } => ({
+    item: current,
+    options: { ...options, mediaOwner: update },
+  });
+  let setProps: (props: ReturnType<typeof propsForItem>) => void;
+  const update = () => {
+    setProps(propsForItem());
+    if (!getOwner()) {
+      flush();
+    }
+  };
+  const view = mountSolid(() => {
+    const [props, setCurrent] = createSignal(propsForItem(), { ownedWrite: true });
+    setProps = setCurrent;
+    return createComponent(MessageAttachment, {
+      get item() {
+        return props().item;
+      },
+      get options() {
+        return props().options;
+      },
+      onOpenSidebar,
+      presentation,
+    });
+  });
+  views.add(view);
   subscribers.add(update);
-  update();
   return {
-    container,
+    ...view,
     replace(next: AttachmentItem) {
       current = next;
       update();
@@ -87,109 +92,73 @@ function mount(
   };
 }
 
+function fetchResponse(
+  response: (...args: Parameters<typeof fetch>) => Response | Promise<Response> = () =>
+    Response.json({ available: false }),
+) {
+  const mock = vi.fn<typeof fetch>(async (...args) => response(...args));
+  vi.stubGlobal("fetch", mock);
+  return mock;
+}
+
+function observationFor(container: HTMLElement) {
+  const observation = observations.find(({ element }) => container.contains(element));
+  expect(observation).toBeDefined();
+  return observation!;
+}
+
 function localAttachment(
   kind: AttachmentItem["attachment"]["kind"],
   label: string,
+  overrides: Partial<AttachmentItem["attachment"]> = {},
 ): AttachmentItem {
   return {
     type: "attachment",
-    attachment: { kind, label, url: `/tmp/openclaw/${crypto.randomUUID()}/${label}` },
+    attachment: { kind, label, url: `/tmp/openclaw/${crypto.randomUUID()}/${label}`, ...overrides },
   };
 }
 
 describe("nonimage attachment source admission", () => {
   it.each([
-    ["document", "notes.pdf", "inline"],
-    ["audio", "recording.mp3", "card"],
-    ["video", "recording.mp4", "card"],
-    ["audio", "preview.mp3", "preview"],
+    ["document", "notes.pdf", "inline", true],
+    ["audio", "recording.mp3", "card", true],
+    ["video", "recording.mp4", "card", true],
+    ["audio", "recording.mp3", "inline", false],
+    ["video", "recording.mp4", "inline", false],
+    ["video", "preview.mp4", "preview", false],
+    ["document", "drawing.svg", "card", false],
   ] as const)(
-    "defers a local %s metadata read until its %s %s card is near the viewport",
-    async (kind, label, presentation) => {
-      const fetchMock = vi.fn<typeof fetch>(async () =>
-        Response.json({ available: false, reason: "Fixture missing", retryable: false }),
+    "routes %s %s %s metadata through its source owner (deferred=%s)",
+    async (kind, label, presentation, deferred) => {
+      const fetchMock = fetchResponse(() =>
+        Response.json(
+          deferred
+            ? { available: false, reason: "Fixture missing", retryable: false }
+            : { available: false },
+        ),
       );
-      vi.stubGlobal("fetch", fetchMock);
       const first = mount(localAttachment(kind, label), {}, undefined, presentation);
-      mount(localAttachment(kind, `other-${label}`), {}, undefined, presentation);
-      await settle();
-
-      expect(first.container.textContent).toContain(label);
-      expect(fetchMock).not.toHaveBeenCalled();
-      const observation = observations.find(({ element }) => first.container.contains(element));
-      expect(observation).toBeDefined();
-      observation?.show();
-      await settle();
-      expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([true, false])(
-    "keeps the focused download through metadata resolution with sidebar=%s",
-    async (withSidebar) => {
-      const metadata = createDeferred<Response>();
-      const fetchMock = vi.fn<typeof fetch>(() => metadata.promise);
-      vi.stubGlobal("fetch", fetchMock);
-      const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
-      const { container } = mount(
-        localAttachment("document", "keyboard.pdf"),
-        {},
-        withSidebar ? onOpenSidebar : undefined,
-      );
-      const link = container.querySelector<HTMLAnchorElement>("a[download]");
-      expect(link).not.toBeNull();
-      if (!link) {
-        throw new Error("Missing pending download");
+      if (deferred) {
+        mount(localAttachment(kind, `other-${label}`), {}, undefined, presentation);
       }
-      expect(link.hasAttribute("href")).toBe(false);
-      expect(link.tabIndex).toBe(0);
-      expect(fetchMock).not.toHaveBeenCalled();
-      link.focus();
       await settle();
+      if (deferred) {
+        expect(first.container.textContent).toContain(label);
+        expect(fetchMock).not.toHaveBeenCalled();
+        observationFor(first.container).show();
+        await settle();
+      } else {
+        expect(observations).toHaveLength(0);
+      }
       expect(fetchMock).toHaveBeenCalledOnce();
-      expect(container.querySelector("a[download]")).toBe(link);
-      expect(document.activeElement).toBe(link);
-      expect(link.getAttribute("aria-disabled")).toBe("true");
-      link.click();
-      expect(onOpenSidebar).not.toHaveBeenCalled();
-      metadata.resolve(
-        Response.json({
-          available: true,
-          mediaTicket: "keyboard",
-          mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-          sizeBytes: 2048,
-        }),
-      );
-      await settle();
-      expect(container.querySelector("a[download]")).toBe(link);
-      expect(document.activeElement).toBe(link);
-      expect(link.getAttribute("href")).toContain("mediaTicket=keyboard");
-      expect(link.hasAttribute("aria-disabled")).toBe(false);
     },
   );
-
-  it.each([
-    ["audio", "recording.mp3", "inline"],
-    ["video", "recording.mp4", "inline"],
-    ["video", "preview.mp4", "preview"],
-    ["document", "drawing.svg", "card"],
-  ] as const)("preserves the existing %s %s %s source owner", async (kind, label, presentation) => {
-    const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ available: false }));
-    vi.stubGlobal("fetch", fetchMock);
-    mount(localAttachment(kind, label), {}, undefined, presentation);
-    await settle();
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(observations).toHaveLength(0);
-  });
 
   it("defers a managed ticket without delaying the admitted download", async () => {
-    const url = `/api/chat/media/outgoing/agent%3Amain%3Amain/${crypto.randomUUID()}/full`;
+    const url = managedSource();
     const resolveArtifactDownload = vi.fn(async () => ({ url: `${url}?mediaTicket=fixture` }));
     const { container } = mount(
-      {
-        type: "attachment",
-        attachment: { kind: "document", label: "notes.pdf", url, artifactId: "fixture-document" },
-      },
+      localAttachment("document", "notes.pdf", { url, artifactId: "fixture-document" }),
       { resolveArtifactDownload },
     );
     await settle();
@@ -203,36 +172,8 @@ describe("nonimage attachment source admission", () => {
     );
   });
 
-  it("ignores stale admission after source replacement and disconnect", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      Response.json({ available: false, reason: "Fixture missing", retryable: false }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    const first = localAttachment("document", "first.pdf");
-    const view = mount(first);
-    const stale = observations[0];
-    view.replace(localAttachment("document", "second.pdf"));
-    view.replace(first);
-    stale?.show();
-    await settle();
-    expect(fetchMock).not.toHaveBeenCalled();
-
-    const current = observations.at(-1);
-    render(null, view.container);
-    current?.show();
-    await settle();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it("opens a deferred file with the sidebar's current authority without a viewport callback", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      Response.json({
-        available: true,
-        mediaTicket: "current-authority",
-        mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
+    const fetchMock = fetchResponse(() => ticketResponse("current-authority"));
     const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
     const { container } = mount(localAttachment("document", "explicit.pdf"), {}, onOpenSidebar);
     await settle();
@@ -264,10 +205,7 @@ describe("nonimage attachment source admission", () => {
     "preserves ongoing static playback across authority updates for %s",
     async (url) => {
       const options: ImageRenderOptions = { authToken: "initial-token", connectionEpoch: 1 };
-      const item: AttachmentItem = {
-        type: "attachment",
-        attachment: { kind: "audio", label: "recording.wav", mimeType: "audio/wav", url },
-      };
+      const item = localAttachment("audio", "recording.wav", { mimeType: "audio/wav", url });
       const view = mount(item, options);
       await settle();
       const media = view.container.querySelector("audio");
@@ -291,15 +229,12 @@ describe("nonimage attachment source admission", () => {
 
   it.each([
     ["inline", false],
-    ["card", true],
     ["preview", true],
   ] as const)(
     "preserves %s voice-note expansion controls before admission",
     async (presentation, expandable) => {
-      const fetchMock = vi.fn<typeof fetch>(async () => Response.json({ available: false }));
-      vi.stubGlobal("fetch", fetchMock);
-      const item = localAttachment("audio", "voice.wav");
-      item.attachment.isVoiceNote = true;
+      const fetchMock = fetchResponse();
+      const item = localAttachment("audio", "voice.wav", { isVoiceNote: true });
       const onOpenSidebar = vi.fn<(content: SidebarContent) => void>();
       const { container } = mount(item, {}, onOpenSidebar, presentation);
       await settle();
@@ -310,6 +245,205 @@ describe("nonimage attachment source admission", () => {
       container.querySelector<HTMLElement>(".chat-assistant-attachment-card")?.click();
       expect(onOpenSidebar).toHaveBeenCalledTimes(expandable ? 1 : 0);
       expect(fetchMock).toHaveBeenCalledTimes(presentation === "inline" ? 1 : 0);
+    },
+  );
+});
+
+const commentText =
+  "Selected text:\nhello\n\nSource session: agent:main:main\nDOM text UTF-16 range: [0, 5)";
+
+function textAttachment(kind: "comment" | "paste", managed = false): AttachmentItem {
+  const id = crypto.randomUUID();
+  const label = kind === "comment" ? "selection-comment.txt" : "pasted-text-123.txt";
+  return localAttachment("document", label, {
+    mimeType: "text/plain",
+    ...(managed ? { url: managedSource(id), artifactId: id } : {}),
+  });
+}
+
+async function settleText(container: HTMLElement) {
+  flush();
+  for (let index = 0; index < 16; index++) {
+    await Promise.all(
+      Array.from(
+        container.querySelectorAll<HTMLElement & { updateComplete?: Promise<unknown> }>(
+          "openclaw-chat-pasted-text",
+        ),
+      ).flatMap((element) => (element.updateComplete ? [element.updateComplete] : [])),
+    );
+    flush();
+  }
+}
+
+function mountText(
+  item: AttachmentItem | AttachmentItem[],
+  options: ImageRenderOptions = {},
+  inlineComments = false,
+) {
+  const [current, setCurrent] = createSignal(Array.isArray(item) ? item : [item]);
+  const [revision, setRevision] = createSignal(0);
+  const open = vi.fn();
+  const update = () => setRevision((value) => value + 1);
+  const view = mountSolid(() =>
+    createComponent(AssistantAttachments, {
+      get attachments() {
+        return current();
+      },
+      get options() {
+        revision();
+        return { ...options, mediaOwner: update };
+      },
+      onOpenSidebar: open,
+      inlinePlayback: false,
+      inlineComments,
+    }),
+  );
+  views.add(view);
+  subscribers.add(update);
+  return {
+    ...view,
+    open,
+    replace(next: AttachmentItem) {
+      setCurrent([next]);
+    },
+  };
+}
+
+describe("deferred attachment source admission", () => {
+  it.each([
+    ["comment", "viewport", true],
+    ["comment", "viewport", false],
+    ["paste", "viewport", false],
+    ["comment", "focus", false],
+    ["paste", "focus", false],
+  ] as const)(
+    "admits %s through %s (grouped=%s) while retaining the chip",
+    async (kind, trigger, grouped) => {
+      const managed = trigger === "focus";
+      const item = textAttachment(kind, managed);
+      const managedItem = grouped ? textAttachment("comment", true) : item;
+      const resolveArtifactDownload = vi.fn(async () => ({
+        url: `${managedItem.attachment.url}?mediaTicket=managed-text`,
+        ...(managed ? { expiresAt: new Date(Date.now() + 300_000).toISOString() } : {}),
+      }));
+      const fetchMock = fetchResponse((input) =>
+        !managed && (input instanceof Request ? input.url : String(input)).includes("meta=1")
+          ? ticketResponse("text-chip")
+          : new Response(managed || kind === "comment" ? commentText : "Visible pasted excerpt"),
+      );
+      const view = mountText(
+        grouped ? [item, managedItem] : item,
+        managed || grouped ? { resolveArtifactDownload } : {},
+      );
+      await settleText(view.container);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(resolveArtifactDownload).not.toHaveBeenCalled();
+      const chip = view.container.querySelector<HTMLElement>(".chat-selection-annotations__chip");
+      expect(chip).not.toBeNull();
+      if (managed) {
+        chip?.focus();
+        await settleText(view.container);
+        expect(resolveArtifactDownload).toHaveBeenCalledOnce();
+        expect(document.activeElement).toBe(chip);
+      } else {
+        const observation = observationFor(view.container);
+        expect(observation.element).toBe(chip);
+        if (grouped) {
+          expect(observations).toHaveLength(1);
+        }
+        observation.show();
+        await settleText(view.container);
+        expect(fetchMock).toHaveBeenCalledTimes(kind === "comment" ? 1 : 2);
+        expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
+        if (grouped) {
+          expect(resolveArtifactDownload).toHaveBeenCalledOnce();
+          chip?.focus();
+        } else {
+          chip?.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+        }
+        await settleText(view.container);
+        expect(fetchMock).toHaveBeenCalledTimes(grouped ? 3 : 2);
+        if (grouped) {
+          expect(
+            view.container.querySelectorAll(".chat-comment-preview__text--selection"),
+          ).toHaveLength(2);
+        } else {
+          await waitForSolid(() =>
+            expect(view.container.textContent).toContain(
+              kind === "comment" ? "hello" : "Visible pasted excerpt",
+            ),
+          );
+        }
+      }
+      expect(view.container.querySelector(".chat-selection-annotations__chip")).toBe(chip);
+      if (kind === "paste") {
+        const activation = new KeyboardEvent("keydown", {
+          key: trigger === "focus" ? " " : "Enter",
+          bubbles: true,
+          cancelable: true,
+        });
+        chip?.dispatchEvent(activation);
+        expect(activation.defaultPrevented).toBe(true);
+        expect(view.open).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            kind: "attachment",
+            attachmentKind: "document",
+            title: "pasted-text-123.txt",
+            plainText: true,
+            sourceIdentity: item.attachment.url,
+          }),
+        );
+      }
+    },
+  );
+
+  it.each(["document", "comment", "paste", "inline-comment"] as const)(
+    "fences stale %s observations after source replacement and disconnect",
+    async (kind) => {
+      const fetchMock = fetchResponse(() =>
+        Response.json(
+          kind === "document"
+            ? { available: false, reason: "Fixture missing", retryable: false }
+            : { available: false },
+        ),
+      );
+      const attachment = () =>
+        kind === "document"
+          ? localAttachment(kind, "file.pdf")
+          : textAttachment(kind === "inline-comment" ? "comment" : kind);
+      const first = attachment();
+      const view =
+        kind === "document"
+          ? mount(first)
+          : mountText(first, { messageSendId: "observer-send" }, kind === "inline-comment");
+      const settled = () => (kind === "document" ? settle() : settleText(view.container));
+      if (kind !== "document") {
+        await settled();
+      }
+      const stale = kind === "document" ? observations[0] : observations.at(-1);
+      expect(stale).toBeDefined();
+      view.replace(attachment());
+      if (kind === "document") {
+        view.replace(first);
+      } else {
+        await settled();
+      }
+      stale?.show();
+      if (kind === "document") {
+        await settled();
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      const current = observations.at(-1);
+      if (kind === "inline-comment") {
+        current?.show();
+        await settled();
+        expect(fetchMock).toHaveBeenCalledOnce();
+      }
+      view.unmount();
+      await settled();
+      current?.show();
+      await settled();
+      expect(fetchMock).toHaveBeenCalledTimes(kind === "inline-comment" ? 1 : 0);
     },
   );
 });

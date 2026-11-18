@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { runMeetingBrowserAct } from "./browser-act-lock.js";
 import { asMeetingBrowserTabs } from "./browser-request.js";
 import type {
@@ -114,7 +115,7 @@ export async function runMeetingParticipationWithBrowser(params: {
   } catch (error) {
     return {
       status: dispatched ? "uncertain" : authorityCheckFailed ? "rejected" : "failed",
-      message: error instanceof Error ? error.message : String(error),
+      message: coerceErrorMessage(error),
     };
   }
 }

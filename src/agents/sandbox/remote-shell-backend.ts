@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandParams,
   SandboxBackendCommandResult,
@@ -36,11 +35,12 @@ type ResolvedRemoteRuntimePaths = {
 };
 export type RemoteShellSandboxBackendOptions = {
   createSession: () => Promise<RemoteShellSandboxSession>;
+  prepareCurrent?: () => Promise<void>;
   backendId?: string;
   runtimeId?: string;
   configLabel?: string;
   configLabelKind?: string;
-  preprovisionedWorkdir?: { runtimeId: string; remoteWorkspaceDir: string };
+  preprovisionedWorkdir?: PreprovisionedRemoteWorkdir;
 };
 
 export async function createRemoteShellSandboxBackend(
@@ -54,13 +54,9 @@ export async function createRemoteShellSandboxBackend(
     ? resolvePreprovisionedRuntimePaths(options.preprovisionedWorkdir)
     : resolveRemoteShellRuntimePaths(params.cfg.ssh.workspaceRoot, params.scopeKey);
   return new RemoteShellSandboxBackendImpl({
+    ...options,
     createParams: params,
-    preprovisionedWorkdir: options.preprovisionedWorkdir,
     backendId: options.backendId ?? params.cfg.backend,
-    runtimeId: options.runtimeId,
-    configLabel: options.configLabel,
-    configLabelKind: options.configLabelKind,
-    createSession: options.createSession,
     runtimePaths,
   }).asHandle();
 }
@@ -71,14 +67,9 @@ class RemoteShellSandboxBackendImpl {
   private readonly pendingExecs = new WeakMap<object, PendingExec>();
 
   constructor(
-    private readonly params: {
+    private readonly params: RemoteShellSandboxBackendOptions & {
       createParams: CreateSandboxBackendParams;
-      preprovisionedWorkdir?: PreprovisionedRemoteWorkdir;
-      createSession: () => Promise<RemoteShellSandboxSession>;
       backendId: string;
-      runtimeId?: string;
-      configLabel?: string;
-      configLabelKind?: string;
       runtimePaths: ResolvedRemoteRuntimePaths;
     },
   ) {}
@@ -93,7 +84,7 @@ class RemoteShellSandboxBackendImpl {
       configLabel: this.params.configLabel,
       configLabelKind: this.params.configLabelKind,
       workdirValidation: "backend",
-      validateWorkdir: async (workdir) => await this.validateWorkdir(workdir),
+      validateWorkdir: (workdir) => this.validateWorkdir(workdir),
       discardPreparedWorkdir: (workdir) => this.discardPreparedWorkdir(workdir),
       workdirRoots: [
         this.params.runtimePaths.remoteWorkspaceDir,
@@ -135,6 +126,7 @@ class RemoteShellSandboxBackendImpl {
             env: prepared.env,
             cwd: prepared.cwd,
             stdinMode: "pipe-open",
+            prepareCurrent: this.params.prepareCurrent,
             assertCurrent: this.params.createParams.assertRuntimeCurrent,
             finalizeToken,
           };
@@ -158,13 +150,13 @@ class RemoteShellSandboxBackendImpl {
           await pending.session.dispose();
         }
       },
-      runShellCommand: async (command) => await this.runRemoteShellScript(command),
+      runShellCommand: (command) => this.runRemoteShellScript(command),
       createFsBridge: ({ sandbox }) =>
         createRemoteShellSandboxFsBridge({
           sandbox,
           runtime: this.asHandle(),
         }),
-      runRemoteShellScript: async (command) => await this.runRemoteShellScript(command),
+      runRemoteShellScript: (command) => this.runRemoteShellScript(command),
     };
   }
 
@@ -322,12 +314,9 @@ class RemoteShellSandboxBackendImpl {
   }
 
   private consumeRefreshedSkillsForNextExec(workdir: string): boolean {
-    if (this.refreshedSkillsForNextExecWorkdir !== workdir) {
-      this.refreshedSkillsForNextExecWorkdir = null;
-      return false;
-    }
+    const refreshed = this.refreshedSkillsForNextExecWorkdir === workdir;
     this.refreshedSkillsForNextExecWorkdir = null;
-    return true;
+    return refreshed;
   }
 
   private resolveWorkdirValidationRoot(workdir: string): string {
@@ -466,10 +455,9 @@ export function resolveRemoteShellRuntimePaths(
   };
 }
 
-function resolvePreprovisionedRuntimePaths(params: {
-  runtimeId: string;
-  remoteWorkspaceDir: string;
-}): ResolvedRemoteRuntimePaths {
+function resolvePreprovisionedRuntimePaths(
+  params: PreprovisionedRemoteWorkdir,
+): ResolvedRemoteRuntimePaths {
   const remoteWorkspaceDir = params.remoteWorkspaceDir;
   if (
     !path.posix.isAbsolute(remoteWorkspaceDir) ||
@@ -499,7 +487,8 @@ function buildRemoteShellRuntimeId(scopeKey: string): string {
   }
   // Keep the path human-readable while hashing the original scope to avoid
   // collisions after normalization and truncation.
-  const safe = normalizeLowercaseStringOrEmpty(trimmed)
+  const safe = trimmed
+    .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

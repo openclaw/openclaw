@@ -11,7 +11,11 @@ import type {
   LaneResult,
   LaneState,
 } from "./config.ts";
-import { buildPackagedUpgradeUpdateArgs, buildRealUpdateEnv, updateTimeoutMs } from "./config.ts";
+import {
+  buildPackagedUpgradeUpdateArgs,
+  buildRealUpdateEnv,
+  resolvePackagedUpgradeTimeouts,
+} from "./config.ts";
 import { readInstalledMetadata, verifyInstalledCandidate } from "./install.ts";
 import { installLaneCompanions } from "./lane-companions.ts";
 import { hasChildExited, reserveGatewayPortForLane, runCommand, stopGateway } from "./process.ts";
@@ -141,11 +145,18 @@ export async function runPackagedSelfUpdateTransition(
     });
     const schemaBefore = JSON.parse(await assertion("schema-before", ["schema", "15"]));
     await runTimedLanePhase(lane, "packaged-self-update", async () => {
-      const update = await cli("self-update", buildPackagedUpgradeUpdateArgs(params.candidateUrl), {
-        env: buildRealUpdateEnv(env),
-        check: false,
-        timeoutMs: updateTimeoutMs(),
-      });
+      const timeouts = resolvePackagedUpgradeTimeouts(
+        lane.phaseTimings.find((phase) => phase.name === "install-baseline")!.durationMs,
+      );
+      const update = await cli(
+        "self-update",
+        buildPackagedUpgradeUpdateArgs(params.candidateUrl, timeouts.stepTimeoutSeconds),
+        {
+          env: buildRealUpdateEnv(env),
+          check: false,
+          timeoutMs: timeouts.wrapperTimeoutMs,
+        },
+      );
       writeFileSync(log("self-update.json"), update.stdout);
       writeFileSync(log("self-update.err"), update.stderr);
       assert.equal(update.exitCode, 0, "packaged self-update failed");

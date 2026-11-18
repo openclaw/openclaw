@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { createReadStream, readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import { isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { list as listTar } from "tar";
+import { list as listTar, Parser } from "tar";
+import { toErrorObject } from "./error-format.mts";
 import { hashFile } from "./gateway-bench-installed-package.ts";
 import { PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
 import { isRecord } from "./record-shared.mjs";
@@ -20,15 +21,62 @@ export type PackagedOwnerEvidence = {
 export async function verifyPackageMember(packageRoot: string, tarball: string, file: string) {
   const relative = path.relative(packageRoot, file).replaceAll(path.sep, "/");
   assert.ok(relative.startsWith("dist/") && !relative.split("/").includes(".."));
-  const bytes = execFileSync("tar", ["-xOf", tarball, `package/${relative}`], {
-    maxBuffer: 32 * 1024 * 1024,
-    windowsHide: true,
+  const maxBytes = 32 * 1024 * 1024;
+  let matches = 0;
+  let sha256: string | undefined;
+  // Read drive-letter paths directly; GNU tar can interpret them as remote hosts.
+  const parser = new Parser({
+    file: tarball,
+    strict: true,
+    // The member byte ceiling owns this verifier's limit, including compressible files.
+    maxDecompressionRatio: Infinity,
+    filter: (name) => name === `package/${relative}`,
+    onReadEntry(entry) {
+      matches += 1;
+      if (matches !== 1) {
+        parser.abort(new Error(`Expected one package member: ${relative}`));
+        return;
+      }
+      if (
+        entry.type !== "File" ||
+        !Number.isSafeInteger(entry.size) ||
+        entry.size < 0 ||
+        entry.size > maxBytes
+      ) {
+        parser.abort(
+          new Error(`Expected a regular package member within ${maxBytes} bytes: ${relative}`),
+        );
+        return;
+      }
+      const hash = createHash("sha256");
+      let bytes = 0;
+      entry.on("data", (chunk: Buffer) => {
+        bytes += chunk.length;
+        if (bytes > maxBytes) {
+          parser.abort(new Error(`Package member exceeds ${maxBytes} bytes: ${relative}`));
+          return;
+        }
+        hash.update(chunk);
+      });
+      entry.on("end", () => {
+        if (bytes === entry.size && bytes <= maxBytes) {
+          sha256 = hash.digest("hex");
+        }
+      });
+      entry.resume();
+    },
   });
-  const sha256 = createHash("sha256").update(bytes).digest("hex");
+  try {
+    await pipeline(createReadStream(tarball, { highWaterMark: 16 * 1024 * 1024 }), parser);
+  } catch (error) {
+    // Parser has no destroy method; also release its decompressor on input failure.
+    parser.abort(toErrorObject(error, "Package archive verification failed"));
+    throw error;
+  }
+  assert.equal(matches, 1, `Expected one package member: ${relative}`);
+  assert.ok(sha256, `Expected a regular package member within ${maxBytes} bytes: ${relative}`);
   assert.equal(
-    createHash("sha256")
-      .update(await fs.readFile(file))
-      .digest("hex"),
+    await hashFile(file),
     sha256,
     `Installed module differs from the bound package: ${relative}`,
   );

@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
+import { countNewlines } from "./line-endings.js";
 import type { FileMutationToolName } from "./tool-mutation-names.js";
 
 type FileMutationLineCount = { added: number; removed: number };
@@ -23,15 +24,8 @@ function readEdits(args: Record<string, unknown>): Record<string, unknown>[] {
   });
 }
 
-function countNewlines(value: unknown): number {
-  if (typeof value !== "string") {
-    return 0;
-  }
-  let count = 0;
-  for (let index = value.indexOf("\n"); index >= 0; index = value.indexOf("\n", index + 1)) {
-    count += 1;
-  }
-  return count;
+function countArgumentNewlines(value: unknown): number {
+  return typeof value === "string" ? countNewlines(value) : 0;
 }
 
 function countCompletedLines(text: string): number {
@@ -53,13 +47,13 @@ export function countStreamingFileMutationLines(
   args: Record<string, unknown>,
 ): FileMutationLineCount {
   if (kind === "write") {
-    return { added: countNewlines(readStringField(args, "content")), removed: 0 };
+    return { added: countArgumentNewlines(readStringField(args, "content")), removed: 0 };
   }
   if (kind === "edit") {
     return readEdits(args).reduce<FileMutationLineCount>(
       (total, edit) => ({
-        added: total.added + countNewlines(edit.newText ?? edit.new_string),
-        removed: total.removed + countNewlines(edit.oldText ?? edit.old_string),
+        added: total.added + countArgumentNewlines(edit.newText ?? edit.new_string),
+        removed: total.removed + countArgumentNewlines(edit.oldText ?? edit.old_string),
       }),
       { added: 0, removed: 0 },
     );
@@ -146,18 +140,8 @@ export function readCompletedFileMutationDelta(
   let removed = 0;
   let hasCompleteEdit = false;
   for (const edit of readEdits(args)) {
-    const oldText =
-      typeof edit.oldText === "string"
-        ? edit.oldText
-        : typeof edit.old_string === "string"
-          ? edit.old_string
-          : undefined;
-    const newText =
-      typeof edit.newText === "string"
-        ? edit.newText
-        : typeof edit.new_string === "string"
-          ? edit.new_string
-          : undefined;
+    const oldText = readStringField(edit, "oldText") ?? readStringField(edit, "old_string");
+    const newText = readStringField(edit, "newText") ?? readStringField(edit, "new_string");
     if (oldText === undefined || newText === undefined) {
       continue;
     }

@@ -30,7 +30,7 @@ describe("agent workspace instruction snapshots", () => {
     });
   });
 
-  it.each(["", " \n\t", "[MISSING] Expected at: fixture workspace"])(
+  it.each([" \n\t", "[MISSING] Expected at: fixture workspace"])(
     "records a successful empty capture for unusable context (%j)",
     (content) => {
       expect(

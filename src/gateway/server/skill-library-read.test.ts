@@ -7,19 +7,18 @@ import { isDeepStrictEqual } from "node:util";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
+import { buildDeviceAuthPayloadV3 } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   PROTOCOL_VERSION,
   type SkillsLibraryReceipt,
   type SkillLibrarySelection,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayStartup } from "../../../test/helpers/gateway-startup.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
 } from "../../../test/helpers/gateway-websocket.js";
-import {
-  writeOpenAiResponsesSse,
-  writeOpenAiResponsesText,
-} from "../../../test/helpers/openai-responses-sse.js";
+import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.js";
 import { prepareDirectCompactionAttempt } from "../../agents/embedded-agent-runner/direct-compaction-preparation.js";
 import {
   buildPreparedCompactionRuntime,
@@ -52,7 +51,7 @@ import { setTestEnvValue } from "../../test-utils/env.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import { buildDeviceAuthPayloadV3 } from "../device-auth.js";
+import { writeToolCallResponse } from "../gateway-provider-fixture.test-support.js";
 import { startGatewayServer } from "../server.js";
 import { startClaimedGateway } from "../test-helpers.listener.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -269,29 +268,7 @@ describe("Gateway pinned manual library read", () => {
                 arguments: JSON.stringify(call.args),
                 status: "completed",
               };
-              writeOpenAiResponsesSse(response, [
-                {
-                  type: "response.output_item.added",
-                  output_index: 0,
-                  item: { ...item, status: "in_progress", arguments: "" },
-                },
-                {
-                  type: "response.function_call_arguments.done",
-                  item_id: item.id,
-                  output_index: 0,
-                  arguments: item.arguments,
-                },
-                { type: "response.output_item.done", output_index: 0, item },
-                {
-                  type: "response.completed",
-                  response: {
-                    id: `resp_${call.id}`,
-                    status: "completed",
-                    output: [item],
-                    usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
-                  },
-                },
-              ]);
+              writeToolCallResponse(response, item, `resp_${call.id}`, 10, 10);
             })().catch((error: unknown) => {
               providerErrors.push(error);
               response.writeHead(500).end(String(error));
@@ -359,16 +336,17 @@ describe("Gateway pinned manual library read", () => {
               startGatewayServer(port, { bind: "loopback", controlUiEnabled: false }),
             );
             await gateway.startupSettled;
+            await waitForGatewayStartup(port);
             const alice = await connectProfile(
               port,
               "alice@example.test",
-              state.path("alice-device.sqlite"),
+              state.path("alice-device", "client", "credentials.sqlite"),
             );
             sockets.push(alice);
             const bob = await connectProfile(
               port,
               "bob@example.test",
-              state.path("bob-device.sqlite"),
+              state.path("bob-device", "client", "credentials.sqlite"),
             );
             sockets.push(bob);
             const saved = (await rpc(alice, "skills.library.save", {

@@ -2,14 +2,15 @@ import { vi } from "vitest";
 import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { t } from "../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
-import { resolveLobsterPetMode } from "./lobster-pet-contract.ts";
-import "./lobster-pet.runtime.ts";
+import { resolveLobsterPetMode, type LobsterComposerElements } from "./lobster-pet-contract.ts";
+import "./lobster-pet.tsx";
 
 registerNewSessionSetupEnglish();
 
 type LobsterPetMode = ReturnType<typeof resolveLobsterPetMode>;
 
 export type LobsterPetElement = HTMLElement & {
+  composerElements: () => LobsterComposerElements | null;
   gatewayVersion: string | null;
   mode: LobsterPetMode;
   runOutcome: "ok" | "error" | "aborted";
@@ -44,7 +45,23 @@ export function createPet(seed: number, mode: LobsterPetMode = "idle"): LobsterP
       value: () => box,
     });
   }
-  wrapper.querySelector(".agent-chat__input")!.prepend(element);
+  const composer = wrapper.querySelector<HTMLDivElement>(".agent-chat__input")!;
+  const editor = wrapper.querySelector<HTMLTextAreaElement>("textarea")!;
+  const footer = wrapper.querySelector<HTMLDivElement>(".agent-chat__composer-footer")!;
+  const controls = [
+    wrapper.querySelector<HTMLDivElement>(".agent-chat__composer-lead")!,
+    wrapper.querySelector<HTMLDivElement>(".chat-composer-model-control")!,
+    wrapper.querySelector<HTMLDivElement>(".agent-chat__composer-actions")!,
+  ];
+  element.composerElements = () => ({
+    root: wrapper,
+    composer,
+    editor,
+    footer,
+    controls: controls.filter((control) => control.isConnected),
+    obstacles: [],
+  });
+  composer.prepend(element);
   document.body.append(wrapper);
   return element;
 }

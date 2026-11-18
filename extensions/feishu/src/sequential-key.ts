@@ -2,6 +2,7 @@ import {
   isAbortRequestText,
   isBtwRequestText,
 } from "openclaw/plugin-sdk/command-primitives-runtime";
+import { normalizeFeishuCommandProbeBody } from "./bot-content.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
 
 export function getFeishuSequentialKey(params: {
@@ -9,14 +10,14 @@ export function getFeishuSequentialKey(params: {
   event: FeishuMessageEvent;
   preparedContent?: string;
   botOpenId?: string;
-  botName?: string;
+  isControlCommandMessage: (text: string) => boolean;
 }): string {
-  const { accountId, event, botOpenId, botName, preparedContent } = params;
+  const { accountId, event, botOpenId, preparedContent, isControlCommandMessage } = params;
   const chatId = event.message.chat_id?.trim() || "unknown";
   const baseKey = `feishu:${accountId}:${chatId}`;
-  const text = (
-    preparedContent ?? parseFeishuMessageEvent(event, botOpenId, botName).content
-  ).trim();
+  const text = normalizeFeishuCommandProbeBody(
+    preparedContent ?? parseFeishuMessageEvent(event, botOpenId).content,
+  );
 
   if (isAbortRequestText(text)) {
     return `${baseKey}:control`;
@@ -26,5 +27,6 @@ export function getFeishuSequentialKey(params: {
     return `${baseKey}:btw`;
   }
 
-  return baseKey;
+  // Commands that may run inference must not hold the abort lane.
+  return isControlCommandMessage(text) ? `${baseKey}:commands` : baseKey;
 }

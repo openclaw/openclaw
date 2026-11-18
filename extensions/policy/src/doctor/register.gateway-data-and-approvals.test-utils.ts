@@ -8,6 +8,8 @@ import { registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
   cfgWithPolicy,
+  policyForAgents,
+  rawCfgWithPolicy,
   ctx,
   registerChecks,
   runPolicyDoctorLint,
@@ -15,6 +17,14 @@ import {
   teardownPolicyDoctorTest,
   writePolicyFixture,
 } from "./register.test-harness.js";
+
+function writeExecApprovalsFixture(value: object): Promise<void> {
+  return fs.writeFile(
+    join(workspaceDir, "exec-approvals.json"),
+    JSON.stringify({ version: 1, ...value }),
+    "utf-8",
+  );
+}
 
 function writeExecApprovalsPolicyFixture(execApprovals: object): Promise<string> {
   return writePolicyFixture({ execApprovals });
@@ -35,8 +45,7 @@ describe("registerPolicyDoctorChecks", () => {
   afterEach(teardownPolicyDoctorTest);
 
   it("does not report Responses URL fetching when it is disabled", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       gateway: {
         http: {
           endpoints: {
@@ -48,7 +57,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writePolicyFixture({
       gateway: {
         http: {
@@ -63,15 +72,14 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports auth profiles missing required metadata or using unapproved modes", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       auth: {
         profiles: {
           missingMode: { provider: "github" },
           oauth: { provider: "github", mode: "oauth" },
         },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writePolicyFixture({
       auth: {
         profiles: { requireMetadata: ["provider", "mode"], allowModes: ["api_key", "token"] },
@@ -97,12 +105,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports data-handling conformance findings from config posture", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       diagnostics: { otel: { enabled: true, captureContent: true } },
       session: { maintenance: { mode: "warn" } },
       memory: { search: { rememberAcrossConversations: true, sources: ["sessions"] } },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       sensitiveLogging: { requireRedaction: true },
       telemetry: { denyContentCapture: true },
@@ -159,10 +166,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("treats omitted session maintenance mode as enforce for retention conformance", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      session: {},
-    } as unknown as OpenClawConfig;
+    const cfg = rawCfgWithPolicy({ session: {} }) as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       retention: { requireSessionMaintenance: true },
     });
@@ -170,24 +174,21 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runRegisteredPolicyDoctor(configPath, cfg);
     const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
 
-    expect(evidence.dataHandling).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          kind: "sessionRetentionMode",
-          source: "oc://openclaw.config/session/maintenance/mode",
-          value: "enforce",
-          explicit: false,
-        }),
-      ]),
+    expect(evidence.dataHandling).toContainEqual(
+      expect.objectContaining({
+        kind: "sessionRetentionMode",
+        source: "oc://openclaw.config/session/maintenance/mode",
+        value: "enforce",
+        explicit: false,
+      }),
     );
     expect(result.findings).toEqual([]);
   });
 
   it("does not treat disabled telemetry capture as content capture", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       diagnostics: { otel: { captureContent: false } },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       telemetry: { denyContentCapture: true },
     });
@@ -198,13 +199,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report inert telemetry capture config", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       diagnostics: {
         enabled: false,
         otel: { enabled: true, captureContent: true },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       telemetry: { denyContentCapture: true },
     });
@@ -215,12 +215,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports OTEL log body content capture without trace export", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       diagnostics: {
         otel: { enabled: true, traces: false, logs: true, captureContent: true },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       telemetry: { denyContentCapture: true },
     });
@@ -236,8 +235,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("supports agent-scoped session transcript memory conformance", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       memory: {
         search: { rememberAcrossConversations: true, sources: ["memory", "sessions"] },
       },
@@ -248,15 +246,12 @@ describe("registerPolicyDoctorChecks", () => {
           buddy: { memory: { search: { rememberAcrossConversations: false } } },
         },
       },
-    } as unknown as OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          dataHandling: { memory: { denySessionTranscriptIndexing: true } },
-        },
-      },
-    });
+    }) as unknown as OpenClawConfig;
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        dataHandling: { memory: { denySessionTranscriptIndexing: true } },
+      }),
+    );
 
     const result = await runRegisteredPolicyDoctor(configPath, cfg);
 
@@ -271,20 +266,16 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies agent-scoped data-handling memory claims to inherited default posture", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       memory: {
         search: { rememberAcrossConversations: true, sources: ["sessions"] },
       },
-    } as unknown as OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["release"],
-          dataHandling: { memory: { denySessionTranscriptIndexing: true } },
-        },
-      },
-    });
+    }) as unknown as OpenClawConfig;
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["release"], {
+        dataHandling: { memory: { denySessionTranscriptIndexing: true } },
+      }),
+    );
 
     const result = await runRegisteredPolicyDoctor(configPath, cfg);
 
@@ -299,8 +290,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report inert memory transcript indexing config", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       memory: {
         search: {
           enabled: false,
@@ -308,7 +298,7 @@ describe("registerPolicyDoctorChecks", () => {
           sources: ["sessions"],
         },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writeDataHandlingPolicyFixture({
       memory: { denySessionTranscriptIndexing: true },
     });
@@ -341,14 +331,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("rejects scoped data-handling rules that cannot be agent-scoped", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          dataHandling: { telemetry: { denyContentCapture: true } },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        dataHandling: { telemetry: { denyContentCapture: true } },
+      }),
+    );
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -361,14 +348,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("rejects malformed scoped data-handling memory rules", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          dataHandling: { memory: { denySessionTranscriptIndexing: "true" } },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        dataHandling: { memory: { denySessionTranscriptIndexing: "true" } },
+      }),
+    );
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -390,25 +374,20 @@ describe("registerPolicyDoctorChecks", () => {
         allowlist: { expected: ["deploy", "doctor"] },
       },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        socket: { path: "/tmp/openclaw.sock", token: "secret-token" },
-        defaults: { security: "full" },
-        agents: {
-          sebby: {
-            security: "full",
-            allowlist: [{ pattern: "deploy", commandText: "deploy --prod" }],
-          },
-          buddy: {
-            security: "allowlist",
-            allowlist: [{ pattern: "status" }],
-          },
+    await writeExecApprovalsFixture({
+      socket: { path: "/tmp/openclaw.sock", token: "secret-token" },
+      defaults: { security: "full" },
+      agents: {
+        sebby: {
+          security: "full",
+          allowlist: [{ pattern: "deploy", commandText: "deploy --prod" }],
         },
-      }),
-      "utf-8",
-    );
+        buddy: {
+          security: "allowlist",
+          allowlist: [{ pattern: "status" }],
+        },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -446,14 +425,9 @@ describe("registerPolicyDoctorChecks", () => {
         allowlist: { expected: [{ pattern: "deploy", argPattern: "^--prod$" }] },
       },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        agents: { main: { allowlist: [{ pattern: "deploy" }] } },
-      }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({
+      agents: { main: { allowlist: [{ pattern: "deploy" }] } },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -476,11 +450,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writeExecApprovalsPolicyFixture({
       agents: { allowSecurity: ["allowlist"] },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({ version: 1, defaults: { security: "full" } }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({ defaults: { security: "full" } });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -497,11 +467,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writeExecApprovalsPolicyFixture({
       agents: { allowAutoAllowSkills: false },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({ version: 1, defaults: { autoAllowSkills: true } }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({ defaults: { autoAllowSkills: true } });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -518,18 +484,13 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writeExecApprovalsPolicyFixture({
       agents: { allowSecurity: ["deny"] },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { security: "full" },
-        agents: {
-          "*": { security: "deny" },
-          main: { allowlist: [{ pattern: "status" }] },
-        },
-      }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({
+      defaults: { security: "full" },
+      agents: {
+        "*": { security: "deny" },
+        main: { allowlist: [{ pattern: "status" }] },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -540,15 +501,10 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writeExecApprovalsPolicyFixture({
       agents: { allowSecurity: ["allowlist"] },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { security: "full" },
-        agents: { main: { security: "allowlist" } },
-      }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({
+      defaults: { security: "full" },
+      agents: { main: { security: "allowlist" } },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -562,37 +518,29 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies scoped exec approvals only to selected agents", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          execApprovals: {
-            agents: {
-              allowSecurity: ["allowlist"],
-              allowlist: { expected: ["deploy", "doctor"] },
-            },
-          },
-        },
-      },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { security: "deny" },
-        agents: {
-          sebby: {
-            security: "full",
-            allowlist: [{ pattern: "deploy" }, { pattern: "status" }],
-          },
-          buddy: {
-            security: "full",
-            allowlist: [{ pattern: "unrelated" }],
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        execApprovals: {
+          agents: {
+            allowSecurity: ["allowlist"],
+            allowlist: { expected: ["deploy", "doctor"] },
           },
         },
       }),
-      "utf-8",
     );
+    await writeExecApprovalsFixture({
+      defaults: { security: "deny" },
+      agents: {
+        sebby: {
+          security: "full",
+          allowlist: [{ pattern: "deploy" }, { pattern: "status" }],
+        },
+        buddy: {
+          security: "full",
+          allowlist: [{ pattern: "unrelated" }],
+        },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -624,26 +572,18 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not inherit wildcard security when exact agent security is malformed", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          execApprovals: { agents: { allowSecurity: ["deny"] } },
-        },
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        execApprovals: { agents: { allowSecurity: ["deny"] } },
+      }),
+    );
+    await writeExecApprovalsFixture({
+      defaults: { security: "deny" },
+      agents: {
+        "*": { security: "full" },
+        sebby: { security: "bogus" },
       },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { security: "deny" },
-        agents: {
-          "*": { security: "full" },
-          sebby: { security: "bogus" },
-        },
-      }),
-      "utf-8",
-    );
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -654,11 +594,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writeExecApprovalsPolicyFixture({
       defaults: { allowSecurity: ["full"] },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({ version: 1, defaults: { security: "bogus" } }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({ defaults: { security: "bogus" } });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -666,16 +602,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("requires exec approvals artifacts for scoped exec approval rules", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby", "buddy"],
-          execApprovals: {
-            agents: { allowSecurity: ["allowlist"] },
-          },
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby", "buddy"], {
+        execApprovals: {
+          agents: { allowSecurity: ["allowlist"] },
         },
-      },
-    });
+      }),
+    );
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -689,16 +622,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("rejects invalid exec approvals artifacts for scoped exec approval rules", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby", "buddy"],
-          execApprovals: {
-            agents: { allowSecurity: ["allowlist"] },
-          },
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby", "buddy"], {
+        execApprovals: {
+          agents: { allowSecurity: ["allowlist"] },
         },
-      },
-    });
+      }),
+    );
     await fs.writeFile(join(workspaceDir, "exec-approvals.json"), "{", "utf-8");
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
@@ -721,36 +651,28 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies wildcard exec approvals to scoped agents", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          execApprovals: {
-            agents: {
-              allowSecurity: ["allowlist"],
-              allowlist: { expected: ["deploy"] },
-            },
-          },
-        },
-      },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { security: "deny" },
-        agents: {
-          "*": {
-            security: "full",
-            allowlist: [{ pattern: "status" }],
-          },
-          sebby: {
-            allowlist: [{ pattern: "deploy" }],
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        execApprovals: {
+          agents: {
+            allowSecurity: ["allowlist"],
+            allowlist: { expected: ["deploy"] },
           },
         },
       }),
-      "utf-8",
     );
+    await writeExecApprovalsFixture({
+      defaults: { security: "deny" },
+      agents: {
+        "*": {
+          security: "full",
+          allowlist: [{ pattern: "status" }],
+        },
+        sebby: {
+          allowlist: [{ pattern: "deploy" }],
+        },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -772,27 +694,19 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies wildcard autoAllowSkills posture to scoped exec approvals", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          execApprovals: {
-            agents: { allowAutoAllowSkills: false },
-          },
-        },
-      },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        agents: {
-          "*": { autoAllowSkills: true },
-          buddy: { autoAllowSkills: true },
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        execApprovals: {
+          agents: { allowAutoAllowSkills: false },
         },
       }),
-      "utf-8",
     );
+    await writeExecApprovalsFixture({
+      agents: {
+        "*": { autoAllowSkills: true },
+        buddy: { autoAllowSkills: true },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -812,27 +726,19 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies inherited default autoAllowSkills posture to scoped exec approvals", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["sebby"],
-          execApprovals: {
-            agents: { allowAutoAllowSkills: false },
-          },
-        },
-      },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { autoAllowSkills: true },
-        agents: {
-          sebby: { allowlist: [{ pattern: "deploy" }] },
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["sebby"], {
+        execApprovals: {
+          agents: { allowAutoAllowSkills: false },
         },
       }),
-      "utf-8",
     );
+    await writeExecApprovalsFixture({
+      defaults: { autoAllowSkills: true },
+      agents: {
+        sebby: { allowlist: [{ pattern: "deploy" }] },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -846,42 +752,37 @@ describe("registerPolicyDoctorChecks", () => {
     ]);
   });
 
-  it("evaluates legacy default exec approvals for scoped main policies", async () => {
-    const configPath = await writePolicyFixture({
-      scopes: {
-        restricted: {
-          agentIds: ["main"],
-          execApprovals: {
-            agents: {
-              allowSecurity: ["deny"],
-              allowlist: { expected: ["legacy", "doctor"] },
-            },
-          },
-        },
-      },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({
-        version: 1,
-        defaults: { security: "deny" },
-        agents: {
-          default: {
-            security: "allowlist",
-            allowlist: ["legacy", { pattern: "doctor" }],
+  it("evaluates canonical exec approvals for scoped main policies", async () => {
+    const configPath = await writePolicyFixture(
+      policyForAgents("restricted", ["main"], {
+        execApprovals: {
+          agents: {
+            allowSecurity: ["deny"],
+            allowlist: { expected: ["legacy", "doctor"] },
           },
         },
       }),
-      "utf-8",
     );
+    await writeExecApprovalsFixture({
+      defaults: { security: "deny" },
+      agents: {
+        main: {
+          security: "allowlist",
+          allowlist: [
+            { id: "entry-1", pattern: "legacy" },
+            { id: "entry-2", pattern: "doctor" },
+          ],
+        },
+      },
+    });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/exec-approvals-agent-security-unapproved",
-        ocPath: "oc://exec-approvals.json/agents/default",
-        target: "oc://exec-approvals.json/agents/default",
+        ocPath: "oc://exec-approvals.json/agents/main",
+        target: "oc://exec-approvals.json/agents/main",
         requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
       }),
     ]);
@@ -926,11 +827,7 @@ describe("registerPolicyDoctorChecks", () => {
     const configPath = await writeExecApprovalsPolicyFixture({
       defaults: { allowSecurity: ["deny"] },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({ version: 1, defaults: { security: "deny" } }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({ defaults: { security: "deny" } });
     await fs.writeFile(
       join(stateDir, "exec-approvals.json"),
       JSON.stringify({ version: 1, defaults: { security: "full" } }),
@@ -960,13 +857,11 @@ describe("registerPolicyDoctorChecks", () => {
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
-    expect(result.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "policy/policy-jsonc-invalid",
-          target: "oc://policy.jsonc/execApprovals/agents/allowlist/expected/#0",
-        }),
-      ]),
+    expect(result.findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-invalid",
+        target: "oc://policy.jsonc/execApprovals/agents/allowlist/expected/#0",
+      }),
     );
   });
 
@@ -989,11 +884,7 @@ describe("registerPolicyDoctorChecks", () => {
       requireFile: true,
       defaults: { allowSecurity: ["deny"] },
     });
-    await fs.writeFile(
-      join(workspaceDir, "exec-approvals.json"),
-      JSON.stringify({ defaults: { security: "deny" } }),
-      "utf-8",
-    );
+    await writeExecApprovalsFixture({ version: undefined, defaults: { security: "deny" } });
 
     const result = await runRegisteredPolicyDoctor(configPath, cfgWithPolicy());
 
@@ -1035,8 +926,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("keeps secret conformance checks active when auth policy shape is invalid", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       models: {
         providers: {
           openai: {
@@ -1044,7 +934,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    }) as unknown as OpenClawConfig;
     const configPath = await writePolicyFixture({
       secrets: {
         requireManagedProviders: true,
@@ -1125,14 +1015,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows private-network SSRF settings when policy permits them", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = rawCfgWithPolicy({
       browser: {
         ssrfPolicy: {
           allowPrivateNetwork: true,
         },
       },
-    } as OpenClawConfig;
+    }) as OpenClawConfig;
     const configPath = await writePolicyFixture({
       network: {
         privateNetwork: { allow: true },

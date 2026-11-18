@@ -76,7 +76,7 @@ internal fun ChatContextPopoverContent(
       ContextSectionLabel(nativeString("Context window"))
       Text(
         text = summary?.detail ?: nativeString("Unknown"),
-        style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
+        style = ClawTheme.type.caption.copy(lineHeight = 18.sp, fontWeight = FontWeight.SemiBold, fontFeatureSettings = "tnum"),
         textAlign = TextAlign.End,
         color = ClawTheme.colors.text,
       )

@@ -13,7 +13,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
@@ -21,21 +20,14 @@ import org.json.JSONObject
 
 private const val MATH_WIDTH_BUCKET_PX = 64
 
-internal data class ChatMathRenderKey(
-  val latex: String,
-  val widthBucket: Int,
-  val darkMode: Boolean,
-)
-
 internal data class ChatMathRenderRequest(
-  val key: ChatMathRenderKey,
+  override val source: String,
+  override val widthPx: Int,
   val textColor: Int,
   val fontSizePx: Float,
   override val density: Float,
 ) : ChatRichBlockRequest {
   override val kind get() = ChatRichBlockKind.Math
-  override val source get() = key.latex
-  override val widthPx get() = key.widthBucket
 
   override fun payload(id: String): JSONObject =
     JSONObject()
@@ -49,7 +41,6 @@ internal data class ChatMathRenderRequest(
     fun create(
       latex: String,
       widthPx: Int,
-      darkMode: Boolean,
       textColor: Int,
       fontSizePx: Float,
       density: Float,
@@ -57,7 +48,8 @@ internal data class ChatMathRenderRequest(
       val boundedWidth = widthPx.coerceAtLeast(1)
       val widthBucket = ((boundedWidth / MATH_WIDTH_BUCKET_PX) * MATH_WIDTH_BUCKET_PX).coerceAtLeast(MATH_WIDTH_BUCKET_PX)
       return ChatMathRenderRequest(
-        key = ChatMathRenderKey(latex = latex, widthBucket = widthBucket, darkMode = darkMode),
+        source = latex,
+        widthPx = widthBucket,
         textColor = textColor,
         fontSizePx = fontSizePx,
         density = density,
@@ -72,17 +64,15 @@ internal fun ChatMathBlock(
   textColor: Color,
 ) {
   val density = LocalDensity.current
-  val darkMode = textColor.luminance() > 0.5f
   BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
     val widthPx = with(density) { maxWidth.roundToPx() }
     val fontSizePx = with(density) { 16.sp.toPx() }
     val densityScale = density.density
     val request =
-      remember(latex, widthPx, darkMode, textColor, fontSizePx, densityScale) {
+      remember(latex, widthPx, textColor, fontSizePx, densityScale) {
         ChatMathRenderRequest.create(
           latex = latex,
           widthPx = widthPx,
-          darkMode = darkMode,
           textColor = textColor.toArgb(),
           fontSizePx = fontSizePx,
           density = densityScale,

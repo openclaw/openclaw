@@ -18,7 +18,7 @@ Wire Gmail inbox triggers to OpenClaw through Google Pub/Sub and `gog gmail watc
 Not on Gmail? The [IMAP email trigger plugin](/automation/imap) watches an existing IMAP mailbox without Google PubSub or a public webhook.
 
 <Note>
-**Prerequisites:** `gcloud` CLI, `gog` (gogcli) authorized for the watched Gmail account, OpenClaw hooks enabled, an HTTPS push endpoint reachable by Pub/Sub (Tailscale Funnel in the recommended setup), and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
+**Prerequisites:** `gcloud` CLI, `gog` (gogcli) authorized for the watched Gmail account (v0.48.0 or a build supporting both `--token-env` and `--hook-token-env` is recommended), OpenClaw hooks enabled, an HTTPS push endpoint reachable by Pub/Sub (Tailscale Funnel in the recommended setup), and a working sandbox backend. The example below uses the default Docker backend; build its image first by following [Sandbox images and setup](/gateway/sandboxing#images-and-setup), or configure another supported backend.
 </Note>
 
 ### Configure a restricted Gmail reader (recommended)
@@ -86,13 +86,13 @@ Why this shape is safer:
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.
 - `deliver: false` disables automatic successful announcements; completion is logged instead. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Agent-to-agent access is on by default: set [`tools.agentToAgent.enabled: false`](/gateway/config-tools#tools-agenttoagent) to disable cross-agent handoff, or deliberately expose the exact coordination tool and constrain permitted agent pairs with `tools.agentToAgent.allow`.
 
-Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Ensure inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
+Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Check that inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
 
 If you intentionally route Gmail to a more capable agent, treat that as a security decision: keep external-content wrapping enabled, sandbox the run, and grant only the tools required by that workflow.
 
 ### Authenticate the reader model
 
-Authenticate the provider selected by `mail_reader`, or ensure its effective auth configuration can use a supported shared credential, then verify the route before connecting Gmail:
+Authenticate the provider selected by `mail_reader`, or check that its effective auth configuration can use a supported shared credential, then verify the route before connecting Gmail:
 
 ```bash
 openclaw models auth --agent mail_reader login --provider openai
@@ -100,7 +100,7 @@ openclaw models status --agent mail_reader --check --probe --probe-provider open
 openclaw agent --agent mail_reader --message "Reply exactly MAIL_READER_OK" --json
 ```
 
-Use the matching provider id when you choose a different model. The live probe checks the provider credential; the agent turn proves the selected model, runtime, sandbox, and effective tool policy can complete a real reader run. Do not continue until both succeed.
+Use the matching provider id when you choose a different model. The live check verifies the provider credential; the agent turn proves the selected model, runtime, sandbox, and effective tool policy can complete a real reader run. Do not continue until both succeed.
 
 ### Connect Gmail transport
 
@@ -134,6 +134,19 @@ Check forwarding and completion separately. A watcher success only acknowledges 
 ### Gateway auto-start
 
 When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts `gog gmail watch serve` on boot and auto-renews the watch. Set `OPENCLAW_SKIP_GMAIL_WATCHER=1` to opt out.
+
+OpenClaw probes the selected Gog executable before watch registration. Supporting builds receive both tokens through child-only environment sources automatically. Older Gog continues working with legacy arguments and one actionable warning per watcher lifecycle. If support cannot be verified, the connection continues with a distinct warning. Both tokens remain visible to other local users with process access while legacy arguments are in use; upgrading Gog is required to remove this exposure. Serve failures never downgrade a watcher that selected environment transport.
+
+Interactive setup and foreground runs can offer upgrades for eligible, unpinned Homebrew installations. Declining preserves the existing connection. Gateway startup never upgrades packages. Doctor reports configured Gmail installations and can upgrade eligible Homebrew installs through an explicit `openclaw doctor --repair`; an OpenClaw updater's internal Doctor pass only reports the finding. Custom wrappers and pins remain operator-managed. After upgrading, restart the watcher or Gateway. See [Gog compatibility and upgrades](/cli/webhooks#webhooks-gmail-run).
+
+After sleep, an overdue renewal runs once instead of replaying missed intervals.
+Shutdown cancels and waits for any in-flight renewal before stopping the watcher.
+
+If the listener port is still occupied during a restart, the watcher retries after
+5, 10, and 20 seconds. If all three retries fail to bind, it logs an error and
+stops restarting; watch renewal continues. Stop the conflicting process and
+restart the Gateway, or disable the Gateway-managed watcher if another service
+owns the listener.
 
 With `forEach: "messages"`, the Gateway prepares one action per email, up to the 200-item fan-out cap. Gmail-path mappings receive a larger request-body allowance derived from `hooks.gmail.maxBytes`, capped at 32 MiB. The upstream history page size is not a strict email count, so oversized batches can still hit limits. See the [Gmail reference](/gateway/config-hooks#gmail-integration) for the exact allowance and [fan-out retry behavior](/gateway/config-hooks#hook-retries-and-fan-out).
 

@@ -1,5 +1,4 @@
 export { normalizeE164, resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
-// Whatsapp API module exposes the plugin public contract.
 export { whatsappPlugin } from "./src/channel.js";
 export { whatsappSetupPlugin } from "./src/channel.setup.js";
 export {
@@ -65,3 +64,4 @@ export {
   type WhatsAppQaDriverObservedMessage,
   type WhatsAppQaDriverSession,
 } from "./src/qa-driver.runtime.js";
+export { createWhatsAppQaAuthState } from "./src/qa-auth.js";

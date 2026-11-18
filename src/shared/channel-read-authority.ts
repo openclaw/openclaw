@@ -1,16 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { captureEffectAuthority } from "./effect-authority.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
 type ChannelReadResource = {
   key: string;
   settle: (accepted: boolean) => Promise<void>;
   assertCurrent?: () => void;
+  onDelegated?: (assertCurrent?: () => void) => void;
 };
 
 type ChannelReadScope = {
   assertCurrent: () => void;
   signal?: AbortSignal;
   registerResource: (resource: ChannelReadResource) => void;
+  delegateResource: (
+    key: string,
+    settle: (accepted: boolean, settleResource: ChannelReadResource["settle"]) => Promise<void>,
+    assertCurrent?: () => void,
+  ) => boolean;
   discardResource: (key: string) => Promise<boolean>;
 };
 
@@ -73,6 +80,7 @@ export async function withChannelReadAuthority<T>(
     onAccepted?.(result);
     return result;
   }
+  const effect = captureEffectAuthority();
   const parent = authorityScope.getStore();
   const parentCompletion = parent?.[completionKey];
   const sourceSignals = [parentCompletion?.signal, signal].filter((source): source is AbortSignal =>
@@ -101,6 +109,7 @@ export async function withChannelReadAuthority<T>(
         resources.add({
           key: resource.key,
           settle: resource.settle,
+          onDelegated: resource.onDelegated,
           // Keep the originating provider check after the inner callable closes.
           assertCurrent: () => {
             sourceSignal?.throwIfAborted();
@@ -108,6 +117,26 @@ export async function withChannelReadAuthority<T>(
             resource.assertCurrent?.();
           },
         });
+      },
+      delegateResource: (
+        key: string,
+        settle: (accepted: boolean, settleResource: ChannelReadResource["settle"]) => Promise<void>,
+        assertResourceCurrent?: () => void,
+      ) => {
+        assertAuthority();
+        const resource = Array.from(resources).find((entry) => entry.key === key);
+        if (!resource) {
+          return parentCompletion?.delegateResource(key, settle, assertResourceCurrent) ?? false;
+        }
+        const original = resource.settle;
+        const assertOriginal = resource.assertCurrent;
+        resource.onDelegated?.(assertResourceCurrent);
+        resource.settle = (accepted) => settle(accepted, original);
+        resource.assertCurrent = () => {
+          assertOriginal?.();
+          assertResourceCurrent?.();
+        };
+        return true;
       },
       discardResource: async (key: string) => {
         const resource = Array.from(resources).find((entry) => entry.key === key);
@@ -125,18 +154,22 @@ export async function withChannelReadAuthority<T>(
     let result: T;
     try {
       result = await authorityScope.run(scopedAuthority, run);
-    } finally {
+    } catch (error) {
       // Fence both results and errors, including work already issued before revocation.
+      await effect.initiate(assertAuthority);
+      throw error;
+    }
+    await effect.initiate(() => {
       assertAuthority();
-    }
-    if (parentCompletion) {
-      for (const resource of resources) {
-        parentCompletion.registerResource(resource);
+      if (parentCompletion) {
+        for (const resource of resources) {
+          parentCompletion.registerResource(resource);
+        }
+        resources.clear();
       }
-      resources.clear();
-    }
-    onAccepted?.(result);
-    open = false;
+      onAccepted?.(result);
+      open = false;
+    });
     // Acceptance is final before teardown; closing a resource does not revoke the read.
     if (resources.size > 0) {
       await settleReadResources(resources, true);

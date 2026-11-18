@@ -1,36 +1,32 @@
+import type { UsageSummary } from "../../../../src/infra/provider-usage.types.js";
 // Fetches the gateway signals behind the Models settings page.
 // Each source degrades independently: unavailable usage data must not blank
 // the provider list.
-import type { SessionModelUsage } from "../../../../src/infra/session-cost-usage.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelAuthStatusResult, ModelCatalogProviderOutcome } from "../../api/types.ts";
+import type {
+  ModelAuthStatusResult,
+  ModelCatalogProviderOutcome,
+  ModelCatalogResult,
+} from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../../lib/gateway-errors.ts";
+import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../../lib/model-catalog-store.ts";
-import {
-  requestProviderUsage,
-  type ProviderUsageRequestResult,
-} from "../../lib/provider-usage-request.ts";
-import { requestSessionUsage } from "../../lib/sessions/usage.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 
 registerSettingsEnglish();
-
-/** Local session-spend window shown on each card. */
-export const MODEL_PROVIDERS_COST_DAYS = 30;
 
 export type ModelProvidersData = {
   authStatus: ModelAuthStatusResult | null;
   /** Operation diagnostics; picker facts are owned by the shared catalog store. */
   providerOutcomes: ModelCatalogProviderOutcome[];
+  pendingProviders: readonly string[];
+  catalogRequestFailed: boolean;
   catalogError: string | null;
-  providerUsage: ProviderUsageRequestResult | null;
-  costByProvider: SessionModelUsage[] | null;
+  providerUsage: UsageSummary | null;
+  providerUsageFailed: boolean;
   updatedAt: number | null;
   error: string | null;
 };
@@ -40,18 +36,14 @@ type RequestResult<T> = { ok: true; result: T } | { ok: false; error: unknown };
 export const EMPTY_MODEL_PROVIDERS_DATA: ModelProvidersData = {
   authStatus: null,
   providerOutcomes: [],
+  pendingProviders: [],
+  catalogRequestFailed: false,
   catalogError: null,
   providerUsage: null,
-  costByProvider: null,
+  providerUsageFailed: false,
   updatedAt: null,
   error: null,
 };
-
-function localDate(daysAgo: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() - daysAgo);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
-}
 
 function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
@@ -67,10 +59,10 @@ function settleRequest<T>(promise: Promise<T>): Promise<RequestResult<T>> {
   );
 }
 
-export async function loadModelProvidersData(
+export function startModelProvidersData(
   client: GatewayBrowserClient,
   opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
-): Promise<ModelProvidersData> {
+) {
   const loadConfiguredCatalog = (refresh = false) =>
     settleRequest(
       loadModelCatalog(client, {
@@ -89,58 +81,46 @@ export async function loadModelProvidersData(
         refreshResult.ok ? refreshResult : loadConfiguredCatalog(),
       )
     : loadConfiguredCatalog();
-  const [authStatus, catalog, refreshResult] = await Promise.all([
-    authStatusLoad,
-    catalogLoad,
-    catalogRefresh ?? Promise.resolve(undefined),
-  ]);
-  return {
-    authStatus:
-      authStatus.ok && Array.isArray(authStatus.result?.providers) ? authStatus.result : null,
-    providerOutcomes: catalog.ok ? (catalog.result.providerOutcomes ?? []) : [],
-    catalogError:
-      refreshResult && !refreshResult.ok
-        ? errorMessage(refreshResult.error)
-        : catalog.ok
-          ? modelCatalogRefreshError(catalog.result, t("modelProviders.defaults.discoverFailed"))
-          : errorMessage(catalog.error),
-    providerUsage: null,
-    costByProvider: null,
+  const auth = authStatusLoad.then((authStatus) => ({
+    authStatus: authStatus.ok ? authStatus.result : null,
     updatedAt: Date.now(),
-    // Auth status is the primary provider list; its failure is the only one
-    // worth surfacing as a page-level error.
+    // Auth status is the primary provider list; catalog failure is sectional.
     error: authStatus.ok
       ? (authStatus.result.unavailable?.message ?? null)
       : errorMessage(authStatus.error),
-  };
+  }));
+  const catalog = Promise.all([catalogLoad, catalogRefresh ?? Promise.resolve(undefined)]).then(
+    ([result, refreshResult]): ModelProvidersCatalogData => ({
+      providerOutcomes: result.ok ? (result.result.providerOutcomes ?? []) : [],
+      pendingProviders: result.ok ? (result.result.pendingProviders ?? []) : [],
+      catalogRequestFailed: !result.ok || (refreshResult !== undefined && !refreshResult.ok),
+      catalogError:
+        refreshResult && !refreshResult.ok
+          ? errorMessage(refreshResult.error)
+          : result.ok
+            ? catalogDiscoveryError(result.result)
+            : errorMessage(result.error),
+    }),
+  );
+  return { auth, catalog };
 }
 
-export function loadModelProviderUsage(
-  client: GatewayBrowserClient,
-  signal: AbortSignal,
-): Promise<ProviderUsageRequestResult> {
-  return requestProviderUsage(client, { signal });
-}
+export type ModelProvidersCatalogData = Pick<
+  ModelProvidersData,
+  "providerOutcomes" | "pendingProviders" | "catalogRequestFailed" | "catalogError"
+>;
 
-export function loadModelProviderCost(
-  client: GatewayBrowserClient,
-  signal: AbortSignal,
-): Promise<SessionModelUsage[] | null> {
-  return requestSessionUsage(
-    client,
-    {
-      startDate: localDate(MODEL_PROVIDERS_COST_DAYS - 1),
-      endDate: localDate(0),
-      scope: "family",
-      timeZone: "local",
-    },
-    { signal },
-  )
-    .then((result) => result?.aggregates?.byProvider ?? null)
-    .catch((error: unknown) => {
-      if (signal.aborted) {
-        throw error;
-      }
-      return null;
-    });
+/** Names the providers whose listing failed, so the warning points at its cause. */
+export function catalogDiscoveryError(result: ModelCatalogResult): string | null {
+  const failed = new Set(
+    (result.providerOutcomes ?? [])
+      .filter((outcome) => outcome.status === "unavailable")
+      .map((outcome) => outcome.provider),
+  );
+  return modelCatalogRefreshError(
+    result,
+    failed.size
+      ? t("modelProviders.defaults.discoverFailedFor", { providers: [...failed].join(", ") })
+      : t("modelProviders.defaults.discoverFailed"),
+  );
 }

@@ -4,18 +4,12 @@ import SwiftUI
 
 extension AgentProTab {
     func agentName(for agent: AgentSummary) -> String {
-        self.normalized(agent.name) ?? agent.id
+        agent.name?.trimmedNonEmpty ?? agent.id
     }
 
     func agentBadge(for agent: AgentSummary) -> String {
-        if let identity = agent.identity,
-           let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
-        {
-            return normalizedEmoji
-        }
-
-        return AgentIdentityPresentation.initialsBadge(for: self.agentName(for: agent))
+        (agent.identity?["emoji"]?.value as? String)?.trimmedNonEmpty
+            ?? AgentIdentityPresentation.initialsBadge(for: self.agentName(for: agent))
     }
 
     func agentTint(for agent: AgentSummary, state: AgentRosterState) -> Color {
@@ -51,10 +45,5 @@ extension AgentProTab {
     func refreshAgents() async {
         guard self.scenePhase == .active, self.liveGatewayConnected else { return }
         await self.appModel.refreshGatewayOverviewIfConnected()
-    }
-
-    func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

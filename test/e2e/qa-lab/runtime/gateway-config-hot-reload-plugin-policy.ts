@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import { createCanvasDocument } from "../../../../src/canvas/documents.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
+import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import {
   connectHotReloadClient,
   waitForHotReloadFact,
@@ -16,7 +18,6 @@ type ToolResult = {
   details: { targetId?: string; viewerUrl?: string; ok?: boolean };
 };
 type BrowserStatus = { pid: number | null; cdpUrl: string; running: boolean; attachOnly: boolean };
-const CANVAS_ASSET = "/__openclaw__/a2ui/a2ui.bundle.js";
 const SESSION_KEY = "agent:qa:hot-reload-plugin";
 
 export async function proveHotReloadPluginPolicy({
@@ -66,6 +67,15 @@ export async function proveHotReloadPluginPolicy({
     // Plugin generations can replace services. Finish Canvas changes before measuring Chrome continuity.
     await proveGroup("plugins.entries.canvas.config.host.enabled", async () => {
       assert(unaffectedNode, "Canvas continuity proof requires the approved browser-only node");
+      const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
+      assert(
+        stateDir && path.isAbsolute(stateDir),
+        "Gateway must have an isolated absolute state dir",
+      );
+      const canvasHtml = "<!doctype html><html><body>Canvas hot-reload document</body></html>";
+      const canvasDocument = await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, () =>
+        createCanvasDocument({ title: "Canvas hot-reload document", html: canvasHtml }),
+      );
       const originalNode = {
         hellos: unaffectedNode.hellos,
         closes: unaffectedNode.closes,
@@ -86,11 +96,11 @@ export async function proveHotReloadPluginPolicy({
         patch({ plugins: { entries: { canvas: { config: { host: { enabled } } } } } });
       const routeState = async (enabled: boolean) => {
         const response = await waitForHotReloadFact("Canvas route publication", async () => {
-          const current = await http(CANVAS_ASSET);
+          const current = await http(canvasDocument.entryUrl);
           return current.status === (enabled ? 200 : 404) ? current : undefined;
         });
         if (enabled) {
-          assert(response.text.length > 1_000, "Canvas must serve the actual renderer bundle");
+          assert.equal(response.text, canvasHtml, "Canvas must serve the persisted HTML document");
         }
         return response.status;
       };
@@ -98,7 +108,7 @@ export async function proveHotReloadPluginPolicy({
         await setEnabled(false);
         await routeState(false);
         const identity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "canvas-hot-reload-node",
         });
         const connected = await connectHotReloadClient(gateway, {
@@ -153,13 +163,13 @@ export async function proveHotReloadPluginPolicy({
           const scopedUrl: string | undefined = connected.pluginSurfaceUrls.canvas;
           if (scopedUrl) {
             assert.notEqual(scopedUrl, previousUrl);
-            const asset: Response = await fetch(`${scopedUrl}${CANVAS_ASSET}`, {
+            const document: Response = await fetch(`${scopedUrl}${canvasDocument.entryUrl}`, {
               signal: AbortSignal.timeout(30_000),
             });
-            assert.equal(asset.status, 200);
-            assert((await asset.text()).length > 1_000);
+            assert.equal(document.status, 200);
+            assert.equal(await document.text(), canvasHtml);
             if (previousUrl) {
-              const retired = await fetch(`${previousUrl}${CANVAS_ASSET}`, {
+              const retired = await fetch(`${previousUrl}${canvasDocument.entryUrl}`, {
                 signal: AbortSignal.timeout(30_000),
               });
               assert.notEqual(
@@ -172,7 +182,7 @@ export async function proveHotReloadPluginPolicy({
             previousUrl = scopedUrl;
           } else {
             assert(previousUrl);
-            const revoked = await fetch(`${previousUrl}${CANVAS_ASSET}`, {
+            const revoked = await fetch(`${previousUrl}${canvasDocument.entryUrl}`, {
               signal: AbortSignal.timeout(30_000),
             });
             assert.notEqual(revoked.status, 200, "Disabled Canvas retained a working capability");
@@ -190,7 +200,7 @@ export async function proveHotReloadPluginPolicy({
         }
         await verifyContinuity(
           "plugins.entries.canvas.config.host.enabled",
-          "A node admitted while Canvas was disabled reconnected on enable→disable→re-enable, gained→lost→regained working renderer URLs, and its old capability stopped working; the browser-only node kept its original connection",
+          "A node admitted while Canvas was disabled reconnected on enable→disable→re-enable, gained→lost→regained working HTML document URLs, and its old capability stopped working; the browser-only node kept its original connection",
         );
       } finally {
         await node?.client.stopAndWait({ timeoutMs: 2_000 });

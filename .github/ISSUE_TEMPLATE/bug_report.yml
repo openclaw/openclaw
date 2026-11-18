@@ -49,7 +49,7 @@ body:
     id: repro
     attributes:
       label: Steps to reproduce
-      description: Provide the shortest deterministic repro path supported by direct observation. If the repro path cannot be grounded from the evidence, respond with exactly `NOT_ENOUGH_INFO`.
+      description: Provide the shortest repeatable reproduction steps supported by direct observation. If the steps cannot be grounded from the evidence, respond with exactly `NOT_ENOUGH_INFO`.
       placeholder: |
         1. Start OpenClaw 2026.2.17 with the attached config.
         2. Send a Telegram thread reply in the affected chat.

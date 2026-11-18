@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { firstLine } from "./command-output.js";
 import type { FaceTimeConfig } from "./config.js";
 import { inspectFaceTimeDriver, type FaceTimeDriverStatus } from "./driver-setup.js";
 import type { FaceTimePreflightCheck, FaceTimePreflightResult } from "./preflight.js";
@@ -33,7 +34,7 @@ type FaceTimeSetupCheck = {
   status: FaceTimeSetupCheckStatus;
   required: boolean;
   message: string;
-  actionId?: string;
+  actionId?: keyof typeof SETUP_ACTIONS;
 };
 
 export type FaceTimeSetupReport = {
@@ -52,92 +53,116 @@ type SetupParams = {
   runtimeStatus?: FaceTimeRuntimeStatus | Promise<FaceTimeRuntimeStatus>;
   runtimeError?: string;
   preflight?: FaceTimePreflightResult | Promise<FaceTimePreflightResult>;
-  readAssertionsFile?: () => Promise<string>;
 };
 
 const XCODE_APP = "/Applications/Xcode.app";
 const XCODE_CLANG = `${XCODE_APP}/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang`;
 const XCODE_MACOS_SDK = `${XCODE_APP}/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`;
-const NATIVE_PACKAGE_COMMAND =
-  "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi";
-const NATIVE_PACKAGE_ACTION = {
-  id: "install-native-package",
-  kind: "command",
-  label: "Install or reinstall the FaceTime native package with Homebrew",
-  command: NATIVE_PACKAGE_COMMAND,
-} as const satisfies FaceTimeSetupAction;
+function commandAction(label: string, command: string) {
+  return { kind: "command" as const, label, command };
+}
 
-const PRECHECK_ACTIONS: Record<
-  string,
-  Pick<FaceTimeSetupAction, "id" | "kind" | "label" | "command" | "gatewayMethod" | "settingsPath">
-> = {
-  "capture-binary": {
-    id: NATIVE_PACKAGE_ACTION.id,
-    kind: "command",
-    label: NATIVE_PACKAGE_ACTION.label,
-    command: NATIVE_PACKAGE_ACTION.command,
+function settingsAction(label: string, settingsPath: string) {
+  return { kind: "system-settings" as const, label, settingsPath };
+}
+
+const SETUP_ACTIONS = {
+  "install-native-package": commandAction(
+    "Install or reinstall the FaceTime native package with Homebrew",
+    "if brew list --versions openclaw-facetime >/dev/null 2>&1; then brew reinstall openclaw/tap/openclaw-facetime; else brew install openclaw/tap/openclaw-facetime; fi",
+  ),
+  "install-xcode-tools": commandAction(
+    "Install full Xcode in /Applications",
+    "open 'https://apps.apple.com/us/app/xcode/id497799835'",
+  ),
+  "enable-developer-tools": commandAction(
+    "Enable developer tools access",
+    "sudo /usr/sbin/DevToolsSecurity -enable",
+  ),
+  "disable-sip-debugging": {
+    kind: "recovery",
+    label: "Disable SIP debugging restrictions from macOS Recovery, then reboot and rerun setup",
+    command: "csrutil enable --without debug",
+    settingsPath: "macOS Recovery > Utilities > Terminal",
   },
-  "paired-driver-mic": {
-    id: "install-driver",
+  "verify-sip-status": commandAction(
+    "Verify SIP status, then rerun setup",
+    "/usr/bin/csrutil status",
+  ),
+  "configure-owner-handles": commandAction("Configure ownerHandles", "openclaw configure"),
+  "restart-gateway": commandAction(
+    "Stop the stale gateway process, then restart OpenClaw",
+    "openclaw gateway restart",
+  ),
+  "wait-for-helper": {
+    kind: "automatic",
+    label: "Wait for automatic helper injection to finish",
+  },
+  "restart-call-apps": {
+    kind: "manual-test",
+    label: "Quit and reopen FaceTime, then let OpenClaw reinject the helper",
+  },
+  "install-driver": {
     kind: "gateway",
     label: "Install or update the paired FaceTime audio driver",
     gatewayMethod: "facetime.installDriver",
   },
-  "paired-driver-feed": {
-    id: "install-driver",
-    kind: "gateway",
-    label: "Install or update the paired FaceTime audio driver",
-    gatewayMethod: "facetime.installDriver",
+  "select-physical-output": settingsAction(
+    "Select MacBook Speakers or another physical output",
+    "System Settings > Sound > Output",
+  ),
+  "grant-system-audio": settingsAction(
+    "Allow OpenClaw to capture FaceTime app audio",
+    "System Settings > Privacy & Security > Screen & System Audio Recording",
+  ),
+  "configure-realtime-provider": commandAction(
+    "Configure authentication for a registered realtime voice provider",
+    "openclaw configure",
+  ),
+  "verify-focus": settingsAction(
+    "Verify Focus is off or allows the expected caller",
+    "Control Center > Focus",
+  ),
+  "allow-sharing-notifications": settingsAction(
+    "Allow notifications while mirroring or sharing the display",
+    "System Settings > Notifications",
+  ),
+  "live-outbound-test": {
+    kind: "manual-test",
+    label: "Place one outbound FaceTime audio call with facetime.dial",
+    gatewayMethod: "facetime.dial",
   },
-  "physical-output": {
-    id: "select-physical-output",
-    kind: "system-settings",
-    label: "Select MacBook Speakers or another physical output",
-    settingsPath: "System Settings > Sound > Output",
+  "live-audio-test": {
+    kind: "manual-test",
+    label: "Run one inbound and one outbound FaceTime audio call",
   },
-  "process-tap": {
-    id: "grant-system-audio",
-    kind: "system-settings",
-    label: "Allow OpenClaw to capture FaceTime app audio",
-    settingsPath: "System Settings > Privacy & Security > Screen & System Audio Recording",
-  },
-  "realtime-provider": {
-    id: "configure-realtime-provider",
-    kind: "command",
-    label: "Configure authentication for a registered realtime voice provider",
-    command: "openclaw configure",
-  },
+  "review-live-voicemail": settingsAction(
+    "Review Live Voicemail if inbound audio calls are screened",
+    "Phone > Settings > Live Voicemail",
+  ),
+} satisfies Record<string, Omit<FaceTimeSetupAction, "id">>;
+
+const PRECHECK_ACTIONS: Record<string, keyof typeof SETUP_ACTIONS> = {
+  "capture-binary": "install-native-package",
+  "paired-driver-mic": "install-driver",
+  "paired-driver-feed": "install-driver",
+  "physical-output": "select-physical-output",
+  "process-tap": "grant-system-audio",
+  "realtime-provider": "configure-realtime-provider",
 };
 
-function firstLine(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().split(/\r?\n/u)[0] || undefined : undefined;
-}
-
-function addAction(actions: FaceTimeSetupAction[], action: FaceTimeSetupAction): void {
-  if (!actions.some((candidate) => candidate.id === action.id)) {
-    actions.push(action);
-  }
-}
-
-function addPreflightCheck(
-  checks: FaceTimeSetupCheck[],
-  actions: FaceTimeSetupAction[],
-  check: FaceTimePreflightCheck,
-): void {
+function addPreflightCheck(checks: FaceTimeSetupCheck[], check: FaceTimePreflightCheck): void {
   if (check.id === "call-app-running") {
     return;
   }
-  const action = PRECHECK_ACTIONS[check.id];
-  if (!check.ok && action) {
-    addAction(actions, action);
-  }
+  const actionId = PRECHECK_ACTIONS[check.id];
   checks.push({
     id: check.id,
     label: check.label,
     status: check.ok ? "ready" : check.required ? "action-required" : "recommended",
     required: check.required,
     message: check.message ?? (check.ok ? "ready" : "not ready"),
-    ...(!check.ok && action ? { actionId: action.id } : {}),
+    ...(!check.ok && actionId ? { actionId } : {}),
   });
 }
 
@@ -159,12 +184,11 @@ function hasActiveFocusAssertion(raw: string): boolean {
   return visit(parsed);
 }
 
-async function checkFocusMode(params: SetupParams): Promise<FaceTimeSetupCheck> {
-  const readAssertions =
-    params.readAssertionsFile ??
-    (() => readFile(resolve(homedir(), "Library/DoNotDisturb/DB/Assertions.json"), "utf8"));
+async function checkFocusMode(): Promise<FaceTimeSetupCheck> {
   try {
-    const active = hasActiveFocusAssertion(await readAssertions());
+    const active = hasActiveFocusAssertion(
+      await readFile(resolve(homedir(), "Library/DoNotDisturb/DB/Assertions.json"), "utf8"),
+    );
     return {
       id: "focus-mode",
       label: "Focus mode",
@@ -199,41 +223,30 @@ async function checkNotificationsDuringSharing(
     "/usr/bin/plutil -extract dnd_prefs raw -o - - | " +
     "/usr/bin/base64 --decode | " +
     "/usr/bin/plutil -extract dndMirrored raw -o - -";
+  let ready = false;
+  let message: string;
   try {
     const result = await runCommandWithTimeout(["/bin/bash", "-c", script], {
       timeoutMs: 5_000,
     });
     const value = firstLine(result.stdout)?.toLowerCase();
-    if (result.code === 0 && value === "true") {
-      return {
-        id: "notifications-while-sharing",
-        label: "Notifications while sharing the display",
-        status: "ready",
-        required: true,
-        message: "Notifications are allowed while mirroring or sharing the display",
-      };
-    }
-    return {
-      id: "notifications-while-sharing",
-      label: "Notifications while sharing the display",
-      status: "action-required",
-      required: true,
-      message:
-        value === "false"
-          ? "Incoming call notifications are suppressed while mirroring or sharing the display"
-          : "Could not verify the notification setting used during display sharing",
-      actionId: "allow-sharing-notifications",
-    };
+    ready = result.code === 0 && value === "true";
+    message = ready
+      ? "Notifications are allowed while mirroring or sharing the display"
+      : value === "false"
+        ? "Incoming call notifications are suppressed while mirroring or sharing the display"
+        : "Could not verify the notification setting used during display sharing";
   } catch (error) {
-    return {
-      id: "notifications-while-sharing",
-      label: "Notifications while sharing the display",
-      status: "action-required",
-      required: true,
-      message: `Could not verify notification behavior: ${formatErrorMessage(error)}`,
-      actionId: "allow-sharing-notifications",
-    };
+    message = `Could not verify notification behavior: ${formatErrorMessage(error)}`;
   }
+  return {
+    id: "notifications-while-sharing",
+    label: "Notifications while sharing the display",
+    status: ready ? "ready" : "action-required",
+    required: true,
+    message,
+    ...(!ready ? { actionId: "allow-sharing-notifications" as const } : {}),
+  };
 }
 
 async function checkCommand(
@@ -275,7 +288,6 @@ async function inspectDriver(params: SetupParams): Promise<{
 
 export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSetupReport> {
   const checks: FaceTimeSetupCheck[] = [];
-  const actions: FaceTimeSetupAction[] = [];
 
   const [xcodeCompiler, xcodeSdk] = await Promise.all([
     checkCommand(params.runCommandWithTimeout, ["/bin/test", "-x", XCODE_CLANG], () => XCODE_CLANG),
@@ -294,16 +306,6 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
       : `Full Xcode is required at ${XCODE_APP}; Command Line Tools alone cannot perform protected-app injection or build the local audio driver`,
     ...(!xcodeReady ? { actionId: "install-xcode-tools" } : {}),
   });
-  if (!xcodeReady) {
-    // Keep the established action id stable for setup-report consumers while
-    // directing operators to the full Xcode app required by the native setup boundary.
-    addAction(actions, {
-      id: "install-xcode-tools",
-      kind: "command",
-      label: "Install full Xcode in /Applications",
-      command: "open 'https://apps.apple.com/us/app/xcode/id497799835'",
-    });
-  }
 
   const developerSecurity = await checkCommand(
     params.runCommandWithTimeout,
@@ -319,17 +321,9 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     required: true,
     message: developerSecurityEnabled
       ? developerSecurity.message
-      : "Developer tools access is disabled; helper injection cannot attach to FaceTime or Phone",
+      : "Developer tools access is disabled; helper injection cannot attach to FaceTime",
     ...(!developerSecurityEnabled ? { actionId: "enable-developer-tools" } : {}),
   });
-  if (!developerSecurityEnabled) {
-    addAction(actions, {
-      id: "enable-developer-tools",
-      kind: "command",
-      label: "Enable developer tools access",
-      command: "sudo /usr/sbin/DevToolsSecurity -enable",
-    });
-  }
 
   const sip = await checkCommand(
     params.runCommandWithTimeout,
@@ -353,28 +347,12 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     status: debuggingRestrictionsDisabled ? "ready" : "action-required",
     required: true,
     message: debuggingRestrictionsDisabled
-      ? "SIP permits debugger attachment to FaceTime and Phone; a connected helper must still be verified separately"
+      ? "SIP permits debugger attachment to FaceTime; a connected helper must still be verified separately"
       : debuggingRestrictionsEnabled
         ? "SIP debugging restrictions block LLDB helper injection into protected Apple apps"
         : "Could not verify SIP debugging restrictions; run csrutil status before changing protection settings",
     ...(!debuggingRestrictionsDisabled ? { actionId: sipActionId } : {}),
   });
-  if (!debuggingRestrictionsDisabled && debuggingRestrictionsEnabled) {
-    addAction(actions, {
-      id: "disable-sip-debugging",
-      kind: "recovery",
-      label: "Disable SIP debugging restrictions from macOS Recovery, then reboot and rerun setup",
-      command: "csrutil enable --without debug",
-      settingsPath: "macOS Recovery > Utilities > Terminal",
-    });
-  } else if (!debuggingRestrictionsDisabled) {
-    addAction(actions, {
-      id: "verify-sip-status",
-      kind: "command",
-      label: "Verify SIP status, then rerun setup",
-      command: "/usr/bin/csrutil status",
-    });
-  }
 
   checks.push({
     id: "owner-handles",
@@ -387,14 +365,6 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
         : "Configure at least one owner email address or phone number",
     ...(params.config.ownerHandles.length === 0 ? { actionId: "configure-owner-handles" } : {}),
   });
-  if (params.config.ownerHandles.length === 0) {
-    addAction(actions, {
-      id: "configure-owner-handles",
-      kind: "command",
-      label: "Configure ownerHandles",
-      command: "openclaw configure",
-    });
-  }
 
   checks.push({
     id: "native-package",
@@ -404,11 +374,8 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     message: params.nativePackageReady
       ? "Compatible FaceTime capture and helper artifacts are installed"
       : "Compatible FaceTime native helpers are not installed",
-    ...(!params.nativePackageReady ? { actionId: NATIVE_PACKAGE_ACTION.id } : {}),
+    ...(!params.nativePackageReady ? { actionId: "install-native-package" } : {}),
   });
-  if (!params.nativePackageReady) {
-    addAction(actions, NATIVE_PACKAGE_ACTION);
-  }
 
   // The runtime can finish asynchronous helper injection while the static
   // checks above run. Resolve its status only when composing the live checks
@@ -425,18 +392,10 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
       : (params.runtimeError ?? "FaceTime runtime is not running"),
     ...(!runtimeStatus
       ? {
-          actionId: params.nativePackageReady ? "restart-gateway" : NATIVE_PACKAGE_ACTION.id,
+          actionId: params.nativePackageReady ? "restart-gateway" : "install-native-package",
         }
       : {}),
   });
-  if (!runtimeStatus && params.nativePackageReady) {
-    addAction(actions, {
-      id: "restart-gateway",
-      kind: "command",
-      label: "Stop the stale gateway process, then restart OpenClaw",
-      command: "openclaw gateway restart",
-    });
-  }
 
   if (runtimeStatus) {
     for (const target of runtimeStatus.helperTargets) {
@@ -451,7 +410,7 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
         id: `helper-${target.target.toLowerCase()}`,
         label: `${target.target} helper`,
         status,
-        required: target.target === "FaceTime" || target.target === "Phone",
+        required: true,
         message: target.connected
           ? "Authenticated helper connected"
           : target.stale
@@ -467,19 +426,6 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
             ? { actionId: "restart-call-apps" }
             : {}),
       });
-      if (status === "repairing") {
-        addAction(actions, {
-          id: "wait-for-helper",
-          kind: "automatic",
-          label: "Wait for automatic helper injection to finish",
-        });
-      } else if (status === "action-required") {
-        addAction(actions, {
-          id: "restart-call-apps",
-          kind: "manual-test",
-          label: "Quit and reopen FaceTime and Phone, then let OpenClaw reinject the helper",
-        });
-      }
     }
   }
 
@@ -499,18 +445,10 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
           : `Driver status: ${driver.status ?? "unknown"}`,
     ...(!driverReady
       ? {
-          actionId: params.nativePackageReady ? "install-driver" : NATIVE_PACKAGE_ACTION.id,
+          actionId: params.nativePackageReady ? "install-driver" : "install-native-package",
         }
       : {}),
   });
-  if (!driverReady && params.nativePackageReady) {
-    addAction(actions, {
-      id: "install-driver",
-      kind: "gateway",
-      label: "Install or update the paired FaceTime audio driver",
-      gatewayMethod: "facetime.installDriver",
-    });
-  }
 
   if (params.preflight) {
     const preflight = await params.preflight;
@@ -518,31 +456,12 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
       if (check.id === "helper-connected" && runtimeStatus?.helperTargets.length) {
         continue;
       }
-      addPreflightCheck(checks, actions, check);
+      addPreflightCheck(checks, check);
     }
   }
 
-  const focus = await checkFocusMode(params);
-  checks.push(focus);
-  if (focus.status === "verify-on-call") {
-    addAction(actions, {
-      id: "verify-focus",
-      kind: "system-settings",
-      label: "Verify Focus is off or allows the expected caller",
-      settingsPath: "Control Center > Focus",
-    });
-  }
-
-  const sharingNotifications = await checkNotificationsDuringSharing(params.runCommandWithTimeout);
-  checks.push(sharingNotifications);
-  if (sharingNotifications.status === "action-required") {
-    addAction(actions, {
-      id: "allow-sharing-notifications",
-      kind: "system-settings",
-      label: "Allow notifications while mirroring or sharing the display",
-      settingsPath: "System Settings > Notifications",
-    });
-  }
+  checks.push(await checkFocusMode());
+  checks.push(await checkNotificationsDuringSharing(params.runCommandWithTimeout));
 
   checks.push({
     id: "facetime-sign-in",
@@ -552,12 +471,6 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
     message:
       "macOS does not expose a supported sign-in readiness API; verify with one outbound call",
     actionId: "live-outbound-test",
-  });
-  addAction(actions, {
-    id: "live-outbound-test",
-    kind: "manual-test",
-    label: "Place one outbound FaceTime audio call with facetime.dial",
-    gatewayMethod: "facetime.dial",
   });
 
   const internalMediaStage = runtimeStatus?.calls.find(
@@ -577,13 +490,6 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
       : "Internal media stages require an active call; remote audibility still needs a separate live check",
     ...(!internalMediaStage ? { actionId: "live-audio-test" } : {}),
   });
-  if (!internalMediaStage) {
-    addAction(actions, {
-      id: "live-audio-test",
-      kind: "manual-test",
-      label: "Run one inbound and one outbound FaceTime audio call",
-    });
-  }
 
   checks.push({
     id: "live-voicemail",
@@ -594,22 +500,15 @@ export async function runFaceTimeSetup(params: SetupParams): Promise<FaceTimeSet
       "If incoming FaceTime Audio rings are intercepted, turn off Live Voicemail on this unattended Mac",
     actionId: "review-live-voicemail",
   });
-  addAction(actions, {
-    id: "review-live-voicemail",
-    kind: "system-settings",
-    label: "Review Live Voicemail if inbound audio calls are screened",
-    settingsPath: "Phone > Settings > Live Voicemail",
-  });
 
-  const requiredReady = checks.every(
-    (check) => !check.required || check.status === "ready" || check.status === "repairing",
-  );
-  const repairsPending = checks.some((check) => check.required && check.status === "repairing");
+  const ready = checks.every((check) => !check.required || check.status === "ready");
   return {
-    ok: requiredReady && !repairsPending,
-    readyForTest: requiredReady && !repairsPending,
+    ok: ready,
+    readyForTest: ready,
     liveCallProofRequired: true,
     checks,
-    actions,
+    actions: [...new Set(checks.flatMap((check) => (check.actionId ? [check.actionId] : [])))].map(
+      (id) => Object.assign({ id }, SETUP_ACTIONS[id]),
+    ),
   };
 }

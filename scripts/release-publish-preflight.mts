@@ -43,13 +43,11 @@ import {
   observeReleaseNpmState,
   readReleasePublicationPackages,
 } from "./lib/release-publish-state.mts";
+import { validateRetiredLineReason } from "./lib/release-version.mjs";
 import { verifyReleasePreflightToolingIdentity } from "./npm-preflight-tooling-identity.mjs";
 import { validateNpmPublishBoundary } from "./openclaw-npm-extended-stable-release.mjs";
 import { verifyOpenClawNpmResumeRun } from "./openclaw-npm-resume-run.mts";
-import {
-  authenticateFullReleaseValidationEvidence,
-  validateFullReleaseValidationEvidence,
-} from "./validate-full-release-validation-evidence.mjs";
+import { authenticateFullReleaseValidationEvidence } from "./validate-full-release-validation-evidence.mjs";
 
 type PreflightContext = {
   manifest?: PublishPreflightRecord;
@@ -61,7 +59,7 @@ type PreflightContext = {
   npmManifest?: PublishPreflightRecord;
   npmManifestPath?: string;
   npmPreflightRun?: PublishPreflightRecord;
-  fullValidationEvidence?: unknown;
+  fullValidationEvidence?: Awaited<ReturnType<typeof authenticateFullReleaseValidationEvidence>>;
 };
 const SHA = /^[a-f0-9]{40}$/u;
 const POSITIVE_ID = /^[1-9][0-9]*$/u;
@@ -103,6 +101,13 @@ export async function runReleasePublishPreflight(
     "Publication inputs are consistent.",
     "Correct the named dispatch inputs and repeat preflight.",
     () => {
+      if (
+        options.tag.includes("-alpha.") ||
+        options.npmDistTag === "alpha" ||
+        options.workflowRef.includes("tideclaw/alpha/")
+      ) {
+        throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+      }
       if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(options.repo)) {
         throw new Error("repo must be owner/name.");
       }
@@ -113,7 +118,7 @@ export async function runReleasePublishPreflight(
         throw new Error("A workflow ref or workflow SHA is required.");
       }
       if (
-        !/^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?$/u.test(
+        !/^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-beta\.[1-9][0-9]*)|(-[1-9][0-9]*))?$/u.test(
           options.tag,
         )
       ) {
@@ -126,10 +131,11 @@ export async function runReleasePublishPreflight(
       ) {
         throw new Error("Core npm publication requires plugin_publish_scope=all-publishable.");
       }
-      if (options.publishOpenclawNpm !== false && options.npmDistTag === "extended-stable") {
-        throw new Error(
-          "Extended-stable core npm publication uses its canonical extended-stable workflow.",
-        );
+      if (options.retiredLinePublicationReason !== undefined) {
+        validateRetiredLineReason(options.retiredLinePublicationReason);
+        if (options.npmDistTag !== "extended-stable") {
+          throw new Error("A retired-line decision requires the extended-stable npm dist-tag.");
+        }
       }
       if (
         options.pluginPublishScope === "selected"
@@ -193,6 +199,10 @@ export async function runReleasePublishPreflight(
     );
   }
   const sourceSha = releaseSha ?? context.targetSha;
+  const includeStableCloseout =
+    !options.tag.includes("-beta.") &&
+    options.npmDistTag !== "extended-stable" &&
+    options.publishOpenclawNpm !== false;
   let workflowRef = options.workflowRef.replace(/^refs\/(?:heads|tags)\//u, "");
   let toolingSha = context.toolingSha ?? "";
   await check(
@@ -227,17 +237,6 @@ export async function runReleasePublishPreflight(
           workflowSha: toolingSha,
           runGh,
         });
-      } else if (
-        options.tag.includes("-alpha.") &&
-        options.npmDistTag === "alpha" &&
-        /^tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$/u.test(workflowRef)
-      ) {
-        const ref = requirePreflightRecord(api(`git/ref/heads/${workflowRef}`), "Tideclaw ref");
-        const object = requirePreflightRecord(ref.object, "Tideclaw ref object");
-        if (object.type !== "commit" || typeof object.sha !== "string" || !SHA.test(object.sha)) {
-          throw new Error("Invalid Tideclaw workflow commit.");
-        }
-        toolingSha = object.sha;
       } else if (workflowRef === "main") {
         const main = requirePreflightRecord(
           requirePreflightRecord(api("git/ref/heads/main"), "main").object,
@@ -245,15 +244,12 @@ export async function runReleasePublishPreflight(
         );
         toolingSha ||= String(main.sha);
         const proposed = `release-publish/${toolingSha.slice(0, 12)}-${Math.floor(Date.now() / 1000)}`;
-        workflowRef = proposed;
-        const remediation = `Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`;
-        if (!context.allowPlannedTag) {
-          throw new Error(`Mutating publish cannot dispatch from main. ${remediation}`);
-        }
-        warn("publisher.planned-tooling", "Protected tooling tag is still pending.", remediation);
+        throw new Error(
+          `Mutating publish cannot dispatch from main. Repeat preflight with --workflow-sha ${toolingSha}; the helper reuses or mints the protected tooling tag (or create ${proposed} yourself with gh api -X POST repos/${options.repo}/git/refs).`,
+        );
       } else {
         throw new Error(
-          "This preflight supports the regular protected-tag publication route; use the alpha or extended-stable owner workflow for other routes.",
+          "This preflight supports the regular protected-tag publication route; use the extended-stable owner workflow for other routes.",
         );
       }
     },
@@ -353,26 +349,6 @@ export async function runReleasePublishPreflight(
           pluginSdkApiAcknowledgement: sealedInputs.pluginSdkApiAcknowledgement,
         };
       }
-      for (const consumer of [
-        "publisher",
-        ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
-        ...(!options.tag.includes("-alpha.") &&
-        !options.tag.includes("-beta.") &&
-        options.publishOpenclawNpm !== false
-          ? ["stable-closeout"]
-          : []),
-      ] as const) {
-        rows.push(
-          ...evaluateReleasePublishGates({
-            manifest,
-            consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
-            releaseTag: options.tag,
-            npmDistTag: options.npmDistTag,
-            expectedSha: sourceSha,
-            expectedReleaseProfile: options.releaseProfile,
-          }),
-        );
-      }
       if (run && sourceSha && SHA.test(toolingSha)) {
         await check(
           "validation.provenance",
@@ -385,11 +361,9 @@ export async function runReleasePublishPreflight(
                 route:
                   options.publicationRoute === "prepared"
                     ? "prepared"
-                    : options.npmDistTag === "alpha"
-                      ? "alpha"
-                      : options.npmDistTag === "extended-stable"
-                        ? "extended-stable"
-                        : "normal",
+                    : options.npmDistTag === "extended-stable"
+                      ? "extended-stable"
+                      : "normal",
                 npmDistTag: options.npmDistTag,
                 publishOpenclawNpm: options.publishOpenclawNpm !== false,
                 pluginPublishScope: options.pluginPublishScope,
@@ -417,7 +391,6 @@ export async function runReleasePublishPreflight(
               expectedReleaseTag: options.tag,
               expectedTrustedWorkflowFullRef: `refs/${PUBLISH_REF.test(workflowRef) ? "tags" : "heads"}/${workflowRef}`,
               expectedTrustedWorkflowSha: toolingSha,
-              expectedWorkflowBranch: workflowRef,
               expectedPublicationSelection: selection,
               verifierSourceSha: execFileSync(
                 "git",
@@ -429,28 +402,30 @@ export async function runReleasePublishPreflight(
               verifierSourceContent: readFileSync(
                 new URL("./release-ci-summary.mjs", import.meta.url),
               ),
-              isTrustedMainAncestor: (sha: string) => {
-                const result = requirePreflightRecord(
-                  api(`compare/${sha}...main?per_page=1`),
-                  "ancestry",
-                );
-                return result.status === "ahead" || result.status === "identical";
-              },
             };
             if (context.fullValidationEvidence) {
-              const prior = requirePreflightRecord(
-                context.fullValidationEvidence,
-                "authenticated candidate evidence",
-              );
-              const evidence = requirePreflightRecord(prior.evidence, "strict candidate evidence");
-              return validateFullReleaseValidationEvidence({
-                ...validationOptions,
-                getWorkflowSource: (sha: string) => client.getWorkflowSource(sha),
-                validateEvidenceReuseStrictly: () => evidence,
-              });
+              const prior = context.fullValidationEvidence;
+              const validated = prior.forPublication(validationOptions);
+              return { ...validated, evidence: prior.evidence };
             }
             return authenticateFullReleaseValidationEvidence(validationOptions, client);
           },
+        );
+      }
+      for (const consumer of [
+        "publisher",
+        ...(options.publishOpenclawNpm === false ? [] : ["core-npm"]),
+        ...(includeStableCloseout ? ["stable-closeout"] : []),
+      ] as const) {
+        rows.push(
+          ...evaluateReleasePublishGates({
+            manifest,
+            consumer: consumer as "publisher" | "core-npm" | "stable-closeout",
+            releaseTag: options.tag,
+            npmDistTag: options.npmDistTag,
+            expectedSha: sourceSha,
+            expectedReleaseProfile: options.releaseProfile,
+          }),
         );
       }
     }
@@ -521,10 +496,13 @@ export async function runReleasePublishPreflight(
       warn(
         "plugin-npm.token-liveness",
         `${registry.bootstrapCandidates.length} package(s) are not visible in npm and may need the repository NPM_TOKEN bootstrap path; token liveness is unverified locally.`,
-        "Run the isolated npm whoami --registry=https://registry.npmjs.org probe documented in .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token using the exact repository secret. A local login or secret updated_at is not proof. Do not publish or rotate credentials during preflight.",
+        "Ask the release credential owner to confirm NPM_TOKEN readiness; see .agents/skills/release-openclaw-maintainer/references/publication-recovery.md#check-the-bootstrap-token. Do not publish or rotate credentials during preflight.",
       );
     }
   }
+  // Sealed FRV npm decisions predate publication, so resume discovery reads the
+  // live core version alongside the current selector.
+  let corePublished = false;
   const npmEvidence =
     evidenceRequired && sourceSha && SHA.test(toolingSha)
       ? await check(
@@ -536,10 +514,15 @@ export async function runReleasePublishPreflight(
               packageName: "openclaw",
               packageUrl: "https://registry.npmjs.org/openclaw",
               maxBytes: 16 * 1024 * 1024,
+              exactVersion: options.tag.slice(1),
             });
             const packument = requirePreflightRecord(
               result.packument,
               "openclaw registry metadata",
+            );
+            corePublished = Object.hasOwn(
+              requirePreflightRecord(packument.versions, "openclaw versions"),
+              options.tag.slice(1),
             );
             const tags = requirePreflightRecord(packument["dist-tags"], "openclaw dist-tags");
             const version = tags[options.npmDistTag];
@@ -574,7 +557,15 @@ export async function runReleasePublishPreflight(
         "github.release-admission",
         "Visible release metadata passed initial publication checks.",
         "Reconcile the exact public release's canonical notes and dependency evidence; leave docs-published bodies with their publication owner.",
-        () => inspectPublishReleasePage({ repo: options.repo, tag: options.tag, sourceSha, runGh }),
+        () =>
+          inspectPublishReleasePage({
+            repo: options.repo,
+            tag: options.tag,
+            sourceSha,
+            toolingSha,
+            retiredLineReason: options.retiredLinePublicationReason,
+            runGh,
+          }),
       );
     }
     const github = await check(
@@ -595,7 +586,7 @@ export async function runReleasePublishPreflight(
     }
   }
   let resume = options.openclawNpmResumeRunId ?? "";
-  if (registry?.corePublished && options.publishOpenclawNpm !== false && npmEvidence) {
+  if (corePublished && options.publishOpenclawNpm !== false && npmEvidence) {
     const tarballSha512 = await check(
       "core-npm.immutable-bytes",
       "Published core tarball matches the prepared release bytes.",
@@ -638,11 +629,7 @@ export async function runReleasePublishPreflight(
       );
     }
   }
-  if (
-    !options.tag.includes("-alpha.") &&
-    !options.tag.includes("-beta.") &&
-    options.publishOpenclawNpm !== false
-  ) {
+  if (includeStableCloseout) {
     if (sourceSha) {
       rows.push(
         ...inspectStableCloseoutPreflight({

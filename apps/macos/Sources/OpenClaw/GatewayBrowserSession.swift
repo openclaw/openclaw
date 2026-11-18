@@ -60,10 +60,6 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
         self.expiresAt = expiresAt
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case provider, origin, issuer, audience, subject, expiresAt, token
-    }
-
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         _ = try values.decode(Provider.self, forKey: .provider)
@@ -85,6 +81,19 @@ struct GatewayBrowserSession: Codable, Equatable, Sendable {
               target.host == owner.host, target.port == owner.port
         else { throw GatewayBrowserSessionError.wrongOrigin }
         guard self.expiresAt > now else { throw GatewayBrowserSessionError.expired }
+    }
+
+    var renewalLeadTime: TimeInterval {
+        struct Lifetime: Decodable {
+            let iat: Double
+            let exp: Double
+        }
+        // The credential was verified at sign-in. These claims only schedule renewal;
+        // old saved sessions without iat keep their original fifteen-minute window.
+        guard let lifetime = try? CloudflareAccessLogin.decodeJWT(Lifetime.self, token: self.token),
+              lifetime.iat.isFinite, lifetime.iat > 0, lifetime.exp.isFinite, lifetime.exp > lifetime.iat
+        else { return 15 * 60 }
+        return max(15 * 60, min(7 * 24 * 60 * 60, (lifetime.exp - lifetime.iat) / 4))
     }
 
     func headers(for url: URL, now: Date = Date()) throws -> [String: String] {

@@ -1,34 +1,94 @@
 /** Shared ACP manager test harness, mocks, fixtures, and assertion helpers. */
-import type { AcpRuntime, AcpRuntimeCapabilities } from "@openclaw/acp-core/runtime/types";
+import type {
+  AcpRuntime,
+  AcpRuntimeCapabilities,
+  AcpRuntimeHandle,
+  AcpRuntimeTurn,
+} from "@openclaw/acp-core/runtime/types";
 import { afterEach, beforeEach, expect, vi } from "vitest";
-import { resetAcpManagerTaskStateForTests } from "../../../test/helpers/acp-manager-task-state.js";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resetAcpActiveTurnsForTests } from "./active-turns.test-support.js";
+import { resolveAcpSessionTarget } from "./manager.utils.js";
 
 export type { AcpRuntime, OpenClawConfig, SessionAcpMeta };
+type MutableMeta = { currentMeta: SessionAcpMeta | undefined };
+
+type AcpMetaUpsertInput = Parameters<
+  typeof import("../runtime/session-meta.js").upsertAcpSessionMeta
+>[0];
+type AcpMetaUpsertObservation = Pick<
+  AcpMetaUpsertInput,
+  "skipMaintenance" | "takeCacheOwnership"
+> & {
+  next: ReturnType<AcpMetaUpsertInput["mutate"]>;
+};
 
 const hoistedMocks = vi.hoisted(() => {
-  const listAcpSessionEntriesMock = vi.fn();
   const readAcpSessionEntryMock = vi.fn();
-  const upsertAcpSessionMetaMock = vi.fn();
-  const getAcpRuntimeBackendMock = vi.fn();
-  const requireAcpRuntimeBackendMock = vi.fn();
   return {
-    listAcpSessionEntriesMock,
+    listAcpSessionEntriesMock: vi.fn(),
     readAcpSessionEntryMock,
-    upsertAcpSessionMetaMock,
-    getAcpRuntimeBackendMock,
-    requireAcpRuntimeBackendMock,
+    readAcpSessionEntryAsyncMock: vi.fn(async (params: unknown) => readAcpSessionEntryMock(params)),
+    upsertAcpSessionMetaMock: vi.fn(),
+    upsertObservations: new WeakMap<object, AcpMetaUpsertObservation>(),
+    getAcpRuntimeBackendMock: vi.fn(),
+    requireAcpRuntimeBackendMock: vi.fn(),
   };
 });
 
+async function mockAcpSessionMetaUpsert(params: AcpMetaUpsertInput) {
+  let invoked = false;
+  const observed: AcpMetaUpsertInput = {
+    ...params,
+    mutate: (current, entry) => {
+      invoked = true;
+      const next = params.mutate(current, entry);
+      hoistedMocks.upsertObservations.set(observed, {
+        next: structuredClone(next),
+        skipMaintenance: params.skipMaintenance,
+        takeCacheOwnership: params.takeCacheOwnership,
+      });
+      return next;
+    },
+  };
+  const result = await hoistedMocks.upsertAcpSessionMetaMock(observed);
+  // Value-only persistence fixtures still evaluate the mutation while its actor is live.
+  if (!invoked) {
+    const current = readySessionMeta();
+    observed.mutate(current, {
+      sessionId: "session-1",
+      updatedAt: current.lastActivityAt,
+      acp: current,
+    });
+  }
+  return result;
+}
+
+// mock-isolation: ACP manager cases own metadata mutations in memory and must not acquire session database actors.
 vi.mock("../runtime/session-meta.js", () => ({
   listAcpSessionEntries: (params: unknown) => hoistedMocks.listAcpSessionEntriesMock(params),
   readAcpSessionEntry: (params: unknown) => hoistedMocks.readAcpSessionEntryMock(params),
-  upsertAcpSessionMeta: (params: unknown) => hoistedMocks.upsertAcpSessionMetaMock(params),
+  readAcpSessionEntryAsync: (params: unknown) => hoistedMocks.readAcpSessionEntryAsyncMock(params),
+  prepareAcpSessionControlRead: async (
+    params: Parameters<typeof import("../runtime/session-meta.js").prepareAcpSessionControlRead>[0],
+  ) => {
+    const readCurrent = async () => {
+      params.assertCurrent?.();
+      const stored = await hoistedMocks.readAcpSessionEntryAsyncMock(params);
+      return { session: stored, entry: stored?.entry };
+    };
+    return {
+      initialRead: await readCurrent(),
+      readCurrent,
+      assertCurrent: () => params.assertCurrent?.(),
+      release: () => {},
+    };
+  },
+  upsertAcpSessionMeta: mockAcpSessionMetaUpsert,
+  upsertAcpSessionMetaForControl: mockAcpSessionMetaUpsert,
 }));
 
 vi.mock("../runtime/registry.js", () => ({
@@ -39,7 +99,6 @@ vi.mock("../runtime/registry.js", () => ({
 
 export const hoisted = hoistedMocks;
 
-// Shared ACP manager test harness with hoisted runtime/session-meta mocks.
 const managerModule = await import("./manager.js");
 type AcpRunTurnInput = import("./manager.types.js").AcpRunTurnInput;
 type TestAcpRunTurnInput = Omit<AcpRunTurnInput, "admittedRunContext"> &
@@ -48,14 +107,23 @@ type TestAcpRunTurnInput = Omit<AcpRunTurnInput, "admittedRunContext"> &
 /** Keeps production ACP admission mandatory while centralizing legacy fixture setup. */
 export class AcpSessionManager extends managerModule.AcpSessionManager {
   override async runTurn(input: TestAcpRunTurnInput): Promise<void> {
-    return await super.runTurn({
-      ...input,
-      admittedRunContext: input.admittedRunContext ?? createTestAdmittedRunContext(input.requestId),
-    });
+    if (input.admittedRunContext) {
+      return await super.runTurn({ ...input, admittedRunContext: input.admittedRunContext });
+    }
+    const admission = prepareSystemAgentRunAdmission(
+      input.cfg,
+      input.requestId,
+      resolveAcpSessionTarget(input).agentId,
+      "acp-manager-test",
+    );
+    try {
+      return await super.runTurn({ ...input, admittedRunContext: await admission.admit("acp") });
+    } finally {
+      admission.close();
+    }
   }
 }
-export const resetAcpSessionManagerForTests = () =>
-  managerModule.testing.resetAcpSessionManagerForTests();
+const resetAcpSessionManagerForTests = () => managerModule.testing.resetAcpSessionManagerForTests();
 const managerLifecycleModule = await import("./manager.lifecycle.js");
 export const disposeAcpSessionManagerInstance =
   managerLifecycleModule.disposeAcpSessionManagerInstance;
@@ -76,134 +144,94 @@ export async function flushMicrotasks(rounds = 3): Promise<void> {
   }
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
+export function expectCalledWith(mock: ReturnType<typeof vi.fn>, fields: Record<string, unknown>) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
 }
 
-export async function expectRejectedRecord(
-  promise: Promise<unknown>,
-  expected: Record<string, unknown>,
-) {
-  await promise.then(
-    () => {
-      throw new Error("Expected promise to reject.");
-    },
-    (error: unknown) => {
-      expectRecordFields(error, expected);
-    },
-  );
-}
-
-export function mockCallArg(
-  mock: ReturnType<typeof vi.fn>,
-  callIndex = 0,
-): Record<string, unknown> {
-  const call = mock.mock.calls[callIndex];
-  if (!call) {
-    throw new Error(`Expected mock call ${callIndex}`);
-  }
-  return call[0] as Record<string, unknown>;
-}
-
-function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
-  return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
-}
-
-function findMockCallFields(mock: ReturnType<typeof vi.fn>, expected: Record<string, unknown>) {
-  return mockCallArgs(mock).find((actual) =>
-    Object.entries(expected).every(([key, value]) => Object.is(actual[key], value)),
-  );
-}
-
-export function expectMockCallFields(
-  mock: ReturnType<typeof vi.fn>,
-  expected: Record<string, unknown>,
-) {
-  if (!findMockCallFields(mock, expected)) {
-    throw new Error(`Expected mock call ${JSON.stringify(expected)}`);
-  }
-}
-
-export function expectNoMockCallFields(
-  mock: ReturnType<typeof vi.fn>,
-  expected: Record<string, unknown>,
-) {
-  expect(findMockCallFields(mock, expected)).toBeUndefined();
-}
-
-export function createRuntime(): {
-  runtime: AcpRuntime;
-  ensureSession: ReturnType<typeof vi.fn<AcpRuntime["ensureSession"]>>;
-  runTurn: ReturnType<typeof vi.fn<AcpRuntime["runTurn"]>>;
-  prepareFreshSession: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>>;
-  cancel: ReturnType<typeof vi.fn<AcpRuntime["cancel"]>>;
-  close: ReturnType<typeof vi.fn<AcpRuntime["close"]>>;
-  getCapabilities: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["getCapabilities"]>>>;
-  getStatus: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["getStatus"]>>>;
-  setMode: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["setMode"]>>>;
-  setConfigOption: ReturnType<typeof vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>>;
-} {
-  const ensureSession = vi.fn<AcpRuntime["ensureSession"]>(
-    async (input: {
-      sessionKey: string;
-      agent: string;
-      mode: "persistent" | "oneshot";
-      model?: string;
-      thinking?: string;
-      cwd?: string;
-      resumeSessionId?: string;
-    }) => ({
-      sessionKey: input.sessionKey,
-      backend: "acpx",
-      runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
-    }),
-  );
-  const runTurn = vi.fn<AcpRuntime["runTurn"]>(async function* () {
-    yield { type: "done" as const };
-  });
-  const prepareFreshSession = vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(async () => {});
-  const cancel = vi.fn<AcpRuntime["cancel"]>(async () => {});
-  const close = vi.fn<AcpRuntime["close"]>(async () => {});
-  const getCapabilities = vi.fn<NonNullable<AcpRuntime["getCapabilities"]>>(
-    async (): Promise<AcpRuntimeCapabilities> => ({
-      controls: ["session/set_mode", "session/set_config_option", "session/status"],
-    }),
-  );
-  const getStatus = vi.fn<NonNullable<AcpRuntime["getStatus"]>>(async () => ({
-    summary: "status=alive",
-    details: { status: "alive" },
-  }));
-  const setMode = vi.fn<NonNullable<AcpRuntime["setMode"]>>(async () => {});
-  const setConfigOption = vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>(async () => {});
+export function runtimeTurn(
+  requestId: string,
+  overrides: Partial<AcpRuntimeTurn> = {},
+): AcpRuntimeTurn {
   return {
-    runtime: {
-      ensureSession,
-      runTurn,
-      getCapabilities,
-      getStatus,
-      setMode,
-      setConfigOption,
-      prepareFreshSession,
-      cancel,
-      close,
-    },
-    ensureSession,
-    runTurn,
-    prepareFreshSession,
-    cancel,
-    close,
-    getCapabilities,
-    getStatus,
-    setMode,
-    setConfigOption,
+    requestId,
+    events: (async function* () {})(),
+    result: Promise.resolve({ status: "completed" }),
+    cancel: vi.fn(async () => {}),
+    closeStream: vi.fn(async () => {}),
+    ...overrides,
   };
+}
+
+export function resolvedIdentity(overrides: Partial<NonNullable<SessionAcpMeta["identity"]>> = {}) {
+  return { state: "resolved" as const, source: "status" as const, lastUpdatedAt: 1, ...overrides };
+}
+
+export function runtimeHandle(
+  sessionKey: string,
+  runtimeSessionName: string,
+  overrides: Partial<AcpRuntimeHandle> = {},
+): AcpRuntimeHandle {
+  return { sessionKey, runtimeSessionName, backend: "acpx", ...overrides };
+}
+
+export function createRuntime() {
+  const mocks = {
+    ensureSession: vi.fn<AcpRuntime["ensureSession"]>(async (input) =>
+      runtimeHandle(input.sessionKey, `${input.sessionKey}:${input.mode}:runtime`),
+    ),
+    runTurn: vi.fn<AcpRuntime["runTurn"]>(async function* () {
+      yield { type: "done" as const };
+    }),
+    prepareFreshSession: vi.fn<NonNullable<AcpRuntime["prepareFreshSession"]>>(async () => {}),
+    cancel: vi.fn<AcpRuntime["cancel"]>(async () => {}),
+    close: vi.fn<AcpRuntime["close"]>(async () => {}),
+    getCapabilities: vi.fn<NonNullable<AcpRuntime["getCapabilities"]>>(
+      async (): Promise<AcpRuntimeCapabilities> => ({
+        controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      }),
+    ),
+    getStatus: vi.fn<NonNullable<AcpRuntime["getStatus"]>>(async () => ({
+      summary: "status=alive",
+      details: { status: "alive" },
+    })),
+    setMode: vi.fn<NonNullable<AcpRuntime["setMode"]>>(async () => {}),
+    setConfigOption: vi.fn<NonNullable<AcpRuntime["setConfigOption"]>>(async () => {}),
+  };
+  const runtime: AcpRuntime = { ...mocks };
+  return { runtime, ...mocks };
+}
+
+export function mockMutableSession(sessionKey: string, state: MutableMeta) {
+  hoisted.readAcpSessionEntryMock.mockImplementation(() => ({
+    sessionKey,
+    storeSessionKey: sessionKey,
+    acp: state.currentMeta,
+  }));
+  installMutableAcpSessionMetaUpsert(state);
+}
+
+export function managerFixture(
+  sessionKey = "agent:codex:acp:session-1",
+  meta = readySessionMeta(),
+  cfg: OpenClawConfig = baseCfg,
+) {
+  const runtimeState = createRuntime();
+  hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+    id: "acpx",
+    runtime: runtimeState.runtime,
+  });
+  hoisted.readAcpSessionEntryMock.mockReturnValue({
+    sessionKey,
+    storeSessionKey: sessionKey,
+    acp: meta,
+  });
+  const manager = new AcpSessionManager();
+  const target = { cfg, sessionKey };
+  const turnInput = { ...target, provenance: "system" as const, mode: "prompt" as const };
+  const run = (
+    overrides: Partial<TestAcpRunTurnInput> & Pick<TestAcpRunTurnInput, "text" | "requestId">,
+  ) => manager.runTurn({ ...turnInput, ...overrides });
+  return { runtimeState, manager, target, run };
 }
 
 export function readySessionMeta(overrides: Partial<SessionAcpMeta> = {}): SessionAcpMeta {
@@ -222,102 +250,56 @@ export function mockParentedAcpSessionEntries(params: {
   childSessionKey: string;
   parentSessionKey: string;
   label?: string;
+  state?: { currentMeta: SessionAcpMeta | undefined };
 }): void {
   hoisted.readAcpSessionEntryMock.mockImplementation((input: unknown) => {
     const sessionKey = (input as { sessionKey?: string }).sessionKey;
-    if (sessionKey === params.childSessionKey) {
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "child-1",
-          updatedAt: Date.now(),
-          spawnedBy: params.parentSessionKey,
-          ...(params.label === undefined ? {} : { label: params.label }),
-        },
-        acp: readySessionMeta(),
-      };
+    const child = sessionKey === params.childSessionKey;
+    if (!child && sessionKey !== params.parentSessionKey) {
+      return null;
     }
-    if (sessionKey === params.parentSessionKey) {
-      return {
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "parent-1",
-          updatedAt: Date.now(),
-        },
-      };
-    }
-    return null;
+    return {
+      sessionKey,
+      storeSessionKey: sessionKey,
+      entry: {
+        sessionId: child ? "child-1" : "parent-1",
+        updatedAt: Date.now(),
+        ...(child
+          ? {
+              spawnedBy: params.parentSessionKey,
+              ...(params.label === undefined ? {} : { label: params.label }),
+            }
+          : {}),
+      },
+      ...(child ? { acp: params.state ? params.state.currentMeta : readySessionMeta() } : {}),
+    };
+  });
+}
+
+function recordedUpserts(): AcpMetaUpsertObservation[] {
+  return hoisted.upsertAcpSessionMetaMock.mock.calls.flatMap(([input]) => {
+    const observation =
+      input !== null && typeof input === "object"
+        ? hoisted.upsertObservations.get(input)
+        : undefined;
+    return observation ? [observation] : [];
   });
 }
 
 export function extractStatesFromUpserts(): SessionAcpMeta["state"][] {
-  const states: SessionAcpMeta["state"][] = [];
-  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
-    const payload = firstArg as {
-      mutate: (
-        current: SessionAcpMeta | undefined,
-        entry: { acp?: SessionAcpMeta } | undefined,
-      ) => SessionAcpMeta | null | undefined;
-    };
-    const current = readySessionMeta();
-    const next = payload.mutate(current, { acp: current });
-    if (next?.state) {
-      states.push(next.state);
-    }
-  }
-  return states;
+  return recordedUpserts().flatMap(({ next }) => (next?.state ? [next.state] : []));
 }
 
-export function extractStateUpsertPersistenceOptions(): Array<{
-  state: SessionAcpMeta["state"];
-  skipMaintenance?: boolean;
-  takeCacheOwnership?: boolean;
-}> {
-  const options: Array<{
-    state: SessionAcpMeta["state"];
-    skipMaintenance?: boolean;
-    takeCacheOwnership?: boolean;
-  }> = [];
-  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
-    const payload = firstArg as {
-      skipMaintenance?: boolean;
-      takeCacheOwnership?: boolean;
-      mutate: (
-        current: SessionAcpMeta | undefined,
-        entry: { acp?: SessionAcpMeta } | undefined,
-      ) => SessionAcpMeta | null | undefined;
-    };
-    const current = readySessionMeta();
-    const next = payload.mutate(current, { acp: current });
-    if (next?.state && payload.skipMaintenance && payload.takeCacheOwnership) {
-      options.push({
-        state: next.state,
-        skipMaintenance: true,
-        takeCacheOwnership: true,
-      });
-    }
-  }
-  return options;
+export function extractStateUpsertPersistenceOptions() {
+  return recordedUpserts().flatMap(({ next, skipMaintenance, takeCacheOwnership }) =>
+    next?.state && skipMaintenance && takeCacheOwnership
+      ? [{ state: next.state, skipMaintenance: true, takeCacheOwnership: true }]
+      : [],
+  );
 }
 
 export function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | undefined> {
-  const options: Array<AcpSessionRuntimeOptions | undefined> = [];
-  for (const [firstArg] of hoisted.upsertAcpSessionMetaMock.mock.calls) {
-    const payload = firstArg as {
-      mutate: (
-        current: SessionAcpMeta | undefined,
-        entry: { acp?: SessionAcpMeta } | undefined,
-      ) => SessionAcpMeta | null | undefined;
-    };
-    const current = readySessionMeta();
-    const next = payload.mutate(current, { acp: current });
-    if (next) {
-      options.push(next.runtimeOptions);
-    }
-  }
-  return options;
+  return recordedUpserts().flatMap(({ next }) => (next ? [next.runtimeOptions] : []));
 }
 
 export function installAcpSessionManagerTestLifecycle(): void {
@@ -327,6 +309,10 @@ export function installAcpSessionManagerTestLifecycle(): void {
     vi.useRealTimers();
     hoisted.listAcpSessionEntriesMock.mockReset().mockResolvedValue([]);
     hoisted.readAcpSessionEntryMock.mockReset();
+    hoisted.readAcpSessionEntryAsyncMock
+      .mockReset()
+      .mockImplementation(async (params: unknown) => hoisted.readAcpSessionEntryMock(params));
+    hoisted.upsertObservations = new WeakMap();
     hoisted.upsertAcpSessionMetaMock.mockReset().mockResolvedValue(null);
     hoisted.requireAcpRuntimeBackendMock.mockReset();
     hoisted.getAcpRuntimeBackendMock.mockReset().mockImplementation((backendId?: string) => {
@@ -344,13 +330,10 @@ export function installAcpSessionManagerTestLifecycle(): void {
     } else {
       setTestEnvValue("OPENCLAW_STATE_DIR", ORIGINAL_STATE_DIR);
     }
-    resetAcpManagerTaskStateForTests();
   });
 }
 
-export function installMutableAcpSessionMetaUpsert(state: {
-  currentMeta: SessionAcpMeta | undefined;
-}): void {
+export function installMutableAcpSessionMetaUpsert(state: MutableMeta): void {
   hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
     const params = paramsUnknown as {
       mutate: (

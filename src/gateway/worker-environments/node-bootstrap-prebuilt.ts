@@ -20,7 +20,6 @@ export async function copyNodeBootstrapPrebuiltArchive(packageRoot: string, temp
   const source = await openFsRoot(packageRoot, {
     symlinks: "reject",
     hardlinks: "allow",
-    nonBlockingRead: true,
   });
   const destination = await openFsRoot(temporaryRoot);
   try {

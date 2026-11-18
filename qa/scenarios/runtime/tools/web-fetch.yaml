@@ -10,6 +10,7 @@ scenario:
   objective: Verify web_fetch preserves arguments and result shape across OpenClaw and Codex.
   successCriteria:
     - Effective tools expose web_fetch.
+    - Live Codex proof records matching tool_search call/output receipts linked to both target results.
     - The mock provider plans exactly one happy-path web_fetch call.
     - The mock provider plans one denied-input failure-path web_fetch call.
     - Runtime parity coverage hard-fails call/result drift in the core runtime-pair lane.
@@ -20,7 +21,13 @@ scenario:
     - extensions/qa-lab/src/runtime-tool-fixture.ts
   execution:
     kind: flow
-    summary: Exercise the web_fetch runtime tool family.
+    liveConfiguredRuntime:
+      id: codex
+      model: openai/gpt-5.5
+    summary: >-
+      For native Codex discovery proof, select --provider-mode live-frontier --model openai/gpt-5.5 --alt-model openai/gpt-5.5.
+      Other model selections retain their general runtime route.
+      Exercise the web_fetch runtime tool family.
     config:
       toolName: web_fetch
       happyPrompt: "Call web_fetch exactly once with URL https://example.com/ and maxChars 500, wait for its result, then summarize. If web_fetch is already callable, call it directly without tool_search. Otherwise use tool_search to locate it first, then call web_fetch. A tool_search result alone does not complete the task; do not finish before web_fetch returns. QA routing marker: tool search qa check target=web_fetch."
@@ -29,12 +36,12 @@ scenario:
         actualTool: web_fetch
         bucket: openclaw-dynamic-integration
         expectedLayer: openclaw-dynamic
-        capabilityLayer: openclaw-dynamic-direct
+        capabilityLayer: openclaw-dynamic-searchable
         required: true
         codexDefaultImpact: P4
         qaImpact: P1
-        action: hard gate in the core runtime-pair lane
-        reason: web_fetch is an OpenClaw integration tool and must stay visible and callable under OpenClaw and Codex direct runtime parity.
+        action: hard gate searchable discovery and call/result proof in live Codex plus the core runtime-pair lane
+        reason: web_fetch is deferred behind the OpenClaw namespace for Codex and must be discovered before its target call/result can count as live proof.
       promptSnippet: "target=web_fetch"
       failurePromptSnippet: "failure target=web_fetch"
 

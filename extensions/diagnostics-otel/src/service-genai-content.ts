@@ -1,33 +1,26 @@
 import {
   ATTR_GEN_AI_INPUT_MESSAGES,
   ATTR_GEN_AI_OUTPUT_MESSAGES,
-  ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
   ATTR_GEN_AI_TOOL_CALL_ARGUMENTS,
   ATTR_GEN_AI_TOOL_CALL_ID,
   ATTR_GEN_AI_TOOL_CALL_RESULT,
   ATTR_GEN_AI_TOOL_DEFINITIONS,
   GEN_AI_OPERATION_NAME_VALUE_EXECUTE_TOOL,
 } from "@opentelemetry/semantic-conventions/incubating";
+import type {
+  DiagnosticEventPrivateData,
+  DiagnosticModelCallContent,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  assignOtelContentAttr,
+  createOtelContentRedactor,
   MAX_OTEL_CONTENT_ARRAY_ITEMS,
   MAX_OTEL_CONTENT_ATTRIBUTE_CHARS,
   normalizeOtelContentValue,
   safeJsonString,
-  type OtelContentCapturePolicy,
+  type OtelContentRedactor,
 } from "./service-content-normalization.js";
-
-export type OtelModelCallContent = {
-  inputMessages?: unknown;
-  outputMessages?: unknown;
-  systemPrompt?: string;
-  toolDefinitions?: unknown;
-};
-
-export type OtelToolCallContent = {
-  toolInput?: unknown;
-  toolOutput?: unknown;
-};
 
 function textPart(content: string): Record<string, unknown> {
   return { type: "text", content };
@@ -94,7 +87,7 @@ function contentParts(value: unknown): Record<string, unknown>[] {
     if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
       return [textPart(String(value))];
     }
-    const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
+    const json = safeJsonString(value);
     return json ? [textPart(json)] : [];
   }
   const parts: Record<string, unknown>[] = [];
@@ -170,6 +163,16 @@ function redactInternalReasoningParts(value: unknown): unknown {
     for (const field of INTERNAL_REASONING_PART_FIELDS) {
       delete redacted[field];
     }
+    // Image bytes too large for any attribute could only be exported as a truncated,
+    // undecodable base64 prefix, yet redacting them dominated content capture
+    // (#158116). Keep the part and its MIME type; drop the bytes.
+    if (
+      part.type === "image" &&
+      typeof part.data === "string" &&
+      part.data.length > MAX_OTEL_CONTENT_ATTRIBUTE_CHARS
+    ) {
+      delete redacted.data;
+    }
     return redacted;
   });
 }
@@ -204,7 +207,7 @@ function redactInternalReasoningFromMessages(value: unknown): unknown {
 
 function normalizeGenAiMessage(
   value: unknown,
-  fallbackRole = "user",
+  fallbackRole: "user" | "assistant",
 ): Record<string, unknown> | undefined {
   if (typeof value === "string") {
     return { role: fallbackRole, parts: [textPart(value)] };
@@ -279,59 +282,20 @@ function normalizeGenAiToolDefinitions(value: unknown) {
   return definitions;
 }
 
-function assignJsonAttribute(
+function assignJsonAttributes(
   attributes: Record<string, string | number | boolean>,
-  key: string,
+  keys: readonly string[],
   value: unknown,
-): void {
-  const json = safeJsonString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
-  if (json) {
+  redact: OtelContentRedactor,
+): boolean {
+  const json = safeJsonString(value, redact);
+  if (!json) {
+    return false;
+  }
+  for (const key of keys) {
     attributes[key] = json;
   }
-}
-
-function assignGenAiModelContentAttributes(
-  attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
-  policy: OtelContentCapturePolicy,
-): void {
-  if (policy.systemPrompt && typeof content?.systemPrompt === "string") {
-    const systemInstructions = [textPart(content.systemPrompt)];
-    assignJsonAttribute(attributes, ATTR_GEN_AI_SYSTEM_INSTRUCTIONS, systemInstructions);
-  }
-  if (policy.inputMessages) {
-    const inputMessages = normalizeGenAiMessages(content?.inputMessages, "user");
-    if (inputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_INPUT_MESSAGES, inputMessages);
-      assignJsonAttribute(attributes, "input.value", inputMessages);
-      attributes["input.mime_type"] = "application/json";
-    }
-  }
-  if (policy.toolDefinitions) {
-    const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
-    if (toolDefinitions.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_TOOL_DEFINITIONS, toolDefinitions);
-    }
-  }
-  if (policy.outputMessages) {
-    const outputMessages = normalizeGenAiMessages(content?.outputMessages, "assistant");
-    if (outputMessages.length > 0) {
-      assignJsonAttribute(attributes, ATTR_GEN_AI_OUTPUT_MESSAGES, outputMessages);
-      assignJsonAttribute(attributes, "output.value", outputMessages);
-      attributes["output.mime_type"] = "application/json";
-    }
-  }
-}
-
-function assignOtelContentAttribute(
-  attributes: Record<string, string | number | boolean>,
-  key: string,
-  value: unknown,
-): void {
-  const normalized = normalizeOtelContentValue(value);
-  if (normalized) {
-    attributes[key] = normalized;
-  }
+  return true;
 }
 
 export function assignOtelToolIdentityAttributes(
@@ -350,65 +314,76 @@ export function assignOtelToolIdentityAttributes(
 
 export function assignOtelModelContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelModelCallContent | undefined,
-  policy: OtelContentCapturePolicy,
+  content: DiagnosticModelCallContent | undefined,
+  captureContent: boolean,
 ): void {
+  if (!captureContent) {
+    return;
+  }
   // Provider-native thinking blocks are not user-visible model output. Keep only
   // a structural marker on compatibility attributes and omit them from semconv
   // message parts, whose reasoning schema requires exportable content.
-  const redactedContent = content
-    ? {
-        ...content,
-        inputMessages: redactInternalReasoningFromMessages(content.inputMessages),
-        outputMessages: redactInternalReasoningFromMessages(content.outputMessages),
-      }
-    : undefined;
-  assignGenAiModelContentAttributes(attributes, redactedContent, policy);
-  if (policy.inputMessages) {
-    assignOtelContentAttribute(
+  const redactedInput = redactInternalReasoningFromMessages(content?.inputMessages);
+  const redactedOutput = redactInternalReasoningFromMessages(content?.outputMessages);
+  // Every attribute below re-serializes the same captured strings; one redactor
+  // redacts each of them once for the whole model call.
+  const redact = createOtelContentRedactor();
+  const inputMessages = normalizeGenAiMessages(redactedInput, "user");
+  if (
+    inputMessages.length > 0 &&
+    assignJsonAttributes(
       attributes,
-      "openclaw.content.input_messages",
-      redactedContent?.inputMessages,
-    );
+      [ATTR_GEN_AI_INPUT_MESSAGES, "input.value"],
+      inputMessages,
+      redact,
+    )
+  ) {
+    attributes["input.mime_type"] = "application/json";
   }
-  if (policy.toolDefinitions) {
-    assignOtelContentAttribute(
+  const toolDefinitions = normalizeGenAiToolDefinitions(content?.toolDefinitions);
+  if (toolDefinitions.length > 0) {
+    assignJsonAttributes(attributes, [ATTR_GEN_AI_TOOL_DEFINITIONS], toolDefinitions, redact);
+  }
+  const outputMessages = normalizeGenAiMessages(redactedOutput, "assistant");
+  if (
+    outputMessages.length > 0 &&
+    assignJsonAttributes(
       attributes,
-      "openclaw.content.tool_definitions",
-      content?.toolDefinitions,
-    );
+      [ATTR_GEN_AI_OUTPUT_MESSAGES, "output.value"],
+      outputMessages,
+      redact,
+    )
+  ) {
+    attributes["output.mime_type"] = "application/json";
   }
-  if (policy.outputMessages) {
-    assignOtelContentAttribute(
-      attributes,
-      "openclaw.content.output_messages",
-      redactedContent?.outputMessages,
-    );
-  }
-  if (policy.systemPrompt) {
-    assignOtelContentAttribute(attributes, "openclaw.content.system_prompt", content?.systemPrompt);
-  }
+  assignOtelContentAttr(attributes, "openclaw.content.input_messages", redactedInput, redact);
+  assignOtelContentAttr(
+    attributes,
+    "openclaw.content.tool_definitions",
+    content?.toolDefinitions,
+    redact,
+  );
+  assignOtelContentAttr(attributes, "openclaw.content.output_messages", redactedOutput, redact);
 }
 
 export function assignOtelToolContentAttributes(
   attributes: Record<string, string | number | boolean>,
-  content: OtelToolCallContent | undefined,
-  policy: OtelContentCapturePolicy,
+  content: DiagnosticEventPrivateData["toolContent"],
+  captureContent: boolean,
 ): void {
+  if (!captureContent) {
+    return;
+  }
   // Mirror captured content onto the semconv keys next to the shipped
   // openclaw.content.* names; normalize once so both copies stay byte-identical.
-  if (policy.toolInputs) {
-    const toolInput = normalizeOtelContentValue(content?.toolInput);
-    if (toolInput) {
-      attributes[ATTR_GEN_AI_TOOL_CALL_ARGUMENTS] = toolInput;
-      attributes["openclaw.content.tool_input"] = toolInput;
-    }
+  const toolInput = normalizeOtelContentValue(content?.toolInput);
+  if (toolInput) {
+    attributes[ATTR_GEN_AI_TOOL_CALL_ARGUMENTS] = toolInput;
+    attributes["openclaw.content.tool_input"] = toolInput;
   }
-  if (policy.toolOutputs) {
-    const toolOutput = normalizeOtelContentValue(content?.toolOutput);
-    if (toolOutput) {
-      attributes[ATTR_GEN_AI_TOOL_CALL_RESULT] = toolOutput;
-      attributes["openclaw.content.tool_output"] = toolOutput;
-    }
+  const toolOutput = normalizeOtelContentValue(content?.toolOutput);
+  if (toolOutput) {
+    attributes[ATTR_GEN_AI_TOOL_CALL_RESULT] = toolOutput;
+    attributes["openclaw.content.tool_output"] = toolOutput;
   }
 }

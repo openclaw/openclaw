@@ -6,8 +6,8 @@ struct AgentProTab: View {
     @Environment(\.scenePhase) var scenePhase
     let directRoute: AgentRoute
     let headerSidebarAction: OpenClawSidebarHeaderAction?
-    let headerTitle: String
-    let openSettings: (() -> Void)?
+    let headerTitle = "Agents"
+    let openSettings: () -> Void
     @State var agentRosterFilter: AgentRosterFilter = .all
     @State var agentSearchText = ""
 
@@ -54,23 +54,11 @@ struct AgentProTab: View {
         }
     }
 
-    init(
-        directRoute: AgentRoute,
-        headerSidebarAction: OpenClawSidebarHeaderAction? = nil,
-        headerTitle: String = "Agents",
-        openSettings: (() -> Void)? = nil)
-    {
-        self.directRoute = directRoute
-        self.headerSidebarAction = headerSidebarAction
-        self.headerTitle = headerTitle
-        self.openSettings = openSettings
-    }
-
     var body: some View {
         self.destination(for: self.directRoute)
-            .toolbar(
-                self.directRoute != .agents && self.headerSidebarAction != nil ? .hidden : .visible,
-                for: .navigationBar)
+            .modifier(OpenClawSidebarRevealToolbarVisibility(action: self.headerSidebarAction) { isRevealShown in
+                self.directRoute != .agents && isRevealShown ? .hidden : .visible
+            })
             .task(id: self.rosterTaskID) {
                 await self.refreshAgents()
             }

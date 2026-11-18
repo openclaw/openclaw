@@ -1,23 +1,16 @@
-import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { CONTROL_UI_ENVIRONMENT_COLORS } from "../gateway/control-ui-bootstrap-contract.js";
-import {
-  ADMIN_SCOPE,
-  APPROVALS_SCOPE,
-  PAIRING_SCOPE,
-  QUESTIONS_SCOPE,
-  READ_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  TALK_SCOPE,
-  TALK_SECRETS_SCOPE,
-  WRITE_SCOPE,
-} from "../gateway/operator-scopes.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
 import {
   isValidPortalIngressDomain,
   portalIngressConflictsWithOrigin,
 } from "./gateway-portal-ingress.js";
+import { GatewayOpenClawIdConfigSchema } from "./zod-schema.gateway-openclaw-id.js";
+import {
+  GatewayOperatorRoleDefinitionSchema,
+  OperatorScopeSchema,
+} from "./zod-schema.gateway-roles.js";
 import {
   GatewayRemoteConfigSchema,
   ResponsesEndpointUrlFetchShape,
@@ -26,53 +19,49 @@ import {
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const OperatorScopeSchema = z.enum([
-  ADMIN_SCOPE,
-  READ_SCOPE,
-  WRITE_SCOPE,
-  SESSION_READ_SCOPE,
-  SESSION_WRITE_SCOPE,
-  APPROVALS_SCOPE,
-  QUESTIONS_SCOPE,
-  PAIRING_SCOPE,
-  TALK_SCOPE,
-  TALK_SECRETS_SCOPE,
-]);
-const GatewayOperatorRoleDefinitionSchema = z.strictObject({
-  sessions: z.strictObject({
-    /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "view", "suggest", "write"]),
-  }),
-  /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
-  sandbox: z.enum(["inherit", "required"]).optional(),
-  /** Agent IDs available for session creation and runs, or all agents when set to "*". */
-  agents: z.union([
-    z.literal("*"),
-    z
-      .array(z.string().trim().min(1).refine(isValidAgentId, "Invalid agent id"))
-      .transform((agents) => uniqueValues(agents.map(normalizeAgentId))),
-  ]),
-  /** Optional model ceiling for this role; defaults to the source agent's primary and fallbacks. */
-  modelPolicy: z
-    .strictObject({
-      sourceAgent: z
-        .string()
-        .trim()
-        .min(1)
-        .refine(isValidAgentId, "Invalid agent id")
-        .transform(normalizeAgentId)
-        .optional(),
-      allow: z.array(z.string().trim().min(1)).optional(),
-      deny: z.array(z.string().trim().min(1)).optional(),
-    })
-    .optional(),
-  /** Ceiling applied to the authenticated profile's granted operator scopes. */
-  scopes: z.array(OperatorScopeSchema).transform((scopes) => uniqueValues(scopes)),
-  /** Required access-policy plugin; availability is checked at admission, not config parsing. */
-  accessPolicyPlugin: z.string().trim().min(1).max(128).optional(),
-});
+const GatewayGitHubEndpointSchema = z
+  .strictObject({
+    host: z.string().trim().min(1).optional(),
+    apiBaseUrl: z.string().url().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (!value.host && !value.apiBaseUrl) {
+      return;
+    }
+    const host = value.host?.toLowerCase();
+    if (!host || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/u.test(host) || host.includes("..")) {
+      ctx.addIssue({ code: "custom", path: ["host"], message: "GitHub host must be a hostname" });
+      return;
+    }
+    if (!value.apiBaseUrl) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["apiBaseUrl"],
+        message: "GitHub API base URL is required with host",
+      });
+      return;
+    }
+    const api = new URL(value.apiBaseUrl);
+    const cloudApi = api.hostname === `api.${host}` && api.pathname === "/";
+    const serverApi = api.hostname === host && ["/api/v3", "/api/v3/"].includes(api.pathname);
+    if (
+      api.protocol !== "https:" ||
+      api.username ||
+      api.password ||
+      api.search ||
+      api.hash ||
+      (!cloudApi && !serverApi)
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["apiBaseUrl"],
+        message: "GitHub API base URL must match the configured HTTPS host",
+      });
+    }
+  });
 const GatewayOperatorRoleNameSchema = z.string().trim().min(1).max(128);
 const GATEWAY_HTTP_LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+const GatewayHttpImagesSchema = z.strictObject(ResponsesEndpointUrlFetchShape).optional();
 
 function validateGatewayPublicOrigin(value: string): boolean {
   if (!validateHttpOrigin(value)) {
@@ -137,6 +126,21 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
+    /** Experimental OpenClaw ID remote access (Labs); inert unless enabled. */
+    openclawId: GatewayOpenClawIdConfigSchema.optional(),
+    github: GatewayGitHubEndpointSchema.optional(),
+    repositoryIntegration: z.string().trim().min(1).optional(),
+    projects: z
+      .strictObject({
+        defaultRepository: z
+          .strictObject({
+            url: z.string().trim().min(1),
+            ref: z.string().trim().min(1).max(255).optional(),
+          })
+          .optional(),
+        nativeGitHubSearch: z.boolean().optional(),
+      })
+      .optional(),
     controlUi: z
       .strictObject({
         // Shipped legacy input. Doctor removes it after recording migration state.
@@ -151,8 +155,19 @@ export const GatewayConfigSchema = z
         basePath: z.string().optional(),
         experimental: z
           .strictObject({
-            /** Allow native UI from user-installed plugins (default false; bundled UI stays available). */
+            /** Advanced native UI opt-out (default true; existing false stays off, bundled UI unaffected). */
             customPlugins: z.boolean().optional(),
+            /** Show the official Template catalog and Add flow in Control UI (default false). */
+            templates: z.boolean().optional(),
+            /** Enable experimental speech bubbles in the Control UI (default false). */
+            chatBubbles: z.boolean().optional(),
+            /** Optional, tool-free next-message suggestions (disabled by default). */
+            composerPredictions: z
+              .strictObject({
+                enabled: z.boolean().optional(),
+                model: z.enum(["utility", "conversation", "default"]).optional(),
+              })
+              .optional(),
           })
           .optional(),
         /** Optional filesystem root for Control UI assets (defaults to dist/control-ui). */
@@ -164,13 +179,20 @@ export const GatewayConfigSchema = z
             color: z.enum(CONTROL_UI_ENVIRONMENT_COLORS),
           })
           .optional(),
-        /** Show the Discord community invitation in this Gateway's Control UI (default true). */
+        /** Show the dismissible Community card in this Gateway's Control UI (default true). */
         communityInvite: z.boolean().optional(),
         /** Seed fresh drafts from configured model/reasoning instead of remembered choices. */
         newSessionModelDefaults: z.enum(["last-used", "configured"]).optional(),
         /** Optional service credential used only for Control UI GitHub previews and discovery. */
         github: z
-          .strictObject({ token: SecretInputSchema.optional().register(sensitive) })
+          .strictObject({
+            host: z
+              .string()
+              .trim()
+              .regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/iu)
+              .optional(),
+            token: SecretInputSchema.optional().register(sensitive),
+          })
           .optional(),
         /** Produce utility-model session status digests for subscribed Control UI clients (default true). */
         sessionObserver: z.boolean().optional(),
@@ -185,7 +207,7 @@ export const GatewayConfigSchema = z
           .optional(),
         /**
          * DANGEROUS: Allow hosted embeds to load absolute external http(s) URLs.
-         * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
+         * Default off; prefer hosted /__openclaw__/canvas content.
          */
         allowExternalEmbedUrls: z.boolean().optional(),
         /** Fetch public-site favicons through the Gateway for Control UI links (default true). */
@@ -197,6 +219,12 @@ export const GatewayConfigSchema = z
          * Supported long-term for deployments that intentionally rely on this policy.
          */
         dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
+      })
+      .optional(),
+    uploads: z
+      .strictObject({
+        /** Allow client file/image uploads to the Gateway (default true). Hot-applies. */
+        enabled: z.boolean().optional(),
       })
       .optional(),
     cliAgents: z
@@ -286,6 +314,25 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Revision-scoped delegation from OpenClaw Enterprise's private browser proxy. */
+            delegation: z
+              .strictObject({
+                credentialFile: z
+                  .string()
+                  .refine(isAbsolute, "Expected an absolute credential file path"),
+              })
+              .optional(),
+            /** Optional organization commit credit, supplied only by the authenticated proxy. */
+            gitCoauthor: z
+              .strictObject({
+                nameHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailHeader: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u),
+                emailVerifiedHeader: z
+                  .string()
+                  .regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u)
+                  .optional(),
+              })
+              .optional(),
             /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
             cloudflareAccessOidc: z
               .strictObject({
@@ -324,11 +371,17 @@ export const GatewayConfigSchema = z
           .optional(),
       })
       .optional(),
-    /** Optional profile-bound operator roles; omitted preserves legacy authorization. */
+    /** Role definitions; a default enables profile-bound named-role enforcement. */
     roles: z
       .strictObject({
-        /** Required validated default for profiles without a valid assigned role. */
-        default: GatewayOperatorRoleNameSchema,
+        /** Enables named-role enforcement and supplies the fallback for unassigned profiles. */
+        default: GatewayOperatorRoleNameSchema.optional(),
+        assignments: z
+          .strictObject({
+            /** Case-insensitive GitHub login assignments; explicit profile assignments win. */
+            byGithubLogin: z.record(z.string(), GatewayOperatorRoleNameSchema).optional(),
+          })
+          .optional(),
         /** Closed capability bundles indexed by administrator-selected role names. */
         definitions: z
           .record(GatewayOperatorRoleNameSchema, GatewayOperatorRoleDefinitionSchema)
@@ -338,12 +391,40 @@ export const GatewayConfigSchema = z
           ),
       })
       .superRefine((roles, ctx) => {
-        if (!Object.hasOwn(roles.definitions, roles.default)) {
+        if (roles.default !== undefined && !Object.hasOwn(roles.definitions, roles.default)) {
           ctx.addIssue({
             code: "custom",
             message: "gateway.roles.default must name a configured role definition",
             path: ["default"],
           });
+        }
+        if (roles.default === undefined && roles.assignments?.byGithubLogin !== undefined) {
+          ctx.addIssue({
+            code: "custom",
+            message:
+              "gateway.roles.assignments.byGithubLogin requires gateway.roles.default to enable named-role enforcement",
+            path: ["assignments", "byGithubLogin"],
+          });
+        }
+        const githubLogins = new Set<string>();
+        for (const [login, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+          const normalizedLogin = normalizeGitHubLogin(login)?.toLowerCase();
+          const path = ["assignments", "byGithubLogin", login];
+          if (!normalizedLogin) {
+            ctx.addIssue({ code: "custom", message: "Invalid GitHub login", path });
+          } else if (githubLogins.has(normalizedLogin)) {
+            ctx.addIssue({ code: "custom", message: "Duplicate GitHub login", path });
+          } else {
+            githubLogins.add(normalizedLogin);
+          }
+          if (!Object.hasOwn(roles.definitions, role)) {
+            ctx.addIssue({
+              code: "custom",
+              message:
+                "gateway.roles.assignments.byGithubLogin must name a configured role definition",
+              path,
+            });
+          }
         }
       })
       .optional(),
@@ -412,11 +493,7 @@ export const GatewayConfigSchema = z
             chatCompletions: z
               .strictObject({
                 enabled: z.boolean().optional(),
-                images: z
-                  .strictObject({
-                    ...ResponsesEndpointUrlFetchShape,
-                  })
-                  .optional(),
+                images: GatewayHttpImagesSchema,
               })
               .optional(),
             responses: z
@@ -436,11 +513,7 @@ export const GatewayConfigSchema = z
                       .optional(),
                   })
                   .optional(),
-                images: z
-                  .strictObject({
-                    ...ResponsesEndpointUrlFetchShape,
-                  })
-                  .optional(),
+                images: GatewayHttpImagesSchema,
               })
               .optional(),
           })
@@ -549,7 +622,7 @@ export const GatewayConfigSchema = z
       ctx.addIssue({
         code: "custom",
         path: ["portals", "ingress", "domain"],
-        message: "Portal ingress must use a separate domain from Gateway and Control UI origins",
+        message: "Portal ingress must use a separate domain from Gateway and web app origins",
       });
     }
     if (ingress.port === (gateway.port ?? 18789)) {

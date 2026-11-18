@@ -7,9 +7,9 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { chunkItems } from "../../utils/chunk-items.js";
 import type { ExactSessionEntry, SessionAccessScope } from "./session-accessor.sqlite-contract.js";
-import { prepareSqliteSessionEntryRowDecoder } from "./session-accessor.sqlite-entry-read.js";
-import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-store.js";
+import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
 import {
   getSessionKysely,
   resolveSqliteReadScope,
@@ -17,17 +17,17 @@ import {
   toDatabaseOptions,
   type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
-import { sessionEntryMetadataJson } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 import type { SessionEntry } from "./types.js";
 
-export type SessionIdentityEvidenceResult =
-  | { status: "current"; sessionKey: string }
-  | { status: "absent" }
-  | {
-      status: "unknown";
-      reason: "ambiguous" | "read-failed" | "row-invalid" | "schema-missing";
-    };
+export type {
+  SessionIdentityEvidenceIdentity,
+  SessionIdentityEvidenceResult,
+} from "./session-entry-read-source.types.js";
 
 type ExactSessionEntryReadOnlyResult =
   | { found: true; value: ExactSessionEntry | undefined }
@@ -101,17 +101,10 @@ type SessionIdentityEvidenceProbe = {
 
 const SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE = 400;
 
-export type SessionIdentityEvidenceIdentity = {
-  sessionId: string;
-  sessionKey?: string;
-};
-
 type SessionIdentityEvidenceRow = {
   current_session_id: string;
-  entry_json: string;
   entry_valid: number;
   session_key: string;
-  updated_at: number;
 };
 
 export function readSessionIdentityEvidenceInDatabase(
@@ -122,18 +115,12 @@ export function readSessionIdentityEvidenceInDatabase(
   const db = getSessionKysely(database.db);
   const rowsByKey = new Map<string, SessionIdentityEvidenceRow>();
   const readChunks = (values: readonly string[], column: "current_session_id" | "session_key") => {
-    for (
-      let offset = 0;
-      offset < values.length;
-      offset += SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE
-    ) {
-      const chunk = values.slice(offset, offset + SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE);
+    for (const chunk of chunkItems(values, SESSION_IDENTITY_EVIDENCE_QUERY_CHUNK_SIZE)) {
       const rows = executeSqliteQuerySync(
         database.db,
         db
           .selectFrom("session_nodes")
-          .select(["current_session_id", "entry_valid", "session_key", "updated_at"])
-          .select(sessionEntryMetadataJson)
+          .select(["current_session_id", "entry_valid", "session_key"])
           .where(column, "in", chunk),
       ).rows;
       for (const row of rows) {
@@ -145,8 +132,8 @@ export function readSessionIdentityEvidenceInDatabase(
     [...new Set(items.flatMap((item) => (item.sessionKey ? [item.sessionKey] : [])))],
     "session_key",
   );
-  // Matching headers only avoid redundant reads; the full validator below still owns
-  // validity. Other probes may require the same identity and replace this snapshot.
+  // Canonical admission and writers own validity; identity evidence needs no entry payload
+  // or participant display data. Identity-only probes still detect ambiguous ownership.
   const fallbackIds = items.flatMap((item) => {
     const exactRow = item.sessionKey ? rowsByKey.get(item.sessionKey) : undefined;
     return exactRow?.entry_valid === 1 && exactRow.current_session_id === item.sessionId
@@ -156,36 +143,17 @@ export function readSessionIdentityEvidenceInDatabase(
   readChunks([...new Set(fallbackIds)], "current_session_id");
 
   const rowsBySessionId = new Map<string, SessionIdentityEvidenceRow[]>();
-  const readableKeys = new Set<string>();
-  const decodeRow = prepareSqliteSessionEntryRowDecoder(
-    database,
-    [...rowsByKey.values()].filter((row) => row.entry_valid === 1),
-    "list",
-  );
   for (const row of rowsByKey.values()) {
     const rows = rowsBySessionId.get(row.current_session_id) ?? [];
     rows.push(row);
     rowsBySessionId.set(row.current_session_id, rows);
-    if (row.entry_valid === 1) {
-      try {
-        if (decodeRow(row)) {
-          readableKeys.add(row.session_key);
-        }
-      } catch {
-        // A corrupt row must not make unrelated placements in this store indeterminate.
-      }
-    }
   }
   return items.map((item): SessionIdentityEvidenceResult => {
     const exactRow = item.sessionKey ? rowsByKey.get(item.sessionKey) : undefined;
-    if (exactRow && exactRow.entry_valid !== -1 && !readableKeys.has(exactRow.session_key)) {
+    if (exactRow?.entry_valid === 0) {
       return { status: "unknown", reason: "row-invalid" };
     }
-    if (
-      exactRow &&
-      readableKeys.has(exactRow.session_key) &&
-      exactRow.current_session_id === item.sessionId
-    ) {
+    if (exactRow && exactRow.entry_valid === 1 && exactRow.current_session_id === item.sessionId) {
       return { status: "current", sessionKey: exactRow.session_key };
     }
     const fallbackRows = rowsBySessionId.get(item.sessionId) ?? [];
@@ -195,7 +163,7 @@ export function readSessionIdentityEvidenceInDatabase(
         : { status: "unknown", reason: "ambiguous" };
     }
     const fallbackRow = fallbackRows[0];
-    if (fallbackRow?.entry_valid === 1 && readableKeys.has(fallbackRow.session_key)) {
+    if (fallbackRow?.entry_valid === 1) {
       return { status: "current", sessionKey: fallbackRow.session_key };
     }
     return fallbackRow?.entry_valid === -1

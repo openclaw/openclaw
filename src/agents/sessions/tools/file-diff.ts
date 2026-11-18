@@ -1,4 +1,6 @@
 import { FILE_HEADERS_ONLY, formatPatch, structuredPatch, type StructuredPatchHunk } from "diff";
+import { countNewlines } from "../../line-endings.js";
+import { WRITE_DIFF_MAX_BYTES } from "./limits.js";
 
 export type FileDiff = {
   diff: string;
@@ -69,17 +71,8 @@ function formatDiffString(
   return { diff: output.join("\n"), firstChangedLine };
 }
 
-export const WRITE_DIFF_MAX_BYTES = 1024 * 1024;
 const WRITE_DIFF_MAX_COMBINED_LINES = 20_000;
 const WRITE_DIFF_MAX_EDIT_LENGTH = 2_000;
-
-function countNewlines(text: string): number {
-  let count = 0;
-  for (let index = text.indexOf("\n"); index !== -1; index = text.indexOf("\n", index + 1)) {
-    count += 1;
-  }
-  return count;
-}
 
 export function prepareFileWriteDiff(params: {
   path: string;

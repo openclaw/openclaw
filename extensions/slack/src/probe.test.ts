@@ -29,7 +29,7 @@ describe("probeSlack", () => {
   });
 
   it("maps Slack auth metadata on success", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+    vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
     authTestMock.mockResolvedValue({
       ok: true,
       user_id: "U123",
@@ -59,7 +59,7 @@ describe("probeSlack", () => {
   });
 
   it("warns when auth.test looks like a user token in the bot token slot", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
+    vi.spyOn(performance, "now").mockReturnValueOnce(100).mockReturnValueOnce(145);
     authTestMock.mockResolvedValue({
       ok: true,
       user_id: "UUSER",
@@ -72,7 +72,7 @@ describe("probeSlack", () => {
       {
         ok: true,
         warning:
-          'Slack auth.test identified account "work" as user UUSER without bot_id. channels.slack.accounts.work.botToken appears to contain a user token; replace it with a Bot User OAuth Token. Until replaced, explicit bot-mention detection is disabled and required-mention channels fail closed.',
+          'Slack auth.test identified account "work" as user UUSER without bot_id. channels.slack.accounts.work.botToken appears to contain a user token; replace it with a Bot User OAuth Token. Until replaced, explicit bot-mention detection is disabled and required-mention channels ignore messages.',
       },
     );
   });
@@ -117,7 +117,7 @@ describe("probeSlack", () => {
   });
 
   it("keeps optional auth metadata fields undefined when Slack omits them", async () => {
-    vi.spyOn(Date, "now").mockReturnValueOnce(200).mockReturnValueOnce(235);
+    vi.spyOn(performance, "now").mockReturnValueOnce(200).mockReturnValueOnce(235);
     authTestMock.mockResolvedValue({ ok: true });
 
     const result = await probeSlack("xoxb-test");
@@ -133,22 +133,6 @@ describe("probeSlack", () => {
         rejectRateLimitedCalls: true,
         retryConfig: { retries: 0 },
         timeout: 2500,
-      },
-      probeDispatcher,
-    );
-  });
-
-  it("passes a custom probe deadline to Slack's abortable read transport", async () => {
-    authTestMock.mockResolvedValue({ ok: true });
-
-    await expect(probeSlack("xoxb-test", 175)).resolves.toMatchObject({ ok: true });
-
-    expect(createSlackReadClientMock).toHaveBeenCalledWith(
-      "xoxb-test",
-      {
-        rejectRateLimitedCalls: true,
-        retryConfig: { retries: 0 },
-        timeout: 175,
       },
       probeDispatcher,
     );

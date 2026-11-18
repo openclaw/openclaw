@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Update } from "grammy/types";
 import {
   executeSqliteQuerySync,
@@ -67,18 +66,9 @@ export function forumUpdate(updateId: number, text: string) {
   return update;
 }
 
-function normalizeTelegramTestAccountId(spoolDir: string): string {
-  const trimmed = path.basename(spoolDir).trim();
-  return trimmed ? trimmed.replace(/[^a-z0-9._-]+/gi, "_") : "default";
-}
-
-function telegramTestQueueName(spoolDir: string): string {
-  return JSON.stringify(["telegram", normalizeTelegramTestAccountId(spoolDir)]);
-}
-
-export function openTelegramSpoolTestKysely(spoolDir: string) {
+export function openTelegramSpoolTestKysely(stateDir: string) {
   const database = openOpenClawStateDatabase({
-    env: { ...process.env, OPENCLAW_STATE_DIR: spoolDir },
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   });
   return {
     database,
@@ -86,14 +76,14 @@ export function openTelegramSpoolTestKysely(spoolDir: string) {
   };
 }
 
-export async function failedUpdateIds(spoolDir: string): Promise<number[]> {
-  const { database, kysely } = openTelegramSpoolTestKysely(spoolDir);
+export async function failedUpdateIds(stateDir: string): Promise<number[]> {
+  const { database, kysely } = openTelegramSpoolTestKysely(stateDir);
   const rows = executeSqliteQuerySync(
     database.db,
     kysely
       .selectFrom("channel_ingress_events")
       .select("event_id")
-      .where("queue_name", "=", telegramTestQueueName(spoolDir))
+      .where("queue_name", "=", JSON.stringify(["telegram", "default"]))
       .where("status", "=", "failed")
       .orderBy("event_id", "asc"),
   ).rows;

@@ -9,9 +9,10 @@ export const HTTP_AUTH_HEADER_BOUNDARY_PATTERN = String.raw`(^|[^A-Za-z0-9_-]|\\
 // Each JSON encoding doubles delimiter slashes and adds one. The cap covers six nested
 // encodings while keeping credential redaction regex work bounded on hostile diagnostics.
 export const HTTP_AUTH_SERIALIZED_QUOTE_PATTERN = String.raw`(?:\\{1,64}["']|["']|)`;
-export const CREDENTIAL_STYLE_HEADER_REDACT_PATTERN = String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\s\\"',;]+)`;
-const STRUCTURED_AUTH_HEADER_RE = new RegExp(
-  String.raw`${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}`,
+// Browser consumers need the fragments above, not these composed matchers.
+export const CREDENTIAL_STYLE_HEADER_REDACT_PATTERN = `${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:x-goog-api-key|api-key|apikey|x-api-token|x-access-token)${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \\t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}([^\\s\\\\"',;]+)`;
+const STRUCTURED_AUTH_HEADER_RE = /* @__PURE__ */ new RegExp(
+  `${HTTP_AUTH_HEADER_BOUNDARY_PATTERN}(?:Proxy-)?Authorization${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}[ \\t]*[:=]${HTTP_AUTH_OPTIONAL_VALUE_WHITESPACE_PATTERN}${HTTP_AUTH_SERIALIZED_QUOTE_PATTERN}(${HTTP_AUTH_SCHEME_PATTERN})${HTTP_AUTH_REQUIRED_VALUE_WHITESPACE_PATTERN}`,
   "giu",
 );
 const AUTH_PARAM_TOKEN_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]+/u;
@@ -27,14 +28,17 @@ function skipHorizontalWhitespace(value: string, start: number): number {
   return cursor;
 }
 
-function readSerializedLineEnd(value: string, start: number): number | null {
+function skipSerializedBackslashes(value: string, start: number): number {
   let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
+  while (cursor - start < 64 && value[cursor] === "\\") {
     cursor += 1;
   }
-  if (slashCount === 0) {
+  return cursor;
+}
+
+function readSerializedLineEnd(value: string, start: number): number | null {
+  const cursor = skipSerializedBackslashes(value, start);
+  if (cursor === start) {
     return null;
   }
   if (value[cursor] === "n") {
@@ -43,23 +47,13 @@ function readSerializedLineEnd(value: string, start: number): number | null {
   if (value[cursor] !== "r") {
     return null;
   }
-  cursor += 1;
-  slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "n" ? cursor + 1 : null;
+  const lineEnd = skipSerializedBackslashes(value, cursor + 1);
+  return lineEnd > cursor + 1 && value[lineEnd] === "n" ? lineEnd + 1 : null;
 }
 
 function readSerializedTabEnd(value: string, start: number): number | null {
-  let cursor = start;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
-  return slashCount > 0 && value[cursor] === "t" ? cursor + 1 : null;
+  const cursor = skipSerializedBackslashes(value, start);
+  return cursor > start && value[cursor] === "t" ? cursor + 1 : null;
 }
 
 function skipAuthWhitespace(value: string, start: number): number {
@@ -96,16 +90,8 @@ function readAuthParamName(value: string, start: number): { name: string; end: n
 
 function isAuthHeaderStart(value: string, index: number): boolean {
   const previous = value[index - 1];
-  let serializedLineBoundary = false;
-  if (previous === "n" || previous === "r") {
-    let slashCursor = index - 2;
-    let slashCount = 0;
-    while (slashCount < 64 && value[slashCursor] === "\\") {
-      slashCount += 1;
-      slashCursor -= 1;
-    }
-    serializedLineBoundary = slashCount > 0;
-  }
+  const serializedLineBoundary =
+    (previous === "n" || previous === "r") && value[index - 2] === "\\";
   if (!serializedLineBoundary && previous !== undefined && /[A-Za-z0-9_-]/u.test(previous)) {
     return false;
   }
@@ -118,15 +104,11 @@ function isAuthHeaderStart(value: string, index: number): boolean {
     return false;
   }
 
-  let cursor = index + name.length;
-  let slashCount = 0;
-  while (slashCount < 64 && value[cursor] === "\\") {
-    slashCount += 1;
-    cursor += 1;
-  }
+  const quoteStart = index + name.length;
+  let cursor = skipSerializedBackslashes(value, quoteStart);
   if (value[cursor] === '"' || value[cursor] === "'") {
     cursor += 1;
-  } else if (slashCount > 0) {
+  } else if (cursor > quoteStart) {
     return false;
   }
   cursor = skipHorizontalWhitespace(value, cursor);
@@ -378,24 +360,14 @@ export function findStructuredAuthParamRanges(value: string): StructuredAuthPara
 }
 
 export function redactStructuredAuthHeaders(value: string, replacement: string): string {
-  const ranges = findStructuredAuthParamRanges(value);
-  if (ranges.length === 0) {
-    return value;
-  }
-  const merged: StructuredAuthParamRange[] = [];
-  for (const range of ranges) {
-    const previous = merged.at(-1);
-    if (previous && range.start <= previous.end) {
-      previous.end = Math.max(previous.end, range.end);
-    } else {
-      merged.push({ ...range });
-    }
-  }
   const parts: string[] = [];
   let cursor = 0;
-  for (const range of merged) {
-    parts.push(value.slice(cursor, range.start), replacement);
-    cursor = range.end;
+  for (const range of findStructuredAuthParamRanges(value)) {
+    // Ranges follow header order; overlapping credentials share one replacement.
+    if (parts.length === 0 || range.start > cursor) {
+      parts.push(value.slice(cursor, range.start), replacement);
+    }
+    cursor = Math.max(cursor, range.end);
   }
   parts.push(value.slice(cursor));
   return parts.join("");

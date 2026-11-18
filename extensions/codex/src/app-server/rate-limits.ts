@@ -30,7 +30,8 @@ const ONE_DAY_MS = 24 * 60 * 60_000;
 const DAY_WINDOW_MINUTES = 24 * 60;
 const WEEKLY_WINDOW_MINUTES = 7 * DAY_WINDOW_MINUTES;
 const WEEKLY_RESET_GAP_MS = 3 * ONE_DAY_MS;
-const CODEX_USAGE_LIMIT_MESSAGE_PREFIX = "You've reached your Codex subscription usage limit.";
+// Native usageLimitExceeded also covers API quota and plans without Codex access.
+const CODEX_USAGE_LIMIT_MESSAGE_PREFIX = "Codex reported a usage or quota limit.";
 const CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE =
   "Codex rejected the request with a usage-limit error, but its current account usage does not report an exhausted limit.";
 
@@ -89,7 +90,6 @@ type RateLimitWindowEntry = {
 export type CodexAccountUsageSummary = {
   usageLine?: string;
   blocked: boolean;
-  blockedUntilMs?: number;
   blockedUntilText?: string;
   blockedResetRelative?: string;
   blockingPeriod?: string;
@@ -109,9 +109,8 @@ export function formatCodexUsageLimitErrorMessage(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   const ordinaryUsageAllowed = readOrdinaryUsageAllowed(params.rateLimits);
-  const snapshots = collectCodexRateLimitSnapshots(params.rateLimits).filter(
-    snapshotHasDisplayableData,
-  );
+  const allSnapshots = collectCodexRateLimitSnapshots(params.rateLimits);
+  const snapshots = allSnapshots.filter(snapshotHasDisplayableData);
   const usageSnapshot = snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
   const blockingSnapshot = selectBlockingRateLimitSnapshot(snapshots, ordinaryUsageAllowed);
   const usageSummary = usageSnapshot
@@ -124,6 +123,7 @@ export function formatCodexUsageLimitErrorMessage(params: {
   ) {
     return [
       CODEX_USAGE_LIMIT_STATE_MISMATCH_MESSAGE,
+      ...(message ? [message] : []),
       "Retry the request, use another Codex account if available, or switch to another configured model/provider.",
     ].join(" ");
   }
@@ -133,12 +133,14 @@ export function formatCodexUsageLimitErrorMessage(params: {
   const nextReset =
     blockingReset ??
     (ordinaryUsageAllowed === undefined && !usageSummary?.blocked
-      ? selectNextRateLimitReset(params.rateLimits, nowMs)
+      ? selectRateLimitWindowEntry(allSnapshots.flatMap(readWindowEntries), nowMs, "next")?.window
       : undefined);
-  const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
-  let recoveryAction = "Wait until Codex becomes available";
+  const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX, ...(message ? [message] : [])];
+  let recoveryAction = "Check the active account's usage and billing details";
   if (nextReset) {
-    parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
+    parts.push(
+      `Next reset in ${formatRelativeDuration(nextReset.resetsAtMs - nowMs)}, ${formatCalendarResetTime(nextReset.resetsAtMs, nowMs)}.`,
+    );
     recoveryAction = "Wait until the reset time";
   } else {
     const codexRetryHint = extractCodexRetryHint(message);
@@ -216,7 +218,13 @@ export function resolveCodexUsageLimitResetAtMs(
   value: JsonValue | undefined,
   nowMs = Date.now(),
 ): number | undefined {
-  return selectBlockingRateLimitReset(value, nowMs)?.resetsAtMs;
+  const blockingSnapshot = selectBlockingRateLimitSnapshot(
+    collectCodexRateLimitSnapshots(value),
+    readOrdinaryUsageAllowed(value),
+  );
+  return blockingSnapshot
+    ? selectSnapshotBlockingReset(blockingSnapshot, nowMs)?.resetsAtMs
+    : undefined;
 }
 
 export function summarizeCodexAccountUsage(
@@ -250,17 +258,11 @@ function summarizeRateLimitUsage(
   nowMs: number,
 ): CodexAccountUsageSummary {
   const blockingEntries = blockingSnapshot ? readWindowEntries(blockingSnapshot) : [];
-  const blockingWindowEntry = selectBlockingWindowEntry(blockingEntries, nowMs);
+  const blockingWindowEntry = selectRateLimitWindowEntry(blockingEntries, nowMs);
   const blockingWindow = blockingWindowEntry?.window;
   const blockingReset =
     blockingWindow && blockingWindow.resetsAtMs > nowMs ? blockingWindow : undefined;
   const blockingPeriod = formatBlockingLimitPeriod(blockingWindowEntry, blockingEntries);
-  const blockedUntilText = blockingReset
-    ? formatAccountResetTime(blockingReset.resetsAtMs, nowMs)
-    : undefined;
-  const blockedResetRelative = blockingReset
-    ? `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`
-    : undefined;
   const blockingReason = blockingPeriod
     ? `${blockingPeriod} Codex usage limit is reached`
     : blockingSnapshot
@@ -269,9 +271,12 @@ function summarizeRateLimitUsage(
   return {
     usageLine: formatUsageLine(usageSnapshot),
     blocked: Boolean(blockingSnapshot),
-    ...(blockingReset ? { blockedUntilMs: blockingReset.resetsAtMs } : {}),
-    ...(blockedUntilText ? { blockedUntilText } : {}),
-    ...(blockedResetRelative ? { blockedResetRelative } : {}),
+    ...(blockingReset
+      ? {
+          blockedUntilText: `${formatCalendarResetTime(blockingReset.resetsAtMs, nowMs)} (in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)})`,
+          blockedResetRelative: `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`,
+        }
+      : {}),
     ...(blockingPeriod ? { blockingPeriod } : {}),
     ...(blockingReason ? { blockingReason } : {}),
   };
@@ -316,35 +321,6 @@ export function buildCodexAppServerUsageSnapshot(
     }
   }
   return result;
-}
-
-function selectNextRateLimitReset(
-  value: JsonValue | undefined,
-  nowMs: number,
-): RateLimitReset | undefined {
-  const windows = collectCodexRateLimitSnapshots(value).flatMap((snapshot) =>
-    LIMIT_WINDOW_KEYS.flatMap((key) => snapshot[key] ?? []),
-  );
-  const futureWindows = windows.filter((window) => window.resetsAtMs > nowMs);
-  if (futureWindows.length === 0) {
-    return undefined;
-  }
-  const exhaustedWindows = futureWindows.filter(
-    (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
-  );
-  const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
-}
-
-function selectBlockingRateLimitReset(
-  value: JsonValue | undefined,
-  nowMs: number,
-): RateLimitReset | undefined {
-  const blockingSnapshot = selectBlockingRateLimitSnapshot(
-    collectCodexRateLimitSnapshots(value),
-    readOrdinaryUsageAllowed(value),
-  );
-  return blockingSnapshot ? selectSnapshotBlockingReset(blockingSnapshot, nowMs) : undefined;
 }
 
 function selectBlockingRateLimitSnapshot(
@@ -466,19 +442,6 @@ function formatReachedType(value: string): string {
   return value.replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
 }
 
-function formatResetTime(resetsAtMs: number, nowMs: number): string {
-  return `in ${formatRelativeDuration(resetsAtMs - nowMs)}, ${formatCalendarResetTime(
-    resetsAtMs,
-    nowMs,
-  )}`;
-}
-
-function formatAccountResetTime(resetsAtMs: number, nowMs: number): string {
-  return `${formatCalendarResetTime(resetsAtMs, nowMs)} (in ${formatRelativeDuration(
-    resetsAtMs - nowMs,
-  )})`;
-}
-
 function snapshotHasLimitBlock(snapshot: RateLimitSnapshot): boolean {
   return Boolean(
     snapshot.rateLimitReachedType ??
@@ -558,13 +521,14 @@ function selectSnapshotBlockingReset(
   snapshot: RateLimitSnapshot,
   nowMs: number,
 ): RateLimitReset | undefined {
-  const window = selectBlockingWindowEntry(readWindowEntries(snapshot), nowMs)?.window;
+  const window = selectRateLimitWindowEntry(readWindowEntries(snapshot), nowMs)?.window;
   return window && window.resetsAtMs > nowMs ? window : undefined;
 }
 
-function selectBlockingWindowEntry(
+function selectRateLimitWindowEntry(
   entries: RateLimitWindowEntry[],
   nowMs: number,
+  selection: "blocking" | "next" = "blocking",
 ): RateLimitWindowEntry | undefined {
   const futureEntries = entries.filter((entry) => entry.window.resetsAtMs > nowMs);
   const exhaustedFutureEntries = futureEntries.filter(
@@ -573,13 +537,14 @@ function selectBlockingWindowEntry(
   const resetCandidates =
     exhaustedFutureEntries.length > 0 ? exhaustedFutureEntries : futureEntries;
   if (resetCandidates.length > 0) {
-    const resetSort =
-      exhaustedFutureEntries.length > 0
-        ? (left: RateLimitWindowEntry, right: RateLimitWindowEntry) =>
-            right.window.resetsAtMs - left.window.resetsAtMs
-        : (left: RateLimitWindowEntry, right: RateLimitWindowEntry) =>
-            left.window.resetsAtMs - right.window.resetsAtMs;
-    return resetCandidates.toSorted(resetSort)[0];
+    return resetCandidates.toSorted((left, right) =>
+      selection === "blocking" && exhaustedFutureEntries.length > 0
+        ? right.window.resetsAtMs - left.window.resetsAtMs
+        : left.window.resetsAtMs - right.window.resetsAtMs,
+    )[0];
+  }
+  if (selection === "next") {
+    return undefined;
   }
   const exhaustedEntries = entries.filter(
     (entry) => entry.window.usedPercent !== undefined && entry.window.usedPercent >= 100,

@@ -1,7 +1,4 @@
-// Telegram plugin module implements scoped topic conversation serialization.
-
 import {
-  normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   parseTelegramTarget,
   type TelegramTarget,
@@ -14,19 +11,11 @@ export type ParsedTelegramTopicConversation = {
   canonicalConversationId: string;
 };
 
-function threadSpecFromTarget(target: TelegramTarget): TelegramThreadSpec | null {
-  if (target.directMessagesTopicId != null) {
-    return { id: target.directMessagesTopicId, scope: "direct-messages" };
-  }
-  return target.messageThreadId == null ? null : { id: target.messageThreadId, scope: "forum" };
-}
-
 function serializeTelegramTopicConversation(params: {
   chatId: string;
   thread: TelegramThreadSpec;
 }): string | null {
-  const chatId =
-    normalizeTelegramChatId(params.chatId) ?? normalizeTelegramLookupTarget(params.chatId);
+  const chatId = normalizeTelegramLookupTarget(params.chatId);
   const id = params.thread.id == null ? undefined : Math.trunc(params.thread.id);
   if (!chatId || id == null || !Number.isFinite(id)) {
     return null;
@@ -34,7 +23,7 @@ function serializeTelegramTopicConversation(params: {
   const marker =
     params.thread.scope === "direct-messages" && id > 0
       ? "direct-topic"
-      : params.thread.scope === "forum" && id >= 0
+      : (params.thread.scope === "forum" || params.thread.scope === "dm") && id >= 0
         ? "topic"
         : null;
   return marker ? `${chatId}:${marker}:${id}` : null;
@@ -56,23 +45,71 @@ export function parseTelegramTopicConversation(params: {
     .trim()
     .replace(/:(direct-topic|topic):/i, (_match, marker: string) => `:${marker.toLowerCase()}:`);
   const target = parseTelegramTarget(conversationId);
-  const chatId =
-    normalizeTelegramChatId(target.chatId) ?? normalizeTelegramLookupTarget(target.chatId);
-  const thread = threadSpecFromTarget(target);
-  if (chatId && thread) {
-    const canonicalConversationId = serializeTelegramTopicConversation({ chatId, thread });
-    return canonicalConversationId ? { chatId, thread, canonicalConversationId } : null;
+  let chatId = normalizeTelegramLookupTarget(target.chatId);
+  let thread: TelegramThreadSpec | null =
+    target.directMessagesTopicId != null
+      ? { id: target.directMessagesTopicId, scope: "direct-messages" }
+      : target.messageThreadId == null
+        ? null
+        : { id: target.messageThreadId, scope: "forum" };
+  if (!chatId || !thread) {
+    const parent = params.parentConversationId?.trim();
+    if (!/^\d+$/.test(conversationId) || !parent || parent === conversationId) {
+      return null;
+    }
+    chatId = parent;
+    thread = { id: Number(conversationId), scope: "forum" };
   }
-  const parent = params.parentConversationId?.trim();
-  if (!/^\d+$/.test(conversationId) || !parent || parent === conversationId) {
+  const canonicalConversationId = serializeTelegramTopicConversation({ chatId, thread });
+  return canonicalConversationId ? { chatId, thread, canonicalConversationId } : null;
+}
+
+/** Thread spec carried by a parsed target; an encoded topic wins over the fallback. */
+export function resolveTelegramTargetThread(
+  target: Pick<TelegramTarget, "messageThreadId" | "directMessagesTopicId">,
+  fallbackThreadId?: string | number | null,
+): TelegramThreadSpec {
+  if (target.directMessagesTopicId != null) {
+    return { id: target.directMessagesTopicId, scope: "direct-messages" };
+  }
+  const forumThreadId = target.messageThreadId ?? fallbackThreadId;
+  if (forumThreadId == null) {
+    return { scope: "none" };
+  }
+  const id = Number(forumThreadId);
+  return Number.isFinite(id) ? { id, scope: "forum" } : { scope: "none" };
+}
+
+/**
+ * The one Telegram conversation identity: a topic conversation id, else a
+ * target whose encoded topic wins over the separate thread id.
+ */
+export function resolveTelegramConversationRef(params: {
+  to?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+  threadId?: string | number | null;
+}): { chatId: string; thread: TelegramThreadSpec; conversationId: string } | null {
+  const topic =
+    params.conversationId &&
+    parseTelegramTopicConversation({
+      conversationId: params.conversationId,
+      parentConversationId: params.parentConversationId,
+    });
+  if (topic) {
+    return {
+      chatId: topic.chatId,
+      thread: topic.thread,
+      conversationId: topic.canonicalConversationId,
+    };
+  }
+  const target = parseTelegramTarget(
+    params.to || params.parentConversationId || params.conversationId || "",
+  );
+  const chatId = target.chatId.trim();
+  if (!chatId) {
     return null;
   }
-  const parentThread: TelegramThreadSpec = { id: Number(conversationId), scope: "forum" };
-  const canonicalConversationId = serializeTelegramTopicConversation({
-    chatId: parent,
-    thread: parentThread,
-  });
-  return canonicalConversationId
-    ? { chatId: parent, thread: parentThread, canonicalConversationId }
-    : null;
+  const thread = resolveTelegramTargetThread(target, params.threadId);
+  return { chatId, thread, conversationId: buildTelegramConversationId({ chatId, thread }) };
 }

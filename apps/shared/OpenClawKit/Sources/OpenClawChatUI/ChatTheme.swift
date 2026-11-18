@@ -206,11 +206,7 @@ public enum OpenClawChatTheme {
     }
 
     static var onboardingAssistantBorder: Color {
-        #if os(macOS)
         Color.white.opacity(0.12)
-        #else
-        Color.white.opacity(0.12)
-        #endif
     }
 
     static var userText: Color {

@@ -14,7 +14,7 @@ scenario:
   objective: Verify the source-internal preview App SDK event, run, artifact, and environment operations preserve their external contracts while remaining accepted by the current Gateway schemas.
   successCriteria:
     - App-wide and per-run event iterators receive the same relevant Gateway run events.
-    - Normalized events preserve version, deterministic id, timestamp, sessionId, taskId, agentId, data, and raw Gateway stateVersion fields.
+    - Normalized events preserve version, deterministic id, timestamp, runId, sessionId, sessionKey, agentId, data, and raw Gateway stateVersion fields.
     - Deterministic Gateway websocket coverage proves successful artifact list, get, and download calls with exact public parameters.
     - Deterministic Gateway websocket coverage routes managed environment list, create, status, and destroy through the actual owner handlers and a deterministic worker service fixture.
     - Every deterministic artifact and environment request/result satisfies the current Gateway protocol schemas.

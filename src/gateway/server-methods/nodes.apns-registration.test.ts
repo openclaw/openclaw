@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { setActiveNodeContext } from "../../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../../infra/active-node-context.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.js";
 import { NodeRegistry } from "../node-registry.js";
 import { makeClient, registerNodeSession } from "../node-registry.test-helpers.js";
@@ -23,7 +23,7 @@ afterEach(() => {
     }
   }
   registries.clear();
-  setActiveNodeContext(null);
+  setActiveNodeContexts([]);
   handleEvent.mockReset();
 });
 

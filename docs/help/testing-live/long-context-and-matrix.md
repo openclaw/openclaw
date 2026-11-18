@@ -22,7 +22,7 @@ read_when:
   token observations. These measurements are informational, not pass/fail
   latency targets.
 - Long output: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1` requires a
-  deterministic response between 4000 and 8000 output tokens.
+  fixed-format response between 4000 and 8000 output tokens.
 - Optional raw read-tool stress:
   `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT=1`. It is not part of the
   default recipe because the effective tool surface may use Code Mode instead
@@ -64,7 +64,7 @@ benchmarks. They fail unless the following runtime contracts hold:
 - Native Codex reports an effective window of `875900`, grows beyond the
   `700000` total-scope threshold without a manual compact, and automatically
   compacts on the next turn.
-- Each runtime produces a deterministic long response between 4000 and 8000
+- Each runtime produces a fixed-format long response between 4000 and 8000
   output tokens and preserves a durable marker through compaction and a
   Gateway restart.
 
@@ -115,7 +115,7 @@ OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
 ```
 
 This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
-the fresh onboarding inference-selection seam, asserts `openai/gpt-6-astra`, and then
+the fresh onboarding inference-selection path, asserts `openai/gpt-6-astra`, and then
 runs a real gateway turn with that resolved model.
 
 GPT-5.6 embedded OpenClaw matrix:
@@ -133,7 +133,7 @@ Docker notes:
 - It passes `OPENAI_API_KEY`, copies Codex CLI auth files when present, installs
   `@openai/codex` into a writable mounted npm
   prefix, stages the source tree, then runs only the Codex-harness live test.
-- Docker enables the image, MCP/tool, and Guardian probes by default. Set
+- Docker enables the image, MCP/tool, and Guardian checks by default. Set
   `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
@@ -142,7 +142,7 @@ Docker notes:
   fallback cannot hide a Codex harness regression.
 - Matrix targets run sequentially in one container. The Docker script scales its
   default 35-minute timeout by target count; any outer shell or CI timeout must
-  allow the same total. Canonical CI keeps each GPT-5.6 target in a separate shard.
+  allow the same total. Upstream CI keeps each GPT-5.6 target in a separate shard.
 
 ### Recommended live recipes
 
@@ -158,7 +158,7 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `OPENCLAW_LIVE_GATEWAY_MODELS=small pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Ollama Cloud API smoke:
-  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.1:cloud OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 pnpm test:live -- extensions/ollama/ollama.live.test.ts`
+  - `OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_OLLAMA=1 OPENCLAW_LIVE_OLLAMA_BASE_URL=https://ollama.com OPENCLAW_LIVE_OLLAMA_MODEL=glm-5.2:cloud OPENCLAW_LIVE_OLLAMA_WEB_SEARCH=0 pnpm test:live -- extensions/ollama/ollama.live.test.ts`
 
 - Single model, gateway smoke:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
@@ -206,16 +206,15 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `deepseek/deepseek-v4-pro`                          |            |
 | `minimax/MiniMax-M3`                                |            |
 | `openai/gpt-5.6`                                    |            |
-| `openrouter/openai/gpt-5.2-chat`                    |            |
+| `openrouter/openai/gpt-5.6-luna`                    |            |
 | `openrouter/minimax/minimax-m2.7`                   |            |
-| `opencode-go/glm-5`                                 |            |
-| `openrouter/ai21/jamba-large-1.7`                   |            |
+| `opencode-go/glm-5.3`                               |            |
 | `xai/grok-4.7`                                      |            |
 | `xai/grok-4.6`                                      |            |
 | `xai/grok-4.5`                                      |            |
 | `xai/grok-4.20-0309-reasoning`                      |            |
 | `zai/glm-5.1`                                       |            |
-| `fireworks/accounts/fireworks/routers/glm-5p2-fast` |            |
+| `fireworks/accounts/fireworks/routers/glm-5p3-fast` |            |
 | `minimax-portal/minimax-m3`                         |            |
 
 The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_GATEWAY_MODELS=small`), from `SMALL_LIVE_MODEL_PRIORITY`:
@@ -235,7 +234,7 @@ Notes on the modern list:
 
 - `codex` and `codex-cli` providers are excluded from the default modern sweep (they cover CLI-backend/ACP behavior, tested separately on [CLI backend and APNs lanes](/help/testing-live/cli-backends) and [ACP bind and Codex app-server lanes](/help/testing-live/acp-and-codex)). `openai/gpt-5.6` itself routes through the Codex app-server harness by default; see [Live: Codex app-server harness smoke](/help/testing-live/acp-and-codex#live-codex-app-server-harness-smoke).
 - `fireworks`, `google`, `openrouter`, and `xai` only run their explicitly curated model ids in the modern sweep (no automatic "every model from this provider" expansion).
-- Include at least one image-capable model (Claude/Gemini/OpenAI-family vision variants, etc.) in `OPENCLAW_LIVE_GATEWAY_MODELS` to exercise the image probe.
+- Include at least one image-capable model (Claude/Gemini/OpenAI-family vision variants, etc.) in `OPENCLAW_LIVE_GATEWAY_MODELS` to exercise the image check.
 
 Run gateway smoke with tools + image across a hand-picked cross-provider set:
 
@@ -262,5 +261,5 @@ More providers you can include in the live matrix (if you have creds/config):
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
-Do not hardcode "all models" in docs. The authoritative list is whatever `discoverModels(...)` returns on your machine plus whatever keys are available.
+Do not hardcode "all models" in docs. The authoritative list is whatever `await discoverModelsAsync(...)` returns on your machine plus whatever keys are available.
 </Tip>

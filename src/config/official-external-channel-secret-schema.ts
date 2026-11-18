@@ -5,7 +5,6 @@ import {
 } from "../plugins/official-external-plugin-catalog.js";
 import {
   asSchemaObject,
-  cloneSchema,
   type ConfigJsonSchemaObject as JsonSchemaObject,
 } from "./schema.shared.js";
 import { SecretRefSchema } from "./zod-schema.core.js";
@@ -26,7 +25,7 @@ function widenProperties(
   for (const field of fields) {
     const current = asSchemaObject(properties[field]);
     if (current) {
-      properties[field] = { anyOf: [current, cloneSchema(SECRET_REF_SCHEMA)] };
+      properties[field] = { anyOf: [current, structuredClone(SECRET_REF_SCHEMA)] };
     }
   }
 }
@@ -41,7 +40,7 @@ export function widenOfficialExternalChannelSecretSchema(params: {
   if ((!contract && hostSchemaAllOf.length === 0) || !params.schema) {
     return params.schema;
   }
-  const next = cloneSchema(params.schema) as JsonSchemaObject;
+  const next = structuredClone(params.schema) as JsonSchemaObject;
   if (contract) {
     const fields = contract.fields.map((field) => field.field);
     widenProperties(next.properties, fields);
@@ -52,7 +51,7 @@ export function widenOfficialExternalChannelSecretSchema(params: {
   if (hostSchemaAllOf.length > 0) {
     next.allOf = [
       ...(Array.isArray(next.allOf) ? next.allOf : []),
-      ...hostSchemaAllOf.map((clause) => cloneSchema(clause) as JsonSchemaObject),
+      ...hostSchemaAllOf.map((clause) => structuredClone(clause) as JsonSchemaObject),
     ];
   }
   return next;

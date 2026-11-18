@@ -1,11 +1,8 @@
 import type { IncomingMessage } from "node:http";
+import { firstHeader } from "../http-auth.js";
 
 export const LEGACY_EXTENSION_RELAY_PROTOCOL = "openclaw-extension-relay";
 const LEGACY_EXTENSION_RELAY_TOKEN_PROTOCOL_PREFIX = "openclaw-extension-token.";
-
-export function firstHeader(value: string | string[] | undefined): string {
-  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "");
-}
 
 export function requestProtocols(req: IncomingMessage): string[] {
   return firstHeader(req.headers["sec-websocket-protocol"])

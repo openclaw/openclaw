@@ -18,6 +18,8 @@ Restart the Gateway after installing or updating the plugin.
 - `memory_recall`
 - `memory_forget`
 - LanceDB vector storage and hybrid memory retrieval.
+- Host memory status and authorized Gateway search and retrieval through the memory provider runtime.
+- `openclaw ltm optimize` for offline local-table compaction, preserving rows and version history.
 
 ## Configure
 

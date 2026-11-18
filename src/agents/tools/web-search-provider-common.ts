@@ -1,15 +1,12 @@
-/**
- * Shared web-search provider helpers.
- *
- * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
- */
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { readProviderEnvValue } from "../../secrets/provider-credential-values.js";
+import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { createProviderErrorTextRedactor, ProviderHttpError } from "../provider-http-errors.js";
+import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_TIMEOUT_SECONDS,
@@ -22,14 +19,7 @@ import {
 } from "./web-shared.js";
 import type { CacheEntry } from "./web-shared.js";
 
-type WebGuardedFetchModule = Pick<
-  typeof import("./web-guarded-fetch.js"),
-  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
->;
-
-const webGuardedFetchLoader = createLazyImportLoader<WebGuardedFetchModule>(
-  () => import("./web-guarded-fetch.js"),
-);
+const loadWebGuardedFetch = createLazyPromise(() => import("./web-guarded-fetch.js"));
 
 type WebSearchEndpointOptions = {
   url: string;
@@ -38,16 +28,39 @@ type WebSearchEndpointOptions = {
   signal?: AbortSignal;
 };
 
-export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
-  ? Web extends { search?: infer Search }
-    ? Search
-    : never
-  : never) &
+type WebSearchEndpointRunner = <T>(
+  params: WebSearchEndpointOptions,
+  run: (response: Response) => Promise<T>,
+) => Promise<T>;
+
+type PostWebToolsJsonParams = {
+  url: string;
+  timeoutSeconds: number;
+  apiKey: string;
+  body: Record<string, unknown>;
+  errorLabel: string;
+  maxErrorBytes?: number;
+  extraHeaders?: Record<string, string>;
+  signal?: AbortSignal;
+};
+
+export type SearchConfigRecord = NonNullable<
+  NonNullable<OpenClawConfig["tools"]>["web"]
+>["search"] &
   Record<string, unknown>;
 
 export const DEFAULT_SEARCH_COUNT = 5;
 export const MAX_SEARCH_COUNT = 10;
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
+
+export function externalContentStamp(provider: string): {
+  untrusted: true;
+  source: "web_search";
+  wrapped: true;
+  provider: string;
+} {
+  return { untrusted: true, source: "web_search", wrapped: true, provider };
+}
 
 export function resolveSearchTimeoutSeconds(searchConfig?: SearchConfigRecord): number {
   return resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
@@ -65,11 +78,33 @@ export function readConfiguredSecretString(value: unknown, path: string): string
   return normalizeSecretInput(normalizeResolvedSecretInputString({ value, path })) || undefined;
 }
 
+export function readWebSearchApiKey(
+  value: unknown,
+  path: string,
+  envVars: string[],
+): string | undefined {
+  return readConfiguredSecretString(value, path) ?? readProviderEnvValue(envVars);
+}
+
+export function readWebSearchQueryAndCount(
+  args: Record<string, unknown>,
+  searchConfig?: SearchConfigRecord,
+): { query: string; count: number | undefined } {
+  return {
+    query: readToolStringParam(args, "query", { required: true }),
+    count:
+      readPositiveIntegerParam(args, "count", {
+        max: MAX_SEARCH_COUNT,
+        message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+      }) ?? searchConfig?.maxResults,
+  };
+}
+
 export async function withTrustedWebSearchEndpoint<T>(
   params: WebSearchEndpointOptions,
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { withTrustedWebToolsEndpoint } = await webGuardedFetchLoader.load();
+  const { withTrustedWebToolsEndpoint } = await loadWebGuardedFetch();
   return withTrustedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
@@ -77,28 +112,49 @@ export async function withSelfHostedWebSearchEndpoint<T>(
   params: WebSearchEndpointOptions,
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
-  const { withSelfHostedWebToolsEndpoint } = await webGuardedFetchLoader.load();
+  const { withSelfHostedWebToolsEndpoint } = await loadWebGuardedFetch();
   return withSelfHostedWebToolsEndpoint(params, async ({ response }) => run(response));
 }
 
+async function withPinnedTrustedHostWebSearchEndpoint<T>(
+  params: WebSearchEndpointOptions,
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const { withPinnedTrustedHostWebToolsEndpoint } = await loadWebGuardedFetch();
+  return withPinnedTrustedHostWebToolsEndpoint(params, async ({ response }) => run(response));
+}
+
+/** Posts JSON to a hosted provider endpoint under the trusted pinned-host policy. */
 export async function postTrustedWebToolsJson<T>(
-  params: {
-    url: string;
-    timeoutSeconds: number;
-    apiKey: string;
-    body: Record<string, unknown>;
-    errorLabel: string;
-    maxErrorBytes?: number;
-    extraHeaders?: Record<string, string>;
-    signal?: AbortSignal;
-  },
+  params: PostWebToolsJsonParams,
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  return postWebToolsJson(withTrustedWebSearchEndpoint, params, parseResponse);
+}
+
+/**
+ * Posts JSON to an operator-configured endpoint with exact-host trust. Only the
+ * host of `params.url` is permitted, honored as typed, including loopback and
+ * private addresses. Cloud-metadata destinations are refused, as is a name
+ * whose DNS answer is loopback, link-local or cloud-metadata.
+ */
+export async function postPinnedTrustedHostWebToolsJson<T>(
+  params: PostWebToolsJsonParams,
+  parseResponse: (response: Response) => Promise<T>,
+): Promise<T> {
+  return postWebToolsJson(withPinnedTrustedHostWebSearchEndpoint, params, parseResponse);
+}
+
+async function postWebToolsJson<T>(
+  withEndpoint: WebSearchEndpointRunner,
+  params: PostWebToolsJsonParams,
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
   const headers = new Headers(params.extraHeaders);
   headers.set("Accept", "application/json");
   headers.set("Authorization", `Bearer ${params.apiKey}`);
   headers.set("Content-Type", "application/json");
-  return withTrustedWebSearchEndpoint(
+  return withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
@@ -144,19 +200,10 @@ export async function throwWebSearchApiError(
 }
 
 export function resolveSiteName(url: string | undefined): string | undefined {
-  if (!url) {
-    return undefined;
-  }
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return undefined;
-  }
+  return URL.parse(url ?? "")?.hostname;
 }
 
-const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
-const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
 type WebSearchFreshnessProvider = "brave" | "perplexity";
 type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
@@ -169,18 +216,17 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-const RECENCY_TO_FRESHNESS: Record<string, string> = {
-  day: "pd",
-  week: "pw",
-  month: "pm",
-  year: "py",
-};
+const RECENCY_TO_FRESHNESS: Record<string, string> = Object.fromEntries(
+  Object.entries(FRESHNESS_TO_RECENCY).map(([freshness, recency]) => [recency, freshness]),
+);
+const BRAVE_FRESHNESS_SHORTCUTS = new Set(Object.keys(FRESHNESS_TO_RECENCY));
+const PERPLEXITY_RECENCY_VALUES = new Set(Object.values(FRESHNESS_TO_RECENCY));
 
 const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 const PERPLEXITY_DATE_PATTERN = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
 
 function isValidIsoDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+  if (!ISO_DATE_PATTERN.test(value)) {
     return false;
   }
   const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
@@ -209,19 +255,16 @@ export function isoToPerplexityDate(iso: string): string | undefined {
 /** Accepts ISO dates plus Perplexity `M/D/YYYY` dates and returns canonical ISO dates. */
 export function normalizeToIsoDate(value: string): string | undefined {
   const trimmed = value.trim();
-  if (ISO_DATE_PATTERN.test(trimmed)) {
+  const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
+  if (!match) {
     return isValidIsoDate(trimmed) ? trimmed : undefined;
   }
-  const match = trimmed.match(PERPLEXITY_DATE_PATTERN);
-  if (match) {
-    const [, month, day, year] = match;
-    if (year === undefined || month === undefined || day === undefined) {
-      return undefined;
-    }
-    const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
-    return isValidIsoDate(iso) ? iso : undefined;
+  const [, month, day, year] = match;
+  if (year === undefined || month === undefined || day === undefined) {
+    return undefined;
   }
-  return undefined;
+  const iso = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+  return isValidIsoDate(iso) ? iso : undefined;
 }
 
 /** Parses optional date range filters and returns provider-facing validation errors. */
@@ -354,14 +397,7 @@ export function parseWebSearchTimeFilters<Provider extends WebSearchFreshnessPro
     };
   }
 
-  const parsedDateRange = parseIsoDateRange({
-    rawDateAfter: params.rawDateAfter,
-    rawDateBefore: params.rawDateBefore,
-    invalidDateAfterMessage: params.invalidDateAfterMessage,
-    invalidDateBeforeMessage: params.invalidDateBeforeMessage,
-    invalidDateRangeMessage: params.invalidDateRangeMessage,
-    docs,
-  });
+  const parsedDateRange = parseIsoDateRange(params);
   if ("error" in parsedDateRange) {
     return parsedDateRange;
   }
@@ -383,14 +419,12 @@ export function readCachedSearchPayload(
   return cached ? { ...cached.value, cached: true } : undefined;
 }
 
-/** Builds a normalized cache key from provider-specific search dimensions. */
 export function buildSearchCacheKey(parts: Array<string | number | boolean | undefined>): string {
   return normalizeCacheKey(
     parts.map((part) => (part === undefined ? "default" : String(part))).join(":"),
   );
 }
 
-/** Stores one provider search payload with its provider-selected TTL. */
 export function writeCachedSearchPayload(
   cacheKey: string,
   payload: Record<string, unknown>,

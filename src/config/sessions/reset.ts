@@ -1,8 +1,4 @@
-// Reset helpers classify session keys and route reset config by session/channel type.
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveLoadedSessionThreadInfo } from "../../channels/plugins/session-thread-info-loaded.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
@@ -50,19 +46,13 @@ export function resolveThreadFlag(params: {
   threadStarterBody?: string | null;
   parentSessionKey?: string | null;
 }): boolean {
-  if (params.messageThreadId != null) {
-    return true;
-  }
-  if (params.threadLabel?.trim()) {
-    return true;
-  }
-  if (params.threadStarterBody?.trim()) {
-    return true;
-  }
-  if (params.parentSessionKey?.trim()) {
-    return true;
-  }
-  return isThreadSessionKey(params.sessionKey);
+  return Boolean(
+    params.messageThreadId != null ||
+    params.threadLabel?.trim() ||
+    params.threadStarterBody?.trim() ||
+    params.parentSessionKey?.trim() ||
+    isThreadSessionKey(params.sessionKey),
+  );
 }
 
 export function resolveChannelResetConfig(params: {
@@ -73,12 +63,6 @@ export function resolveChannelResetConfig(params: {
   if (!resetByChannel) {
     return undefined;
   }
-  const normalized = normalizeMessageChannel(params.channel);
-  const fallback = normalizeOptionalLowercaseString(params.channel);
-  // Channel ids can arrive as public message-channel names or raw provider keys.
-  const key = normalized ?? fallback;
-  if (!key) {
-    return undefined;
-  }
-  return resetByChannel[key];
+  const key = normalizeMessageChannel(params.channel);
+  return key ? resetByChannel[key] : undefined;
 }

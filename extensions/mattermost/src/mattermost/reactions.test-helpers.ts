@@ -1,7 +1,6 @@
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import type { MattermostFetch } from "./client.js";
 
 let testConfigSequence = 0;
 
@@ -68,23 +67,13 @@ export function createMattermostReactionFetchMock(params: {
       });
 
       const responseBody = params.body === undefined ? { ok: true } : params.body;
-      return new Response(
-        responseBody === null ? null : JSON.stringify(responseBody),
-        responseBody === null
-          ? { status: addStatus, headers: { "content-type": "text/plain" } }
-          : { status: addStatus, headers: { "content-type": "application/json" } },
-      );
+      return Response.json(responseBody, { status: addStatus });
     }
 
     if (allowRemove && urlText.endsWith(removePath)) {
       expect(init?.method).toBe("DELETE");
       const responseBody = params.body === undefined ? { status: "OK" } : params.body;
-      return new Response(
-        responseBody === null ? null : JSON.stringify(responseBody),
-        responseBody === null
-          ? { status: removeStatus, headers: { "content-type": "text/plain" } }
-          : { status: removeStatus, headers: { "content-type": "application/json" } },
-      );
+      return Response.json(responseBody, { status: removeStatus });
     }
 
     throw new Error(`unexpected url: ${urlText}`);
@@ -92,7 +81,7 @@ export function createMattermostReactionFetchMock(params: {
 }
 
 export async function withMockedGlobalFetch<T>(
-  fetchImpl: MattermostFetch,
+  fetchImpl: typeof fetch,
   run: () => Promise<T>,
 ): Promise<T> {
   const prevFetch = globalThis.fetch;

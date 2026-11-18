@@ -3,7 +3,7 @@ import {
   withWorkerWorkspaceHashMemo,
   type WorkspaceHashMemo,
 } from "../gateway/worker-environments/workspace-hash-memo.js";
-import { changedPaths } from "../gateway/worker-environments/workspace-manifest-comparison.js";
+import { prepareWorkspaceReconciliation } from "../gateway/worker-environments/workspace-manifest-comparison.js";
 import { overlayWorkspaceManifest } from "../gateway/worker-environments/workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
@@ -47,6 +47,7 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
   }
   const capture = async (referenceManifestRef: string, baseManifestRef?: string) =>
     await captureManifest({
+      mode: "eligible",
       workspaceDir: row.workspace_dir,
       manifestHome: row.home_dir,
       baseCommit: source.baseCommit,
@@ -69,8 +70,10 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
     target = overlay.manifest;
   }
   const sourceEntries = new Map(source.entries.map((entry) => [entry.path, entry]));
+  params.signal?.throwIfAborted();
+  const reconciliation = prepareWorkspaceReconciliation(base, target);
   return {
-    changed: changedPaths(base, target, params.signal),
+    changed: new Set(reconciliation.preflight.changedPaths),
     readSourceFile: async (
       entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
     ): Promise<Buffer> => {
@@ -137,16 +140,17 @@ export async function prepareNodeWorkerWorkspaceOverlay(params: {
           async () =>
             await applyStagedWorkerWorkspace({
               root: row.workspace_dir,
+              assertCurrent: () => params.signal?.throwIfAborted(),
               stagingRoot,
               baseManifestRef,
               currentManifestRef: targetRef,
-              base,
+              reconciliation,
               current: target,
               journal: {
-                load: () => undefined,
-                begin: () => {},
-                commit: () => {},
-                abort: () => {
+                load: async () => undefined,
+                begin: async () => {},
+                commit: async () => {},
+                abort: async () => {
                   rolledBack = true;
                 },
               },

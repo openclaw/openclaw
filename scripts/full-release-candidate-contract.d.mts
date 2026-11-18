@@ -14,13 +14,23 @@ export interface FullReleaseCandidateRequest {
   releaseProfile: string;
   releaseSoak: boolean;
   repository: string;
-  schema: "openclaw.full-release-candidate-request/v2";
+  schema: "openclaw.full-release-candidate-request/v3";
   sharedImagePolicy: string;
   targetSha: string;
   toolingSha: string;
+  upgradeBaseline: string;
   upgradeSurvivorBaselines: string[];
   upgradeSurvivorScenarios: string[];
 }
+
+export type RecordedFullReleaseCandidateRequest =
+  | FullReleaseCandidateRequest
+  | (Omit<FullReleaseCandidateRequest, "schema" | "upgradeBaseline"> & {
+      schema: "openclaw.full-release-candidate-request/v2";
+    })
+  | (Omit<FullReleaseCandidateRequest, "packagePublished" | "schema" | "upgradeBaseline"> & {
+      schema: "openclaw.full-release-candidate-request/v1";
+    });
 
 export interface FullReleaseCandidateArtifactIdentity {
   digest: string;
@@ -88,18 +98,27 @@ export interface FullReleaseCandidateBinding extends Omit<FullReleaseCandidateMa
   schema: "openclaw.full-release-candidate-binding/v2";
 }
 
+export interface RecordedFullReleaseCandidateBinding extends Omit<
+  FullReleaseCandidateBinding,
+  "request"
+> {
+  request: RecordedFullReleaseCandidateRequest;
+}
+
 export function buildFullReleaseCandidateRequest(
   input: FullReleaseCandidateRecord,
 ): FullReleaseCandidateRequest;
 export function buildFullReleaseCandidateBinding(input: {
   artifact: FullReleaseCandidateRecord;
   manifest: FullReleaseCandidateRecord;
-}): FullReleaseCandidateBinding;
+}): RecordedFullReleaseCandidateBinding;
 export function canonicalFullReleaseCandidateRequestJson(value: unknown): string;
 export function candidateRequestSha256(value: unknown): string;
 export function fullReleaseCandidateArtifactName(requestSha256: string): string;
 export function validateFullReleaseCandidateRequest(value: unknown): FullReleaseCandidateRequest;
 export function validateRecordedFullReleaseCandidateRequest(
   value: unknown,
-): FullReleaseCandidateRequest;
-export function validateFullReleaseCandidateBinding(value: unknown): FullReleaseCandidateBinding;
+): RecordedFullReleaseCandidateRequest;
+export function validateFullReleaseCandidateBinding(
+  value: unknown,
+): RecordedFullReleaseCandidateBinding;

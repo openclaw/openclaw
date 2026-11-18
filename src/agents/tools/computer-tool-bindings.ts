@@ -53,15 +53,6 @@ const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .join(", ")}`,
 };
 
-async function resolveComputerNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
 export async function resolveComputerBinding(params: {
   executionId: string;
   sessionTransport?: ComputerToolTransport;
@@ -194,7 +185,7 @@ export async function resolveComputerBinding(params: {
       (prepared?.configured === false && params.target !== "gateway");
     const gateway =
       (usePrepared ? prepared : undefined) ??
-      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal));
+      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal, true));
     if (gateway.available) {
       assertHostedCaller();
       const close = await bindGatewayComputerCleanup({
@@ -236,12 +227,19 @@ export async function resolveComputerBinding(params: {
     }
     if (gateway.configured || params.target === "gateway") {
       throw new Error(
-        (gateway.configured ? gateway.error : undefined) ??
-          "Gateway computer is unavailable; enable its computer provider and desktop session",
+        gateway.configured
+          ? (gateway.error ??
+              "Gateway computer is unavailable; enable its computer provider and desktop session")
+          : "Gateway computer is not configured on this host. Omit target, or use target: node, to select a paired computer-capable node.",
       );
     }
   }
-  const node = await resolveComputerNode(params.gatewayOpts, params.node, params.signal);
+  const node = resolveEligibleNodeFromList(
+    await listNodes(params.gatewayOpts, params.signal),
+    params.node,
+    isEligibleComputerNode,
+    COMPUTER_NODE_MESSAGES,
+  );
   return {
     host: { host: "node", nodeId: node.nodeId },
     gatewayOpts: params.gatewayOpts,

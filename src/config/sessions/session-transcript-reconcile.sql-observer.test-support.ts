@@ -14,10 +14,10 @@ const methods = [
   "close",
 ] as const;
 type Boundary = (typeof methods)[number];
-type Bucket = "control" | "data" | "unknown";
+type Bucket = "data" | "unknown";
 
 /** No path is exempt: classification supplements the unfiltered native-call ledger. */
-export function observeReconcileHostSqlite(paths: { control: string[]; data: string[] }) {
+export function observeReconcileHostSqlite(paths: { data: string[] }) {
   const sqlite = requireNodeSqlite();
   const NativeDatabase = sqlite.DatabaseSync;
   const descriptor = Object.getOwnPropertyDescriptor(sqlite, "DatabaseSync")!;
@@ -29,11 +29,7 @@ export function observeReconcileHostSqlite(paths: { control: string[]; data: str
       return "unknown";
     }
     const resolved = path.resolve(location);
-    return paths.control.includes(resolved)
-      ? "control"
-      : paths.data.includes(resolved)
-        ? "data"
-        : "unknown";
+    return paths.data.includes(resolved) ? "data" : "unknown";
   };
   const record = (method: Boundary, database?: DatabaseSync, sql?: string, opening?: string) => {
     let location = opening ?? (database && locations.get(database));

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { readPositiveIntEnv } from "../env-limits.mjs";
+import { childOf } from "./fixture-files.mjs";
 import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
@@ -22,16 +23,6 @@ const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const quote = (value) => `'${String(value).replaceAll("'", "'\\''")}'`;
 const writeJson = (file, value) =>
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { flag: "wx" });
-
-function childOf(root, file) {
-  const relative = path.relative(root, file);
-  return (
-    relative !== "" &&
-    relative !== ".." &&
-    !relative.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relative)
-  );
-}
 
 function context(packageRoot) {
   const required = (key) => {

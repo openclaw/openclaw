@@ -1,21 +1,32 @@
 import crypto from "node:crypto";
 import { ARCHIVE_LIMIT_ERROR_CODE, ArchiveLimitError } from "openclaw/plugin-sdk/archive";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type {
   OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyContext,
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
+import { bindFileTransferAudit } from "./audit-context.js";
+import type { FileTransferAuditOp } from "./audit.js";
 import { inspectDirFetchArchive } from "./dir-fetch-archive.js";
-import { DIR_FETCH_MAX_ENTRIES } from "./dir-fetch-limits.js";
+import {
+  DIR_FETCH_DEFAULT_MAX_BYTES,
+  DIR_FETCH_HARD_MAX_BYTES,
+  DIR_FETCH_MAX_ENTRIES,
+} from "./dir-fetch-limits.js";
+import { readFileCreateMetadata } from "./file-create-protocol.js";
+import {
+  FILE_FETCH_DEFAULT_MAX_BYTES,
+  FILE_FETCH_HARD_MAX_BYTES,
+  readFileFetchBinaryMaxBytes,
+} from "./file-fetch-protocol.js";
 import { commandKind, requestApproval } from "./node-invoke-policy-approval.js";
 import {
   FILE_TRANSFER_NODE_INVOKE_COMMANDS,
   type FileTransferNodeInvokeCommand,
 } from "./node-invoke-policy-commands.js";
-import { prepareParams, validateFetchMaxBytesParam } from "./node-invoke-policy-params.js";
 import {
   policyDeniedResult,
   runPathPreflight,
@@ -25,10 +36,38 @@ import {
 import { persistLiteralGrant } from "./policy.js";
 const DIR_FETCH_ARCHIVE_INSPECTION_TIMEOUT_MS = 30_000;
 
-type FileTransferCommand = FileTransferNodeInvokeCommand;
+function readMaxBytes(input: {
+  value: unknown;
+  defaultValue: number;
+  hardMax: number;
+  policyMax?: number;
+}): number {
+  const parsed =
+    input.value === undefined
+      ? input.defaultValue
+      : readPositiveIntegerParam({ maxBytes: input.value }, "maxBytes");
+  const requested = parsed ?? input.defaultValue;
+  const clamped = Math.max(1, Math.min(requested, input.hardMax));
+  return input.policyMax ? Math.min(clamped, input.policyMax) : clamped;
+}
+
+function validateFetchMaxBytesParam(
+  command: FileTransferNodeInvokeCommand,
+  params: Record<string, unknown>,
+) {
+  if (command !== "file.fetch" && command !== "dir.fetch") {
+    return;
+  }
+  if (params.maxBytes !== undefined) {
+    readPositiveIntegerParam(params, "maxBytes");
+  }
+  if (command === "file.fetch") {
+    readFileFetchBinaryMaxBytes(params);
+  }
+}
 
 function readAuditSizeBytes(
-  command: FileTransferCommand,
+  command: FileTransferNodeInvokeCommand,
   payload: Record<string, unknown> | null,
   verifiedDirFetchBytes?: number,
 ): number | undefined {
@@ -95,15 +134,19 @@ async function verifyDirFetchArchive(
 async function handleFileTransferInvoke(
   ctx: OpenClawPluginNodeInvokePolicyContext,
 ): Promise<OpenClawPluginNodeInvokePolicyResult> {
-  if (!FILE_TRANSFER_NODE_INVOKE_COMMANDS.includes(ctx.command as FileTransferCommand)) {
+  if (!FILE_TRANSFER_NODE_INVOKE_COMMANDS.includes(ctx.command as FileTransferNodeInvokeCommand)) {
     return { ok: false, code: "UNSUPPORTED_COMMAND", message: "unsupported file-transfer command" };
   }
-  const command = ctx.command as FileTransferCommand;
+  const command = ctx.command as FileTransferNodeInvokeCommand;
   const op: FileTransferAuditOp = command;
   const params = asOptionalRecord(ctx.params) ?? {};
   const requestedPath = typeof params.path === "string" ? params.path : "";
   const nodeDisplayName = ctx.node?.displayName;
   const startedAt = Date.now();
+  const audit = bindFileTransferAudit(
+    { op, nodeId: ctx.nodeId, nodeDisplayName, requestedPath },
+    startedAt,
+  );
 
   if (!requestedPath) {
     return { ok: false, code: "INVALID_PARAMS", message: `${op} path required` };
@@ -131,12 +174,33 @@ async function handleFileTransferInvoke(
 
   let forwardedParams: Record<string, unknown>;
   try {
-    forwardedParams = prepareParams({
-      command,
-      params,
-      followSymlinks: gate.followSymlinks,
-      maxBytes: gate.maxBytes,
-    });
+    const { followSymlinks, maxBytes } = gate;
+    forwardedParams = {
+      ...params,
+      // A caller may narrow the configured permission, never expand it.
+      followSymlinks: followSymlinks && params.followSymlinks !== false,
+    };
+    delete forwardedParams.preflightOnly;
+    delete forwardedParams.expectedCanonicalPath;
+    delete forwardedParams.expectedBinding;
+    if (command === "file.create") {
+      Object.assign(forwardedParams, readFileCreateMetadata(params, maxBytes));
+    } else if (command === "file.fetch") {
+      const binaryMax = readFileFetchBinaryMaxBytes(params);
+      forwardedParams.maxBytes = readMaxBytes({
+        value: params.maxBytes,
+        defaultValue: FILE_FETCH_DEFAULT_MAX_BYTES,
+        hardMax: binaryMax ?? FILE_FETCH_HARD_MAX_BYTES,
+        policyMax: maxBytes,
+      });
+    } else if (command === "dir.fetch") {
+      forwardedParams.maxBytes = readMaxBytes({
+        value: params.maxBytes,
+        defaultValue: DIR_FETCH_DEFAULT_MAX_BYTES,
+        hardMax: DIR_FETCH_HARD_MAX_BYTES,
+        policyMax: maxBytes,
+      });
+    }
   } catch (error) {
     return {
       ok: false,
@@ -162,15 +226,10 @@ async function handleFileTransferInvoke(
 
   const result = await ctx.invokeNode({ params: forwardedParams });
   if (!result.ok) {
-    await appendFileTransferAudit({
-      op,
-      nodeId: ctx.nodeId,
-      nodeDisplayName,
-      requestedPath,
+    await audit({
       decision: "error",
       errorCode: result.code,
       errorMessage: result.message,
-      durationMs: Date.now() - startedAt,
     });
     return {
       ok: false,
@@ -183,16 +242,11 @@ async function handleFileTransferInvoke(
 
   const payload = asNullableRecord(result.payload);
   if (payload?.ok === false) {
-    await appendFileTransferAudit({
-      op,
-      nodeId: ctx.nodeId,
-      nodeDisplayName,
-      requestedPath,
+    await audit({
       canonicalPath: typeof payload.canonicalPath === "string" ? payload.canonicalPath : undefined,
       decision: "error",
       errorCode: typeof payload.code === "string" ? payload.code : undefined,
       errorMessage: typeof payload.message === "string" ? payload.message : undefined,
-      durationMs: Date.now() - startedAt,
     });
     return result;
   }
@@ -202,14 +256,14 @@ async function handleFileTransferInvoke(
     return policyDeniedResult({
       op,
       code: "CANONICAL_PATH_MISSING",
-      message: "node result did not return a canonical path",
+      message: "node result did not return a resolved path",
     });
   }
   if (preflight.canonicalPath !== canonicalPath) {
     return policyDeniedResult({
       op,
       code: "CANONICAL_PATH_CHANGED",
-      message: "the canonical path changed after preflight; refusing the result",
+      message: "the resolved path changed after preflight; refusing the result",
       details: { path: canonicalPath },
     });
   }
@@ -229,16 +283,11 @@ async function handleFileTransferInvoke(
   if (command === "dir.fetch") {
     const archiveEntries = await verifyDirFetchArchive(payload);
     if (!archiveEntries.ok) {
-      await appendFileTransferAudit({
-        op,
-        nodeId: ctx.nodeId,
-        nodeDisplayName,
-        requestedPath,
+      await audit({
         canonicalPath,
         decision: "error",
         errorCode: archiveEntries.code,
         reason: archiveEntries.reason,
-        durationMs: Date.now() - startedAt,
       });
       return policyDeniedResult({
         op,
@@ -279,25 +328,16 @@ async function handleFileTransferInvoke(
     } catch (error) {
       standingApprovalWarning =
         "The transfer succeeded, but the standing approval was not saved. Run the command again and choose allow-always, or use allow-once.";
-      await appendFileTransferAudit({
-        op,
-        nodeId: ctx.nodeId,
-        nodeDisplayName,
-        requestedPath,
+      await audit({
         canonicalPath,
         decision: "error",
         errorCode: "APPROVAL_PERSIST_FAILED",
         reason: `standing approval persistence failed: ${String(error)}`,
-        durationMs: Date.now() - startedAt,
       });
     }
   }
 
-  await appendFileTransferAudit({
-    op,
-    nodeId: ctx.nodeId,
-    nodeDisplayName,
-    requestedPath,
+  await audit({
     canonicalPath,
     decision: "allowed",
     sizeBytes: readAuditSizeBytes(command, payload, verifiedDirFetchArchive?.sizeBytes),
@@ -307,7 +347,6 @@ async function handleFileTransferInvoke(
         : typeof payload?.sha256 === "string"
           ? payload.sha256
           : undefined,
-    durationMs: Date.now() - startedAt,
   });
 
   return standingApprovalWarning && payload

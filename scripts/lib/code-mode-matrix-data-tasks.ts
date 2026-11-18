@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { createGatewayMatrixPluginSource } from "./code-mode-matrix-gateway-fixtures.ts";
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
 
@@ -245,12 +246,7 @@ api.registerTool({
           fs.readFile(path.join(params.workspace, name), "utf8").catch(() => undefined),
         ),
       );
-      let actual: unknown;
-      try {
-        actual = JSON.parse(jsonText ?? "");
-      } catch {
-        actual = undefined;
-      }
+      const actual = safeParseJson(jsonText ?? "");
       const receipts = params.receipts.filter(
         (row): row is Record<string, unknown> => typeof row === "object" && row !== null,
       );

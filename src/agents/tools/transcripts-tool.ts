@@ -1,11 +1,11 @@
-/**
- * transcripts built-in tool.
- *
- * Manages live capture, manual import, summarization, and process-local transcript sessions.
- */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
+import {
+  TRANSCRIPTS_LIST_MAX,
+  type TranscriptSessionSummary,
+} from "../../../packages/gateway-protocol/src/schema/transcripts.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,10 +14,12 @@ import {
   exportTranscriptSummary,
   stopTranscriptCapture,
 } from "../../transcripts/capture-operations.js";
-import { assertTranscriptCaptureEnabled } from "../../transcripts/capture-startup.js";
-import { persistTranscriptSummary } from "../../transcripts/capture-summary.js";
 import {
   activeSessions,
+  assertTranscriptCaptureEnabled,
+} from "../../transcripts/capture-startup.js";
+import { persistTranscriptSummary } from "../../transcripts/capture-summary.js";
+import {
   authorizeTranscriptSource,
   createTranscriptSessionId,
   isTranscriptSelectionCurrent,
@@ -25,7 +27,6 @@ import {
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   startTranscripts,
-  type TranscriptsLogger,
   type TranscriptsRuntimeContext,
 } from "../../transcripts/capture.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
@@ -35,6 +36,8 @@ import type {
   TranscriptSessionDescriptor,
   TranscriptToolCaller,
 } from "../../transcripts/provider-types.js";
+import { presentTranscriptSession } from "../../transcripts/read-live.js";
+import { projectTranscriptSession, projectTranscriptNotes } from "../../transcripts/read.js";
 import {
   readTranscriptStringParam,
   sanitizeTranscriptSourceLocator,
@@ -43,8 +46,7 @@ import {
 import { TranscriptsSummaryChangedError } from "../../transcripts/store-errors.js";
 import { transcriptSessionSelector, type TranscriptsStore } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import type { AnyAgentTool } from "./common.js";
-import { listPastTranscripts, showPastTranscript } from "./transcripts-tool-read.js";
+import { readNonNegativeIntegerParam, type AnyAgentTool } from "./common.js";
 import {
   toolText,
   transcriptStartToolResult,
@@ -55,6 +57,124 @@ import {
   resolveTranscriptToolSession,
   transcriptSelectionNoLongerActive,
 } from "./transcripts-tool-selection.js";
+
+const TRANSCRIPTS_SHOW_MAX_CHARS = 12_000;
+const TRANSCRIPTS_LIST_MAX_CHARS = 4_000;
+type ReadParams = {
+  ctx: TranscriptsRuntimeContext;
+  store: TranscriptsStore;
+  rawParams: Record<string, unknown>;
+};
+
+async function listPastTranscripts({ ctx, store, rawParams }: ReadParams) {
+  const limit = rawParams.limit ?? 20;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw new Error("limit must be an integer from 1 to 50.");
+  }
+  const offset = readNonNegativeIntegerParam(rawParams, "offset") ?? 0;
+  const sessions: Omit<TranscriptSessionSummary, "overview">[] = [];
+  // Bound work before authorization; denied rows advance the continuation too.
+  const { entries, hasMore } = await store.listReadEntries({ limit: TRANSCRIPTS_LIST_MAX, offset });
+  ctx.assertCallerActive?.();
+  let scanned = 0;
+  for (const entry of entries) {
+    scanned++;
+    if (!(await canAccessTranscriptSession(ctx, entry.session, "list"))) {
+      continue;
+    }
+    const { overview: _overview, ...session } = presentTranscriptSession(
+      projectTranscriptSession(entry),
+      undefined,
+      resolveSourceProvider(entry.session.source.providerId, ctx)?.name,
+    );
+    sessions.push(session);
+    if (sessions.length === limit) {
+      break;
+    }
+  }
+  const nextOffset = scanned < entries.length || hasMore ? offset + scanned : undefined;
+  ctx.assertCallerActive?.();
+  const lines: string[] = [];
+  for (const session of sessions) {
+    const title = truncateUtf16Safe(
+      sanitizeTerminalText(session.title || session.providerName || session.providerId),
+      80,
+    );
+    const participants = truncateUtf16Safe(session.participants.join(", "), 100);
+    const date = session.startedAt.slice(0, 16).replace("T", " ");
+    const line = `${date}  ${title}  (${session.utteranceCount} utterances, ${participants || "no speakers"})  selector: ${session.selector}`;
+    if ([...lines, line].join("\n").length > TRANSCRIPTS_LIST_MAX_CHARS - 100) {
+      lines.push("More meetings in details.sessions; use a smaller limit for a shorter list.");
+      break;
+    }
+    lines.push(line);
+  }
+  if (nextOffset !== undefined) {
+    lines.push(`More meetings may be available; call list with offset=${nextOffset}.`);
+  }
+  return toolText(lines.join("\n") || "No accessible meeting transcripts found.", {
+    sessions,
+    ...(nextOffset !== undefined ? { nextOffset } : {}),
+  });
+}
+
+async function showPastTranscript(params: ReadParams) {
+  const { ctx, store } = params;
+  const selection = await resolveTranscriptToolSession({ ...params, action: "show" });
+  const entry = (await store.listReadEntries({ limit: 1, session: selection.session })).entries[0];
+  ctx.assertCallerActive?.();
+  if (!entry) {
+    throw new Error(`transcripts session not found: ${selection.selector}`);
+  }
+  const notes = projectTranscriptNotes(await store.readNotes(selection.session));
+  const current = await isTranscriptSelectionCurrent(selection, store);
+  ctx.assertCallerActive?.();
+  if (!current || !isTranscriptSelectionOwned(selection)) {
+    const text = "Transcript changed while reading. Retry show to read the current notes.";
+    return toolText(text, {
+      text,
+      sessionId: selection.session.sessionId,
+      selector: selection.selector,
+      skipped: true,
+      retryable: true,
+    });
+  }
+  const {
+    selector,
+    sessionId,
+    title,
+    startedAt,
+    stoppedAt,
+    utteranceCount,
+    participants,
+    summarySource,
+    active,
+  } = presentTranscriptSession(projectTranscriptSession({ ...entry, session: selection.session }));
+  const marker = `\n[truncated; run openclaw transcripts show ${selector} for the full notes]`;
+  const markdown = notes?.markdown;
+  const text =
+    markdown === undefined
+      ? `No summary exists yet for this meeting.${active ? " Capture is active." : ""}`
+      : markdown.length > TRANSCRIPTS_SHOW_MAX_CHARS
+        ? truncateUtf16Safe(markdown, TRANSCRIPTS_SHOW_MAX_CHARS - marker.length) + marker
+        : markdown;
+  return {
+    content: [{ type: "text" as const, text }],
+    details: {
+      text,
+      selector,
+      sessionId,
+      title,
+      startedAt,
+      stoppedAt,
+      utteranceCount,
+      participants: notes?.participants.length ? notes.participants : participants,
+      summarySource,
+      ...(markdown === undefined ? { active } : {}),
+    },
+  };
+}
+
 const STATUS_SELECTOR_LIMIT = 3;
 const STATUS_ACTIVE_MAX_ENTRIES = 5;
 const STATUS_ACTIVE_MAX_CHARS = 2_000;
@@ -79,6 +199,9 @@ const TranscriptsSchema = Type.Object(
       }),
     ),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
+    offset: Type.Optional(
+      Type.Integer({ minimum: 0, description: "For list: continue from details.nextOffset." }),
+    ),
     title: Type.Optional(Type.String({ minLength: 1 })),
     providerId: Type.Optional(Type.String({ minLength: 1 })),
     accountId: Type.Optional(Type.String({ minLength: 1 })),
@@ -145,6 +268,7 @@ async function importTranscripts(params: {
     await params.store.appendUtteranceForSession(session, utterance);
   }
   const persisted = await persistTranscriptSummary({
+    stateDir: params.ctx.stateDir,
     config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
     cfg: params.ctx.config,
     store: params.store,
@@ -196,6 +320,7 @@ async function summarizeExisting(params: {
   try {
     persisted = await persistTranscriptSummary({
       ...params,
+      stateDir: params.ctx.stateDir,
       cfg: params.ctx.config,
       session,
       expectedInputRevision: selection.historicalRevision,
@@ -237,11 +362,10 @@ async function summarizeExisting(params: {
 }
 
 async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
-  const providers = [
+  const providers = uniqueStrings([
     manualTranscriptSourceProvider.id,
     ...listTranscriptSourceProviders(ctx.config).map((provider) => provider.id),
-  ];
-  const uniqueProviders = uniqueStrings(providers);
+  ]);
   const visibleEntries = (
     await Promise.all(
       [...activeSessions.values()].map(async (entry) =>
@@ -323,7 +447,7 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   }
   return toolText(
     [
-      `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
+      `Transcripts providers: ${providers.length ? providers.join(", ") : "none"}`,
       `Active sessions: ${active.length}`,
       ...(pendingFinalization.length
         ? [
@@ -333,30 +457,25 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
       ...activeLines,
       ...selectorText,
     ].join("\n"),
-    { providers: uniqueProviders, active, pendingFinalization },
+    { providers, active, pendingFinalization },
   );
 }
 
-/** Create the agent-facing transcripts tool. */
-export function createTranscriptsTool(options?: {
+export function createTranscriptsTool(options: {
   agentId?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
   caller?: TranscriptToolCaller;
   assertCallerActive?: () => void;
+  /** The turn has no human or operator identity to authorize transcript access. */
+  callerUnavailable?: true;
   config?: OpenClawConfig;
-  stateDir?: string;
-  logger?: TranscriptsLogger;
 }): AnyAgentTool {
-  const getConfig = options?.config && createRuntimeConfigReader(options.config);
+  const getConfig = options.config && createRuntimeConfigReader(options.config);
   const context: TranscriptsRuntimeContext = {
-    stateDir: options?.stateDir ?? resolveStateDir(),
-    logger: options?.logger ?? console,
-    ...(options?.agentId ? { agentId: options.agentId } : {}),
-    ...(options?.agentChannel ? { agentChannel: options.agentChannel } : {}),
-    ...(options?.agentAccountId ? { agentAccountId: options.agentAccountId } : {}),
-    ...(options?.caller ? { caller: options.caller } : {}),
-    ...(options?.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
+    stateDir: resolveStateDir(),
+    logger: console,
+    ...(options.agentId ? { agentId: options.agentId } : {}),
+    ...(options.caller ? { caller: options.caller } : {}),
+    ...(options.assertCallerActive ? { assertCallerActive: options.assertCallerActive } : {}),
   };
   return {
     name: "transcripts",
@@ -365,6 +484,11 @@ export function createTranscriptsTool(options?: {
       "Start, stop, import, summarize, or inspect meeting transcript captures; list past meetings and read their notes.",
     parameters: TranscriptsSchema,
     async execute(_toolCallId, rawParams, signal) {
+      if (options.callerUnavailable) {
+        throw new Error(
+          "transcripts are unavailable in this turn: it has no user or operator identity to authorize access.",
+        );
+      }
       const ctx = { ...context, config: getConfig?.() };
       const config = resolveTranscriptsConfig(ctx.config?.transcripts);
       assertTranscriptCaptureEnabled(ctx);

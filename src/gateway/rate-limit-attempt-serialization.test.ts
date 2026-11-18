@@ -1,12 +1,16 @@
 // Auth serialization tests cover exemption-aware credential fallback ordering.
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { withSerializedCredentialFallbackAttempt } from "./rate-limit-attempt-serialization.js";
 
 describe("credential fallback serialization", () => {
   it("does not queue an exempt local fallback behind another local attempt", async () => {
-    const limiter = createGatewayAuthRateLimiter({ pruneIntervalMs: 0 });
+    const limiter = createGatewayAuthRateLimiter(
+      { pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const { promise: firstGate, resolve: releaseFirst } = createDeferred();
     let secondStarted = false;
 
@@ -33,7 +37,10 @@ describe("credential fallback serialization", () => {
   });
 
   it("keeps non-exempt remote fallbacks serialized", async () => {
-    const limiter = createGatewayAuthRateLimiter({ pruneIntervalMs: 0 });
+    const limiter = createGatewayAuthRateLimiter(
+      { pruneIntervalMs: 0 },
+      { scheduler: createTestGatewayScheduler() },
+    );
     const ip = "198.51.100.20";
     const { promise: firstGate, resolve: releaseFirst } = createDeferred();
     let secondStarted = false;

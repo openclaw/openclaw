@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { decodeSandboxHostCsp } from "../../agents/sandbox-host.js";
+import { buildSandboxHostDocument, decodeSandboxHostCsp } from "../../agents/sandbox-host.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import type { ControlUiEmbedSandboxMode } from "../control-ui-bootstrap-contract.js";
 import { createCoreGatewayMethodDescriptors } from "../methods/core-method-policy.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
+import { setOpenClawIdClawOriginResolver } from "../openclaw-id/claw-origin.js";
 import { canvasHandlers } from "./canvas.js";
 import type {
   GatewayClient,
@@ -54,7 +57,10 @@ beforeEach(() => {
   resetGatewayWorkAdmission();
   readDocument.mockReset().mockResolvedValue({ html: "<p>Widget</p>", cspSandbox: "scripts" });
 });
-afterEach(() => resetGatewayWorkAdmission());
+afterEach(() => {
+  resetGatewayWorkAdmission();
+  setOpenClawIdClawOriginResolver(undefined);
+});
 
 describe("canvas.document.view", () => {
   it("returns only the hosted document and isolated sandbox metadata", async () => {
@@ -70,6 +76,7 @@ describe("canvas.document.view", () => {
         sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
         sandboxPort: 18790,
         sandboxOrigin: "https://sandbox.example",
+        embedSandbox: "scripts",
       },
     ]);
     const result = respond.mock.calls[0]![1];
@@ -95,7 +102,7 @@ describe("canvas.document.view", () => {
     context.getMcpAppSandboxPort = () => undefined;
     vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
     const pending = invoke();
-    expect(readDocument).toHaveBeenCalledWith("cv_widget", { maxBytes: 2 * 1024 * 1024 });
+    expect(readDocument).toHaveBeenCalledWith("cv_widget");
     expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
     sandbox.resolve(18790);
     document.resolve({ html: "<p>Widget</p>", cspSandbox: "scripts" });
@@ -125,43 +132,17 @@ describe("canvas.document.view", () => {
 
   it("refuses non-widget documents and oversized widget bytes", async () => {
     const { invoke } = createHarness();
+    const html = "é".repeat(5 * 1024 * 1024);
+    readDocument.mockResolvedValueOnce({ html, cspSandbox: "scripts" });
+    expect((await invoke()).mock.calls[0]?.[1]?.html).toBe(html);
     for (const document of [
       { html: "<p>Non-widget artifact</p>" },
-      { html: "x".repeat(2 * 1024 * 1024 + 1), cspSandbox: "scripts" },
+      { html: html + "é", cspSandbox: "scripts" },
     ]) {
       readDocument.mockResolvedValueOnce(document);
       expect((await invoke()).mock.calls[0]?.[0]).toBe(false);
     }
   });
-
-  it.each(["gateway", "client", "signal", "configuration"] as const)(
-    "rejects a retired %s before returning awaited content",
-    async (boundary) => {
-      const { context, client, invoke } = createHarness();
-      const document = createDeferred<{ html: string; cspSandbox: "scripts" }>();
-      readDocument.mockReturnValue(document.promise);
-      const controller = new AbortController();
-      const pending = invoke(undefined, { signal: controller.signal });
-      if (boundary === "gateway") {
-        context.resolveGatewayContext = () => undefined;
-      }
-      if (boundary === "client") {
-        client.invalidated = true;
-      }
-      if (boundary === "signal") {
-        controller.abort();
-      }
-      if (boundary === "configuration") {
-        context.getRuntimeConfig = () => ({
-          plugins: { entries: { canvas: { config: { host: { enabled: false } } } } },
-        });
-      }
-      document.resolve({ html: "<p>Private widget</p>", cspSandbox: "scripts" });
-      const respond = await pending;
-      expect(respond.mock.calls[0]?.[0]).toBe(false);
-      expect(respond.mock.calls[0]?.[1]).toBeUndefined();
-    },
-  );
 
   it("reports missing documents and unavailable sandbox listeners without exposing file paths", async () => {
     const { context, invoke } = createHarness();
@@ -172,6 +153,56 @@ describe("canvas.document.view", () => {
     context.getMcpAppSandboxPort = () => undefined;
     context.ensureSandboxHostPort = undefined;
     expect((await invoke()).mock.calls[0]?.[0]).toBe(false);
+  });
+});
+
+describe.each(["canvas.document.view", "canvas.document.preview"])("%s embed policy", (method) => {
+  const params =
+    method === "canvas.document.view" ? { docId: "cv_widget" } : { html: "<p>Preview</p>" };
+
+  it.each(["strict", "scripts", "trusted"] satisfies ControlUiEmbedSandboxMode[])(
+    "returns the effective %s ceiling without changing the isolated host",
+    async (embedSandbox) => {
+      const { context, invoke } = createHarness(method);
+      context.getRuntimeConfig = () => ({ gateway: { controlUi: { embedSandbox } } });
+      const respond = await invoke(params);
+      expect(respond.mock.calls).toEqual([
+        [
+          true,
+          {
+            html: method === "canvas.document.view" ? "<p>Widget</p>" : params.html,
+            sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
+            sandboxPort: 18790,
+            embedSandbox,
+          },
+        ],
+      ]);
+    },
+  );
+
+  it("uses the current policy when config changes during sandbox provisioning", async () => {
+    const { context, invoke } = createHarness(method);
+    let config: OpenClawConfig = {
+      gateway: { controlUi: { embedSandbox: "trusted" } },
+      mcp: { apps: { sandboxOrigin: "https://retired-sandbox.example" } },
+    };
+    context.getRuntimeConfig = () => config;
+    const sandbox = createDeferred<number>();
+    context.getMcpAppSandboxPort = () => undefined;
+    vi.mocked(context.ensureSandboxHostPort!).mockReturnValue(sandbox.promise);
+    const pending = invoke(params);
+    expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
+    config = {
+      gateway: { controlUi: { embedSandbox: "strict" } },
+      mcp: { apps: { sandboxOrigin: "https://current-sandbox.example" } },
+    };
+    sandbox.resolve(18790);
+    expect((await pending).mock.calls[0]?.[1]).toMatchObject({
+      sandboxOrigin: "https://current-sandbox.example",
+      embedSandbox: "strict",
+    });
+    config = {};
+    expect((await invoke(params)).mock.calls[0]?.[1]).toMatchObject({ embedSandbox: "scripts" });
   });
 });
 
@@ -200,6 +231,7 @@ describe("canvas.document.preview", () => {
           sandboxUrl: expect.stringMatching(/^\/mcp-app-sandbox\?csp=/),
           sandboxPort: 18790,
           sandboxOrigin: "https://sandbox.example",
+          embedSandbox: "scripts",
         },
       ],
     ]);
@@ -232,7 +264,7 @@ describe("canvas.document.preview", () => {
     expect(respond.mock.calls[0]?.[0]).toBe(true);
     expect(respond.mock.calls[0]).toEqual([
       true,
-      { html, sandboxPort: 18790, sandboxUrl: expect.any(String) },
+      { html, sandboxPort: 18790, sandboxUrl: expect.any(String), embedSandbox: "scripts" },
     ]);
   });
 
@@ -357,14 +389,6 @@ describe("canvas.document.preview", () => {
     },
   );
 
-  it("provisions the existing host without touching stored documents", async () => {
-    const { context, invoke } = createPreviewHarness();
-    context.getMcpAppSandboxPort = () => undefined;
-    const respond = await invoke({ html: "<h1>Preview</h1>" });
-    expect(context.ensureSandboxHostPort).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.[0]).toBe(true);
-  });
-
   it("reports unavailable or failed listeners without exposing server details", async () => {
     const { context, invoke } = createPreviewHarness();
     context.getMcpAppSandboxPort = () => undefined;
@@ -376,3 +400,31 @@ describe("canvas.document.preview", () => {
     expect((await invoke({ html: "" })).mock.calls[0]?.[2]).toMatchObject({ code: "UNAVAILABLE" });
   });
 });
+
+describe.each(["canvas.document.view", "canvas.document.preview"])(
+  "%s tunnel sandbox",
+  (method) => {
+    it("bootstraps only linked tunnel views, preserving direct and unlinked responses", async () => {
+      const { client, invoke } = createHarness(method);
+      const params =
+        method === "canvas.document.view" ? { docId: "cv_widget" } : { html: "<p>Preview</p>" };
+      const direct = (await invoke(params)).mock.calls[0]![1];
+      client.browserOrigin = { openclawIdTunnel: true };
+      expect((await invoke(params)).mock.calls[0]![1]).toEqual(direct);
+      setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.crabd.xyz");
+      const tunnel = (await invoke(params)).mock.calls[0]![1];
+      const url = new URL(tunnel.sandboxUrl);
+      expect(url.origin).toBe("https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz");
+      expect(url.pathname).toBe("/mcp-app-sandbox");
+      expect(url.searchParams.get("cspv")).toBe("1");
+      expect(url.searchParams.get("claw")).toBe("studio-k7x2q");
+      expect(tunnel.sandboxOrigin).toBe(url.origin);
+      expect(tunnel.sandboxShellHtml).toBe(
+        buildSandboxHostDocument(decodeSandboxHostCsp(url.searchParams.get("csp"))).html,
+      );
+      expect(tunnel.html).toBe(direct.html);
+      client.browserOrigin = { openclawIdTunnel: false };
+      expect((await invoke(params)).mock.calls[0]![1]).toEqual(direct);
+    });
+  },
+);

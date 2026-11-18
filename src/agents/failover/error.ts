@@ -11,12 +11,25 @@ import type { FailoverReason } from "./signal.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
+export const CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE = "cli_partial_output_rejected";
+export const MODEL_CHAT_UNSUPPORTED_TEXT = "This model doesn't support chat; pick another model.";
+/** A listed model failed its chat request; see `isListedModelChatRejection`. */
+export const MODEL_CHAT_REJECTED_CODE = "model_chat_rejected";
+export const MODEL_CHAT_REJECTED_TEXT =
+  "The provider lists this model but rejected a chat request. It may not be a chat model, or it isn't enabled for this account. Choose another model.";
+/** Host-authored planner diagnostic that names a saved login; never provider reply copy. */
+export const AUTH_PROFILE_COOLDOWN_ERROR_CODE = "auth_profile_cooldown";
+/** The host refused another warm CLI process because its free memory is low. */
+export const CLI_LIVE_SESSION_HOST_MEMORY_ERROR_CODE = "cli_live_session_host_memory";
+
 export type CliTimeoutContext = {
   mode: "overall" | "no-output";
   timeoutSeconds: number;
   observedActivity: boolean;
   activeToolCount: number;
   backgroundTaskCount: number;
+  /** Native compaction (or similar backend maintenance) is running: silent but busy. */
+  compactionActive?: boolean;
 };
 
 export type FallbackAttemptRecord = {
@@ -24,7 +37,10 @@ export type FallbackAttemptRecord = {
   model: string;
   reason: FailoverReason;
   status?: number;
+  code?: string;
   error?: string;
+  rateLimitRetriesExhausted?: number;
+  rateLimitResetAt?: number;
 };
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
@@ -37,6 +53,8 @@ export class FailoverError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly rawError?: string;
+  /** Controller-owned count exhaustion; zero means retries were disabled. Not a provider fact. */
+  readonly rateLimitRetriesExhausted?: number;
   // Preserve the provider fact before the message becomes user-facing copy.
   readonly requestSizeCeiling: boolean;
   readonly authProfileFailure?: { allInCooldown: boolean };
@@ -49,6 +67,8 @@ export class FailoverError extends Error {
   readonly timeout?: Pick<AgentRunTerminalOutcome, "timeoutPhase" | "providerStarted">;
   readonly attempts?: readonly FallbackAttemptRecord[];
   readonly soonestCooldownExpiry?: number | null;
+  /** Absolute provider reset, preserved when diagnostics become user-facing text. */
+  readonly rateLimitResetAt?: number;
 
   constructor(
     message: string,
@@ -64,6 +84,7 @@ export class FailoverError extends Error {
     this.status = params.status;
     this.code = params.code;
     this.rawError = params.rawError;
+    this.rateLimitRetriesExhausted = params.rateLimitRetriesExhausted;
     this.requestSizeCeiling = isProviderRequestSizeCeilingError(params.rawError ?? message);
     this.authProfileFailure = params.authProfileFailure;
     this.sessionId = params.sessionId;
@@ -73,6 +94,20 @@ export class FailoverError extends Error {
     this.timeout = params.timeout;
     this.attempts = params.attempts;
     this.soonestCooldownExpiry = params.soonestCooldownExpiry;
+    this.rateLimitResetAt = params.rateLimitResetAt;
+  }
+}
+
+export function assertModelSupportsChat(
+  chat: boolean | undefined,
+  ref: { provider: string; model: string },
+): void {
+  if (chat === false) {
+    throw new FailoverError(MODEL_CHAT_UNSUPPORTED_TEXT, {
+      reason: "format",
+      code: "model_chat_unsupported",
+      ...ref,
+    });
   }
 }
 
@@ -102,6 +137,17 @@ export function findErrorProperty<T>(
   return (
     findErrorProperty(candidate.error, reader, seen) ??
     findErrorProperty(candidate.cause, reader, seen)
+  );
+}
+
+/** Preserve the producer's output decision through cancellation and cleanup wrappers. */
+export function isCliPartialOutputRejected(error: unknown): boolean {
+  return (
+    findErrorProperty(error, (candidate) =>
+      isFailoverError(candidate) && candidate.code === CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE
+        ? true
+        : undefined,
+    ) === true
   );
 }
 
@@ -142,12 +188,12 @@ export function readDirectErrorMessage(err: unknown): string | undefined {
     return String(err);
   }
   if (typeof err === "symbol") {
-    return err.description ?? undefined;
+    return err.description;
   }
   return readStringField(asOptionalObjectRecord(err), "message") || undefined;
 }
 
-export function getErrorMessage(err: unknown): string {
+function getErrorMessage(err: unknown): string {
   return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 
@@ -162,15 +208,11 @@ function hasTimeoutHint(err: unknown): boolean {
   return Boolean(message && isTimeoutErrorMessage(message));
 }
 
-/** Return true when an unknown error shape represents a timeout. */
 export function isTimeoutError(err: unknown): boolean {
   if (hasTimeoutHint(err)) {
     return true;
   }
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (readErrorName(err) !== "AbortError") {
+  if (!err || typeof err !== "object" || readErrorName(err) !== "AbortError") {
     return false;
   }
   const message = getErrorMessage(err);

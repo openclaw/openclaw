@@ -1,9 +1,18 @@
+import { statSync } from "node:fs";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
+import {
+  isConfiguredAgentDatabaseTarget,
+  resolveConfiguredAgentDatabaseCandidatePaths,
+  resolveConfiguredSessionStoreTargets,
+} from "../config/sessions/targets.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { hasNodeErrorCode } from "../infra/path-guards.js";
 import {
   discoverAgentDatabaseMigrationTargets,
   type PreparedAgentDatabaseMigrationDiscovery,
 } from "../infra/state-migrations.media-persistence-targets.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
 import { createAgentDatabaseDeletionClassifier } from "./agent-deletion-discovery.js";
 import type {
@@ -15,8 +24,64 @@ import {
   isPersistentOpenClawAgentDatabasePath,
 } from "./openclaw-agent-db.paths.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
+import type { OpenClawDatabasePreflightOptions } from "./openclaw-database-preflight.types.js";
 
 type AgentTarget = { agentId: string; path: string };
+
+export function selectAgentDatabaseInspectionTargets(
+  options: OpenClawDatabasePreflightOptions & { purpose: AgentDeletionJournalPurpose },
+  candidates: ReturnType<typeof collectAgentDatabasePreflightTargets>["candidates"],
+  configuredTargets: readonly AgentTarget[],
+) {
+  const admissionTargets =
+    options.agentAdmissionConfig &&
+    (options.purpose === "runtime" ||
+      options.requireStartupMigrationReadiness ||
+      options.reuseStartupSchemaPreparation)
+      ? [
+          ...configuredTargets,
+          ...(
+            options.configuredAgentDatabaseCandidatePaths ??
+            resolveConfiguredAgentDatabaseCandidatePaths(options.agentAdmissionConfig, {
+              env: options.env,
+            })
+          ).map((pathname) => ({ path: pathname })),
+        ]
+      : undefined;
+  const skipped = new Set<string>();
+  const inspectionTargets = candidates
+    .filter((row) => {
+      if (
+        !admissionTargets ||
+        isConfiguredAgentDatabaseTarget(admissionTargets, row.agentId, row.path)
+      ) {
+        return true;
+      }
+      if (options.requireStartupMigrationReadiness && !skipped.has(row.path)) {
+        createSubsystemLogger("state/agent-admission").warn(
+          `Skipped ${row.path}${row.agentId ? ` (agent ${row.agentId})` : ""}: database is not a configured target; run openclaw doctor to inspect retained data.`,
+        );
+        skipped.add(row.path);
+      }
+      return false;
+    })
+    .map((row) => Object.assign({}, row, { presence: inspectDatabaseCandidatePresence(row.path) }))
+    .filter((row) => row.presence.status !== "absent");
+  return { admissionTargets, inspectionTargets };
+}
+
+export function inspectDatabaseCandidatePresence(
+  databasePath: string,
+): { status: "present" | "absent" } | { status: "indeterminate"; reason: string } {
+  try {
+    statSync(databasePath);
+    return { status: "present" };
+  } catch (error) {
+    return hasNodeErrorCode(error, "ENOENT")
+      ? { status: "absent" }
+      : { status: "indeterminate", reason: formatErrorMessage(error) };
+  }
+}
 
 /** An inspected custom path supplies recovery ownership, never migration admission. */
 export function recordAgentDatabaseRecoveryInspection(
@@ -57,14 +122,20 @@ export function collectAgentDatabasePreflightTargets(options: {
     | readonly AgentTarget[]
     | ((registered: readonly AgentTarget[]) => readonly AgentTarget[]);
   configuredAgentDatabaseCandidatePaths?: readonly string[];
-  inspectCandidateOwners: boolean;
+  inspectHeldAgentDatabaseTargets?: readonly AgentTarget[];
+  requireStartupMigrationReadiness?: boolean;
+  agentAdmissionConfig?: OpenClawDatabasePreflightOptions["agentAdmissionConfig"];
   onAgentDatabaseDiscovery?: (prepared: PreparedAgentDatabaseMigrationDiscovery) => void;
 }) {
   const { registeredDatabases, deletionJournal, purpose } = options;
   const retainedDeletions = deletionJournal.status === "present" ? deletionJournal.entries : [];
   let agentTargets = registeredDatabases;
   let configuredTargets: readonly AgentTarget[] = [];
-  const retainedAgentIds = new Set(retainedDeletions.map((deletion) => deletion.agentId));
+  const retainedAgentIds = new Set(
+    retainedDeletions
+      .filter((deletion) => deletion.cleanupCompleted || deletion.manualTemplateRemoval)
+      .map((deletion) => deletion.agentId),
+  );
   const retainedPaths = new Set<string>();
   const failures: Array<{ path: string; reason: string }> = [];
   let preparedDiscovery: PreparedAgentDatabaseMigrationDiscovery | undefined;
@@ -89,7 +160,7 @@ export function collectAgentDatabasePreflightTargets(options: {
       registeredAgentDatabases: registeredDatabases,
       discovery,
     };
-    agentTargets = discovery.targets;
+    agentTargets = discovery.schemaTargets;
     for (const retained of [...discovery.retainedTargets, ...discovery.unverifiedTargets]) {
       retainedPaths.add(retained.realPath);
     }
@@ -97,10 +168,22 @@ export function collectAgentDatabasePreflightTargets(options: {
   }
   // An occupied custom-store candidate can have a newer, unreadable owner.
   // Check its version without promoting it into an owned migration target.
-  const candidates: Array<{ agentId?: string; path: string; holdForDeletionRecovery?: true }> = [
+  const candidates: Array<{
+    agentId?: string;
+    path: string;
+    holdForDeletionRecovery?: true;
+    held?: true;
+  }> = [
     // Migration deduplication must not discard configured ownership claims.
     ...configuredTargets,
     ...agentTargets,
+    ...(purpose === "runtime"
+      ? ((deletionJournal.status === "present"
+          ? deletionJournal.held
+          : deletionJournal.status === "unavailable"
+            ? deletionJournal.known?.held
+            : undefined) ?? [])
+      : []),
     // Migration discovery intentionally declines ownership of foreign registry
     // paths. Preflight remains read-only, so preserve their downgrade guard.
     ...(options.configuredAgentDatabaseTargets !== undefined
@@ -109,9 +192,10 @@ export function collectAgentDatabasePreflightTargets(options: {
         )
       : []),
     ...(options.configuredAgentDatabaseCandidatePaths ?? []).map((candidatePath) => ({
-      agentId: options.inspectCandidateOwners
-        ? resolveUnsuffixedSqliteTargetFromSessionStorePath(candidatePath).agentId
-        : undefined,
+      agentId:
+        options.requireStartupMigrationReadiness || options.agentAdmissionConfig
+          ? resolveUnsuffixedSqliteTargetFromSessionStorePath(candidatePath).agentId
+          : undefined,
       path: candidatePath,
     })),
   ];
@@ -123,32 +207,61 @@ export function collectAgentDatabasePreflightTargets(options: {
     configuredAgentDatabaseTargets: configuredTargets,
     registeredAgentDatabases: registeredDatabases,
   });
+  if (purpose === "runtime" && options.agentAdmissionConfig) {
+    for (const target of resolveConfiguredSessionStoreTargets(
+      options.agentAdmissionConfig,
+      options.env,
+    )) {
+      const pathname = resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path;
+      if (classifyDeletion(pathname, target.agentId) === "held") {
+        candidates.push({ agentId: target.agentId, path: pathname, held: true });
+      }
+    }
+  }
   return {
+    configuredTargets,
     candidates:
       purpose === "runtime"
-        ? candidates.filter((row) => typeof classifyDeletion(row.path, row.agentId) !== "object")
+        ? candidates.flatMap((row) => {
+            const disposition = classifyDeletion(row.path, row.agentId);
+            return disposition === "held"
+              ? [{ ...row, held: true as const }]
+              : typeof disposition === "object"
+                ? []
+                : [row];
+          })
         : deletionJournal.status === "unavailable"
           ? preparedDiscovery && options.onAgentDatabaseDiscovery
             ? (options.configuredAgentDatabaseCandidatePaths ?? [])
                 .filter((pathname) => !retained.some((candidate) => samePath(candidate, pathname)))
-                .map((pathname) => ({
+                .map((pathname): (typeof candidates)[number] => ({
                   agentId: undefined,
                   path: pathname,
                   holdForDeletionRecovery: true as const,
                 }))
             : []
-          : candidates.filter(
-              (row) =>
-                (row.agentId === undefined || !retainedAgentIds.has(row.agentId)) &&
-                !(
-                  deletionJournal.status === "present" &&
-                  deletionJournal.held.some((target) => samePath(target.path, row.path))
-                ),
-            ),
-    isRetainedPath: (pathname: string) =>
-      purpose === "runtime"
-        ? typeof classifyDeletion(pathname) === "object"
-        : retained.some((candidate) => samePath(candidate, pathname)),
+          : candidates.filter((row) => {
+              if (
+                deletionJournal.status === "present" &&
+                deletionJournal.held.some((target) => samePath(target.path, row.path))
+              ) {
+                // Quarantine's retained tombstone must not hide a required hold
+                // from Doctor's final read-only verification.
+                return (
+                  options.inspectHeldAgentDatabaseTargets?.some(
+                    (target) => target.agentId === row.agentId && samePath(target.path, row.path),
+                  ) === true
+                );
+              }
+              return row.agentId === undefined || !retainedAgentIds.has(row.agentId);
+            }),
+    isRetainedPath: (pathname: string) => {
+      if (purpose === "runtime") {
+        const disposition = classifyDeletion(pathname);
+        return disposition === "held" || typeof disposition === "object";
+      }
+      return retained.some((candidate) => samePath(candidate, pathname));
+    },
     failures,
     preparedDiscovery,
   };

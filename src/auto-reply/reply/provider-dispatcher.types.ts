@@ -1,4 +1,3 @@
-// Shared provider dispatch type contracts for reply runtime execution.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
@@ -11,7 +10,7 @@ import type { GetReplyFromConfig } from "./get-reply.types.js";
 import type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
-} from "./reply-dispatcher.js";
+} from "./reply-dispatcher.types.js";
 
 type DispatchReplyContext = MsgContext | FinalizedMsgContext;
 type DispatchReplyOptions = Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &

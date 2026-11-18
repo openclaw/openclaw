@@ -9,7 +9,7 @@ scenario:
   objective: Preserve HTML and Markdown formatting around atomic rich text through native Telegram sends and edits.
   successCriteria:
     - Full TDLib rich-message trees retain styled HTML links in details, lists, and quotes.
-    - Markdown links and spoilers retain mathematical expressions and custom emoji as wrapped atoms.
+    - Markdown links and spoilers retain mathematical expressions as wrapped atoms.
     - Transcript headers remain standalone fixed-width text outside HTML link and bold wrappers.
     - Escaped tags and image alternatives stay literal; tag-shaped Markdown links do not activate HTML.
     - Unsupported HTML ancestors stay literal across Markdown block boundaries.
@@ -37,7 +37,7 @@ scenario:
     isolationReason: Rich-message account configuration and native message revisions belong to this leased DM.
     transportPolicy:
       directMessageOnly: true
-    summary: Send eleven synthetic formatting cases through the Gateway and edit one through the normal CLI; inspect full TDLib trees from the leased Test Server DM. This proves direct operator delivery, not model generation. The CLI harness and package candidate must contain the same reviewed renderer.
+    summary: Send nine synthetic formatting cases and edit one through the Gateway action boundary; inspect full TDLib trees from the leased Test Server DM. This proves direct operator delivery, not model generation.
     config:
       requiredProviderMode: mock-openai
       requiredChannelDriver: live
@@ -76,13 +76,9 @@ flow:
                   { id: 'list', markdown: `<ul><li>${link}</li></ul>`, pattern: { '@type': 'pageBlockList', items: [{ blocks: [linkBlock] }] } },
                   { id: 'quote', markdown: `<blockquote>${link}</blockquote>`, pattern: { '@type': 'pageBlockBlockQuote', blocks: [linkBlock] } }
                 ];
-                for (const [id, html, atom] of [
-                  ['math', '<tg-math>x</tg-math>', { '@type': 'richTextMathematicalExpression', expression: 'x' }],
-                  ['emoji', '<tg-emoji emoji-id="4929292553544531969">👋</tg-emoji>', { '@type': 'richTextCustomEmoji', custom_emoji_id: '4929292553544531969', alternative_text: '👋' }]
-                ]) {
-                  fixtures.push({ id: `${id}-link`, markdown: `[${html}](https://example.com/qa)`, pattern: url(atom) });
-                  fixtures.push({ id: `${id}-spoiler`, markdown: `||${html}||`, pattern: wrap('richTextSpoiler', atom) });
-                }
+                const math = { '@type': 'richTextMathematicalExpression', expression: 'x' };
+                fixtures.push({ id: 'math-link', markdown: '[<tg-math>x</tg-math>](https://example.com/qa)', pattern: url(math) });
+                fixtures.push({ id: 'math-spoiler', markdown: '||<tg-math>x</tg-math>||', pattern: wrap('richTextSpoiler', math) });
                 for (const [id, open, close, trailing] of [
                   ['annotation-link', '<a href="https://example.com/qa">', '</a>', url(plain(' trailing'))],
                   ['annotation-bold', '<b>', '</b>', wrap('richTextBold', plain(' trailing'))]
@@ -129,7 +125,7 @@ flow:
           value: []
         - set: failures
           value: []
-        - set: editCliCompleted
+        - set: editCompleted
           value: false
         - set: editVerified
           value: false
@@ -143,7 +139,7 @@ flow:
                   const { publishQaSuiteArtifactFiles } = await qaImport('./suite-artifacts.js');
                   const { redactQaGatewayDebugText } = await qaImport('./gateway-log-redaction.js');
                   // Export only this run's synthetic formatting, never observer/account metadata.
-                  const fields = new Set(['@type', 'blocks', 'is_full', 'is_rtl', 'text', 'texts', 'header', 'items', 'label', 'caption', 'credit', 'url', 'is_cached', 'expression', 'custom_emoji_id', 'alternative_text', 'is_open']);
+                  const fields = new Set(['@type', 'blocks', 'is_full', 'is_rtl', 'text', 'texts', 'header', 'items', 'label', 'caption', 'credit', 'url', 'is_cached', 'expression', 'is_open']);
                   // Diagnostic limits never affect the complete trees used by assertions.
                   const tree = value => {
                     const json = JSON.stringify(value, function (key, child) { return key === '' || Array.isArray(this) || fields.has(key) ? child : undefined; });
@@ -173,10 +169,10 @@ flow:
                   }
                   const artifact = {
                     transport: 'Telegram Test Server', topology: 'leased DM', scenarioInvokesModel: false,
-                    receipts: vars.receipts.slice(0, 11).map((receipt, index) => ({ case: receipt.case, label: `message-${index + 1}` })),
-                    cases: vars.proofs.slice(0, 11).map(proof => ({ case: proof.case, label: proof.label, accountMessageIdsDiffer: proof.accountMessageIdsDiffer, richMessage: tree(proof.richMessage) })),
+                    receipts: vars.receipts.slice(0, fixtures.length).map((receipt, index) => ({ case: receipt.case, label: `message-${index + 1}` })),
+                    cases: vars.proofs.slice(0, fixtures.length).map(proof => ({ case: proof.case, label: proof.label, accountMessageIdsDiffer: proof.accountMessageIdsDiffer, richMessage: tree(proof.richMessage) })),
                     failures: vars.failures.map(failure => ({ case: failure.case, label: failure.label, contentType: failure.contentType, full: failure.full, matchesPattern: failure.matchesPattern, richMessage: tree(failure.richMessage) })),
-                    edit: { completedWithBotReceipt: vars.editCliCompleted, verified: vars.editVerified },
+                    edit: { completedWithBotReceipt: vars.editCompleted, verified: vars.editVerified },
                     candidates, unmatched: { count: unmatchedCount, contentTypes: [...unmatchedTypes] }
                   };
                   const content = redactQaGatewayDebugText(JSON.stringify(artifact).replaceAll(runId, 'run'));
@@ -243,13 +239,23 @@ flow:
               - set: editMarker
                 value:
                   expr: "`QA-RICH-${runId}-edit-END`"
-              - call: runQaCli
+              - call: env.gateway.call
                 args:
-                  - ref: env
-                  - expr: "['message', 'edit', '--channel', 'telegram', '--account', transport.accountId, '--target', delivery.to, '--message-id', String(editTarget.botMessageId), '--message', `${fixtures[1].markdown}\n\n${editMarker}`, '--json']"
+                  - message.action
+                  - channel: telegram
+                    accountId: { ref: transport.accountId }
+                    action: edit
+                    conversationReadOrigin: direct-operator
+                    params:
+                      chatId: { ref: delivery.to }
+                      messageId:
+                        expr: "Number(editTarget.botMessageId)"
+                      content:
+                        expr: "`${fixtures[1].markdown}\n\n${editMarker}`"
+                    idempotencyKey:
+                      expr: "`${runId}:edit`"
                   - timeoutMs: 60000
-                    json: true
-              - set: editCliCompleted
+              - set: editCompleted
                 value: true
               - call: waitForCondition
                 saveAs: edited

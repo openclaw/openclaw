@@ -1,30 +1,26 @@
-/**
- * Browser route context factory that wires profile-scoped runtime operations for
- * the Browser control server.
- */
-import {
-  resolveCdpControlPolicy,
-  resolveCdpReachabilityPolicy,
-} from "./cdp-reachability-policy.js";
+import fs from "node:fs";
+import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
 import { redactCdpUrl } from "./cdp.helpers.js";
-import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
+import { resolveOpenClawUserDataDir } from "./chrome.js";
 import { getOwnBrowserProfile, resolveProfile, type ResolvedBrowserProfile } from "./config.js";
 import {
   BrowserProfileNotFoundError,
   BrowserProfileUnavailableError,
+  BrowserResetUnsupportedError,
   toBrowserErrorResponse,
 } from "./errors.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
 import { refreshResolvedBrowserConfigFromDisk } from "./resolved-config-refresh.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import {
+  assertProfileLifecycleContext,
+  beginProfileTransition,
   getProfileLifecycle,
   getOrCreateProfileRuntime,
   isBrowserRuntimeRunning,
   withProfileOperationLease,
 } from "./server-context.lifecycle.js";
-import { createProfileResetOps } from "./server-context.reset.js";
 import { createProfileSelectionOps } from "./server-context.selection.js";
 import { createProfileTabOps } from "./server-context.tab-ops.js";
 import type {
@@ -35,12 +31,12 @@ import type {
   ProfileRuntimeState,
   ProfileStatus,
 } from "./server-context.types.js";
+import { movePathToTrash } from "./trash.js";
 
 export type {
   BrowserRouteContext,
   BrowserServerState,
   ProfileContext,
-  ProfileStatus,
 } from "./server-context.types.js";
 
 type ProfileOperationRunner = <T>(
@@ -76,12 +72,9 @@ export function withProfileContextOperation<T>(
     const directSignal = signal ?? new AbortController().signal;
     return run(directSignal);
   }
-  return runner(signal, async (leasedSignal) => await run(leasedSignal));
+  return runner(signal, run);
 }
 
-/**
- * Create a profile-scoped context for browser operations.
- */
 function createProfileContext(
   opts: ContextOptions,
   runtimeState: BrowserServerState,
@@ -96,8 +89,6 @@ function createProfileContext(
     return runtimeState;
   };
 
-  const configRevision = getProfileLifecycle(profileState).configRevision;
-
   const rawTabOps = createProfileTabOps({
     profile,
     state,
@@ -109,7 +100,6 @@ function createProfileContext(
     profile,
     state,
     runtime: profileState,
-    configRevision,
   });
 
   const rawSelection = createProfileSelectionOps({
@@ -119,14 +109,7 @@ function createProfileContext(
     listTabs: rawTabOps.listTabs,
     openTab: rawTabOps.openTab,
   });
-
-  const rawReset = createProfileResetOps({
-    profile,
-    state,
-    runtime: profileState,
-    configRevision,
-    resolveOpenClawUserDataDir,
-  });
+  const capabilities = getBrowserProfileCapabilities(profile);
 
   const withLease = async <T>(
     callerSignal: AbortSignal | undefined,
@@ -136,7 +119,6 @@ function createProfileContext(
     await withProfileOperationLease({
       state: state(),
       runtime: profileState,
-      configRevision,
       signal: callerSignal,
       run: async (lifecycleSignal) => await run(lifecycleSignal, profileState),
       commit: options?.commit,
@@ -161,54 +143,62 @@ function createProfileContext(
         return await rawSelection.ensureTabAvailable(targetId, { ...options, signal });
       });
     },
-    isHttpReachable: async (timeoutMs, callerSignal) =>
-      await withLease(
-        callerSignal,
-        async (signal) => await rawAvailability.isHttpReachable(timeoutMs, signal),
+    isHttpReachable: (timeoutMs, callerSignal) =>
+      withLease(callerSignal, (signal) => rawAvailability.isHttpReachable(timeoutMs, signal)),
+    isTransportAvailable: (timeoutMs, callerSignal, pageProbe) =>
+      withLease(callerSignal, (signal) =>
+        rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
       ),
-    isTransportAvailable: async (timeoutMs, callerSignal, pageProbe) =>
-      await withLease(
-        callerSignal,
-        async (signal) => await rawAvailability.isTransportAvailable(timeoutMs, signal, pageProbe),
+    isReachable: (timeoutMs, options) =>
+      withLease(options?.signal, (signal) =>
+        rawAvailability.isReachable(timeoutMs, { ...options, signal }),
       ),
-    isReachable: async (timeoutMs, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawAvailability.isReachable(timeoutMs, { ...options, signal }),
+    listTabs: (options) =>
+      withLease(options?.signal, (signal) => rawTabOps.listTabs({ ...options, signal })),
+    openTab: (url, options) =>
+      withLease(options?.signal, (signal) => rawTabOps.openTab(url, { ...options, signal })),
+    labelTab: (targetId, label) =>
+      withLease(undefined, (signal) => rawTabOps.labelTab(targetId, label, { signal })),
+    focusTab: (targetId, options) =>
+      withLease(options?.signal, (signal) =>
+        rawSelection.focusTab(targetId, { ...options, signal }),
       ),
-    listTabs: async (options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawTabOps.listTabs({ ...options, signal }),
-      ),
-    openTab: async (url, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawTabOps.openTab(url, { ...options, signal }),
-      ),
-    labelTab: async (targetId, label) =>
-      await withLease(
-        undefined,
-        async (signal) => await rawTabOps.labelTab(targetId, label, { signal }),
-      ),
-    focusTab: async (targetId, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawSelection.focusTab(targetId, { ...options, signal }),
-      ),
-    closeTab: async (targetId, options) =>
-      await withLease(
-        options?.signal,
-        async (signal) => await rawSelection.closeTab(targetId, { ...options, signal }),
+    closeTab: (targetId, options) =>
+      withLease(options?.signal, (signal) =>
+        rawSelection.closeTab(targetId, { ...options, signal }),
       ),
     stopRunningBrowser,
-    resetProfile: rawReset.resetProfile,
+    resetProfile: async () => {
+      if (!capabilities.supportsReset) {
+        throw new BrowserResetUnsupportedError(
+          `reset-profile is only supported for local profiles (profile "${profile.name}" is remote).`,
+        );
+      }
+      const userDataDir = resolveOpenClawUserDataDir(profile.name);
+      assertProfileLifecycleContext({ state: state(), runtime: profileState });
+      profileState.managedLaunchFailure = undefined;
+      let result: Awaited<ReturnType<ProfileContext["resetProfile"]>> = {
+        moved: false,
+        from: userDataDir,
+      };
+      await beginProfileTransition({
+        state: state(),
+        runtime: profileState,
+        reason: "profile reset requested",
+        managedChrome: "release-profile-data",
+        afterCleanup: async () => {
+          if (fs.existsSync(userDataDir)) {
+            result = { moved: true, from: userDataDir, to: await movePathToTrash(userDataDir) };
+          }
+        },
+      });
+      return result;
+    },
   };
   profileOperationRunners.set(context, withLease);
   return context;
 }
 
-/** Creates the Browser route context used by control-server route handlers. */
 export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteContext {
   const refreshConfigFromDisk = opts.refreshConfigFromDisk === true;
 
@@ -251,86 +241,46 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         continue;
       }
       profileState ??= getOrCreateProfileRuntime(current, profile);
-      let statusProfile = profile;
+      let statusProfile = profileState.profile;
       let unavailableReason: string | null = null;
-      let running = false;
-      let tabCount = 0;
+      let running: boolean;
+      let tabCount: number;
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
+      const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
+      try {
+        const snapshot = await runProfileContextOperation(
+          profileCtx,
+          undefined,
+          async (signal, runtime) => {
+            const activeProfile = runtime.profile;
+            let activeTabCount = 0;
+            const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+              profileIsLoopback: activeProfile.cdpIsLoopback,
+              attachOnly: activeProfile.attachOnly,
+            })
+              ? 200
+              : current.resolved.remoteCdpTimeoutMs;
+            const activeRunning = await profileCtx
+              .isTransportAvailable(probeTimeoutMs, signal, {
+                onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
+              })
+              .catch(() => false);
+            signal.throwIfAborted();
+            return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
+          },
+        );
+        statusProfile = snapshot.profile;
+        running = snapshot.running;
+        tabCount = snapshot.tabCount;
+      } catch (err) {
         statusProfile = profileState.profile;
-        const profileCtx = createProfileContext(opts, current, profileState, statusProfile);
-        try {
-          const snapshot = await runProfileContextOperation(
-            profileCtx,
-            undefined,
-            async (signal, runtime) => {
-              const activeProfile = runtime.profile;
-              const capabilities = getBrowserProfileCapabilities(activeProfile);
-              let activeRunning: boolean;
-              let activeTabCount = 0;
-
-              if (capabilities.usesChromeMcp) {
-                try {
-                  activeRunning = await profileCtx.isTransportAvailable(300, signal, {
-                    onResult: (observedTabCount) => (activeTabCount = observedTabCount ?? 0),
-                  });
-                } catch {
-                  activeRunning = false;
-                }
-              } else if (runtime.running) {
-                activeRunning = true;
-                try {
-                  const tabs = await profileCtx.listTabs({ signal });
-                  activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-                } catch {
-                  // Browser might not be responsive.
-                }
-              } else {
-                try {
-                  const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
-                    profileIsLoopback: activeProfile.cdpIsLoopback,
-                    attachOnly: activeProfile.attachOnly,
-                  })
-                    ? 200
-                    : current.resolved.remoteCdpTimeoutMs;
-                  activeRunning =
-                    capabilities.mode === "local-extension"
-                      ? await profileCtx.isTransportAvailable(probeTimeoutMs, signal)
-                      : await isChromeReachable(
-                          activeProfile.cdpUrl,
-                          probeTimeoutMs,
-                          resolveCdpReachabilityPolicy(activeProfile, current.resolved.ssrfPolicy),
-                          signal,
-                        );
-                  if (activeRunning) {
-                    const tabs = await profileCtx.listTabs({ signal }).catch(() => []);
-                    activeTabCount = tabs.filter((tab) => tab.type === "page").length;
-                  }
-                } catch {
-                  activeRunning = false;
-                }
-              }
-              signal.throwIfAborted();
-              return { profile: activeProfile, running: activeRunning, tabCount: activeTabCount };
-            },
-          );
-          statusProfile = snapshot.profile;
-          running = snapshot.running;
-          tabCount = snapshot.tabCount;
-          break;
-        } catch (err) {
-          if (attempt === 0) {
-            continue;
-          }
-          statusProfile = profileState.profile;
-          const actor = getProfileLifecycle(profileState);
-          unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
-          if (!unavailableReason && !toBrowserErrorResponse(err)) {
-            throw err;
-          }
-          running = Boolean(profileState.running);
-          tabCount = 0;
+        const actor = getProfileLifecycle(profileState);
+        unavailableReason = actor.blockedReason ?? actor.transitionReason ?? actor.terminal;
+        if (!unavailableReason && !toBrowserErrorResponse(err)) {
+          throw err;
         }
+        running = Boolean(profileState.running);
+        tabCount = 0;
       }
 
       const capabilities = getBrowserProfileCapabilities(statusProfile);
@@ -362,20 +312,5 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     state,
     forProfile,
     listProfiles,
-    // Legacy methods delegate to default profile
-    ensureBrowserAvailable: (options) => forProfile().ensureBrowserAvailable(options),
-    ensureTabAvailable: (targetId, options) => forProfile().ensureTabAvailable(targetId, options),
-    isHttpReachable: (timeoutMs, signal) => forProfile().isHttpReachable(timeoutMs, signal),
-    isTransportAvailable: (timeoutMs, signal, pageProbe) =>
-      forProfile().isTransportAvailable(timeoutMs, signal, pageProbe),
-    isReachable: (timeoutMs, options) => forProfile().isReachable(timeoutMs, options),
-    listTabs: (options) => forProfile().listTabs(options),
-    openTab: (url, optsLocal) => forProfile().openTab(url, optsLocal),
-    labelTab: (targetId, label) => forProfile().labelTab(targetId, label),
-    focusTab: (targetId, options) => forProfile().focusTab(targetId, options),
-    closeTab: (targetId, options) => forProfile().closeTab(targetId, options),
-    stopRunningBrowser: () => forProfile().stopRunningBrowser(),
-    resetProfile: () => forProfile().resetProfile(),
-    mapTabError: toBrowserErrorResponse,
   };
 }

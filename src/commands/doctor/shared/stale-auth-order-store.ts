@@ -21,20 +21,17 @@ import {
 } from "../../doctor-auth-legacy-paths.js";
 
 function inspectAuthPath(pathname: string): "present" | "missing" | "unreadable" {
-  try {
-    fs.statSync(pathname);
-    return "present";
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      return "unreadable";
-    }
-  }
-  try {
-    fs.lstatSync(pathname);
-    return "unreadable";
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      return "unreadable";
+  for (const [inspect, outcome] of [
+    [fs.statSync, "present"],
+    [fs.lstatSync, "unreadable"],
+  ] as const) {
+    try {
+      inspect(pathname);
+      return outcome;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        return "unreadable";
+      }
     }
   }
 
@@ -87,10 +84,7 @@ export function inspectAuthDatabaseFiles(agentDir: string): "present" | "missing
   }
   const availability = inspectAuthPath(databasePath);
   const sidecarAvailability = sidecarPaths.map((pathname) => inspectAuthPath(pathname));
-  if (
-    availability === "unreadable" ||
-    sidecarAvailability.some((status) => status === "unreadable")
-  ) {
+  if (availability === "unreadable" || sidecarAvailability.includes("unreadable")) {
     return "unreadable";
   }
   if (availability === "present") {

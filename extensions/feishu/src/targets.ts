@@ -1,4 +1,3 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FeishuIdType } from "./types.js";
 
 const CHAT_ID_PREFIX = "oc_";
@@ -36,7 +35,7 @@ export function normalizeFeishuTarget(raw: string): string | null {
 
 export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_id" {
   const trimmed = id.trim();
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
+  const lowered = trimmed.toLowerCase();
   if (
     lowered.startsWith("chat:") ||
     lowered.startsWith("group:") ||
@@ -62,9 +61,6 @@ export function resolveReceiveIdType(id: string): "chat_id" | "open_id" | "user_
 
 export function looksLikeFeishuId(raw: string): boolean {
   const trimmed = stripFeishuProviderPrefix(raw.trim());
-  if (!trimmed) {
-    return false;
-  }
   if (/^(chat|group|channel|user|dm|open_id):/i.test(trimmed)) {
     return true;
   }

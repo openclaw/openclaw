@@ -1,4 +1,3 @@
-// Defines channel heartbeat and health visibility configuration types.
 import type { z } from "zod";
 import type {
   ChannelHealthMonitorSchema,

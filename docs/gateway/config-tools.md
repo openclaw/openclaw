@@ -14,7 +14,7 @@ sidebarTitle: "Tools and custom providers"
 
 - [Configuration — tool policy](/gateway/config-tools/tool-policy) — tool profiles, tool groups, the sandbox tool gate, `tools.codeMode`, and the `allow`/`deny`, `byProvider`, `toolsBySender`, and `elevated` layers.
 - [Configuration — GitHub identity for agent tools](/gateway/config-tools/github-identity) — `tools.github`: the shared managed `gh` identity, token refresh, and the execution boundaries that receive it.
-- [Configuration — built-in tool settings](/gateway/config-tools/built-in-tools) — `tools.exec`, `tools.loopDetection`, `tools.web`, `tools.media`, and `tools.updatePlan`.
+- [Configuration — built-in tool settings](/gateway/config-tools/built-in-tools) — `tools.exec`, `tools.openclaw` delegation approvals, `tools.loopDetection`, `tools.web`, `tools.media`, and `tools.updatePlan`.
 - [Configuration — cross-agent, session, and subagent tools](/gateway/config-tools/sessions-and-subagents) — `tools.agentToAgent`, `tools.sessions` visibility, `tools.sessions_spawn` attachments, and `agents.defaults.subagents`.
 - [Configuration — custom providers and base URLs](/gateway/config-tools/custom-providers) — `models.providers` registration, base-URL trust, and the provider field reference.
 - [Configuration — provider examples](/gateway/config-tools/provider-examples) — worked configurations for Cerebras, Kimi, llama.cpp, LM Studio, MiniMax, Moonshot, OpenCode, Synthetic, and Z.AI.
@@ -57,7 +57,7 @@ entry points at the page that now holds the content.
 - <a id="custom-provider-capability-declarations" />[Custom provider capability declarations](/gateway/config-tools/custom-providers#custom-provider-capability-declarations)
 - <a id="amazon-bedrock-discovery" />[Amazon Bedrock discovery](/gateway/config-tools/custom-providers#amazon-bedrock-discovery)
 - <a id="provider-examples" />[Provider examples](/gateway/config-tools/provider-examples#provider-examples)
-- <a id="cerebras-glm-4-7-gpt-oss" />[Cerebras (GLM 4.7 / GPT OSS)](/gateway/config-tools/provider-examples#cerebras-glm-4-7-gpt-oss)
+- <a id="cerebras-glm-4-7-gpt-oss" />[Cerebras (GPT OSS)](/gateway/config-tools/provider-examples#cerebras-gpt-oss)
 - <a id="kimi-coding" />[Kimi Coding](/gateway/config-tools/provider-examples#kimi-coding)
 - <a id="local-models-llama-cpp-llama-server" />[Local models (llama.cpp / llama-server)](/gateway/config-tools/provider-examples#local-models-llama-cpp-llama-server)
 - <a id="local-models-lm-studio" />[Local models (LM Studio)](/gateway/config-tools/provider-examples#local-models-lm-studio)

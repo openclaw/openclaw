@@ -142,6 +142,36 @@ for (const [field, allowed, assign] of [
   });
 }
 
+test("preserves type short-circuiting and mixed enum diagnostic order", (t) => {
+  const f = fixture(t);
+  f.review.nitSweep = { performed: true, status: false, summary: "No nits." };
+  f.review.issueValidation.source = "unknown";
+  f.review.behavioralSweep.silentDropRisk = 0;
+  f.review.docs = "unknown";
+  const result = f.validate();
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.stdout.trimEnd().split("\n"), [
+    "Invalid nit sweep status in .local/review.json: nitSweep.status must be a string",
+    'Invalid issue validation source in .local/review.json: issueValidation.source="unknown" (allowed: linked_issue|pr_body|both)',
+    "Invalid behavioral sweep risk in .local/review.json: behavioralSweep.silentDropRisk must be a string",
+    'Invalid docs status in .local/review.json: docs="unknown" (allowed: up_to_date|missing|not_applicable)',
+    "4 artifact violations",
+  ]);
+});
+
+test("a partial nit sweep on a fresh template names how to fix it", (t) => {
+  const f = fixture(t);
+  f.review.nitSweep = { performed: true, status: "none" };
+  const result = f.validate();
+  assert.equal(result.status, 1);
+  assert.deepEqual(result.stdout.trimEnd().split("\n"), [
+    'Invalid nit sweep summary in .local/review.json: nitSweep.summary must be a non-empty string describing the sweep result (for example "No nits."); remove nitSweep if no nit sweep was performed',
+    "1 artifact violations",
+  ]);
+  delete f.review.nitSweep;
+  assert.equal(f.validate().status, 0);
+});
+
 test("empty required summaries and missing finding severity remain invalid", (t) => {
   const f = fixture(t);
   f.review.issueValidation.summary = "";
@@ -212,6 +242,108 @@ test("substantive findings and runtime proof still gate READY", (t) => {
   assert.equal(f.validate().status, 1);
   f.review.tests.result = "fail";
   assert.match(f.validate().stdout, /passing tests/);
+});
+
+test("investigated local failures retain failed proof and gate READY on complete evidence", (t) => {
+  const f = fixture(t, true);
+  f.review.recommendation = "READY FOR /prepare-pr";
+  Object.assign(f.review.issueValidation, { performed: true, status: "valid" });
+  Object.assign(f.review.behavioralSweep, {
+    performed: true,
+    status: "pass",
+    silentDropRisk: "none",
+    branches: [{ path: "src/example.ts", decision: "empty input", outcome: "explicit error" }],
+  });
+  f.review.tests = {
+    result: "fail",
+    ran: ["original live command failed; one diagnostic replay passed"],
+    gaps: ["The original failure remains unexplained."],
+    investigatedLocalFailures: {
+      head,
+      failures: [
+        {
+          failure: "The unchanged live command returned an incomplete reply.",
+          reproductionAttempts: ["One same-head diagnostic replay returned the complete reply."],
+          evidence: ["Original failure log and replay trace in the PR."],
+          remainingUncertainty: "The replay did not establish a cause or prove a fix.",
+        },
+      ],
+    },
+  };
+  const accepted = f.validate();
+  assert.equal(accepted.status, 0, accepted.stdout + accepted.stderr);
+  const rendered = cli("render", f.reviewPath);
+  assert.equal(rendered.status, 0);
+  assert.match(rendered.stdout, /Tests: fail/);
+  assert.match(rendered.stdout, /Unresolved local test failures/);
+  assert.ok(rendered.stdout.includes(head));
+  const failure = f.review.tests.investigatedLocalFailures.failures[0];
+  for (const text of [
+    failure.failure,
+    ...failure.reproductionAttempts,
+    ...failure.evidence,
+    failure.remainingUncertainty,
+  ]) {
+    assert.ok(rendered.stdout.includes(text), rendered.stdout);
+  }
+
+  const valid = structuredClone(f.review);
+  for (const mutate of [
+    (review) => {
+      review.tests.result = "pass";
+    },
+    (review) => {
+      review.tests.result = "not_run";
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.head = "c".repeat(40);
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures = null;
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures = [];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures = [null];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].failure = " ";
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].reproductionAttempts = [];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].reproductionAttempts = [""];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].evidence = [];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].evidence = [""];
+    },
+    (review) => {
+      review.tests.investigatedLocalFailures.failures[0].remainingUncertainty = " ";
+    },
+  ]) {
+    Object.assign(f.review, structuredClone(valid));
+    mutate(f.review);
+    const rejected = f.validate();
+    assert.equal(rejected.status, 1, rejected.stdout + rejected.stderr);
+    assert.match(rejected.stdout, /Invalid investigated local failures/);
+  }
+  Object.assign(f.review, structuredClone(valid));
+  f.review.findings.push({
+    id: "F1",
+    severity: "IMPORTANT",
+    title: "Regression",
+    area: "input",
+    fix: "Handle input",
+  });
+  assert.match(f.validate().stdout, /cannot include BLOCKER or IMPORTANT findings/);
+  f.review.findings = [];
+  f.review.behavioralSweep.status = "needs_work";
+  assert.match(f.validate().stdout, /requires behavioralSweep.status/);
 });
 
 test(
@@ -475,10 +607,14 @@ test(
     writeFileSync(
       selectedGit,
       `#!/bin/sh
-if [ "$1" = diff ] && [ "$2" = --name-only ]; then
-  printf 'docs/partial.md\\0'
-  echo 'fixture changed-path failure' >&2
-  exit 73
+if [ "$1" = diff ]; then
+  for arg in "$@"; do
+    if [ "$arg" = --name-only ]; then
+      printf 'docs/partial.md\\0'
+      echo 'fixture changed-path failure' >&2
+      exit 73
+    fi
+  done
 fi
 exec git "$@"
 `,

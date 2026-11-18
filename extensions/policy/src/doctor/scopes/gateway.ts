@@ -1,62 +1,13 @@
-// Policy doctor checks and findings for gateway exposure policy.
-import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
-import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import type { PolicyEvidence, PolicyGatewayExposureEvidence } from "../../policy-state-types.js";
-import { repairPolicyAutomaticNarrower } from "../automatic-repairs.js";
-import { createPolicyScopedChecks } from "../check-factory.js";
+import { getPolicyPath } from "../../policy-value.js";
 import { CHECK_IDS } from "../check-ids.js";
-import { policyEvidenceFinding } from "../policy-evidence-finding.js";
-import { previewPolicyReviewRequiredRepair } from "../review-required-repairs.js";
-import type { PolicyDoctorCheckDeps } from "../types.js";
+import {
+  policyEvidenceFinding,
+  policyEvidenceRuleFindings,
+  type PolicyEvidenceRule,
+} from "../policy-evidence-finding.js";
 import { readPolicyBoolean, readStringList } from "../utils.js";
-
-export function createPolicyGatewayChecks(deps: PolicyDoctorCheckDeps): readonly HealthCheck[] {
-  return createPolicyScopedChecks(deps, [
-    [
-      CHECK_IDS.policyGatewayNonLoopbackBind,
-      "Gateway bind posture matches policy exposure requirements.",
-      (ctx, findings) =>
-        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNonLoopbackBind),
-    ],
-    [
-      CHECK_IDS.policyGatewayAuthDisabled,
-      "Gateway authentication remains enabled when required by policy.",
-    ],
-    [
-      CHECK_IDS.policyGatewayRateLimitMissing,
-      "Gateway authentication rate-limit posture is explicit when required by policy.",
-    ],
-    [
-      CHECK_IDS.policyGatewayControlUiInsecure,
-      "Gateway Control UI insecure exposure toggles remain disabled by policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayControlUiInsecure),
-    ],
-    [CHECK_IDS.policyGatewayTailscaleFunnel, "Gateway Tailscale Funnel exposure matches policy."],
-    [
-      CHECK_IDS.policyGatewayRemoteEnabled,
-      "Remote gateway mode matches policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayRemoteEnabled),
-    ],
-    [
-      CHECK_IDS.policyGatewayHttpEndpointEnabled,
-      "Gateway HTTP API endpoints match policy.",
-      (ctx, findings) =>
-        repairPolicyAutomaticNarrower(ctx, findings, CHECK_IDS.policyGatewayHttpEndpointEnabled),
-    ],
-    [
-      CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
-      "Gateway HTTP URL-fetch inputs have allowlists when required by policy.",
-    ],
-    [
-      CHECK_IDS.policyGatewayNodeCommandDenied,
-      "Gateway node command allowlists match policy.",
-      (ctx, findings) =>
-        previewPolicyReviewRequiredRepair(ctx, findings, CHECK_IDS.policyGatewayNodeCommandDenied),
-    ],
-  ]);
-}
 
 export function gatewayExposureFindings(
   policy: unknown,
@@ -120,29 +71,15 @@ export function gatewayExposureFindings(
       message: (entry) => `Gateway remote posture '${entry.id}' is enabled.`,
       fixHint: "Disable remote gateway mode/config or update policy after review.",
     },
-  ] satisfies readonly {
-    path: readonly string[];
-    enabled: boolean;
-    violates: (entry: PolicyGatewayExposureEvidence) => boolean;
-    checkId: Parameters<typeof policyEvidenceFinding>[1]["checkId"];
-    message: (entry: PolicyGatewayExposureEvidence) => string;
-    fixHint: string;
-  }[];
+  ] satisfies readonly (PolicyEvidenceRule<PolicyGatewayExposureEvidence> & { enabled: boolean })[];
   // Preserve the diagnostic order used by policy attestations.
   return [
-    ...rules.flatMap((rule) => {
-      if (readPolicyBoolean(policy, ["gateway", ...rule.path]) !== rule.enabled) {
-        return [];
-      }
-      return (evidence.gatewayExposure ?? []).filter(rule.violates).map((entry) =>
-        policyEvidenceFinding(entry, {
-          checkId: rule.checkId,
-          message: rule.message(entry),
-          requirement: `oc://${policyDocName}/gateway/${rule.path.join("/")}`,
-          fixHint: rule.fixHint,
-        }),
-      );
-    }),
+    ...policyEvidenceRuleFindings(
+      evidence.gatewayExposure ?? [],
+      rules.filter((rule) => readPolicyBoolean(policy, ["gateway", ...rule.path]) === rule.enabled),
+      policyDocName,
+      "gateway",
+    ),
     ...gatewayHttpEndpointFindings(policy, policyDocName, evidence),
     ...gatewayHttpUrlFetchFindings(policy, policyDocName, evidence),
     ...gatewayNodeCommandFindings(policy, policyDocName, evidence),
@@ -154,11 +91,7 @@ function gatewayHttpEndpointFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
-  const denied = new Set(
-    readStringList(policy, ["gateway", "http", "denyEndpoints"]).map((endpoint) =>
-      endpoint.toLowerCase(),
-    ),
-  );
+  const denied = new Set(readStringList(policy, ["gateway", "http", "denyEndpoints"]));
   if (denied.size === 0) {
     return [];
   }
@@ -234,13 +167,7 @@ function gatewayNodeCommandFindings(
 }
 
 function hasValidOptionalStringList(policy: unknown, path: readonly string[]): boolean {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return true;
-    }
-    current = current[part];
-  }
+  const current = getPolicyPath(policy, path);
   return (
     current === undefined ||
     (Array.isArray(current) &&

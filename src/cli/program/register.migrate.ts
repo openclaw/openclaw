@@ -1,5 +1,4 @@
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-// Migration command registration: list, plan, and apply migration providers.
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
@@ -14,7 +13,7 @@ import { inheritOptionFromParent } from "../command-options.js";
 import { formatHelpExamples } from "../help-format.js";
 import { collectOption } from "./helpers.js";
 
-function readMigrationOption<T>(command: Command, name: string, value: T): T {
+function readMigrationOption<T>(command: Command | undefined, name: string, value: T): T {
   return inheritOptionFromParent<T>(command, name) ?? value;
 }
 
@@ -60,7 +59,7 @@ function addMigrationOptions(command: Command): Command {
   return addVerifyPluginAppsOption(command);
 }
 
-function readSharedMigrationOptions(opts: Record<string, unknown>, command: Command) {
+function readSharedMigrationOptions(opts: Record<string, unknown>, command?: Command) {
   const agent = readMigrationOption(command, "agent", opts.agent);
   return {
     source: readMigrationOption(command, "from", opts.from as string | undefined),
@@ -94,7 +93,6 @@ function rejectUnsupportedApplyDryRun(command: Command): void {
   }
 }
 
-/** Register migration commands and shared provider/item selection flags. */
 export function registerMigrateCommand(program: Command) {
   const migrate = addMigrationSourceOptions(
     program
@@ -131,21 +129,12 @@ export function registerMigrateCommand(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await migrateDefaultCommand(defaultRuntime, {
           provider: provider as string | undefined,
-          source: opts.from as string | undefined,
-          targetAgentId: opts.agent as string | undefined,
-          includeSecrets: opts.includeSecrets === true ? true : undefined,
-          authCredentials: opts.authCredentials as boolean | undefined,
-          overwrite: Boolean(opts.overwrite),
-          skills: normalizeOptionalTrimmedStringList(opts.skill),
-          plugins: normalizeOptionalTrimmedStringList(opts.plugin),
-          itemIds: normalizeOptionalTrimmedStringList(opts.item),
-          verifyPluginApps: opts.verifyPluginApps === true,
+          ...readSharedMigrationOptions(opts),
           dryRun: Boolean(opts.dryRun),
           yes: Boolean(opts.yes),
           backupOutput: opts.backupOutput as string | undefined,
           noBackup: opts.backup === false,
           force: Boolean(opts.force),
-          json: Boolean(opts.json),
         });
       });
     });

@@ -59,7 +59,7 @@ export function createMissingSessionIndexVerifier(params: {
           readMigrationArtifactIdentity(sourcePath);
           const primary = readLegacyPrimaryTranscriptIdentity(sourcePath, sourcePath);
           if (!primary || !snapshot.snapshot.sessionKeysBySessionId.has(primary.sessionId)) {
-            throw new Error("Legacy transcript has no verified canonical owner");
+            throw new Error("Legacy transcript has no verified session owner");
           }
           return { path: sourcePath, sessionId: primary.sessionId };
         },
@@ -89,7 +89,7 @@ export function createMissingSessionIndexVerifier(params: {
       target.validatedTranscriptEvents = verified.events;
       target.issues.push({
         code: "legacy_index_informational",
-        message: `${target.storePath}: Canonical SQLite transcripts are complete. The legacy index source and archive are missing; legacy index entries are informational. No import is needed.`,
+        message: `${target.storePath}: Stored SQLite transcripts are complete. The legacy index source and archive are missing; legacy index entries are informational. No import is needed.`,
       });
       return true;
     } catch {

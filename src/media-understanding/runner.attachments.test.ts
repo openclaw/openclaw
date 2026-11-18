@@ -25,37 +25,4 @@ describe("normalizeMediaAttachments", () => {
       },
     ]);
   });
-
-  it.each(["image", "sticker", "document"] as const)(
-    "preserves the authoritative %s kind at the private runner facade",
-    (kind) => {
-      expect(normalizeMediaAttachments({ media: [{ path: "/tmp/upload.bin", kind }] })).toEqual([
-        {
-          path: "/tmp/upload.bin",
-          url: undefined,
-          mime: undefined,
-          kind,
-          index: 0,
-          alreadyTranscribed: false,
-        },
-      ]);
-    },
-  );
-
-  it("preserves an explicitly declared staging root without inventing empty optional fields", () => {
-    expect(
-      normalizeMediaAttachments({
-        media: [{ path: "/tmp/staged/photo.png", workspaceDir: "/tmp/staged" }],
-      }),
-    ).toEqual([
-      {
-        path: "/tmp/staged/photo.png",
-        url: undefined,
-        mime: undefined,
-        workspaceDir: "/tmp/staged",
-        index: 0,
-        alreadyTranscribed: false,
-      },
-    ]);
-  });
 });

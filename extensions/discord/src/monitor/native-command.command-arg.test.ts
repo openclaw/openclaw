@@ -1,12 +1,11 @@
 // Discord tests cover native command.command arg plugin behavior.
 import type { ChatCommandDefinition } from "openclaw/plugin-sdk/command-auth-native";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 import { createDiscordCommandArgFallbackButton } from "./native-command-arg-ui.js";
 import type { DispatchDiscordCommandInteraction } from "./native-command-dispatch.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
+import { nativeCommandContext } from "./native-command.dispatch.test-support.js";
 
 type CommandArgContext = Parameters<typeof createDiscordCommandArgFallbackButton>[0]["ctx"];
 type CommandArgButton = ReturnType<typeof createDiscordCommandArgFallbackButton>;
@@ -33,23 +32,6 @@ function createCommandDefinition(): ChatCommandDefinition {
   };
 }
 
-function createContext(
-  discordConfig: NonNullable<OpenClawConfig["channels"]>["discord"],
-): CommandArgContext {
-  const cfg = {
-    channels: {
-      discord: discordConfig,
-    },
-  } as OpenClawConfig;
-  return {
-    cfg,
-    discordConfig,
-    accountId: "default",
-    sessionPrefix: "discord:slash",
-    threadBindings: createNoopThreadBindingManager("default"),
-  };
-}
-
 function createInteraction(): CommandArgInteraction {
   return {
     user: {
@@ -63,14 +45,6 @@ function createInteraction(): CommandArgInteraction {
 
 async function safeInteractionCall<T>(_label: string, fn: () => Promise<T>): Promise<T | null> {
   return await fn();
-}
-
-function firstDispatchCall(dispatchSpy: { mock: { calls: unknown[][] } }) {
-  const firstCall = dispatchSpy.mock.calls.at(0);
-  if (!firstCall) {
-    throw new Error("expected Discord command interaction dispatch");
-  }
-  return firstCall[0] as Parameters<DispatchDiscordCommandInteraction>[0];
 }
 
 describe("discord command argument fallback", () => {
@@ -88,7 +62,9 @@ describe("discord command argument fallback", () => {
       .mockResolvedValue({ accepted: true });
     const button = createDiscordCommandArgFallbackButton({
       ctx: {
-        ...createContext({ slashCommand: { ephemeral: false } }),
+        ...nativeCommandContext({
+          channels: { discord: { slashCommand: { ephemeral: false } } },
+        }),
         dispatchReplyFromConfig,
       },
       safeInteractionCall,
@@ -102,14 +78,15 @@ describe("discord command argument fallback", () => {
       user: "owner",
     } satisfies CommandArgData);
 
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = firstDispatchCall(dispatchSpy);
-    expect(dispatchCall?.prompt).toBe("/think high");
-    expect(dispatchCall?.responseEphemeral).toBe(false);
-    expect(dispatchCall?.accountId).toBe("default");
-    expect(dispatchCall?.sessionPrefix).toBe("discord:slash");
-    expect(dispatchCall?.preferFollowUp).toBe(true);
-    expect(dispatchCall?.dispatchReplyFromConfig).toBe(dispatchReplyFromConfig);
+    expect(dispatchSpy).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        prompt: "/think high",
+        responseEphemeral: false,
+        accountId: "default",
+        sessionPrefix: "discord:slash",
+        dispatchReplyFromConfig,
+      }),
+    );
   });
 });
 

@@ -1,0 +1,141 @@
+/* Background skill review result, in the Carapace turn-recap anatomy: hairline rules around
+   one muted line of text. Square radii and quiet text actions; no pills, no card. */
+.chat-skill-notice {
+  margin: var(--space-7) 8px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+}
+
+.chat-skill-notice__line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-skill-notice__line::before,
+.chat-skill-notice__line::after {
+  flex: 1 1 24px;
+  border-top: 1px solid var(--border);
+  content: "";
+}
+
+.chat-skill-notice__line::before {
+  margin-inline-end: 4px;
+}
+
+.chat-skill-notice__line::after {
+  margin-inline-start: 4px;
+}
+
+.chat-skill-notice__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+}
+
+.chat-skill-notice__icon svg,
+.chat-skill-notice__undo svg,
+.chat-skill-notice__done svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-skill-notice__label {
+  color: var(--muted-strong);
+  font-weight: 500;
+}
+
+.chat-skill-notice__skill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.chat-skill-notice__sep {
+  margin-inline-end: 2px;
+}
+
+.chat-skill-notice__name {
+  overflow: hidden;
+  max-width: 24ch;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 2px;
+  transition: text-decoration-color var(--duration-fast) var(--ease-out);
+}
+
+.chat-skill-notice__name:hover {
+  text-decoration-color: currentColor;
+}
+
+.chat-skill-notice__name:focus-visible,
+.chat-skill-notice__undo:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.chat-skill-notice__undo,
+.chat-skill-notice__done {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-inline-start: 6px;
+  padding: 2px 6px;
+  font: inherit;
+  font-weight: 500;
+}
+
+.chat-skill-notice__undo {
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-strong);
+  transition:
+    background var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.chat-skill-notice__undo:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-skill-notice__undo:disabled {
+  opacity: 0.6;
+}
+
+.chat-skill-notice__done {
+  color: var(--ok);
+}
+
+.chat-skill-notice--undone .chat-skill-notice__name {
+  color: var(--muted);
+  text-decoration-color: currentColor;
+  text-decoration-line: line-through;
+}
+
+.chat-skill-notice__error {
+  margin: 6px 0 0;
+  color: var(--danger);
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-skill-notice__name,
+  .chat-skill-notice__undo {
+    transition: none;
+  }
+}

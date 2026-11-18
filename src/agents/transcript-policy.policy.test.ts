@@ -43,28 +43,16 @@ const MOONSHOT_PLUGIN_CONFIG = {
   },
 } as OpenClawConfig;
 
-function createProviderRuntimeSmokeContext(): {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  workspaceDir: string;
-} {
-  const env = { ...process.env };
-  delete env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  delete env.OPENCLAW_SKIP_PROVIDERS;
-  delete env.OPENCLAW_SKIP_CHANNELS;
-  delete env.OPENCLAW_SKIP_CRON;
-  delete env.OPENCLAW_TEST_MINIMAL_GATEWAY;
-  return {
-    config: {},
-    env,
-    workspaceDir: process.cwd(),
-  };
-}
+const providerRuntimeContext = {
+  config: {},
+  env: {},
+  workspaceDir: process.cwd(),
+};
 
 describe("resolveTranscriptPolicy provider replay policy", () => {
   it("uses images-only sanitization without tool-call id rewriting for OpenAI models", () => {
     const policy = resolveTranscriptPolicy({
-      ...createProviderRuntimeSmokeContext(),
+      ...providerRuntimeContext,
       provider: "openai",
       modelId: "gpt-4o",
       modelApi: "openai",
@@ -76,7 +64,7 @@ describe("resolveTranscriptPolicy provider replay policy", () => {
 
   it("uses strict9 tool-call sanitization for Mistral-family models", () => {
     const policy = resolveTranscriptPolicy({
-      ...createProviderRuntimeSmokeContext(),
+      ...providerRuntimeContext,
       provider: "mistral",
       modelId: "mistral-large-latest",
       config: MISTRAL_PLUGIN_CONFIG,
@@ -87,7 +75,7 @@ describe("resolveTranscriptPolicy provider replay policy", () => {
 
   it("uses OpenAI-style duplicate ids for Moonshot replay", () => {
     const policy = resolveTranscriptPolicy({
-      ...createProviderRuntimeSmokeContext(),
+      ...providerRuntimeContext,
       provider: "moonshot",
       modelId: "kimi-k2.6",
       modelApi: "openai-completions",

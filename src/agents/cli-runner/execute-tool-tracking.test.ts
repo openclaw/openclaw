@@ -24,6 +24,10 @@ function createTracking() {
   return tracking;
 }
 
+function finishParsed(tracking: Tracking, toolCallId: string, isError = false) {
+  tracking.handleCliToolResult({ toolCallId, name: "mcp__openclaw__ask_user", isError });
+}
+
 function startParsed(tracking: Tracking, toolCallId: string, args: Record<string, unknown>) {
   tracking.handleCliToolUseStart({
     toolCallId,
@@ -58,7 +62,7 @@ describe("CLI loopback ask_user deadline tracking", () => {
   it("keeps the deadline until Claude emits the correlated tool result", () => {
     const tracking = createTracking();
     const listener = vi.fn();
-    tracking.onActiveLoopbackAskUserDeadlineChange(listener);
+    tracking.setOnActiveLoopbackAskUserDeadlineChange(listener);
     const capture = startQuestion(tracking, "tool-1");
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBe(Date.now() + 910_000);
     expect(listener).toHaveBeenCalledOnce();
@@ -74,19 +78,11 @@ describe("CLI loopback ask_user deadline tracking", () => {
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBe(Date.now() + 10_000);
     expect(listener).toHaveBeenCalledOnce();
 
-    tracking.handleCliToolResult({
-      toolCallId: "tool-1",
-      name: "mcp__openclaw__ask_user",
-      isError: false,
-    });
+    finishParsed(tracking, "tool-1");
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBe(Date.now() + 70_000);
     expect(listener).toHaveBeenCalledTimes(2);
 
-    tracking.handleCliToolResult({
-      toolCallId: "tool-2",
-      name: "mcp__openclaw__ask_user",
-      isError: false,
-    });
+    finishParsed(tracking, "tool-2");
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBeUndefined();
     expect(listener).toHaveBeenCalledTimes(3);
     tracking.finalizeCapture(() => {});
@@ -105,11 +101,7 @@ describe("CLI loopback ask_user deadline tracking", () => {
     const tracking = createTracking();
     startQuestion(tracking, "invalid", "bad");
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBeUndefined();
-    tracking.handleCliToolResult({
-      toolCallId: "invalid",
-      name: "mcp__openclaw__ask_user",
-      isError: true,
-    });
+    finishParsed(tracking, "invalid", true);
 
     const args = { questions: [], timeoutSeconds: 3_600 };
     startParsed(tracking, "duplicate-1", args);

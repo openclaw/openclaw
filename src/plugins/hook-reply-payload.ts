@@ -34,9 +34,7 @@ export const acceptPluginReplyPayload = (
   previous: ReplyPayload,
   next: PluginHookReplyPayload,
 ): ReplyPayload => {
-  // SAFETY: the optional core-only field is viewed solely to discard it, never to trust it.
-  const { trustedLocalMedia: _trustedLocalMedia, ...safePayload } = next as ReplyPayload;
-  const clonedPayload = structuredClone(safePayload);
+  const clonedPayload = toPluginReplyPayload(next);
   const acceptedPayload = preservesTrustedMediaRefs(previous, clonedPayload)
     ? { ...clonedPayload, trustedLocalMedia: true }
     : clonedPayload;

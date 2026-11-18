@@ -4,13 +4,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConfigSetOperation } from "./config-cli-input.js";
 import { runConfigOperations } from "./config-cli-runner.js";
 
-// Exercise the real ordered runner, path mutators, roster projection and reference
-// restorer. Snapshot loading, schema/policy checks and persistence are boundaries;
-// this suite does not claim writer/topology or registered CLI acceptance.
+// Real runner, path/roster mutators and reference restoration; mocked snapshot,
+// validation and persistence boundaries do not prove writer/topology or CLI acceptance.
 const state = vi.hoisted(() => ({
   snapshot: {} as Record<string, unknown>,
   prepare: vi.fn(),
   replace: vi.fn(),
+  unexpected: (operation: string): never => {
+    throw new Error(`Unexpected ${operation}`);
+  },
 }));
 vi.mock("../config/config.js", () => ({ replaceConfigFile: state.replace }));
 vi.mock("./config-cli-validation.js", () => ({
@@ -18,32 +20,27 @@ vi.mock("./config-cli-validation.js", () => ({
   validateConfigMutation: async () => ({ kind: "write" }),
   assertStrictConfigForMutation: vi.fn(),
 }));
-vi.mock("../config/io.write-prepare.js", () => ({
-  prepareConfigWriteValues: state.prepare,
-}));
+// mock-isolation: Observe supplied write intent without preparing filesystem writes.
+vi.mock("../config/io.write-prepare.js", () => ({ prepareConfigWriteValues: state.prepare }));
+// mock-isolation: Fail if a real write unexpectedly enters the dry-run topology path.
 vi.mock("../config/io.write-topology.js", () => ({
-  prepareConfigWriteTopology: () => {
-    throw new Error("Unexpected dry-run topology");
-  },
+  prepareConfigWriteTopology: () => state.unexpected("dry-run topology"),
 }));
+// mock-isolation: Fail if the runner unexpectedly requests dry-run unset expansion.
 vi.mock("../config/config-path-mutation.js", () => ({
-  resolveManagedUnsetPathsForWrite: () => {
-    throw new Error("Unexpected dry-run unsets");
-  },
+  resolveManagedUnsetPathsForWrite: () => state.unexpected("dry-run unsets"),
 }));
 vi.mock("../config/io.meta.js", () => ({ AUTO_MANAGED_CONFIG_META_PATHS: [] }));
-vi.mock("../config/io.read-helpers.js", () => ({
-  coerceConfig: (value: unknown) => value,
-}));
+// mock-isolation: Keep the supplied synthetic snapshot intact at the reader boundary.
+vi.mock("../config/io.read-helpers.js", () => ({ coerceConfig: (value: unknown) => value }));
 vi.mock("../config/paths.js", () => ({
   resolveConfigPath: () => "/test/openclaw.json",
   resolveStateDir: vi.fn(),
 }));
+// mock-isolation: Reject unexpected redacted input without loading secret discovery.
 vi.mock("../config/redact-snapshot.js", () => ({
   REDACTED_SENTINEL: "__OPENCLAW_REDACTED__",
-  restoreRedactedValues: () => {
-    throw new Error("Unexpected redacted input");
-  },
+  restoreRedactedValues: () => state.unexpected("redacted input"),
 }));
 vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: async () => undefined,
@@ -61,10 +58,11 @@ vi.mock("../runtime.js", () => ({
   ExitError: class ExitError extends Error {},
   writeRuntimeJson: vi.fn(),
 }));
-vi.mock("./config-cli-input.js", () => ({ formatPluginInstallConfigSetError: vi.fn() }));
+// mock-isolation: Keep metadata discovery outside this ordered path-intent runner boundary.
 vi.mock("./config-cli-model-normalization.js", () => ({
   normalizeConfigMutationModelRefs: (value: unknown) => value,
   normalizeConfigMutationExplicitSetPath: (path: string[]) => path,
+  shouldNormalizeConfigMutationProviderCatalogs: () => true,
 }));
 vi.mock("./config-set-dryrun.js", () => ({
   ConfigSetDryRunValidationError: class extends Error {},
@@ -72,8 +70,7 @@ vi.mock("./config-set-dryrun.js", () => ({
 }));
 vi.mock("./one-shot-exit.js", () => ({ exitCliAfterOutput: vi.fn() }));
 vi.mock("./command-format.js", () => ({ formatCliCommand: (s: string) => s }));
-// This public predecessor keeps roster functions in agent-scope-config.
-// Leave that implementation real and isolate only its workspace services.
+// Keep roster functions real, isolating only their workspace services.
 vi.mock("../config/legacy.default-agent-owner-state.js", () => ({
   getRetainedLegacyDefaultAgentId: vi.fn(),
 }));
@@ -101,38 +98,38 @@ vi.mock("../utils.js", async () => ({
 
 const modelsPath = ["models", "providers", "example", "models"];
 const modelPath = (index: number, ...tail: string[]) => [...modelsPath, String(index), ...tail];
+const pathSegments = (path: string | string[]) =>
+  typeof path === "string" ? path.split(".") : path;
+const namedEntries = (...names: string[]) =>
+  Object.fromEntries(names.map((name, i) => [String(i), { name }]));
 const modelConfig = (rows: { id: string; name: string }[]) => ({
   models: { providers: { example: { models: rows } } },
 });
-const rows = [
+const referenceRows = (edited: string, untouched: string) => [
   { id: "drop", name: "drop" },
-  { id: "edited", name: "${ALIAS}" },
-  { id: "untouched", name: "${OTHER_ALIAS}" },
+  { id: "edited", name: edited },
+  { id: "untouched", name: untouched },
 ];
-const resolvedRows = [
-  { id: "drop", name: "drop" },
-  { id: "edited", name: "${TARGET}" },
-  { id: "untouched", name: "${OTHER_TARGET}" },
-];
+const rows = referenceRows("${ALIAS}", "${OTHER_ALIAS}");
+const resolvedRows = referenceRows("${TARGET}", "${OTHER_TARGET}");
 function op(
   mutation: ConfigSetOperation["mutation"],
-  path: string[],
+  path: string | string[],
   value?: unknown,
 ): ConfigSetOperation {
   // Each command input is independently parsed JSON, not a shared fixture object.
+  const segments = pathSegments(path);
   return {
     mutation,
-    setPath: path,
-    requestedPath: path,
+    setPath: segments,
+    requestedPath: segments,
     value: structuredClone(value),
     inputMode: "json",
   };
 }
-async function apply(
-  resolved: unknown,
-  operations: ConfigSetOperation[],
-  authored: unknown = resolved,
-) {
+const editModelName = (index: number, name: string) => op("set", modelPath(index, "name"), name);
+const deleteModel = (index: number) => op("delete", modelPath(index));
+function loadSnapshot(resolved: unknown, authored: unknown = resolved): void {
   state.snapshot = {
     path: "/test/openclaw.json",
     resolved: structuredClone(resolved),
@@ -141,12 +138,22 @@ async function apply(
     runtimeConfig: structuredClone(resolved),
     authoredConfig: structuredClone(authored),
   };
-  await runConfigOperations({
+}
+const run = (operations: ConfigSetOperation[], successMode: "set" | "patch" = "patch") =>
+  runConfigOperations({
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
     operations,
     options: {},
-    successMode: "patch",
+    successMode,
   });
+
+async function apply(
+  resolved: unknown,
+  operations: ConfigSetOperation[],
+  authored: unknown = resolved,
+) {
+  loadSnapshot(resolved, authored);
+  await run(operations);
   expect(state.prepare).toHaveBeenCalled();
   expect(state.replace).toHaveBeenCalledTimes(1);
   const prepared = state.prepare.mock.calls.find(([params]) => params.explicitSetPaths)?.[0];
@@ -174,196 +181,111 @@ beforeEach(() => {
 });
 
 describe("ordered runner supplied intent after deletion", () => {
-  it("keeps a merge-by-id reference change on its surviving model after an earlier splice", async () => {
-    const result = await apply(
+  it.each([0, 1])(
+    "keeps merge intent only on surviving models after deleting index %s",
+    async (deleted) => {
+      const result = await apply(
+        modelConfig(resolvedRows),
+        [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), deleteModel(deleted)],
+        modelConfig(rows),
+      );
+      expect(result.config.models?.providers?.example?.models).toEqual([
+        deleted === 0 ? { id: "edited", name: "${TARGET}" } : { id: "drop", name: "drop" },
+        { id: "untouched", name: "${OTHER_ALIAS}" },
+      ]);
+      expect(result.paths).toEqual(deleted === 0 ? [modelPath(0, "id"), modelPath(0, "name")] : []);
+      expect(result.policyPaths).toEqual([modelsPath]);
+    },
+  );
+
+  it.each<[string, unknown, ConfigSetOperation[], (string | string[])[]]>([
+    [
+      "successive splices",
+      modelConfig(["a", "b", "c", "d"].map((id) => ({ id, name: id }))),
+      [editModelName(3, "edited"), deleteModel(1), deleteModel(0)],
+      [modelPath(1, "name")],
+    ],
+    [
+      "earlier indices and unrelated arrays",
+      { ...modelConfig(resolvedRows), other: [{ name: "first" }, { name: "second" }] },
+      [editModelName(0, "edited"), op("set", "other.1.name", "other edited"), deleteModel(2)],
+      [modelPath(0, "name"), "other.1.name"],
+    ],
+    [
+      "ancestor replacement",
       modelConfig(resolvedRows),
-      [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), op("delete", modelPath(0))],
-      modelConfig(rows),
-    );
-    expect(result.config.models?.providers?.example?.models).toEqual([
-      { id: "edited", name: "${TARGET}" },
-      { id: "untouched", name: "${OTHER_ALIAS}" },
-    ]);
-    expect(result.paths).toEqual([modelPath(0, "id"), modelPath(0, "name")]);
-    // Policy ownership remains at the parent merge path.
-    expect(result.policyPaths).toEqual([modelsPath]);
-  });
-
-  it("removes deleted-item intent so it cannot attach to the next survivor", async () => {
-    const result = await apply(
+      [op("replace", modelsPath, resolvedRows), deleteModel(0)],
+      [modelsPath],
+    ],
+    [
+      "numeric object keys",
+      { channels: { custom: { accounts: namedEntries("zero", "one") } } },
+      [
+        op("set", "channels.custom.accounts.0.name", "removed"),
+        op("set", "channels.custom.accounts.1.name", "survivor"),
+        op("delete", "channels.custom.accounts.0"),
+      ],
+      ["channels.custom.accounts.1.name"],
+    ],
+    [
+      "nested array below a canonical agent ID",
+      { agents: { entries: { "1": { tools: { allow: ["first", "second", "third"] } } } } },
+      [
+        op("set", "agents.list.0.tools.allow.2", "edited"),
+        op("delete", "agents.list.0.tools.allow.0"),
+      ],
+      ["agents.entries.1.tools.allow.1"],
+    ],
+    [
+      "recreated item",
+      modelConfig(["a", "b", "c"].map((id) => ({ id, name: id }))),
+      [
+        editModelName(1, "removed"),
+        deleteModel(1),
+        op("replace", modelPath(1), { id: "fresh", name: "fresh" }),
+      ],
+      [modelPath(1)],
+    ],
+    [
+      "missing deletion",
       modelConfig(resolvedRows),
-      [op("merge", modelsPath, [{ id: "edited", name: "${TARGET}" }]), op("delete", modelPath(1))],
-      modelConfig(rows),
-    );
-    expect(result.config.models?.providers?.example?.models).toEqual([
-      { id: "drop", name: "drop" },
-      { id: "untouched", name: "${OTHER_ALIAS}" },
-    ]);
-    expect(result.paths).toEqual([]);
-  });
-
-  it("rebases against the current index after each successive splice", async () => {
-    const result = await apply(
-      modelConfig([
-        { id: "a", name: "a" },
-        { id: "b", name: "b" },
-        { id: "c", name: "c" },
-        { id: "d", name: "d" },
-      ]),
-      [
-        op("set", modelPath(3, "name"), "edited"),
-        op("delete", modelPath(1)),
-        op("delete", modelPath(0)),
-      ],
-    );
-    expect(result.paths).toEqual([modelPath(1, "name")]);
-  });
-
-  it("leaves intent before a deletion and in unrelated arrays unchanged", async () => {
-    const result = await apply(
-      {
-        ...modelConfig(resolvedRows),
-        other: [{ name: "first" }, { name: "second" }],
-      },
-      [
-        op("set", modelPath(0, "name"), "edited"),
-        op("set", ["other", "1", "name"], "other edited"),
-        op("delete", modelPath(2)),
-      ],
-    );
-    expect(result.paths).toEqual([modelPath(0, "name"), ["other", "1", "name"]]);
-  });
-
-  it("retains ancestor replacement intent across a child splice", async () => {
-    const result = await apply(modelConfig(resolvedRows), [
-      op("replace", modelsPath, resolvedRows),
-      op("delete", modelPath(0)),
-    ]);
-    expect(result.paths).toEqual([modelsPath]);
-  });
-
-  it("does not reindex numeric object keys and removes only the deleted key's intent", async () => {
-    const result = await apply(
-      {
-        channels: {
-          custom: {
-            accounts: {
-              "0": { name: "zero" },
-              "1": { name: "one" },
-            },
-          },
-        },
-      },
-      [
-        op("set", ["channels", "custom", "accounts", "0", "name"], "removed"),
-        op("set", ["channels", "custom", "accounts", "1", "name"], "survivor"),
-        op("delete", ["channels", "custom", "accounts", "0"]),
-      ],
-    );
-    expect(result.paths).toEqual([["channels", "custom", "accounts", "1", "name"]]);
-  });
-
-  it("does not shift canonical numeric agent IDs after a legacy roster splice", async () => {
-    const result = await apply(
-      {
-        agents: {
-          list: [
-            { id: "0", name: "zero" },
-            { id: "1", name: "one" },
-            { id: "2", name: "two" },
-          ],
-        },
-      },
-      [op("set", ["agents", "list", "1", "name"], "edited"), op("delete", ["agents", "list", "0"])],
-    );
-    expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
-    expect(result.config.agents?.entries).toEqual({
-      "1": { name: "edited" },
-      "2": { name: "two" },
-    });
+      [editModelName(1, "edited"), deleteModel(8)],
+      [modelPath(1, "name")],
+    ],
+  ])("preserves supplied intent for %s", async (_name, config, operations, paths) => {
+    expect((await apply(config, operations)).paths).toEqual(paths.map(pathSegments));
   });
 
   it("drops deleted canonical agent intent without moving surviving IDs", async () => {
     const result = await apply(
-      {
-        agents: {
-          list: [
-            { id: "0", name: "zero" },
-            { id: "1", name: "one" },
-          ],
-        },
-      },
+      { agents: { ownership: "explicit", entries: namedEntries("zero", "one", "two") } },
       [
-        op("set", ["agents", "list", "0", "name"], "removed"),
-        op("set", ["agents", "list", "1", "name"], "survivor"),
-        op("delete", ["agents", "list", "0"]),
+        op("set", "agents.list.0.name", "removed"),
+        op("set", "agents.list.1.name", "survivor"),
+        op("delete", "agents.list.0"),
       ],
     );
     expect(result.paths).toEqual([["agents", "entries", "1", "name"]]);
-  });
-
-  it("rebases a nested array below a canonical agent ID", async () => {
-    const result = await apply(
-      { agents: { list: [{ id: "1", tools: { allow: ["first", "second", "third"] } }] } },
-      [
-        op("set", ["agents", "list", "0", "tools", "allow", "2"], "edited"),
-        op("delete", ["agents", "list", "0", "tools", "allow", "0"]),
-      ],
-    );
-    expect(result.paths).toEqual([["agents", "entries", "1", "tools", "allow", "1"]]);
-  });
-
-  it("records fresh intent after deleting and recreating an item", async () => {
-    const result = await apply(
-      modelConfig([
-        { id: "a", name: "a" },
-        { id: "b", name: "b" },
-        { id: "c", name: "c" },
-      ]),
-      [
-        op("set", modelPath(1, "name"), "removed"),
-        op("delete", modelPath(1)),
-        op("replace", modelPath(1), { id: "fresh", name: "fresh" }),
-      ],
-    );
-    expect(result.paths).toEqual([modelPath(1)]);
-  });
-
-  it("does not rebase intent for a missing array deletion", async () => {
-    const result = await apply(modelConfig(resolvedRows), [
-      op("set", modelPath(1, "name"), "edited"),
-      op("delete", modelPath(8)),
-    ]);
-    expect(result.paths).toEqual([modelPath(1, "name")]);
+    expect(result.config.agents?.entries).toEqual({
+      "1": { name: "survivor" },
+      "2": { name: "two" },
+    });
   });
 });
 
-describe("ordered writer policy after deletion", () => {
-  it("keeps final writer restoration on the shifted explicit leaf", async () => {
-    const authored = modelConfig(rows);
-    const resolved = modelConfig(resolvedRows);
-    const result = await apply(
-      resolved,
-      [op("set", modelPath(1, "name"), "${TARGET}"), op("delete", modelPath(0))],
-      authored,
+// Advice must name registered flags: config patch has --replace-path, not --merge/--replace.
+it.each([
+  ["patch", "Use --replace-path models.providers.example.models to replace intentionally."],
+  ["set", "Use --merge to merge by id or --replace to replace intentionally."],
+] as const)(
+  "refuses a %s model list replacement naming its own flags",
+  async (successMode, advice) => {
+    loadSnapshot(modelConfig(resolvedRows));
+    await expect(
+      run([op(undefined, modelsPath, [{ id: "edited", name: "${TARGET}" }])], successMode),
+    ).rejects.toHaveProperty(
+      "message",
+      `Refusing to replace models.providers.example.models; it would remove existing entries: drop, untouched. ${advice}`,
     );
-    expect(result.policyPaths).toEqual([modelPath(0, "name")]);
-    expect(
-      restoreEnvVarRefsFromResolved(result.config, authored, resolved, result.policyPaths),
-    ).toEqual(
-      modelConfig([
-        { id: "edited", name: "${TARGET}" },
-        { id: "untouched", name: "${OTHER_ALIAS}" },
-      ]),
-    );
-  });
-
-  it("removes deleted explicit leaf policy without authorizing its survivor", async () => {
-    const result = await apply(
-      modelConfig(resolvedRows),
-      [op("set", modelPath(1, "name"), "${TARGET}"), op("delete", modelPath(1))],
-      modelConfig(rows),
-    );
-    expect(result.policyPaths).toBeUndefined();
-  });
-});
+  },
+);

@@ -25,7 +25,7 @@ scenario:
     - docs/channels/qa-channel.md
   codeRefs:
     - extensions/memory-core/src/tools.ts
-    - extensions/qa-lab/src/suite-runtime-agent.ts
+    - extensions/qa-lab/src/suite-runtime-agent-process.ts
   execution:
     kind: flow
     summary: Verify fake personal preference recall through the local QA memory path.

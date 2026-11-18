@@ -14,20 +14,23 @@ export function chunkMatrixStateJson(
     }
     chunks.push(chunk);
   };
-  let current = "";
+  let chunkStart = 0;
   let currentBytes = 0;
-  for (const char of value) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (current && currentBytes + charBytes > maxBytes) {
-      pushChunk(current);
-      current = "";
+  // Slice whole code points instead of allocating and concatenating one string
+  // per character. Crypto snapshots can contain millions of characters.
+  for (let index = 0; index < value.length;) {
+    const codePoint = value.codePointAt(index)!;
+    const charBytes = codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+    if (index > chunkStart && currentBytes + charBytes > maxBytes) {
+      pushChunk(value.slice(chunkStart, index));
+      chunkStart = index;
       currentBytes = 0;
     }
-    current += char;
     currentBytes += charBytes;
+    index += codePoint > 0xffff ? 2 : 1;
   }
-  if (current) {
-    pushChunk(current);
+  if (chunkStart < value.length) {
+    pushChunk(value.slice(chunkStart));
   }
   return chunks;
 }
@@ -37,7 +40,7 @@ export async function readMatrixStateChunks<T>(
   keys: string[],
   kind: string,
 ): Promise<string[] | null> {
-  // lookupMany is optional on the published host floor.
+  // Doctor supplies the published V1 store contract, where lookupMany is optional.
   const records = await store.lookupMany?.(keys);
   const chunks: string[] = [];
   for (let index = 0; index < keys.length; index += 1) {
@@ -64,7 +67,6 @@ export async function writeMatrixStateChunks<T>(
   rows: {
     chunks: { key: string; value: T }[];
     meta: { key: string; value: T };
-    nextChunkKeys: Set<string>;
   },
   chunkKeyPrefix: string,
 ): Promise<void> {
@@ -72,8 +74,21 @@ export async function writeMatrixStateChunks<T>(
     await store.register(row.key, row.value);
   }
   await store.register(rows.meta.key, rows.meta.value);
+  await pruneMatrixStateChunks(
+    store,
+    rows.chunks.map((row) => row.key),
+    chunkKeyPrefix,
+  );
+}
+
+export async function pruneMatrixStateChunks<T>(
+  store: Pick<PluginStateKeyedStore<T>, "entries" | "delete">,
+  retainedKeys: string[],
+  chunkKeyPrefix: string,
+): Promise<void> {
+  const nextChunkKeys = new Set(retainedKeys);
   for (const row of await store.entries()) {
-    if (row.key.startsWith(chunkKeyPrefix) && !rows.nextChunkKeys.has(row.key)) {
+    if (row.key.startsWith(chunkKeyPrefix) && !nextChunkKeys.has(row.key)) {
       await store.delete(row.key);
     }
   }

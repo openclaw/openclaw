@@ -1,16 +1,21 @@
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
-import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
+import {
+  assertSessionWriterDeliveryAuthorized,
+  prepareSessionWriterDeliveryAuthority,
+} from "../../auto-reply/reply/session-writer-delivery-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GatewayOperatorAccessDeniedError } from "../../gateway/operator-access-policy.js";
-import { parseCommandOwnerReference } from "../../state/user-channel-identities.js";
+import { parseCommandOwnerReference } from "../../state/user-channel-authorization-reference.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
-import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { InternalDeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { preparePluginNoticeOwnerCheck } from "./delivery-completion.js";
+import { projectQueuedDeliveryOptions } from "./delivery-queue-projection.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
-import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
+import { preparedOutboundPayloads } from "./prepared-batch.js";
 
 export async function buildRecoveryDeliverParams(
   entry: QueuedDelivery,
@@ -23,6 +28,12 @@ export async function buildRecoveryDeliverParams(
     entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
   const pendingFinal =
     entry.deliveryCompletion?.kind === "pending-final" ? entry.deliveryCompletion : undefined;
+  const pluginNotice =
+    entry.deliveryCompletion?.kind === "plugin-notice" ? entry.deliveryCompletion : undefined;
+  // The initial owner check precedes awaited recovery preparation; recheck the plugin at I/O.
+  const assertPluginOwner = pluginNotice
+    ? await preparePluginNoticeOwnerCheck(pluginNotice.pluginId)
+    : undefined;
   let owner: Awaited<ReturnType<typeof prepareCommandOwnerAuthority>> | undefined;
   const rejection = (error: unknown) =>
     new PlatformMessageNotDispatchedError(
@@ -49,6 +60,11 @@ export async function buildRecoveryDeliverParams(
       throw rejection(new GatewayOperatorAccessDeniedError());
     }
   }
+  const writer = await prepareSessionWriterDeliveryAuthority(
+    pendingFinal?.sessionWriterDeliveryAuthority,
+    pendingFinal?.storePath,
+    resolveDeliveryQueueStateEnv(stateDir, stateContext),
+  );
   const assertCurrent = () => {
     try {
       if (pendingFinal?.commandOwnerReference !== undefined && !owner?.isCurrent(cfg)) {
@@ -58,34 +74,27 @@ export async function buildRecoveryDeliverParams(
     } catch (error) {
       throw rejection(error);
     }
-    assertSessionWriterDeliveryAuthorized(pendingFinal?.sessionWriterDeliveryAuthority);
+    assertSessionWriterDeliveryAuthorized(writer.authority);
+    try {
+      assertPluginOwner?.();
+    } catch (error) {
+      throw new PlatformMessageNotDispatchedError("Posting plugin is no longer active", {
+        cause: error,
+        retryable: false,
+      });
+    }
   };
   return {
+    release: writer.release,
     cfg,
-    channel: entry.channel,
-    to: entry.to,
-    accountId: entry.accountId,
+    ...projectQueuedDeliveryOptions(entry),
     ...(entry.queuePolicy !== undefined ? { queuePolicy: entry.queuePolicy } : {}),
     ...(entry.requireUnknownSendReconciliation === true
       ? { requireUnknownSendReconciliation: true }
       : {}),
-    payloads: acceptedPreparedOutboundEntries(entry.preparedBatch).map(
-      (prepared) => prepared.payload,
-    ),
+    payloads: preparedOutboundPayloads(entry.preparedBatch),
     preparedBatch: entry.preparedBatch,
-    renderedBatchPlan: entry.renderedBatchPlan,
-    threadId: entry.threadId,
     reply: entry.reply,
-    formatting: entry.formatting,
-    identity: entry.identity,
-    bestEffort: entry.bestEffort,
-    gifPlayback: entry.gifPlayback,
-    forceDocument: entry.forceDocument,
-    silent: entry.silent,
-    mirror: entry.mirror,
-    session: entry.session,
-    gatewayClientScopes: entry.gatewayClientScopes,
-    preparedMessageId: entry.preparedMessageId,
     // Recovery owns terminal completion because nested delivery only reports
     // process-local evidence that cannot survive another restart.
     ...(conversationCompletion
@@ -103,7 +112,7 @@ export async function buildRecoveryDeliverParams(
         }
       : {}),
     // Recovery retains completion settlement and reconstructs its original authority at I/O.
-    ...(pendingFinal
+    ...(pendingFinal || pluginNotice
       ? {
           onDirectAdapterHandoff: async () => assertCurrent(),
           assertDirectAdapterHandoff: assertCurrent,
@@ -117,5 +126,5 @@ export async function buildRecoveryDeliverParams(
     skipQueue: true, // Prevent re-enqueueing during recovery.
     deferredDeliveryAdmissionPassed: true,
     deferCommitHooks: true,
-  } satisfies DeliverOutboundPayloadsParams;
+  } satisfies InternalDeliverOutboundPayloadsParams & { release: () => void };
 }

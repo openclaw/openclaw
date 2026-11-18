@@ -46,24 +46,23 @@ export function applyPostPluginConfigValidation(
       : "post-plugin-doctor-invalid-config",
     warnings: [
       ...(pluginUpdate.warnings ?? []),
-      executionFailed
-        ? {
-            // Released readers omit failureFacts but retain this bounded warning.
-            reason: validation.failureFacts
+      {
+        // Released readers omit failureFacts but retain this bounded warning.
+        reason: executionFailed
+          ? validation.failureFacts
               .map((fact) => fact.message)
               .filter(Boolean)
-              .join("; "),
-            message: "Config validation could not complete; refusing to restart.",
-            guidance: [
-              "Resolve the validation command failure, then rerun `openclaw update repair`.",
-            ],
-          }
-        : {
-            reason: "Config remained invalid after updated plugin migrations.",
-            message:
-              "Post-update plugin migration did not produce a valid config; refusing to restart.",
-            guidance: ["Run `openclaw doctor --fix`, then rerun `openclaw update repair`."],
-          },
+              .join("; ")
+          : "Config remained invalid after updated plugin migrations.",
+        message: executionFailed
+          ? "Config validation could not complete; refusing to restart."
+          : "Post-update plugin migration did not produce a valid config; refusing to restart.",
+        guidance: [
+          executionFailed
+            ? "Resolve the validation command failure, then rerun `openclaw update repair`."
+            : "Run `openclaw doctor --fix`, then rerun `openclaw update repair`.",
+        ],
+      },
     ],
   };
 }

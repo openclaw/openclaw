@@ -1,11 +1,11 @@
 import AppKit
-import OpenClawKit
 import Testing
 
 extension AppKitTestSupport {
     static func performWindowTransition(
         _ window: NSWindow,
         notification: Notification.Name,
+        sourceLocation: SourceLocation = #_sourceLocation,
         action: @MainActor () async throws -> Void) async throws
     {
         let events = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -17,18 +17,12 @@ extension AppKitTestSupport {
             events.continuation.finish()
         }
         try await action()
-        let observed = try await AsyncTimeout.withTimeout(
-            seconds: 10,
-            onTimeout: {
-                NSError(
-                    domain: "AppKitWindowTransitionTests",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "The window did not emit \(notification.rawValue)"])
-            },
-            operation: {
-                var iterator = events.stream.makeAsyncIterator()
-                return await iterator.next() != nil
-            })
+        var iterator = events.stream.makeAsyncIterator()
+        let observed = await iterator.next() != nil
+        guard observed, !Task.isCancelled else {
+            Issue.record("Still waiting for window \(notification.rawValue)", sourceLocation: sourceLocation)
+            throw CancellationError()
+        }
         try #require(observed)
         // Native window ordering continues after the transition notification.
         // Assert the settled result after its main-queue completion work can run.

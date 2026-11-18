@@ -45,60 +45,53 @@ impl DesktopNodeProcess {
         }
         let (sender, output) = mpsc::sync_channel(64);
         let overflow = Arc::new(AtomicBool::new(false));
-        let readers = [
+        let pipes: [(bool, Box<dyn Read + Send>); 2] = [
             (
                 true,
-                child
-                    .stdout
-                    .take()
-                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+                Box::new(child.stdout.take().expect("piped desktop sharing stdout")),
             ),
             (
                 false,
-                child
-                    .stderr
-                    .take()
-                    .map(|pipe| Box::new(pipe) as Box<dyn Read + Send>),
+                Box::new(child.stderr.take().expect("piped desktop sharing stderr")),
             ),
-        ]
-        .into_iter()
-        .filter_map(|(stdout, pipe)| pipe.map(|pipe| (stdout, pipe)))
-        .map(|(stdout, mut pipe)| {
-            let sender = sender.clone();
-            let overflow = Arc::clone(&overflow);
-            thread::spawn(move || {
-                let mut chunk = [0; 4096];
-                let mut line = Vec::new();
-                while let Ok(size) = pipe.read(&mut chunk) {
-                    if size == 0 {
-                        break;
-                    }
-                    for byte in &chunk[..size] {
-                        if *byte == b'\n' {
-                            if sender
-                                .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                                .is_err()
-                            {
-                                overflow.store(true, Ordering::SeqCst);
-                            }
-                            line.clear();
-                        } else if line.len() < 16 * 1024 {
-                            line.push(*byte);
-                        } else {
+        ];
+        let readers = pipes
+            .into_iter()
+            .map(|(stdout, mut pipe)| {
+                let sender = sender.clone();
+                let overflow = Arc::clone(&overflow);
+                thread::spawn(move || {
+                    let send_line = |line: &[u8]| {
+                        if sender
+                            .try_send((stdout, String::from_utf8_lossy(line).into_owned()))
+                            .is_err()
+                        {
                             overflow.store(true, Ordering::SeqCst);
                         }
+                    };
+                    let mut chunk = [0; 4096];
+                    let mut line = Vec::new();
+                    while let Ok(size) = pipe.read(&mut chunk) {
+                        if size == 0 {
+                            break;
+                        }
+                        for byte in &chunk[..size] {
+                            if *byte == b'\n' {
+                                send_line(&line);
+                                line.clear();
+                            } else if line.len() < 16 * 1024 {
+                                line.push(*byte);
+                            } else {
+                                overflow.store(true, Ordering::SeqCst);
+                            }
+                        }
                     }
-                }
-                if !line.is_empty()
-                    && sender
-                        .try_send((stdout, String::from_utf8_lossy(&line).into_owned()))
-                        .is_err()
-                {
-                    overflow.store(true, Ordering::SeqCst);
-                }
+                    if !line.is_empty() {
+                        send_line(&line);
+                    }
+                })
             })
-        })
-        .collect();
+            .collect();
         Ok(Self {
             child,
             output,
@@ -123,7 +116,7 @@ impl DesktopNodeProcess {
     pub fn stop(&mut self) -> Result<(), String> {
         self.child.stdin.take();
         #[cfg(unix)]
-        signal_group(self.child.id(), "TERM")?;
+        signal_group(self.child.id(), libc::SIGTERM)?;
         #[cfg(windows)]
         self.job.stop()?;
         let force_at = Instant::now() + Duration::from_secs(30);
@@ -132,7 +125,7 @@ impl DesktopNodeProcess {
         loop {
             let leader_done = self.exited()?;
             #[cfg(unix)]
-            let tree_done = !signal_group(self.child.id(), "0")?;
+            let tree_done = !signal_group(self.child.id(), 0)?;
             #[cfg(windows)]
             let tree_done = self.job.is_empty()?;
             if leader_done && tree_done && self.readers.iter().all(JoinHandle::is_finished) {
@@ -148,7 +141,7 @@ impl DesktopNodeProcess {
             }
             if !forced && Instant::now() >= force_at {
                 #[cfg(unix)]
-                signal_group(self.child.id(), "KILL")?;
+                signal_group(self.child.id(), libc::SIGKILL)?;
                 #[cfg(windows)]
                 self.job.stop()?;
                 forced = true;
@@ -172,7 +165,7 @@ impl DesktopNodeProcess {
         let mut stderr = Vec::new();
         let mut bytes = 0;
         let mut drained_after_exit = false;
-        loop {
+        let result = loop {
             for (out, line) in process.output() {
                 bytes += line.len() + 1;
                 if bytes <= 1024 * 1024 {
@@ -182,14 +175,10 @@ impl DesktopNodeProcess {
                 }
             }
             if cancelled() {
-                process.stop()?;
-                owner.take();
-                return Ok(None);
+                break Ok(None);
             }
             if bytes > 1024 * 1024 || process.overflow.load(Ordering::SeqCst) {
-                process.stop()?;
-                owner.take();
-                return Err(
+                break Err(
                     "Desktop sharing setup returned too much output; no node was started.".into(),
                 );
             }
@@ -203,9 +192,7 @@ impl DesktopNodeProcess {
                         drained_after_exit = true;
                         continue;
                     }
-                    process.stop()?;
-                    owner.take();
-                    return Ok(Some(Output {
+                    break Ok(Some(Output {
                         status,
                         stdout,
                         stderr,
@@ -213,23 +200,18 @@ impl DesktopNodeProcess {
                 }
             }
             if Instant::now() >= deadline {
-                process.stop()?;
-                owner.take();
-                return Err("The local CLI did not finish preparing desktop sharing. Update the CLI and try again.".into());
+                break Err("The local CLI did not finish preparing desktop sharing. Update the CLI and try again.".into());
             }
             thread::sleep(Duration::from_millis(25));
-        }
+        };
+        process.stop()?;
+        owner.take();
+        result
     }
 }
 
 #[cfg(unix)]
-fn signal_group(pid: u32, signal: &str) -> Result<bool, String> {
-    let signal = match signal {
-        "TERM" => libc::SIGTERM,
-        "KILL" => libc::SIGKILL,
-        "0" => 0,
-        _ => unreachable!(),
-    };
+fn signal_group(pid: u32, signal: i32) -> Result<bool, String> {
     let pid = i32::try_from(pid).map_err(|_| "Invalid desktop sharing process identity.")?;
     if pid <= 1 {
         return Err("Invalid desktop sharing process identity.".into());
@@ -369,7 +351,7 @@ mod tests {
             .parse::<u32>()
             .unwrap();
         process.stop().unwrap();
-        assert!(!signal_group(process.child.id(), "0").unwrap());
+        assert!(!signal_group(process.child.id(), 0).unwrap());
         let probe = Command::new("/bin/kill")
             .args(["-0", &descendant.to_string()])
             .output()
@@ -391,7 +373,7 @@ mod tests {
         command
             .args([
                 "-c",
-                "echo $$ > \"$1\"; while :; do echo diagnostic; done",
+                "echo $$ > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while :; do echo diagnostic; done",
                 "fixture",
             ])
             .arg(&marker);

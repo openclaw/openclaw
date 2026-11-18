@@ -27,7 +27,7 @@ struct DashboardFullScreenTests {
             NotificationCenter.default.post(name: NSWindow.didExitFullScreenNotification, object: window)
             #expect(toolbar.isVisible)
             #expect(window.toolbar === toolbar)
-            #expect(window.toolbarStyle == .unified)
+            #expect(window.toolbarStyle == .unifiedCompact)
             window.toggleToolbarShown(nil)
             #expect(toolbar.isVisible)
         }
@@ -78,7 +78,7 @@ struct DashboardFullScreenTests {
     private static func makeController(reusing window: NSWindow? = nil) throws -> DashboardWindowController {
         try DashboardWindowController(
             url: #require(URL(string: "about:blank")),
-            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil),
+            auth: DashboardWindowAuth.unauthenticated,
             websiteDataStore: .nonPersistent(),
             windowAutosaveName: "",
             reusingWindow: window,

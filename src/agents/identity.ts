@@ -1,8 +1,3 @@
-/**
- * Agent identity and message-prefix resolution.
- * Applies account, channel, global, and per-agent precedence for reactions,
- * prefixes, and human-delay settings.
- */
 import type { HumanDelayConfig, IdentityConfig } from "../config/types.base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
@@ -47,26 +42,6 @@ export function resolveIdentityNamePrefix(
   return `[${name}]`;
 }
 
-/** Resolve the outbound message prefix, preserving explicit empty prefixes. */
-function resolveMessagePrefix(
-  cfg: OpenClawConfig,
-  agentId: string,
-  opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
-): string {
-  const configured = opts?.configured;
-  if (configured !== undefined) {
-    return configured;
-  }
-
-  const hasAllowFrom = opts?.hasAllowFrom === true;
-  if (hasAllowFrom) {
-    return "";
-  }
-
-  return resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallback ?? "[openclaw]";
-}
-
-/** Helper to extract a channel config value by dynamic key. */
 function getChannelConfig(
   cfg: OpenClawConfig,
   channel: string,
@@ -129,14 +104,11 @@ export function resolveEffectiveMessagesConfig(
   },
 ): { messagePrefix: string; responsePrefix?: string } {
   return {
-    messagePrefix: resolveMessagePrefix(cfg, agentId, {
-      hasAllowFrom: opts?.hasAllowFrom,
-      fallback: opts?.fallbackMessagePrefix,
-    }),
-    responsePrefix: resolveResponsePrefix(cfg, agentId, {
-      channel: opts?.channel,
-      accountId: opts?.accountId,
-    }),
+    messagePrefix:
+      opts?.hasAllowFrom === true
+        ? ""
+        : (resolveIdentityNamePrefix(cfg, agentId) ?? opts?.fallbackMessagePrefix ?? "[openclaw]"),
+    responsePrefix: resolveResponsePrefix(cfg, agentId, opts),
   };
 }
 

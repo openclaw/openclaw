@@ -1,6 +1,6 @@
 ---
 doc-schema-version: 1
-summary: "Extended-stable validation dispatch, changelog-only Release SHA reuse, coverage policies, and Telegram deferrals and waivers"
+summary: "Extended-stable validation dispatch, changelog-only Release SHA reuse, coverage policies, and beta Telegram deferrals"
 title: "Extended-stable and changelog-only validation"
 read_when:
   - Validating an extended-stable candidate
@@ -10,18 +10,17 @@ read_when:
 
 ## Extended-stable validation
 
-Extended-stable validation uses the same checked helper with an immutable
-trusted-main Tooling SHA. Keep the exact candidate, Tooling SHA, canonical
-context, and workflow transport separate:
+Use the admitted helper with [frozen C/Q/P identities and recovery rules](/reference/RELEASING#frozen-qualification-identity): C owns source/version/baselines; Q owns qualification (default C; reviewed main-ancestor via `--workflow-sha <Q>`); independently trusted P admits/verifies.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
-TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 CONTEXT_REF="extended-stable/YYYY.M.33"
 pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref "$CONTEXT_REF" \
-  --workflow-sha "$TOOLING_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
   -f validation_purpose=publish \
   -f publication_selection_json='{"route":"extended-stable","npmDistTag":"extended-stable","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}' \
   -f release_profile=stable \
@@ -32,158 +31,34 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
-The helper creates `release-ci/<tooling-prefix>-<unique-id>` at the Tooling SHA,
-dispatches from that named branch, supplies the trusted-main identity, and uses
-the exact Validation SHA for both `ref` and `expected_sha` with the canonical
-branch in `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch
-or tag, not a raw SHA. Outside extended-stable validation, a direct
-canonical-branch dispatch is valid only when its head is also the trusted
-workflow implementation. Current extended-stable validation uses distinct
-trusted-main tooling and therefore requires the immutable helper.
+- After admission, immutable `release-ci/<Q-prefix>-<unique-id>` selects Q; `ref`/`expected_sha` select C; `target_context_ref` supplies context, not authority. Dispatch `--ref` requires branch/tag, not SHA. Never manually create transport refs or substitute moving main.
+- Publication requires admitted candidate-owned `rerun_group=all` evidence and the exact successful attempt; `release-publish/*` selects P, not Q. Follow the linked identity contract for product/qualification/tooling repairs, historical recovery, and diagnostic-only exclusions. Provider/approval/runner recovery preserves identities/inputs. Old targets still require package/installer/update/channel/live proof.
 
-The shared publisher requires this canonical `release-ci/*` producer and binds
-its trusted workflow SHA separately from the exact candidate SHA. Its protected
-`release-publish/*` ref does not replace the canonical candidate branch. Retain
-the complete `rerun_group=all` manifest, exact run ID and successful attempt;
-reject direct canonical-branch/main producers, narrow runs, stale attempts, and
-mismatched targets. If a reviewed tooling repair changes the publication SHA,
-the validation tooling must remain reachable from current `main` and all
-candidate and evidence identities must still match.
+**Changelog-only releases:** final notes at green Code SHA → same Release SHA, successful full parent, exact prepared artifacts; no extra commit/run. Later notes → commit Release SHA and run this helper. [Optional reuse](/reference/RELEASING#changelog-only-evidence-reuse) requires GitHub-proven descent, changed `CHANGELOG/YYYY.M.PATCH.md`, optional matching `CHANGELOG/records/YYYY.M.PATCH.md` additions/modifications, and only modifications to `CHANGELOG.md`. No renames, deletions, other releases, or docs edits. `split-changelog-release-v1` qualifies new package/image bytes; historical root-only receipts retain `changelog-only-release-v1`. Other changes require full Code validation.
 
-Backport product failures; make the smallest behavior-preserving repair for
-frozen-target tooling; retry provider, approval, or runner failures without a
-source change. Any branch change needs a complete new run. Do not omit required
-package, installer, update, channel, or live behavior because the target is old.
+| Phase                    | Inputs                                                                                                                                             |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `beta-publish`           | `release_profile=beta`, `run_release_soak=false`                                                                                                   |
+| `postpublish-confidence` | `validation_purpose=postpublish-confidence`, no publication selection; exact published package; `run_release_soak=true` or explicit focused groups |
+| `stable-publish`         | `release_profile=stable`                                                                                                                           |
 
-For a regular release whose qualified Code SHA already contains final notes,
-use that same commit as the **Release SHA**. Retain its successful full
-validation parent and exact prepared publication artifacts; no extra commit or
-validation run is needed solely to separate those roles.
+| All-group policy               | Eligibility                                                                                                                                             | Retained / deferred                                                                                                                                                                                                                                                                   |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `coveragePolicy=npm-beta-v1`   | Actual beta package, matching release branch/beta tag, beta profile, no soak; not `main` or non-beta targets                                            | Retains Linux/macOS/Windows Node, Control UI, plugins, package integrity, install/update and cross-OS acceptance, QA parity, runtime-pair/restart and tool coverage. Defers native apps, performance, published-package Telegram; broad live/E2E and QA-live remain outside the gate. |
+| `coveragePolicy=npm-stable-v1` | Regular final package, matching release branch/tag, stable profile; includes numeric corrections and unchanged base packages with same-source base tags | CI `npm-stable` scope defers only iOS/Watch, Android, native i18n. Retains macOS Swift/OpenClawKit `tests`/`packages`, Linux/macOS/Windows Node, Control UI, plugins, package/installer acceptance, QA, soak, blocking performance.                                                   |
 
-If notes change after qualification, commit the selected release entry and its
-permitted record/index updates as a new
-Release SHA and run the same helper for that commit. Product evidence reuse is
-optional and requires GitHub to prove that the Release SHA descends from the
-green Code SHA. The complete changed path set must include
-`CHANGELOG/YYYY.M.PATCH.md` and may also include only `CHANGELOG.md` and
-`CHANGELOG/records/YYYY.M.PATCH.md`. Entry/record additions or modifications are
-allowed; the root index may only be modified. Renames, deletions, other release
-files, and docs source edits do not qualify. This path records
-`split-changelog-release-v1`; historical root-only receipts retain their
-`changelog-only-release-v1` contract. Reuse still qualifies the changed
-package and image bytes. Any other source change returns to full Code
-validation. See [Releasing](/reference/RELEASING) for the publication sequence.
+- Deferred beta confidence: exact published beta with `run_release_soak=true`, or explicit `ci`, `performance`, `npm-telegram`, `package`, or relevant QA/live group. Selected children must finish/pass policy; deferred means **not run**, never passed. Stable/full/soak/focused confidence coverage is unchanged.
+- Extended-stable, contextless `main`, `full`, and explicit `ci` retain full CI. Reuse requires identical coverage policy, package version, target context, and effective inputs; beta/historical-full receipts cannot substitute for stable npm evidence.
 
-The conceptual phases map to current inputs:
+**Native publication:** `OpenClaw Release Publish` runs exact-source full CI with Android alongside npm-stable core publication. Successful native qualification **and** core publication gate the separate Android job’s v3 receipt and tag-owned APK dispatch. The receipt binds native run/attempt/tooling ref; proof is rechecked before approval, immediately before dispatch, before APK attestation, and each upload. Frozen non-v3 tags (including `v2026.8.2` and same-source corrections) require `release_profile=full` and retain v2; npm-only evidence is rejected before core publication. Recorded native failures block Android, not core npm/GitHub finalization; the parent may remain active afterward.
 
-- `beta-publish`: `release_profile=beta`, `run_release_soak=false`
-- `postpublish-confidence`: `validation_purpose=postpublish-confidence`, no publication selection, exact published package plus
-  `run_release_soak=true` or explicit focused groups
-- `stable-publish`: `release_profile=stable`
+macOS keeps native validation/signing/notarization/promotion gates. Signing, notarization, appcast and Windows Hub promotion run alongside/after npm, never delaying it; artifact/promotion gates remain. Windows Hub assets are required before the regular GitHub release leaves draft. Stable npm still requires soak and blocking performance.
 
-For an actual beta package on its matching canonical release branch or beta
-tag, `all` with `release_profile=beta` and no soak records
-`coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
-Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
-package checks, QA parity, core runtime-pair/restart proof, and runtime tool
-coverage. Native app qualification, product performance, and published-package
-Telegram confidence are deferred. Broad live/E2E and QA-live also remain outside
-this bounded gate.
+**Package selection:** Package Acceptance normally packs resolved `ref`, including full-SHA `pnpm ci:full-release` runs. After beta publication, `release_package_spec=openclaw@YYYY.M.PATCH-beta.N` selects shipped bytes across release checks, Package Acceptance, cross-OS, release-path Docker, and package Telegram. Override `package_acceptance_package_spec` only to intentionally test a different package.
 
-Run deferred confidence against the exact published beta with
-`run_release_soak=true`, or select `ci`, `performance`, `npm-telegram`,
-`package`, or the relevant QA/live group explicitly. Selected children must
-still finish and pass their existing policy; a deferred check is **not run**,
-never passed. Stable, full, soak-enabled, and focused validation retain their
-existing confidence coverage. `main`, alpha, and non-beta targets do not qualify
-for `npm-beta-v1`.
+The Codex lane derives `codex_plugin_spec=npm:@openclaw/codex@<version>` from published specs; SHA/artifact runs pack `extensions/codex` at the selected ref. Explicit `codex_plugin_spec` supports `npm:`, `npm-pack:`, `git:`. It grants required Codex CLI install approval, runs CLI preflight and same-session OpenAI turns. Final proof: zero retries, medium thinking, visible progress without Codex `final`, randomized workspace reads, exact artifact write, explicit completion (v2026.7.1 progress-termination regression).
 
-For a regular final package on its matching release branch or tag, `all` with
-`release_profile=stable` records `coveragePolicy=npm-stable-v1` and uses CI's
-`npm-stable` scope. Numeric corrections qualify, including an unchanged base
-package whose base tag resolves to the same source SHA. This policy defers only
-macOS Swift/OpenClawKit, iOS/Watch, Android, and native i18n. Linux, macOS, and
-Windows Node coverage, Control UI, plugins, package and installer acceptance,
-QA, stable soak, and blocking product performance remain required. Extended-stable,
-`main` without release context, `full`, and explicit `ci` runs retain full CI.
-Evidence reuse requires the same coverage policy, exact package version, target
-context, and effective inputs; a beta or historical full receipt cannot silently
-replace stable npm qualification.
+**Telegram:** selected source QA, standalone npm, and Package Acceptance tests run; failures block unless the pinned [waiver policy](/reference/full-release-validation/evidence#release-tooling-waivers) grants that exact failure. Missing credentials/exhausted pools are not proof; preserve candidate identity, credential isolation, and lease cleanup.
 
-Native publication owns the deferred qualification. For an npm-stable release,
-`OpenClaw Release Publish` starts an exact-source full CI run with Android enabled
-in parallel with core publication. Only successful native qualification and core
-publication permit the separate Android job to issue a v3 approval receipt and
-dispatch the tag-owned APK publisher. The receipt binds the exact native CI run,
-attempt, and tooling ref. The publisher rechecks that proof before writing approval,
-immediately before dispatch, before APK attestation, and before each asset upload.
-Frozen tags without the v3 consumer, including `v2026.8.2` and its same-source
-corrections, must use `release_profile=full`; publication rejects npm-only evidence
-for those targets before starting core publication. Their historical full-validation
-route retains the v2 approval contract. Native failures are
-recorded and block Android approval, while core npm publication and GitHub
-release finalization remain independent. The parent may remain active for native
-work after core publication completes. macOS retains its separate native
-validation, signing, notarization, and promotion gates. Stable npm publication
-still rejects evidence without soak and blocking product performance.
-
-macOS app signing, notarization, appcast publication, and Windows Hub asset
-promotion run in parallel with or after npm publication and never delay npm.
-Their own artifact validation and promotion gates still apply; Windows Hub
-assets remain required before the regular GitHub release leaves draft.
-
-Package Acceptance normally builds the candidate tarball from the resolved
-`ref`, including full-SHA runs dispatched with `pnpm ci:full-release`. After a
-beta publish, pass `release_package_spec=openclaw@YYYY.M.PATCH-beta.N` to reuse
-the shipped npm package across release checks, Package Acceptance, cross-OS,
-release-path Docker, and package Telegram. Use `package_acceptance_package_spec`
-only when Package Acceptance should intentionally prove a different package.
-The Codex plugin live package lane follows the same state: published
-`release_package_spec` values derive `codex_plugin_spec=npm:@openclaw/codex@<version>`;
-SHA/artifact runs pack `extensions/codex` from the selected ref; and operators
-can set `codex_plugin_spec` directly for `npm:`, `npm-pack:`, or `git:` plugin
-sources. The lane grants the explicit Codex CLI install approval required by
-that plugin, then runs Codex CLI preflight and same-session OpenAI agent turns.
-Its final zero-retry, medium-thinking turn sends visible progress with omitted
-Codex `final`, reads randomized workspace inputs, writes their exact artifact,
-and sends explicit completion. This catches the v2026.7.1 regression where an
-ordinary progress send terminated the turn.
-
-Selected source Telegram QA and standalone npm Telegram tests must pass before
-normal release validation can pass. Selected Package Acceptance Telegram must also pass in every profile. Missing credentials,
-an exhausted pool, and failed attempts do not count as successful proof. Exact
-candidate identity, credential isolation, and lease cleanup remain required.
-
-Package Acceptance Telegram E2E is automatically deferred for every beta-profile
-`all` run without soak, including beta-profile checks of `main` or alpha targets.
-The effective `skip_package_telegram_e2e=true` is captured in the inputs and
-summary as **not run**. Soak-enabled runs and explicit `rerun_group=package`
-keep Telegram selected by default. The existing
-`-f skip_package_telegram_e2e=true` input remains available for an explicit beta
-deferral; it is rejected for `stable` and `full` and does not disable the focused
-`rerun_group=npm-telegram` workflow.
-
-Selected-test requirements are separate from explicit omissions. The reviewed exceptions are
-`-f telegram_waiver=2026.8.1-owner-approved` and
-`-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
-reviewed code change; a matching `<target-version>-owner-approved` string alone
-is not authorization. The value must name the validated target's actual
-`package.json` version, the sealed candidate version must match, and the profile
-must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
-Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs
-select the sealed candidate.
-It omits source Telegram QA, Package Acceptance Telegram E2E, and the
-published-package Telegram E2E; their evidence states **waived / not run**,
-never passed. Telegram unit tests and every other selected gate remain active,
-including stable soak and performance checks. An explicit Telegram rerun or
-suite filter, including an aggregate such as `qa-live` or `qa-live-non-slack`
-that selects Telegram, conflicts with the waiver and is rejected. The declaration and
-target version bind the immutable execution plan, manifest, and reuse identity;
-the publisher carries the waiver into release verification notes. The beta-only
-package deferral above remains unchanged.
-
-Source Telegram QA uses the release checks' shared context check: an exact candidate
-SHA must remain an ancestor of its canonical branch, or equal its release tag.
-Both build and execution admission independently repeat that check and retain
-candidate-version, signature/merge-attribution, and live maintainer checks.
-Advancing a release branch does not select a new candidate or invalidate the old one.
+- Every beta-profile `all` run without soak—including `main`—automatically defers Package Acceptance Telegram E2E and records effective `skip_package_telegram_e2e=true` in inputs/summary as **not run**. Soak or explicit `rerun_group=package` selects Telegram by default. Explicit beta `-f skip_package_telegram_e2e=true` remains available; stable/full reject it; focused `rerun_group=npm-telegram` is unaffected.
+- Source QA requires C to remain a release-branch ancestor or equal its release tag. Build and execution admission independently check context, candidate version, signature/merge attribution, and live maintainer authority. Branch advancement neither selects a new C nor invalidates the old one.

@@ -25,7 +25,6 @@ import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Constraints
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntRect
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
@@ -201,7 +200,6 @@ private data class SheetHostElement(
   override fun create() = SheetHostNode(state, direction)
 
   override fun update(node: SheetHostNode) {
-    check(node.state === state)
     node.direction = direction
   }
 

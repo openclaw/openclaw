@@ -1,7 +1,8 @@
 import path from "node:path";
-import { openSqliteWorkerStore, type SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
+import type { SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import type { TeamReportsOperations } from "./store-contract.js";
+import { TEAM_REPORTS_WRITES } from "./store-contract.js";
 import type { Period } from "./types.js";
 
 export type { PeriodListEntry, PersonDay } from "./store-contract.js";
@@ -11,14 +12,31 @@ export class TeamReportsStore {
 
   constructor(private readonly worker: SqliteWorkerStore<TeamReportsOperations>) {}
 
-  private async execute<K extends keyof TeamReportsOperations>(
+  async execute<K extends keyof TeamReportsOperations>(
     type: K,
     input: TeamReportsOperations[K]["input"],
+    options?: { signal?: AbortSignal },
   ): Promise<TeamReportsOperations[K]["output"]> {
     if (this.closed) {
       throw new Error("Team Reports store is closed.");
     }
-    return this.worker.execute({ type, input });
+    return this.worker.execute({ type, input }, options);
+  }
+
+  resetActivity() {
+    return this.execute("resetActivity", undefined);
+  }
+
+  appendActivity(input: TeamReportsOperations["appendActivity"]["input"]) {
+    return this.execute("appendActivity", input);
+  }
+
+  aggregateActivity(input: TeamReportsOperations["aggregateActivity"]["input"]) {
+    return this.execute("aggregateActivity", input);
+  }
+
+  aggregatePeriod(input: TeamReportsOperations["aggregatePeriod"]["input"]) {
+    return this.execute("aggregatePeriod", input);
   }
 
   upsertPeriod(value: TeamReportsOperations["upsertPeriod"]["input"]) {
@@ -43,10 +61,6 @@ export class TeamReportsStore {
 
   latestPeople() {
     return this.execute("latestPeople", undefined);
-  }
-
-  getDayReports(sinceMs: number, untilMs: number) {
-    return this.execute("getDayReports", { sinceMs, untilMs });
   }
 
   listPersonDays(
@@ -95,10 +109,27 @@ export async function createTeamReportsStore(options: {
       "team-reports",
       "team-reports.sqlite",
     );
-  const worker = await openSqliteWorkerStore<TeamReportsOperations>({
-    moduleUrl: options.workerModuleUrl,
-    databasePath,
-    input: undefined,
+  const { openEngineWorkerStore, getDatabaseEngineInput, runEngineStoreOperation } =
+    await import("openclaw/plugin-sdk/database-engine-runtime");
+  const input = getDatabaseEngineInput("team-reports");
+  const worker = await openEngineWorkerStore<TeamReportsOperations>(
+    {
+      moduleUrl: options.workerModuleUrl,
+      databasePath,
+      input,
+    },
+    input,
+  );
+  return new TeamReportsStore({
+    execute: (command, operationOptions) =>
+      runEngineStoreOperation(
+        worker,
+        input,
+        TEAM_REPORTS_WRITES.has(command.type),
+        (scope) => scope.execute(command, operationOptions),
+        undefined,
+        databasePath,
+      ),
+    close: () => worker.close(),
   });
-  return new TeamReportsStore(worker);
 }

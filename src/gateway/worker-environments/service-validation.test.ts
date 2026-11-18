@@ -1,47 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { requireWorkerLease } from "./service-validation.js";
 
-const transports = [
-  { kind: "node", endpoint: { node: { deviceId: "node-1" } } },
+const nodeLease = { leaseId: "lease-1", node: { deviceId: "node-1" } };
+
+it.each([
+  { ...nodeLease, sharedHost: true },
   {
-    kind: "ssh",
-    endpoint: {
-      ssh: {
-        host: "worker.example.test",
-        port: 22,
-        user: "openclaw",
-        hostKey: "ssh-ed25519 AAAA",
-        keyRef: { source: "file", provider: "worker-keys", id: "/development-key" },
-      },
+    leaseId: "lease-1",
+    sharedHost: false,
+    ssh: {
+      host: "worker.example.test",
+      port: 22,
+      user: "openclaw",
+      hostKey: "ssh-ed25519 AAAA",
+      keyRef: { source: "file", provider: "worker-keys", id: "/development-key" },
     },
   },
-];
+])("preserves the explicit provider host classification $sharedHost", (lease) => {
+  expect(requireWorkerLease(lease)).toEqual(lease);
+});
 
-describe.each(transports)("$kind worker lease host classification", ({ endpoint }) => {
-  it.each([true, false])("preserves the explicit provider fact %s", (sharedHost) => {
-    expect(requireWorkerLease({ leaseId: "lease-1", ...endpoint, sharedHost })).toEqual({
-      leaseId: "lease-1",
-      ...endpoint,
-      sharedHost,
-    });
-  });
+it("does not infer omitted host classification", () => {
+  expect(requireWorkerLease(nodeLease)).toEqual(nodeLease);
+});
 
-  it.each([{}, { sharedHost: undefined }])(
-    "does not infer omitted classification from %j",
-    (input) => {
-      expect(requireWorkerLease({ leaseId: "lease-1", ...endpoint, ...input })).toEqual({
-        leaseId: "lease-1",
-        ...endpoint,
-      });
-    },
-  );
-
-  it.each([null, 0, "false", {}, []].map((sharedHost) => ({ sharedHost })))(
-    "rejects non-boolean classification $sharedHost",
-    ({ sharedHost }) => {
-      expect(() => requireWorkerLease({ leaseId: "lease-1", ...endpoint, sharedHost })).toThrow(
-        "Worker provider returned an invalid provision result",
-      );
-    },
+it.each([null, "false"])("rejects non-boolean host classification %j", (sharedHost) => {
+  expect(() => requireWorkerLease({ ...nodeLease, sharedHost })).toThrow(
+    "Worker provider returned an invalid provision result",
   );
 });

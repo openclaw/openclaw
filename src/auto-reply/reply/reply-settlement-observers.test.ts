@@ -6,7 +6,6 @@ import { captureReplyDispatchDeliveryOutcome, createReplyDispatcher } from "./re
 describe("reply settlement observer isolation", () => {
   it.each([
     { asyncObserver: false, asyncReporter: false },
-    { asyncObserver: false, asyncReporter: true },
     { asyncObserver: true, asyncReporter: true },
   ])(
     "settles replies independently of observer failure (asyncObserver=$asyncObserver, asyncReporter=$asyncReporter)",

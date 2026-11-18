@@ -7,19 +7,7 @@ type WriterEvent = {
   values?: number[];
 };
 
-export function startSqliteConcurrentWriter(
-  databasePath: string,
-  journal: "WAL" | "MEMORY",
-  busyTimeoutMs = 30_000,
-) {
-  // Snapshot header reads close raw descriptors. A thread would share the
-  // writer's POSIX locks with those reads; a separate process owns its locks.
-  const child = spawn(
-    process.execPath,
-    [
-      "--input-type=commonjs",
-      "-e",
-      `
+const writerScript = `
         const { DatabaseSync } = require("node:sqlite");
         const database = new DatabaseSync(process.argv[1]);
         const journal = process.argv[2];
@@ -96,27 +84,35 @@ export function startSqliteConcurrentWriter(
               report("busy");
             }
           }
-          setImmediate(writeBatch);
+          // WAL checkpoints stay disabled for source-artifact assertions. Pace
+          // commits instead of busy-spinning an uncheckpointed WAL during slow inspection.
+          if (journal === "WAL") setTimeout(writeBatch, 1);
+          else setImmediate(writeBatch);
         }
         writeBatch();
-      `,
-      databasePath,
-      journal,
-      String(busyTimeoutMs),
-    ],
+      `;
+
+export function startSqliteConcurrentWriter(
+  databasePath: string,
+  journal: "WAL" | "MEMORY",
+  busyTimeoutMs = 30_000,
+) {
+  // Snapshot header reads close raw descriptors. A thread would share the
+  // writer's POSIX locks with those reads; a separate process owns its locks.
+  const child = spawn(
+    process.execPath,
+    ["--input-type=commonjs", "-e", writerScript, databasePath, journal, String(busyTimeoutMs)],
     { stdio: ["ignore", "ignore", "pipe", "ipc"] },
   );
   const messages = new Map<WriterEvent["event"], WriterEvent>();
-  const waiters = new Set<() => void>();
+  let changed = Promise.withResolvers<void>();
   let failure: Error | undefined;
   let stderr = "";
   let closed = false;
   let stopping = false;
   const wake = () => {
-    for (const resolve of waiters) {
-      resolve();
-    }
-    waiters.clear();
+    changed.resolve();
+    changed = Promise.withResolvers<void>();
   };
   child.stderr?.on("data", (chunk: Buffer) => {
     stderr = (stderr + chunk.toString()).slice(-4000);
@@ -154,22 +150,18 @@ export function startSqliteConcurrentWriter(
       if (closed) {
         throw new Error(`SQLite writer closed before ${event}`);
       }
-      await new Promise<void>((resolve) => {
-        waiters.add(resolve);
-      });
+      await changed.promise;
     }
   }
+  const request = (command: string, event: WriterEvent["event"]) => {
+    child.send(command);
+    return waitFor(event);
+  };
   return {
     pid: child.pid,
     waitFor,
-    async holdTransaction() {
-      child.send("hold");
-      return await waitFor("held");
-    },
-    async progress() {
-      child.send("progress");
-      return await waitFor("progress");
-    },
+    holdTransaction: async () => await request("hold", "held"),
+    progress: async () => await request("progress", "progress"),
     async stop() {
       if (!stopping && !closed && child.connected) {
         stopping = true;

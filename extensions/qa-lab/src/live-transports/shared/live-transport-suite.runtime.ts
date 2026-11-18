@@ -183,23 +183,11 @@ export async function runStandardLiveTransportQaSuiteCommand(params: {
     channelId: params.channelId,
     defaultProviderMode: "live-frontier",
     options: params.options,
-    selectScenarioIds: ({ channelDriver, profile, primaryModel, providerMode, scenarioIds }) =>
-      channelDriver === "crabline"
-        ? resolveCatalogLiveTransportQaScenarioIds({
-            channelId: params.channelId,
-            channelDriver,
-            primaryModel,
-            providerMode,
-            scenarioIds,
-            supportsModuleFlows: true,
-          })
-        : resolveLiveTransportQaScenarioIds({
-            channelId: params.channelId,
-            profile,
-            primaryModel,
-            providerMode,
-            scenarioIds,
-            supportsModuleFlows: true,
-          }),
+    selectScenarioIds: ({ channelDriver, profile, ...selection }) => {
+      const options = { ...selection, channelId: params.channelId, supportsModuleFlows: true };
+      return channelDriver === "crabline"
+        ? resolveCatalogLiveTransportQaScenarioIds({ ...options, channelDriver })
+        : resolveLiveTransportQaScenarioIds({ ...options, profile });
+    },
   });
 }

@@ -1,13 +1,42 @@
 import type { ChildProcess } from "node:child_process";
 import { once } from "node:events";
+import fs, {
+  readFileSync as nativeReadFileSync,
+  readdirSync as nativeReaddirSync,
+  readlinkSync as nativeReadlinkSync,
+} from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import process from "node:process";
-import { setImmediate } from "node:timers/promises";
+import { setImmediate, setTimeout as waitForProcessTick } from "node:timers/promises";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as processIdentity from "../shared/pid-alive.js";
-import { killPidIfAlive, waitForPidToExit } from "../test-utils/process-tree.js";
+import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
+import * as commandIdentity from "./command-process-identity.js";
+import { readCommandProcessCleanup } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
+import { isProcessGroupGoneByCensus } from "./supervisor/service-child-group-ownership.js";
+
+// Wrap the real census so tests can tell whether the kernel probe alone settled a group.
+vi.mock("./supervisor/service-child-group-ownership.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("./supervisor/service-child-group-ownership.js")>();
+  return { ...actual, isProcessGroupGoneByCensus: vi.fn(actual.isProcessGroupGoneByCensus) };
+});
+
+// A foreign descendant has no retained ChildProcess handle after its root exits.
+async function waitForGroupExit(child: ChildProcess, signal: AbortSignal): Promise<void> {
+  try {
+    while (isChildProcessTreeAlive(child)) {
+      await waitForProcessTick(25, undefined, { signal });
+    }
+  } catch (error) {
+    throw new Error(`Timed out waiting for process group ${child.pid} to exit`, { cause: error });
+  }
+}
 
 type ScopeCase = {
   name: string;
@@ -16,13 +45,17 @@ type ScopeCase = {
   identity?: "initially-missing" | "reused-after-exit" | "reused-after-extinction";
 };
 
-const endings: ScopeCase[] = [false, true].flatMap((exitParent) =>
-  (["explicit", "resolve", "reject"] as const).map((completion) => ({
-    name: `stops owned descendants on ${completion} without stopping another command (parent exited: ${exitParent})`,
-    exitParent,
-    completion,
-  })),
-);
+const endings: ScopeCase[] = (
+  [
+    ["explicit", false],
+    ["resolve", true],
+    ["reject", false],
+  ] as const
+).map(([completion, exitParent]) => ({
+  name: `stops owned descendants on ${completion} without stopping another command (parent exited: ${exitParent})`,
+  exitParent,
+  completion,
+}));
 endings.push(
   {
     name: "stops a live child when its initial start-time probe failed",
@@ -112,43 +145,63 @@ describe("command process scope cancellation", () => {
     }, controller.signal);
   });
 
-  it.each(["scope", "caller"] as const)(
+  it.for(["scope", "caller"] as const)(
     "joins command-runner termination after nested %s cancellation",
-    async (source) => {
+    async (source, { signal }) => {
       const controller = new AbortController();
       const caller = new AbortController();
+      const identityReady = createDeferredCore();
+      const readIdentity = commandIdentity.readCommandProcessStartTime;
+      const identity = vi
+        .spyOn(commandIdentity, "readCommandProcessStartTime")
+        .mockImplementationOnce(async (...args) => {
+          const observed = await readIdentity(...args);
+          await identityReady.promise;
+          return observed;
+        });
       let childPid: number | undefined;
       try {
         await withCommandProcessScope(
           () =>
             withCommandProcessScope(async () => {
               let output = "";
-              const result = await runCommandWithTimeout(
-                [
-                  process.execPath,
-                  "-e",
-                  "process.on('SIGTERM',()=>{});console.log(process.pid);setInterval(()=>{},1000)",
-                ],
-                {
-                  signal: caller.signal,
-                  killProcessTree: true,
-                  timeoutMs: 3_000,
-                  onOutputChunk: (chunk) => {
-                    output += chunk.toString();
-                    if (output.includes("\n") && childPid === undefined) {
-                      childPid = Number(output.trim());
-                      (source === "scope" ? controller : caller).abort();
-                    }
+              const result = await withinTest(
+                runCommandWithTimeout(
+                  [
+                    process.execPath,
+                    "-e",
+                    "process.on('SIGTERM',()=>{});console.log(process.pid);setInterval(()=>{},1000)",
+                  ],
+                  {
+                    signal: caller.signal,
+                    killProcessTree: true,
+                    timeoutMs: 3_000,
+                    onOutputChunk: (chunk) => {
+                      output += chunk.toString();
+                      if (output.includes("\n") && childPid === undefined) {
+                        childPid = Number(output.trim());
+                        (source === "scope" ? controller : caller).abort();
+                      }
+                    },
                   },
-                },
-              );
-              expect(result).toMatchObject({ termination: "signal", cleanup: "forced" });
+                ),
+                signal,
+              ).finally(() => identityReady.resolve());
+              expect(result.termination).toBe("signal");
+              expect(
+                await withinTest(
+                  Promise.resolve(readCommandProcessCleanup(result) ?? result.cleanup),
+                  signal,
+                ),
+              ).toBe("forced");
               expect(Number.isSafeInteger(childPid)).toBe(true);
               expect(processIdentity.isPidAlive(childPid!)).toBe(false);
             }),
           controller.signal,
         );
       } finally {
+        identityReady.resolve();
+        identity.mockRestore();
         killPidIfAlive(childPid);
       }
     },
@@ -156,7 +209,8 @@ describe("command process scope cancellation", () => {
 });
 
 describe.skipIf(process.platform === "win32")("terminal command process ownership", () => {
-  it.each(endings)("$name", async ({ exitParent, completion, identity }) => {
+  it.for(endings)("$name", async ({ exitParent, completion, identity }, { signal: testSignal }) => {
+    vi.mocked(isProcessGroupGoneByCensus).mockClear();
     const unrelated = spawnCommand([process.execPath, "-e", "setInterval(()=>{},1000)"], {
       stdio: "ignore",
       reject: false,
@@ -166,7 +220,10 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
     let descendantPid: number | undefined;
     let retiredSignals: MockInstance<typeof process.kill> | undefined;
     const failure = new Error("scope fixture failure");
-    const identityProbe = vi.spyOn(processIdentity, "getFileLockProcessStartTime");
+    const identityProbe =
+      process.platform === "linux" || process.platform === "android"
+        ? vi.spyOn(commandIdentity, "readCommandProcessStartTime")
+        : vi.spyOn(processIdentity, "getFileLockProcessStartTime");
     if (identity === "initially-missing") {
       identityProbe.mockReturnValueOnce(null);
     } else if (identity === "reused-after-exit" || identity === "reused-after-extinction") {
@@ -189,9 +246,14 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         );
         child = command.nodeChildProcess;
         childResult = command;
-        const [message] = await once(child, "message", {
-          signal: AbortSignal.timeout(3_000),
-        });
+        const [message] = await withinTest(
+          awaitGateBeforeSettlement(
+            once(child, "message", { signal: testSignal }),
+            command,
+            "Scope did not receive its descendant PID",
+          ),
+          testSignal,
+        );
         descendantPid = Number(message);
         expect(Number.isSafeInteger(descendantPid)).toBe(true);
         if (exitParent) {
@@ -204,8 +266,9 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
             // Real process-group extinction is required before simulating PID reuse.
             expect(isChildProcessTreeAlive(child)).toBe(true);
             process.kill(descendantPid, "SIGKILL");
-            expect(await waitForPidToExit(descendantPid)).toBe(true);
-            expect(isChildProcessTreeAlive(child)).toBe(false);
+            // Group absence also joins adopted-child reaping, which PID liveness alone cannot prove.
+            await waitForGroupExit(child, testSignal);
+            expect(processIdentity.isPidAlive(descendantPid)).toBe(false);
             const kill = process.kill.bind(process);
             let groupReads = 0;
             retiredSignals = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
@@ -231,20 +294,23 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
         }
       });
       if (identity === "reused-after-exit") {
-        await expect(running).rejects.toMatchObject({
+        await expect(withinTest(running, testSignal)).rejects.toMatchObject({
           code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
         });
       } else if (completion === "reject") {
-        await expect(running).rejects.toBe(failure);
+        await expect(withinTest(running, testSignal)).rejects.toBe(failure);
       } else {
-        await running;
+        await withinTest(running, testSignal);
       }
       if (descendantPid === undefined) {
         throw new Error("Scope did not receive its descendant PID");
       }
-      expect(await waitForPidToExit(descendantPid)).toBe(identity !== "reused-after-exit");
+      // Scope settlement joins group extinction, or rejects without signaling the reused identity.
+      expect(processIdentity.isPidAlive(descendantPid)).toBe(identity === "reused-after-exit");
       await childResult;
       expect(processIdentity.isPidAlive(unrelated.pid!)).toBe(true);
+      // The kernel group probe answers here; the census is only the denied-probe fallback.
+      expect(isProcessGroupGoneByCensus).not.toHaveBeenCalled();
       if (retiredSignals) {
         expect(
           retiredSignals.mock.calls.filter(
@@ -262,4 +328,95 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
       await unrelated;
     }
   });
+});
+
+describe.skipIf(process.platform !== "linux")("denied process-group probes", () => {
+  it("keeps a group alive on a kernel EPERM without consulting the census", () => {
+    vi.mocked(isProcessGroupGoneByCensus).mockClear();
+    const pgid = 123_456_789;
+    // A member owned by another UID makes the kernel answer EPERM for this group only;
+    // the out-of-range canary group still gets the kernel's ESRCH, so the host is not denying probes.
+    const kernel = vi.spyOn(process, "kill").mockImplementation((pid) => {
+      throw Object.assign(new Error(pid === -pgid ? "kill EPERM" : "kill ESRCH"), {
+        code: pid === -pgid ? "EPERM" : "ESRCH",
+        syscall: "kill",
+      });
+    });
+    try {
+      expect(isChildProcessTreeAlive({ pid: pgid })).toBe(true);
+      expect(isProcessGroupGoneByCensus).not.toHaveBeenCalled();
+    } finally {
+      kernel.mockRestore();
+    }
+  });
+
+  it(
+    "settles a scope from the process census when negative-PID probes return EPERM",
+    { timeout: 15_000 },
+    async ({ signal: testSignal }) => {
+      vi.mocked(isProcessGroupGoneByCensus).mockClear();
+      let descendantPid: number | undefined;
+      const namespaceReads = vi.spyOn(fs, "readlinkSync");
+      const directoryReads = vi.spyOn(fs, "readdirSync");
+      const fileReads = vi.spyOn(fs, "readFileSync");
+      syncBuiltinESMExports();
+      let observedSync = { namespace: 0, directory: 0, file: 0 };
+      const kill = process.kill.bind(process);
+      // OpenShell's seccomp rule denies group-wide kill(2) and probes with EPERM.
+      const denied = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid < 0) {
+          throw Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" });
+        }
+        return kill(pid, signal);
+      });
+      try {
+        nativeReadlinkSync("/proc/self");
+        nativeReaddirSync("/proc");
+        nativeReadFileSync("/proc/self/stat", "utf8");
+        expect(namespaceReads).toHaveBeenCalled();
+        expect(directoryReads).toHaveBeenCalled();
+        expect(fileReads).toHaveBeenCalled();
+        await withinTest(
+          withCommandProcessScope(async () => {
+            // The root exits at once; its descendant keeps the group alive.
+            const descendant = "setInterval(()=>{},1000)";
+            const command = spawnCommand(
+              [
+                process.execPath,
+                "-e",
+                `const c=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});c.unref();console.log(c.pid)`,
+              ],
+              { stdio: ["ignore", "pipe", "ignore"], reject: false },
+            );
+            const { stdout } = await command;
+            descendantPid = Number(stdout);
+            // EPERM alone proves nothing: only the census can see the live descendant.
+            expect(isChildProcessTreeAlive(command.nodeChildProcess)).toBe(true);
+            expect(isProcessGroupGoneByCensus).toHaveBeenCalled();
+            namespaceReads.mockClear();
+            directoryReads.mockClear();
+            fileReads.mockClear();
+            process.kill(descendantPid, "SIGKILL");
+          }),
+          testSignal,
+        );
+        observedSync = {
+          namespace: namespaceReads.mock.calls.filter(([file]) => file === "/proc/self").length,
+          directory: directoryReads.mock.calls.filter(([file]) => file === "/proc").length,
+          file: fileReads.mock.calls.filter(
+            ([file]) => typeof file === "string" && file.startsWith("/proc/"),
+          ).length,
+        };
+      } finally {
+        denied.mockRestore();
+        namespaceReads.mockRestore();
+        directoryReads.mockRestore();
+        fileReads.mockRestore();
+        syncBuiltinESMExports();
+        killPidIfAlive(descendantPid);
+      }
+      expect(processIdentity.isPidAlive(descendantPid!)).toBe(false);
+      expect(observedSync).toEqual({ namespace: 0, directory: 0, file: 0 });
+    },
+  );
 });

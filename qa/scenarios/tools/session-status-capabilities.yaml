@@ -1,0 +1,25 @@
+title: Session status capability inventory
+
+scenario:
+  id: session-status-capabilities
+  surface: tools
+  coverage:
+    primary:
+      - gateway.session-apis-session-status
+  objective: Verify session_status reports the live session tool inventory and names the policy source for tools the session does not expose.
+  successCriteria:
+    - Plain session_status calls do not read the tool inventory.
+    - session_status with capabilities=true returns the Gateway's live-session inventory for a real stored session.
+    - Tools removed by tools.deny are listed as unavailable with their policy source in both the structured result and the model-visible text.
+  docsRefs:
+    - docs/concepts/session-tool.md
+    - docs/gateway/config-tools.md
+  codeRefs:
+    - src/agents/tools/session-status-capabilities.ts
+    - src/agents/tools/session-status-tool.ts
+    - src/gateway/server-methods/tools-effective.ts
+    - test/e2e/qa-lab/runtime/session-status-capabilities.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/session-status-capabilities.e2e.test.ts
+    summary: Starts the full Gateway with tools.deny, seeds a real session, and invokes session_status through POST /tools/invoke.

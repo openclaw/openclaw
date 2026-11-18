@@ -1,4 +1,4 @@
-// The production subscriber call sites are covered in block-reply-rejections;
+// The production subscriber call sites are covered in before-terminal-delivery;
 // this child-process proof adds the real fatal unhandled-rejection handler.
 import { describe, expect, it } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";

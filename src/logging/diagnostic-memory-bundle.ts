@@ -1,4 +1,8 @@
-import type { DiagnosticMemoryUsage } from "../infra/diagnostic-process-types.js";
+import {
+  DIAGNOSTIC_WORKER_RETAINED_STRUCTURES,
+  type DiagnosticMemoryUsage,
+  type DiagnosticWorkerRetainedData,
+} from "../infra/diagnostic-process-types.js";
 import { normalizeDiagnosticWorkerScript } from "../infra/worker-diagnostic-script.js";
 import {
   assignOptionalFields,
@@ -21,7 +25,13 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
     memory,
     label,
     [
+      "anonymousRssBytes",
+      "anonymousSwapBytes",
+      "heapSizeLimitBytes",
+      "oldGenerationAfterGcBytes",
       "workerCount",
+      "postgresBridgeCount",
+      "postgresPoolSelfRootCount",
       "workerHeapSampledCount",
       "workerHeapTotalBytes",
       "workerHeapUsedBytes",
@@ -55,9 +65,47 @@ export function readMemoryUsage(input: unknown, label: string): DiagnosticMemory
         sample,
         worker,
         entryLabel,
-        ["threadId", "external", "arrayBuffers", "sampleAgeMs"],
+        [
+          "threadId",
+          "external",
+          "arrayBuffers",
+          "sampleAgeMs",
+          "heapSizeLimitBytes",
+          "oldGenerationAfterGcBytes",
+        ],
         readOptionalPositiveInteger,
       );
+      if (Array.isArray(worker.retainedData)) {
+        sample.retainedData = worker.retainedData.flatMap((retainedValue, retainedIndex) => {
+          const retainedLabel = `${entryLabel}.retainedData[${retainedIndex}]`;
+          const entry = readObject(retainedValue, retainedLabel);
+          const structure = DIAGNOSTIC_WORKER_RETAINED_STRUCTURES.find(
+            (candidate) => candidate === entry.structure,
+          );
+          if (!structure) {
+            return [];
+          }
+          const retained: DiagnosticWorkerRetainedData = {
+            structure,
+            entries: readRequiredNumber(entry.entries, `${retainedLabel}.entries`),
+            approximateBytes: readRequiredNumber(
+              entry.approximateBytes,
+              `${retainedLabel}.approximateBytes`,
+            ),
+          };
+          assignOptionalFields(
+            retained,
+            entry,
+            retainedLabel,
+            ["stringBytes", "objects", "generations", "providers", "accounts"],
+            readOptionalPositiveInteger,
+          );
+          if (typeof entry.truncated === "boolean") {
+            retained.truncated = entry.truncated;
+          }
+          return [retained];
+        });
+      }
       return sample;
     });
   }

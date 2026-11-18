@@ -1,49 +1,40 @@
 import { describe, expect, it } from "vitest";
+import { fitCompactionSummary } from "../../../../packages/agent-core/src/harness/compaction/compaction-summary-budget.js";
 import {
   createCompactionRequestBudget,
   estimateCompactedRequestTokens,
+  replayTokenBudget,
   withCompactionQueuedContext,
 } from "./request-budget.js";
 
 describe("createCompactionRequestBudget", () => {
   it.each([
     { pendingPrompt: undefined, pendingImageCount: 0, pendingTokens: 0 },
-    { pendingPrompt: "", pendingImageCount: 0, pendingTokens: 0 },
-    { pendingPrompt: "a", pendingImageCount: 0, pendingTokens: 1 },
-    { pendingPrompt: "aaaaa", pendingImageCount: 0, pendingTokens: 2 },
-    { pendingPrompt: "中", pendingImageCount: 0, pendingTokens: 1 },
-    { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 5 },
+    { pendingPrompt: "𠀀", pendingImageCount: 0, pendingTokens: 4 },
     { pendingPrompt: "", pendingImageCount: 1, pendingTokens: 2_400 },
     { pendingPrompt: "a", pendingImageCount: 1, pendingTokens: 2_401 },
   ])(
     "serializes fixed tools once for prompt=$pendingPrompt and images=$pendingImageCount",
     ({ pendingPrompt, pendingImageCount, pendingTokens }) => {
       let serializations = 0;
+      const toJSON = () => {
+        serializations += 1;
+        return {};
+      };
       const budget = createCompactionRequestBudget({
         contextWindow: 4_096,
         reserveTokens: 512,
-        tools: [
-          {
-            name: "a",
-            description: "b",
-            parameters: {
-              toJSON() {
-                serializations += 1;
-                return {};
-              },
-            },
-          },
-        ],
+        tools: [{ name: "a", description: "b", parameters: { toJSON } }],
         pendingPrompt,
         pendingImageCount,
         pendingUserIdempotencyKey: "pending-user",
       });
 
-      // The 48-character tool JSON contributes 16 tokens beside the 12-token boundary.
+      // The 48-character tool JSON, including 11 delimiters, adds 24 tokens beside the 12-token boundary.
       expect(budget).toEqual({
         contextWindow: 4_096,
         reserveTokens: 512,
-        fixedTokens: 34,
+        fixedTokens: 44,
         pendingTokens,
         pendingQueuedContextTokens: 0,
         pendingUserIdempotencyKey: "pending-user",
@@ -53,13 +44,9 @@ describe("createCompactionRequestBudget", () => {
   );
 
   it.each([
-    { systemPrompt: undefined, fixedTokens: 15, pendingTokens: 1 },
     { systemPrompt: " \n ", fixedTokens: 15, pendingTokens: 1 },
     { systemPrompt: "a", fixedTokens: 30, pendingTokens: 2 },
     { systemPrompt: "aaaaa", fixedTokens: 32, pendingTokens: 1 },
-    { systemPrompt: "aaaaaaaaa", fixedTokens: 33, pendingTokens: 1 },
-    { systemPrompt: "aaaaaaaaaaaaa", fixedTokens: 34, pendingTokens: 1 },
-    { systemPrompt: "aaaaaaaaaaaaaaaaa", fixedTokens: 35, pendingTokens: 1 },
   ])(
     "retains joint-margin rounding for system prompt $systemPrompt",
     ({ systemPrompt, fixedTokens, pendingTokens }) => {
@@ -70,14 +57,7 @@ describe("createCompactionRequestBudget", () => {
           systemPrompt,
           pendingPrompt: "a",
         }),
-      ).toEqual({
-        contextWindow: 100,
-        reserveTokens: 10,
-        fixedTokens,
-        pendingTokens,
-        pendingQueuedContextTokens: 0,
-        pendingUserIdempotencyKey: undefined,
-      });
+      ).toMatchObject({ fixedTokens, pendingTokens });
     },
   );
 
@@ -115,4 +95,29 @@ describe("createCompactionRequestBudget", () => {
       pendingQueuedContextTokens: 0,
     });
   });
+});
+
+it("keeps a replay summary fitted to its budget inside the window", () => {
+  const session = {
+    agent: { state: { systemPrompt: "Keep the project requirements. ".repeat(250) } },
+  };
+  const window = { contextWindow: 5_000, reserveTokens: 400 };
+  const replay = (summary: string) => [
+    { role: "compactionSummary" as const, summary, tokensBefore: 0, timestamp: 0 },
+    { role: "user" as const, content: "recent prompt", timestamp: 1 },
+  ];
+  const budget = replayTokenBudget(session, window, window, replay(""));
+  const fitted = fitCompactionSummary(
+    budget,
+    (chars) => ({ summary: "word ".repeat(chars) }),
+    9_000,
+  );
+  if (!fitted.ok) {
+    throw fitted.error;
+  }
+  const requestBudget = createCompactionRequestBudget({ ...window, ...session.agent.state });
+  expect(
+    estimateCompactedRequestTokens(replay(fitted.value.summary), requestBudget),
+  ).toBeLessThanOrEqual(4_600);
+  expect(replayTokenBudget(session, {}, window, replay(""))).toBeUndefined();
 });

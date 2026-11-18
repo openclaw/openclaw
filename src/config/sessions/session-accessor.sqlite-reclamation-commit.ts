@@ -1,6 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
-import { withSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
+import {
+  retainSqliteWriteAdmissionService,
+  withSqliteWriteAdmissionService,
+} from "../../infra/sqlite-transaction.js";
 
 const COMMIT_DECISION_TIMEOUT_MS = 5_000;
 const WAITING = 0;
@@ -9,10 +13,13 @@ const COMMITTING = 3;
 const SETTLED = 4;
 const REQUESTED = 5;
 
+/** A refused request may reuse its connection only after native rollback is confirmed. */
+export class SqliteReclamationRequestRefusedError extends Error {}
+
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
   buffer: SharedArrayBuffer,
-  database: DatabaseSync,
+  database: EngineConnection | string,
   assertCurrent: () => void,
   run: (authorize: () => void) => Promise<T>,
 ): Promise<T> {
@@ -53,7 +60,18 @@ export async function withSqliteReclamationAuthorization<T>(
       }
     }
   };
-  return await withSqliteWriteAdmissionService(database, service, () => run(authorize));
+  if (typeof database !== "string") {
+    return await withSqliteWriteAdmissionService(sqlPublicationAnchor(database), service, () =>
+      run(authorize),
+    );
+  }
+  // The execution owner's admitted native location does not require a host connection.
+  const release = retainSqliteWriteAdmissionService([database], service);
+  try {
+    return await run(authorize);
+  } finally {
+    release();
+  }
 }
 
 function rejectCommit(shared: Int32Array): void {
@@ -74,14 +92,34 @@ export function waitForSqliteReclamationCommit(
 ): void {
   const shared = new Int32Array(buffer);
   if (Atomics.compareExchange(shared, 0, WAITING, REQUESTED) !== WAITING) {
-    throw new Error("SQLite session reclamation commit was revoked");
+    throw new SqliteReclamationRequestRefusedError("SQLite session reclamation commit was revoked");
   }
   request();
   Atomics.wait(shared, 0, REQUESTED, COMMIT_DECISION_TIMEOUT_MS);
   if (Atomics.load(shared, 0) !== COMMITTING) {
     rejectCommit(shared);
-    throw new Error("SQLite session reclamation commit was not authorized");
+    throw new SqliteReclamationRequestRefusedError(
+      "SQLite session reclamation commit was not authorized",
+    );
   }
+}
+
+/** Physical qualification can block; consume the same live or accepted grant afterward. */
+export function assertSqliteReclamationAuthority(
+  buffer: SharedArrayBuffer,
+  assertPendingCurrent?: () => void,
+): void {
+  const state = Atomics.load(new Int32Array(buffer), 0);
+  if (state === COMMITTING) {
+    return;
+  }
+  if (assertPendingCurrent && (state === WAITING || state === REQUESTED)) {
+    assertPendingCurrent();
+    return;
+  }
+  throw new SqliteReclamationRequestRefusedError(
+    "SQLite reclamation authority is no longer current",
+  );
 }
 
 /** Publish only after the transaction ended or its connection successfully closed. */

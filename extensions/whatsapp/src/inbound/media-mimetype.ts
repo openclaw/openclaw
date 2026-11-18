@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements inbound media MIME normalization.
 import type { proto } from "baileys";
 
 /**

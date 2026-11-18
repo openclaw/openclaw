@@ -1,423 +1,384 @@
-import * as commandTaskRuntime from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import { createAgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { createAdmittedHostCapabilityTestFixture } from "openclaw/plugin-sdk/plugin-test-runtime";
+import path from "node:path";
+import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { itemNotification, turnCompleted } from "./protocol.test-helpers.js";
+import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import {
+  isCodexAppServerLiveThreadProtected,
+  retainCodexAppServerLiveThread,
+} from "./client-runtime.js";
+import { ownCodexInferenceClient } from "./inference-routing.js";
+import type { JsonObject } from "./protocol.js";
+import { itemNotification } from "./protocol.test-helpers.js";
+import {
+  answerCompleted,
+  readManagedInstructions,
+  retainSourceAuthority,
+  runningCommand,
+} from "./run-attempt-continuity.test-support.js";
+import { seedRunSessionOwnerForTest } from "./run-attempt-session-owners.test-support.js";
+import {
+  createParams,
   createStartedThreadHarness,
   createTestParams,
   runCodexAppServerAttempt,
   setupRunAttemptTestHooks,
+  tempDir,
+  threadStartResult,
 } from "./run-attempt-test-harness.js";
+import { isCodexTurnContextHandoff } from "./test-support.js";
+import { writeNativeCatalogFixture } from "./thread-lifecycle.test-fixtures.js";
 
 setupRunAttemptTestHooks();
 
-describe("native background command outcomes", () => {
-  it.each([
-    "complete",
-    "cancel",
-    "natural success",
-    "natural failure",
-    "natural failure during stop",
-    "source retired during stop",
-    "publication failure",
-    "refused stop",
-    "failed stop",
-    "concurrent stop",
-    "authority retired during inventory",
-    "changed handle",
-    "source retired",
-    "client closed",
-  ] as const)(
-    "keeps a retained native command owned after its foreground turn ends (%s)",
-    async (scenario) => {
-      const finished = createDeferred<void>();
-      const terminateStarted = createDeferred<void>();
-      const terminateRelease = createDeferred<void>();
-      const releaseSource = vi.fn();
-      const releaseTask = vi.fn();
-      let cancellationCurrent = true;
-      let finishAttempts = 0;
-      let terminationAttempts = 0;
-      let stopAttempts: Promise<PromiseSettledResult<void>[]> | undefined;
-      let cancelOwner: (() => Promise<void>) | undefined;
-      let commandTaskId: string | undefined;
-      const createTask = commandTaskRuntime.createAgentHarnessCommandTask;
-      const admission = vi
-        .spyOn(commandTaskRuntime, "createAgentHarnessCommandTask")
-        .mockImplementation(async (input) => {
-          cancelOwner = () =>
-            input.cancel("Cancelled by operator.", () => {
-              if (!cancellationCurrent) {
-                throw new Error("Task cancellation authority retired");
-              }
-            });
-          const task = await createTask(input);
-          commandTaskId = task.task.taskId;
-          return {
-            ...task,
-            release() {
-              releaseTask();
-              task.release();
-            },
-            async finish(terminal) {
-              try {
-                finishAttempts += 1;
-                if (scenario === "client closed" || scenario === "publication failure") {
-                  throw new Error("Synthetic terminal publication failure");
-                }
-                return await task.finish(terminal);
-              } finally {
-                finished.resolve();
-              }
-            },
-          };
-        });
-      const params = createTestParams();
-      const host = await createAdmittedHostCapabilityTestFixture(params);
-      params.agentHarnessTaskRuntimeScope = host.agentHarnessTaskRuntimeScope;
-      const source = new AbortController();
+const FIRST_CATALOG = "<available_skills><skill><name>weather</name></skill></available_skills>";
+const SECOND_CATALOG =
+  "<available_skills><skill><name>weather</name><description>edited</description></skill></available_skills>";
+
+describe("Codex app-server skill catalog delivery", () => {
+  it("keeps managed catalogs fresh and parent-local without thread refreshes", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-managed-skills";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
+    const received: string[] = [];
+    const personalUser = "Synthetic selected personal preferences.";
+    const personalPath = path.join(tempDir, "users", "alice", "USER.md");
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as { bootstrapFiles: unknown[] };
+      context.bootstrapFiles.push({
+        name: "USER.md",
+        path: personalPath,
+        content: personalUser,
+        missing: false,
+        personalUser: true,
+      });
+    });
+    const harness = createStartedThreadHarness(async (method, request) => {
+      if (method === "account/read") {
+        return { account: { type: "apiKey" } };
+      }
+      if (method === "turn/start") {
+        received.push(readManagedInstructions(harness.client, request));
+      }
+      return undefined;
+    });
+    ownCodexInferenceClient(harness.client);
+    for (const [index, catalog] of [
+      FIRST_CATALOG,
+      SECOND_CATALOG,
+      undefined,
+      SECOND_CATALOG,
+    ].entries()) {
+      const params = createParams(path.join(tempDir, "managed.jsonl"), tempDir, {
+        sessionKey,
+        runId: `managed-${index}`,
+      });
+      params.skillsSnapshot = { prompt: catalog ?? "", skills: [] };
+      if (index === 2) {
+        params.bootstrapContextMode = "lightweight";
+        params.bootstrapContextRunKind = "cron";
+      }
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      const result = await run;
+      if (index !== 2) {
+        expect(received[index]).toContain(personalUser);
+        expect(result.systemPromptReport?.injectedWorkspaceFiles).toContainEqual(
+          expect.objectContaining({ path: personalPath, injectedChars: personalUser.length }),
+        );
+      }
+    }
+    expect(received[0]).toContain(FIRST_CATALOG);
+    expect(received[1]).toContain(SECOND_CATALOG);
+    expect(received[1]).not.toContain(FIRST_CATALOG);
+    expect(received[2]).not.toContain("available_skills");
+    expect(received[3]).toContain(SECOND_CATALOG);
+    const nativeRequests = harness.requests.filter(({ method }) =>
+      ["thread/start", "thread/resume", "thread/inject_items"].includes(method),
+    );
+    expect(nativeRequests.map(({ method }) => method)).toEqual(["thread/start"]);
+    expect(JSON.stringify(nativeRequests)).not.toContain("available_skills");
+    expect(JSON.stringify(harness.requests)).not.toContain(personalUser);
+  });
+
+  it("re-delivers the catalog on the next turn when the post-compaction restore fails", async () => {
+    const sessionKey = "agent:main:dashboard:incognito-skill-restore-failure";
+    await seedRunSessionOwnerForTest("session-1", sessionKey);
+    let failNextInject = false;
+    const harness = createStartedThreadHarness(async (method, request) => {
+      if (
+        method === "thread/inject_items" &&
+        !isCodexTurnContextHandoff(request) &&
+        failNextInject
+      ) {
+        failNextInject = false;
+        throw new Error("inject_items unavailable");
+      }
+      return undefined;
+    });
+    const sessionFile = path.join(tempDir, "incognito-restore-failure-session.jsonl");
+    const workspaceDir = path.join(tempDir, "incognito-restore-failure-workspace");
+    const injectCount = () =>
+      harness.requests.filter(
+        ({ method, params }) =>
+          method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+      ).length;
+    const runTurn = async (runId: string, catalog: string, options: { compact?: boolean } = {}) => {
+      const params = createParams(sessionFile, workspaceDir, { sessionKey, runId });
+      // Allow the real before_compaction history worker to start.
+      params.timeoutMs = 60_000;
+      params.skillsSnapshot = { prompt: catalog, skills: [] };
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      if (options.compact) {
+        await harness.notify(
+          itemNotification("item/started", { type: "contextCompaction", id: "compact-1" }),
+        );
+        await harness.notify(
+          itemNotification("item/completed", { type: "contextCompaction", id: "compact-1" }),
+        );
+      }
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      await run;
+    };
+
+    await runTurn("run-1", FIRST_CATALOG);
+    await runTurn("run-2", SECOND_CATALOG);
+    expect(injectCount()).toBe(1);
+
+    // A failed restore leaves the thread on the creation-time catalog. Recording
+    // the refresh as still delivered would strand it there for the whole session.
+    failNextInject = true;
+    await runTurn("run-3", SECOND_CATALOG, { compact: true });
+    expect(injectCount()).toBe(2);
+
+    await runTurn("run-4", SECOND_CATALOG);
+    const injected = harness.requests.filter(
+      ({ method, params }) =>
+        method === "thread/inject_items" && !isCodexTurnContextHandoff(params),
+    );
+    expect(injected).toHaveLength(3);
+    expect(JSON.stringify(injected[2]?.params)).toContain(SECOND_CATALOG);
+  });
+});
+
+it("delivers fresh prompt-hook parent context on the same protected thread", async () => {
+  const agentDir = path.join(tempDir, "wire-agent");
+  const codexHome = resolveCodexAppServerHomeDir(agentDir);
+  const rolloutPath = path.join(codexHome, "sessions", "hook-parent.jsonl");
+  let nativeTools: unknown;
+  const contexts = ["Synthetic first-turn recall", "Synthetic second-turn recall"];
+  let context = contexts[0];
+  let systemPrompt: string | undefined;
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([
+      {
+        hookName: "before_prompt_build",
+        handler: async () => ({
+          systemPrompt,
+          prependSystemContext: context,
+          appendSystemContext: `${context} clock`,
+        }),
+      },
+    ]),
+  );
+  const source = new AbortController();
+  const received: string[] = [];
+  const command = runningCommand("background-listener", "synthetic-callback-listener", "12345");
+  const harness = createStartedThreadHarness(
+    async (method, request) => {
+      if (method === "account/read") {
+        return { account: { type: "apiKey" } };
+      }
+      if (method === "thread/backgroundTerminals/list") {
+        return { data: [{ itemId: command.id, processId: command.processId }], nextCursor: null };
+      }
+      if (method === "thread/start") {
+        nativeTools = (request as { dynamicTools?: unknown }).dynamicTools;
+        const result = threadStartResult();
+        return { ...result, thread: { ...result.thread, path: rolloutPath } };
+      }
+      if (method === "turn/start") {
+        await writeNativeCatalogFixture(rolloutPath, "thread-1", nativeTools);
+        received.push(readManagedInstructions(harness.client, request));
+      }
+      return undefined;
+    },
+    { persistedThreads: [], codexHome },
+  );
+  ownCodexInferenceClient(harness.client);
+  const unsubscribe = { method: "thread/unsubscribe", params: { threadId: "thread-1" } };
+  const paramsFor = (runId: string, prompt?: string) =>
+    Object.assign(createParams(path.join(tempDir, "session.jsonl"), tempDir, { runId, prompt }), {
+      agentDir,
+    });
+  try {
+    for (const [index, hookContext] of contexts.entries()) {
+      context = hookContext;
+      const params = paramsFor(
+        `run-${index}`,
+        index === 0 ? "Start a callback listener" : "Explain the callback setup",
+      );
+      params.skillsSnapshot = {
+        prompt: "<available_skills><skill><name>synthetic-skill</name></skill></available_skills>",
+        skills: [],
+      };
       params.hostCapabilities = {
         ...params.hostCapabilities,
-        retainSourceAuthority: () => ({
-          modelPolicyRequired: false,
-          assertCurrent: () => source.signal.throwIfAborted(),
-          signal: source.signal,
-          release: releaseSource,
-          bindModelExecution: () => ({
-            signal: source.signal,
-            assertCurrent: () => source.signal.throwIfAborted(),
-            release() {},
-          }),
-        }),
+        retainSourceAuthority: retainSourceAuthority(source.signal),
       };
-      const command = {
-        type: "commandExecution",
-        id: "visible-command",
-        command: "python3 synthetic-worker.py",
-        cwd: "/workspace",
-        processId: "54527",
-        status: "inProgress",
-        commandActions: [],
-        aggregatedOutput: null,
-        exitCode: null,
-        durationMs: null,
-      };
-      let retained = false;
-      const terminal = (exitCode: number) =>
-        itemNotification("item/completed", {
-          ...command,
-          status: exitCode === 0 ? "completed" : "failed",
-          exitCode,
-          aggregatedOutput: "synthetic outcome",
-          durationMs: 1,
-        });
-      const harness = createStartedThreadHarness(async (method, input) => {
-        if (method === "thread/backgroundTerminals/list") {
-          if (retained && scenario === "authority retired during inventory") {
-            cancellationCurrent = false;
-          }
-          return {
-            data: [
-              {
-                itemId:
-                  retained && scenario === "changed handle" ? "successor-command" : command.id,
-                processId: "54527",
-                command: command.command,
-                cwd: "/workspace",
-              },
-            ],
-            nextCursor: null,
-          };
-        }
-        if (method === "thread/backgroundTerminals/terminate") {
-          expect(input).toEqual({ threadId: "thread-1", processId: "54527" });
-          terminationAttempts += 1;
-          if (scenario === "failed stop" && terminationAttempts === 1) {
-            throw new Error("Synthetic transport failure");
-          }
-          if (scenario === "concurrent stop" || scenario === "client closed") {
-            if (terminationAttempts > 1) {
-              return { terminated: false };
-            }
-            terminateStarted.resolve();
-            await terminateRelease.promise;
-          }
-          if (scenario === "refused stop") {
-            return { terminated: false };
-          }
-          if (scenario === "source retired during stop") {
-            source.abort();
-          }
-          await harness.notify(
-            terminal(
-              scenario === "natural success"
-                ? 0
-                : scenario === "natural failure during stop" ||
-                    scenario === "source retired during stop"
-                  ? 7
-                  : -1,
-            ),
-          );
-          return { terminated: true };
-        }
-        return undefined;
-      });
       const run = runCodexAppServerAttempt(params);
-      try {
-        await run.waitForTurnAccepted();
+      await run.waitForTurnAccepted();
+      if (index === 0) {
         await harness.notify(itemNotification("item/started", command));
-        await harness.notify(turnCompleted({ id: "turn-1", status: "completed", items: [] }));
-        await run;
-        if (!host.agentHarnessTaskRuntimeScope) {
-          throw new Error("Expected an admitted task scope");
-        }
-        const tasks = createAgentHarnessTaskRuntime({
-          runtime: "cli",
-          scope: host.agentHarnessTaskRuntimeScope,
-        });
-        expect(tasks.listTaskRecords()).toContainEqual(
-          expect.objectContaining({
-            taskId: commandTaskId,
-            status: "running",
-            task: command.command,
-            ownerKey: params.sessionKey,
-          }),
-        );
-        retained = true;
-        if (!cancelOwner) {
-          throw new Error("Expected the registered native cancellation owner");
-        }
-        if (scenario === "publication failure") {
-          const releasedBeforeCompletion = releaseSource.mock.calls.length;
-          await expect(harness.notify(terminal(0))).rejects.toThrow(
-            "Synthetic terminal publication failure",
-          );
-          expect(releaseTask).toHaveBeenCalledOnce();
-          expect(releaseSource).toHaveBeenCalledTimes(releasedBeforeCompletion + 1);
-          expect(finishAttempts).toBe(1);
-          expect(terminationAttempts).toBe(0);
-          expect(source.signal.aborted).toBe(false);
-          // The failed publication has no confirmed durable terminal result.
-          expect(tasks.listTaskRecords()).toContainEqual(
-            expect.objectContaining({ taskId: commandTaskId, status: "running" }),
-          );
-          return;
-        }
-        if (scenario === "client closed") {
-          const releasedBeforeStop = releaseSource.mock.calls.length;
-          stopAttempts = Promise.allSettled([cancelOwner()]);
-          await terminateStarted.promise;
-          harness.close();
-          terminateRelease.resolve();
-          expect(await stopAttempts).toMatchObject([{ status: "rejected" }]);
-          expect(releaseTask).toHaveBeenCalledOnce();
-          expect(releaseSource).toHaveBeenCalledTimes(releasedBeforeStop + 1);
-          expect(tasks.listTaskRecords()).toContainEqual(
-            expect.objectContaining({ taskId: commandTaskId, status: "running" }),
-          );
-          await expect(cancelOwner()).rejects.toThrow();
-          return;
-        } else if (scenario === "source retired") {
-          source.abort();
-          await finished.promise;
-          await expect(cancelOwner()).rejects.toThrow();
-        } else if (scenario === "complete" || scenario === "natural failure") {
-          await harness.notify(terminal(scenario === "complete" ? 0 : 7));
-        } else if (scenario === "concurrent stop") {
-          stopAttempts = Promise.allSettled([cancelOwner(), cancelOwner()]);
-          await terminateStarted.promise;
-          terminateRelease.resolve();
-          const results = await stopAttempts;
-          expect(terminationAttempts).toBe(1);
-          expect(results).toMatchObject([{ status: "fulfilled" }, { status: "fulfilled" }]);
-        } else if (
-          [
-            "refused stop",
-            "failed stop",
-            "changed handle",
-            "authority retired during inventory",
-          ].includes(scenario)
-        ) {
-          await expect(cancelOwner()).rejects.toThrow();
-          expect(tasks.listTaskRecords()).toContainEqual(
-            expect.objectContaining({ taskId: commandTaskId, status: "running" }),
-          );
-          if (scenario === "failed stop") {
-            await cancelOwner();
-          } else {
-            await harness.notify(terminal(7));
-          }
-        } else {
-          await cancelOwner();
-        }
-        const expected =
-          scenario === "complete" || scenario === "natural success"
-            ? "succeeded"
-            : scenario === "cancel" || scenario === "concurrent stop" || scenario === "failed stop"
-              ? "cancelled"
-              : "failed";
-        expect(tasks.listTaskRecords()).toContainEqual(
-          expect.objectContaining({
-            taskId: commandTaskId,
-            status: expected,
-            task: command.command,
-            terminalSummary:
-              scenario === "source retired"
-                ? "Command outcome unknown"
-                : {
-                    succeeded: "Command completed",
-                    failed: "Command failed",
-                    cancelled: "Command stopped",
-                  }[expected],
-          }),
-        );
-        if (
-          scenario === "changed handle" ||
-          scenario === "source retired" ||
-          scenario === "authority retired during inventory"
-        ) {
-          expect(
-            harness.requests.some(
-              (request) => request.method === "thread/backgroundTerminals/terminate",
-            ),
-          ).toBe(false);
-        }
-      } finally {
-        terminateRelease.resolve();
-        await stopAttempts;
-        source.abort();
-        harness.close();
-        host.closeHost();
-        host.closeAdmission();
-        await Promise.allSettled([run]);
-        admission.mockRestore();
       }
-    },
-  );
-  it.each([
-    ["retained", "52627"],
-    ["foreign item", "52627"],
-    ["foreign process", "52627"],
-    ["orphan", "52627"],
-    ["completion during inventory", "52627"],
-    ["revoked during inventory", "52627"],
-    ["inventory unavailable", "52627"],
-    ["retained", null],
-    ["foreign item", null],
-    ["orphan", null],
-    ["completion during inventory", null],
-    ["revoked during inventory", null],
-  ] as const)("projects owner outcome: %s (%s)", async (scenario, startProcessId) => {
-    const accepted = createDeferred<void>();
-    const abort = new AbortController();
-    const params = createTestParams();
-    params.abortSignal = abort.signal;
-    params.onExecutionPhase = ({ phase }) => {
-      if (phase === "turn_accepted") {
-        accepted.resolve();
-      }
-    };
-    const command = {
-      type: "commandExecution",
-      id: "retained-command",
-      command: "synthetic-controlled-command",
-      cwd: "/workspace",
-      processId: startProcessId,
-      status: "inProgress",
-      commandActions: [],
-      aggregatedOutput: null,
-      exitCode: null,
-      durationMs: null,
-    };
-    const harness = createStartedThreadHarness(async (method, input) => {
-      if (method !== "thread/backgroundTerminals/list") {
-        return undefined;
-      }
-      expect(input).toMatchObject({ threadId: "thread-1" });
-      if (abort.signal.aborted) {
-        return { data: [], nextCursor: null };
-      }
-      if (scenario === "inventory unavailable") {
-        throw new Error("Synthetic inventory unavailable");
-      }
-      if (scenario === "completion during inventory") {
-        await harness.notify(
-          itemNotification("item/completed", {
-            ...command,
-            processId: "52627",
-            status: "failed",
-            exitCode: 7,
-            aggregatedOutput: "Synthetic command failed after yielding",
-            durationMs: 1,
-          }),
-        );
-      }
-      if (scenario === "revoked during inventory") {
-        abort.abort(new Error("Synthetic source revoked during inventory"));
-      }
-      return {
-        data:
-          scenario === "orphan"
-            ? []
-            : [
-                {
-                  itemId: scenario === "foreign item" ? "another-command" : command.id,
-                  processId: scenario === "foreign process" ? "another-process" : "52627",
-                },
-              ],
-        nextCursor: null,
-      };
-    });
-    const run = runCodexAppServerAttempt(params);
-    try {
-      await Promise.race([
-        accepted.promise,
-        run.then(() => {
-          throw new Error("Attempt ended before native turn acceptance");
-        }),
-      ]);
-      await harness.notify(itemNotification("item/started", command));
-      await harness.notify(
-        turnCompleted({
-          id: "turn-1",
-          status: "completed",
-          items: [
-            {
-              id: "answer",
-              type: "agentMessage",
-              phase: "final_answer",
-              text: "Retained handle 52627.",
-            },
-          ],
-        }),
-      );
-      const result = await run;
-      const tool = result.messagesSnapshot.find(
-        (message) => message.role === "toolResult" && message.toolCallId === command.id,
-      );
-      if (scenario === "retained") {
-        expect(tool).toMatchObject({
-          isError: false,
-          content: [{ type: "text", text: expect.stringContaining("still running") }],
-          __openclaw: { toolOutput: { outcome: "unknown" } },
-        });
-        expect(JSON.stringify(tool)).toContain("52627");
-      } else if (scenario === "completion during inventory") {
-        expect(tool).toMatchObject({
-          isError: true,
-          content: [{ type: "text", text: "Synthetic command failed after yielding" }],
-        });
-        expect(JSON.stringify(tool)).not.toContain('"outcome":"unknown"');
-      } else {
-        expect(tool).toMatchObject({ isError: true });
-        expect(JSON.stringify(tool)).not.toContain('"outcome":"unknown"');
-      }
-    } finally {
-      abort.abort(new Error("fixture cleanup"));
-      harness.close();
-      await Promise.allSettled([run]);
+      await harness.notify(answerCompleted("Ready."));
+      await run;
+      expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+      expect(harness.requests).not.toContainEqual(unsubscribe);
     }
+    expect(received).toHaveLength(2);
+    for (const [index, hookContext] of contexts.entries()) {
+      expect(received[index]?.split(`${hookContext} clock`)).toHaveLength(2);
+      expect(received[index]?.split(hookContext)).toHaveLength(3);
+      expect(received[index]).toMatch(
+        /Native model-owned policy[\s\S]*<available_skills>[\s\S]*OpenClaw plugin-injected system context\./,
+      );
+    }
+    expect(received[1]).not.toContain("Synthetic first-turn recall");
+    systemPrompt = "Changed persistent thread policy";
+    await expect(runCodexAppServerAttempt(paramsFor("changed-policy"))).rejects.toMatchObject({
+      name: "AgentHarnessPreflightError",
+      message:
+        "Codex thread thread-1 still has background work after waiting for cleanup; stop its running work and retry.",
+    });
+    expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+    expect(harness.requests).not.toContainEqual(unsubscribe);
+    expect(
+      harness.requests
+        .filter(({ method }) => ["thread/start", "thread/resume"].includes(method))
+        .map(({ method }) => method),
+    ).toEqual(["thread/start"]);
+    expect(JSON.stringify(harness.requests)).not.toMatch(/Synthetic (first|second)-turn recall/);
+    expect(harness.requests.filter(({ method }) => method === "turn/start")).toHaveLength(2);
+  } finally {
+    source.abort(new Error("fixture cleanup"));
+    harness.close();
+  }
+});
+
+it.each([
+  ["retained", "52627"],
+  ["foreign item", "52627"],
+  ["foreign process", "52627"],
+  ["completion during inventory", "52627"],
+  ["revoked during inventory", "52627"],
+  ["inventory unavailable", "52627"],
+  ["retained", null],
+] as const)("native background outcome: %s (%s)", async (scenario, startProcessId) => {
+  const abort = new AbortController();
+  const params = createTestParams();
+  params.abortSignal = abort.signal;
+  const source = new AbortController();
+  const releaseSource = vi.fn();
+  params.hostCapabilities = {
+    ...params.hostCapabilities,
+    retainSourceAuthority: retainSourceAuthority(source.signal, releaseSource),
+  };
+  const command = runningCommand(
+    "retained-command",
+    "synthetic-controlled-command",
+    startProcessId,
+  );
+  const failedOutput = "Synthetic command failed after yielding";
+  const complete = (patch: JsonObject): Promise<void> =>
+    harness.notify(itemNotification("item/completed", { ...command, ...patch }));
+  const harness = createStartedThreadHarness(async (method, input) => {
+    if (method !== "thread/backgroundTerminals/list") {
+      return undefined;
+    }
+    expect(input).toMatchObject({ threadId: "thread-1" });
+    if (abort.signal.aborted) {
+      return { data: [], nextCursor: null };
+    }
+    if (scenario === "inventory unavailable") {
+      throw new Error("Synthetic inventory unavailable");
+    }
+    if (scenario === "completion during inventory") {
+      await complete({
+        processId: "52627",
+        status: "failed",
+        exitCode: 7,
+        aggregatedOutput: failedOutput,
+        durationMs: 1,
+      });
+    }
+    if (scenario === "revoked during inventory") {
+      abort.abort(new Error("Synthetic source revoked during inventory"));
+    }
+    return {
+      data: [
+        {
+          itemId: scenario === "foreign item" ? "another-command" : command.id,
+          processId: scenario === "foreign process" ? "another-process" : "52627",
+        },
+      ],
+      nextCursor: null,
+    };
   });
+  const run = runCodexAppServerAttempt(params);
+  try {
+    await run.waitForTurnAccepted();
+    await harness.notify(itemNotification("item/started", command));
+    await harness.notify(answerCompleted("Retained handle 52627."));
+    const tool = (await run).messagesSnapshot.find(
+      (message) => message.role === "toolResult" && message.toolCallId === command.id,
+    );
+    if (scenario === "retained") {
+      expect(tool).toMatchObject({
+        isError: false,
+        content: [{ type: "text", text: expect.stringContaining("still running") }],
+        __openclaw: { toolOutput: { outcome: "unknown" } },
+      });
+      expect(JSON.stringify(tool)).toContain("52627");
+      const unsubscribe = { method: "thread/unsubscribe", params: { threadId: "thread-1" } };
+      const evictIdleThreads = async (phase: string) => {
+        for (let index = 0; index < 65; index += 1) {
+          await retainCodexAppServerLiveThread(harness.client, `idle-${phase}-${index}`);
+        }
+      };
+      await evictIdleThreads("before");
+      expect(harness.requests).not.toContainEqual(unsubscribe);
+      await harness.notify({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "foreign-turn",
+          item: { ...command, processId: "52627" },
+        },
+      });
+      await complete({ processId: "foreign-process" });
+      await evictIdleThreads("foreign");
+      expect(harness.requests).not.toContainEqual(unsubscribe);
+      if (startProcessId === null) {
+        source.abort(new Error("Synthetic retained source revoked"));
+      } else {
+        await complete({ processId: "52627", status: "completed", exitCode: 0 });
+      }
+      await evictIdleThreads("after");
+      expect(harness.requests).toContainEqual(unsubscribe);
+      expect(releaseSource).toHaveBeenCalled();
+    } else {
+      expect(tool).toMatchObject({ isError: true });
+      if (scenario === "completion during inventory") {
+        expect(tool).toMatchObject({ content: [{ type: "text", text: failedOutput }] });
+      }
+      expect(JSON.stringify(tool)).not.toContain('"outcome":"unknown"');
+    }
+  } finally {
+    source.abort(new Error("fixture cleanup"));
+    abort.abort(new Error("fixture cleanup"));
+    harness.close();
+    await Promise.allSettled([run]);
+  }
 });

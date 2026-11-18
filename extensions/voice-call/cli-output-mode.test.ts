@@ -13,6 +13,7 @@ describe("voice-call CLI output mode", () => {
     "latency",
     "speak",
     "start",
+    "steer",
     "status",
     "tail",
   ])("detects %s as machine output", (command) => {

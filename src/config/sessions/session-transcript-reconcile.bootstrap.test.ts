@@ -3,10 +3,6 @@ import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import {
-  acquireStateDatabaseCoordinator,
-  resolveStateDatabaseCoordinatorPath,
-} from "../../infra/state-database-coordinator.js";
 import { readAgentDatabaseDeletionSnapshot } from "../../state/agent-deletion-journal.read.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../../state/openclaw-agent-db.test-support.js";
@@ -15,20 +11,20 @@ import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-work
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
-  captureSessionTranscriptReconcileGeneration,
   closeSessionTranscriptReconcileWorkerPool,
   getSessionTranscriptReconcileWorkerPoolSnapshot,
   runSessionTranscriptReconcileOperation,
 } from "./session-transcript-reconcile-pool.js";
+import { acquireReconcileGatewayOwner } from "./session-transcript-reconcile.fixtures.test-support.js";
 import { observeReconcileHostSqlite } from "./session-transcript-reconcile.sql-observer.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "./session-transcript-reconcile.worker.js";
 
 function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
   return runSessionTranscriptReconcileOperation(
-    captureSessionTranscriptReconcileGeneration(),
     async (operation) => {
       const task = await operation.startTask({
         mode: "disk",
+        sessionIds: [],
         agentId: "main",
         path: pathname,
         stateDir: context.environment.OPENCLAW_STATE_DIR,
@@ -60,20 +56,13 @@ function runDiskTask(context: OpenClawStateWorkerContext, pathname: string) {
 
 function observe(context: OpenClawStateWorkerContext, agentPath: string) {
   return observeReconcileHostSqlite({
-    control: [
-      resolveStateDatabaseCoordinatorPath({
-        databasePath: context.admission.databasePath,
-        runtimeDirectory: context.coordinatorRuntime.directory,
-        uid: process.getuid?.(),
-      }),
-    ],
     data: [context.admission.databasePath, agentPath],
   });
 }
 
 it.each([false, true])(
-  "initializes runtime without inventing deletion history for a custom agent, borrowed=%s",
-  async (borrowed) => {
+  "initializes runtime without inventing deletion history for a custom agent, serving Gateway owner=%s",
+  async (owned) => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "reconcile-first-creation" },
       async (state) => {
@@ -85,9 +74,7 @@ it.each([false, true])(
         const context = captureOpenClawStateWorkerContext();
         expect(context.admission.identity.key).toMatch(/^path:/u);
         expect(fs.existsSync(context.admission.databasePath)).toBe(false);
-        const parent = borrowed
-          ? acquireStateDatabaseCoordinator({ databasePath: context.admission.databasePath })
-          : undefined;
+        const parent = acquireReconcileGatewayOwner(context, state, owned);
         const observation = observe(context, agentPath);
         try {
           await expect(runDiskTask(context, agentPath)).resolves.toEqual([
@@ -140,7 +127,10 @@ it("refuses an agent replacement during canonical first creation", async () => {
         });
       const observation = observe(context, agentPath);
       try {
-        await expect(runDiskTask(context, agentPath)).rejects.toThrow();
+        await expect(runDiskTask(context, agentPath)).resolves.toEqual([
+          "failed",
+          "lease-released",
+        ]);
         expect(replaced).toBe(true);
         expect(readDatabasePathIdentitySync(agentPath).key).not.toBe(original.key);
         await closeSessionTranscriptReconcileWorkerPool();

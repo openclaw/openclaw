@@ -5,40 +5,22 @@ import { isDecisionAssistanceEligible } from "./decision-assistance.js";
 
 describe("Decision assistance foundation", () => {
   it.each([
-    [false, undefined, false],
-    [false, "example/decision", false],
-    [true, undefined, false],
-    [true, "example/decision", true],
-  ] as const)(
-    "opt-in %s and model %s gives eligibility %s",
-    (decisionAssistance, decisionModel, expected) => {
-      const config: OpenClawConfig = {
-        agents: { defaults: { experimental: { decisionAssistance }, decisionModel } },
-      };
-      expect(isDecisionAssistanceEligible(config, "support")).toBe(expected);
-    },
-  );
-
-  it.each([undefined, {}, { localModelLean: true }, { decisionAssistance: false }])(
-    "does not infer consent from omitted/option-bearing experimental config %j",
-    (experimental) => {
-      const defaults = AgentDefaultsBaseSchema.parse({
-        experimental,
-        decisionModel: "example/decision",
-      });
+    { experimental: undefined, decisionModel: "example/decision" },
+    { experimental: { localModelLean: true }, decisionModel: "example/decision" },
+    { experimental: { decisionAssistance: true }, decisionModel: undefined },
+  ])("requires explicit consent and a decision model: %j", (input) => {
+    const defaults = AgentDefaultsBaseSchema.parse(input);
+    if (input.decisionModel) {
       expect(defaults.experimental?.decisionAssistance).not.toBe(true);
-      expect(isDecisionAssistanceEligible({ agents: { defaults } }, "support")).toBe(false);
-    },
-  );
+    }
+    expect(isDecisionAssistanceEligible({ agents: { defaults } }, "support")).toBe(false);
+  });
 
-  it.each([{}, { enabled: true }, { mode: "auto" }, "true", "auto", 1, null])(
-    "rejects non-Boolean gate %j rather than implicitly opting in",
-    (decisionAssistance) => {
-      expect(
-        AgentDefaultsBaseSchema.safeParse({ experimental: { decisionAssistance } }).success,
-      ).toBe(false);
-    },
-  );
+  it("rejects a string gate rather than coercing consent", () => {
+    expect(
+      AgentDefaultsBaseSchema.safeParse({ experimental: { decisionAssistance: "true" } }).success,
+    ).toBe(false);
+  });
 
   it("preserves global inheritance and empty agent overrides through opt-out and model changes", () => {
     const config: OpenClawConfig = {

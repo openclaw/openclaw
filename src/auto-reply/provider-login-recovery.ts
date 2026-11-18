@@ -66,17 +66,16 @@ export function buildProviderLoginRecovery(
   evidence: ProviderLoginRecoveryEvidence,
 ): ProviderLoginRecovery | undefined {
   const needsLogin =
-    evidence.oauthReason !== null && evidence.oauthReason !== undefined
-      ? true
-      : evidence.authMode === "oauth" &&
-        evidence.failoverReason !== undefined &&
-        AUTH_PROFILE_LOGIN_REASONS.has(evidence.failoverReason);
+    evidence.oauthReason != null ||
+    (evidence.authMode === "oauth" &&
+      evidence.failoverReason !== undefined &&
+      AUTH_PROFILE_LOGIN_REASONS.has(evidence.failoverReason));
   if (!needsLogin) {
     return undefined;
   }
   const command = buildOAuthRefreshFailureLoginCommand(evidence.provider, { surface: "chat" });
   return {
-    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or Control UI session. Where shown, you can also select **Sign in**.`,
+    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**.`,
     presentation: {
       blocks: [
         {

@@ -43,6 +43,8 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -60,6 +62,7 @@ import java.io.File
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class ChatMessageMediaLayoutTest {
   @get:Rule val composeRule = createComposeRule()
+  private val imageDecodeDispatcher = StandardTestDispatcher(TestCoroutineScheduler())
 
   @Test
   fun userGalleryPrecedesCaptionAndKeepsImagesOutsideTheTextSurface() {
@@ -339,32 +342,39 @@ class ChatMessageMediaLayoutTest {
     role: String,
     bytes: (String) -> ByteArray,
   ) {
-    ChatBubble(
-      messageId = "media-$role",
-      entryId = "entry-$role",
-      role = role,
-      live = false,
-      content = content,
-      timestampMs = null,
-      onReplyMessage = {},
-      sessionActionsEnabled = true,
-      onRewindMessage = {},
-      onForkMessage = {},
-      speechState = null,
-      onToggleListen = { _, _ -> },
-      inlineMediaPlaybackBlocked = false,
-      inlineWidgetResolverReady = true,
-      resolveInlineWidgetResource = { _, _ -> null },
-      loadImageArtifact = { GatewayLoadedImage(bytes(it), "image/png") },
-      loadMediaArtifact = { _, _, _ -> null },
-    )
+    CompositionLocalProvider(LocalChatImageDecodeDispatcher provides imageDecodeDispatcher) {
+      ChatBubble(
+        messageId = "media-$role",
+        entryId = "entry-$role",
+        role = role,
+        live = false,
+        content = content,
+        timestampMs = null,
+        onReplyMessage = {},
+        sessionActionsEnabled = true,
+        onRewindMessage = {},
+        onForkMessage = {},
+        speechState = null,
+        onToggleListen = { _, _ -> },
+        inlineMediaPlaybackBlocked = false,
+        inlineWidgetResolverReady = true,
+        resolveInlineWidgetResource = { _, _ -> null },
+        loadImageArtifact = { GatewayLoadedImage(bytes(it), "image/png") },
+        loadMediaArtifact = { _, _, _ -> null },
+      )
+    }
   }
 
+  // Compose idleness does not include the decoder's background work. Drain it
+  // separately so image readiness never depends on wall time.
   private fun awaitImages(count: Int) {
     fun visibleImages(): Int =
       composeRule.onAllNodesWithContentDescription("Garden", substring = true, useUnmergedTree = true).fetchSemanticsNodes().size +
         composeRule.onAllNodesWithContentDescription("image/png", useUnmergedTree = true).fetchSemanticsNodes().size
-    composeRule.waitUntil { visibleImages() == count }
+    composeRule.waitForIdle()
+    assertTrue("Decoded images appear only after the decode drain", visibleImages() < count)
+    imageDecodeDispatcher.scheduler.advanceUntilIdle()
+    composeRule.waitForIdle()
     assertEquals(count, visibleImages())
   }
 

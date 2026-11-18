@@ -216,7 +216,8 @@ class ScreenTypographyLayoutTest {
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.Chat)
     showApp { RootScreen(model) }
     val message = "Summarize the open review feedback for me."
-    composeRule.onNodeWithText(message, useUnmergedTree = true).performScrollTo().assertIsDisplayed()
+    composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(message))
+    composeRule.onNodeWithText(message, useUnmergedTree = true).assertIsDisplayed()
 
     fun messageDensity(): Density {
       val layouts = mutableListOf<TextLayoutResult>()
@@ -391,7 +392,7 @@ class ScreenTypographyLayoutTest {
     show { ShellScreen(model) }
     capture("settings-dark")
     assertTextStyle("Settings", type.display)
-    assertTextStyle("OpenClaw mobile", type.caption)
+    assertTextStyle("Device name and identity", type.caption.copy(fontSize = 13.sp, lineHeight = 18.sp))
     composeRule.onNodeWithContentDescription("Open profile").performClick()
     capture("profile-dark")
     assertTextStyle("Profile", type.display)

@@ -1,12 +1,5 @@
 import type { BrowserActRequest } from "../client-actions.types.js";
 
-/**
- * Existing-session browser capability-limit messages.
- *
- * Centralizes unsupported-operation text so route responses and tests stay
- * stable while Chrome MCP support grows incrementally.
- */
-/** User-facing messages for existing-session route limitations. */
 export const EXISTING_SESSION_LIMITS = {
   act: {
     clickSelector: "existing-session click does not support selector targeting yet; use ref.",
@@ -64,26 +57,19 @@ export const EXISTING_SESSION_LIMITS = {
     "emulate is not supported for existing-session profiles; use a managed browser profile for device, media, timezone, or locale settings.",
 } as const;
 
-type ExistingSessionAction = Exclude<BrowserActRequest, { kind: "batch" | "insertText" }>;
-
-type ExistingSessionActionAdmission =
-  | { ok: true; action: ExistingSessionAction }
-  | { ok: false; error: string };
-
 /** Validate existing-session support before admitting a narrowed action to dispatch. */
 export function admitExistingSessionAction(
   action: BrowserActRequest,
-): ExistingSessionActionAdmission {
+):
+  | { ok: true; action: Exclude<BrowserActRequest, { kind: "batch" | "insertText" }> }
+  | { ok: false; error: string } {
   let error: string | undefined;
   switch (action.kind) {
     case "click":
       if (action.selector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickSelector };
       }
-      if (
-        (action.button && action.button !== "left") ||
-        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
-      ) {
+      if ((action.button && action.button !== "left") || action.modifiers?.length) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers };
       }
       break;
@@ -108,17 +94,14 @@ export function admitExistingSessionAction(
       error = action.delayMs ? EXISTING_SESSION_LIMITS.act.pressDelay : undefined;
       break;
     case "hover":
+    case "scrollIntoView": {
+      const messagePrefix = action.kind === "hover" ? "hover" : "scroll";
       if (action.selector) {
-        return { ok: false, error: EXISTING_SESSION_LIMITS.act.hoverSelector };
+        return { ok: false, error: EXISTING_SESSION_LIMITS.act[`${messagePrefix}Selector`] };
       }
-      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.hoverTimeout : undefined;
+      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act[`${messagePrefix}Timeout`] : undefined;
       break;
-    case "scrollIntoView":
-      if (action.selector) {
-        return { ok: false, error: EXISTING_SESSION_LIMITS.act.scrollSelector };
-      }
-      error = action.timeoutMs ? EXISTING_SESSION_LIMITS.act.scrollTimeout : undefined;
-      break;
+    }
     case "drag":
       if (action.startSelector || action.endSelector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.dragSelector };

@@ -1,15 +1,7 @@
-// Irc plugin module implements probe behavior.
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return typeof err === "string" ? err : JSON.stringify(err);
-}
 
 export async function probeIrc(
   cfg: CoreConfig,
@@ -31,14 +23,14 @@ export async function probeIrc(
     };
   }
 
-  const started = Date.now();
+  const started = performance.now();
   try {
     const client = await connectIrcClient(
       buildIrcConnectOptions(account, {
         connectTimeoutMs: opts?.timeoutMs ?? 8000,
       }),
     );
-    const elapsed = Date.now() - started;
+    const elapsed = performance.now() - started;
     client.quit("probe");
     return {
       ...base,
@@ -48,7 +40,8 @@ export async function probeIrc(
   } catch (err) {
     return {
       ...base,
-      error: formatError(err),
+      error:
+        err instanceof Error ? err.message : typeof err === "string" ? err : JSON.stringify(err),
     };
   }
 }

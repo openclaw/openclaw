@@ -1,15 +1,8 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
-import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
-import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
 const execFileAsync = promisify(execFile);
@@ -23,10 +16,10 @@ export const ISOLATED_RUNTIME_NODE_ARGS = [
   "--import",
   `data:text/javascript,${encodeURIComponent(`
     import fs from "node:fs";
-    import { registerHooks } from "node:module";
+    import nodeModule from "node:module";
     import path from "node:path";
     import { fileURLToPath, pathToFileURL } from "node:url";
-    registerHooks({
+    nodeModule.registerHooks({
       resolve(specifier, context, nextResolve) {
         const resolved = nextResolve(specifier, context);
         if (!resolved.url.startsWith("file:")) return resolved;
@@ -45,7 +38,7 @@ export function runBuiltRuntime(
   env: NodeJS.ProcessEnv,
   args: string[],
   timeout: number,
-  maxBuffer?: number,
+  options: Pick<Parameters<typeof runCliProcessChild>[0], "maxBuffer" | "onTestFinished"> = {},
 ) {
   return runCliProcessChild({
     nodeExecutable: isolatedRuntimeNodeExecPath,
@@ -54,7 +47,8 @@ export function runBuiltRuntime(
     cwd: runtimeRoot,
     env,
     timeoutMs: timeout,
-    maxBuffer: maxBuffer ?? 1024 * 1024,
+    maxBuffer: options.maxBuffer ?? 1024 * 1024,
+    ...(options.onTestFinished ? { onTestFinished: options.onTestFinished } : {}),
   });
 }
 
@@ -102,9 +96,10 @@ export function runIsolatedModuleScript(
 }
 
 export function createSourceRuntime(root: string): string {
+  const packageJson: { files: string[] } = JSON.parse(fs.readFileSync("package.json", "utf8"));
   const runtimeRoot = path.join(root, "runtime");
   fs.mkdirSync(path.join(runtimeRoot, "dist"), { recursive: true });
-  for (const dirname of ["node_modules", "packages", "scripts", "src"]) {
+  for (const dirname of ["node_modules", "packages", "scripts", "src", "docs"]) {
     fs.symlinkSync(
       path.resolve(dirname),
       path.join(runtimeRoot, dirname),
@@ -112,15 +107,7 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-sqlite.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
+    ...packageJson.files.filter((file) => !file.includes("/") && file.endsWith(".mjs")),
     "package.json",
     "tsconfig.json",
   ]) {
@@ -139,7 +126,7 @@ export function createSourceRuntime(root: string): string {
 export function createBuiltRuntime(
   root: string,
   sourceDist = path.resolve("dist"),
-  options: { copyDirectories?: boolean } = {},
+  options: { copyDirectories?: boolean; emptyExtensions?: boolean } = {},
 ): string {
   const runtimeRoot = createSourceRuntime(root);
   // The pretest owner supplies immutable built modules once; mutable package
@@ -150,7 +137,9 @@ export function createBuiltRuntime(
     }
     const source = path.join(sourceDist, entry.name);
     const target = path.join(runtimeRoot, "dist", entry.name);
-    if (entry.isDirectory() && options.copyDirectories) {
+    if (entry.isDirectory() && entry.name === "extensions" && options.emptyExtensions) {
+      fs.mkdirSync(target);
+    } else if (entry.isDirectory() && options.copyDirectories) {
       // Direct package entry invocations do not pass --preserve-symlinks.
       fs.cpSync(source, target, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
     } else if (entry.isDirectory()) {
@@ -163,98 +152,4 @@ export function createBuiltRuntime(
     throw new Error("built Doctor fixture requires dist/entry.js; prepare the runtime first");
   }
   return runtimeRoot;
-}
-
-export function seedPluginStateSidecar(stateDir: string, canonicalCreatedAt: number): void {
-  const sharedPath = path.join(stateDir, "state", "openclaw.sqlite");
-  const sidecarPath = path.join(stateDir, "plugin-state", "state.sqlite");
-  fs.mkdirSync(path.dirname(sharedPath), { recursive: true });
-  fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
-
-  openOpenClawStateDatabase({
-    path: sharedPath,
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
-  closeOpenClawStateDatabaseForTest();
-
-  const shared = new DatabaseSync(sharedPath);
-  try {
-    shared
-      .prepare(`
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      .run("discord", "components", "interaction:1", '{"ok":false}', canonicalCreatedAt, null);
-  } finally {
-    shared.close();
-  }
-
-  const sidecar = new DatabaseSync(sidecarPath);
-  try {
-    sidecar.exec(`
-      CREATE TABLE plugin_state_entries (
-        plugin_id TEXT NOT NULL,
-        namespace TEXT NOT NULL,
-        entry_key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        created_at INTEGER NOT NULL,
-        expires_at INTEGER,
-        PRIMARY KEY (plugin_id, namespace, entry_key)
-      );
-    `);
-    sidecar
-      .prepare(`
-        INSERT INTO plugin_state_entries (
-          plugin_id, namespace, entry_key, value_json, created_at, expires_at
-        ) VALUES (?, ?, ?, ?, ?, ?)
-      `)
-      // Keep retired sidecar data distinct from the canonical row.
-      .run("discord", "components", "interaction:1", '{"ok":true}', 3_000, null);
-  } finally {
-    sidecar.close();
-  }
-}
-
-export function seedV17AdditiveRepairDatabase(
-  stateDir: string,
-  options: { participantDependency?: boolean } = {},
-): string {
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  openOpenClawStateDatabase({ env });
-  closeOpenClawStateDatabaseForTest();
-  const databasePath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
-  fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  try {
-    seedOpenClawAgentSchemaV21(database);
-    removeCanonicalValidationFromHistoricalAgentFixture(database);
-    database.exec(`
-      DROP TABLE session_participants;
-      DROP TRIGGER session_conversations_route_context_invalidate_after_update;
-      ALTER TABLE session_conversations DROP COLUMN route_context_json;
-      DROP INDEX idx_agent_transcript_event_identity_sequence;
-      PRAGMA user_version = 17;
-      UPDATE schema_meta SET schema_version = 17;
-    `);
-    if (options.participantDependency) {
-      database.exec(`
-        CREATE TABLE session_participants (
-          session_key TEXT NOT NULL,
-          actor_type TEXT NOT NULL,
-          actor_id TEXT NOT NULL,
-          actor_source TEXT,
-          contribution_count INTEGER,
-          first_prompted_at INTEGER NOT NULL,
-          last_prompted_at INTEGER NOT NULL,
-          PRIMARY KEY (session_key, actor_type, actor_id),
-          FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
-        ) STRICT;
-        CREATE INDEX idx_test_participant_dependency ON session_participants(actor_id);
-      `);
-    }
-  } finally {
-    database.close();
-  }
-  return databasePath;
 }

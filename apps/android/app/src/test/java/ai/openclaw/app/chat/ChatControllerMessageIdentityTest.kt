@@ -269,6 +269,37 @@ class ChatControllerMessageIdentityTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun historyPreservesBrowserSelectionFromTopLevelToolResults() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          commandOutbox = this.createChatCommandOutbox(),
+          cacheScope = { ChatCacheScope("gateway-test", 1L) },
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """{"messages":[{"role":"toolResult","toolName":"browser","toolCallId":"browser-1","content":"Opened travel page","details":{"browserTab":{"target":"host","profile":"openclaw","targetId":"t1","url":"https://example.test/travel"}}}]}"""
+            } else {
+              emptyChatGatewayResponse(method)
+            }
+          },
+        )
+      controller.load("main")
+      advanceUntilIdle()
+      assertEquals(
+        ChatBrowserTab("host", null, "openclaw", "t1", "https://example.test/travel", null),
+        controller.messages.value
+          .single()
+          .content
+          .single()
+          .toolActivity
+          ?.browserTab,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun liveHistoryDecodesSystemNoticeMetadataWithoutChangingRoles() =
     runTest {
       val controller =

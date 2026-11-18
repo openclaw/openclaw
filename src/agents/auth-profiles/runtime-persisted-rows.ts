@@ -1,127 +1,144 @@
-import fs from "node:fs";
-import type { AuthProfileRowRead } from "./types.js";
-
-const IDENTITY_PROBE_INTERVAL_MS = 100;
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  type AgentDatabaseReadCandidate,
+} from "../../infra/agent-database-readers.js";
+import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
+import { readAuthProfileRowsReceipt } from "./persisted-rows-receipt.js";
+import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
+import { buildPersistedAuthProfileState } from "./state.js";
+import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
 
 type RowsReader = {
+  identity?: string;
   read: () => Promise<AuthProfileRowRead>;
   assertCurrent: () => void;
 };
 
-export class AuthProfileRuntimeReadStaleError extends Error {
-  constructor(readonly waitForSettlement?: (signal?: AbortSignal) => Promise<void>) {
-    super("Auth profile store changed during its runtime read; retry resolution");
-    this.name = "AuthProfileRuntimeReadStaleError";
-  }
-}
-
-// Worker rows contain JSON values; normalization builds each caller's mutable store.
-function freezeRows(value: unknown): void {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
-    return;
-  }
-  Object.freeze(value);
-  for (const child of Object.values(value)) {
-    freezeRows(child);
-  }
-}
-
-// Include WAL and rollback-journal writes from other processes, without opening
-// SQLite (which could release a host writer's POSIX locks).
-function readIdentity(databasePath: string): string {
-  return ["", "-wal", "-journal"]
-    .map((suffix) => {
-      const stat = fs.statSync(databasePath + suffix, { bigint: true, throwIfNoEntry: false });
-      return stat
-        ? `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`
-        : "missing";
-    })
-    .join("/");
-}
-
-/** A derived rows cache; the runtime snapshot owner supplies publication generations. */
-export function createRuntimeAuthProfileRowsCache(
-  revisionAtPath: (path: string) => {
-    rows: string;
-    selection: string;
-    ownerLineage?: readonly string[];
+/** Persisted rows follow their source owner, independently of resolved snapshot publication. */
+type Entry = {
+  identity: string | undefined;
+  receipt: object;
+  revision: number;
+  rows?: AuthProfileRowRead;
+  canonical: boolean;
+};
+const entries = new Map<string, Entry>();
+const hasCurrentSource = (databasePath: string, entry: Entry) =>
+  getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath) === entry.revision &&
+  readAuthProfileRowsReceipt(databasePath) === entry.receipt;
+export const runtimeAuthProfileRowsCache = {
+  hasSource(databasePath: string): boolean {
+    const entry = entries.get(databasePath);
+    return Boolean(entry && hasCurrentSource(databasePath, entry));
   },
-) {
-  const entries = new Map<
-    string,
-    { identity: string; checkedAt: number; revision: string; rows: AuthProfileRowRead }
-  >();
-  return {
-    clear(databasePath?: string) {
-      if (databasePath === undefined) {
-        entries.clear();
-      } else {
+  recordSource(databasePath: string, identity: string, store: AuthProfileStore | null) {
+    const entry = entries.get(databasePath);
+    // Runtime postimages omit private authorization lifetimes. Keep the complete rows
+    // when this publication describes the same admitted source without an auth write.
+    if (
+      store &&
+      entry?.canonical &&
+      entry.rows &&
+      entry.identity === identity &&
+      hasCurrentSource(databasePath, entry)
+    ) {
+      return;
+    }
+    const source = store && structuredClone(store);
+    entries.set(databasePath, {
+      identity,
+      receipt: readAuthProfileRowsReceipt(databasePath),
+      revision: getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath),
+      canonical: false,
+      // Persisted values precede runtime secret overlays but omit private lifetimes.
+      rows: source
+        ? freezeJsonSnapshot({
+            store: { status: "readable", raw: buildPersistedAuthProfileSecretsStore(source) },
+            state: { status: "readable", raw: buildPersistedAuthProfileState(source) },
+            cacheable: true,
+          } satisfies AuthProfileRowRead)
+        : undefined,
+    });
+  },
+  invalidateRows(databasePath?: string) {
+    for (const [pathname, entry] of entries) {
+      if (databasePath === undefined || pathname === databasePath) {
+        entry.rows = undefined;
+      }
+    }
+  },
+  clear(databasePath?: string) {
+    if (databasePath === undefined) {
+      entries.clear();
+    } else {
+      entries.delete(databasePath);
+    }
+  },
+  retire(candidates: readonly AgentDatabaseReadCandidate[], retainedPaths?: ReadonlySet<string>) {
+    for (const databasePath of entries.keys()) {
+      if (
+        !retainedPaths?.has(databasePath) &&
+        candidates.some((candidate) =>
+          matchesAgentDatabaseReadCandidatePath(candidate, databasePath),
+        )
+      ) {
         entries.delete(databasePath);
       }
-    },
-    prepare(
-      databasePath: string,
-      reader: RowsReader,
-      captureSettlement?: (
-        databasePaths: readonly string[],
-        rows: AuthProfileRowRead | undefined,
-      ) => ((signal?: AbortSignal) => Promise<void>) | undefined,
-    ): RowsReader {
-      const revision = revisionAtPath(databasePath);
-      const ownerLineage = [databasePath, ...(revision.ownerLineage ?? [])];
-      let capturedRows: AuthProfileRowRead | undefined;
-      const assertCurrent = () => {
+    }
+  },
+  publishSnapshots(databasePaths: ReadonlySet<string>) {
+    for (const databasePath of entries.keys()) {
+      if (!databasePaths.has(databasePath)) {
+        entries.delete(databasePath);
+      }
+    }
+  },
+  rebase(databasePath: string) {
+    const entry = entries.get(databasePath);
+    if (entry && readAuthProfileRowsReceipt(databasePath) === entry.receipt) {
+      entry.revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
+    }
+  },
+  prepare(
+    databasePath: string,
+    reader: RowsReader,
+    source: "runtime" | "canonical" = "runtime",
+  ): RowsReader {
+    return {
+      assertCurrent: reader.assertCurrent,
+      async read() {
         reader.assertCurrent();
-        // Bookkeeping evicts reusable rows without revoking an admitted snapshot read.
-        if (revisionAtPath(databasePath).selection !== revision.selection) {
-          throw new AuthProfileRuntimeReadStaleError(
-            captureSettlement?.(ownerLineage, capturedRows),
-          );
+        const revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
+        const entry = entries.get(databasePath);
+        const receipt = readAuthProfileRowsReceipt(databasePath);
+        if (
+          entry?.identity === reader.identity &&
+          entry?.revision === revision &&
+          entry.receipt === receipt &&
+          entry.rows &&
+          (source !== "canonical" || entry.canonical)
+        ) {
+          return entry.rows;
         }
-      };
-      return {
-        assertCurrent,
-        async read() {
-          assertCurrent();
-          const entry = entries.get(databasePath);
-          const checkedAt = performance.now();
-          // Owner writes invalidate immediately; external writes are checked every 100 ms.
-          // Hits must not extend the interval, including while a cold read is pending.
-          if (
-            entry?.revision === revision.rows &&
-            checkedAt - entry.checkedAt < IDENTITY_PROBE_INTERVAL_MS
-          ) {
-            capturedRows = entry.rows;
-            return entry.rows;
-          }
-          const identity = readIdentity(databasePath);
-          if (entry?.identity === identity && entry.revision === revision.rows) {
-            entry.checkedAt = checkedAt;
-            capturedRows = entry.rows;
-            return entry.rows;
-          }
-          entries.delete(databasePath);
-          // Only completed, certified reads can serve another caller's later snapshot.
-          const rows = await reader.read();
-          capturedRows = rows;
-          assertCurrent();
-          if (
-            rows.cacheable &&
-            rows.store.status !== "unreadable" &&
-            rows.state.status !== "unreadable" &&
-            revisionAtPath(databasePath).rows === revision.rows &&
-            readIdentity(databasePath) === identity
-          ) {
-            freezeRows(rows);
-            entries.set(databasePath, { identity, checkedAt, revision: revision.rows, rows });
-            // Bound retained credential owners; eviction never changes read authority.
-            while (entries.size > 64) {
-              entries.delete(entries.keys().next().value!);
-            }
-          }
-          return rows;
-        },
-      };
-    },
-  };
-}
+        if (entry) {
+          entry.rows = undefined;
+        }
+        const rows = await reader.read();
+        if (rows.store.status !== "unreadable" && rows.state.status !== "unreadable") {
+          freezeJsonSnapshot(rows);
+          // A write overtaking discovery invalidates this receipt at the next lookup.
+          // Actual credential use still checks the credential owner's live authority.
+          entries.set(databasePath, {
+            identity: reader.identity,
+            receipt,
+            revision,
+            rows,
+            canonical: true,
+          });
+        }
+        return rows;
+      },
+    };
+  },
+};

@@ -20,28 +20,35 @@ enum SystemSettingsURLSupport {
                 "x-apple.systempreferences:com.apple.preference.notifications",
             ]
         }
-        let pane = switch capability {
+        let pane: String? = switch capability {
         case .notifications: "Notifications"
-        case .accessibility: "Accessibility"
+        case .accessibility, .eventPosting, .computerControl, .canvas: "Accessibility"
         case .screenRecording: "ScreenCapture"
         case .microphone: "Microphone"
         case .speechRecognition: "SpeechRecognition"
         case .camera: "Camera"
+        case .cameraEnabled: nil
         case .location: "LocationServices"
         }
+        guard let pane else { return [] }
         return [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_\(pane)",
             "x-apple.systempreferences:com.apple.preference.security",
         ]
     }
 
-    static func openPrivacySettings(for capability: Capability) {
+    @MainActor static func openPrivacySettings(for capability: Capability) {
         self.openFirst(self.privacySettingsCandidates(for: capability))
     }
 
-    static func openFirst(_ candidates: [String]) {
+    @MainActor static func openFirst(_ candidates: [String]) {
+        guard AppLaunchRuntimePlan.current.allowsActivation else {
+            Logger(subsystem: "ai.openclaw", category: "permissions").warning(
+                "System Settings deferred by --no-activate; relaunch without the flag to open settings, then retry.")
+            return
+        }
         for candidate in candidates {
-            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+            if let url = URL(string: candidate), AppActivation.shared.open(url) {
                 return
             }
         }

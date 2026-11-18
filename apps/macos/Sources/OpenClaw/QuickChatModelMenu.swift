@@ -1,5 +1,4 @@
 import AppKit
-import Observation
 import OpenClawChatUI
 
 @MainActor
@@ -51,16 +50,6 @@ enum QuickChatModelMenuPresenter {
 
         let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
         let contentPoint = contentView.convert(windowPoint, from: nil)
-        // Observation can notify off actor; bind the AppKit action on MainActor first.
-        let cancelTracking: @MainActor @Sendable () -> Void = { [weak menu] in
-            menu?.cancelTracking()
-        }
-        // NSMenu owns a snapshot; retire this popup when its choices lose authority.
-        withObservationTracking {
-            _ = model.modelCatalogInvalidated
-        } onChange: {
-            Task { @MainActor in cancelTracking() }
-        }
         _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
     }
 }

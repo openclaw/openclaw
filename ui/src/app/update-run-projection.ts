@@ -1,6 +1,10 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import {
+  projectUpdateRunHistory,
+  type UpdateRunServingIdentity,
+} from "../../../src/infra/update-run-history-projection.ts";
+import {
   isAcknowledgedAbandonedUpdateRun,
   type UpdateRunRecord,
   type UpdateRunStep,
@@ -10,17 +14,26 @@ import {
   resolveUpdateRunIdentity,
 } from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 
-type OracleState = "pass" | "warn" | "fail" | "pending";
+registerUpdateActionsEnglish();
 
 export function updateRunStepOwner(step: string): string {
   // Diagnostic suffixes identify ledger receipts, not additional installation work.
   return step.replace(/^(?:diagnostic|warning):(.+?)(?::\d+)?$/u, "$1");
 }
 
-export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
+export function projectUpdateRun(
+  run: UpdateRunRecord,
+  connected = true,
+  serving?: UpdateRunServingIdentity,
+) {
   const terminal = run.status !== "running";
-  const report = renderUpdateRunReport(run);
+  const managedByOcm = run.target.installationMethod === "ocm";
+  const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const report = historical
+    ? { headline: historical, lines: [], markdown: historical }
+    : renderUpdateRunReport(run);
   const currentIndex = UPDATE_RUN_PHASES.indexOf(run.phase);
   const phases = UPDATE_RUN_PHASES.flatMap((phase, index) => {
     const recorded = run.steps.find((step) => step.step === phase);
@@ -76,7 +89,7 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
   const details = detailStep ? (stepDetails.get(updateRunStepOwner(detailStep.step)) ?? "") : "";
   const facts = run.verification;
   const identity = resolveUpdateRunIdentity(facts, run.after);
-  const booleanState = (value: boolean | undefined): OracleState =>
+  const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
     { name: "service", state: booleanState(facts.serviceRunning) },
@@ -107,13 +120,17 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
       (run.phase === "activating" || run.phase === "restarting" || run.phase === "verifying")
         ? t("updates.run.restarting")
         : report.headline,
-    compactLabel: t("updates.run.progress", { completed: String(completed), total: String(total) }),
-    phases: phases.map(({ step, status, label }) => ({
-      step,
-      status,
-      label,
-      detail: stepDetails.get(step),
-    })),
+    compactLabel: managedByOcm
+      ? ""
+      : t("updates.run.progress", { completed: String(completed), total: String(total) }),
+    phases: managedByOcm
+      ? []
+      : phases.map(({ step, status, label }) => ({
+          step,
+          status,
+          label,
+          detail: stepDetails.get(step),
+        })),
     steps: steps.map(({ step, status }) => ({
       step,
       status,
@@ -121,6 +138,6 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
     })),
     detailStep: detailStep?.step,
     details,
-    oracles,
+    oracles: managedByOcm ? [] : oracles,
   };
 }

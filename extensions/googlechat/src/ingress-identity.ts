@@ -6,49 +6,42 @@ import {
 
 export function normalizeGoogleChatUserId(raw?: string | null): string {
   const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return "";
-  }
   return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
 }
 
 const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
 
-function normalizeGoogleChatStableEntry(entry: string): string | null {
-  const withoutProvider = normalizeLowercaseStringOrEmpty(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (!withoutProvider) {
-    return null;
-  }
-  return withoutProvider.startsWith("users/")
-    ? normalizeGoogleChatUserId(withoutProvider)
-    : withoutProvider;
-}
-
-function normalizeGoogleChatEmailEntry(entry: string): string | null {
-  const withoutProvider = normalizeLowercaseStringOrEmpty(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (withoutProvider.startsWith("users/")) {
-    return null;
-  }
-  return withoutProvider.includes("@") ? withoutProvider : null;
-}
-
 export const googleChatIngressIdentity = defineStableChannelIngressIdentity({
   key: "sender-id",
   // Google signs the webhook for the configured audience before sender.name is consumed.
   authentication: "verified",
-  normalizeEntry: normalizeGoogleChatStableEntry,
+  normalizeEntry(entry: string): string | null {
+    const withoutProvider = normalizeLowercaseStringOrEmpty(entry).replace(
+      /^(googlechat|google-chat|gchat):/i,
+      "",
+    );
+    if (!withoutProvider) {
+      return null;
+    }
+    return withoutProvider.startsWith("users/")
+      ? normalizeGoogleChatUserId(withoutProvider)
+      : withoutProvider;
+  },
   normalizeSubject: normalizeGoogleChatUserId,
   aliases: [
     {
       key: "email",
       kind: GOOGLECHAT_EMAIL_KIND,
-      normalizeEntry: normalizeGoogleChatEmailEntry,
+      normalizeEntry(entry: string): string | null {
+        const withoutProvider = normalizeLowercaseStringOrEmpty(entry).replace(
+          /^(googlechat|google-chat|gchat):/i,
+          "",
+        );
+        if (withoutProvider.startsWith("users/")) {
+          return null;
+        }
+        return withoutProvider.includes("@") ? withoutProvider : null;
+      },
       normalizeSubject: normalizeLowercaseStringOrEmpty,
       authentication: "mutable",
     },

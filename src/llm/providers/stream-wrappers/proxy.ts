@@ -1,7 +1,11 @@
 import { resolveOpenAIModelReasoningEfforts } from "@openclaw/ai/internal/openai";
-import { applyCompletionsAnthropicCacheControl } from "@openclaw/ai/transports";
+import {
+  applyAnthropicEphemeralCacheControlMarkers,
+  applyCompletionsAnthropicCacheControl,
+  resolveAnthropicEphemeralCacheControl,
+} from "@openclaw/ai/transports";
+import { normalizeOpenRouterModelFamilyId } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-// Proxy stream wrapper applies provider-specific wrappers around base stream functions.
 import {
   normalizeOptionalLowercaseString,
   readStringValue,
@@ -16,24 +20,18 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { normalizeOpenAICompatibleReasoningPayload } from "../../../plugin-sdk/provider-stream-shared.js";
 import { parseBooleanValue } from "../../../utils/boolean.js";
 import { streamSimple } from "../../stream.js";
-import {
-  applyAnthropicEphemeralCacheControlMarkers,
-  resolveAnthropicEphemeralCacheControl,
-} from "./anthropic-cache-control-payload.js";
-import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
-const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
-const KILOCODE_FEATURE_DEFAULT = "openclaw";
-const KILOCODE_FEATURE_ENV_VAR = "KILOCODE_FEATURE";
 const BOOLEAN_PARAM_PARSE_OPTIONS = {
   truthy: ["1", "true", "yes", "on", "enable", "enabled"],
   falsy: ["0", "false", "no", "off", "disable", "disabled"],
 };
 
-function resolveKilocodeAppHeaders(): Record<string, string> {
-  const feature = process.env[KILOCODE_FEATURE_ENV_VAR]?.trim() || KILOCODE_FEATURE_DEFAULT;
-  return { [KILOCODE_FEATURE_HEADER]: feature };
-}
+export const OPENROUTER_RESPONSE_CACHE_TTL_KEYS = [
+  "responseCacheTtlSeconds",
+  "response_cache_ttl_seconds",
+  "responseCacheTtl",
+  "response_cache_ttl",
+] as const;
 
 function resolveModelEndpointClass(model: Parameters<StreamFn>[0]) {
   return (
@@ -64,19 +62,14 @@ function readExtraParam(
 }
 
 function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string"
-        ? parseStrictFiniteNumber(value)
-        : undefined;
+  const parsed = parseStrictFiniteNumber(value);
   if (parsed === undefined) {
     return undefined;
   }
   return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));
 }
 
-function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0]): boolean {
+function isOpenRouterEndpoint(model: Parameters<StreamFn>[0]): boolean {
   const provider = readStringValue(model.provider);
   const endpointClass = resolveModelEndpointClass(model);
   return (
@@ -89,7 +82,7 @@ function resolveOpenRouterResponseCacheHeaders(
   model: Parameters<StreamFn>[0],
   extraParams: Record<string, unknown> | undefined,
 ): Record<string, string> | undefined {
-  if (!shouldApplyOpenRouterResponseCacheHeaders(model)) {
+  if (!isOpenRouterEndpoint(model)) {
     return undefined;
   }
   const configuredCache = parseBooleanValue(
@@ -113,12 +106,7 @@ function resolveOpenRouterResponseCacheHeaders(
   }
 
   const ttl = resolveOpenRouterResponseCacheTtlSeconds(
-    readExtraParam(extraParams, [
-      "responseCacheTtlSeconds",
-      "response_cache_ttl_seconds",
-      "responseCacheTtl",
-      "response_cache_ttl",
-    ]),
+    readExtraParam(extraParams, OPENROUTER_RESPONSE_CACHE_TTL_KEYS),
   );
   if (ttl) {
     headers["X-OpenRouter-Cache-TTL"] = ttl;
@@ -136,18 +124,11 @@ export function createOpenRouterSystemCacheWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const provider = readStringValue(model.provider);
-    const modelId = readStringValue(model.id);
     // Keep OpenRouter-specific cache markers on verified OpenRouter routes
     // (or the provider's default route), but not on arbitrary OpenAI proxies.
-    const endpointClass = resolveModelEndpointClass(model);
     if (
-      !modelId ||
-      !isAnthropicModelRef(modelId) ||
-      !(
-        endpointClass === "openrouter" ||
-        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
-      )
+      !isOpenRouterEndpoint(model) ||
+      !normalizeOpenRouterModelFamilyId(model.id)?.startsWith("anthropic/")
     ) {
       return underlying(model, context, options);
     }
@@ -229,9 +210,7 @@ export function createOpenRouterWrapper(
 
 /** @deprecated Proxy provider-owned stream helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  const trimmed = normalizeOptionalLowercaseString(modelId);
-  const slashIndex = trimmed?.indexOf("/") ?? -1;
-  return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
+  return normalizeOptionalLowercaseString(modelId)?.startsWith("x-ai/") ?? false;
 }
 
 /** @deprecated Kilocode provider-owned stream helper; do not use from third-party plugins. */
@@ -249,7 +228,9 @@ export function createKilocodeWrapper(
       transport: "stream",
       routeFacts: getModelProviderRequestRouteFacts(model),
       callerHeaders: options?.headers,
-      providerHeaders: resolveKilocodeAppHeaders(),
+      providerHeaders: {
+        "X-KILOCODE-FEATURE": process.env.KILOCODE_FEATURE?.trim() || "openclaw",
+      },
       precedence: "defaults-win",
     }).headers;
     return streamWithPayloadPatch(

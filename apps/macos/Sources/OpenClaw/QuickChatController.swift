@@ -1,12 +1,11 @@
 import AppKit
 import KeyboardShortcuts
 import Observation
-import OpenClawChatUI
 import SwiftUI
 
 private let quickChatLogger = Logger(subsystem: "ai.openclaw", category: "quickchat")
 
-private final class QuickChatPanel: NSPanel {
+final class QuickChatPanel: NSPanel {
     /// Quick Chat must accept typing without behaving like a normal activating app window.
     override var canBecomeKey: Bool {
         true
@@ -43,7 +42,6 @@ final class QuickChatController: NSObject {
     @ObservationIgnored private let dictation: QuickChatDictation
     @ObservationIgnored private let allowsHotkeyRegistrationInTests: Bool
     @ObservationIgnored private var panel: QuickChatPanel?
-    @ObservationIgnored private var hostingView: NSHostingView<QuickChatView>?
     @ObservationIgnored private weak var textView: NSTextView?
     @ObservationIgnored private var globalMonitor: Any?
     @ObservationIgnored private var localMonitor: Any?
@@ -89,13 +87,7 @@ final class QuickChatController: NSObject {
         recentSessionsProvider: @escaping RecentSessionsProvider = {
             try await SessionLoader.loadSnapshot(limit: 5).rows
         },
-        replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = {
-            let transport = MacGatewayChatTransport(defaultGlobalAgentID: $0.agentID)
-            return OpenClawChatViewModel(
-                sessionKey: $0.sessionKey,
-                transport: transport,
-                activeAgentId: $0.agentID)
-        },
+        replyViewModelFactory: @escaping QuickChatReplyBinding.ViewModelFactory = QuickChatReplyBinding.makeViewModel,
         allowsHotkeyRegistrationInTests: Bool = false)
     {
         self.enableUI = enableUI
@@ -144,8 +136,7 @@ final class QuickChatController: NSObject {
     /// completions no-op, and cancels/clears the task so the picker stays usable.
     private func invalidateRecentsFetch() {
         self.recentSessionsRequestID = UUID()
-        self.recentSessionsTask?.cancel()
-        self.recentSessionsTask = nil
+        SimpleTaskSupport.stop(task: &self.recentSessionsTask)
     }
 
     private func registerHotkeyIfNeeded() {
@@ -157,7 +148,6 @@ final class QuickChatController: NSObject {
             }
         }
         self.hotkeyRegistered = true
-        quickChatLogger.info("quick chat hotkey handler registered")
     }
 
     private func unregisterHotkeyIfNeeded() {
@@ -171,13 +161,11 @@ final class QuickChatController: NSObject {
         self.isStarted = false
         self.dismiss(immediate: true)
         self.model.cancelAllTasks()
-        self.recentSessionsTask?.cancel()
-        self.recentSessionsTask = nil
+        SimpleTaskSupport.stop(task: &self.recentSessionsTask)
         self.replyBinding.clear()
         NotificationCenter.default.removeObserver(self, name: NSWindow.didResignKeyNotification, object: nil)
         self.panel?.delegate = nil
         self.panel = nil
-        self.hostingView = nil
         self.textView = nil
     }
 
@@ -212,37 +200,24 @@ final class QuickChatController: NSObject {
         self.visibleFrame = self.cursorScreen()?.visibleFrame ?? .zero
         self.ensurePanel()
         let target = self.targetFrame()
-        quickChatLogger.info(
-            "quick chat present visible=\(NSStringFromRect(self.visibleFrame)) target=\(NSStringFromRect(target))")
         guard let panel = self.panel else { return }
         panel.alphaValue = 1
         if wasVisible {
             OverlayPanelFactory.applyFrame(window: panel, target: target, animate: true)
-            panel.makeKeyAndOrderFront(nil)
         } else {
             let start = QuickChatPlacement.scaledRect(target, factor: 0.96)
             OverlayPanelFactory.animatePresent(window: panel, from: start, to: target, duration: 0.16)
-            panel.makeKeyAndOrderFront(nil)
         }
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         self.focusEditor()
     }
 
-    func dismiss() {
-        self.dismiss(immediate: false)
-    }
-
-    private func dismiss(immediate: Bool) {
+    func dismiss(immediate: Bool = false) {
         self.stopDictation()
         self.cancelPasteRequest()
-        if self.isVisible {
-            quickChatLogger.info("quick chat dismiss immediate=\(immediate)")
-        }
         self.windowPicker?.cancel()
-        self.recentSessionsRequestID = UUID()
-        self.recentSessionsTask?.cancel()
-        self.recentSessionsTask = nil
-        self.presentationTask?.cancel()
-        self.presentationTask = nil
+        self.invalidateRecentsFetch()
+        SimpleTaskSupport.stop(task: &self.presentationTask)
         self.model.endPresentation()
         self.replyBinding.clear()
         self.removeDismissMonitors()
@@ -267,7 +242,7 @@ final class QuickChatController: NSObject {
             if self.transitionID != dismissalID, self.isVisible {
                 panel.alphaValue = 1
                 panel.setFrame(self.targetFrame(), display: true)
-                panel.makeKeyAndOrderFront(nil)
+                AppActivation.shared.makeKeyAndOrderFront(window: panel)
                 self.focusEditor()
             }
         }
@@ -295,7 +270,6 @@ final class QuickChatController: NSObject {
         let host = NSHostingView(rootView: view)
         panel.contentView = host
         self.panel = panel
-        self.hostingView = host
         // Sheets retain SwiftUI's delegate; observe their focus loss without replacing it.
         NotificationCenter.default.addObserver(
             self,
@@ -357,7 +331,7 @@ final class QuickChatController: NSObject {
         guard self.isVisible, let panel = self.panel, panel.attachedSheet == nil,
               let textView = self.textView
         else { return }
-        panel.makeKeyAndOrderFront(nil)
+        AppActivation.shared.makeKeyAndOrderFront(window: panel)
         panel.makeFirstResponder(textView)
         let transitionID = self.transitionID
         DispatchQueue.main.async { [weak self, weak panel, weak textView] in
@@ -437,8 +411,7 @@ final class QuickChatController: NSObject {
 
     private func stopDictation() {
         self.dictationRequestID = UUID()
-        self.dictationStartTask?.cancel()
-        self.dictationStartTask = nil
+        SimpleTaskSupport.stop(task: &self.dictationStartTask)
         self.dictation.stop()
         self.model.stopDictation()
     }
@@ -517,7 +490,7 @@ final class QuickChatController: NSObject {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID {
             return true
         }
-        guard targetApp.activate(options: []) else { return false }
+        guard AppActivation.shared.activate(application: targetApp) else { return false }
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(1))
         while clock.now < deadline {
@@ -552,8 +525,7 @@ final class QuickChatController: NSObject {
     }
 
     private func dismissIfFocusWasLost() {
-        guard self.canDismissForOutsideInteraction, !self.ownsWindow(NSApp?.keyWindow) else { return }
-        self.dismiss()
+        self.dismissIfClickOutside(window: NSApp?.keyWindow)
     }
 
     /// These flows intentionally move focus outside the bar without ending its presentation.
@@ -579,8 +551,7 @@ final class QuickChatController: NSObject {
 
     private func cancelPasteRequest() {
         self.pasteRequestID = UUID()
-        self.pasteTask?.cancel()
-        self.pasteTask = nil
+        SimpleTaskSupport.stop(task: &self.pasteTask)
         if self.replyBinding.isPastingReply {
             self.replyBinding.finishPaste()
         }
@@ -606,19 +577,7 @@ final class QuickChatController: NSObject {
     }
 
     private func showAgentPicker() {
-        guard self.model.agents.count > 1,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
-
-        self.isMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
-
+        guard self.model.agents.count > 1 else { return }
         let menu = NSMenu()
         for agent in self.model.agents {
             let title = agent.emoji.map { "\($0) \(agent.name)" } ?? agent.name
@@ -633,19 +592,18 @@ final class QuickChatController: NSObject {
                 }
             })
         }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        // Competing interaction: invalidate any in-flight recents fetch before blocking.
-        self.invalidateRecentsFetch()
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        self.presentMenu(menu, invalidatingRecents: true)
     }
 
     private func showModelMenu() {
-        guard self.model.canUseModelControls,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
+        guard self.model.canUseModelControls else { return }
+        self.withMenuInteraction { panel, contentView in
+            QuickChatModelMenuPresenter.present(model: self.model, panel: panel, contentView: contentView)
+        }
+    }
 
+    private func withMenuInteraction(_ present: (NSPanel, NSView) -> Void) {
+        guard let panel, let contentView = panel.contentView else { return }
         self.isMenuActive = true
         self.removeDismissMonitors()
         defer {
@@ -654,10 +612,17 @@ final class QuickChatController: NSObject {
             self.focusEditor()
         }
 
-        QuickChatModelMenuPresenter.present(
-            model: self.model,
-            panel: panel,
-            contentView: contentView)
+        present(panel, contentView)
+    }
+
+    private func presentMenu(_ menu: NSMenu, invalidatingRecents: Bool = false) {
+        self.withMenuInteraction { panel, contentView in
+            let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
+            let contentPoint = contentView.convert(windowPoint, from: nil)
+            // Competing interactions retire a pending recents fetch before AppKit starts tracking.
+            if invalidatingRecents { self.invalidateRecentsFetch() }
+            _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        }
     }
 
     private func showRecentSessionsPicker() {
@@ -692,36 +657,16 @@ final class QuickChatController: NSObject {
 
     private var canShowRecentSessions: Bool {
         self.isVisible &&
-            self.model.canSelectRecentSession &&
+            self.model.canCaptureWindow &&
             self.windowPicker?.isInteractionActive != true &&
             !self.isMenuActive
     }
 
-    private func captureFocusedAppText() {
-        self.invalidateRecentsFetch()
-        self.model.captureFocusedAppText()
-    }
-
-    private func grantMissingPermissions() {
-        self.invalidateRecentsFetch()
-        self.stopDictation()
-        self.model.grantMissingPermissions()
-    }
-
     private func presentRecentSessionsMenu(rows: [SessionRow]) {
-        guard let panel, let contentView = panel.contentView else { return }
         let items = QuickChatRecentMenuLogic.items(
             rows: rows,
             agentName: self.model.agentDisplay.name,
             selectedTarget: self.model.targetSessionOverride)
-
-        self.isMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
 
         let menu = NSMenu()
         for (index, recent) in items.enumerated() {
@@ -734,25 +679,11 @@ final class QuickChatController: NSObject {
                 }
             })
         }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        self.presentMenu(menu)
     }
 
     private func showCaptureMenu() {
-        guard self.model.canCaptureWindow,
-              let panel,
-              let contentView = panel.contentView
-        else { return }
-
-        self.isMenuActive = true
-        self.removeDismissMonitors()
-        defer {
-            self.isMenuActive = false
-            if self.isVisible { self.installDismissMonitors() }
-            self.focusEditor()
-        }
-
+        guard self.model.canCaptureWindow else { return }
         let menu = NSMenu()
         for (title, area) in [
             (String(localized: "Capture Window…"), false),
@@ -762,11 +693,7 @@ final class QuickChatController: NSObject {
                 self?.startCapturePicker(area: area)
             })
         }
-        let windowPoint = panel.convertPoint(fromScreen: NSEvent.mouseLocation)
-        let contentPoint = contentView.convert(windowPoint, from: nil)
-        // Competing interaction: invalidate any in-flight recents fetch before blocking.
-        self.invalidateRecentsFetch()
-        _ = menu.popUp(positioning: nil, at: contentPoint, in: contentView)
+        self.presentMenu(menu, invalidatingRecents: true)
     }
 
     private func startCapturePicker(area: Bool) {
@@ -785,11 +712,7 @@ final class QuickChatController: NSObject {
         // Competing interaction: a recents menu must not pop over the picker overlays.
         self.invalidateRecentsFetch()
         Task {
-            if area {
-                await windowPicker.beginArea()
-            } else {
-                await windowPicker.beginWindow()
-            }
+            await windowPicker.begin(mode: area ? .area : .window)
         }
     }
 
@@ -833,47 +756,33 @@ extension QuickChatController {
         QuickChatView(
             model: self.model,
             replyBinding: self.replyBinding,
-            onDismiss: { [weak self] in self?.dismiss() },
-            onSendAccepted: { [weak self] openChat in
-                self?.handleSendAccepted(openChat: openChat)
-            },
-            onShowAgentPicker: { [weak self] in
-                self?.showAgentPicker()
-            },
-            onShowModelMenu: { [weak self] in
-                self?.showModelMenu()
-            },
-            onShowRecentSessions: { [weak self] in
-                self?.showRecentSessionsPicker()
-            },
-            onToggleReply: { [weak self] in
-                self?.toggleReply()
-            },
-            onToggleDictation: { [weak self] in
-                self?.toggleDictation()
-            },
-            onStopDictation: { [weak self] in
-                self?.stopDictation()
-            },
-            onCaptureTextContext: { [weak self] in
-                self?.captureFocusedAppText()
-            },
-            onShowCaptureMenu: { [weak self] in
-                self?.showCaptureMenu()
-            },
-            onGrantPermissions: { [weak self] in
-                self?.grantMissingPermissions()
-            },
-            onPasteReply: { [weak self] in
-                self?.pasteReplyToFrontmostApp()
-            },
-            onContentHeightChange: { [weak self] height in
-                self?.updateContentHeight(height)
-            },
-            onTextViewReady: { [weak self] textView in
-                self?.textView = textView
-                self?.focusEditor()
-            })
+            onAction: { [weak self] action in self?.handleAction(action) })
+    }
+
+    private func handleAction(_ action: QuickChatView.Action) {
+        switch action {
+        case .dismiss: self.dismiss()
+        case .showAgentPicker: self.showAgentPicker()
+        case .showModelMenu: self.showModelMenu()
+        case .showRecentSessions: self.showRecentSessionsPicker()
+        case .toggleReply: self.toggleReply()
+        case .toggleDictation: self.toggleDictation()
+        case .stopDictation: self.stopDictation()
+        case .captureTextContext:
+            self.invalidateRecentsFetch()
+            self.model.captureFocusedAppText()
+        case .showCaptureMenu: self.showCaptureMenu()
+        case .grantPermissions:
+            self.invalidateRecentsFetch()
+            self.stopDictation()
+            self.model.grantMissingPermissions()
+        case .pasteReply: self.pasteReplyToFrontmostApp()
+        case let .sendAccepted(openChat): self.handleSendAccepted(openChat: openChat)
+        case let .contentHeightChanged(height): self.updateContentHeight(height)
+        case let .textViewReady(textView):
+            self.textView = textView
+            self.focusEditor()
+        }
     }
 }
 

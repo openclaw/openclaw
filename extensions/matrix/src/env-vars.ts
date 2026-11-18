@@ -13,13 +13,9 @@ const MATRIX_GLOBAL_ENV_KEYS = MATRIX_SCOPED_ENV_SUFFIXES.map((suffix) => `MATRI
 const MATRIX_SCOPED_ENV_RE = new RegExp(`^MATRIX_(.+)_(${MATRIX_SCOPED_ENV_SUFFIXES.join("|")})$`);
 
 export function resolveMatrixEnvAccountToken(accountId: string): string {
-  return Array.from(normalizeAccountId(accountId))
-    .map((char) =>
-      /[a-z0-9]/.test(char)
-        ? char.toUpperCase()
-        : `_X${char.codePointAt(0)?.toString(16).toUpperCase() ?? "00"}_`,
-    )
-    .join("");
+  return normalizeAccountId(accountId)
+    .toUpperCase()
+    .replace(/[-_]/g, (char) => (char === "-" ? "_X2D_" : "_X5F_"));
 }
 
 export function getMatrixScopedEnvVarNames(accountId: string): {
@@ -42,28 +38,11 @@ export function getMatrixScopedEnvVarNames(accountId: string): {
 }
 
 function decodeMatrixEnvAccountToken(token: string): string | undefined {
-  let decoded = "";
-  for (let index = 0; index < token.length;) {
-    const hexEscape = /^_X([0-9A-F]+)_/.exec(token.slice(index));
-    if (hexEscape) {
-      const hex = hexEscape[1];
-      const codePoint = hex ? Number.parseInt(hex, 16) : Number.NaN;
-      // Reject invalid code points so one malformed env token cannot abort Matrix discovery.
-      if (!Number.isInteger(codePoint) || codePoint > 0x10ffff) {
-        return undefined;
-      }
-      const char = String.fromCodePoint(codePoint);
-      decoded += char;
-      index += hexEscape[0].length;
-      continue;
-    }
-    const char = token[index];
-    if (!char || !/[A-Z0-9]/.test(char)) {
-      return undefined;
-    }
-    decoded += char.toLowerCase();
-    index += 1;
-  }
+  // The account-id owner admits only ASCII letters, digits, hyphens, and underscores.
+  // Decode in one pass so escape-shaped account names cannot be decoded twice.
+  const decoded = token
+    .replace(/_X(?:2D|5F)_/g, (escape) => (escape === "_X2D_" ? "-" : "_"))
+    .toLowerCase();
   const normalized = normalizeOptionalAccountId(decoded);
   if (!normalized) {
     return undefined;

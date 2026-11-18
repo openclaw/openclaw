@@ -1,52 +1,22 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { aroundEach, expect, it, vi } from "vitest";
+import { aroundEach, expect, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../../test/helpers/managed-handoff-isolation.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../infra/state-database-coordinator.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import * as handoffDatabase from "../../infra/update-managed-service-handoff-database.js";
-import {
-  resolveManagedUpdateLeaseDatabasePath,
-  createManagedHandoffLeaseStore,
-} from "../../infra/update-managed-service-handoff-lease.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { resolveUpdateRoot } from "./shared.js";
-import {
-  withUpdateCommandExecutor,
-  captureUpdateCommandExecutorAuthority,
-} from "./update-command-executor.js";
+import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 
-export const validConfigSnapshot = {
-  path: "/tmp/openclaw.json",
-  exists: true,
-  raw: "{}",
-  valid: true,
-  parsed: {},
-  config: {},
-  runtimeConfig: {},
-  sourceConfig: {},
-  resolved: {},
-  warnings: [],
-  issues: [],
-  legacyIssues: [],
-};
+export const validConfigSnapshot = createTestConfigSnapshot({}, {});
 
-export const successfulPluginUpdate = {
-  status: "ok" as const,
+export const successfulPluginUpdate = createPostCorePluginUpdateResult({
+  status: "ok",
   changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
   warnings: [],
-};
+});
 
 export function expectLifecycleBoundary(events: readonly string[], preLeaseEvent: string): void {
   const preLeaseIndex = events.indexOf(`${preLeaseEvent}:false`);
@@ -56,9 +26,9 @@ export function expectLifecycleBoundary(events: readonly string[], preLeaseEvent
     (event, index) => index > preLeaseIndex && event === "read-config:true",
   );
   expect(authoritativeReadIndex).toBeGreaterThan(preLeaseIndex);
-  for (const event of ["prepare-config:true", "installed-records:true", "plugin-update:true"]) {
-    expect(events).toContain(event);
-  }
+  expect(events).toEqual(
+    expect.arrayContaining(["prepare-config:true", "installed-records:true", "plugin-update:true"]),
+  );
   expect(events.indexOf("plugin-update:true")).toBeGreaterThan(authoritativeReadIndex);
 }
 
@@ -85,6 +55,12 @@ export async function prepareFinalizationPackage(root: string): Promise<void> {
 export function registerPrivateHandoffBindingTests() {
   const dirs = createTempDirTracker();
   let binding: ReturnType<typeof createManagedHandoffTestBinding>;
+  const bindPath =
+    <Args extends [string, ...unknown[]], Result>(open: (...args: Args) => Result) =>
+    (...args: Args): Result => {
+      binding.assertPath(args[0]);
+      return open(...args);
+    };
   aroundEach(async (runTest) => {
     binding = createManagedHandoffTestBinding(dirs.make("update-lifecycle-control-"));
     const resolveTemp = vi
@@ -93,51 +69,22 @@ export function registerPrivateHandoffBindingTests() {
         binding.assertPath();
         return binding.directory;
       });
-    const createDatabase = handoffDatabase.createManagedHandoffLeaseDatabase;
+    const createDatabase = bindPath(handoffDatabase.createManagedHandoffLeaseDatabase);
     const database = vi
       .spyOn(handoffDatabase, "createManagedHandoffLeaseDatabase")
-      .mockImplementation((file, identity) => {
-        binding.assertPath(file);
-        return createDatabase(file, identity);
-      });
+      .mockImplementation(createDatabase);
+    const prepareDatabase = bindPath(handoffDatabase.prepareManagedHandoffLeaseDatabase);
+    const preparedDatabase = vi
+      .spyOn(handoffDatabase, "prepareManagedHandoffLeaseDatabase")
+      .mockImplementation(prepareDatabase);
     try {
       expect(resolveManagedUpdateLeaseDatabasePath()).toBe(binding.databasePath);
-      await withStateDatabaseCoordinatorRuntimeDirectory(binding.directory, runTest);
+      await runTest();
     } finally {
+      preparedDatabase.mockRestore();
       database.mockRestore();
       resolveTemp.mockRestore();
       dirs.cleanup();
     }
   });
-  it.each([false, true])(
-    "binds the real executor before opening its store (missing=%s)",
-    async (missing) => {
-      const root = await resolveUpdateRoot();
-      const wrongDirectory = dirs.make("update-lifecycle-unbound-");
-      if (missing) {
-        vi.mocked(tempRoot.resolvePreferredOpenClawTmpDir).mockReturnValue(wrongDirectory);
-      }
-      vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
-      const run = createUpdateRun({ trigger: "cli" });
-      const operation = withUpdateCommandExecutor(run.runId, async (executor) => {
-        const fence = await executor.enter(root);
-        expect(captureUpdateCommandExecutorAuthority(fence).databasePath).toBe(
-          binding.databasePath,
-        );
-        expect(createManagedHandoffLeaseStore().read(root)).toMatchObject({ kind: "current" });
-      });
-      if (missing) {
-        await expect(operation).rejects.toMatchObject({
-          code: "ERR_ASSERTION",
-          actual: path.join(wrongDirectory, "managed-update-handoffs.sqlite"),
-          expected: binding.databasePath,
-        });
-        expect(await fs.readdir(wrongDirectory)).toEqual([]);
-      } else {
-        await operation;
-        expect((await fs.stat(binding.assertPath())).isFile()).toBe(true);
-        expect(createManagedHandoffLeaseStore().read(root)).toEqual({ kind: "absent" });
-      }
-    },
-  );
 }

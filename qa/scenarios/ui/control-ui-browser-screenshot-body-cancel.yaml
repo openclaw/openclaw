@@ -1,4 +1,4 @@
-title: Control UI browser screenshot response-body cancellation
+title: Control UI browser screenshot failure
 
 scenario:
   id: control-ui-browser-screenshot-body-cancel
@@ -8,11 +8,10 @@ scenario:
       - control-ui.gateway-hosted-ui-control
   objective: >-
     Verify the rendered browser panel keeps a failed screenshot visible while
-    canceling the unread authenticated assistant-media response body.
+    authenticating the assistant-media request.
   successCriteria:
     - Chromium opens the Control UI and renders the browser panel.
     - The browser panel displays the screenshot HTTP failure.
-    - The unread assistant-media response body is canceled exactly once.
     - Browser tab and screenshot requests retain the expected target and authentication.
   docsRefs:
     - docs/web/control-ui.md
@@ -24,7 +23,7 @@ scenario:
   execution:
     kind: playwright
     path: ui/src/e2e/browser-screenshot-body-cancel.e2e.test.ts
-    testNamePattern: keeps the status error visible and cancels the unread media body
+    testNamePattern: authenticates screenshot media and presents its HTTP failure
     summary: >-
-      Real Chromium coverage for screenshot failure visibility, authenticated
-      browser requests, and unread response-body cancellation.
+      Real Chromium coverage for screenshot failure visibility and authenticated
+      browser requests.

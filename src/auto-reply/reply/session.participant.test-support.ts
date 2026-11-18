@@ -13,61 +13,32 @@ import { initSessionState } from "./test/session.test-support.js";
 export async function expectSessionParticipantInputs(root: string) {
   const storePath = path.join(root, "sessions.json");
   const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-  const profileContext = {
-    RawBody: "authenticated input",
+  const input = (name: string, extra: Record<string, unknown> = {}) => ({
+    RawBody: `${name} prompt`,
     ChatType: "direct" as const,
-    SessionKey: "agent:main:profile-participant",
-  };
+    SessionKey: `agent:main:${name}-participant`,
+    ...extra,
+  });
+
+  const profileContext = input("profile");
   prepareSessionParticipantInput(profileContext, { type: "profile", id: "current-profile" }, 42);
   await initSessionState({ ctx: profileContext, cfg });
   await initSessionState({ ctx: { ...profileContext }, cfg });
 
-  await initSessionState({
-    ctx: {
-      RawBody: "channel prompt",
-      ChatType: "direct",
-      SessionKey: "agent:main:channel-participant",
-      SenderId: "channel-sender",
-    },
-    cfg,
-  });
-  await initSessionState({
-    ctx: {
-      RawBody: "unknown prompt",
-      ChatType: "direct",
-      SessionKey: "agent:main:unknown-participant",
-    },
-    cfg,
-  });
-  await initSessionState({
-    ctx: {
-      RawBody: "channel-created prompt",
-      ChatType: "direct",
-      SessionKey: "agent:main:channel-created-participant",
+  for (const ctx of [
+    input("channel", { SenderId: "channel-sender" }),
+    input("unknown"),
+    input("channel-created", {
       SenderId: "channel-created-sender",
       SessionCreation: { via: "channel", actor: { type: "human", id: "channel-actor" } },
-    },
-    cfg,
-  });
-  await initSessionState({
-    ctx: {
-      RawBody: "own agent prompt",
-      ChatType: "direct",
-      SessionKey: "agent:main:own-agent-participant",
-      SessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } },
-    },
-    cfg,
-  });
-  await initSessionState({
-    ctx: {
-      RawBody: "delegated agent prompt",
-      ChatType: "direct",
-      SessionKey: "agent:main:delegated-agent-participant",
+    }),
+    input("own-agent", { SessionCreation: { via: "spawn", actor: { type: "agent", id: "main" } } }),
+    input("delegated-agent", {
       SessionCreation: { via: "spawn", actor: { type: "agent", id: "research" } },
-    },
-    cfg,
-  });
+    }),
+  ]) {
+    await initSessionState({ ctx, cfg });
+  }
 
   await runOpenClawAgentWriteAdmission(
     toDatabaseOptions(resolveSqliteScope({ agentId: "main", storePath, sessionKey: "" })),
@@ -82,35 +53,23 @@ export async function expectSessionParticipantInputs(root: string) {
       lastPromptedAt: 42,
     },
   ]);
-  expect(participants.get("agent:main:channel-participant")).toEqual([
-    {
-      identity: {
-        type: "observation",
-        id: "channel-sender",
-        pluginId: null,
-        accountId: null,
-        senderKind: "unknown",
+  for (const name of ["channel", "channel-created"]) {
+    expect(participants.get(`agent:main:${name}-participant`)).toEqual([
+      {
+        identity: {
+          type: "observation",
+          id: `${name}-sender`,
+          pluginId: null,
+          accountId: null,
+          senderKind: "unknown",
+        },
+        contributionCount: 1,
+        firstPromptedAt: expect.any(Number),
+        lastPromptedAt: expect.any(Number),
       },
-      contributionCount: 1,
-      firstPromptedAt: expect.any(Number),
-      lastPromptedAt: expect.any(Number),
-    },
-  ]);
-  expect(participants.get("agent:main:unknown-participant")).toBeUndefined();
-  expect(participants.get("agent:main:channel-created-participant")).toEqual([
-    {
-      identity: {
-        type: "observation",
-        id: "channel-created-sender",
-        pluginId: null,
-        accountId: null,
-        senderKind: "unknown",
-      },
-      contributionCount: 1,
-      firstPromptedAt: expect.any(Number),
-      lastPromptedAt: expect.any(Number),
-    },
-  ]);
-  expect(participants.get("agent:main:own-agent-participant")).toBeUndefined();
-  expect(participants.get("agent:main:delegated-agent-participant")).toBeUndefined();
+    ]);
+  }
+  for (const name of ["unknown", "own-agent", "delegated-agent"]) {
+    expect(participants.get(`agent:main:${name}-participant`)).toBeUndefined();
+  }
 }

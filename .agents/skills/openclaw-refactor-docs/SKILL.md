@@ -144,7 +144,7 @@ Rewrite in this order:
 
 Add `doc-schema-version: 1` to the YAML frontmatter of every docs page that the
 refactor migrates, creates, or materially rewrites. Apply it only to docs page
-files, not `docs.json`, glossary JSON, or other non-page metadata. If a
+files, not `docs.json` or other non-page metadata. If a
 migrated page is generated, update the generator so regeneration preserves the
 marker instead of hand-editing generated output.
 
@@ -174,8 +174,6 @@ Run the smallest reliable docs checks for the touched surface:
 - Targeted `pnpm exec oxfmt --check --threads=1 <touched-files>`
 - `pnpm docs:check-mdx`
 - `pnpm docs:check-links`
-- `pnpm docs:check-i18n-glossary` when link text, navigation, labels, or glossary
-  surfaces changed
 - Generated-doc checks when schemas, generated config docs, API docs, or
   generated baselines are touched
 

@@ -1,6 +1,32 @@
+import { vi, type Mock } from "vitest";
 import type { InternalSessionEntry } from "../config/sessions.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+
+export function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+export async function resetTestSessionReaders(state: {
+  loadSessionEntryMock: Mock;
+  sessionStoreMock: Record<string, InternalSessionEntry> | undefined;
+  resolvedSessionKeyMock: string | undefined;
+}) {
+  state.loadSessionEntryMock.mockReset().mockImplementation((params: { sessionKey?: string }) => {
+    const sessionKey = params.sessionKey ?? state.resolvedSessionKeyMock ?? "agent:main:main";
+    return state.sessionStoreMock?.[sessionKey];
+  });
+  const sessionEntryReadRuntime = await import("../config/sessions/session-entry-read-runtime.js");
+  vi.spyOn(sessionEntryReadRuntime, "readSessionEntryReadOnlyInWorker").mockImplementation(
+    async (scope, assertCurrent) => {
+      assertCurrent?.();
+      return state.loadSessionEntryMock(scope);
+    },
+  );
+}
 
 export function makeSuccessResult(provider: string, model: string) {
   return {
@@ -64,6 +90,21 @@ export function createChannelModelRuntimeConfig({
       },
     },
     channels: { modelByChannel: { [channel]: { [matchKey]: model } } },
+  };
+}
+
+export function createLegacyAutoFallbackAliasCollisionConfig() {
+  return {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude" },
+        models: {
+          "anthropic/claude": {},
+          "cloudflare-ai-gateway/gemini-2.5-flash-lite": {},
+          "google/gemini-2.5-flash-lite": { alias: "gemini-2.5-flash-lite" },
+        },
+      },
+    },
   };
 }
 

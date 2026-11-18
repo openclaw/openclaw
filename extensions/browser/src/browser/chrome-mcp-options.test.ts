@@ -1,57 +1,39 @@
-import { execFileSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 
 describe("Chrome MCP profile options", () => {
-  it.each([undefined, "npx"])(
-    "launches the packaged Chrome MCP with Node for HTTP endpoints with command %s",
-    (mcpCommand) => {
-      const { command, args } = normalizeChromeMcpOptions({
-        cdpUrl: "http://127.0.0.1:9222",
+  it.each([
+    {
+      mcpCommand: undefined,
+      cdpUrl: "http://127.0.0.1:9222",
+      flag: "--browserUrl",
+      other: "--wsEndpoint",
+    },
+    {
+      mcpCommand: "npx",
+      cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+      flag: "--wsEndpoint",
+      other: "--browserUrl",
+    },
+  ])(
+    "launches the packaged Chrome MCP on the current runtime with $flag and command $mcpCommand",
+    ({ mcpCommand, cdpUrl, flag, other }) => {
+      const { command, args, env } = normalizeChromeMcpOptions({
+        cdpUrl,
         mcpCommand,
       });
 
-      const identity = JSON.parse(
-        execFileSync(
-          command,
-          [
-            "--eval",
-            'process.stdout.write(JSON.stringify({ executable: require("node:fs").realpathSync(process.execPath), runtime: process.versions.bun ? "bun" : "node" }))',
-          ],
-          {
-            encoding: "utf8",
-            env: {
-              SystemRoot: process.env.SystemRoot,
-              SYSTEMROOT: process.env.SYSTEMROOT,
-              WINDIR: process.env.WINDIR,
-              TEMP: process.env.TEMP,
-              TMP: process.env.TMP,
-              TMPDIR: process.env.TMPDIR,
-            },
-          },
-        ),
-      );
-      expect(identity).toEqual({ executable: realpathSync(command), runtime: "node" });
+      expect(command).toBe(process.execPath);
+      expect(env).toEqual({ CHROME_DEVTOOLS_MCP_NO_UPDATE_CHECKS: "1" });
       expect(args[0]).toMatch(
         /[/\\]chrome-devtools-mcp[/\\]build[/\\]src[/\\]bin[/\\]chrome-devtools-mcp\.js$/,
       );
       expect(args[1]).toBe("--experimentalVision");
-      expect(args).toContain("--browserUrl");
-      expect(args).toContain("http://127.0.0.1:9222");
-      expect(args).not.toContain("--wsEndpoint");
+      expect(args).toContain(flag);
+      expect(args).toContain(cdpUrl);
+      expect(args).not.toContain(other);
     },
   );
-
-  it("passes direct WebSocket CDP endpoints to Chrome MCP as wsEndpoint attachments", () => {
-    const { args } = normalizeChromeMcpOptions({
-      cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
-    });
-
-    expect(args).toContain("--wsEndpoint");
-    expect(args).toContain("ws://127.0.0.1:9222/devtools/browser/abc");
-    expect(args).not.toContain("--browserUrl");
-  });
 
   it("keeps endpoint-looking arguments after -- positional", () => {
     const cdpUrl = "https://configured.example";
@@ -88,6 +70,7 @@ describe("Chrome MCP profile options", () => {
     const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
 
     expect(options.command).toBe("custom-chrome-mcp");
+    expect(options.env).toBeUndefined();
     expect(options.args).toEqual([
       "--autoConnect",
       "--no-usage-statistics",

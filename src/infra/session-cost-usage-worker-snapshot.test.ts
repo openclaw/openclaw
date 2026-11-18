@@ -1,0 +1,491 @@
+import fs from "node:fs";
+import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { requireNodeSqlite } from "./node-sqlite.js";
+import {
+  createUsageCheckpoint,
+  createUsageRollupEntry,
+  createUsageTranscriptEntry,
+} from "./session-cost-usage-fixtures.test-support.js";
+import {
+  partitionUsageCostRollup,
+  USAGE_COST_PARTITION_SCOPE,
+  usageCostPartitionKey,
+  type UsageCostPartition,
+} from "./session-cost-usage-partitions.js";
+import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
+import {
+  decodeUsageCostRollupEnvelope,
+  USAGE_COST_ROLLUP_SCOPE,
+  type UsageCostRollupEntry,
+} from "./session-cost-usage-rollup-codec.js";
+import {
+  appendSessionUsageRollupContribution,
+  createSessionUsageRollupData,
+} from "./session-cost-usage-rollup.js";
+import { createEmptyCostUsageTotals } from "./session-cost-usage-totals.js";
+import {
+  prepareUsageCostReportEntry,
+  readUsageCostReportEntry,
+} from "./session-cost-usage-worker-report.js";
+import { executeUsageCostWorker } from "./session-cost-usage-worker.js";
+import type { UsageCostWorkerInput } from "./session-cost-usage-worker.types.js";
+import type { UsageCostTranscriptFile } from "./session-cost-usage.types.js";
+
+const fixture = vi.hoisted(() => ({
+  withRead: vi.fn(),
+  inventory: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
+  selectedFiles: vi.fn<() => Promise<UsageCostTranscriptFile[]>>(),
+}));
+
+// mock-isolation: Use only the borrowed native connection, without opening real agent stores.
+vi.mock("../state/openclaw-agent-db-readonly.js", () => ({
+  withOpenClawAgentDatabaseReadOnly: fixture.withRead,
+}));
+// mock-isolation: Avoid loading the worker's retained refresh state.
+vi.mock("./session-cost-usage-refresh-inputs.worker.js", () => ({
+  createUsageCostCollectionAccess: () => ({
+    readFreshness: async () =>
+      (await fixture.inventory()).map((file) => ({
+        mtimeMs: file.mtimeMs,
+        generation: file.generation ?? null,
+      })),
+  }),
+  usageRefreshInputs: vi.fn(),
+}));
+// mock-isolation: Supply captured metadata and aliases without opening a second native store.
+vi.mock("./session-cost-usage-collection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-cost-usage-collection.js")>()),
+  listUsageCountedTranscriptSources: fixture.inventory,
+  readUsageCostTranscriptSourceStats: async (sources: UsageCostTranscriptFile[]) => sources,
+  resolveUsageCostTranscriptFiles: fixture.selectedFiles,
+  resolveUsageCostTranscriptPaths: async (paths: string[]) => paths,
+}));
+
+afterEach(() => vi.resetAllMocks());
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+const timestamp = Date.UTC(2026, 8, 18);
+const pricingFingerprint = "synthetic-pricing";
+function cacheDatabase() {
+  const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  db.exec(`CREATE TABLE cache_entries (
+    scope TEXT NOT NULL, key TEXT NOT NULL, value_json TEXT, blob BLOB,
+    expires_at INTEGER, updated_at INTEGER NOT NULL, PRIMARY KEY (scope, key)
+  )`);
+  return db;
+}
+function reportFile(filePath: string, inode: number): UsageCostTranscriptFile {
+  return {
+    filePath,
+    sourcePath: filePath,
+    kind: "jsonl",
+    size: 100,
+    mtimeMs: timestamp,
+    device: 1,
+    inode,
+  };
+}
+function reportEntry(file: UsageCostTranscriptFile, tokens: number): UsageCostRollupEntry {
+  const rollup = createSessionUsageRollupData();
+  appendSessionUsageRollupContribution(rollup, {
+    timestamp,
+    role: "assistant",
+    toolNames: [],
+    toolResultCounts: { total: 0, errors: 0 },
+    usageTotals: {
+      ...createEmptyCostUsageTotals(),
+      input: tokens,
+      totalTokens: tokens,
+      inputCost: tokens / 10,
+      totalCost: tokens / 10,
+    },
+  });
+  return createUsageRollupEntry(rollup, {
+    pricingFingerprint,
+    checkpoint: {
+      ...createUsageCheckpoint(file.size, file.mtimeMs, file.inode ?? 0),
+      anchorHash: "synthetic-anchor",
+    },
+    scannedAt: timestamp,
+    parsedRecords: 1,
+    countedRecords: 1,
+  });
+}
+
+/** Commit one rollup with its month partitions and quarter rows, as the cache host does. */
+function writeRollup(
+  db: DatabaseSync,
+  key: string,
+  encoded: { valueJson: string; blob: Uint8Array; partitions?: UsageCostPartition[] },
+) {
+  const upsert = db.prepare(`INSERT INTO cache_entries (scope, key, value_json, blob, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (scope, key) DO UPDATE SET
+      value_json = excluded.value_json, blob = excluded.blob, updated_at = excluded.updated_at`);
+  upsert.run(USAGE_COST_ROLLUP_SCOPE, key, encoded.valueJson, encoded.blob, timestamp);
+  for (const partition of encoded.partitions ?? []) {
+    const dated = usageCostPartitionKey(key, partition.date);
+    upsert.run(USAGE_COST_PARTITION_SCOPE, dated, partition.valueJson, partition.blob, timestamp);
+    const quarters = partition.quarters;
+    if (quarters) {
+      upsert.run(USAGE_COST_QUARTER_SCOPE, dated, quarters.valueJson, quarters.blob, timestamp);
+    }
+  }
+}
+const writeReport = (
+  db: DatabaseSync,
+  file: UsageCostTranscriptFile,
+  entry: UsageCostRollupEntry,
+) => writeRollup(db, file.filePath, partitionUsageCostRollup(entry));
+
+function borrowDatabase(db: DatabaseSync) {
+  fixture.withRead.mockImplementation((read: (opened: { db: DatabaseSync }) => unknown) => ({
+    found: true,
+    value: read({ db }),
+  }));
+}
+
+function execute(
+  operation: UsageCostWorkerInput["operation"],
+  request: Parameters<typeof executeUsageCostWorker>[1]["request"] = vi.fn(),
+) {
+  return executeUsageCostWorker(
+    {
+      kind: "usage-cost",
+      location: { agentId: "main", databasePath: ":memory:", storePath: ":memory:", env: {} },
+      databases: [{ agentId: "main", path: ":memory:" }],
+      stores: [],
+      archiveStorePaths: [],
+      operation,
+    },
+    { consumeInput() {}, notify() {}, request },
+    {
+      signal: new AbortController().signal,
+      runNativeSection: async (run) => run(),
+      throwIfCancelled() {},
+    },
+    async (_database, read) => read(),
+  );
+}
+
+it.for([
+  { selected: false, scanMs: 11_000 },
+  { selected: true, scanMs: 11_000 },
+  { selected: true, scanMs: 0 },
+])(
+  "batches whole transcripts and retains pending selectors ($selected, $scanMs ms)",
+  async ({ selected, scanMs }) => {
+    const root = tempDirs.make("usage-batch-quantum-");
+    const entry = createUsageTranscriptEntry(7, { cost: 1 });
+    Object.assign(entry.message.usage, { output: 3, totalTokens: 10 });
+    const text = JSON.stringify({ ...entry, id: "usage", parentId: null }) + "\n";
+    const files: UsageCostTranscriptFile[] = ["a", "b"].map((name) => {
+      const filePath = path.join(root, `${name}.jsonl`);
+      fs.writeFileSync(filePath, text);
+      const stats = fs.statSync(filePath);
+      return {
+        kind: "jsonl",
+        filePath,
+        sourcePath: filePath,
+        size: stats.size,
+        mtimeMs: stats.mtimeMs,
+        device: stats.dev,
+        inode: stats.ino,
+      };
+    });
+    fixture.inventory.mockResolvedValue(files);
+    const requested = [
+      files[0]!,
+      { ...files[1]!, sourcePath: `${files[1]!.sourcePath}.alias` },
+      files[1]!,
+    ];
+    fixture.selectedFiles.mockResolvedValue(requested);
+    const db = cacheDatabase();
+    borrowDatabase(db);
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const written: string[] = [];
+    const batches: number[] = [];
+    try {
+      const result = await execute(
+        {
+          kind: "refresh",
+          pricingFingerprint,
+          maxFiles: 50,
+          sessionFiles: selected ? requested.map((file) => file.sourcePath) : undefined,
+        },
+        async (value) => {
+          let output: unknown;
+          if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
+            batches.push(value.input.length);
+            for (const row of value.input) {
+              if (isRecord(row) && typeof row.key === "string") {
+                written.push(row.key);
+              }
+            }
+            output = true;
+          } else if (isRecord(value) && value.kind === "refresh-session") {
+            now += scanMs;
+          } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
+            output = value.input.map(() => undefined);
+          }
+          return { input: output, consumed() {} };
+        },
+      );
+      expect(batches).toEqual(scanMs ? [1] : [2]);
+      expect(written).toEqual((scanMs ? files.slice(0, 1) : files).map((file) => file.filePath));
+      expect(result).toEqual({
+        kind: "refresh",
+        changed: true,
+        ...(scanMs
+          ? {
+              remainingFiles: (selected ? requested.slice(1) : files.slice(1)).map((file) => ({
+                sessionFile: file.sourcePath,
+                rollupId: file.filePath,
+              })),
+            }
+          : {}),
+      });
+    } finally {
+      clock.mockRestore();
+      db.close();
+    }
+  },
+);
+
+it("spends the shared decoded budget on complete reports after preparing the snapshot", async () => {
+  const entries = [17, 23].map((tokens) => {
+    const file = reportFile(`/synthetic/report-${tokens}.jsonl`, tokens);
+    const entry = reportEntry(file, tokens);
+    // Untimestamped tool counts remain in the body, not its dated partitions.
+    appendSessionUsageRollupContribution(entry.rollup, {
+      toolNames: Array.from({ length: 32 }, (_, index) => `synthetic-unattributed-tool-${index}`),
+      toolResultCounts: { total: 0, errors: 0 },
+    });
+    const encoded = partitionUsageCostRollup(entry);
+    const envelope = decodeUsageCostRollupEnvelope(encoded.valueJson, pricingFingerprint);
+    if (!envelope) {
+      throw new Error("Encoded fixture must have a valid rollup envelope");
+    }
+    const partitionBytes = encoded.partitions.reduce((total, partition) => {
+      const metadata: { bytes: number } = JSON.parse(partition.valueJson);
+      return total + metadata.bytes;
+    }, 0);
+    expect(envelope.body.bytes).toBeGreaterThan(partitionBytes);
+    const prepared = prepareUsageCostReportEntry({
+      row: { key: file.filePath, updatedAt: timestamp, valueJson: encoded.valueJson },
+      body: () => encoded.blob,
+      partitions: () => encoded.partitions,
+      pricingFingerprint,
+      throwIfCancelled() {},
+    });
+    return { prepared, file, decodedBytes: envelope.body.bytes + partitionBytes };
+  });
+  const [first, second] = entries;
+  if (!first || !second) {
+    throw new Error("Budget fixture requires two reports");
+  }
+  expect(second.decodedBytes).toBe(first.decodedBytes);
+  const cacheBudget = { remainingBytes: first.decodedBytes };
+  const unexpectedReplay = async () => {
+    throw new Error("Committed partition fixture must not replay transcripts");
+  };
+  const read = (entry: (typeof entries)[number]) =>
+    readUsageCostReportEntry({
+      prepared: entry.prepared,
+      file: entry.file,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      scan: {
+        pricingFingerprint,
+        resolveCosts: unexpectedReplay,
+        readGeneration: unexpectedReplay,
+        readRows: unexpectedReplay,
+      },
+      throwIfCancelled() {},
+      replayBudget: { remainingBytes: 0, deadline: Number.POSITIVE_INFINITY },
+      cacheBudget,
+    });
+  expect(await read(first)).toMatchObject({
+    rollup: { buckets: { [String(timestamp)]: { totals: { totalTokens: 17, totalCost: 1.7 } } } },
+  });
+  expect(await read(second)).toBeNull();
+});
+
+it("reads the report snapshot after discovery and keeps it closed across awaits", async ({
+  signal,
+}) => {
+  const db = cacheDatabase();
+  const file = reportFile("/synthetic/report.jsonl", 2);
+  const write = (tokens: number) => writeReport(db, file, reportEntry(file, tokens));
+  write(3);
+  // Borrow one native connection so an independent job can use it while discovery waits.
+  borrowDatabase(db);
+  const discovering = createDeferredCore();
+  const resume = createDeferredCore();
+  fixture.inventory.mockImplementationOnce(async () => {
+    discovering.resolve();
+    await resume.promise;
+    return [file];
+  });
+  fixture.inventory.mockResolvedValue([file]);
+  fixture.selectedFiles.mockResolvedValue([file]);
+  const report = () =>
+    execute({
+      kind: "summary",
+      pricingFingerprint,
+      startMs: timestamp,
+      endMs: timestamp + 15 * 60 * 1000 - 1,
+      dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+    });
+  const pending = report();
+  try {
+    await withinTest(
+      awaitGateBeforeSettlement(discovering.promise, pending, "Report did not reach discovery"),
+      signal,
+    );
+    const insideReportSnapshot = db.isTransaction;
+    write(7);
+    resume.resolve();
+    expect(insideReportSnapshot).toBe(false);
+    expect(await pending).toMatchObject({
+      kind: "summary",
+      summary: { totals: { totalTokens: 7, totalCost: 0.7 } },
+    });
+  } finally {
+    resume.resolve();
+    await pending.catch(() => {});
+    db.close();
+  }
+});
+
+it("refreshes a usage.cost cache written before a shorter SQLite transcript rewrite", async () => {
+  const db = cacheDatabase();
+  const filePath = "sqlite:main:usage-rewritten:/synthetic/openclaw-agent.sqlite";
+  // The rewrite rotated the generation and left fewer events than the cached checkpoint.
+  const file: UsageCostTranscriptFile = {
+    kind: "sqlite",
+    filePath,
+    sourcePath: filePath,
+    sessionId: "usage-rewritten",
+    size: 100,
+    mtimeMs: timestamp,
+    eventCount: 10,
+    maxSeq: 10,
+    generation: "generation-b",
+  };
+  writeReport(db, file, {
+    ...reportEntry(file, 7),
+    checkpoint: {
+      kind: "sqlite",
+      generation: "generation-a",
+      maxSeq: 100,
+      eventCount: 100,
+      size: 1_000,
+      mtimeMs: timestamp,
+      anchorHash: "synthetic-anchor",
+    },
+  });
+  borrowDatabase(db);
+  fixture.inventory.mockResolvedValue([file]);
+  try {
+    expect(
+      await execute({
+        kind: "summary",
+        pricingFingerprint,
+        startMs: timestamp,
+        endMs: timestamp + 15 * 60 * 1000 - 1,
+        dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+      }),
+    ).toMatchObject({
+      kind: "summary",
+      summary: { totals: { totalTokens: 0 }, cacheStatus: { staleFiles: 1 } },
+      staleSessionFiles: [filePath],
+    });
+  } finally {
+    db.close();
+  }
+});
+
+// Accounting semantics changed with the canonical-navigation repair, so a rollup an
+// older build published must not survive on an unchanged transcript: this side-cursor
+// history billed 0 tokens before, and the displaced reply's 10 tokens return only if
+// the semantic version retires the cached row.
+it("rebuilds a usage rollup published by an older accounting version", async () => {
+  const at = (second: number) => new Date(timestamp + second * 1_000).toISOString();
+  const filePath = path.join(tempDirs.make("usage-cache-version-"), "side-cursor.jsonl");
+  fs.writeFileSync(
+    filePath,
+    [
+      { type: "message", id: "u1", parentId: null, timestamp: at(0), message: { role: "user" } },
+      {
+        ...createUsageTranscriptEntry(10, { cost: 1, timestamp: at(1) }),
+        id: "a1",
+        parentId: "u1",
+      },
+      { type: "custom", id: "s", parentId: "u1", appendMode: "side", timestamp: at(2) },
+      { type: "leaf", id: "cut", parentId: "s", targetId: null },
+    ]
+      .map((event) => `${JSON.stringify(event)}\n`)
+      .join(""),
+  );
+  const stats = fs.statSync(filePath);
+  const file: UsageCostTranscriptFile = {
+    kind: "jsonl",
+    filePath,
+    sourcePath: filePath,
+    size: stats.size,
+    mtimeMs: stats.mtimeMs,
+    device: stats.dev,
+    inode: stats.ino,
+  };
+  const db = cacheDatabase();
+  // The cached checkpoint still matches the file exactly, so only the version retires it.
+  writeReport(db, file, {
+    ...reportEntry(file, 0),
+    // Version 11 shipped before the canonical-navigation accounting repair.
+    version: 11,
+    checkpoint: {
+      ...createUsageCheckpoint(stats.size, stats.mtimeMs, stats.ino),
+      device: stats.dev,
+    },
+  });
+  borrowDatabase(db);
+  fixture.inventory.mockResolvedValue([file]);
+  fixture.selectedFiles.mockResolvedValue([file]);
+  const summary = {
+    kind: "summary",
+    pricingFingerprint,
+    startMs: timestamp,
+    endMs: timestamp + 15 * 60 * 1000 - 1,
+    dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
+  } as const;
+  try {
+    // The retired row is reported stale, then republished with the spend it really made.
+    expect(await execute(summary)).toMatchObject({
+      summary: { totals: { totalTokens: 0 }, cacheStatus: { staleFiles: 1 } },
+    });
+    await execute({ kind: "refresh", pricingFingerprint, maxFiles: 50 }, async (value) => {
+      let output: unknown;
+      if (isRecord(value) && value.kind === "write" && Array.isArray(value.input)) {
+        for (const row of value.input as Array<{ value: Uint8Array; blob: Uint8Array }>) {
+          writeRollup(db, filePath, { ...row, valueJson: new TextDecoder().decode(row.value) });
+        }
+        output = true;
+      } else if (isRecord(value) && value.kind === "pricing" && Array.isArray(value.input)) {
+        output = value.input.map(() => undefined);
+      }
+      return { input: output, consumed() {} };
+    });
+    expect(await execute(summary)).toMatchObject({
+      summary: { totals: { totalTokens: 10 }, cacheStatus: { staleFiles: 0 } },
+    });
+  } finally {
+    db.close();
+  }
+});

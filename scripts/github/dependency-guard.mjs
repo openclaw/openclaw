@@ -4,11 +4,13 @@
 // lockfile-only PR changes without executing contributor code.
 import { appendFile } from "node:fs/promises";
 import {
-  SupersededReviewError,
+  ObsoleteReviewError,
   assertGuardUnchanged,
+  failGuard,
   findMaintainerApproval,
   finishGuard,
   openGuard,
+  securityReviewContracts,
   withApprovalRequest,
 } from "./guard-review.mjs";
 import {
@@ -29,8 +31,8 @@ import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 
 /** Marker used to identify dependency guard comments. */
 const dependencyChangeMarker = "<!-- openclaw:dependency-guard -->";
-const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard -->";
-const dependencyApprovalCommand = "/allow-dependencies-change";
+const dependencyGraphGuardMarker = securityReviewContracts.dependency.commentMarker;
+const dependencyApprovalCommand = securityReviewContracts.dependency.approvalCommand;
 export const dependencyChangedLabel = "dependencies-changed";
 export {
   GITHUB_API_REQUEST_TIMEOUT_MS,
@@ -187,11 +189,11 @@ function renderApprovedDependencyComment(approval, changes) {
       : "### ✅ Dependency graph changes approved",
     "",
     approval.kind === "author"
-      ? "This maintainer PR changes the dependency graph. This comment is informational because the PR author has repository Maintain or Admin access."
-      : "A maintainer approved this revision with an explicit dependency approval comment.",
+      ? "This PR changes the dependency graph.\n\n**This comment is informational because the PR author is a repository admin or an active member of `@openclaw/openclaw-secops`.**"
+      : "A repository admin or SecOps member approved this revision with an explicit dependency approval comment.",
     "",
     `- Current SHA: ${markdownCode(approval.sha)}`,
-    `- Maintainer: @${sanitizeGuardDisplayValue(approval.login)}`,
+    `- Approver: @${sanitizeGuardDisplayValue(approval.login)}`,
     `- Repository role: ${markdownCode(approval.role)}`,
     ...(approval.kind === "comment" ? [`- Approval comment: ${approval.url}`] : []),
     "",
@@ -200,7 +202,7 @@ function renderApprovedDependencyComment(approval, changes) {
       : []),
     approval.kind === "author"
       ? "Carefully review these changes before merging."
-      : "A later push requires a fresh approval comment for an external contributor's PR.",
+      : "A later push requires a fresh approval comment unless the author is a repository admin or SecOps member.",
   ].join("\n");
 }
 
@@ -214,13 +216,13 @@ export function renderRemovalOnlyDependencyComment({ dependencyGraphChanges, hea
     "",
     "### Dependency removals noted",
     "",
-    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require additional maintainer approval.",
+    "This PR only removes dependencies from the dependency graph, so the dependency guard is informational and does not require additional admin or SecOps approval.",
     "",
     ...removalLines,
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
     "",
-    "A later push that adds or changes dependency graph entries will require a fresh maintainer approval.",
+    "A later push that adds or changes dependency graph entries will require a fresh admin or SecOps approval.",
   ].join("\n");
 }
 
@@ -236,7 +238,7 @@ export function renderAutoscrubbedDependencyComment({
 
 ### Dependency lockfile changes were removed
 
-This PR did not change dependency graph fields in package manifests and had no maintainer approval, so the workflow restored the lockfiles to this PR's merge base automatically.
+This PR did not change dependency graph fields in package manifests and had no admin or SecOps approval, so the workflow restored the lockfiles to this PR's merge base automatically.
 
 Restored lockfiles:
 ${fileLines.join("\n")}
@@ -259,7 +261,7 @@ export function renderClearedDependencyGuardComment({ headSha }) {
     "",
     "### Dependency graph guard cleared",
     "",
-    `This PR no longer has dependency changes awaiting review. A future dependency graph change from an external contributor requires a maintainer's ${markdownCode(dependencyApprovalCommand)} comment after the guard notice identifies that revision.`,
+    `This PR no longer has dependency changes awaiting review. A future dependency graph change requires an admin or SecOps member’s ${markdownCode(dependencyApprovalCommand)} comment after the guard notice identifies that revision.`,
     "",
     `- Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
   ].join("\n");
@@ -304,9 +306,9 @@ export function renderBlockedDependencyComment({
   return [
     dependencyGraphGuardMarker,
     "",
-    "### ⚠️ Maintainer dependency review required",
+    "### ⚠️ Dependency review required",
     "",
-    "This external contributor PR changes the dependency graph. A maintainer must review these changes before merging.",
+    "This PR changes the dependency graph. A repository admin or an active member of `@openclaw/openclaw-secops` must review these changes before merging.",
     "",
     `Current SHA: ${markdownCode(headSha ?? "<head-sha>")}`,
     "",
@@ -332,7 +334,7 @@ function renderAutoscrubStatusLines(status) {
   if (status.kind === "unavailable") {
     return [
       "",
-      "Automatic lockfile cleanup is best effort. These lockfile changes remain in this PR. If they are unintentional, remove them using the commands below. Otherwise, a maintainer can review and approve them with `/allow-dependencies-change`.",
+      "Automatic lockfile cleanup is best effort. These lockfile changes remain in this PR. If they are unintentional, remove them using the commands below. Otherwise, a repository admin or SecOps member can review and approve them with `/allow-dependencies-change`.",
     ];
   }
   if (status.kind === "blocked-by-dependency-manifest-fields") {
@@ -395,19 +397,8 @@ function decodeContentFile(payload) {
   return Buffer.from(payload.content, payload.encoding ?? "base64").toString("utf8");
 }
 
-async function readJsonFileAtRef(api, { owner, repo, path, ref }) {
-  if (!ref) {
-    return null;
-  }
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
-  const payload = await api
-    .request(`/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`)
-    .catch((error) => {
-      if (error?.status === 404) {
-        return null;
-      }
-      throw error;
-    });
+async function readJsonFileAtRef(api, options) {
+  const payload = await readContentFileMetadataAtRef(api, options);
   const text = decodeContentFile(payload);
   return text ? JSON.parse(text) : null;
 }
@@ -517,11 +508,11 @@ export async function createAutoscrubCommit(
   }
   // Recheck after reading file contents: neither an old workflow event nor the
   // detection job authorizes a write after the PR or its approval has changed.
-  await assertGuardUnchanged(guard);
+  await assertGuardUnchanged(guard, { allowMerged: false });
   if (await findMaintainerApproval(guard)) {
     return null;
   }
-  await assertGuardUnchanged(guard);
+  await assertGuardUnchanged(guard, { allowMerged: false });
   const data = await writeApi
     .graphql(
       `mutation CreateAutoscrubCommit($input: CreateCommitOnBranchInput!) {
@@ -590,26 +581,23 @@ async function setOutput(name, value) {
   await appendFile(outputPath, `${name}=${value}\n`);
 }
 
+let currentGuard;
+
 export async function reviewDependencyChanges(
   prepared,
   mode = process.env.OPENCLAW_DEPENDENCY_GUARD_MODE ?? "enforce",
 ) {
-  const guard = await openGuard(
-    {
-      context: "openclaw/dependency-review",
-      commentMarker: dependencyGraphGuardMarker,
-      approvalCommand: dependencyApprovalCommand,
-    },
-    prepared,
-  );
+  const guard = await openGuard(securityReviewContracts.dependency, prepared);
+  currentGuard = guard;
   if (!guard) {
     return true;
   }
   const { api, owner, repo, pullRequest, issuePath, files } = guard;
   const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
-  if (!["detect", "autoscrub", "enforce"].includes(mode)) {
+  if (!["detect", "autoscrub", "enforce", "prepare"].includes(mode)) {
     throw new Error(`Unknown dependency guard mode: ${mode}`);
   }
+  const enforce = mode === "enforce" || mode === "prepare";
   const dependencyFiles = [
     ...new Set(files.flatMap((file) => [file.filename, file.previous_filename])),
   ]
@@ -654,10 +642,10 @@ export async function reviewDependencyChanges(
       dependencyManifestChanges,
     });
   const autoscrubTarget =
-    autoscrubCandidate && !approval && !removalOnly
+    autoscrubCandidate && pullRequest.state === "open" && !approval && !removalOnly
       ? autoscrubTargetRepository({ owner, repo, pullRequest })
       : null;
-  if (mode === "detect") {
+  if (mode === "detect" || mode === "prepare") {
     await setOutput("autoscrub", String(Boolean(autoscrubTarget)));
     if (autoscrubTarget) {
       await setOutput("autoscrub-owner", autoscrubTarget.owner);
@@ -666,11 +654,15 @@ export async function reviewDependencyChanges(
     await writeSummary(
       "## Dependency Guard\n\nDependency analysis complete; the final guard job publishes the review result.",
     );
-    return true;
+    if (mode === "detect" || autoscrubTarget) {
+      if (prepared && mode === "prepare") {
+        prepared.autoscrubPending = Boolean(autoscrubTarget);
+      }
+      return true;
+    }
   }
 
-  const comments = await api.paginate(`${issuePath}/comments`);
-  const labels = await api.paginate(`${issuePath}/labels`);
+  const { comments, labelNames } = await guard.readIssueNotices();
   const trustedCommentAuthors = dependencyGuardCommentAuthors(
     process.env.OPENCLAW_DEPENDENCY_GUARD_COMMENT_BOTS,
   );
@@ -685,7 +677,8 @@ export async function reviewDependencyChanges(
       issuePath,
       owner,
       repo,
-      labelNames: new Set(labels.map((label) => label.name)),
+      labelNames,
+      recoverCommentWrites: enforce,
     });
   // Consolidate the former awareness and enforcement comments into one notice.
   await deleteCommentIfPresent(findComment(dependencyChangeMarker));
@@ -698,8 +691,8 @@ export async function reviewDependencyChanges(
       );
     }
     await writeSummary("## Dependency Guard\n\nNo dependency-related file changes detected.");
-    if (mode === "enforce") {
-      return await finishGuard(guard, { description: "No dependency changes require review." });
+    if (enforce) {
+      return await finishGuard(guard, securityReviewContracts.dependency.success.clear);
     }
     return true;
   }
@@ -721,7 +714,7 @@ export async function reviewDependencyChanges(
         );
         if (!commit) {
           await writeSummary(
-            "## Dependency Guard\n\nMaintainer approval arrived; lockfile changes were preserved.",
+            "## Dependency Guard\n\nAdmin or SecOps approval arrived; lockfile changes were preserved.",
           );
           return true;
         }
@@ -740,7 +733,7 @@ export async function reviewDependencyChanges(
           error instanceof GitHubRateLimitError ||
           error instanceof GitHubReadTimeoutError ||
           error instanceof GitHubDiffDataError ||
-          error instanceof SupersededReviewError
+          error instanceof ObsoleteReviewError
         ) {
           throw error;
         }
@@ -777,13 +770,11 @@ export async function reviewDependencyChanges(
     }
   }
 
-  if (mode === "enforce") {
-    const allowed = await finishGuard(guard, {
-      description: removalOnly
-        ? "Dependency removals are informational."
-        : "Dependency review requirements satisfied.",
-      requiresApproval: !removalOnly,
-    });
+  if (enforce) {
+    const allowed = await finishGuard(
+      guard,
+      securityReviewContracts.dependency.success[removalOnly ? "removals" : "approved"],
+    );
     if (allowed) {
       const body = removalOnly
         ? renderRemovalOnlyDependencyComment({
@@ -816,7 +807,17 @@ export async function reviewDependencyChanges(
     }),
   );
   if (mode === "autoscrub") {
-    await assertGuardUnchanged(guard);
+    try {
+      await assertGuardUnchanged(guard);
+    } catch (error) {
+      // A lifecycle stop must not hide a cleanup mutation that already failed.
+      if (autoscrubStatus?.kind === "failed") {
+        throw new Error(`Dependency lockfile autoscrub failed: ${autoscrubStatus.reason}`, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
   await upsertComment(existingGuardComment, body);
   await writeSummary(body);
@@ -828,8 +829,11 @@ export async function reviewDependencyChanges(
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewDependencyChanges().catch(
-    /** @param {unknown} error */ (error) => {
-      if (error instanceof SupersededReviewError) {
+    /** @param {unknown} error */ async (error) => {
+      if (currentGuard) {
+        await failGuard(currentGuard, error, { terminal: true });
+      }
+      if (error instanceof ObsoleteReviewError) {
         console.log(error.message);
         return;
       }

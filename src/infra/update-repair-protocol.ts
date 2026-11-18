@@ -13,7 +13,9 @@ export const updateRepairValidationSchema = z.object({
   summary: z.string(),
   stopReason: z.string().max(1024).optional(),
 });
-const text = z.string().max(1024);
+// Wire cap enforced by both the current protocol and the frozen published parser.
+export const UPDATE_REPAIR_TEXT_MAX_CHARS = 1024;
+const text = z.string().max(UPDATE_REPAIR_TEXT_MAX_CHARS);
 const wireValidation = updateRepairValidationSchema.extend({ summary: text });
 const status = z.enum(["repaired", "improved", "unrepaired", "unavailable", "aborted"]);
 const turn = z.number().int().positive();
@@ -136,7 +138,7 @@ export type UpdateRepairParams = {
   };
   /** Read-only oracle for the captured target. Honor the signal to cancel diagnostics. */
   validate: (signal: AbortSignal) => Promise<UpdateRepairValidation>;
-  budget?: z.input<typeof updateRepairBudgetSchema>;
+  budget?: Omit<z.input<typeof updateRepairBudgetSchema>, "maxTurns">;
   onEvent?: (event: UpdateRepairEvent) => void;
   signal?: AbortSignal;
   /** The caller still owns this repair slot. */

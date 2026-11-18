@@ -44,11 +44,10 @@ export function ensureTelegramDefaultGroupMentionGate(
 
 export function shouldShowTelegramDmAccessWarning(cfg: OpenClawConfig, accountId: string): boolean {
   const merged = mergeTelegramAccountConfig(cfg, accountId);
-  const policy = merged.dmPolicy ?? "pairing";
   const hasAllowFrom =
     Array.isArray(merged.allowFrom) &&
     merged.allowFrom.some((entry) => normalizeOptionalString(String(entry)));
-  return policy === "pairing" && !hasAllowFrom;
+  return (merged.dmPolicy ?? "pairing") === "pairing" && !hasAllowFrom;
 }
 
 export function buildTelegramDmAccessWarningLines(accountId: string): string[] {

@@ -1,7 +1,30 @@
 import Foundation
 
 /// Registry migration suites share process-global defaults and Keychain fixtures.
-let gatewayPersistenceTestSemaphore = DispatchSemaphore(value: 1)
+@MainActor
+final class GatewayPersistenceTestGate {
+    static let shared = GatewayPersistenceTestGate()
+
+    private var locked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !self.locked {
+            self.locked = true
+            return
+        }
+        // A holder can suspend on MainActor; waiting must leave it free to restore the fixture.
+        await withCheckedContinuation { self.waiters.append($0) }
+    }
+
+    func release() {
+        guard !self.waiters.isEmpty else {
+            self.locked = false
+            return
+        }
+        self.waiters.removeFirst().resume()
+    }
+}
 
 func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws -> T) rethrows -> T {
     let defaults = UserDefaults.standard

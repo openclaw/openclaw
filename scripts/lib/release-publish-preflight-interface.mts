@@ -1,5 +1,6 @@
 import { parseArgs } from "node:util";
 import type { ReleasePublishGate } from "./release-publish-gates.mts";
+import { validateRetiredLineReason } from "./release-version.mjs";
 
 export type ReleasePublishPreflightOptions = {
   repo: string;
@@ -16,6 +17,7 @@ export type ReleasePublishPreflightOptions = {
   publishOpenclawNpm?: boolean;
   openclawNpmResumeRunId?: string;
   pluginSdkApiAcknowledgement?: string;
+  retiredLinePublicationReason?: string;
   windowsNodeTag?: string;
   windowsNodeInstallerDigests?: string;
   npmTelegramRunId?: string;
@@ -26,12 +28,20 @@ function quote(value: string): string {
   return /^[a-zA-Z0-9_./:@=-]+$/u.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 }
 
+/** Regular final releases published to npm `latest` activate GitHub before Docker. */
+function isStableLatestPublication(tag: string, npmDistTag: string | undefined): boolean {
+  return npmDistTag === "latest" && /^v\d{4}\.\d{1,2}\.\d+(?:-\d+)?$/u.test(tag);
+}
+
 export function buildReleasePublishDispatchCommand(
   options: ReleasePublishPreflightOptions,
   attempt: string,
   workflowRef: string,
   resume: string,
 ) {
+  if (options.retiredLinePublicationReason) {
+    validateRetiredLineReason(options.retiredLinePublicationReason);
+  }
   const fields = {
     tag: options.tag,
     preflight_run_id: options.preflightRunId ?? options.fullReleaseValidationRunId,
@@ -44,9 +54,16 @@ export function buildReleasePublishDispatchCommand(
     publish_openclaw_npm: String(options.publishOpenclawNpm !== false),
     openclaw_npm_resume_run_id: resume,
     plugin_sdk_api_acknowledgement: options.pluginSdkApiAcknowledgement,
+    retired_line_publication_reason: options.retiredLinePublicationReason,
     windows_node_tag: options.windowsNodeTag,
     windows_node_installer_digests: options.windowsNodeInstallerDigests,
     npm_telegram_run_id: options.npmTelegramRunId,
+    // Stable policy: GitHub goes Latest right after npm verification, before Docker.
+    finalize_release_before_docker:
+      options.publishOpenclawNpm !== false &&
+      isStableLatestPublication(options.tag, options.npmDistTag)
+        ? "true"
+        : undefined,
   };
   return [
     `gh workflow run openclaw-release-publish.yml --repo ${quote(options.repo)} --ref ${quote(workflowRef)}`,
@@ -83,6 +100,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "repo",
     "tag",
     "full-release-validation-run-id",
+    "full-release-run",
     "full-release-validation-run-attempt",
     "preflight-run-id",
     "npm-dist-tag",
@@ -94,6 +112,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     "publish-openclaw-npm",
     "openclaw-npm-resume-run-id",
     "plugin-sdk-api-acknowledgement",
+    "retired-line-publication-reason",
     "windows-node-tag",
     "windows-node-installer-digests",
     "npm-telegram-run-id",
@@ -113,6 +132,11 @@ export function parsePublishPreflightArgs(argv: string[]) {
     return undefined;
   }
   const value = (key: string, fallback = "") => String(parsed.values[key] ?? fallback);
+  if (value("full-release-validation-run-id") && value("full-release-run")) {
+    throw new Error(
+      "Use --full-release-validation-run-id; do not combine it with the deprecated --full-release-run alias.",
+    );
+  }
   if (!value("tag") || Boolean(value("workflow-ref")) === Boolean(value("workflow-sha"))) {
     throw new Error("--tag and exactly one of --workflow-ref or --workflow-sha are required.");
   }
@@ -129,7 +153,8 @@ export function parsePublishPreflightArgs(argv: string[]) {
   const options: ReleasePublishPreflightOptions = {
     repo: value("repo", "openclaw/openclaw"),
     tag: value("tag"),
-    fullReleaseValidationRunId: value("full-release-validation-run-id"),
+    fullReleaseValidationRunId:
+      value("full-release-validation-run-id") || value("full-release-run"),
     fullReleaseValidationRunAttempt: value("full-release-validation-run-attempt"),
     preflightRunId: value("preflight-run-id") || undefined,
     npmDistTag: value("npm-dist-tag", "beta"),
@@ -141,6 +166,7 @@ export function parsePublishPreflightArgs(argv: string[]) {
     publishOpenclawNpm: value("publish-openclaw-npm", "true") === "true",
     openclawNpmResumeRunId: value("openclaw-npm-resume-run-id"),
     pluginSdkApiAcknowledgement: value("plugin-sdk-api-acknowledgement"),
+    retiredLinePublicationReason: value("retired-line-publication-reason") || undefined,
     windowsNodeTag: value("windows-node-tag"),
     windowsNodeInstallerDigests: value("windows-node-installer-digests"),
     npmTelegramRunId: value("npm-telegram-run-id"),

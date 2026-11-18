@@ -309,8 +309,8 @@ class GatewayNodeApprovalTest {
       desired: GatewayNodeApprovalSurface =
         GatewayNodeApprovalSurface(
           setOf("camera", "notifications"),
-          setOf("camera.snap", "notifications.list"),
-          mapOf("camera" to true),
+          setOf("camera.snap", "notifications.list", "sms.search"),
+          mapOf("camera" to true, "smsRead" to false, "smsSend" to false),
         ),
     ): GatewayNodeApprovalContext {
       val lease =

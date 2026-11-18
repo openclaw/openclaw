@@ -119,6 +119,7 @@ private final class BrowserSessionWebSocketRecorder: WebSocketSessioning, @unche
     }
 }
 
+@Suite(.testWaitLimit)
 struct GatewayConnectionBrowserSessionTests {
     @Test(arguments: [false, true])
     func `browser credential replacement retires route and preserves subscribed observers`(
@@ -126,7 +127,8 @@ struct GatewayConnectionBrowserSessionTests {
     {
         let url = try #require(URL(string: "wss://gateway.example.test/team/"))
         let original = try gatewayBrowserSessionFixture(token: "first-browser-session")
-        let replacement = try gatewayBrowserSessionFixture(token: "second-browser-session")
+        let replacement = try gatewayBrowserSessionFixture(
+            token: "second-browser-session", expiresAt: original.expiresAt.addingTimeInterval(86400))
         let source = GatewayConnectionEndpointSource(endpoint: .init(
             config: (url, "stale-owner-token", "stale-owner-password"),
             routeAuthority: 1,
@@ -150,17 +152,20 @@ struct GatewayConnectionBrowserSessionTests {
                 browserSession: replacement))
             #expect(await connection.isCurrentServerLease(oldLease) == false)
             _ = try await connection.request(method: "health", params: nil)
-            let successor = try await AsyncTimeout.withTimeout(
-                seconds: 2, onTimeout: { URLError(.timedOut) }, operation: {
-                    for await delivery in subscription {
-                        if case .snapshot = delivery.push, delivery.isCurrent {
-                            return delivery.serverLease
-                        }
-                    }
-                    throw CancellationError()
-                })
+            var successorLease: GatewayConnection.ServerLease?
+            for await delivery in subscription {
+                if case .snapshot = delivery.push, delivery.isCurrent {
+                    successorLease = delivery.serverLease
+                    break
+                }
+            }
+            guard let successor = successorLease, !Task.isCancelled else {
+                Issue.record("Still waiting for replacement browser session")
+                throw CancellationError()
+            }
             #expect(successor != oldLease)
             #expect(successor.route.browserSession == replacement)
+            #expect(successor.route.browserSession?.expiresAt == replacement.expiresAt)
             #expect(recorder.requests.value.map { $0.value(forHTTPHeaderField: "CF-Access-Token") } == [
                 "first-browser-session", "second-browser-session",
             ])
@@ -206,13 +211,17 @@ struct GatewayConnectionBrowserSessionTests {
             let lease = try #require(await connection.captureServerLease())
             #expect(await connection.isCurrentServerLease(lease))
             let sentBeforeExpiry = recorder.sentMessageCount.value
-            let retirement = try await AsyncTimeout.withTimeout(
-                seconds: 20, onTimeout: { URLError(.timedOut) }, operation: {
-                    for await delivery in subscription {
-                        if case .disconnected = delivery.event { return delivery }
-                    }
-                    throw CancellationError()
-                })
+            var retiredDelivery: GatewayConnection.PushDelivery?
+            for await delivery in subscription {
+                if case .disconnected = delivery.event {
+                    retiredDelivery = delivery
+                    break
+                }
+            }
+            guard let retirement = retiredDelivery, !Task.isCancelled else {
+                Issue.record("Still waiting for expired browser session retirement")
+                throw CancellationError()
+            }
             #expect(retirement.serverLease == lease)
             guard case let .disconnected(reason) = retirement.event else {
                 throw CancellationError()
@@ -233,7 +242,7 @@ struct GatewayConnectionBrowserSessionTests {
     }
 }
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct MacGatewayBrowserSessionStoreTests {
     @Test @MainActor
     func `cancelled admission leaves an existing sign in current`() async throws {
@@ -271,11 +280,13 @@ struct MacGatewayBrowserSessionStoreTests {
             let oldLease = browser.lease(for: original)
             try await oldLease.prepare(for: original.origin, in: WKUserContentController())
             let refreshes = LockIsolated(0)
+            let refreshed = AsyncTestSignal()
             let observation = NotificationCenter.default.addObserver(
                 forName: MacGatewayProfileStore.didChangeNotification, object: nil, queue: .main)
             { notification in
                 if notification.userInfo?[MacGatewayProfileStore.changedProfileIDKey] as? String == profile.id {
                     refreshes.withValue { $0 += 1 }
+                    refreshed.notify()
                 }
             }
             defer { NotificationCenter.default.removeObserver(observation) }
@@ -293,12 +304,9 @@ struct MacGatewayBrowserSessionStoreTests {
                         try await store.saveBrowserSession(name: "Failed", session: replacement, attempt: attempt)
                     }
                 }
-                let deadline = ContinuousClock.now + .seconds(2)
-                while refreshes.value == 0, ContinuousClock.now < deadline {
-                    try await Task.sleep(for: .milliseconds(10))
-                }
+                try await refreshed.wait("surviving browser credentials") { refreshes.value > 0 }
                 #expect(refreshes.value == 1)
-                #expect(!oldLease.isCurrent)
+                #expect(oldLease.isCurrent)
                 let surviving = try #require(await store.endpoint(profileID: profile.id).browserSession)
                 #expect(surviving == original)
                 try await browser.lease(for: surviving).prepare(for: surviving.origin, in: WKUserContentController())
@@ -400,6 +408,37 @@ struct MacGatewayBrowserSessionStoreTests {
                 result = .failure(error)
             }
             await connection.shutdown()
+            try await store.remove(profileID: profile.id)
+            try result.get()
+        }
+    }
+
+    @Test @MainActor
+    func `automatic renewal rejects another account before any side effect`() async throws {
+        try await self.withIsolatedStore { store in
+            let host = "renewal-account-\(UUID().uuidString.lowercased()).example.test"
+            let url = try #require(URL(string: "wss://\(host)/"))
+            let accountA = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-a")
+            let accountB = try gatewayBrowserSessionFixture(origin: "https://\(host)/", subject: "account-b")
+            let initial = try await store.beginBrowserSignIn(url: url)
+            let profile = try await store.saveBrowserSession(name: "Saved", session: accountA, attempt: initial)
+            let result: Result<Void, Error>
+            do {
+                let binding = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                let attempt = try await store.beginBrowserSignIn(url: url)
+                await #expect(throws: GatewayBrowserSessionError.superseded) {
+                    try await store.saveBrowserSession(
+                        name: "Saved", session: accountB, attempt: attempt, renewingOnly: true)
+                }
+                await store.cancelBrowserSignIn(attempt)
+                #expect(try await store.endpoint(profileID: profile.id).browserSession == accountA)
+                let current = try await MacGatewayConnectionFleet.shared.binding(profileID: profile.id)
+                #expect(current.connection === binding.connection)
+                #expect(current.chatStoreID == binding.chatStoreID)
+                result = .success(())
+            } catch {
+                result = .failure(error)
+            }
             try await store.remove(profileID: profile.id)
             try result.get()
         }

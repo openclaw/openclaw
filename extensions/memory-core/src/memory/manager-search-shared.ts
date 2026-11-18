@@ -10,21 +10,13 @@ export type MemorySearchRow = {
   source: MemorySource;
 };
 
-export type SearchRowResult = {
-  id: string;
-  path: string;
-  startLine: number;
-  endLine: number;
-  score: number;
-  snippet: string;
-  source: MemorySource;
-};
+export type SearchRowResult = ReturnType<typeof projectMemorySearchRow>;
 
 export function projectMemorySearchRow(
   row: MemorySearchRow,
   snippetMaxChars: number,
   score: number,
-): SearchRowResult {
+) {
   return {
     id: row.id,
     path: row.path,

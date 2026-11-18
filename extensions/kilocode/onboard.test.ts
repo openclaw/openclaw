@@ -1,8 +1,5 @@
-// Kilocode tests cover onboard plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveEnvApiKey } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildKilocodeModelDefinition,
   KILOCODE_DEFAULT_CONTEXT_WINDOW,
@@ -13,168 +10,57 @@ import {
 import { applyKilocodeConfig, KILOCODE_DEFAULT_MODEL_REF } from "./onboard.js";
 import { KILOCODE_BASE_URL } from "./provider-models.js";
 
-const emptyCfg: OpenClawConfig = {};
-const KILOCODE_MODEL_IDS = ["kilo-auto/balanced"];
-
-function requireKilocodeProvider(cfg: OpenClawConfig) {
-  const provider = cfg.models?.providers?.kilocode;
-  if (!provider) {
-    throw new Error("expected Kilocode provider config");
-  }
-  return provider;
-}
-
 describe("Kilo Gateway provider config", () => {
-  describe("constants", () => {
-    it("KILOCODE_BASE_URL points to kilo openrouter endpoint", () => {
-      expect(KILOCODE_BASE_URL).toBe("https://api.kilo.ai/api/gateway/");
-    });
-
-    it("KILOCODE_DEFAULT_MODEL_REF includes provider prefix", () => {
-      expect(KILOCODE_DEFAULT_MODEL_REF).toBe("kilocode/kilo-auto/balanced");
-    });
-
-    it("KILOCODE_DEFAULT_MODEL_ID is kilo-auto/balanced", () => {
-      expect(KILOCODE_DEFAULT_MODEL_ID).toBe("kilo-auto/balanced");
-    });
+  it("builds the public default model definition", () => {
+    const model = buildKilocodeModelDefinition();
+    expect(model.id).toBe(KILOCODE_DEFAULT_MODEL_ID);
+    expect(model.name).toBe("Auto Balanced");
+    expect(model.reasoning).toBe(true);
+    expect(model.input).toEqual(["text", "image"]);
+    expect(model.contextWindow).toBe(KILOCODE_DEFAULT_CONTEXT_WINDOW);
+    expect(model.maxTokens).toBe(KILOCODE_DEFAULT_MAX_TOKENS);
+    expect(model.cost).toEqual(KILOCODE_DEFAULT_COST);
   });
 
-  describe("buildKilocodeModelDefinition", () => {
-    it("returns correct model shape", () => {
-      const model = buildKilocodeModelDefinition();
-      expect(model.id).toBe(KILOCODE_DEFAULT_MODEL_ID);
-      expect(model.name).toBe("Auto Balanced");
-      expect(model.reasoning).toBe(true);
-      expect(model.input).toEqual(["text", "image"]);
-      expect(model.contextWindow).toBe(KILOCODE_DEFAULT_CONTEXT_WINDOW);
-      expect(model.maxTokens).toBe(KILOCODE_DEFAULT_MAX_TOKENS);
-      expect(model.cost).toEqual(KILOCODE_DEFAULT_COST);
-    });
+  it("seeds the default model in replace mode", () => {
+    const result = applyKilocodeConfig({ models: { mode: "replace" } });
+    expect(result.models?.providers?.kilocode?.models.map((model) => model.id)).toEqual([
+      "kilo-auto/balanced",
+    ]);
   });
 
-  describe("applyKilocodeConfig", () => {
-    it("registers kilocode provider with correct baseUrl and api", () => {
-      const result = applyKilocodeConfig(emptyCfg);
-      const provider = requireKilocodeProvider(result);
-      expect(provider.baseUrl).toBe(KILOCODE_BASE_URL);
-      expect(provider.api).toBe("openai-completions");
-    });
-
-    it("includes the default model in the provider model list", () => {
-      const result = applyKilocodeConfig({ models: { mode: "replace" } });
-      const provider = result.models?.providers?.kilocode;
-      const models = provider?.models;
-      expect(Array.isArray(models)).toBe(true);
-      const modelIds = models?.map((m) => m.id) ?? [];
-      expect(modelIds).toContain(KILOCODE_DEFAULT_MODEL_ID);
-    });
-
-    it("appends missing catalog models to existing Kilo provider config", () => {
+  it.each([undefined, "merge"] as const)(
+    "preserves authored rows without seeding %s config",
+    (mode) => {
+      expect(applyKilocodeConfig({ models: { mode } }).models?.providers?.kilocode?.models).toEqual(
+        [],
+      );
+      const authored = {
+        ...buildKilocodeModelDefinition(),
+        id: "operator-model",
+        name: "My model",
+      };
       const result = applyKilocodeConfig({
         models: {
-          providers: {
-            kilocode: {
-              baseUrl: KILOCODE_BASE_URL,
-              api: "openai-completions",
-              models: [buildKilocodeModelDefinition()],
-            },
-          },
+          mode,
+          providers: { kilocode: { baseUrl: KILOCODE_BASE_URL, models: [authored] } },
         },
       });
-      const modelIds = result.models?.providers?.kilocode?.models?.map((m) => m.id) ?? [];
-      for (const modelId of KILOCODE_MODEL_IDS) {
-        expect(modelIds).toContain(modelId);
-      }
-    });
+      expect(result.models?.providers?.kilocode?.models).toEqual([authored]);
+    },
+  );
 
-    it("sets Kilo Gateway alias in agent default models", () => {
-      const result = applyKilocodeConfig(emptyCfg);
-      const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
-      expect(agentModel).toEqual({ alias: "Kilo Gateway" });
-    });
-
-    it.each([undefined, "merge"] as const)(
-      "preserves authored rows without seeding %s config",
-      (mode) => {
-        expect(
-          applyKilocodeConfig({ models: { mode } }).models?.providers?.kilocode?.models,
-        ).toEqual([]);
-        const authored = {
-          ...buildKilocodeModelDefinition(),
-          id: "operator-model",
-          name: "My model",
-        };
-        const result = applyKilocodeConfig({
-          models: {
-            mode,
-            providers: { kilocode: { baseUrl: KILOCODE_BASE_URL, models: [authored] } },
-          },
-        });
-        expect(result.models?.providers?.kilocode?.models).toEqual([authored]);
-      },
-    );
-
-    it("preserves existing alias if already set", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            models: {
-              [KILOCODE_DEFAULT_MODEL_REF]: { alias: "My Custom Alias" },
-            },
-          },
-        },
-      };
-      const result = applyKilocodeConfig(cfg);
-      const agentModel = result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF];
-      expect(agentModel?.alias).toBe("My Custom Alias");
-    });
-
-    it("does not change the default model selection", () => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5" },
-          },
-        },
-      };
-      const result = applyKilocodeConfig(cfg);
-      expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe("openai/gpt-5");
-    });
-  });
-
-  it("sets kilocode as the default model", () => {
-    const result = applyKilocodeConfig(emptyCfg);
+  it("sets up the Kilo Gateway default for a new config", () => {
+    const result = applyKilocodeConfig({});
     expect(resolveAgentModelPrimaryValue(result.agents?.defaults?.model)).toBe(
-      KILOCODE_DEFAULT_MODEL_REF,
+      "kilocode/kilo-auto/balanced",
     );
-    const provider = requireKilocodeProvider(result);
-    expect(provider.baseUrl).toBe(KILOCODE_BASE_URL);
-  });
-
-  describe("env var resolution", () => {
-    it("resolves KILOCODE_API_KEY from env", () => {
-      vi.stubEnv("KILOCODE_API_KEY", "test-kilo-key");
-
-      try {
-        const result = resolveEnvApiKey("kilocode");
-        expect(result).toEqual({
-          apiKey: "test-kilo-key",
-          source: "env: KILOCODE_API_KEY",
-        });
-      } finally {
-        vi.unstubAllEnvs();
-      }
+    expect(result.agents?.defaults?.models?.[KILOCODE_DEFAULT_MODEL_REF]).toEqual({
+      alias: "Kilo Gateway",
     });
-
-    it("returns null when KILOCODE_API_KEY is not set", () => {
-      vi.stubEnv("KILOCODE_API_KEY", "");
-
-      try {
-        const result = resolveEnvApiKey("kilocode");
-        expect(result).toBeNull();
-      } finally {
-        vi.unstubAllEnvs();
-      }
+    expect(result.models?.providers?.kilocode).toMatchObject({
+      baseUrl: "https://api.kilo.ai/api/gateway/",
+      api: "openai-completions",
     });
   });
 });

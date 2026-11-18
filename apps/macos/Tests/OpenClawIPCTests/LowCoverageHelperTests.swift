@@ -88,6 +88,28 @@ struct LowCoverageHelperTests {
         #expect(result.stderr.contains("stderr-1999"))
     }
 
+    @Test(arguments: [#"abc\377"#, #"abc\342\234"#])
+    func `shell executor keeps valid output around malformed utf8`(bytes: String) async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", "printf '\(bytes)'; printf '\(bytes)' 1>&2"],
+            cwd: nil,
+            env: nil,
+            timeout: 2)
+        #expect(result.success == true)
+        #expect(result.stdout == "abc\u{FFFD}")
+        #expect(result.stderr == "abc\u{FFFD}")
+    }
+
+    @Test func `shell executor keeps output before a split character on timeout`() async {
+        let result = await ShellExecutor.runDetailed(
+            command: ["/bin/sh", "-c", #"printf 'building \342\234'; sleep 5"#],
+            cwd: nil,
+            env: nil,
+            timeout: 1)
+        #expect(result.timedOut == true)
+        #expect(result.stdout == "building \u{FFFD}")
+    }
+
     @Test func `shell executor finishes when a descendant retains output handles`() async {
         let startedAt = ContinuousClock.now
         let result = await ShellExecutor.runDetailed(
@@ -102,10 +124,10 @@ struct LowCoverageHelperTests {
     }
 
     @Test @MainActor func `presence reporter summary and privacy parameters`() {
-        let summary = PresenceReporter._testComposePresenceSummary(mode: "local", reason: "test")
+        let summary = PresenceReporter.composePresenceSummary(mode: "local", reason: "test")
         #expect(summary.contains("mode local"))
         #expect(!summary.contains("last input"))
-        let privacyParameters = PresenceReporter._testActivityPrivacyParameters()
+        let privacyParameters = PresenceReporter.activityPrivacyParameters
         #expect(privacyParameters["lastInputSeconds"]?.base as? Int == 2_592_000)
         #expect(
             privacyParameters["tags"]?.base as? [String] ==
@@ -116,10 +138,8 @@ struct LowCoverageHelperTests {
         let output = """
         p123
         cnode
-        uuser
         p456
         cssh
-        uroot
         """
         let listeners = PortGuardian._testParseListeners(output)
         #expect(listeners.count == 2)
@@ -129,13 +149,13 @@ struct LowCoverageHelperTests {
         let okReport = PortGuardian._testBuildReport(
             port: 18789,
             mode: .local,
-            listeners: [(pid: 1, command: "node", fullCommand: "node", user: "me")])
+            listeners: [(pid: 1, command: "node", fullCommand: "node")])
         #expect(okReport.offenders.isEmpty)
 
         let badReport = PortGuardian._testBuildReport(
             port: 18789,
             mode: .local,
-            listeners: [(pid: 2, command: "python", fullCommand: "python", user: "me")])
+            listeners: [(pid: 2, command: "python", fullCommand: "python")])
         #expect(!badReport.offenders.isEmpty)
 
         let emptyReport = PortGuardian._testBuildReport(port: 18789, mode: .local, listeners: [])
@@ -149,8 +169,7 @@ struct LowCoverageHelperTests {
             listeners: [(
                 pid: 99,
                 command: "com.docker.backend",
-                fullCommand: "com.docker.backend",
-                user: "me")])
+                fullCommand: "com.docker.backend")])
         #expect(dockerReport.offenders.isEmpty)
 
         let localDockerReport = PortGuardian._testBuildReport(
@@ -159,8 +178,7 @@ struct LowCoverageHelperTests {
             listeners: [(
                 pid: 99,
                 command: "com.docker.backend",
-                fullCommand: "com.docker.backend",
-                user: "me")])
+                fullCommand: "com.docker.backend")])
         #expect(!localDockerReport.offenders.isEmpty)
     }
 
@@ -169,6 +187,9 @@ struct LowCoverageHelperTests {
             + "-o ExitOnForwardFailure=yes -n -N -L 18789:127.0.0.1:18789 -- user@host"
         #expect(PortGuardian.isTunnelCommand(full, localPort: 18789))
         #expect(PortGuardian.isTunnelCommand("ssh -N -L18789:127.0.0.1:18789 user@host", localPort: 18789))
+        // v2026.11.1 shares this ledger and drops receipts it cannot match, so the matcher stays exactly its
+        // shape and RemotePortTunnel never names a bind address.
+        #expect(!PortGuardian.isTunnelCommand("ssh -N -L 127.0.0.1:18790:127.0.0.1:18790 user@host", localPort: 18790))
 
         // Wrong local port, missing -N (interactive forward), other binaries, or a
         // forward to a non-loopback host are not ours to kill.
@@ -324,10 +345,22 @@ struct LowCoverageHelperTests {
         try "<h1>Hello</h1>".write(to: index, atomically: true, encoding: .utf8)
 
         let handler = CanvasSchemeHandler(root: root)
-        let url = try #require(CanvasScheme.makeURL(session: "main", path: "index.html"))
-        let response = handler._testResponse(for: url)
-        #expect(response.mime == "text/html")
-        #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
+        for path in ["index.html", "/", ""] {
+            let url = try #require(CanvasScheme.makeURL(session: "main", path: path))
+            let response = handler._testResponse(for: url)
+            #expect(response.mime == "text/html")
+            #expect(String(data: response.data, encoding: .utf8)?.contains("Hello") == true)
+        }
+        let documents = session.appendingPathComponent("documents", isDirectory: true)
+        try FileManager().createDirectory(at: documents, withIntermediateDirectories: false)
+        try "<h1>Nested</h1>".write(
+            to: documents.appendingPathComponent("index.htm"), atomically: true, encoding: .utf8)
+        for path in ["documents", "documents/"] {
+            let url = try #require(CanvasScheme.makeURL(session: "main", path: path))
+            let response = handler._testResponse(for: url)
+            #expect(response.mime == "text/html")
+            #expect(String(data: response.data, encoding: .utf8)?.contains("Nested") == true)
+        }
 
         let invalid = try #require(URL(string: "https://example.com"))
         let invalidResponse = handler._testResponse(for: invalid)
@@ -370,8 +403,9 @@ struct LowCoverageHelperTests {
 
     @Test @MainActor func `canvas window helper functions`() {
         let rect = NSRect(x: 10, y: 12, width: 400, height: 420)
-        let key = CanvasWindowController._testStoredFrameKey(sessionKey: "test")
-        let loaded = CanvasWindowController._testStoreAndLoadFrame(sessionKey: "test", frame: rect)
+        let key = CanvasWindowController.storedFrameDefaultsKey(sessionKey: "test")
+        CanvasWindowController.storeRestoredFrame(rect, sessionKey: "test")
+        let loaded = CanvasWindowController.loadRestoredFrame(sessionKey: "test")
         UserDefaults.standard.removeObject(forKey: key)
         #expect(loaded?.size.width == rect.size.width)
     }

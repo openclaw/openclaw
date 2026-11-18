@@ -21,9 +21,7 @@ import org.robolectric.RobolectricTestRunner
 private fun speechClip(bytes: ByteArray = byteArrayOf(1, 2, 3)): TalkSpeakAudio =
   TalkSpeakAudio(
     bytes = bytes,
-    provider = "openai",
     outputFormat = "mp3",
-    voiceCompatible = null,
     mimeType = "audio/mpeg",
     fileExtension = ".mp3",
   )
@@ -95,7 +93,6 @@ class MessageSpeechControllerTest {
       assertEquals("""{"text":"Hello"}""", params)
       assertEquals(60_000L, timeoutMs)
       assertArrayEquals(byteArrayOf(1, 2, 3), audio.bytes)
-      assertEquals("openai", audio.provider)
       assertEquals("mp3", audio.outputFormat)
       assertEquals("audio/mpeg", audio.mimeType)
       assertEquals(".mp3", audio.fileExtension)

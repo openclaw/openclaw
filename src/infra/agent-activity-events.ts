@@ -3,15 +3,12 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { isSyntheticMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
+  formatSubagentProgressReference,
   projectAgentActivityItem,
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
-import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
-import {
-  inferToolMetaFromArgsCore,
-  isCommandBearingToolCall,
-  resolveToolDisplay,
-} from "../agents/tool-display.js";
+import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
+import { isCommandBearingToolCall, resolveToolDisplay } from "../agents/tool-display.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
 import type { ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import {
@@ -49,7 +46,7 @@ export type AgentCommandOutputEventFields = {
 export type AgentCommandOutputEventData = Record<string, unknown> & AgentCommandOutputEventFields;
 
 /** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = Record<string, unknown> & {
+type AgentPatchSummaryEventData = Record<string, unknown> & {
   itemId: string;
   phase: "end";
   title: string;
@@ -71,6 +68,7 @@ type AgentActivityEventDataByStream = {
 type ToolActivityInput = {
   toolCallId: string;
   name: string;
+  presentationName?: string;
   phase: "start" | "update" | "result";
   args?: unknown;
   result?: unknown;
@@ -86,9 +84,25 @@ export function projectAgentToolActivity(
 ): AgentItemEventData;
 export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivityItem;
 export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivityItem {
-  const meta = tool.meta ?? inferToolMetaFromArgsCore(tool.name, tool.args);
-  const label = resolveToolDisplay({ name: tool.name }).label;
+  const input = { name: tool.name, args: tool.args };
+  const unwrapped = unwrapToolCallForDisplay(input);
+  // History may omit executed args; its presentation name is then a name-only fallback.
+  const call =
+    unwrapped === input && tool.presentationName
+      ? { name: tool.presentationName, args: tool.args }
+      : unwrapped;
+  const display = resolveToolDisplay(call);
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
+  const meta =
+    [
+      display.progress ? display.progress.detail : (tool.meta ?? display.detail),
+      call.name === "sessions_spawn"
+        ? formatSubagentProgressReference(normalizeOptionalString(details?.childSessionKey))
+        : undefined,
+    ]
+      .filter(Boolean)
+      .join(" ") || undefined;
+  const label = display.progress?.label ?? display.label;
   const approval =
     tool.phase === "result" &&
     (details?.status === "approval-pending" || details?.status === "approval-unavailable");
@@ -96,23 +110,27 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   const status =
     tool.phase !== "result"
       ? "running"
-      : approval || skipped
-        ? "blocked"
-        : tool.status === "unknown"
-          ? undefined
-          : (tool.status ??
-            (tool.isError === true ? "failed" : tool.isError === false ? "completed" : undefined));
-  return projectAgentActivityItem(
+      : skipped && details.deniedReason === "steering"
+        ? "skipped"
+        : approval || skipped
+          ? "blocked"
+          : tool.status === "unknown"
+            ? undefined
+            : (tool.status ??
+              (tool.isError === true
+                ? "failed"
+                : tool.isError === false
+                  ? "completed"
+                  : undefined));
+  const activity: AgentActivityItem = projectAgentActivityItem(
     {
       itemId: `tool:${tool.toolCallId}`,
       toolCallId: tool.toolCallId,
       name: tool.name,
       kind: "tool",
       phase: tool.phase === "result" ? "end" : tool.phase,
-      title: meta ? `${label} ${meta}` : label,
-      ...(status
-        ? { status }
-        : { summary: "Outcome unknown", title: `${label} — outcome unknown` }),
+      title: label,
+      ...(status ? { status } : { summary: "Outcome unknown" }),
       ...(approval
         ? {
             approvalId: normalizeOptionalString(details?.approvalId),
@@ -125,10 +143,26 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
         : {}),
       ...(skipped ? { summary: "Skipped" } : {}),
       ...(meta ? { meta } : {}),
-      commandBearing: isCommandBearingToolCall(tool.name, tool.args),
+      commandBearing: isCommandBearingToolCall(call.name, call.args),
       ...(tool.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
     { args: tool.args, result: tool.result, nativeOperation: tool.nativeOperation },
+  );
+  // Outcome and visibility still belong to the original execution facts.
+  return { ...activity, name: call.name };
+}
+
+/** Poll is the only process action that returns an aggregate for one session. */
+function isProcessPollResultDetails(value: unknown): boolean {
+  const details = asOptionalRecord(value);
+  return Boolean(
+    details &&
+    typeof details.sessionId === "string" &&
+    (details.status === "running" || details.status === "completed") &&
+    (typeof details.aggregated === "string" ||
+      (details.persistedDetailsTruncated === true &&
+        Array.isArray(details.originalDetailKeys) &&
+        details.originalDetailKeys.includes("aggregated"))),
   );
 }
 
@@ -137,10 +171,7 @@ export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem
 export function projectAgentHistoryActivity(
   messages: ReadonlyArray<{ messageId: string; message: unknown }>,
 ): AgentHistoryActivity[] {
-  const facts = new Map<
-    string,
-    Parameters<typeof projectAgentToolActivity>[0] & ToolCallIdentity
-  >();
+  const facts = new Map<string, ToolActivityInput & ToolCallIdentity>();
   let turn = 0;
   const entries = messages.map(({ messageId, message }) => {
     const record = asOptionalRecord(message);
@@ -256,6 +287,7 @@ export function projectAgentHistoryActivity(
       if (isToolCallContentType(block.type)) {
         const name =
           normalizeOptionalString(block.name) ?? normalizeOptionalString(block.toolName) ?? "Tool";
+        const args = executedArgs ?? block.arguments ?? block.args ?? block.input;
         // A transcript call is not live authority. Its result may be absent or
         // outside this page; only live events can establish running activity.
         facts.set(key, {
@@ -264,8 +296,12 @@ export function projectAgentHistoryActivity(
           runId,
           parentToolCallId,
           name,
+          presentationName: unwrapToolCallForDisplay({
+            name,
+            args,
+          }).name,
           phase: "result",
-          args: executedArgs,
+          args,
         });
       }
     }
@@ -290,7 +326,8 @@ export function projectAgentHistoryActivity(
         normalizeOptionalString(block.toolName) ??
         normalizeOptionalString(block.name) ??
         "Tool";
-      const failed = isError === true || isToolResultError(block);
+      const synthetic = isSyntheticMissingToolResult(block);
+      const failed = !synthetic && (isError === true || isToolResultError(block));
       const details = asOptionalRecord(block.details);
       const exitReasonLost =
         (name === "exec" || name === "bash" || name === "process") &&
@@ -312,8 +349,9 @@ export function projectAgentHistoryActivity(
         name,
         phase: "result",
         args: executedArgs ?? call?.args,
-        result: block,
-        isError: failed ? true : poll ? false : isError,
+        // Repair receipts keep provider pairing valid; they record no execution outcome.
+        result: synthetic ? undefined : block,
+        isError: synthetic ? undefined : failed ? true : poll ? false : isError,
         // The existing persistence cap can remove the distinction between a
         // requested stop and a failed command. Do not invent that outcome.
         ...(!failed && exitReasonLost ? { status: "unknown" as const } : {}),
@@ -321,16 +359,23 @@ export function projectAgentHistoryActivity(
       });
     }
   }
-  const prepared = [...facts].map(([key, fact]) => ({
-    key,
-    callId: fact.callId,
-    runId: fact.runId,
-    parentToolCallId: fact.parentToolCallId,
-    activity: projectAgentToolActivity({
+  const prepared = [...facts].map(([key, fact]) => {
+    const activity = projectAgentToolActivity({
       ...fact,
       ...(fact.name === "collab.wait" ? { nativeOperation: "wait" as const } : {}),
-    }),
-  }));
+    });
+    if (fact.result === undefined) {
+      activity.unpairedCall = true;
+      delete activity.summary;
+    }
+    return {
+      key,
+      callId: fact.callId,
+      runId: fact.runId,
+      parentToolCallId: fact.parentToolCallId,
+      activity,
+    };
+  });
   const wrappers = resolveCompletedActivityWrappers(prepared);
   const preparedByKey = new Map(prepared.map((call) => [call.key, call]));
   return entries.flatMap(({ messageId, blocks, hasTools }) => {

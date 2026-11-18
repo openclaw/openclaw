@@ -42,7 +42,6 @@ describe("stageBrowserScreenshotForSharing", () => {
     expect(mocks.readFile).toHaveBeenCalledWith(sourcePath);
     expect(mocks.normalizeBrowserScreenshot).toHaveBeenCalledWith(source, {
       maxSide: 1200,
-      maxBytes: 5 * 1024 * 1024,
     });
     expect(mocks.saveMediaBuffer).toHaveBeenCalledWith(
       normalized,

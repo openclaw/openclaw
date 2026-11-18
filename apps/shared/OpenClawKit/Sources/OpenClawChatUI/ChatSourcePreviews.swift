@@ -27,13 +27,18 @@ struct ChatSourcePreview: Identifiable, Hashable {
     }
 }
 
-/// Keeps parsed Markdown and recorded result fields for unchanged transcript rows.
+/// Keeps parsed Markdown, recorded result fields and cited cards for unchanged transcript rows.
 /// The projection is rebuilt from canonical history, never from a neighboring turn.
 struct ChatSourcePreviewProjector {
     private struct Entry {
         let message: OpenClawChatMessage
         let links: [URL]
         let results: [Result]
+        /// Cards for `links`, built from the same-run rows in `sourceIDs` under the projector's context.
+        var previews: [ChatSourcePreview] = []
+        var sourceIDs: [UUID] = []
+        /// Markdown rendered for `previews`, kept in the shared cache while this reply is.
+        var rendered: [(Candidate, RenderedCandidate)] = []
     }
 
     private struct Result {
@@ -55,17 +60,7 @@ struct ChatSourcePreviewProjector {
         var page: Candidate?
         var search: Candidate?
 
-        func preview(
-            cached: [Candidate: RenderedCandidate],
-            retained: inout [Candidate: RenderedCandidate]) -> ChatSourcePreview
-        {
-            func render(_ candidate: Candidate) -> RenderedCandidate {
-                let value = retained[candidate] ?? cached[candidate] ?? RenderedCandidate(
-                    title: ChatSourcePreviewProjector.title(candidate.title, source: candidate.name),
-                    excerpt: ChatSourcePreviewProjector.excerpt(candidate.excerpt, source: candidate.name))
-                retained[candidate] = value
-                return value
-            }
+        func preview(render: (Candidate) -> RenderedCandidate) -> ChatSourcePreview {
             let source = render(self.source)
             let pageExcerpt = self.page.map(render)?.excerpt
             let excerpt = pageExcerpt ?? self.search.map(render)?.excerpt
@@ -85,38 +80,76 @@ struct ChatSourcePreviewProjector {
 
     private var entries: [UUID: Entry] = [:]
     private var renderedCandidates: [Candidate: RenderedCandidate] = [:]
+    private var context: OpenClawChatSourceContext?
 
     mutating func project(
         _ messages: [OpenClawChatMessage],
         context: OpenClawChatSourceContext? = nil) -> [UUID: [ChatSourcePreview]]
     {
         var retained: [UUID: Entry] = [:]
-        var retainedCandidates: [Candidate: RenderedCandidate] = [:]
+        var rendered: [Candidate: RenderedCandidate] = [:]
         var runs: [String: [Entry]] = [:]
+        var changedRuns: Set<String> = []
+        var reused: [[(Candidate, RenderedCandidate)]] = []
+        var replaced = false
         var previews: [UUID: [ChatSourcePreview]] = [:]
         for message in messages {
-            guard let runID = Self.nonBlank(message.transcriptRunID) else { continue }
-            let entry: Entry = if let cached = self.entries[message.id], cached.message == message {
-                cached
+            guard let runID = ChatPayloadDecoding.trimmedNonEmptyString(message.transcriptRunID) else { continue }
+            var entry: Entry
+            // Whether the last projection had cards for this row, so its rendered Markdown may be dropped.
+            let wasCited: Bool
+            if let cached = self.entries[message.id], cached.message == message {
+                entry = cached
+                wasCited = !cached.links.isEmpty
             } else {
-                Entry(
+                wasCited = self.entries[message.id]?.links.isEmpty == false
+                entry = Entry(
                     message: message,
                     links: message.isCompletedReply ? Self.citations(in: message) : [],
                     results: Self.results(in: message, runID: runID))
+                changedRuns.insert(runID)
+            }
+            if !entry.links.isEmpty {
+                let sources = runs[runID] ?? []
+                let sourceIDs = sources.map(\.message.id)
+                // Cards depend only on this reply, the earlier rows of its run and the context.
+                if context != self.context || changedRuns.contains(runID) || entry.sourceIDs != sourceIDs {
+                    var used: [(Candidate, RenderedCandidate)] = []
+                    entry.previews = Self
+                        .previews(links: entry.links, entries: sources, context: context) { candidate in
+                            let value = rendered[candidate] ?? self.renderedCandidates[candidate] ?? RenderedCandidate(
+                                title: Self.title(candidate.title, source: candidate.name),
+                                excerpt: Self.excerpt(candidate.excerpt, source: candidate.name))
+                            rendered[candidate] = value
+                            used.append((candidate, value))
+                            return value
+                        }
+                    entry.sourceIDs = sourceIDs
+                    entry.rendered = used
+                    replaced = replaced || wasCited
+                } else {
+                    reused.append(entry.rendered)
+                }
+                previews[message.id] = entry.previews
             }
             retained[message.id] = entry
-            if !entry.links.isEmpty {
-                previews[message.id] = Self.previews(
-                    links: entry.links,
-                    entries: runs[runID] ?? [],
-                    context: context,
-                    cached: self.renderedCandidates,
-                    retained: &retainedCandidates)
-            }
             runs[runID, default: []].append(entry)
         }
+        // Rendered Markdown is kept for exactly the cited replies that remain.
+        if replaced || self.entries.values.contains(where: {
+            !$0.links.isEmpty && retained[$0.message.id]?.links.isEmpty != false
+        }) {
+            for pairs in reused {
+                rendered.merge(pairs) { current, _ in current }
+            }
+            self.renderedCandidates = rendered
+        } else if self.renderedCandidates.isEmpty {
+            self.renderedCandidates = rendered
+        } else if !rendered.isEmpty {
+            self.renderedCandidates.merge(rendered) { current, _ in current }
+        }
         self.entries = retained
-        self.renderedCandidates = retainedCandidates
+        self.context = context
         return previews
     }
 
@@ -124,8 +157,7 @@ struct ChatSourcePreviewProjector {
         links: [URL],
         entries: [Entry],
         context: OpenClawChatSourceContext?,
-        cached: [Candidate: RenderedCandidate],
-        retained: inout [Candidate: RenderedCandidate]) -> [ChatSourcePreview]
+        render: (Candidate) -> RenderedCandidate) -> [ChatSourcePreview]
     {
         var cited = Set(links.map(Self.key))
         var sources: [String: Sources] = [:]
@@ -135,18 +167,20 @@ struct ChatSourcePreviewProjector {
             let message = entry.message
             guard ["assistant", "tool", "toolresult", "tool_result"].contains(message.role.lowercased()),
                   !message.content.contains(where: {
-                      ($0.isToolCall || $0.isToolResult) && Self.nonBlank($0.runId).map {
+                      ($0.isToolCall || $0.isToolResult) && ChatPayloadDecoding.trimmedNonEmptyString($0.runId).map {
                           $0 != message.transcriptRunID
                       } == true
                   })
             else { continue }
             for call in message.content where call.isToolCall {
-                if let id = Self.nonBlank(call.id ?? message.toolCallId), let name = Self.nonBlank(call.name) {
+                if let id = ChatPayloadDecoding.trimmedNonEmptyString(call.id ?? message.toolCallId),
+                   let name = ChatPayloadDecoding.trimmedNonEmptyString(call.name)
+                {
                     callNames[id] = name
                 }
             }
             for result in entry.results {
-                let envelopeName = Self.nonBlank(message.toolName)
+                let envelopeName = ChatPayloadDecoding.trimmedNonEmptyString(message.toolName)
                 let invocationName = result.callID.flatMap { callNames[$0] }
                 guard let name = invocationName ?? envelopeName,
                       ["web_search", "web_fetch"].contains(name),
@@ -189,7 +223,7 @@ struct ChatSourcePreviewProjector {
             if let index = previews.firstIndex(where: { Self.key($0.url) == canonical }) {
                 previews[index].citedURLs.append(link)
             } else if previews.count < 8 {
-                var preview = source.preview(cached: cached, retained: &retained)
+                var preview = source.preview(render: render)
                 preview.citedURLs = [link]
                 previews.append(preview)
             }
@@ -210,7 +244,7 @@ struct ChatSourcePreviewProjector {
         }
         guard message.role.lowercased() == "assistant" else { return [] }
         return message.content.filter(\.isToolResult).compactMap { block in
-            guard Self.nonBlank(block.runId).map({ $0 == runID }) ?? true,
+            guard ChatPayloadDecoding.trimmedNonEmptyString(block.runId).map({ $0 == runID }) ?? true,
                   !ChatToolActivity.resultIsError(block.isError, text: block.text)
             else { return nil }
             return Self.result(
@@ -224,8 +258,8 @@ struct ChatSourcePreviewProjector {
     private static func result(callID: String?, name: String?, details: AnyCodable?, text: String?) -> Result {
         let payload: [String: AnyCodable]? = if let details {
             details.dictionaryValue
-        } else if let text, text.utf16.count <= 100_000, let data = text.data(using: .utf8) {
-            (try? JSONDecoder().decode(AnyCodable.self, from: data))?.dictionaryValue
+        } else if let text, text.utf16.count <= 100_000 {
+            (try? JSONDecoder().decode(AnyCodable.self, from: Data(text.utf8)))?.dictionaryValue
         } else {
             nil
         }
@@ -233,7 +267,10 @@ struct ChatSourcePreviewProjector {
               let external = payload["externalContent"]?.dictionaryValue,
               let source = external["source"]?.stringValue,
               external["untrusted"]?.boolValue == true, external["wrapped"]?.boolValue == true
-        else { return Result(callID: Self.nonBlank(callID), name: Self.nonBlank(name), candidates: []) }
+        else { return Result(
+            callID: ChatPayloadDecoding.trimmedNonEmptyString(callID),
+            name: ChatPayloadDecoding.trimmedNonEmptyString(name),
+            candidates: []) }
         var candidates: [Candidate] = []
         if source == "web_search" {
             let isResults = payload["kind"]?.stringValue == "results"
@@ -260,22 +297,27 @@ struct ChatSourcePreviewProjector {
                 title: payload["title"]?.stringValue,
                 excerpt: payload["text"]?.stringValue)]
         }
-        return Result(callID: Self.nonBlank(callID), name: Self.nonBlank(name), candidates: candidates)
+        return Result(
+            callID: ChatPayloadDecoding.trimmedNonEmptyString(callID),
+            name: ChatPayloadDecoding.trimmedNonEmptyString(name),
+            candidates: candidates)
     }
 
-    private static func citations(in message: OpenClawChatMessage) -> [URL] {
+    static func citations(in message: OpenClawChatMessage) -> [URL] {
         let text = ChatMessageVisibleText.visibleText(in: message)
         guard !text.isEmpty, text.utf16.count <= 30000 else { return [] }
         return chatPreviewURLs(in: text).compactMap { Self.url($0.absoluteString) }
     }
 
+    private static let externalContentFrame = try? NSRegularExpression(
+        pattern: #"(?:^|\n)<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>\r?\n"# +
+            #"Source: ([^\r\n]+)\r?\n---\r?\n([\s\S]*?)\r?\n"# +
+            #"<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>"#)
+
     private static func prose(_ value: String?, source: String) -> String? {
         guard let value, value.utf16.count <= 100_000 else { return nil }
         // Only the provenance-owned frame is removed; quoted markers remain source prose.
-        let pattern = #"(?:^|\n)<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>\r?\n"# +
-            #"Source: ([^\r\n]+)\r?\n---\r?\n([\s\S]*?)\r?\n"# +
-            #"<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>"#
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        guard let regex = Self.externalContentFrame,
               let match = regex.firstMatch(in: value, range: NSRange(value.startIndex..., in: value)),
               let nameRange = Range(match.range(at: 2), in: value),
               value[nameRange] == (source == "web_search" ? "Web Search" : "Web Fetch"),
@@ -314,11 +356,6 @@ struct ChatSourcePreviewProjector {
             : paragraphs(document)
         guard let text = paragraphs.first(where: { $0.count >= (source == "web_fetch" ? 60 : 1) }) else { return nil }
         return text.count > 280 ? String(text.prefix(279)).trimmingCharacters(in: .whitespacesAndNewlines) + "…" : text
-    }
-
-    private static func nonBlank(_ value: String?) -> String? {
-        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
-        return value
     }
 
     fileprivate static func url(_ value: String?) -> URL? {

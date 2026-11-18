@@ -22,17 +22,14 @@ function buildTailscaleExposureArgs(opts: {
   return [opts.mode, "--bg", "--yes", ...portArgs, "--set-path", opts.path, opts.localUrl ?? "off"];
 }
 
-async function runTailscaleCommand(
-  args: string[],
-  timeoutMs = 2500,
-): Promise<{ code: number; stdout: string }> {
+async function runTailscaleCommand(args: string[]): Promise<{ code: number; stdout: string }> {
   try {
     const result = await runCommandWithTimeout(["tailscale", ...args], {
       killProcessTree: true,
       maxOutputBytes: { stdout: TAILSCALE_COMMAND_STDOUT_MAX_BYTES, stderr: 1 },
       outputCapture: "head",
       terminateOnOutputLimit: { stdout: true },
-      timeoutMs,
+      timeoutMs: 2500,
     });
     if (result.termination !== "exit" || result.outputLimitExceeded) {
       return { code: -1, stdout: "" };
@@ -60,11 +57,6 @@ export async function getTailscaleSelfInfo(): Promise<TailscaleSelfInfo | null> 
   }
 }
 
-async function getTailscaleDnsName(): Promise<string | null> {
-  const info = await getTailscaleSelfInfo();
-  return info?.dnsName ?? null;
-}
-
 export async function cleanupTailscaleExposureRoute(opts: {
   mode: "serve" | "funnel";
   port: number;
@@ -78,7 +70,7 @@ export async function setupTailscaleExposureRoutes(opts: {
   port: number;
   routes: Array<{ path: string; localUrl: string }>;
 }): Promise<string | null> {
-  const dnsName = await getTailscaleDnsName();
+  const dnsName = (await getTailscaleSelfInfo())?.dnsName;
   if (!dnsName) {
     console.warn("[voice-call] Could not get Tailscale DNS name");
     return null;
@@ -113,24 +105,16 @@ export async function setupTailscaleExposure(config: VoiceCallConfig): Promise<s
     return null;
   }
 
-  const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
-  const localUrl = `http://127.0.0.1:${config.serve.port}${config.serve.path}`;
-  const streamRoutes = resolveVoiceCallStreamExposurePaths(config).map(
-    ({ publicPath, localPath }) => ({
-      path: publicPath,
-      localUrl: `http://127.0.0.1:${config.serve.port}${localPath}`,
-    }),
-  );
   return setupTailscaleExposureRoutes({
-    mode,
+    mode: config.tailscale.mode,
     port: config.tailscale.port,
     routes: [
-      {
-        path: config.tailscale.path,
-        localUrl,
-      },
-      ...streamRoutes,
-    ],
+      { publicPath: config.tailscale.path, localPath: config.serve.path },
+      ...resolveVoiceCallStreamExposurePaths(config),
+    ].map(({ publicPath, localPath }) => ({
+      path: publicPath,
+      localUrl: `http://127.0.0.1:${config.serve.port}${localPath}`,
+    })),
   });
 }
 
@@ -139,7 +123,7 @@ export async function cleanupTailscaleExposure(config: VoiceCallConfig): Promise
     return;
   }
 
-  const mode = config.tailscale.mode === "funnel" ? "funnel" : "serve";
+  const mode = config.tailscale.mode;
   await cleanupTailscaleExposureRoute({
     mode,
     port: config.tailscale.port,

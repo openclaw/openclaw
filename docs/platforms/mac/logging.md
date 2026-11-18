@@ -13,7 +13,7 @@ title: "macOS logging"
 The macOS app logs through swift-log (unified logging by default) and can also write a rotating local file log for durable capture (`DiagnosticsFileLog`).
 
 - Enable: **Debug pane -> Logs -> App logging -> "Write rolling diagnostics log (JSONL)"** (off by default).
-- Verbosity: **Debug pane -> Logs -> App logging -> Verbosity** picker.
+- Verbosity: **Debug pane -> Logs -> App logging -> Verbosity** picker. Changes apply immediately to existing app loggers; no restart is required.
 - Location: `~/Library/Logs/OpenClaw/diagnostics.jsonl`.
 - Rotation: rotates at 5 MB; up to 5 backups suffixed `.1`...`.5` (oldest dropped).
 - Clear: **Debug pane -> Logs -> App logging -> "Clear"** deletes the active file and all backups.

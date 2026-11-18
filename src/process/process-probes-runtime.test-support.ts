@@ -1,4 +1,14 @@
 export const processProbeEntrypoints = {
+  serviceChildSubreaper: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "supervisor/service-child-subreaper.test-support",
+    distWorkerPath: "process/supervisor/service-child-subreaper.test-support.js",
+  },
+  groupCustodyDenied: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "spawn-broker/group-custody-denied.test-support",
+    distWorkerPath: "process/spawn-broker/group-custody-denied.test-support.js",
+  },
   commandQueue: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "command-queue",

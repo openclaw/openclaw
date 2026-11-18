@@ -2,11 +2,8 @@
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { buildGoogleMeetExportManifest, googleMeetExportFileNames } from "./src/cli-export.js";
-import {
-  fetchGoogleMeetArtifacts,
-  fetchGoogleMeetAttendance,
-  fetchLatestGoogleMeetConferenceRecord,
-} from "./src/meet.js";
+import { fetchLatestGoogleMeetConferenceRecord } from "./src/meet-api.js";
+import { fetchGoogleMeetArtifacts, fetchGoogleMeetAttendance } from "./src/meet.js";
 import { resolveGoogleMeetAccessToken } from "./src/oauth.js";
 
 const LIVE_MEETING = process.env.OPENCLAW_GOOGLE_MEET_LIVE_MEETING?.trim() ?? "";

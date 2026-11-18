@@ -1,85 +1,54 @@
-import type { TalkVoiceSelection } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
-import { repeat } from "lit/directives/repeat.js";
-import { renderPicker } from "../../../components/select-picker.ts";
-import { t } from "../../../i18n/index.ts";
-import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
+import { createMemo } from "solid-js";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
+import type { ChatThreadProps } from "./chat-thread-interactions.ts";
+import { createTranscriptMemo, transcriptArraysEqual } from "./chat-transcript-memo.ts";
 
-type ChatRealtimeTalkConversationProps = {
-  assistantName: string;
-  userName?: string | null;
-  realtimeTalkConversation?: RealtimeTalkConversationEntry[];
-};
+const persistedMessageIds = createTranscriptMemo<Set<string | null>>();
 
-export function renderRealtimeVoicePicker(params: {
-  selection?: TalkVoiceSelection | null;
-  changing?: boolean;
-  disabled?: boolean;
-  onChange?: (voice: string) => void;
-}) {
-  const { selection } = params;
-  if (!selection || !params.onChange) {
-    return nothing;
-  }
-  const options = selection.voices.map((value) => ({ value, label: value }));
-  return html`<span class="chat-talk-voice-picker" aria-busy=${String(Boolean(params.changing))}>
-    ${renderPicker({
-      label: t("talkPage.voice.title"),
-      value: selection.voice ?? "",
-      options: [
-        ...(!selection.voice
-          ? [{ value: "", label: t("talkPage.voice.default"), disabled: true }]
-          : []),
-        ...options,
-        ...(selection.voice && !selection.voices.includes(selection.voice)
-          ? [{ value: selection.voice, label: selection.voice, disabled: true }]
-          : []),
-      ],
-      disabled: params.disabled || params.changing || !selection.canChange,
-      title: params.changing ? t("chat.voice.preparing") : t("talkPage.voice.title"),
-      placement: "top",
-      searchable: true,
-      onChange: params.onChange,
-    })}
-  </span>`;
-}
-
-export function renderRealtimeTalkConversation(props: ChatRealtimeTalkConversationProps) {
-  const entries = props.realtimeTalkConversation ?? [];
-  if (entries.length === 0) {
-    return nothing;
-  }
-  return html`
-    <div
-      class="agent-chat__voice-turns"
-      role="log"
-      aria-label=${t("chat.composer.voiceTranscript")}
-    >
-      ${repeat(
-        entries,
-        (entry) => entry.id,
-        (entry) => {
-          const label =
-            entry.role === "user" ? props.userName?.trim() || "You" : props.assistantName;
-          return html`
-            <div
-              class="agent-chat__voice-turn agent-chat__voice-turn--${entry.role}"
-              data-role=${entry.role}
-            >
-              <span class="agent-chat__voice-turn-speaker">${label}</span>
-              <span class="agent-chat__voice-turn-text">${entry.text}</span>
-              ${
-                entry.isStreaming
-                  ? html`<span
-                      class="agent-chat__voice-turn-stream"
-                      aria-label=${t("chat.composer.stillListening")}
-                    ></span>`
-                  : nothing
-              }
-            </div>
-          `;
+export function projectRealtimeTalkConversation(
+  props: Pick<
+    ChatThreadProps,
+    "assistantName" | "userName" | "messages" | "readRealtimeTalkConversation" | "transcriptVisible"
+  >,
+) {
+  const presentation = createMemo(() => projectPresentation(props.transcriptVisible ?? true));
+  // Voice captions reconcile against unfiltered immutable history, not the
+  // current search or streaming projection.
+  const entries = createParkedProjection(
+    () =>
+      (props.readRealtimeTalkConversation?.() ?? []).filter((entry) => {
+        if (!entry.transcriptId) {
+          return true;
+        }
+        return !persistedMessageIds(
+          props.messages,
+          [],
+          () => new Set(props.messages.map(persistedMessageEntryId)),
+        ).has(entry.transcriptId);
+      }),
+    () => presentation().read(),
+  );
+  // Blocks change only when a caption opens or retires a history position, so
+  // caption text updates re-render the caption blocks, not the transcript.
+  const anchors = createMemo(() => [...new Set(entries().map((entry) => entry.afterMessageId))], {
+    equals: transcriptArraysEqual,
+  });
+  return {
+    hasEntries: createMemo(() => entries().length > 0),
+    blocks: createMemo(() =>
+      anchors().map((afterMessageId) => ({
+        afterMessageId,
+        content: {
+          kind: "realtime" as const,
+          assistantName: props.assistantName,
+          userName: props.userName,
+          get entries() {
+            return entries().filter((entry) => entry.afterMessageId === afterMessageId);
+          },
         },
-      )}
-    </div>
-  `;
+      })),
+    ),
+  };
 }

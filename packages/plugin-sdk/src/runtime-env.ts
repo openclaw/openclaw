@@ -1,5 +1,3 @@
-// Public package facade for runtime environment helpers.
-
 export {
   computeBackoff,
   createNonExitingRuntime,

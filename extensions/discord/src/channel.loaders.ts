@@ -13,6 +13,9 @@ export const loadDiscordResolveUsersModule = createLazyRuntimeModule(
 export const loadDiscordThreadBindingsManagerModule = createLazyRuntimeModule(
   () => import("./monitor/thread-bindings.manager.js"),
 );
+export const loadDiscordConversationForkModule = createLazyRuntimeModule(
+  () => import("./conversation-fork.js"),
+);
 export const loadDiscordTargetResolverModule = createLazyRuntimeModule(
   () => import("./target-resolver.js"),
 );
@@ -21,7 +24,7 @@ export const loadDiscordProviderRuntime = createLazyRuntimeModule(
   () => import("./monitor/provider.runtime.js"),
 );
 
-export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.js"));
 
 export async function probeDiscordStatusAccount(params: {
   token: string;

@@ -1,9 +1,13 @@
 // Removes transient runtime state from restorable OpenClaw database snapshots.
 import type { DatabaseSync } from "node:sqlite";
-import { tryParsePersistedExecApprovals } from "../infra/exec-approvals-config.js";
+import {
+  parseLegacyExecApprovals,
+  tryParsePersistedExecApprovals,
+} from "../infra/exec-approvals-config.js";
 import type { ExecApprovalsFile } from "../infra/exec-approvals-core.js";
 import { projectionValues } from "../infra/exec-approvals-sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
 type SnapshotSanitizerDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
@@ -18,13 +22,6 @@ const FAIL_CLOSED_EXEC_APPROVALS: ExecApprovalsFile = {
   },
   agents: {},
 };
-
-function tableExists(database: DatabaseSync, tableName: string): boolean {
-  const row = database // sqlite-allow-raw -- Offline snapshot maintenance boundary.
-    .prepare("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName) as { ok?: unknown } | undefined;
-  return row?.ok === 1;
-}
 
 /** Remove coordination rows that must never survive restore. */
 export function sanitizeOpenClawStateLeaseRows(database: DatabaseSync): void {
@@ -57,14 +54,7 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
       stateDb.selectFrom("exec_approvals_config").select(["config_key", "raw_json"]),
     ).rows;
     for (const row of rows) {
-      let sanitized: ExecApprovalsFile = FAIL_CLOSED_EXEC_APPROVALS;
-      const parsed = tryParsePersistedExecApprovals(row.raw_json);
-      if (parsed) {
-        sanitized = structuredClone(parsed);
-        if (sanitized.socket) {
-          delete sanitized.socket.token;
-        }
-      }
+      const sanitized = readSnapshotExecApprovals(row.raw_json);
       executeSqliteQuerySync(
         database,
         stateDb
@@ -72,9 +62,26 @@ export function sanitizeOpenClawGlobalStateSnapshot(database: DatabaseSync): voi
           .set({
             raw_json: `${JSON.stringify(sanitized, null, 2)}\n`,
             ...projectionValues(sanitized),
+            // Historical snapshots retain the path for credential migration to verify and move.
+            socket_path: sanitized.socket?.path ?? null,
           })
           .where("config_key", "=", row.config_key),
       );
     }
   }
+}
+
+/** Keep a policy Doctor can still migrate instead of substituting fail-closed defaults. */
+function readSnapshotExecApprovals(rawJson: string): ExecApprovalsFile {
+  const parsed = tryParsePersistedExecApprovals(rawJson) ?? readLegacyExecApprovals(rawJson);
+  const sanitized = parsed ?? FAIL_CLOSED_EXEC_APPROVALS;
+  if (sanitized.socket) {
+    delete sanitized.socket.token;
+  }
+  return sanitized;
+}
+
+function readLegacyExecApprovals(rawJson: string): ExecApprovalsFile | null {
+  const legacy = parseLegacyExecApprovals(rawJson);
+  return legacy.ok ? legacy.value : null;
 }

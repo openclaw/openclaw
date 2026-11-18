@@ -4,12 +4,7 @@ enum OpenClawEnv {
     static func path(_ key: String) -> String? {
         // Normalize env overrides once so UI + file IO stay consistent.
         guard let raw = getenv(key) else { return nil }
-        let value = String(cString: raw).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty
-        else {
-            return nil
-        }
-        return value
+        return String(cString: raw).nonEmpty
     }
 }
 

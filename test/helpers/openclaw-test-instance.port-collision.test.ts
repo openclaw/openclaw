@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import net from "node:net";
 import { expect, it, vi } from "vitest";
+import { acquireGatewayE2ePortBlock } from "../../src/gateway/test-helpers.listener.js";
 import * as ports from "../../src/test-utils/ports.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 import { createDeferred } from "./promise.js";
@@ -72,5 +73,21 @@ it("keeps overlapping fixture allocations exclusive before their reservation bin
     releaseProbe?.();
     await Promise.allSettled([first, second]);
     await Promise.all(instances.map((instance) => instance.cleanup()));
+  }
+});
+
+it("keeps an in-process Gateway E2E port out of fixture instance allocation", async () => {
+  const owner = await acquireGatewayE2ePortBlock();
+  // Same-shard workers try the same first candidate.
+  const pickerSpy = vi
+    .spyOn(ports, "getDeterministicFreePortBlock")
+    .mockResolvedValueOnce(owner.port);
+  const instance = await createOpenClawTestInstance({ name: "in-process-port-owner" });
+  try {
+    expect(instance.port).not.toBe(owner.port);
+  } finally {
+    pickerSpy.mockRestore();
+    await instance.cleanup();
+    await owner.release();
   }
 });

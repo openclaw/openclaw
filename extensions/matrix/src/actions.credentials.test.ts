@@ -56,7 +56,7 @@ describe("Matrix stored-credential message preparation", () => {
           payload,
         });
       const inspect = async () => {
-        const sql = observeHostDataSql({ OPENCLAW_STATE_DIR: stateDir });
+        const sql = observeHostDataSql();
         try {
           const account = await matrixSetupPlugin.config.resolveAccountAsync!(cfg, "default");
           const configured = await matrixSetupPlugin.config.hasConfiguredStateAsync!({ cfg });

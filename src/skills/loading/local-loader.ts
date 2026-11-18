@@ -1,4 +1,3 @@
-// Local skill loader reads skill definitions from local filesystem roots.
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -30,7 +29,6 @@ export type LocalSkillLoadDiagnostic = {
   message: string;
 };
 
-// Read SKILL.md through the root boundary helper so symlinks cannot escape the skill root.
 function readSkillFileSync(params: {
   rootRealPath: string;
   filePath: string;
@@ -157,32 +155,4 @@ export function loadSingleSkillDirectory(params: {
     frontmatter: { ...loaded.frontmatter },
     content: raw,
   };
-}
-
-export function readSkillFrontmatterSafe(params: {
-  rootDir: string;
-  filePath: string;
-  maxBytes?: number;
-  rejectHardlinks?: boolean;
-}): Record<string, string> | null {
-  let rootRealPath: string;
-  try {
-    rootRealPath = fs.realpathSync(path.resolve(params.rootDir));
-  } catch {
-    return null;
-  }
-  const raw = readSkillFileSync({
-    rootRealPath,
-    filePath: path.resolve(params.filePath),
-    maxBytes: params.maxBytes,
-    rejectHardlinks: params.rejectHardlinks,
-  });
-  if (raw === null) {
-    return null;
-  }
-  try {
-    return parseSkillFrontmatter(raw);
-  } catch {
-    return null;
-  }
 }

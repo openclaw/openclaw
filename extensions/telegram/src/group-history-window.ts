@@ -1,4 +1,5 @@
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   TelegramAmbientTranscriptWatermark,
   TelegramPromptContextEntry,
@@ -38,45 +39,49 @@ export function isTelegramHistoryEntryAfterAmbientWatermark(
     return true;
   }
   // Exclusive boundary: entries at or before this point are transcript-owned.
-  if (entry.timestamp !== undefined && watermark.timestampMs !== undefined) {
-    if (entry.timestamp !== watermark.timestampMs) {
-      return entry.timestamp > watermark.timestampMs;
-    }
-    const entryMessageId = numericMessageId(entry.messageId);
-    const watermarkMessageId = numericMessageId(watermark.messageId);
-    return (
-      entryMessageId !== undefined &&
-      watermarkMessageId !== undefined &&
-      entryMessageId > watermarkMessageId
-    );
+  const { timestamp } = entry;
+  const { timestampMs } = watermark;
+  const hasTimestamps = timestamp !== undefined && timestampMs !== undefined;
+  if (hasTimestamps && timestamp !== timestampMs) {
+    return timestamp > timestampMs;
   }
   const entryMessageId = numericMessageId(entry.messageId);
   const watermarkMessageId = numericMessageId(watermark.messageId);
   if (entryMessageId !== undefined && watermarkMessageId !== undefined) {
     return entryMessageId > watermarkMessageId;
   }
-  return entry.messageId !== watermark.messageId;
-}
-
-function telegramChatWindowPayload(
-  entry: TelegramPromptContextEntry | undefined,
-): Record<string, unknown> | undefined {
-  return entry?.payload && typeof entry.payload === "object" && !Array.isArray(entry.payload)
-    ? (entry.payload as Record<string, unknown>)
-    : undefined;
+  return !hasTimestamps && entry.messageId !== watermark.messageId;
 }
 
 function telegramPromptMessages(payload: Record<string, unknown> | undefined) {
-  return Array.isArray(payload?.["messages"])
-    ? payload["messages"].filter(
-        (message): message is Record<string, unknown> =>
-          Boolean(message) && typeof message === "object" && !Array.isArray(message),
-      )
-    : [];
+  return Array.isArray(payload?.["messages"]) ? payload["messages"].filter(isRecord) : [];
 }
 
 export function isTelegramChatWindowPromptContext(entry: TelegramPromptContextEntry): boolean {
   return entry.source === "telegram" && entry.type === "chat_window";
+}
+
+/** Ids of unhydrated media the sender posted in the selected chat window, oldest first. */
+export function selectTelegramSenderMediaMessageIds(params: {
+  promptContext: readonly TelegramPromptContextEntry[];
+  senderId: string;
+  sinceMs: number;
+}): string[] {
+  return params.promptContext.flatMap((entry) =>
+    isTelegramChatWindowPromptContext(entry)
+      ? telegramPromptMessages(asOptionalRecord(entry.payload)).flatMap((message) => {
+          const messageId = message["message_id"];
+          const timestamp = message["timestamp_ms"];
+          return typeof messageId === "string" &&
+            message["sender_id"] === params.senderId &&
+            typeof message["media_ref"] === "string" &&
+            typeof timestamp === "number" &&
+            timestamp >= params.sinceMs
+            ? [messageId]
+            : [];
+        })
+      : [],
+  );
 }
 
 export function telegramPromptContextHistory(
@@ -84,7 +89,7 @@ export function telegramPromptContextHistory(
 ): HistoryEntry[] {
   return promptContext.flatMap((entry) =>
     isTelegramChatWindowPromptContext(entry)
-      ? telegramPromptMessages(telegramChatWindowPayload(entry)).flatMap((message) =>
+      ? telegramPromptMessages(asOptionalRecord(entry.payload)).flatMap((message) =>
           typeof message["body"] === "string" && typeof message["sender"] === "string"
             ? [
                 {
@@ -114,7 +119,7 @@ export function selectTelegramGroupPromptContext(params: {
     if (!isTelegramChatWindowPromptContext(entry)) {
       return [entry];
     }
-    const payload = telegramChatWindowPayload(entry);
+    const payload = asOptionalRecord(entry.payload);
     const sourceMessages = telegramPromptMessages(payload);
     const recentMessages =
       params.historyLimit > 0

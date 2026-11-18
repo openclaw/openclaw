@@ -4,6 +4,8 @@ import { log } from "../logger.js";
 
 export type EmbeddedAttemptSteeringAdmission = {
   accepting: boolean;
+  readonly closed: boolean;
+  readonly closedSignal: AbortSignal;
   stop: () => void;
   bindStreamUnsubscribe: (unsubscribe: () => void) => () => void;
 };
@@ -14,16 +16,16 @@ export function withEmbeddedAttemptSteeringAdmission<T>(
   signal: AbortSignal,
   prepare: (admission: EmbeddedAttemptSteeringAdmission) => T,
 ): T {
-  let accepting = true;
-  let closed = false;
+  const closure = new AbortController();
+  let phase: "accepting" | "paused" | "closed" = "accepting";
   let unsubscribeSteering: (() => void) | undefined;
   let unsubscribeStream: (() => void) | undefined;
   const stop = () => {
-    if (closed) {
+    if (phase === "closed") {
       return;
     }
-    closed = true;
-    accepting = false;
+    phase = "closed";
+    closure.abort();
     signal.removeEventListener("abort", stop);
     unsubscribeSteering?.();
   };
@@ -47,12 +49,16 @@ export function withEmbeddedAttemptSteeringAdmission<T>(
       stop();
     }
     return prepare({
+      closedSignal: closure.signal,
+      get closed() {
+        return phase === "closed";
+      },
       get accepting() {
-        return accepting;
+        return phase === "accepting";
       },
       set accepting(value) {
-        if (!closed) {
-          accepting = value;
+        if (phase !== "closed") {
+          phase = value ? "accepting" : "paused";
         }
       },
       stop,

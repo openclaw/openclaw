@@ -28,6 +28,9 @@ export const sessionGatewayTest = mockGatewayTest.extend<{
   connect: async ({ gatewayPage }, use) => {
     await use(async (scenario = {}) => {
       const { window, execute } = gatewayPage;
+      // These wire-contract tests compare row contents across reads at one sample time.
+      const sampledAt = Date.now();
+      window.Date.now = () => sampledAt;
       execute(createControlUiMockGatewayInitScript(scenario));
       const socket = new window.WebSocket("ws://mock-gateway");
       const frames: Frame[] = [];

@@ -5,8 +5,9 @@ import type {
   GatewayCloseParams as GatewayTeardownParams,
   GatewayClosePrepareParams,
 } from "./server-close.js";
+import type { GatewayCloseOptions } from "./server-public.js";
 
-type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
+export type GatewayCloseParams = GatewayTeardownParams & GatewayClosePrepareParams;
 type GatewayCloseFixtureMocks = Pick<
   GatewayCloseParams,
   | "disposeAllBundleLspRuntimes"
@@ -18,7 +19,17 @@ type GatewayCloseFixtureMocks = Pick<
 };
 type GatewayCloseClient = GatewayCloseParams["clients"] extends Set<infer T> ? T : never;
 
-export function createTestChatRunState() {
+/** Read the captured first close-effect call without changing its mock behavior. */
+
+export function createGatewayCloseTestHandlerFactory({
+  prepareGatewayClose,
+  completeGatewayClose,
+}: Pick<typeof import("./server-close.js"), "prepareGatewayClose" | "completeGatewayClose">) {
+  return (params: GatewayCloseParams) => async (opts?: GatewayCloseOptions) =>
+    completeGatewayClose(params, await prepareGatewayClose(params, opts));
+}
+
+function createTestChatRunState() {
   const state = createChatRunState();
   const clear = state.clear;
   state.clear = vi.fn(() => clear());
@@ -26,9 +37,12 @@ export function createTestChatRunState() {
 }
 
 export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMocks) {
+  const resolveGatewayContext = () => undefined;
   return (overrides: Partial<GatewayCloseParams> = {}): GatewayCloseParams => {
     return {
-      resolveGatewayContext: () => undefined,
+      resolveGatewayContext,
+      preparePluginRegistryClose: async () => [],
+      drainWorktreeRunEnd: vi.fn(async () => {}),
       closePluginRegistry: async (onRetirement) => {
         let retirement: ReturnType<GatewayCloseParams["pluginMetadata"]["close"]> | undefined;
         const retire = () =>
@@ -56,17 +70,15 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       tailscaleCleanup: null,
       stopChannel: vi.fn(async () => undefined),
       pluginServices: null,
+      stopScheduler: vi.fn(async () => {}),
       disposeAllBundleLspRuntimes: mocks.disposeAllBundleLspRuntimes,
       drainRetainedOpenAiEmbeddingProviders: mocks.drainRetainedEmbeddingProviders,
       stopGmailWatcher: mocks.stopGmailWatcher,
       disposeAllCodeModeRuns: mocks.disposeAllCodeModeRuns,
       closeProviderTransportDispatcherPool: mocks.closeProviderTransportDispatcherPool,
       cron: { stop: vi.fn() },
-      heartbeatRunner: { stop: vi.fn() } as never,
+      stopScheduledServices: vi.fn(async () => {}),
       updateCheckStop: null,
-      stopTaskRegistryMaintenance: null,
-      nodePresenceTimers: new Map(),
-      broadcast: vi.fn(),
       maintenance: {
         stopPeriodicTasks: vi.fn(async () => {}),
         startMediaCleanup: vi.fn(),
@@ -75,18 +87,9 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,
-      taskUnsub: null,
-      heartbeatUnsub: null,
       transcriptUnsub: null,
       lifecycleUnsub: null,
       chatRunState: createTestChatRunState(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      restartRecoveryCandidates: new Map(),
-      removeChatRun: vi.fn(),
-      agentRunSeq: new Map(),
-      nodeSendToSession: vi.fn(),
-      getPendingReplyCount: vi.fn(() => 0),
       clients: new Set<GatewayCloseClient>(),
       configReloader: { stop: vi.fn(async () => undefined) },
       wss: {

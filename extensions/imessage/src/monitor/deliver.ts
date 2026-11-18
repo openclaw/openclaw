@@ -1,10 +1,7 @@
-import {
-  createAcceptedChannelDeliveryResult,
-  createChannelPartialDeliveryError,
-  isChannelPartialDeliveryError,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { createChannelDeliveryAccumulator } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { resolveOutboundMediaAccessForConfig } from "openclaw/plugin-sdk/outbound-media";
 import { chunkMarkdownTextWithMode, resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import {
   deliverTextOrMediaReply,
@@ -40,16 +37,21 @@ export async function deliverIMessageReply(params: {
   const reply = resolveSendableOutboundReplyParts(payload, {
     text: convertMarkdownTables(rawText, tableMode),
   });
-  const accepted: Awaited<ReturnType<typeof sendMessageIMessage>>[] = [];
+  const accepted = createChannelDeliveryAccumulator({
+    kind: reply.mediaUrls.length > 0 ? "media" : "text",
+  });
+  const mediaAccess = resolveOutboundMediaAccessForConfig(cfg);
   const sendAccepted = async (text: string, mediaUrl?: string) => {
     const sent = await sendMessageIMessage(target, text, {
       config: cfg,
-      ...(mediaUrl ? { mediaUrl, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) } : {}),
+      ...(mediaUrl
+        ? { mediaUrl, mediaAccess, ...(payload.audioAsVoice ? { audioAsVoice: true } : {}) }
+        : {}),
       maxBytes,
       accountId,
       replyToId: payload.replyToId,
     });
-    accepted.push(sent);
+    accepted.add({ receipt: sent.receipt }, sent.sentText);
     const echoText = sent.echoText ?? (sent.sentText || undefined);
     sentMessageCache?.remember(scope, {
       ...(echoText ? { text: echoText } : {}),
@@ -67,39 +69,12 @@ export async function deliverIMessageReply(params: {
       sendMedia: ({ mediaUrl, caption }) => sendAccepted(caption ?? "", mediaUrl),
     });
   } catch (error: unknown) {
-    const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
-    if (accepted.length === 0 && partial?.visibleReplySent !== true) {
-      throw error;
-    }
-    // A native attachment can settle before its caption rejects; preserve every
-    // previously accepted receipt plus that nested provider-visible subset.
-    throw createChannelPartialDeliveryError(
-      error,
-      createAcceptedChannelDeliveryResult({
-        results: accepted.map((result) => ({ receipt: result.receipt })),
-        deliveryResults: partial ? [partial] : [],
-        kind: reply.mediaUrls.length > 0 ? "media" : "text",
-        content: [...accepted.map((result) => result.sentText), partial?.content]
-          .filter(Boolean)
-          .join("\n"),
-      }),
-    );
+    throw accepted.partialError(error);
   }
-  if (delivered === "empty") {
-    return {
-      visibleReplySent: false as const,
-      suppression: { reason: "no_visible_result" as const },
-    };
+  const deliveryResult = accepted.result();
+  if (delivered !== "empty") {
+    runtime.log?.(`imessage: delivered reply to ${target}`);
   }
-  const deliveryResult = createAcceptedChannelDeliveryResult({
-    results: accepted.map((result) => ({ receipt: result.receipt })),
-    kind: delivered,
-    content: accepted
-      .map((result) => result.sentText)
-      .filter(Boolean)
-      .join("\n"),
-  });
-  runtime.log?.(`imessage: delivered reply to ${target}`);
   return deliveryResult;
 }
 

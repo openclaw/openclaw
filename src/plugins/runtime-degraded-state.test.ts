@@ -2,7 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
-import { pluginInstallPathMatchesRoot } from "./runtime-degraded-state.js";
+import {
+  buildDegradedPluginsFromVerificationFailures,
+  clearActiveDegradedPlugin,
+  findActiveDegradedPlugin,
+  listActiveDegradedPlugins,
+  pluginInstallPathMatchesRoot,
+  setActiveDegradedPlugins,
+} from "./runtime-degraded-state.js";
 
 describe("pluginInstallPathMatchesRoot", () => {
   it("matches an existing plugin root through a symlink alias", () => {
@@ -31,4 +38,33 @@ describe("pluginInstallPathMatchesRoot", () => {
       );
     });
   });
+});
+
+it("keeps quarantine snapshots stable across caller edits, replacement, and clearing", () => {
+  const previous = listActiveDegradedPlugins();
+  try {
+    const plugins = buildDegradedPluginsFromVerificationFailures([
+      { pluginId: "example", reason: "missing-package-json", detail: "package.json is missing" },
+    ]);
+    setActiveDegradedPlugins(plugins);
+    const snapshot = listActiveDegradedPlugins();
+
+    plugins.length = 0;
+    expect(listActiveDegradedPlugins()).toHaveLength(1);
+
+    setActiveDegradedPlugins(
+      buildDegradedPluginsFromVerificationFailures([
+        { pluginId: "example", reason: "missing-main-entry", detail: "main entry is missing" },
+      ]),
+    );
+    expect(findActiveDegradedPlugin("example")?.diagnostic.reason).toBe("missing-main-entry");
+    expect(snapshot.map((plugin) => plugin.diagnostic.reason)).toEqual(["missing-package-json"]);
+
+    clearActiveDegradedPlugin("example");
+    expect(findActiveDegradedPlugin("example")).toBeUndefined();
+    expect(listActiveDegradedPlugins()).toEqual([]);
+    expect(snapshot.map((plugin) => plugin.diagnostic.reason)).toEqual(["missing-package-json"]);
+  } finally {
+    setActiveDegradedPlugins(previous);
+  }
 });

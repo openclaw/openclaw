@@ -9,7 +9,7 @@ export const STAGED_INPUT_MAX_BYTES = 50 * 1024 * 1024;
 
 const STAGED_INPUT_DIRECTORY_PREFIX = "media/inbound/openclaw-staged-";
 export const STAGED_INPUT_GIT_PATHSPEC = `:(glob)${STAGED_INPUT_DIRECTORY_PREFIX}*/**`;
-const STAGED_INPUT_GITIGNORE =
+export const STAGED_INPUT_GITIGNORE =
   "# Raw task inputs remain private; copy outputs into the project to publish.\n*\n";
 
 const STAGED_INPUT_GITIGNORE_SHA256 = createHash("sha256")
