@@ -2137,6 +2137,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.d0fa5785b4dcc4a3","source":"API key"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.3d3c690a3f4a410c","source":"ChatGPT"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.c88984408bdbb9a7","source":"Check again"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.4d94efd15dfdbe3e","source":"Choose another AI"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.6ede43a324c2fde1","source":"Claude"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.cea8f9534c6f3753","source":"Connect"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.9fde0847d7bf35e5","source":"Connecting…"},

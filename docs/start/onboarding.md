@@ -135,9 +135,10 @@ if you want to use Git.
 Pick one entry from the list: **ChatGPT**, **Claude**, **Gemini**, **API key**,
 or **A model on your own computer** (Ollama or LM Studio). Logins OpenClaw
 finds on the Gateway host are tagged **On this Mac**. Nothing is tested,
-installed, or saved until you pick an entry. Sign-in steps, the key form, and
-the live AI test all appear inside the entry you picked. **More providers**
-lists every other supported sign-in. Setup must pass a live AI test before you
+installed, or saved until you pick an entry. Picking an entry, or a sign-in
+under **More providers**, replaces the list with that provider's card: its
+sign-in steps, key form, and live AI test. **Choose another AI** returns to the
+list. **More providers** lists every other supported sign-in. Setup must pass a live AI test before you
 can continue.
 
 See [AI connection options](/start/onboarding#ai-connection-options) below for login reuse,

@@ -98,7 +98,8 @@ struct OnboardingAISetupView: View {
     @Bindable var model: OnboardingAISetupModel
     var returnToGatewayAuthentication: () -> Void
     var retryConfiguredGatewayProbe: (OnboardingAISetupModel.SetupIntent) -> Void
-    @State private var expandedRow: OnboardingAIPicker.RowID?
+    /// The picked provider. Its card replaces the list until the user chooses another.
+    @State private var openRow: OnboardingAIPicker.RowID?
     @State private var showMoreProviders = false
 
     static func gatewayAuthCard(for issue: RemoteGatewayAuthIssue) -> GatewayAuthCard {
@@ -118,7 +119,7 @@ struct OnboardingAISetupView: View {
                         .padding(.trailing, 12)
                 }
                 .scrollIndicators(.automatic)
-                // Pinned below the list so a tall expanded row never pushes it out of sight.
+                // Pinned below the list so it never scrolls out of sight.
                 if self.showsMoreProvidersLink {
                     HStack {
                         Spacer(minLength: 0)
@@ -138,12 +139,21 @@ struct OnboardingAISetupView: View {
                     withAnimation { scroll.scrollTo("manual-entry", anchor: .bottom) }
                 }
             }
+            // A canceled or failed sign-in goes back to the list instead of leaving an empty step.
+            .onChange(of: self.model.activeAuthOption == nil) { _, ended in
+                guard ended, self.model.phase != .testing, !self.model.connected,
+                      let row = self.openRow.flatMap({ id in self.picker.rows.first { $0.id == id } }),
+                      case .signIn = row.action
+                else { return }
+                withAnimation(.easeInOut(duration: 0.15)) { self.openRow = nil }
+            }
         }
     }
 
     private var showsMoreProvidersLink: Bool {
         self.model.providerCatalogLoaded && self.model.configuredGatewayAuthIssue == nil &&
-            (self.model.phase == .ready || self.model.phase == .testing)
+            (self.model.phase == .ready || self.model.phase == .testing) &&
+            self.openRow == nil && self.model.activeAuthOption == nil
     }
 
     private var content: some View {
@@ -213,16 +223,21 @@ struct OnboardingAISetupView: View {
     private var resultsView: some View {
         let picker = self.picker
         if self.model.configuredGatewayAuthIssue == nil {
-            if !picker.rows.isEmpty {
-                self.rowList(picker.rows)
-            }
-            // Steps started without a row (a resumed setup or More providers) show under the list.
-            if self.model.activeAuthOption != nil, self.expandedRow == nil {
+            // A picked provider's card stands alone, like a sign-in from More providers or a resumed setup.
+            if let row = self.openRow.flatMap({ id in picker.rows.first { $0.id == id } }) {
+                self.chooseAnotherLink
+                self.rowStep(row)
+            } else if self.model.activeAuthOption != nil {
+                self.chooseAnotherLink
                 self.unplacedSetupSteps
-            }
-            if self.model.providerCatalogLoaded, self.showMoreProviders {
-                self.moreProviders(picker)
-                    .id("more-providers")
+            } else {
+                if !picker.rows.isEmpty {
+                    self.rowList(picker.rows)
+                }
+                if self.model.providerCatalogLoaded, self.showMoreProviders {
+                    self.moreProviders(picker)
+                        .id("more-providers")
+                }
             }
         }
 
@@ -276,70 +291,82 @@ struct OnboardingAISetupView: View {
     }
 
     private func pickerRow(_ row: OnboardingAIPicker.Row) -> some View {
-        let expanded = self.expandedRow == row.id
-        let failure = self.failure(for: row)
-        return VStack(alignment: .leading, spacing: 10) {
-            Button {
-                self.select(row)
-            } label: {
-                HStack(spacing: 12) {
-                    OnboardingProviderArtwork(
-                        icon: row.candidate?.icon,
-                        brandCandidates: Self.brands(for: row),
-                        fallbackSymbol: Self.symbol(for: row),
-                        wellSize: 36,
-                        iconSize: 20)
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 6) {
-                            self.title(for: row)
-                                .font(.callout.weight(.semibold))
-                            if row.onThisMac {
-                                Text("On this Mac")
-                                    .font(.caption2.weight(.semibold))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(Capsule().fill(Color.green.opacity(0.16)))
-                                    .foregroundStyle(Color.green)
-                            }
-                        }
-                        Group {
-                            if let failure {
-                                Text(failure.summary)
-                            } else if expanded, self.isConnecting {
-                                Text("Connecting…")
-                            } else {
-                                self.subtitle(for: row, expanded: expanded)
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundStyle(failure == nil ? Color.secondary : Color.orange)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.leading)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 0)
-                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                .contentShape(Rectangle())
+        Button {
+            self.select(row)
+        } label: {
+            HStack(spacing: 12) {
+                self.rowHeader(row, open: false)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.tertiary)
             }
-            .buttonStyle(.plain)
-            .disabled(!self.canSelect(row))
-            .accessibilityIdentifier("onboarding-ai-row-\(Self.accessibilityName(for: row.id))")
-
-            if expanded {
-                self.expandedContent(row, failure: failure)
-                    .padding(.leading, 48)
-                    .transition(.opacity)
-            }
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .disabled(!self.canSelect(row))
+        .accessibilityIdentifier("onboarding-ai-row-\(Self.accessibilityName(for: row.id))")
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
-        .background(expanded ? Color.accentColor.opacity(0.06) : Color.clear)
-        .overlay(alignment: .leading) {
-            if expanded {
-                Rectangle().fill(Color.accentColor).frame(width: 3)
+    }
+
+    private var chooseAnotherLink: some View {
+        Button {
+            if self.model.activeAuthOption != nil { self.model.cancelProviderAuth() }
+            withAnimation(.easeInOut(duration: 0.15)) { self.openRow = nil }
+        } label: {
+            Label("Choose another AI", systemImage: "chevron.left")
+        }
+        .buttonStyle(.link)
+        .disabled(self.model.providerAuthCancellation == .requesting)
+    }
+
+    private func rowStep(_ row: OnboardingAIPicker.Row) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            self.rowHeader(row, open: true)
+            self.expandedContent(row, failure: self.failure(for: row))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(OnboardingSurface(cornerRadius: 12))
+    }
+
+    private func rowHeader(_ row: OnboardingAIPicker.Row, open: Bool) -> some View {
+        let failure = self.failure(for: row)
+        return HStack(spacing: 12) {
+            OnboardingProviderArtwork(
+                icon: row.candidate?.icon,
+                brandCandidates: Self.brands(for: row),
+                fallbackSymbol: Self.symbol(for: row),
+                wellSize: 36,
+                iconSize: 20)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    self.title(for: row)
+                        .font(.callout.weight(.semibold))
+                    if row.onThisMac {
+                        Text("On this Mac")
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.green.opacity(0.16)))
+                            .foregroundStyle(Color.green)
+                    }
+                }
+                Group {
+                    if let failure {
+                        Text(failure.summary)
+                    } else if open, self.isConnecting {
+                        Text("Connecting…")
+                    } else {
+                        self.subtitle(for: row, expanded: open)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(failure == nil ? Color.secondary : Color.orange)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -414,24 +441,18 @@ struct OnboardingAISetupView: View {
 
     private func select(_ row: OnboardingAIPicker.Row) {
         withAnimation(.easeInOut(duration: 0.15)) {
+            self.openRow = row.id
             switch row.action {
             case let .candidate(kind):
-                self.expandedRow = row.id
                 self.model.userSelect(kind: kind)
             case let .signIn(option):
-                self.expandedRow = row.id
                 self.model.startProviderWizard(option, kind: .auth)
             case let .apiKey(providerID):
-                self.toggle(row.id)
                 if let providerID { self.model.manualProviderID = providerID }
             case .localModel:
-                self.toggle(row.id)
+                break
             }
         }
-    }
-
-    private func toggle(_ id: OnboardingAIPicker.RowID) {
-        self.expandedRow = self.expandedRow == id ? nil : id
     }
 
     private func title(for row: OnboardingAIPicker.Row) -> Text {
@@ -526,7 +547,7 @@ struct OnboardingAISetupView: View {
                 }
             }
             ForEach(picker.localAuthOptions) { option in
-                self.providerAuthRow(option, row: .localModel)
+                self.providerAuthRow(option)
             }
         }
     }
@@ -554,7 +575,7 @@ struct OnboardingAISetupView: View {
                 .padding(.bottom, 6)
             }
             ForEach(picker.moreAuthOptions) { option in
-                self.providerAuthRow(option, row: nil)
+                self.providerAuthRow(option)
             }
             if self.model.manualProviders.isEmpty, self.model.authOptions.isEmpty {
                 OnboardingErrorCard(
@@ -712,11 +733,7 @@ struct OnboardingAISetupView: View {
         return false
     }
 
-    /// `row` is where the started steps show; nil shows them under the list with the option's own name.
-    private func providerAuthRow(
-        _ option: OnboardingAISetupModel.AuthOption,
-        row: OnboardingAIPicker.RowID?) -> some View
-    {
+    private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
         let (fallbackSymbol, actionLabel): (String, LocalizedStringKey) = switch option.kind {
         case "device-code": ("link.badge.plus", "Pair")
         case "install": ("puzzlepiece.extension", "Set up…")
@@ -731,7 +748,6 @@ struct OnboardingAISetupView: View {
             fallbackSymbol: fallbackSymbol,
             actionLabel: Text(actionLabel))
         {
-            self.expandedRow = row
             self.model.startProviderWizard(option, kind: .auth)
         }
     }
