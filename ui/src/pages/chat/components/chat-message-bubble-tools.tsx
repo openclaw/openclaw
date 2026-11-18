@@ -4,9 +4,11 @@ import { createMemo, For, lazy, merge, Show } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
@@ -18,10 +20,13 @@ import {
   ExpandedToolCardContent,
   ToolPreview,
 } from "./chat-message-deferred.tsx";
+import { MessageImages } from "./chat-message-images-solid.tsx";
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 import type { ToolCardOptions } from "./chat-tool-card-types.ts";
 import { ChatToolCard, ToolApprovalReviews } from "./chat-tool-cards.solid.tsx";
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
+
+registerEnglishCatalog(registerChatToolContentEnglish);
 
 const ToolMessageSummary = lazy(() => import("./chat-tool-card-row.solid.tsx"), {
   export: "ToolMessageSummary",
@@ -148,6 +153,15 @@ function ToolMessageFallback(props: ToolMessageProps) {
     const card = props.state().singleToolCard;
     return card ? resolveToolDisplayIdentity(unwrapToolCallForDisplay(card).name) : null;
   };
+  const inspectedImage = () => {
+    const card = props.state().singleToolCard;
+    return card &&
+      unwrapToolCallForDisplay(card).name === "view_image" &&
+      resolveToolCardOutcome(card, props.options.runActive) === "succeeded" &&
+      props.state().images.length > 0
+      ? card
+      : null;
+  };
   let host: HTMLDivElement | undefined;
   return (
     <div
@@ -200,7 +214,51 @@ function ToolMessageFallback(props: ToolMessageProps) {
         when={props.state().toolMessageExpanded}
         fallback={<OmittedMedia items={props.state().omittedMedia} />}
       >
-        <div class="chat-tool-msg-body">{props.renderContents()}</div>
+        <Show
+          when={inspectedImage()}
+          fallback={<div class="chat-tool-msg-body">{props.renderContents()}</div>}
+        >
+          {(card) => (
+            <div class="chat-tool-msg-body chat-tool-msg-body--inspected-image">
+              <MessageImages
+                images={props.state().images}
+                options={props.state().imageRenderOptions}
+              />
+              <Show
+                when={props.state().toolRenderOptions.onOpenSidebar}
+                fallback={
+                  <details class="chat-tool-wrapper-details">
+                    <summary>{t("chat.toolCards.openDetailsTooltip")}</summary>
+                    <ExpandedToolCardContent
+                      card={card()}
+                      options={props.state().toolRenderOptions}
+                    />
+                  </details>
+                }
+              >
+                <button
+                  class="chat-tool-card__action-btn"
+                  type="button"
+                  title={t("chat.toolCards.openDetailsTooltip")}
+                  aria-label={t("chat.toolCards.openDetails")}
+                  onClick={() =>
+                    props.state().toolRenderOptions.onOpenSidebar?.({
+                      kind: "tool-output",
+                      card: card(),
+                      sessionKey: props.options.sessionKey,
+                      agentId: props.options.agentId,
+                    })
+                  }
+                >
+                  <span class="chat-tool-card__action-icon">
+                    <Icon name="panelRightOpen" />
+                  </span>
+                </button>
+              </Show>
+              <OmittedMedia items={props.state().omittedMedia} />
+            </div>
+          )}
+        </Show>
       </Show>
       <For each={props.state().toolCards} keyed={(card) => card.callId ?? card}>
         {(card) => (
