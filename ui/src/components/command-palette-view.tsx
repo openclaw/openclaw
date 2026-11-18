@@ -298,8 +298,7 @@ function PaletteSearch(props: {
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
     !current().sessionSearchPartial &&
-    !current().sessionSearchIndexing &&
-    current().archivedTranscriptsExcluded === 0;
+    !current().sessionSearchIndexing;
   return (
     <>
       {(latest(props.sessionRead), null)}
@@ -427,13 +426,6 @@ function PaletteSearch(props: {
               />
             </p>
           </Show>
-        </div>
-      </Show>
-      <Show when={current().archivedTranscriptsExcluded > 0}>
-        <div class="cmd-palette__footer">
-          <span class="cmd-palette__archive-note" role="status">
-            {t("palette.archivedSessionsExcluded")}
-          </span>
         </div>
       </Show>
     </>

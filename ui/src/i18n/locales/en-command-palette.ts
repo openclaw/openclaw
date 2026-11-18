@@ -34,7 +34,6 @@ const enCommandPalette = {
     attachmentPrompt: en.palette.attachmentPrompt,
     searchingSessions: "Searching sessions…",
     searchingCommands: "Searching commands…",
-    archivedSessionsExcluded: "Archived sessions are not included in message search.",
     clearSearch: "Clear search",
     escapeKey: "esc",
     filterLabel: "Filter search results",
