@@ -57,7 +57,7 @@ describe("cron form validation", () => {
       activeHoursEnabled: true,
       activeHoursStart: "24:00",
       activeHoursEnd: "25:00",
-      activeHoursTimezone: "Invalid/Timezone",
+      cronTz: "Invalid/Timezone",
     });
     expect(errors.name).toBe("cron.errors.nameRequired");
     expect(errors.cronExpr).toBe("cron.errors.cronExprRequired");
@@ -67,7 +67,7 @@ describe("cron form validation", () => {
     expect(errors.deliveryTo).toBe("cron.errors.webhookUrlInvalid");
     expect(errors.activeHoursStart).toBe("cron.errors.activeHoursTime");
     expect(errors.activeHoursEnd).toBe("cron.errors.activeHoursTime");
-    expect(errors.activeHoursTimezone).toBe("cron.errors.activeHoursTimezone");
+    expect(errors.cronTz).toBe("cron.errors.cronTzInvalid");
   });
 
   it("preserves an explicit direct-message block and a valid overnight window", () => {
@@ -81,7 +81,7 @@ describe("cron form validation", () => {
       activeHoursEnabled: true,
       activeHoursStart: "22:00",
       activeHoursEnd: "24:00",
-      activeHoursTimezone: "user",
+      cronTz: "user",
     };
     expect(validateCronForm(form)).toEqual({});
     expect(validateCronForm({ ...form, deliveryDirectPolicy: "allow" })).toEqual({});

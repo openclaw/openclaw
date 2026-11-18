@@ -11,6 +11,7 @@ import {
   durationMsToSecondsString,
   parseStaggerSchedule,
   parseCronScheduleAt,
+  readCronHourRange,
 } from "./form-schedule.ts";
 import { DEFAULT_CRON_FORM } from "./state.ts";
 import type { CronFieldErrors, CronFormState } from "./types.ts";
@@ -51,10 +52,9 @@ export function normalizeCronFormState(
   };
 }
 
-function parsesAsCron(expr: string, timezone?: string): boolean {
+function parsesAsCron(expr: string): boolean {
   try {
-    // Croner validates the timezone lazily, on the first run lookup.
-    new Cron(expr, { timezone: timezone || undefined, catch: false }).nextRun();
+    new Cron(expr, { catch: false }).nextRun();
     return true;
   } catch {
     return false;
@@ -94,12 +94,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     const cronExpr = form.cronExpr.trim();
     if (!cronExpr) {
       errors.cronExpr = "cron.errors.cronExprRequired";
-    } else if (!parsesAsCron(cronExpr, form.cronTz.trim())) {
-      if (parsesAsCron(cronExpr)) {
-        errors.cronTz = "cron.errors.cronTzInvalid";
-      } else {
-        errors.cronExpr = "cron.errors.cronExprInvalid";
-      }
+    } else if (!parsesAsCron(cronExpr)) {
+      errors.cronExpr = "cron.errors.cronExprInvalid";
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
@@ -146,13 +142,19 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(form.activeHoursEnd) && form.activeHoursEnd !== "24:00") {
       errors.activeHoursEnd = "cron.errors.activeHoursTime";
     }
-    const timezone = form.activeHoursTimezone.trim();
-    if (timezone && timezone !== "local" && timezone !== "user") {
-      try {
+  }
+  const timezone = form.cronTz.trim();
+  if (
+    (form.scheduleKind === "cron" || form.activeHoursEnabled) &&
+    timezone &&
+    timezone !== "local"
+  ) {
+    try {
+      if (timezone !== "user" || form.scheduleKind === "cron") {
         new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
-      } catch {
-        errors.activeHoursTimezone = "cron.errors.activeHoursTimezone";
       }
+    } catch {
+      errors.cronTz = "cron.errors.cronTzInvalid";
     }
   }
   if (form.deliveryMode === "webhook") {
@@ -209,14 +211,13 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     eventName: "",
     eventArguments: "{}",
     scheduleAt: "",
-    cronTz: "",
+    cronTz: job.activeHours ? (job.activeHours.timezone ?? "user") : "",
     scheduleExact: false,
     staggerAmount: "",
     staggerUnit: "seconds",
     activeHoursEnabled: job.activeHours !== undefined,
     activeHoursStart: job.activeHours?.start ?? DEFAULT_CRON_FORM.activeHoursStart,
     activeHoursEnd: job.activeHours?.end ?? DEFAULT_CRON_FORM.activeHoursEnd,
-    activeHoursTimezone: job.activeHours?.timezone ?? "",
     idleOnly: job.idleOnly === true,
     payloadSkipIfScratchEmpty: payload?.kind === "agentTurn" && payload.skipIfScratchEmpty === true,
     deliveryTarget:
@@ -279,7 +280,13 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   } else if (job.schedule.kind === "every") {
     Object.assign(next, parseEverySchedule(job.schedule.everyMs));
   } else if (job.schedule.kind === "cron") {
-    next.cronExpr = job.schedule.expr;
+    const range = job.activeHours ? undefined : readCronHourRange(job.schedule.expr);
+    next.cronExpr = range?.expr ?? job.schedule.expr;
+    if (range) {
+      next.activeHoursEnabled = true;
+      next.activeHoursStart = range.start;
+      next.activeHoursEnd = range.end;
+    }
     next.cronTz = job.schedule.tz ?? "";
     Object.assign(next, parseStaggerSchedule(job.schedule.staggerMs));
   }

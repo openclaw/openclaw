@@ -247,7 +247,6 @@ export function ScheduleSentence(
   const as = <F extends CronSentence["frequency"]>() => sentence() as Of<F>;
   const withDays = () => as<"hourly" | "daily">();
   const timed = () => as<"daily" | "weekly" | "monthly">();
-  const hourly = () => as<"hourly">();
   const weekly = () => as<"weekly">();
   const monthly = () => as<"monthly">();
   return (
@@ -389,84 +388,7 @@ export function ScheduleSentence(
                 )}
               </Part>
             ) : undefined}
-            {frequency === "hourly" ? (
-              <Part
-                id={`${id}-hours`}
-                label={t("cron.schedule.hours")}
-                rowLabel={t(hourly().hours ? "cron.schedule.betweenLabel" : "cron.schedule.hours")}
-                text={(() => {
-                  const hours = hourly().hours;
-                  if (!hours) {
-                    return t("cron.schedule.allDay");
-                  }
-                  const from = timeLabel(hours.from);
-                  const until = timeLabel(hours.until);
-                  return props.phoneLayout
-                    ? `${from} – ${until}`
-                    : t("cron.schedule.between", { from, until });
-                })()}
-                testId="cron-schedule-hours"
-              >
-                {(close) => (
-                  <>
-                    <div
-                      class="cron-sentence__choices"
-                      role="group"
-                      aria-label={t("cron.schedule.hours")}
-                    >
-                      <Choice
-                        selected={!hourly().hours}
-                        label={t("cron.schedule.allDayOption")}
-                        testId="cron-schedule-all-day"
-                        onSelect={() => {
-                          writeCron({ ...hourly(), hours: null });
-                          close();
-                        }}
-                      />
-                      <Choice
-                        selected={Boolean(hourly().hours)}
-                        label={t("cron.schedule.betweenOption")}
-                        testId="cron-schedule-between"
-                        onSelect={() =>
-                          writeCron({
-                            ...hourly(),
-                            hours: hourly().hours ?? { from: 9, until: 17 },
-                          })
-                        }
-                      />
-                    </div>
-                    <Show when={hourly().hours}>
-                      {(hours) => (
-                        <div class="cron-sentence__range">
-                          <NumberChoice
-                            label={t("cron.schedule.from")}
-                            value={hours().from}
-                            min={0}
-                            max={hours().until - 1}
-                            text={timeLabel}
-                            testId="cron-schedule-from"
-                            onChange={(from) =>
-                              writeCron({ ...hourly(), hours: { ...hours(), from } })
-                            }
-                          />
-                          <NumberChoice
-                            label={t("cron.schedule.until")}
-                            value={hours().until}
-                            min={hours().from + 1}
-                            max={23}
-                            text={timeLabel}
-                            testId="cron-schedule-until"
-                            onChange={(until) =>
-                              writeCron({ ...hourly(), hours: { ...hours(), until } })
-                            }
-                          />
-                        </div>
-                      )}
-                    </Show>
-                  </>
-                )}
-              </Part>
-            ) : (
+            {frequency !== "hourly" ? (
               <Part
                 id={`${id}-time`}
                 label={t("cron.schedule.time")}
@@ -488,10 +410,48 @@ export function ScheduleSentence(
                   />
                 )}
               </Part>
-            )}
+            ) : undefined}
           </>
         )}
       </Show>
     </span>
+  );
+}
+
+/** The same hour restriction picker for both fixed intervals and cron. */
+export function ScheduleHours(props: CronProps) {
+  const id = createUniqueId();
+  return (
+    <Part
+      id={id}
+      label={t("cron.schedule.hours")}
+      text={t(
+        props.form.activeHoursEnabled ? "cron.schedule.betweenOption" : "cron.schedule.allDay",
+      )}
+      testId="cron-schedule-hours"
+    >
+      {(close) => (
+        <div class="cron-sentence__choices" role="group" aria-label={t("cron.schedule.hours")}>
+          <Choice
+            selected={!props.form.activeHoursEnabled}
+            label={t("cron.schedule.allDayOption")}
+            testId="cron-schedule-all-day"
+            onSelect={() => {
+              props.onFormChange({ activeHoursEnabled: false });
+              close();
+            }}
+          />
+          <Choice
+            selected={props.form.activeHoursEnabled}
+            label={t("cron.schedule.betweenOption")}
+            testId="cron-schedule-between"
+            onSelect={() => {
+              props.onFormChange({ activeHoursEnabled: true });
+              close();
+            }}
+          />
+        </div>
+      )}
+    </Part>
   );
 }

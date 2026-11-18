@@ -1,5 +1,4 @@
 import { createMemo, createSignal, For } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { hasUnchangedCronSchedule } from "../../lib/cron/form-schedule.ts";
 import type { CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
@@ -16,7 +15,7 @@ import {
   TrayInput,
 } from "./view-fields.tsx";
 import { describeJobNextRun } from "./view-job-status.tsx";
-import { ScheduleSentence } from "./view-schedule-sentence.tsx";
+import { ScheduleHours, ScheduleSentence } from "./view-schedule-sentence.tsx";
 import type { CronProps } from "./view-types.ts";
 export function DurationRow(
   props: CronProps & {
@@ -66,7 +65,14 @@ export function DurationRow(
   );
 }
 /** Schedule fields whose validation messages the tray lists under its controls. */
-export const TRAY_SCHEDULE_FIELDS = ["scheduleAt", "everyAmount", "cronExpr"] as const;
+export const TRAY_SCHEDULE_FIELDS = [
+  "scheduleAt",
+  "everyAmount",
+  "cronExpr",
+  "cronTz",
+  "activeHoursStart",
+  "activeHoursEnd",
+] as const;
 /** The Repeat choice and its per-kind fields, compact enough to share the prompt's tray. */
 export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
   const form = () => props.form;
@@ -98,6 +104,22 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
     }
     const read = formSentenceFrequency(draft);
     return preferredMode === "daily" && read === "weekly" ? "daily" : read;
+  });
+  const showHours = () =>
+    form().scheduleKind === "cron" || form().scheduleKind === "every" || form().activeHoursEnabled;
+  const savedHoursZone = createMemo(() => {
+    const job = props.editingJob;
+    if (
+      !form().activeHoursEnabled ||
+      form().scheduleKind !== "cron" ||
+      job?.schedule.kind !== "cron" ||
+      !job.activeHours ||
+      form().cronTz.trim() !== (job.schedule.tz ?? "")
+    ) {
+      return undefined;
+    }
+    const zone = job.activeHours.timezone ?? "user";
+    return zone === (job.schedule.tz ?? "local") ? undefined : zone;
   });
   const isOnExit = () => form().scheduleKind === "on-exit";
   const isStream = () => form().scheduleKind === "stream";
@@ -225,6 +247,56 @@ export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
           />
         </span>
       ) : undefined}
+      {showHours() ? <ScheduleHours {...props} /> : undefined}
+      {form().activeHoursEnabled ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.schedule.hours")}
+          </span>
+          <span class="cron-tray-pair">
+            <TrayInput
+              {...props}
+              field="activeHoursStart"
+              label={t("cron.form.activeHoursStart")}
+              errorKey="activeHoursStart"
+              size="narrow"
+              placeholder="09:00"
+            />
+            <span aria-hidden="true">–</span>
+            <TrayInput
+              {...props}
+              field="activeHoursEnd"
+              label={t("cron.form.activeHoursEnd")}
+              errorKey="activeHoursEnd"
+              size="narrow"
+              placeholder="17:00"
+            />
+          </span>
+        </span>
+      ) : undefined}
+      {form().scheduleKind === "cron" || form().activeHoursEnabled ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.timezoneOptional")}
+          </span>
+          <TrayInput
+            {...props}
+            field="cronTz"
+            label={t("cron.form.timezoneOptional")}
+            help={t("cron.form.timezoneHelp")}
+            errorKey="cronTz"
+            list="cron-tz-suggestions"
+            placeholder={t("cron.form.timezoneGateway")}
+          />
+        </span>
+      ) : undefined}
+      {savedHoursZone() ? (
+        <span class="cron-sentence__row">
+          <span class="cron-tray-note__text">
+            {t("cron.form.splitTimezone", { zone: savedHoursZone() ?? "" })}
+          </span>
+        </span>
+      ) : undefined}
     </>
   );
 }
@@ -247,8 +319,7 @@ export function TrayErrors(props: Pick<CronProps, "fieldErrors"> & { fields: Cro
   );
 }
 /**
- * What the tray's controls cannot say: a time zone set under Advanced, or a saved
- * one-shot's runtime when it no longer matches the configured time.
+ * A saved one-shot’s runtime when it no longer matches the configured time.
  */
 export function ScheduleNote(props: CronProps) {
   const form = () => props.form;
@@ -261,7 +332,6 @@ export function ScheduleNote(props: CronProps) {
     },
     { equals: false },
   );
-  const timeZone = () => (form().scheduleKind === "cron" ? form().cronTz.trim() : "");
   const runtime = createMemo(() => {
     const job = savedOneShot();
     if (job?.schedule.kind !== "at") {
@@ -275,22 +345,7 @@ export function ScheduleNote(props: CronProps) {
   });
   return (
     <>
-      {timeZone() ? (
-        <span class="cron-sentence__row">
-          <span class="cron-sentence__label" aria-hidden="true">
-            {t("cron.form.timezoneOptional")}
-          </span>
-          <span
-            class="cron-tray-note__text"
-            data-test-id="cron-schedule-note"
-            title={t("cron.form.timezoneOptional")}
-          >
-            <Icon name="globe" />
-            <span class="sr-only">{t("cron.form.timezoneOptional")}: </span>
-            {timeZone()}
-          </span>
-        </span>
-      ) : runtime() ? (
+      {runtime() ? (
         <span class="cron-sentence__row">
           <span class="cron-tray-note__text" data-test-id="cron-schedule-note">
             {runtime()}

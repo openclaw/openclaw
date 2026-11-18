@@ -134,21 +134,23 @@ describe("cron view editor", () => {
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
   });
 
-  it("adds to the schedule controls only the time zone they cannot show", async () => {
-    const note = (container: Element) => text(container, testId("cron-schedule-note"));
-    expect(note(await renderEditor({ scheduleKind: "every", everyAmount: "30" }))).toBeUndefined();
+  it("shows one time zone for a cron schedule or a restricted interval", async () => {
+    const input = (container: Element) =>
+      container.querySelector<HTMLInputElement>(".cron-editor-schedule #cron-cron-tz");
+    expect(input(await renderEditor({ scheduleKind: "every" }))).toBeNull();
     expect(
-      note(await renderEditor({ scheduleKind: "cron", cronExpr: "0 9 * * *" })),
-    ).toBeUndefined();
+      input(await renderEditor({ scheduleKind: "every", activeHoursEnabled: true, cronTz: "UTC" }))
+        ?.value,
+    ).toBe("UTC");
     expect(
-      note(
+      input(
         await renderEditor({
           scheduleKind: "cron",
           cronExpr: "0 6,18 * * *",
           cronTz: "America/Los_Angeles",
         }),
-      ),
-    ).toBe("Time zone: America/Los_Angeles");
+      )?.value,
+    ).toBe("America/Los_Angeles");
   });
 
   it("shows announce channel/to rows and webhook URL row per delivery mode", async () => {

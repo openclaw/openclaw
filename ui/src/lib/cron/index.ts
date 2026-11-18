@@ -7,7 +7,11 @@ import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import { parseFailureAlertCooldownMs } from "./decimal.ts";
-import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
+import {
+  hasUnchangedCronSchedule,
+  buildCronSchedule,
+  resolveScheduleWindow,
+} from "./form-schedule.ts";
 import {
   hasCronFormErrors,
   isReadOnlyCronPayload,
@@ -172,7 +176,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? editingJob
           ? undefined
           : sourceJob.schedule
-        : buildCronSchedule(form, editingJob?.schedule);
+        : buildCronSchedule(form, sourceJob);
     const preserveLockedPayload = Boolean(
       editingJob && form.payloadLocked && isReadOnlyCronPayload(sourcePayload),
     );
@@ -267,17 +271,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       trigger,
-      activeHours: form.activeHoursEnabled
-        ? {
-            start: form.activeHoursStart,
-            end: form.activeHoursEnd,
-            ...(form.activeHoursTimezone.trim()
-              ? { timezone: form.activeHoursTimezone.trim() }
-              : {}),
-          }
-        : editingJob?.activeHours
-          ? null
-          : undefined,
+      activeHours:
+        resolveScheduleWindow(form, sourceJob).activeHours ??
+        (editingJob?.activeHours ? null : undefined),
       idleOnly: form.idleOnly || editingJob?.idleOnly !== undefined ? form.idleOnly : undefined,
       delivery,
       failureAlert,

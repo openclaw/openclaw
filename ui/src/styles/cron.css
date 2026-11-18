@@ -1487,13 +1487,6 @@
   width: 120px;
 }
 
-.cron-sentence__range {
-  display: flex;
-  flex-direction: column;
-  margin-top: 4px;
-  padding-top: 4px;
-}
-
 /* The layout wrappers keep the desktop tray and field spacing unchanged. */
 .cron-editor-layout,
 .cron-editor-extra {

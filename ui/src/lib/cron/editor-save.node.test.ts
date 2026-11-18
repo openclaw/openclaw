@@ -81,6 +81,90 @@ async function saveAndReopen(state: CronState, readJob: () => CronJob) {
 }
 
 describe("automation save editor ownership", () => {
+  it("adds a window to a 45-minute interval without resetting its anchor", async () => {
+    const schedule = { kind: "every" as const, everyMs: 2_700_000, anchorMs: 42 };
+    const stored = storedJob({ schedule });
+    const readJob = () => readPublicJob(stored);
+    const state = createSaveState(stored);
+    startCronEdit(state, readJob());
+    Object.assign(state.cronForm, {
+      activeHoursEnabled: true,
+      activeHoursStart: "08:00",
+      activeHoursEnd: "22:00",
+      cronTz: "America/Toronto",
+    });
+    await saveAndReopen(state, readJob);
+    expect(stored.schedule).toEqual(schedule);
+    expect(stored.activeHours).toEqual({
+      start: "08:00",
+      end: "22:00",
+      timezone: "America/Toronto",
+    });
+    expect(state.cronForm).toMatchObject({
+      activeHoursEnabled: true,
+      everyAmount: "45",
+      cronTz: "America/Toronto",
+    });
+  });
+
+  it.each([
+    ["08:00", "22:00", "0 */15 8-21 * * 1-5"],
+    ["22:00", "06:00", "0 */15 0-5,22-23 * * 1-5"],
+    ["23:00", "24:00", "0 */15 23-23 * * 1-5"],
+    ["08:15", "22:00", undefined],
+  ])("round-trips a cron window from %s to %s", async (start, end, expr) => {
+    const base = "0 */15 * * * 1-5";
+    const stored = storedJob({
+      schedule: { kind: "cron", expr: base, tz: "America/Toronto", staggerMs: 0 },
+    });
+    const readJob = () => readPublicJob(stored);
+    const state = createSaveState(stored);
+    startCronEdit(state, readJob());
+    Object.assign(state.cronForm, {
+      activeHoursEnabled: true,
+      activeHoursStart: start,
+      activeHoursEnd: end,
+    });
+    await saveAndReopen(state, readJob);
+    expect(stored.schedule).toMatchObject({
+      kind: "cron",
+      expr: expr ?? base,
+      tz: "America/Toronto",
+    });
+    expect(stored.activeHours).toEqual(
+      expr ? undefined : { start, end, timezone: "America/Toronto" },
+    );
+    expect(state.cronForm).toMatchObject({
+      cronExpr: base,
+      activeHoursEnabled: true,
+      activeHoursStart: start,
+      activeHoursEnd: end,
+    });
+
+    state.cronForm.activeHoursEnabled = false;
+    await saveAndReopen(state, readJob);
+    expect(stored.schedule).toMatchObject({ kind: "cron", expr: base });
+    expect(stored.activeHours).toBeUndefined();
+  });
+
+  it("keeps a saved runtime window in its own time zone until the time zone is edited", async () => {
+    const schedule = { kind: "cron" as const, expr: "0 * * * *", tz: "UTC", staggerMs: 120_000 };
+    const activeHours = { start: "08:00", end: "22:00" };
+    const stored = storedJob({ schedule, activeHours });
+    const readJob = () => readPublicJob(stored);
+    const state = createSaveState(stored);
+    startCronEdit(state, readJob());
+    state.cronForm.name = "Renamed automation";
+    await saveAndReopen(state, readJob);
+    expect(stored.schedule).toEqual(schedule);
+    expect(stored.activeHours).toEqual(activeHours); // Missing timezone still means the configured user timezone.
+
+    state.cronForm.cronTz = "America/Toronto";
+    await saveAndReopen(state, readJob);
+    expect(stored.schedule).toEqual({ ...schedule, tz: "America/Toronto" });
+    expect(stored.activeHours).toEqual({ ...activeHours, timezone: "America/Toronto" });
+  });
+
   it.each([true, false])("saves ordinary job policies enabled=%s", async (enabled) => {
     const stored = storedJob({
       sessionTarget: enabled ? "main" : "session:agent:main:main",

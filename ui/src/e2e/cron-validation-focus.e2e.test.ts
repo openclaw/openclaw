@@ -15,7 +15,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("reveals an invalid Advanced field when its validation summary link is activated", async () => {
+  it("focuses an invalid schedule field when its validation summary link is activated", async () => {
     const artifacts = createControlUiE2eArtifactDir("cron-validation-focus");
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -28,22 +28,17 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "cron?new");
       await page.locator("#cron-name").fill("Synthetic garden inventory");
       await page.locator("#cron-payload-text").fill("Summarize the fictional garden inventory.");
-      const advanced = page.locator("details.cron-advanced").first();
-      const summary = advanced.locator("summary").first();
-      await summary.click();
-      await page.getByRole("switch", { name: "Only run during set hours", exact: true }).click();
+      await page.locator('[data-test-id="cron-schedule-hours"]').click();
+      await page.locator('[data-test-id="cron-schedule-between"]').click();
       const input = page.locator("#cron-active-hours-start");
       await input.fill("invalid");
       await expect.poll(() => input.getAttribute("aria-invalid")).toBe("true");
-      await summary.click();
-      expect(await input.isVisible()).toBe(false);
       const link = page.locator(".cron-form-status__link").filter({ hasText: "From:" });
       await link.focus();
       await page.keyboard.press("Enter");
       const outcome = await input.evaluate((element) => ({
         focused: document.activeElement === element,
         visible: element.checkVisibility(),
-        advancedOpen: element.closest("details")?.open,
         activeTag: document.activeElement?.tagName,
       }));
       writeFileSync(artifacts + "/outcome.json", JSON.stringify(outcome, null, 2));
@@ -53,7 +48,7 @@ suite.define(() => {
         scrollTo: target,
       });
       writeFileSync(artifacts + "/state.png", frame.png);
-      expect(outcome).toMatchObject({ focused: true, visible: true, advancedOpen: true });
+      expect(outcome).toMatchObject({ focused: true, visible: true });
       for (const method of ["cron.add", "cron.update", "cron.run"]) {
         expect(await gateway.getRequests(method)).toHaveLength(0);
       }
