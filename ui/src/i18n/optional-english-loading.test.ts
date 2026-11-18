@@ -96,7 +96,7 @@ it("loads picker auth copy without loading Settings and preserves later Settings
 
   expect(manager.t("modelProviders.status.apiKey")).toBe("API-Schlüssel");
   expect(manager.t("channels.hub.setUp")).toBe("Einrichten");
-  expect(manager.t("modelProviders.title")).toBe("modelProviders.title");
+  expect(manager.t("modelProviders.emptyTitle")).toBe("modelProviders.emptyTitle");
   await manager.setLocale("en");
   expect(manager.t("modelProviders.status.apiKey")).toBe("API key");
   expect(manager.t("channels.hub.setUp")).toBe("Set up");
@@ -105,7 +105,7 @@ it("loads picker auth copy without loading Settings and preserves later Settings
   registerSettingsEnglish();
   const { registerModelProviderAuthEnglish } = await import("./locales/en-model-provider-auth.ts");
   registerModelProviderAuthEnglish();
-  expect(manager.t("modelProviders.title")).toBe("Configured providers");
+  expect(manager.t("modelProviders.emptyTitle")).toBe("No model providers configured");
   expect(manager.t("modelProviders.status.ok")).toBe("Signed in");
 });
 
