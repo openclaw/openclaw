@@ -317,18 +317,11 @@ private fun cronDeliveryLabel(delivery: JsonObject?): NativeText {
   )
 }
 
-private fun cronFailureAlertLabel(failureAlert: JsonElement?): NativeText {
-  if ((failureAlert as? JsonPrimitive)?.booleanOrNull == false) return nativeText("Off")
-  val alert = failureAlert.asObjectOrNull() ?: return nativeText("Default")
-  val parts =
-    listOfNotNull(
-      alert.long("after")?.let { nativeText("After \$it", it) },
-      alert.nonBlankString("mode")?.replaceFirstChar { it.uppercaseChar() }?.let(::verbatimText),
-      alert.nonBlankString("channel")?.let(::verbatimText),
-      alert.nonBlankString("to")?.let(::verbatimText),
-      alert.long("cooldownMs")?.takeIf { it > 0L }?.let { nativeText("Cooldown \${formatCronInterval(it)}", formatCronInterval(it)) },
-    )
-  return if (parts.isEmpty()) nativeText("On") else joinedNativeText(" · ", parts)
-}
+private fun cronFailureAlertLabel(failureAlert: JsonElement?): NativeText =
+  when ((failureAlert as? JsonPrimitive)?.booleanOrNull) {
+    true -> nativeText("On")
+    false -> nativeText("Off")
+    null -> nativeText("Default")
+  }
 
 private fun JsonObject.boolean(key: String): Boolean = (this[key] as? JsonPrimitive)?.booleanOrNull == true

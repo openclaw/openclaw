@@ -71,10 +71,12 @@ async function requestFailureRepair(
   };
   const failed = async (err: unknown) => {
     state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
-    await dispatchCronNotification(state, {
-      ...notification.fallback,
-      routing: notification.routing,
-    });
+    if (notification.fallback) {
+      await dispatchCronNotification(state, {
+        ...notification.fallback,
+        routing: notification.routing,
+      });
+    }
   };
   if (!sessionKey || !cycle.notificationId || !state.deps.runCronFailureRepair) {
     await failed(new Error("Missing failure repair runner, owner session, or notice ID"));
@@ -199,6 +201,8 @@ async function transportFailureAlert(
       to: params.route.to,
       mode: params.route.mode,
       accountId: params.route.accountId,
+      ...(params.route.target ? { target: params.route.target } : {}),
+      ...(params.route.directPolicy ? { directPolicy: params.route.directPolicy } : {}),
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
       onDeliverySettled: async (outcome) => {

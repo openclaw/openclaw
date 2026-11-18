@@ -250,6 +250,15 @@ export async function commitAutomaticConfigRepair(
         snapshot: currentSnapshot,
         nextConfig: plan.writeConfig,
       });
+      const { repairScopedCronFailureAlertsBeforeConfigWrite } =
+        await import("../cron/failure-alert-migration.js");
+      changes.push(
+        ...(await repairScopedCronFailureAlertsBeforeConfigWrite({
+          snapshot: currentSnapshot,
+          nextConfig: plan.writeConfig,
+          env: process.env,
+        })),
+      );
       if (changes.length > 0) {
         const { note } = await import("../../../../packages/terminal-core/src/note.js");
         note(changes.join("\n"), "Doctor changes");

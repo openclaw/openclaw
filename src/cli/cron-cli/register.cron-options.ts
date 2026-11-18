@@ -112,13 +112,8 @@ export function registerCronMutationOptions(command: Command, mode: "add" | "edi
     .option("--to <dest>", "Delivery destination (E.164, Telegram chatId, or Discord channel/user)")
     .option("--thread-id <id>", "Telegram forum topic thread id")
     .option("--account <id>", "Channel account id for delivery (multi-account setups)")
-    .option(
-      "--best-effort-deliver",
-      create
-        ? "Do not fail the job if delivery fails"
-        : "Do not fail job if delivery fails (also implies --announce when used alone)",
-      create ? false : undefined,
-    );
+    .option("--failure-alert", "Enable failure alerts for this job")
+    .option("--no-failure-alert", "Disable failure alerts for this job");
 }
 
 export async function resolveCronExecutionPolicyOptions(

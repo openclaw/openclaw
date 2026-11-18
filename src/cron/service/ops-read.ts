@@ -50,6 +50,7 @@ async function readSnapshot(
     status: Object.freeze({
       enabled: state.deps.cronEnabled,
       triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
+      failureAlertsEnabled: state.deps.cronConfig?.failureAlert?.enabled !== false,
       storePath: sqlitePath,
       storage: "sqlite" as const,
       sqlitePath,

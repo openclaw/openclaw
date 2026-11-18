@@ -202,7 +202,7 @@ describe("worker-owned startup recovery", () => {
             ? { kind: "at", at: new Date(now).toISOString() }
             : { kind: "every", everyMs: 60_000, anchorMs: now },
         state: { nextRunAtMs: now, consecutiveErrors: 9 },
-        failureAlert: { after: 1, cooldownMs: 0 },
+        failureAlert: true,
       });
       const store = await recoveryStore([entry]);
       await activateManual(store, entry, "acknowledged-manual-run");
@@ -325,7 +325,7 @@ describe("worker-owned startup recovery", () => {
   it.each([undefined, "timeout"] as const)(
     "restores the recorded failure reason %s without changing history or replaying notices",
     async (errorReason) => {
-      const entry = job("recorded-failure", { failureAlert: { after: 1, cooldownMs: 0 } });
+      const entry = job("recorded-failure", { failureAlert: true });
       const store = await recoveryStore([entry]);
       const receipt = await activateManual(store, entry);
       await record(store, receipt, {

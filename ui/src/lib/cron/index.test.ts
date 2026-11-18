@@ -202,20 +202,6 @@ it("clears persisted delivery routing", async () => {
   });
 });
 
-it.each([
-  [0, "0"],
-  [Number.MAX_SAFE_INTEGER, "9007199254740.991"],
-] as const)("round trips %s ms and clears cloned cooldown", async (cooldownMs, seconds) => {
-  const { state, submit } = editFields({ failureAlert: { cooldownMs } });
-  expect(state.cronForm.failureAlertCooldownSeconds).toBe(seconds);
-  state.cronForm.description = "Metadata changed";
-  expect(patchOf(await submit()).failureAlert).toMatchObject({ cooldownMs });
-  const clone = cloneJob(makeJob({ failureAlert: { cooldownMs, threadId: 41 } }));
-  clone.state.cronForm.failureAlertCooldownSeconds = "";
-  const alert = (await clone.submit()).failureAlert;
-  expect(alert).toMatchObject({ cooldownMs: undefined, threadId: 41 });
-});
-
 it("submits webhook delivery and resets the form", async () => {
   const { state, submit } = newJob("Webhook", {
     deliveryMode: "webhook",
@@ -371,11 +357,6 @@ it.each<[Partial<CronState["cronForm"]>, string, unknown]>([
     "schedule",
     { kind: "cron", expr: "0 * * * *", staggerMs: 16_000 },
   ],
-  [
-    { failureAlertMode: "custom", failureAlertCooldownSeconds: "1e-3" },
-    "failureAlert",
-    expect.objectContaining({ cooldownMs: 1 }),
-  ],
 ])("serializes numeric form input %j", async (form, field, expected) => {
   const { call, result } = await newJob("numeric", form).submit();
   expect(result.saved).toBe(true);
@@ -401,35 +382,15 @@ it("requires an explicit clear before saving an existing script payload with a c
   expect(patchOf(call)).not.toHaveProperty("payload");
 });
 
-it("clears stored alert routing without losing skipped-run policy", async () => {
-  const job = createCronJob("alerts", "Alerts", {
-    failureAlert: { channel: "telegram", to: "123", accountId: "bot", includeSkipped: true },
-  });
-  const { state, submit } = editJob(job);
-  Object.assign(state.cronForm, {
-    failureAlertChannel: "last",
-    failureAlertTo: "",
-    failureAlertAccountId: "",
-  });
-  expect(patchOf(await submit()).failureAlert).toMatchObject({
-    channel: "last",
-    to: null,
-    accountId: null,
-    includeSkipped: true,
-  });
-});
-
 it.each`
-  form                                                                                                            | field                            | error
-  ${{ scheduleKind: "cron", cronExpr: "bad", cronTz: "" }}                                                        | ${"cronExpr"}                    | ${"cron.errors.cronExprInvalid"}
-  ${{ scheduleKind: "cron", cronExpr: "0 7 * * *", cronTz: "Mars/Phobos" }}                                       | ${"cronTz"}                      | ${"cron.errors.cronTzInvalid"}
-  ${{ scheduleKind: "cron", staggerAmount: "8640000000000.001", staggerUnit: "seconds" }}                         | ${"staggerAmount"}               | ${"cron.errors.staggerAmountInvalid"}
-  ${{ scheduleKind: "cron", staggerAmount: "0.0001" }}                                                            | ${"staggerAmount"}               | ${"cron.errors.staggerAmountInvalid"}
-  ${{ timeoutSeconds: "Infinity" }}                                                                               | ${"timeoutSeconds"}              | ${"cron.errors.timeoutInvalid"}
-  ${{ everyAmount: "0x10" }}                                                                                      | ${"everyAmount"}                 | ${"cron.errors.everyAmountInvalid"}
-  ${{ everyAmount: "29.999", everyUnit: "seconds", triggerEnabled: true, triggerScript: "json({ fire: true })" }} | ${"everyAmount"}                 | ${"cron.errors.triggerIntervalTooShort"}
-  ${{ failureAlertMode: "custom", failureAlertAfter: ".5" }}                                                      | ${"failureAlertAfter"}           | ${"Failure alert threshold must be at least 1."}
-  ${{ failureAlertMode: "custom", failureAlertCooldownSeconds: "1e308" }}                                         | ${"failureAlertCooldownSeconds"} | ${"Cooldown must be finite and 0 or greater."}
+  form                                                                                                            | field               | error
+  ${{ scheduleKind: "cron", cronExpr: "bad", cronTz: "" }}                                                        | ${"cronExpr"}       | ${"cron.errors.cronExprInvalid"}
+  ${{ scheduleKind: "cron", cronExpr: "0 7 * * *", cronTz: "Mars/Phobos" }}                                       | ${"cronTz"}         | ${"cron.errors.cronTzInvalid"}
+  ${{ scheduleKind: "cron", staggerAmount: "8640000000000.001", staggerUnit: "seconds" }}                         | ${"staggerAmount"}  | ${"cron.errors.staggerAmountInvalid"}
+  ${{ scheduleKind: "cron", staggerAmount: "0.0001" }}                                                            | ${"staggerAmount"}  | ${"cron.errors.staggerAmountInvalid"}
+  ${{ timeoutSeconds: "Infinity" }}                                                                               | ${"timeoutSeconds"} | ${"cron.errors.timeoutInvalid"}
+  ${{ everyAmount: "0x10" }}                                                                                      | ${"everyAmount"}    | ${"cron.errors.everyAmountInvalid"}
+  ${{ everyAmount: "29.999", everyUnit: "seconds", triggerEnabled: true, triggerScript: "json({ fire: true })" }} | ${"everyAmount"}    | ${"cron.errors.triggerIntervalTooShort"}
 `("rejects invalid $field before RPC", async ({ form, field, error }: Rejection) => {
   const { state, request } = newJob("invalid", form);
   expect(await addCronJob(state)).toEqual({ saved: false });
@@ -475,17 +436,7 @@ it.each([
 it.each([
   { schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC", staggerMs: 60_000 } },
   { schedule: { kind: "on-exit", command: "make build", cwd: "/repo" } },
-  {
-    failureAlert: {
-      after: 4,
-      cooldownMs: 1_001,
-      mode: "webhook",
-      to: "https://alerts.example.test/cron",
-      accountId: "bot-a",
-      includeSkipped: true,
-    },
-  },
-  { failureAlert: { channel: "last", includeSkipped: false, threadId: 41 } },
+  { failureAlert: true },
   { failureAlert: false },
 ] as const)("clones exact persisted fields: %j", async (fields) => {
   const sourceJob = createCronJob("source", "Source", { ...fields, agentId: "writer" });
@@ -505,9 +456,7 @@ it("round-trips hidden delivery destinations through clone and edit", async () =
       mode: "announce",
       accountId: "ops-bot",
       threadId: 42,
-      bestEffort: true,
       completionDestination: { mode: "webhook", to: "https://example.test/complete" },
-      failureDestination: { mode: "announce", to: "ops" },
     },
   });
 
@@ -557,13 +506,12 @@ it("omits an unchanged minute but sends a genuinely changed minute", async () =>
   });
 });
 
-it("preserves inherited alert fields while editing a command with hidden alert controls", async () => {
+it("preserves explicit alert settings while editing a command", async () => {
   const { submit } = editFields(
-    { payload: { kind: "command", argv: ["node", "report.mjs"] }, failureAlert: {} },
+    { payload: { kind: "command", argv: ["node", "report.mjs"] }, failureAlert: false },
     { description: "Only metadata changed" },
   );
   const patch = patchOf(await submit());
   expect(patch).not.toHaveProperty("payload");
-  // oxlint-disable-next-line unicorn/prefer-structured-clone -- hidden controls must not materialize defaults on the wire
-  expect(JSON.parse(JSON.stringify(patch.failureAlert))).toEqual({});
+  expect(patch.failureAlert).toBe(false);
 });

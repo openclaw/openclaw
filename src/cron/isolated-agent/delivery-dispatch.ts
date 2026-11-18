@@ -74,7 +74,6 @@ export async function dispatchCronDelivery(
   ): Promise<DispatchCronDeliveryState> => {
     const failed = disposition?.kind === "error" && disposition.errorKind !== "delivery-target";
     const completion = resolveAdmittedCronCompletionStatus(
-      params.job,
       failed ? "error" : params.undeliveredRunStatus,
       state.status,
       state.deliverySuppressionReason,
@@ -214,11 +213,6 @@ export async function dispatchCronDelivery(
     (requiresExternalCronDelivery(params.deliveryPlan, params.resolvedDelivery) ||
       (!params.sourceSessionKey && params.job.sessionTarget !== "current"))
   ) {
-    if (params.deliveryBestEffort) {
-      record("not-delivered", params.resolvedDelivery.error.message);
-      await logCronDeliveryWarn(params.resolvedDelivery.error.message);
-      return finish({ kind: "suppressed" });
-    }
     return failTarget(params.resolvedDelivery.error.message);
   }
   if (!sentByTool && (synthesizedText || params.spawnOnlyHandoff)) {
@@ -229,7 +223,6 @@ export async function dispatchCronDelivery(
         sessionKey: params.runSessionKey,
         runStartedAt: params.runStartedAt,
         timeoutMs: params.timeoutMs,
-        deliveryBestEffort: params.deliveryBestEffort,
         spawnOnlyHandoff: params.spawnOnlyHandoff,
         initialSynthesizedText: initial,
         abortSignal: params.abortSignal,
@@ -269,7 +262,7 @@ export async function dispatchCronDelivery(
         delivered: false,
       });
     }
-    if (!params.deliveryBestEffort && child.hasUnsettledDescendants) {
+    if (child.hasUnsettledDescendants) {
       deliveryAttempted = true;
       record(
         "not-delivered",
@@ -315,11 +308,6 @@ export async function dispatchCronDelivery(
     if (params.job.sessionTarget === "current") {
       return failTarget("current cron delivery is missing its source session binding");
     }
-    if (params.deliveryBestEffort) {
-      record("not-delivered", params.resolvedDelivery.error.message);
-      await logCronDeliveryWarn(params.resolvedDelivery.error.message);
-      return finish({ kind: "suppressed" });
-    }
     return failTarget(params.resolvedDelivery.error.message);
   }
   if (params.resolvedDelivery.ok && !sentByTool) {
@@ -359,7 +347,6 @@ export async function dispatchCronDelivery(
           exactKey: true,
         }),
         abortSignal: params.abortSignal ?? new AbortController().signal,
-        bestEffort: params.deliveryBestEffort,
         completion: {
           job: params.job,
           runStartedAt: params.runStartedAt,

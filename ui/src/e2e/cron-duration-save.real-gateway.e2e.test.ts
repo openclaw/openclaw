@@ -506,27 +506,6 @@ async function readStoredJob(id: string) {
   return requireRecord(await seedClient.request("cron.get", { id }));
 }
 
-async function seedAlertJob(name: string, failureAlert: CronJob["failureAlert"]) {
-  const result = await seedPausedAgentJob(
-    name,
-    {
-      kind: "agentTurn",
-      message: "Synthetic paused failure-alert fixture",
-    },
-    { failureAlert },
-  );
-  const id = cronJobId(result);
-  const stored = await readStoredJob(id);
-  expect(stored).toMatchObject({
-    id,
-    name,
-    enabled: false,
-    schedule: { kind: "every", everyMs: 60_000 },
-  });
-  expect(stored.failureAlert).toEqual(failureAlert);
-  return { id, stored };
-}
-
 function seedCliAutomation(cliJson: CliJson, name: string, flags: Record<string, string | true>) {
   const options: typeof flags = { name, agent: "main", disabled: true, ...flags, json: true };
   return cliJson([
@@ -564,16 +543,6 @@ async function seedPausedAgentJob(
 async function choosePicker(picker: Locator, value: string) {
   await selectPickerValue(picker, value);
   await expect.poll(() => pickerValue(picker)).toBe(value);
-}
-
-async function readAlertFields(page: Page) {
-  const mode = page.locator("openclaw-select-picker:has(#cron-failure-alert-delivery-mode)");
-  return {
-    after: await page.locator("#cron-failure-alert-after").inputValue(),
-    cooldown: await page.locator("#cron-failure-alert-cooldown-seconds").inputValue(),
-    mode: await pickerValue(mode),
-    modeLabel: await mode.locator(".picker-select__trigger .picker-select__label").textContent(),
-  };
 }
 
 async function openEdit(page: Page) {
@@ -701,107 +670,6 @@ suite.define(() => {
             reloadedStagger: "1.001",
           },
         );
-      });
-    });
-  });
-
-  it("failure alert round trip: preserves partial policy through metadata save and clone", async () => {
-    await withGatewayCommands(async (cliJson) => {
-      const policy = { cooldownMs: 1_001, includeSkipped: true };
-      const job = await seedAlertJob("Partial failure policy", policy);
-      await withCronJobPage(cliJson, job.id, async (evidence) => {
-        const { page } = evidence;
-        await openAdvanced(page, job.stored.name);
-        const loaded = await readAlertFields(page);
-        await page.locator("#cron-failure-alert-cooldown-seconds").scrollIntoViewIfNeeded();
-        await page.locator("#cron-description").fill("Only metadata changed");
-        const saved = await submitCronForm(evidence, "cron.update");
-        await openAdvanced(page, job.stored.name);
-        const savedFields = await readAlertFields(page);
-        await page.locator('[data-test-id="cron-cancel"]').click();
-        const menu = page.locator(".cron-detail-actions .cron-job-menu");
-        await menu.locator(".cron-job-menu__trigger").click();
-        await menu.locator('[data-value="clone"]').click();
-        await page.locator("#cron-name").fill("Cloned partial failure policy");
-        const cloned = await submitCronForm(evidence, "cron.add");
-        const cloneId = cronJobId(cloned.stored);
-        await openAutomation(page, cloneId);
-        await openAdvanced(page, cloned.stored.name);
-        const clonedFields = await readAlertFields(page);
-        await page.locator("#cron-failure-alert-cooldown-seconds").scrollIntoViewIfNeeded();
-        const expectedFields = {
-          after: "",
-          cooldown: "1.001",
-          mode: "",
-          modeLabel: "Default",
-        };
-        expect({ loaded, savedFields, clonedFields }).toEqual({
-          loaded: expectedFields,
-          savedFields: expectedFields,
-          clonedFields: expectedFields,
-        });
-        expect([saved.stored.failureAlert, cloned.stored.failureAlert]).toEqual([policy, policy]);
-        expect([saved.stored.schedule, cloned.stored.schedule]).toEqual([
-          job.stored.schedule,
-          job.stored.schedule,
-        ]);
-      });
-    });
-  });
-
-  it("failure alert round trip: clears field overrides through the real picker", async () => {
-    await withGatewayCommands(async (cliJson) => {
-      const job = await seedAlertJob("Clear failure policy", {
-        after: 4,
-        cooldownMs: 1_001,
-        mode: "webhook",
-        to: "https://alerts.example.test/job",
-        accountId: "fixture-account",
-        includeSkipped: true,
-      });
-      await withCronJobPage(cliJson, job.id, async (evidence) => {
-        const { page } = evidence;
-        await openAdvanced(page, job.stored.name);
-        await page.locator("#cron-failure-alert-after").fill("");
-        await page.locator("#cron-failure-alert-cooldown-seconds").fill("");
-        const deliveryMode = page.locator(
-          "openclaw-select-picker:has(#cron-failure-alert-delivery-mode)",
-        );
-        await deliveryMode.locator(".picker-select__trigger").click();
-        const inheritOption = deliveryMode.locator('[role="option"][data-value=""]');
-        await inheritOption.waitFor({ state: "visible" });
-        expect(await inheritOption.textContent()).toContain("Default");
-        await inheritOption.click();
-        await expect.poll(() => pickerValue(deliveryMode)).toBe("");
-        await expect
-          .poll(() =>
-            deliveryMode.locator(".picker-select__trigger .picker-select__label").textContent(),
-          )
-          .toBe("Default");
-        const cleared = await submitCronForm(evidence, "cron.update");
-        expect(cleared.request.params).toMatchObject({
-          patch: { failureAlert: { after: null, cooldownMs: null, mode: null } },
-        });
-        expect(cleared.stored.failureAlert).toEqual({
-          to: "https://alerts.example.test/job",
-          accountId: "fixture-account",
-          includeSkipped: true,
-        });
-        const policyMode = page.locator("openclaw-select-picker:has(#cron-failure-alert-mode)");
-        await openAdvanced(page, job.stored.name);
-        await choosePicker(policyMode, "inherit");
-        const inherited = await submitCronForm(evidence, "cron.update");
-        expect(inherited.request.params).toMatchObject({ patch: { failureAlert: null } });
-        expect(inherited.stored).not.toHaveProperty("failureAlert");
-        await openAdvanced(page, job.stored.name);
-        await choosePicker(policyMode, "disabled");
-        const disabled = await submitCronForm(evidence, "cron.update");
-        expect(disabled.stored.failureAlert).toBe(false);
-        await openAdvanced(page, job.stored.name);
-        await choosePicker(policyMode, "custom");
-        await page.locator("#cron-failure-alert-cooldown-seconds").fill("0");
-        const zero = await submitCronForm(evidence, "cron.update");
-        expect(zero.stored.failureAlert).toEqual({ cooldownMs: 0 });
       });
     });
   });

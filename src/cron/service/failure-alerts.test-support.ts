@@ -13,22 +13,14 @@ export type SendCronFailureAlert = NonNullable<
   Parameters<typeof createCronServiceState>[0]["sendCronFailureAlert"]
 >;
 
-export function createAlertJob(params: {
-  id: string;
-  dueAt: number;
-  includeSkipped?: boolean;
-}): CronJob {
+export function createAlertJob(params: { id: string; dueAt: number }): CronJob {
   const job = createDueIsolatedJob({
     id: params.id,
     nowMs: params.dueAt,
     nextRunAtMs: params.dueAt,
   });
   job.schedule = { kind: "every", everyMs: 60_000, anchorMs: params.dueAt - 60_000 };
-  job.failureAlert = {
-    after: 1,
-    cooldownMs: 60_000,
-    ...(params.includeSkipped ? { includeSkipped: true } : {}),
-  };
+  job.failureAlert = true;
   job.state.runningAtMs = params.dueAt;
   return job;
 }
@@ -36,11 +28,15 @@ export function createAlertJob(params: {
 export function createAlertState(params: {
   storePath: string;
   nowMs: () => number;
+  cronConfig?: Parameters<typeof createCronServiceState>[0]["cronConfig"];
   sendCronFailureAlert: SendCronFailureAlert;
 }) {
   return createCronRegressionState({
     storePath: params.storePath,
     nowMs: params.nowMs,
+    cronConfig: params.cronConfig ?? {
+      failureAlert: { after: 1, cooldownMs: 60_000, includeSkipped: true },
+    },
     sendCronFailureAlert: params.sendCronFailureAlert,
     runIsolatedAgentJob: vi.fn(),
   });

@@ -158,7 +158,6 @@ async function createCompletionFixture(
       satisfiesSourceDelivery: false,
       unverifiedMessageToolDelivery: false,
     },
-    deliveryBestEffort: false,
     deliveryPayloads: [payload],
     isAborted: () => false,
     abortReason: () => "aborted",

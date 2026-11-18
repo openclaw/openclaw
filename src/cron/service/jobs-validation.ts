@@ -342,14 +342,13 @@ export function assertAnnounceDeliveryChannelSupport(
     mode !== "announce" ||
     (channel !== undefined && channel !== "last") ||
     targetMaySelectChannel ||
-    job.delivery?.bestEffort === true ||
     job.delivery?.target === "owner" ||
     channels.length < 2
   ) {
     return;
   }
   throw new Error(
-    `cron announce delivery requires an explicit channel when multiple channels are configured (${channels.join(", ")}): set --channel <id> or use --best-effort-deliver`,
+    `cron announce delivery requires an explicit channel when multiple channels are configured (${channels.join(", ")}): set --channel <id>`,
   );
 }
 
@@ -362,37 +361,4 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
     "agentId" in patch ||
     "sessionKey" in patch
   );
-}
-
-export function assertFailureDestinationSupport(
-  job: Pick<CronJob, "sessionTarget" | "payload" | "delivery">,
-) {
-  const failureDestination = job.delivery?.failureDestination;
-  if (
-    !failureDestination ||
-    (failureDestination.channel === undefined &&
-      failureDestination.to === undefined &&
-      failureDestination.accountId === undefined &&
-      failureDestination.mode === undefined)
-  ) {
-    return;
-  }
-  if (
-    job.sessionTarget === "main" &&
-    job.payload.kind !== "agentTurn" &&
-    job.delivery?.mode !== "webhook"
-  ) {
-    throw new Error(
-      'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
-    );
-  }
-  if (failureDestination.mode === "webhook") {
-    const target = normalizeHttpWebhookUrl(failureDestination.to);
-    if (!target) {
-      throw new Error(
-        "cron failure destination webhook requires delivery.failureDestination.to to be a valid http(s) URL",
-      );
-    }
-    failureDestination.to = target;
-  }
 }

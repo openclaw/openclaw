@@ -29,19 +29,18 @@ function validateCron(cron: CronConfig) {
 }
 
 describe("cron default destination channels", () => {
-  it.each([
-    { failureAlert: { threadId: 42 } },
-    { agents: { ops: { failureAlert: { threadId: "42" } } } },
-    { creators: { alice: { failureAlert: { threadId: 42 } } } },
-  ])("accepts optional failure threads: %j", (config) => {
-    expect(validateCron(config).ok).toBe(true);
-  });
+  it.each([{ failureAlert: { threadId: 42 } }])(
+    "accepts optional failure threads: %j",
+    (config) => {
+      expect(validateCron(config).ok).toBe(true);
+    },
+  );
 
   it("accepts defaults on known channels, including built-in aliases", () => {
     const result = validateCron({
       delivery: { channel: "chat", to: "1" },
       agents: { ops: { delivery: { channel: "telegram", to: "-100123" } } },
-      creators: { alice: { failureAlert: { channel: "gchat", to: "spaces/a" } } },
+      creators: { alice: { delivery: { channel: "gchat", to: "spaces/a" } } },
     });
     expect(result.ok).toBe(true);
     expect(result.warnings.filter(({ path }) => path.startsWith("cron."))).toEqual([]);
@@ -54,16 +53,8 @@ describe("cron default destination channels", () => {
       { agents: { ops: { delivery: { channel: "telegarm", to: "1" } } } },
     ],
     [
-      "cron.agents.ops.failureAlert.channel",
-      { agents: { ops: { failureAlert: { channel: "telegarm", to: "1" } } } },
-    ],
-    [
       "cron.creators.alice.delivery.channel",
       { creators: { alice: { delivery: { channel: "telegarm", to: "1" } } } },
-    ],
-    [
-      "cron.creators.alice.failureAlert.channel",
-      { creators: { alice: { failureAlert: { channel: "telegarm", to: "1" } } } },
     ],
   ])("rejects an unknown channel at %s", (path, cron) => {
     const result = validateCron(cron);

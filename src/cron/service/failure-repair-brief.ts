@@ -13,6 +13,7 @@ export function buildCronFailureRepairBrief(params: {
   error?: string;
   errorReason?: FailoverReason;
   terminal?: boolean;
+  deliveryFailed?: boolean;
 }): string {
   const { job } = params;
   const payload = job.payload;
@@ -29,9 +30,11 @@ export function buildCronFailureRepairBrief(params: {
     .join("\n");
   return [
     `Automation repair request from the scheduler, not a user message. Do not relay it; follow the steps below.`,
-    params.terminal
-      ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). The user was not alerted; you are their notice.`
-      : `An automation (id ${job.id}), created in this conversation, failed${params.consecutiveErrors > 1 ? ` ${params.consecutiveErrors} runs in a row` : ""}. The user was not alerted; you are their notice.`,
+    params.deliveryFailed
+      ? `An automation (id ${job.id}) ran successfully but could not send its result. Investigate delivery; do not rerun the work.`
+      : params.terminal
+        ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). The user was not alerted; you are their notice.`
+        : `An automation (id ${job.id}), created in this conversation, failed${params.consecutiveErrors > 1 ? ` ${params.consecutiveErrors} runs in a row` : ""}. The user was not alerted; you are their notice.`,
     `Schedule: ${JSON.stringify(job.schedule)}. Payload kind: ${payload.kind}.`,
     // Job text and provider errors can carry third-party content: data, never instructions.
     wrapUntrustedPromptDataBlock({ label: "Automation name", text: job.name, maxChars: 200 }),

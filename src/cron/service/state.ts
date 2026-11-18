@@ -331,6 +331,8 @@ export type CronServiceDeps = {
     accountId?: string;
     threadId?: string | number;
     inheritSessionThread?: false;
+    target?: "owner";
+    directPolicy?: "allow" | "block";
     /** Persists the transport-owned terminal fact before Gateway work admission releases. */
     onDeliverySettled: (outcome: CronFailureNotificationDelivery) => Promise<void>;
   }) => Promise<void>;
@@ -615,6 +617,7 @@ export type CronWakeMode = "now" | "next-heartbeat";
 export type CronStatusSummary = {
   enabled: boolean;
   triggersEnabled: boolean;
+  failureAlertsEnabled?: boolean;
   /** @deprecated Alias for `sqlitePath`. */
   storePath: string;
   storage: "sqlite";

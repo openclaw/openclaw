@@ -517,7 +517,6 @@ it("creates a one-shot webhook system event with an explicit keep policy", async
     channel: undefined,
     threadId: undefined,
     accountId: undefined,
-    bestEffort: undefined,
   });
   expect(defaultRuntime.error).not.toHaveBeenCalled();
 });
@@ -699,42 +698,10 @@ it.each([
   ["disables delivery", ["--no-deliver"], { delivery: { mode: "none" } }],
   [
     "sets webhook delivery",
-    ["--webhook", " https://example.invalid/cron ", "--best-effort-deliver"],
-    { delivery: { mode: "webhook", to: "https://example.invalid/cron", bestEffort: true } },
+    ["--webhook", " https://example.invalid/cron "],
+    { delivery: { mode: "webhook", to: "https://example.invalid/cron" } },
   ],
-  [
-    "implies announcement when enabling best-effort on a message edit",
-    ["--message", "hello", "--best-effort-deliver"],
-    {
-      payload: { kind: "agentTurn", message: "hello" },
-      delivery: { mode: "announce", bestEffort: true },
-    },
-  ],
-  [
-    "patches failure-alert settings",
-    flags({
-      "--failure-alert-after": "3",
-      "--failure-alert-cooldown": "1h",
-      "--failure-alert-channel": "telegram",
-      "--failure-alert-to": "19098680",
-      "--failure-alert-thread-id": "42",
-      "--failure-alert-mode": "webhook",
-      "--failure-alert-account-id": "bot-a",
-      "--failure-alert-include-skipped": true,
-    }),
-    {
-      failureAlert: {
-        after: 3,
-        cooldownMs: 3_600_000,
-        channel: "telegram",
-        to: "19098680",
-        threadId: "42",
-        mode: "webhook",
-        accountId: "bot-a",
-        includeSkipped: true,
-      },
-    },
-  ],
+  ["enables failure alerts", ["--failure-alert"], { failureAlert: true }],
   ["disables failure alerts", ["--no-failure-alert"], { failureAlert: false }],
   [
     "converts to a zoned one-shot with keep-after-run",
@@ -856,11 +823,7 @@ it.each([
     [...EDIT, "--webhook", "https://example.invalid/cron", "--announce"],
     "Choose at most one of --announce, --no-deliver, or --webhook",
   ],
-  [[...EDIT, "--failure-alert-after", "3x"], "Invalid --failure-alert-after"],
-  [
-    [...EDIT, "--failure-alert-include-skipped", "--failure-alert-exclude-skipped"],
-    "Use either --failure-alert-include-skipped",
-  ],
+  [[...EDIT, "--failure-alert-after", "3"], "unknown option"],
 ])("rejects %j before Gateway access", async (args, error) => {
   await expectCronCommandExit(args);
   expectRuntimeErrorContaining(error);

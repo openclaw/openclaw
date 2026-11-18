@@ -132,14 +132,6 @@ function DeliveryRows(
           help={t("cron.form.includeReasoningHelp")}
         />
       ) : undefined}
-      {props.selectedDeliveryMode !== "none" ? (
-        <ToggleRow
-          {...props}
-          field="deliveryBestEffort"
-          label={t("cron.form.bestEffortDelivery")}
-          help={t("cron.form.bestEffortHelp")}
-        />
-      ) : undefined}
       <CronInput
         {...props}
         field="sessionKey"
@@ -160,8 +152,6 @@ const ADVANCED_FIELDS = [
   "deliveryMode",
   "deliveryDirectPolicy",
   "deliveryTo",
-  "failureAlertAfter",
-  "failureAlertCooldownSeconds",
   "staggerAmount",
   "cronTz",
 ] as const;
@@ -379,11 +369,15 @@ export function Advanced(
         <SettingsSection title={t("cron.form.advancedResults")}>
           <DeliveryRows {...props} channelOptions={channelOptions()} />
         </SettingsSection>
-        {props.isAgentTurn ? (
-          <SettingsSection title={t("cron.form.failureAlerts")}>
-            <FailureAlertRows {...props} channelOptions={channelOptions()} />
-          </SettingsSection>
-        ) : undefined}
+        <SettingsSection title={t("cron.form.advancedNotifications")}>
+          <ToggleRow
+            {...props}
+            field="failureAlert"
+            defaultChecked={props.status?.failureAlertsEnabled !== false}
+            label={t("cron.form.failureAlerts")}
+            help={t("cron.form.failureAlertsHelp")}
+          />
+        </SettingsSection>
       </div>
     </details>
   );
@@ -461,78 +455,6 @@ function TriggerRows(props: CronProps) {
           ) : undefined}
         </>
       )}
-    </>
-  );
-}
-function FailureAlertRows(
-  props: CronProps & {
-    channelOptions: readonly ChannelPickerOption[];
-  },
-) {
-  return (
-    <>
-      <CronSelect
-        {...props}
-        field="failureAlertMode"
-        label={t("cron.form.failureAlertSend")}
-        help={t("cron.form.failureAlertsHelp")}
-        options={[
-          { value: "inherit", label: t("cron.form.failureAlertInherit") },
-          { value: "disabled", label: t("cron.form.failureAlertDisabled") },
-          { value: "custom", label: t("cron.form.failureAlertCustom") },
-        ]}
-      />
-      {props.form.failureAlertMode === "custom" ? (
-        <>
-          <CronInput
-            {...props}
-            field="failureAlertAfter"
-            label={t("cron.form.failureAlertAfter")}
-            help={t("cron.form.failureAlertAfterHelp")}
-            errorKey="failureAlertAfter"
-            placeholder={t("cron.form.failureAlertInherit")}
-          />
-          <CronInput
-            {...props}
-            field="failureAlertCooldownSeconds"
-            label={t("cron.form.failureAlertCooldown")}
-            help={t("cron.form.failureAlertCooldownHelp")}
-            errorKey="failureAlertCooldownSeconds"
-            placeholder={t("cron.form.failureAlertInherit")}
-          />
-          <CronSelect
-            {...props}
-            field="failureAlertDeliveryMode"
-            label={t("cron.form.failureAlertMode")}
-            options={[
-              { value: "", label: t("cron.form.failureAlertInherit") },
-              { value: "announce", label: t("cron.form.failureAlertAnnounce") },
-              { value: "webhook", label: t("cron.form.failureAlertWebhook") },
-            ]}
-          />
-          <CronSelect
-            {...props}
-            field="failureAlertChannel"
-            label={t("cron.form.failureAlertChannel")}
-            options={props.channelOptions}
-            channel
-          />
-          <CronInput
-            {...props}
-            field="failureAlertTo"
-            label={t("cron.form.failureAlertTo")}
-            help={t("cron.form.failureAlertToHelp")}
-            list="cron-failure-alert-to-suggestions"
-            placeholder={t("cron.form.failureAlertToPlaceholder")}
-          />
-          <CronInput
-            {...props}
-            field="failureAlertAccountId"
-            label={t("cron.form.failureAlertAccountId")}
-            placeholder={t("cron.form.failureAlertAccountPlaceholder")}
-          />
-        </>
-      ) : undefined}
     </>
   );
 }

@@ -339,7 +339,7 @@ describe("cron batch outcome finalization", () => {
           ...(routed ? { lastFailureAlertAtMs: DUE_AT - 30_000 } : {}),
         },
         ...(routed
-          ? { failureAlert: { mode: "webhook" as const, to: "https://alerts.example.com/hook" } }
+          ? { delivery: { mode: "webhook" as const, to: "https://alerts.example.com/hook" } }
           : {}),
       });
       const order: string[] = [];

@@ -93,7 +93,6 @@ describe("sendCronAnnouncePayloadStrict", () => {
         accountId: "bot-a",
         threadId: 42,
         payloads,
-        bestEffort: false,
         deliveryIntentId: "cron-direct-delivery:v1:cron:job-1:1000:telegram:bot-a:123:42",
       }),
       undefined,

@@ -238,24 +238,22 @@ describe("automation save editor ownership", () => {
 });
 
 it.each<[string, Partial<CronFormState>, string | number, string | number | undefined]>([
-  ["recipient change", { deliveryTo: "-100new", failureAlertTo: "-100new" }, 42, undefined],
-  ["account change", { deliveryAccountId: "new", failureAlertAccountId: "new" }, 42, undefined],
-  ["channel change", { deliveryChannel: "last", failureAlertChannel: "last" }, 42, undefined],
+  ["recipient change", { deliveryTo: "-100new" }, 42, undefined],
+  ["account change", { deliveryAccountId: "new" }, 42, undefined],
+  ["channel change", { deliveryChannel: "last" }, 42, undefined],
   ["agent change", { agentId: "other" }, 42, undefined],
   ["cleared agent override", { clearAgent: true }, 42, undefined],
-  ["delivery disabled", { deliveryMode: "none", failureAlertMode: "disabled" }, 42, undefined],
+  ["delivery disabled", { deliveryMode: "none" }, 42, undefined],
   ["unchanged topic", { description: "Edited" }, 42, 42],
   ["zero topic", { description: "Edited" }, 0, 0],
-  ["recipient whitespace", { deliveryTo: " -100old ", failureAlertTo: " -100old " }, 42, 42],
-  ["account whitespace", { deliveryAccountId: " old ", failureAlertAccountId: " old " }, 42, 42],
+  ["recipient whitespace", { deliveryTo: " -100old " }, 42, 42],
+  ["account whitespace", { deliveryAccountId: " old " }, 42, 42],
   ["agent whitespace", { agentId: " writer " }, 42, 42],
   [
     "replacement topic",
     {
       deliveryTo: "-100new",
       deliveryThreadId: "new",
-      failureAlertTo: "-100new",
-      failureAlertThreadId: "new",
     },
     42,
     "new",
@@ -265,7 +263,7 @@ it.each<[string, Partial<CronFormState>, string | number, string | number | unde
   const stored = storedJob({
     agentId: "writer",
     delivery: { mode: "announce", ...route },
-    failureAlert: route,
+    failureAlert: false,
   });
   const readJob = () => readPublicJob(stored);
   const state = createSaveState(stored, readJob);
@@ -275,8 +273,7 @@ it.each<[string, Partial<CronFormState>, string | number, string | number | unde
   await saveAndReopen(state, readJob);
   expect(stored.delivery?.threadId).toBe(expected);
   expect(state.cronForm.deliveryThreadId).toBe(expected);
-  const alert = stored.failureAlert;
-  expect(typeof alert === "object" ? alert.threadId : undefined).toBe(expected);
+  expect(stored.failureAlert).toBe(false);
 });
 
 it.each<

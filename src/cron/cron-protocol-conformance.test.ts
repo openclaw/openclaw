@@ -18,7 +18,6 @@ const DELIVERY_FIXTURES = {
     channel: "telegram",
     threadId: "topic-42",
     completionDestination: { mode: "webhook", to: "https://example.test/complete" },
-    failureDestination: { mode: "announce", channel: "last", to: "ops" },
   },
   webhook: { mode: "webhook", to: "https://example.test/result" },
 } satisfies Record<CronDelivery["mode"], CronDelivery>;

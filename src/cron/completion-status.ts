@@ -4,12 +4,6 @@ type CronCompletionRunStatus = "ok" | "error" | "skipped";
 
 type CronCompletionDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
-type CronCompletionJob = {
-  delivery?: {
-    bestEffort?: boolean;
-  };
-};
-
 /** Whole-run completion after execution and its admitted delivery policy settle. */
 export type CronCompletionStatus = "succeeded" | "failed" | "unknown";
 
@@ -47,7 +41,6 @@ export function resolveCronCompletionStatus(params: {
 
 /** Resolves completion from the immutable delivery contract admitted for this run. */
 export function resolveAdmittedCronCompletionStatus(
-  job: CronCompletionJob,
   status: CronCompletionRunStatus,
   deliveryStatus: CronCompletionDeliveryStatus,
   deliverySuppressionReason?: NormalizeReplySkipReason,
@@ -56,6 +49,6 @@ export function resolveAdmittedCronCompletionStatus(
     status,
     deliveryStatus,
     deliverySuppressionReason,
-    requiredDelivery: job.delivery?.bestEffort !== true && deliveryStatus !== "not-requested",
+    requiredDelivery: deliveryStatus !== "not-requested",
   });
 }

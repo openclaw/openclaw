@@ -8,9 +8,8 @@ import {
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
-import { resolveFailureAlert } from "./service/failure-alerts.js";
 import { assertCanonicalCronDeliveryMode } from "./store/delivery-codec.js";
-import type { CronDelivery, CronFailureAlert, CronJobCreate, CronStoredJob } from "./types.js";
+import type { CronDelivery } from "./types.js";
 
 function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
   const channels = cfg.channels;
@@ -30,7 +29,7 @@ function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
 async function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel" | "failureAlert.channel";
+  field: "delivery.channel";
 }) {
   if (params.channel === "last") {
     return;
@@ -67,7 +66,7 @@ async function assertConfiguredAnnounceChannel(params: {
 /**
  * Rejects an announce account the operator has turned off in config, so a job is
  * not scheduled against a route its owner already disabled - the same late failure
- * this file prevents for `channel` (see `assertValidCronFailureAlert`).
+ * this file prevents for `channel`.
  *
  * Scoped to a matching `accounts.<id>.enabled: false` entry, and nothing else.
  * Cron delivery ids are not always operator-typed (`delivery-context.ts` copies
@@ -119,7 +118,7 @@ function resolveAnnounceValidationChannel(params: {
 function assertCompatibleAnnounceTarget(params: {
   channel?: string;
   to?: string;
-  field: "delivery.channel" | "delivery.failureDestination.channel" | "failureAlert.channel";
+  field: "delivery.channel";
 }) {
   if (!params.channel || params.channel === "last") {
     return;
@@ -153,85 +152,4 @@ export async function assertValidCronAnnounceDelivery(params: {
       field: "delivery.accountId",
     });
   }
-
-  const failureDestination = params.delivery?.failureDestination;
-  if (failureDestination && (failureDestination.mode ?? "announce") === "announce") {
-    if (
-      failureDestination.channel === undefined &&
-      failureDestination.to === undefined &&
-      failureDestination.accountId === undefined &&
-      failureDestination.mode === undefined
-    ) {
-      return;
-    }
-    assertCompatibleAnnounceTarget({
-      channel: failureDestination.channel,
-      to: failureDestination.to,
-      field: "delivery.failureDestination.channel",
-    });
-    await assertConfiguredAnnounceChannel({
-      cfg: params.cfg,
-      channel: resolveAnnounceValidationChannel(failureDestination),
-      field: "delivery.failureDestination.channel",
-    });
-  }
-}
-
-/**
- * Validates the per-job `failureAlert` channel the same way announce delivery is
- * validated. `failureAlert` is a distinct field from `delivery.failureDestination`
- * (its own store columns and delivery path), so it needs its own check - otherwise
- * an explicit unknown channel (e.g. a Slack `C0...` id passed to
- * `--failure-alert-channel`) is stored and only fails later as `channel_not_found`.
- */
-export async function assertValidCronFailureAlert(params: {
-  cfg: OpenClawConfig;
-  failureAlert?: CronFailureAlert | false;
-  delivery?: CronDelivery;
-  /** Job owner and creator fields that select scoped default routes. */
-  owner?: Pick<CronJobCreate, "agentId" | "sessionKey" | "sessionTarget"> &
-    Partial<Pick<CronStoredJob, "createdActor">>;
-  defaultAgentId?: string;
-}) {
-  // Validate the scheduler-owned route so prefix, global, and inheritance
-  // decisions cannot diverge between mutations and actual alert delivery.
-  const failureAlert = resolveFailureAlert(
-    { deps: { cronConfig: params.cfg.cron, defaultAgentId: params.defaultAgentId } },
-    {
-      agentId: params.owner?.agentId,
-      sessionKey: params.owner?.sessionKey,
-      sessionTarget: params.owner?.sessionTarget,
-      createdActor: params.owner?.createdActor,
-      delivery: params.delivery,
-      failureAlert: params.failureAlert,
-    },
-  );
-  if (!failureAlert || failureAlert.mode === "webhook") {
-    return;
-  }
-  assertCompatibleAnnounceTarget({
-    channel: failureAlert.channel,
-    to: failureAlert.to,
-    field: "failureAlert.channel",
-  });
-  await assertConfiguredAnnounceChannel({
-    cfg: params.cfg,
-    channel: failureAlert.channel,
-    field: "failureAlert.channel",
-  });
-}
-
-export async function assertValidCronCreateDelivery(
-  cfg: OpenClawConfig,
-  job: CronJobCreate & Partial<Pick<CronStoredJob, "createdActor">>,
-  defaultAgentId?: string,
-) {
-  await assertValidCronAnnounceDelivery({ cfg, delivery: job.delivery });
-  await assertValidCronFailureAlert({
-    cfg,
-    failureAlert: job.failureAlert,
-    delivery: job.delivery,
-    owner: job,
-    defaultAgentId,
-  });
 }

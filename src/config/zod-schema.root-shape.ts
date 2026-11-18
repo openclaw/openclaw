@@ -64,7 +64,6 @@ const CronFailureAlertRouteSchema = z.strictObject({
 
 const CronScopedDefaultsSchema = z.strictObject({
   delivery: CronDefaultDeliveryDestinationSchema.optional(),
-  failureAlert: CronFailureAlertRouteSchema.optional(),
 });
 
 export const OpenClawSchemaShape = {

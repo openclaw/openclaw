@@ -298,14 +298,14 @@ it("normalizes completion destinations without inventing an enclosing mode", () 
   expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
 });
 
-it.each([
-  { channel: null, to: null, threadId: null, accountId: null, failureDestination: null },
-  { failureDestination: { channel: null, to: null, accountId: null, mode: null } },
-])("preserves nullable delivery patch clears %j", (delivery) => {
-  const patch = normalizePatch({ delivery });
-  expect(patch.delivery).toEqual(delivery);
-  expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
-});
+it.each([{ channel: null, to: null, threadId: null, accountId: null }])(
+  "preserves nullable delivery patch clears %j",
+  (delivery) => {
+    const patch = normalizePatch({ delivery });
+    expect(patch.delivery).toEqual(delivery);
+    expect(validateCronUpdateParams({ id: "job", patch })).toBe(true);
+  },
+);
 
 it.each([
   { kind: "agentTurn", field: "message", create: createAgent },

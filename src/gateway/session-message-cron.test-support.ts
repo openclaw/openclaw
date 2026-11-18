@@ -114,7 +114,6 @@ export function registerCronSessionCompletionEventTests({
             satisfiesSourceDelivery: false,
             unverifiedMessageToolDelivery: false,
           },
-          deliveryBestEffort: false,
           deliveryPayloads: [{ text: "The detached cron finished without another user message." }],
           synthesizedText: "The detached cron finished without another user message.",
           summary: "The detached cron finished without another user message.",

@@ -103,7 +103,6 @@ it("normalizes delivery overrides and preserves the account until explicitly cle
       channel: "telegram",
       to: "-10012345/6789",
       accountId: " coordinator ",
-      bestEffort: true,
     },
   });
   expect(current.payload).toMatchObject(agentPayload());
@@ -112,23 +111,11 @@ it("normalizes delivery overrides and preserves the account until explicitly cle
     channel: "telegram",
     to: "-10012345/6789",
     accountId: "coordinator",
-    bestEffort: true,
   });
   applyJobPatch(current, { delivery: { to: "-100999" } });
   expect(current.delivery).toMatchObject({ accountId: "coordinator", to: "-100999" });
   applyJobPatch(current, { delivery: { accountId: "" } });
   expect(current.delivery?.accountId).toBeUndefined();
-});
-
-it("validates and trims webhook failure destinations", () => {
-  const failureDestination = { mode: "webhook" as const, to: "not-a-url" };
-  const current = agentJob({ ...announce, failureDestination });
-  expect(() => applyJobPatch(current, { enabled: true })).toThrow(
-    "cron failure destination webhook requires delivery.failureDestination.to to be a valid http(s) URL",
-  );
-  failureDestination.to = `  ${WEBHOOK}  `;
-  applyJobPatch(current, { enabled: true });
-  expect(current.delivery?.failureDestination?.to).toBe(WEBHOOK);
 });
 
 it("preserves default tool authority when replacing a system payload", () => {
@@ -307,8 +294,6 @@ it("preserves a future running marker owned by a live execution", () => {
 const patchErrors = {
   completion: 'cron completion destination webhook is only supported with delivery.mode="announce"',
   webhook: "cron webhook delivery requires delivery.to to be a valid http(s) URL",
-  mainFailure:
-    'cron delivery.failureDestination is only supported for sessionTarget="isolated" unless delivery.mode="webhook"',
   triggerSyntax: "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
   emptyTrigger: "cron trigger script must not be empty",
   scriptSyntax: "cron script payload has a syntax error",
@@ -317,10 +302,6 @@ const patchErrors = {
   channel: "cron announce delivery requires an explicit channel",
 };
 const announce = { mode: "announce" as const, channel: "telegram", to: "123" };
-const invalidMainJob = () =>
-  fixtureJob({
-    delivery: { ...announce, failureDestination: { ...announce, to: "999" } },
-  });
 const explicitChannelJob = () =>
   createTestJob(agentInput({ delivery: { mode: "announce", channel: "discord" } }), options);
 type InvalidPatch = [
@@ -340,7 +321,6 @@ it.each<InvalidPatch>([
     () => fixtureJob({ delivery: { mode: "webhook" } }),
     { delivery: { mode: "webhook", to: "" } },
   ],
-  ["mainFailure", invalidMainJob, { enabled: true }],
   [
     "triggerSyntax",
     () => createTestJob(triggeredInput()),

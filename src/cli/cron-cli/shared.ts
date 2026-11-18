@@ -277,7 +277,7 @@ function formatCronStatusForDisplay(job: CronJob) {
   const deliveryUnknown = status === "ok" && state.lastDeliveryStatus === "unknown";
   const suppressed =
     undelivered && !streamDisabled && state.deliverySuppressionReason !== undefined;
-  // The recorded non-outcome, not completion success, distinguishes silence from failed best-effort delivery.
+  // The recorded non-outcome, not completion success, distinguishes silence from failed delivery.
   const color =
     status === "error"
       ? theme.error

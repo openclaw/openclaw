@@ -1,6 +1,6 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
-import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import { projectCronJobThroughStorageCodec } from "../store/row-codec.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
@@ -21,15 +21,6 @@ function makeMainJob(delivery?: CronJob["delivery"]) {
     delivery,
   });
 }
-
-const clearFailureDestination = { channel: null, to: null, accountId: null, mode: null };
-const clearedFailureDestination = {
-  channel: undefined,
-  to: undefined,
-  accountId: undefined,
-  mode: undefined,
-};
-const failureDefaults = { channel: "slack", to: "C123", accountId: "bot-b" };
 
 describe("applyJobPatch schedule retention", () => {
   it.each([undefined, false] as const)(
@@ -118,7 +109,6 @@ describe("applyJobPatch delivery merge", () => {
       threadId: null,
       accountId: null,
       completionDestination: null,
-      failureDestination: null,
     },
     { mode: "none", channel: "telegram", to: "123", threadId: 0, accountId: "bot-a" },
   ] satisfies NonNullable<CronJobPatch["delivery"]>[])(
@@ -147,99 +137,26 @@ describe("applyJobPatch delivery merge", () => {
     },
   );
 
-  it("clears inherited announce delivery when retargeting to main with bestEffort", () => {
-    const job = makeJob();
-    applyJobPatch(job, {
-      sessionTarget: "main",
-      payload: { kind: "systemEvent", text: "tick" },
-      delivery: { bestEffort: false },
-    });
-    expect(job).toMatchObject({ sessionTarget: "main", delivery: undefined });
+  it("persists Off, On and clearing to the gateway default", () => {
+    const job = makeJob({ failureAlert: true });
+    applyJobPatch(job, { failureAlert: false });
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toBe(false);
+    applyJobPatch(job, { failureAlert: true });
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toBe(true);
+    applyJobPatch(job, { failureAlert: null });
+    expect(projectCronJobThroughStorageCodec(job).failureAlert).toBeUndefined();
   });
 
   it("preserves inherited main-session webhook mode in a partial delivery update", () => {
-    const job = makeMainJob({ mode: "webhook", to: "https://example.com/old", bestEffort: true });
+    const job = makeMainJob({ mode: "webhook", to: "https://example.com/old" });
 
     applyJobPatch(job, {
-      delivery: { to: "https://example.com/new", bestEffort: false },
+      delivery: { to: "https://example.com/new" },
     });
 
     expect(job.delivery).toEqual({
       mode: "webhook",
       to: "https://example.com/new",
-      bestEffort: false,
     });
-  });
-
-  it.each(["isolated", "main"] as const)(
-    "clears %s failure routes as global opt-outs",
-    (target) => {
-      const job = target === "main" ? makeMainJob() : makeJob();
-      if (job.delivery) {
-        job.delivery.failureDestination = { mode: "announce", ...failureDefaults };
-      }
-      applyJobPatch(job, { delivery: { failureDestination: clearFailureDestination } });
-
-      expect(job.delivery?.failureDestination).toStrictEqual(clearedFailureDestination);
-      if (target === "main") {
-        expect(job.delivery?.mode).toBe("none");
-      }
-      const accountId = target === "main" ? "bot-a" : "bot-b";
-      expect(resolveFailureDestination(job, { ...failureDefaults, accountId })).toBeNull();
-    },
-  );
-
-  it("keeps unspecified failure destination fields inheriting global defaults", () => {
-    const job = makeJob();
-
-    applyJobPatch(job, { delivery: { failureDestination: { to: "C123" } } });
-
-    expect(job.delivery?.failureDestination).toEqual({ to: "C123" });
-    expect(Object.hasOwn(job.delivery?.failureDestination ?? {}, "channel")).toBe(false);
-    expect(resolveFailureDestination(job, { channel: "slack", accountId: "bot-a" })).toEqual({
-      mode: "announce",
-      channel: "slack",
-      to: "C123",
-      accountId: "bot-a",
-    });
-  });
-});
-
-describe("applyJobPatch failure alert merge", () => {
-  it("clears explicit fields, preserves omitted fields, and persists the result", () => {
-    const kept = { channel: "telegram", includeSkipped: true, mode: "announce" as const };
-    const cleared = {
-      after: undefined,
-      to: undefined,
-      cooldownMs: undefined,
-      accountId: undefined,
-    };
-    const job = makeJob({
-      failureAlert: { ...kept, after: 2, to: "123456", cooldownMs: 60_000, accountId: "bot-a" },
-    });
-
-    applyJobPatch(job, {
-      failureAlert: { after: null, to: null, cooldownMs: null, accountId: null },
-    });
-
-    expect(job.failureAlert).toEqual({ ...kept, ...cleared });
-    expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual(kept);
-
-    applyJobPatch(job, {
-      failureAlert: { channel: null, includeSkipped: null, mode: null },
-    });
-    expect(projectCronJobThroughStorageCodec(job).failureAlert).toEqual({});
-  });
-
-  it("clears the whole override only for explicit null", () => {
-    const original = { after: 2, channel: "telegram" as const };
-    const job = makeJob({ failureAlert: original });
-
-    applyJobPatch(job, {});
-    expect(job.failureAlert).toEqual(original);
-
-    applyJobPatch(job, { failureAlert: null });
-    expect(job.failureAlert).toBeUndefined();
-    expect(projectCronJobThroughStorageCodec(job).failureAlert).toBeUndefined();
   });
 });

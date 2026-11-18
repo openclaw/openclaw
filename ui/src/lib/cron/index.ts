@@ -5,8 +5,6 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
-import { toNumber } from "../format.ts";
-import { parseFailureAlertCooldownMs } from "./decimal.ts";
 import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
 import {
   hasCronFormErrors,
@@ -116,38 +114,6 @@ function normalizePersistedDeliveryChannel(
   return channel;
 }
 
-function buildFailureAlert(
-  form: CronFormState,
-  source?: CronJob["failureAlert"],
-  isUpdate = false,
-) {
-  if (form.failureAlertMode === "disabled") {
-    return false as const;
-  }
-  if (form.failureAlertMode !== "custom") {
-    return isUpdate && source !== undefined ? null : undefined;
-  }
-  const sourceConfig = source && typeof source === "object" ? source : undefined;
-  const existingConfig = isUpdate ? sourceConfig : undefined;
-  const after = toNumber(form.failureAlertAfter.trim(), 0);
-  const cooldownMs = parseFailureAlertCooldownMs(form.failureAlertCooldownSeconds);
-  const accountId = form.failureAlertAccountId.trim();
-  const to = form.failureAlertTo.trim();
-  return {
-    ...sourceConfig,
-    after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
-    channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLast: Boolean(sourceConfig?.channel),
-    }),
-    to: to || (existingConfig?.to ? null : undefined),
-    cooldownMs: cooldownMs ?? (existingConfig?.cooldownMs !== undefined ? null : undefined),
-    mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
-    accountId: accountId || (existingConfig?.accountId ? null : undefined),
-    threadId:
-      form.failureAlertThreadId ?? (existingConfig?.threadId !== undefined ? null : undefined),
-  };
-}
-
 type CronSaveResult = { saved: false } | { saved: true; jobId: string };
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
@@ -198,7 +164,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           mode: selectedDeliveryMode,
           ...(selectedDeliveryMode === "none"
             ? {
-                ...(form.deliveryBestEffort ? { bestEffort: true } : {}),
                 ...(form.deliveryTarget === "owner"
                   ? {
                       target: "owner",
@@ -229,7 +194,6 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                       (previousDelivery?.directPolicy ? null : undefined)
                     : undefined,
                 accountId: deliveryAccountId,
-                bestEffort: form.deliveryBestEffort,
               }),
           threadId:
             (!ownerTarget ? form.deliveryThreadId : undefined) ??
@@ -237,12 +201,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
             ? { completionDestination: form.deliveryCompletionDestination }
             : {}),
-          ...(form.deliveryFailureDestination
-            ? { failureDestination: form.deliveryFailureDestination }
-            : {}),
         }
       : undefined;
-    const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
     const trigger = form.triggerEnabled
       ? editingJob?.trigger?.script === triggerScript &&
@@ -280,7 +240,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
           : undefined,
       idleOnly: form.idleOnly || editingJob?.idleOnly !== undefined ? form.idleOnly : undefined,
       delivery,
-      failureAlert,
+      failureAlert: form.failureAlert,
     };
     if (editingJob && form.ownerProfileId && form.ownerProfileId !== editingJob.ownerProfileId) {
       job.ownerProfileId = form.ownerProfileId;

@@ -493,6 +493,8 @@ async function sendGatewayCronFailureAlertUnderAdmission(
             to: params.to,
             accountId: params.accountId,
             threadId: params.threadId,
+            target: params.target,
+            directPolicy: params.directPolicy,
             sessionKey: resolveCronDeliverySessionKey(params.job),
           },
           { inheritSessionThread: params.inheritSessionThread },

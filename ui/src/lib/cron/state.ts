@@ -55,18 +55,8 @@ export const DEFAULT_CRON_FORM: CronFormState = {
   deliveryChannel: "last",
   deliveryTo: "",
   deliveryAccountId: "",
-  deliveryBestEffort: false,
   deliveryThreadId: undefined,
   deliveryCompletionDestination: undefined,
-  deliveryFailureDestination: undefined,
-  failureAlertMode: "inherit",
-  failureAlertAfter: "",
-  failureAlertCooldownSeconds: "",
-  failureAlertChannel: "last",
-  failureAlertTo: "",
-  failureAlertDeliveryMode: "",
-  failureAlertAccountId: "",
-  failureAlertThreadId: undefined,
   timeoutSeconds: "",
 };
 

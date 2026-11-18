@@ -33,8 +33,6 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   deliveryMode: "cron.form.deliveryModeLabel",
   deliveryDirectPolicy: "cron.form.directPolicy",
   deliveryTo: "cron.form.to",
-  failureAlertAfter: "cron.form.failureAlertAfter",
-  failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
 };
 export function errorIdForField(props: CronFieldKey) {
   return `cron-error-${props}`;
@@ -134,10 +132,12 @@ export function FieldRow(props: {
   );
 }
 type CronStringFormField = {
-  [Field in keyof CronFormState]: CronFormState[Field] extends string ? Field : never;
+  [Field in keyof CronFormState]-?: CronFormState[Field] extends string ? Field : never;
 }[keyof CronFormState];
 type CronBooleanFormField = {
-  [Field in keyof CronFormState]: CronFormState[Field] extends boolean ? Field : never;
+  [Field in keyof CronFormState]-?: NonNullable<CronFormState[Field]> extends boolean
+    ? Field
+    : never;
 }[keyof CronFormState];
 type FormProps = Pick<CronProps, "form" | "fieldErrors" | "onFormChange">;
 type CronInputOptions = {
@@ -290,6 +290,7 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
 export function ToggleRow(
   props: FormProps & {
     field: CronBooleanFormField;
+    defaultChecked?: boolean;
     label: string;
     help?: string;
   },
@@ -298,7 +299,7 @@ export function ToggleRow(
     <SettingsToggleRow
       title={props.label}
       description={props.help}
-      checked={props.form[props.field]}
+      checked={props.form[props.field] ?? props.defaultChecked ?? false}
       onChange={(checked) => props.onFormChange({ [props.field]: checked })}
     />
   );

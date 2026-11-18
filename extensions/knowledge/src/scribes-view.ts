@@ -648,7 +648,7 @@ function detail(
       job.failureAlert === false
         ? "No alert"
         : job.failureAlert
-          ? `Alert after ${plural(job.failureAlert.after ?? 1, "failed run")}`
+          ? "Failure alerts on"
           : "Default failure alert",
     ]);
   }

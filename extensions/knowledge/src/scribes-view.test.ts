@@ -14,7 +14,7 @@ const reviewJob = {
   configRevision: "rev-7",
   sessionTarget: "session:s-review",
   schedule: { kind: "cron", expr: "45 3 * * 0" },
-  failureAlert: { after: 2 },
+  failureAlert: true,
   state: { lastRunStatus: "ok", lastRunAtMs: 1_793_000_000_000, nextRunAtMs: 1_793_090_000_000 },
 };
 
@@ -452,7 +452,7 @@ it.each([false, true])(
     let view = await render();
     expect(view.textContent).toContain("1 recent run, all succeeded");
     expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
-    expect(view.textContent).toContain("Alert after 2 failed runs");
+    expect(view.textContent).toContain("Failure alerts on");
     expect(view.textContent).toMatch(/Weekly on Sunday, 3:45\sAM/);
     buttonNamed(view, "Run now").click();
     await flush();
@@ -546,7 +546,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
   const prompt = String(sent[0]![1]!.message);
   expect(prompt).toMatch(/^Update the Knowledge scribe "Knowledge Consolidation"/);
   expect(prompt).toContain(
-    'exactly as written: `{"thinking":"high","toolsAllow":["read"],"idleOnly":true,"failureAlert":{"after":2}}`. Pass `toolsAllowMode: "exact"`',
+    'exactly as written: `{"thinking":"high","toolsAllow":["read"],"idleOnly":true,"failureAlert":true}`. Pass `toolsAllowMode: "exact"`',
   );
   expect(prompt).toContain("- delivery and failure alert: as saved on the current automation");
   expect(prompt).toContain("Leave `enabled` out");

@@ -272,17 +272,6 @@ function createCronTriggerSchema(): TSchema {
 }
 
 function createCronDeliverySchema(): TSchema {
-  const failureDestinationObject = Type.Object(
-    {
-      channel: deliveryStringSchema("Failure delivery channel"),
-      to: deliveryStringSchema("Failure delivery target"),
-      accountId: deliveryStringSchema("Failure delivery account"),
-      mode: Type.Optional(
-        Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()]),
-      ),
-    },
-    { additionalProperties: true },
-  );
   const completionDestinationObject = Type.Object(
     {
       mode: Type.Literal("webhook"),
@@ -307,19 +296,7 @@ function createCronDeliverySchema(): TSchema {
             description: "Thread/topic id",
           }),
         ),
-        bestEffort: Type.Optional(
-          Type.Boolean({
-            description:
-              "Omitted/false requires requested delivery for successful completion; true lets successful execution complete and delete a one-shot despite failed/unknown delivery. Intentional silence succeeds in either mode.",
-          }),
-        ),
         accountId: deliveryStringSchema("Delivery account"),
-        failureDestination: Type.Optional(
-          Type.Union([failureDestinationObject, Type.Null()], {
-            description:
-              "Failure-alert route override; required-delivery failures bypass after but share the execution-alert cooldown; null clears.",
-          }),
-        ),
         completionDestination: Type.Optional(
           Type.Union([completionDestinationObject, Type.Null()], {
             description: "Completion webhook; requires delivery.mode=announce; null clears.",
@@ -327,38 +304,6 @@ function createCronDeliverySchema(): TSchema {
         ),
       },
       { additionalProperties: true },
-    ),
-  );
-}
-
-// Keep the policy object first for restricted-provider projections; runtime
-// validation must still accept the documented false sentinel.
-function createCronFailureAlertSchema(): TSchema {
-  return Type.Optional(
-    Type.Union(
-      [
-        Type.Object(
-          {
-            after: optionalPositiveIntegerSchema({
-              description:
-                "Consecutive execution failures before alert; delivery failures bypass this threshold",
-            }),
-            channel: Type.Optional(Type.String({ description: "Alert channel" })),
-            to: Type.Optional(Type.String({ description: "Alert target" })),
-            cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
-            includeSkipped: Type.Optional(Type.Boolean({ description: "Count skipped runs." })),
-            mode: optionalStringEnum(["announce", "webhook"] as const),
-            accountId: Type.Optional(Type.String()),
-          },
-          { additionalProperties: true },
-        ),
-        Type.Literal(false),
-        Type.Null(),
-      ],
-      {
-        description:
-          "Failure alert policy/route override; null clears. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
-      },
     ),
   );
 }
@@ -465,11 +410,16 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         deleteAfterRun: Type.Optional(
           Type.Boolean({
             description:
-              "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent, or explicitly bestEffort. Failed/unknown required delivery retains it disabled.",
+              "Delete one-shot after successful completion: delivery confirmed, not requested, intentionally silent. Failed/unknown required delivery retains it disabled.",
           }),
         ),
         sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
-        failureAlert: createCronFailureAlertSchema(),
+        failureAlert: Type.Optional(
+          Type.Boolean({
+            description:
+              "Turn failure alerts on or off for this automation. Auto-disable safety notices are always kept.",
+          }),
+        ),
       },
       {
         additionalProperties: true,

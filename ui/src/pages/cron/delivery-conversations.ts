@@ -22,23 +22,9 @@ export function invalidateStaleDeliveryRoute(
       patch.deliveryAccountId?.trim() !== current.deliveryAccountId.trim()) ||
     ("deliveryTo" in patch && patch.deliveryTo?.trim() !== current.deliveryTo.trim()) ||
     agentChanged;
-  const failureAlertIdentityChanged =
-    ("failureAlertMode" in patch && patch.failureAlertMode !== current.failureAlertMode) ||
-    ("failureAlertDeliveryMode" in patch &&
-      patch.failureAlertDeliveryMode !== current.failureAlertDeliveryMode) ||
-    ("failureAlertChannel" in patch &&
-      patch.failureAlertChannel?.trim() !== current.failureAlertChannel.trim()) ||
-    ("failureAlertAccountId" in patch &&
-      patch.failureAlertAccountId?.trim() !== current.failureAlertAccountId.trim()) ||
-    ("failureAlertTo" in patch && patch.failureAlertTo?.trim() !== current.failureAlertTo.trim()) ||
-    agentChanged;
-  const resolved =
-    deliveryIdentityChanged && patch.deliveryThreadId === undefined
-      ? { ...patch, deliveryThreadId: undefined }
-      : patch;
-  return failureAlertIdentityChanged && patch.failureAlertThreadId === undefined
-    ? { ...resolved, failureAlertThreadId: undefined }
-    : resolved;
+  return deliveryIdentityChanged && patch.deliveryThreadId === undefined
+    ? { ...patch, deliveryThreadId: undefined }
+    : patch;
 }
 
 // Account filtering is local: only request-key changes rediscover the directory.

@@ -1,7 +1,11 @@
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { cronSourceIdentity, ownsCronSource } from "../source-schedule.js";
-import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import {
+  assertCanonicalCronDeliveryMode,
+  hasCanonicalCronFailureSettings,
+  CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE,
+} from "../store/delivery-codec.js";
 import type { CronJob } from "../types.js";
 import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
@@ -179,6 +183,9 @@ export async function inspectManualRunPreflight(
     return { ok: true, ran: false, reason: "not-due" };
   }
   assertCronHostExecutionAllowed(state, job);
+  if (!hasCanonicalCronFailureSettings(job)) {
+    throw new Error(CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE);
+  }
   assertCanonicalCronDeliveryMode(job.delivery);
   if (opts?.onExit && (!isJobEnabled(job) || job.state.autoDisabled)) {
     return { ok: true, ran: false, reason: "disabled" };

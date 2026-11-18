@@ -45,7 +45,7 @@ export type ScribeJob = {
   /** The conversation that created the automation; a `current` job runs as its child. */
   sessionKey?: string;
   schedule: { kind: string; expr?: string; tz?: string; everyMs?: number; at?: string };
-  failureAlert?: false | { after?: number };
+  failureAlert?: boolean;
   /** The run message is the prompt each scheduled run receives; other fields are run options. */
   payload?: { kind: string; message?: string } & Record<string, unknown>;
   activeHours?: unknown;

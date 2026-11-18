@@ -32,7 +32,6 @@ export function makeBaseParams(overrides: {
   deliveryRequested?: boolean;
   runStartedAt?: number;
   sessionTarget?: string;
-  deliveryBestEffort?: boolean;
   spawnOnlyHandoff?: boolean;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
@@ -42,7 +41,6 @@ export function makeBaseParams(overrides: {
   });
   const delivery: CronDelivery = {
     mode: "announce",
-    bestEffort: overrides.deliveryBestEffort,
   };
   const runStartedAt = overrides.runStartedAt ?? Date.now();
   return {
@@ -85,7 +83,6 @@ export function makeBaseParams(overrides: {
       satisfiesSourceDelivery: false,
       unverifiedMessageToolDelivery: false,
     },
-    deliveryBestEffort: overrides.deliveryBestEffort ?? false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
     synthesizedText: overrides.synthesizedText ?? "on it",
     summary: overrides.synthesizedText ?? "on it",

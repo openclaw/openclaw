@@ -6,11 +6,7 @@ import { stripCronPinnedExecGrant } from "../scheduled-tool-policy.js";
 import { decodeCronStreamOperatorSource } from "../stream-operator-source.js";
 import { parseCronStreamSandboxTarget } from "../stream-sandbox-target.js";
 import type { CronStoredJob, CronStoreFile } from "../types.js";
-import {
-  decodeCronJobConfig as decodeDeliveryConfig,
-  deliveryToJson,
-  hasCanonicalCronDeliveryMode,
-} from "./delivery-codec.js";
+import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
 
 export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Record<string, unknown> {
   const {
@@ -73,15 +69,14 @@ export function stripJobRuntimeFields(job: CronStoreFile["jobs"][number]): Recor
       ? { payload: { kind: "pluginCommand", toolsAllow: storedToolsAllow ?? toolsAllow } }
       : {}),
     ...(rest.delivery && hasCanonicalCronDeliveryMode(rest.delivery)
-      ? { delivery: deliveryToJson(rest.delivery) }
+      ? { delivery: rest.delivery }
       : {}),
     state: {},
   };
 }
 
 export function resolveCronJobGrantDefinitionRevision(job: CronStoredJob): string {
-  // Match job_json: drop ordinary undefined fields after deliveryToJson has
-  // encoded meaningful explicit destination clears as null.
+  // Match job_json by omitting undefined fields.
   const storedDefinition = safeParseJsonRecord(JSON.stringify(stripJobRuntimeFields(job)));
   if (!storedDefinition) {
     throw new Error(`Cannot canonicalize cron job ${job.id} for grant revision`);
@@ -111,7 +106,7 @@ export function decodeStoredCronJobConfig(
       ? actor.id
       : undefined);
   return {
-    ...decodeDeliveryConfig(jobJson),
+    ...jobJson,
     ...(jobJson.streamOperatorSource !== undefined
       ? { streamOperatorSource: decodeCronStreamOperatorSource(jobJson.streamOperatorSource) }
       : {}),

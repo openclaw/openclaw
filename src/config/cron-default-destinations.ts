@@ -14,7 +14,7 @@ type ChannelRoute = { channel?: string; mode?: string } | undefined;
 
 /**
  * Collects every explicit default channel: `cron.delivery`, `cron.failureAlert`,
- * and the `delivery`/`failureAlert` routes under `cron.agents` and
+ * and the result delivery routes under `cron.agents` and
  * `cron.creators`. `last` and webhook failure routes name no chat channel, and a
  * channel implied by a `to` prefix only resolves for an active plugin, so
  * neither can point at a missing channel.
@@ -35,7 +35,6 @@ export function listCronDefaultDestinationChannels(
   for (const [scope, entries] of Object.entries(scoped)) {
     for (const [key, entry] of Object.entries(entries ?? {})) {
       add(`cron.${scope}.${key}.delivery`, entry?.delivery);
-      add(`cron.${scope}.${key}.failureAlert`, entry?.failureAlert);
     }
   }
   return refs;

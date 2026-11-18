@@ -280,7 +280,7 @@ describe("ownerless skip transaction guards", () => {
     { label: "captured absence", configuredDefault: undefined, rawDefault: undefined },
   ])("finishes a committed skip after default routing changes ($label)", async (testCase) => {
     const job = commandJob(`committed-skip-${testCase.label.replaceAll(" ", "-")}`);
-    job.failureAlert = { after: 1, cooldownMs: 0, includeSkipped: true };
+    job.failureAlert = true;
     let currentDefault: string | undefined = testCase.rawDefault;
     const { state, storePath, events, execute } = await setupOwnerlessJob(
       job,

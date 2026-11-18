@@ -8,11 +8,7 @@ import {
   sessionCreatorProfileId,
   type SessionCreatedActor,
 } from "../config/sessions/session-entry-provenance.js";
-import type {
-  CronConfig,
-  CronDefaultDeliveryDestinationConfig,
-  CronFailureDestinationConfig,
-} from "../config/types.cron.js";
+import type { CronConfig, CronDefaultDeliveryDestinationConfig } from "../config/types.cron.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import { tryResolveCronJobEffectiveAgentId } from "./agent-id.js";
 import { hasExplicitCronDeliveryTarget } from "./delivery-target-validation.js";
@@ -22,7 +18,7 @@ import type { CronDelivery, CronJob } from "./types.js";
 
 /** Gateway config, job owner, and job creator used to select configured default destinations. */
 export type CronDeliveryDefaultsScope = {
-  cronConfig?: Pick<CronConfig, "delivery" | "failureAlert" | "agents" | "creators">;
+  cronConfig?: Pick<CronConfig, "delivery" | "agents" | "creators">;
   /** Effective agent that owns the job; selects `cron.agents.<agentId>` defaults. */
   agentId?: string;
   /** Gateway profile of the human who created the job; selects `cron.creators.<profileId>`. */
@@ -86,32 +82,6 @@ export function resolveCronDefaultDeliveryDestination(
     resolveAgentCronDefaults(scope)?.delivery ??
     scope?.cronConfig?.delivery
   );
-}
-
-/**
- * Returns the failure-alert config whose route fields come from the job creator's
- * default, else the owner agent's default, when one exists. Tuning (enabled,
- * after, cooldown, skipped runs) stays Gateway-wide; the scoped route replaces
- * the global route fields whole.
- */
-export function resolveCronFailureAlertDefaults(
-  scope: CronDeliveryDefaultsScope | undefined,
-): CronConfig["failureAlert"] {
-  const global = scope?.cronConfig?.failureAlert;
-  const agentRoute: CronFailureDestinationConfig | undefined =
-    resolveCreatorCronDefaults(scope)?.failureAlert ??
-    resolveAgentCronDefaults(scope)?.failureAlert;
-  if (!agentRoute) {
-    return global;
-  }
-  return {
-    ...global,
-    mode: agentRoute.mode,
-    channel: agentRoute.channel,
-    to: agentRoute.to,
-    threadId: agentRoute.threadId,
-    accountId: agentRoute.accountId,
-  };
 }
 
 /**

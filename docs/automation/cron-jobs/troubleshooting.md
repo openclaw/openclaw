@@ -28,7 +28,7 @@ openclaw doctor
 
 <AccordionGroup>
   <Accordion title="Reminder creation rejected">
-    - Empty delivery targets are rejected before normalization. Supply a valid target, or omit the unused optional object (for example, `delivery.failureDestination`) instead of filling its fields with empty strings.
+    - Empty delivery targets are rejected before normalization. Supply a valid target, or omit the unused optional object instead of filling its fields with empty strings.
     - A one-time `schedule.kind: "at"` cannot have a `trigger`. Remove `trigger` for an ordinary reminder. If the condition is intentional, use a recurring `every` or `cron` schedule instead. Rejected requests do not create a job; correct the named field before retrying.
 
   </Accordion>

@@ -471,7 +471,6 @@ export async function finalizeCronRun(params: {
           : undefined),
     spawnOnlyHandoff,
     sourceDeliveryOutcome,
-    deliveryBestEffort: prepared.input.job.delivery?.bestEffort === true,
     deliveryPayloads,
     synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,

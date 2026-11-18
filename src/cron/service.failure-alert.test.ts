@@ -17,7 +17,7 @@ const { withFailureAlertCron } = setupFailureAlertSuite();
 it("passes an explicit failure thread to the delivery hook", () =>
   withAlerts(async ({ addJob, runJob, sendCronFailureAlert }) => {
     const job = await addJob("threaded failure", {
-      failureAlert: { ...telegramRoute, threadId: 42 },
+      delivery: { ...createTelegramDelivery(), threadId: 42 },
     });
     await runJob(job, 1, timeoutFailure);
     expect(sendCronFailureAlert).toHaveBeenCalledWith(
@@ -119,7 +119,7 @@ describe("CronService failure alerts", () => {
           const atMs = Date.now() + 60_000;
           const oneShot = await addJob(`one-shot ${mode}`, {
             schedule: { kind: "at", at: new Date(atMs).toISOString() },
-            failureAlert: { after: 1 },
+            failureAlert: true,
           });
           if (mode === "due") {
             vi.setSystemTime(atMs);
@@ -137,7 +137,7 @@ describe("CronService failure alerts", () => {
           }
         }
 
-        await cron.update(job.id, { enabled: false, failureAlert: { after: 1 } });
+        await cron.update(job.id, { enabled: false, failureAlert: true });
         await cron.run(job.id, "force");
         expect(cron.getJob(job.id)?.enabled).toBe(false);
         expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeUndefined();
@@ -173,13 +173,7 @@ describe("CronService failure alerts", () => {
   it("groups delivery failures with the job cooldown without an after gate", () =>
     withAlerts(
       async ({ cron, addJob, runJob }) => {
-        const job = await addJob("delivery cooldown", {
-          delivery: {
-            ...createTelegramDelivery(),
-            failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
-          },
-          failureAlert: { after: 8, cooldownMs: 120_000 },
-        });
+        const job = await addJob("delivery cooldown");
         const firstAt = Date.now();
         await runJob(job, 1);
 
@@ -205,7 +199,12 @@ describe("CronService failure alerts", () => {
         expect(cron.getJob(job.id)?.state.lastFailureAlertAtMs).toBe(Date.now());
       },
       {
-        failureAlert: { cooldownMs: 60_000 },
+        failureAlert: {
+          after: 8,
+          cooldownMs: 120_000,
+          mode: "webhook",
+          to: "https://alerts.example.test/cron",
+        },
         runResult: { status: "ok", delivered: false, deliveryError: "primary rejected" },
       },
     ));
@@ -297,84 +296,6 @@ describe("CronService failure alerts", () => {
       },
       {
         failureAlert: { after: 1, cooldownMs: 0 },
-      },
-    ));
-
-  it.each([false, true])("routes skipped alerts with an owned destination=%s", (owned) => {
-    const name = owned ? "skipped job with a failure destination" : "updated skipped alert job";
-    return withAlerts(
-      async ({ cron, sendCronFailureAlert, addJob, runJob }) => {
-        const route = { channel: "telegram", to: "12345" };
-        const job = await addJob(
-          name,
-          owned
-            ? {
-                delivery: { mode: "none", failureDestination: { channel: "slack", to: "#alerts" } },
-              }
-            : { delivery: undefined, failureAlert: { after: 1, ...route } },
-        );
-        if (!owned) {
-          const updated = await cron.update(job.id, { failureAlert: { includeSkipped: true } });
-          expect(updated?.failureAlert).toMatchObject({ after: 1, ...route, includeSkipped: true });
-        }
-        await runJob(job, 1);
-        expectAlertFields(
-          sendCronFailureAlert,
-          owned ? { mode: "announce", channel: "slack", to: "#alerts" } : route,
-        );
-        expectAlertTextContaining(sendCronFailureAlert, `Automation "${name}" skipped`);
-      },
-      {
-        ...(owned
-          ? {
-              failureAlert: {
-                enabled: true,
-                after: 1,
-                includeSkipped: true,
-                mode: "announce",
-                channel: "telegram",
-                to: "telegram:19098680",
-              },
-            }
-          : {}),
-        runResult: { status: "skipped", error: "requests-in-flight" },
-      },
-    );
-  });
-
-  it("threads failure alert mode/accountId and skips best-effort jobs", () =>
-    withAlerts(
-      async ({ sendCronFailureAlert, addJob, runJob }) => {
-        const delivery = { ...createTelegramDelivery(), bestEffort: true };
-        const normalJob = await addJob("normal alert job");
-        const bestEffortJob = await addJob("best effort alert job", { delivery });
-        const explicitBestEffortJob = await addJob("explicit best effort alert job", {
-          delivery,
-          failureAlert: { after: 1, ...telegramRoute },
-        });
-
-        await runJob(normalJob, 1);
-        expectAlertFields(sendCronFailureAlert, {
-          mode: "webhook",
-          accountId: "global-account",
-          to: undefined,
-        });
-
-        await runJob(bestEffortJob, 1);
-
-        await runJob(explicitBestEffortJob, 2);
-        expectAlertFields(sendCronFailureAlert, {
-          mode: "announce",
-          ...telegramRoute,
-        });
-      },
-      {
-        failureAlert: {
-          enabled: true,
-          after: 1,
-          mode: "webhook",
-          accountId: "global-account",
-        },
       },
     ));
 

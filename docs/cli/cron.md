@@ -242,13 +242,7 @@ They cannot be set and cleared in the same command.
 
 ### Failure delivery
 
-Failure notifications resolve in this order:
-
-1. Route fields in the job's `failureAlert` object.
-2. `delivery.failureDestination` on the job, layered over the global destination fields on `cron.failureAlert` (`mode`, `channel`, `to`, `accountId`). The `cron.failureDestination` block, retired in 2026.8.1, is merged into them by `openclaw doctor --fix`.
-3. The job's primary announce target (when neither of the above resolves to a concrete destination).
-
-Jobs with one of those routes default to an execution-failure notice from the first failure, with a 1-hour cooldown; the same unresolved failure repeats at most daily. Owned jobs send that notice to their owner conversation's agent, which fixes the problem or tells you. A per-job or global `failureAlert` object explicitly activates/tunes the policy even without an existing route. `failureAlert: false` disables execution and required-delivery failure alerts for the job, but not the auto-disable safety notification. Global `enabled: false` disables inheritance unless the job has its own `failureAlert` object. `delivery.bestEffort: true` suppresses inherited/default execution alerts, but not an explicit per-job policy. Terminal one-shot failures bypass `after`: eligible owned jobs receive a repair turn in their owner conversation, other jobs use an enabled failure-alert route, and jobs without one receive the auto-disable safety notice. Operator cancellations and runs retired by a Gateway restart stay quiet.
+Use `--failure-alert` or `--no-failure-alert` with `openclaw automations add` or `edit`. Without either flag, a new job uses the Gateway default and an edit leaves the setting unchanged. The owning conversation gets the repair turn when eligible; otherwise the configured global failure route or the automation's result destination gets the notice. Turning alerts off does not hide auto-disable safety notices.
 
 Repeated failures with the same cause stay grouped into one incident across Gateway restarts. A changed cause or destination can notify after the cooldown. Successful completion clears the incident silently; the recovery stays in automation history. Skipped runs and unknown delivery outcomes do not count as recovery. If script setup cannot refresh tools after a plugin reload, the alert explains that automatic recovery failed before the script ran.
 
@@ -256,17 +250,13 @@ After an in-place plugin replacement, the next script invocation refreshes its r
 
 For transient failures, a scheduler-authored repair may intentionally return `NO_REPLY` and finish silently without a WebChat error. Public messages do not gain that waiver by claiming cron provenance.
 
-<Note>
-Main-session system-event and script jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Agent-turn and isolated jobs accept it in all modes.
-</Note>
-
 Chat failure notifications include the run start time in the agent's configured user timezone. Webhook message text stays stable and exposes the instant as `runAtMs`.
 
 Isolated automation runs treat run-level agent failures as job errors, even when no reply payload is produced. Model and provider failures still increment error counters and trigger failure notifications.
 
 Command jobs do not start an isolated agent turn. A zero exit code records `ok`. Non-zero exit, signal, timeout, or no-output timeout records `error`, and can trigger the same failure notification path.
 
-Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the shared job/global `failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. An alert never retries the primary route that just failed.
+Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use the owning conversation or a different global failure route without the `after` threshold and group repeated failures into one incident. Alerts for changed failures honor the global `cron.failureAlert.cooldownMs` (default 1 hour), including the first delivery failure after an execution alert. An alert never retries the primary route that just failed.
 
 An unresolved announcement target (for example, no configured channels) is a delivery-only failure when the agent turn succeeds. Its report remains in run history; configure the destination before running the job again.
 
@@ -283,7 +273,7 @@ Invalid `--tz` values are rejected before saving a job; use an IANA timezone suc
 daylight-saving transition are reported separately as `--at` errors.
 
 <Note>
-One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence and successful executions with explicit `delivery.bestEffort: true` complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
+One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delivery failure or unknown completion keeps the job disabled, with no next run, so restarts do not replay payload side effects. Intentional silence complete and delete normally. Use `--keep-after-run` to preserve successful jobs too.
 </Note>
 
 An `at` job records a terminal execution failure after a permanent error or exhausted retries. An `on-exit` job fired by its watcher is terminal on any execution error, including a transient one, because retrying would rerun the watched command. These failures record `state.autoDisabled`, which `openclaw doctor` reports. Manually force-running a paused `on-exit` job preserves its pause without recording an auto-disable.
@@ -296,7 +286,7 @@ Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 
 
 For provider network failures, request timeouts, overloads, rate limits, and server errors (not the job's own execution timeout), the scheduler first re-runs the job after 30s, 1m, and 5m (or at its next scheduled run when sooner), and holds failure alerts and owner repair requests until those re-runs also fail.
 
-Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
+Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but the global `cron.failureAlert.includeSkipped` policy can opt failure alerts into repeated skipped-run notifications.
 
 A local configured model provider has a base URL on loopback, on a private network, or on `.local`. For isolated jobs that target such a provider, the scheduler runs a lightweight provider preflight before it starts the agent turn. The scheduler checks `api: "ollama"` providers at `/api/tags`. It checks other local OpenAI-compatible providers (`api: "openai-completions"`, for example vLLM, SGLang, and LM Studio) at `/models`. If the endpoint is unreachable, the scheduler records the run as `skipped` and retries it on a later schedule. It caches the reachability result per endpoint for 5 minutes, so many jobs against the same local server do not send repeated checks.
 
@@ -345,7 +335,7 @@ The automation `--model` is a **job primary**, not a chat-session `/model` overr
 - When a job has `--model` but no fallback list is configured, OpenClaw passes an explicit empty fallback override. The agent primary is therefore not appended as a hidden retry target.
 - Local-provider preflight checks walk configured fallbacks before marking a run `skipped`.
 
-When every local provider is unreachable, `automations runs` and `automations show` retain the skipped status and preflight reason. Start the provider or correct its configured endpoint. Repeated preflight skips use the existing failure-alert route and threshold without requiring `failureAlert.includeSkipped`, while explicit alert opt-outs still apply. Recurring jobs stay enabled and resume on a later scheduled run once reachability is checked again; endpoint results are cached for up to five minutes.
+When every local provider is unreachable, `automations runs` and `automations show` retain the skipped status and preflight reason. Start the provider or correct its configured endpoint. Repeated preflight skips use the existing failure-alert route and threshold even when `cron.failureAlert.includeSkipped` is off, while explicit alert opt-outs still apply. Recurring jobs stay enabled and resume on a later scheduled run once reachability is checked again; endpoint results are cached for up to five minutes.
 
 `openclaw doctor` reports jobs that already have `payload.model` set, including provider namespace counts and mismatches against `agents.defaults.model`. Use that check when auth, provider, or billing behavior looks different between live chat and scheduled jobs.
 
@@ -386,7 +376,7 @@ A literal leading `NO_REPLY\n` strips that one control line and delivers the res
 
 Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`. Genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
-Successful executions with an unconfirmed delivery outcome show `delivery unknown`, including webhook requests that time out before receiving response headers. This label applies to both required and best-effort delivery; it does not claim delivery failed. JSON execution status remains `ok`.
+Successful executions with an unconfirmed delivery outcome show `delivery unknown`, including webhook requests that time out before receiving response headers. This label does not claim delivery failed. JSON execution status remains `ok`.
 
 ### Structured denials
 
@@ -587,8 +577,8 @@ Delivery tweaks:
 ```bash
 openclaw automations edit <job-id> --announce --channel slack --to "channel:C1234567890"
 openclaw automations edit <job-id> --webhook "https://example.invalid/openclaw/cron"
-openclaw automations edit <job-id> --best-effort-deliver
-openclaw automations edit <job-id> --no-best-effort-deliver
+openclaw automations edit <job-id> --failure-alert
+openclaw automations edit <job-id> --no-failure-alert
 openclaw automations edit <job-id> --no-deliver
 ```
 

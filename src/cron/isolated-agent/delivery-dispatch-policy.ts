@@ -134,7 +134,6 @@ export async function resolveDescendantSubagentFollowup(params: {
   sessionKey: string;
   runStartedAt: number;
   timeoutMs: number;
-  deliveryBestEffort: boolean;
   spawnOnlyHandoff: boolean;
   initialSynthesizedText: string;
   abortSignal?: AbortSignal;
@@ -173,7 +172,7 @@ export async function resolveDescendantSubagentFollowup(params: {
         runStartedAt: params.runStartedAt,
       })
     : undefined;
-  if (!params.deliveryBestEffort && hasUnsettledDescendants) {
+  if (hasUnsettledDescendants) {
     let finalReply = await followupRuntime?.waitForDescendantSubagentSummary({
       sessionKey: params.sessionKey,
       initialReply: params.initialSynthesizedText,

@@ -660,6 +660,10 @@ quarantine files, including linked files, and reports their deferred archival.
 The live Doctor phase imports those sources and archives them after package
 installation. This also protects updates started by supported older releases.
 
+## Automation failure alerts
+
+After upgrading, run `openclaw doctor --fix`. Doctor backs up cron state, converts a custom alert object to On, preserves Off, and lists the settings it removes for each job. It removes per-agent and per-creator failure routes without changing result destinations or the global `cron.failureAlert` policy. It also removes best-effort delivery. When the old notification or delivery behavior cannot be kept, Doctor pauses the job for review instead of changing it silently. No job is deleted.
+
 ## Legacy cron delivery settings
 
 A stored delivery object must name its mode: `none`, `announce`, or `webhook`.
@@ -671,8 +675,7 @@ The scheduler keeps unrepaired jobs visible and reports `openclaw doctor --fix`;
 it withholds their execution while healthy jobs continue. Doctor repairs known
 legacy values. For an unknown value, explicitly edit the delivery mode after
 reviewing the intended route. Unrelated edits cannot silently discard it.
-Wholly omitted delivery still uses the job's normal defaults; optional failure
-notification fields still inherit their configured defaults.
+Wholly omitted delivery still uses the job's normal defaults.
 
 Gateway `cron.add` and `cron.update` requests still accept the deprecated
 `delivery.mode: "deliver"` spelling and persist `announce`. Clients should send

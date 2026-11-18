@@ -26,7 +26,6 @@ type TimelessOutcome = Omit<Outcome, "startedAt" | "endedAt"> &
   Partial<Pick<Outcome, "startedAt" | "endedAt">>;
 const alertDelivery = {
   mode: "announce",
-  failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
 } satisfies CronJob["delivery"];
 
 function alertFixture(
@@ -36,7 +35,20 @@ function alertFixture(
 ) {
   const store = fixtures.makeStorePath();
   const job = createAlertJob({ id: crypto.randomUUID(), dueAt });
-  const state = createAlertState({ storePath: store.storePath, nowMs, sendCronFailureAlert: send });
+  const state = createAlertState({
+    storePath: store.storePath,
+    nowMs,
+    sendCronFailureAlert: send,
+    cronConfig: {
+      failureAlert: {
+        after: 1,
+        cooldownMs: 60_000,
+        includeSkipped: true,
+        mode: "webhook",
+        to: "https://alerts.example.test/cron",
+      },
+    },
+  });
   const outcome = (result: TimelessOutcome) =>
     applyJobResultAndDrainNotifications(state, job, {
       startedAt: nowMs(),
@@ -125,7 +137,7 @@ it.each([
     const endedAt = Date.parse("2026-08-01T14:50:00Z");
     const { job, state, send } = alertFixture(() => endedAt + 30_000, endedAt - 10);
     job.delivery = { mode: "none" };
-    job.failureAlert = enabled ? { after: 1, cooldownMs: 60_000, includeSkipped: true } : false;
+    job.failureAlert = enabled;
     job.state.lastFailureAlertAtMs = endedAt + priorOffset;
     const deferredNotifications: DeferredCronNotifications = [];
     restoreFinalizedStartupRun({
@@ -161,7 +173,7 @@ it("resumes skipped alerts after a clock rollback only after durable persistence
     durableAtSend = await durable();
   });
   const { job, state, persist, durable, finalize } = alertFixture(() => now, now, send);
-  job.failureAlert = { after: 1, cooldownMs: 60_000, includeSkipped: true };
+  job.failureAlert = true;
   job.state.lastFailureAlertAtMs = dueAt + 3_600_000;
   await persist();
   await finalize("skipped", "provider unavailable");
@@ -242,7 +254,8 @@ it.each([1, 3])(
   "keeps a payload failure open across trigger checks (threshold=%s)",
   async (after) => {
     let now = Date.parse("2026-08-01T15:00:00Z");
-    const { job, quiet, outcome, send } = alertFixture(() => now);
+    const { job, state, quiet, outcome, send } = alertFixture(() => now);
+    state.deps.cronConfig = { failureAlert: { after, cooldownMs: 60_000 } };
     const fail = (source: "trigger" | "payload", code: "timeout" | "plugin_reload_failed") =>
       outcome({
         status: "error",
@@ -250,7 +263,7 @@ it.each([1, 3])(
         ...cronScriptFailureMetadata(source, code),
       });
     await fail("trigger", "timeout");
-    job.failureAlert = { after, cooldownMs: 60_000 };
+    job.failureAlert = true;
     now += 1_000;
     await fail("payload", "timeout");
     expect(send).toHaveBeenCalledOnce();

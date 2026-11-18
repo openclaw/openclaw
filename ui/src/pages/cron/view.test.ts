@@ -82,7 +82,7 @@ describe("cron view editor", () => {
   it("falls back to configured channel labels when metadata has no label", async () => {
     const container = await renderEditor(
       {
-        failureAlertMode: "custom",
+        failureAlert: true,
       },
       {
         channels: ["telegram"],

@@ -493,7 +493,6 @@ export function authorCronRunCompletion<
     ...result,
     deliveryState,
     completionStatus: resolveAdmittedCronCompletionStatus(
-      job,
       result.status,
       deliveryState.status,
       deliveryState.deliverySuppressionReason,

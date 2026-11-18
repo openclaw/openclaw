@@ -771,7 +771,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         wakeMode: "now",
         payload: { kind: "agentTurn", message: unfinishedPrompt },
         delivery: { mode: "none" },
-        failureAlert: { after: 1, cooldownMs: 0 },
+        failureAlert: true,
       });
       // Omit the completion wait: the process must die with accepted, unfinished work.
       const unfinishedRun = await gateway.request<{ runId: string }>("cron.run", {

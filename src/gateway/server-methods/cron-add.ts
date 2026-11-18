@@ -6,7 +6,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
-import { assertValidCronCreateDelivery } from "../../cron/delivery-channel-validation.js";
+import { assertValidCronAnnounceDelivery } from "../../cron/delivery-channel-validation.js";
 import { resolveCronDeliveryPreview } from "../../cron/delivery-preview.js";
 import { cronAddResultReadView } from "../../cron/job-read-view.js";
 import { readPluginCommandCreation } from "../../cron/plugin-command-creation.js";
@@ -172,11 +172,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       runtimeAuthority !== undefined,
     );
     await assertCronDoesNotTargetAgentHarness(jobCreate, cfg);
-    await assertValidCronCreateDelivery(
-      cfg,
-      { ...jobCreate, createdActor: creatorOptions.createdActor },
-      context.cron.getDefaultAgentId(),
-    );
+    await assertValidCronAnnounceDelivery({ cfg, delivery: jobCreate.delivery });
   } catch (err) {
     creatorOptions?.disposeOperatorSource?.();
     creatorOptions?.disposeInferenceAuthorization?.();

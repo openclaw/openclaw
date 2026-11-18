@@ -458,7 +458,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     }
   });
 
-  it.each(["silent", "best-effort", "execution error", "presentation warning"])(
+  it.each(["silent", "execution error", "presentation warning"])(
     "settles isolated %s cleanup after releasing its lease",
     async (outcome) => {
       using preparation = vi.spyOn(
@@ -469,7 +469,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         (await vi.importActual<typeof import("./delivery-dispatch.js")>("./delivery-dispatch.js"))
           .dispatchCronDelivery,
       );
-      const bestEffort = outcome !== "silent";
       const failed = outcome === "execution error" || outcome === "presentation warning";
       resolveCronPayloadOutcomeMock.mockImplementation(
         (await vi.importActual<typeof import("./helpers.js")>("./helpers.js"))
@@ -529,7 +528,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
           sessionKey: "cron:test-job",
           job: makeIsolatedAgentJobFixture({
             deleteAfterRun: true,
-            delivery: { mode: "announce", bestEffort },
+            delivery: { mode: "announce" },
           }),
         }),
       );

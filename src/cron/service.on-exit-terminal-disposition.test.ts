@@ -23,7 +23,6 @@ it.each<
   ["transient failure with route", "rate limit exceeded", routed, 0, 1],
   ["same incident during cooldown", permanentError, routed, 0, 2, 2],
   ["no route", permanentError, { mode: "none" }, 1, 0],
-  ["best-effort route", permanentError, { ...routed, bestEffort: true }, 1, 0],
 ])(
   "records and notifies a watcher terminal %s",
   async (_name, error, delivery, notices, alerts, priorFailures = 0) => {

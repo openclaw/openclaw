@@ -57,9 +57,8 @@ describe("resolveTransientCronRetryDecision", () => {
     async (route) => {
       const job = makeJob("at");
       job.sessionTarget = "main";
-      job.failureAlert = route
-        ? { channel: "telegram", to: "synthetic-owner", cooldownMs: 60_000 }
-        : false;
+      job.failureAlert = route;
+      job.delivery = { mode: "announce", channel: "telegram", to: "synthetic-owner" };
       job.state.lastFailureAlertAtMs = endedAt;
       const notifications = await executeAndApply(job, {
         runSessionEvent: (request) =>

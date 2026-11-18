@@ -362,7 +362,7 @@ function createFixture() {
   });
   job.schedule = { kind: "every", everyMs: 60_000, anchorMs: clock.now };
   job.delivery = { mode: "none" };
-  job.failureAlert = { after: 1, cooldownMs: 60_000 };
+  job.failureAlert = true;
   const sendCronFailureAlert = vi.fn(async () => undefined);
   const state = createCronRegressionState({
     storePath: store.storePath,

@@ -67,7 +67,10 @@ type CronFailureAlertRoute = {
   mode?: "announce" | "webhook";
   accountId?: string;
   threadId?: string | number;
+  target?: "owner";
+  directPolicy?: "allow" | "block";
   alternateRoute: boolean;
+  hasDestination?: boolean;
 };
 
 export type ResolvedFailureAlert = CronFailureAlertRoute & {
@@ -90,7 +93,9 @@ export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
       kind: "failure-repair";
       job: CronNotificationJob;
       text: string;
-      fallback: CronFailureAlertNotification;
+      fallback?:
+        | CronFailureAlertNotification
+        | { kind: "auto-disabled"; job: CronNotificationJob; text: string };
     }
   | CronFailureAlertNotification
 );

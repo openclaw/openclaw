@@ -1519,10 +1519,9 @@ describe("buildGatewayCronService", () => {
   it.each([
     ["no_visible_result", false, "command", "default"],
     ["no_visible_payload", false, "script", "required"],
-    ["cancelled_by_message_sending_hook", false, "command", "optional"],
+    ["cancelled_by_message_sending_hook", false, "command", "required"],
     ["adapter_returned_no_identity", true, "command", "default"],
     ["adapter_returned_no_identity", true, "script", "required"],
-    ["adapter_returned_no_identity", true, "script", "optional"],
   ] as const)(
     "records %s suppression (recipientReached=%s, payload=%s, policy=%s) without retry",
     async (reason, recipientReached, payloadKind, policy) => {
@@ -1558,7 +1557,6 @@ describe("buildGatewayCronService", () => {
               mode: "announce",
               channel: "telegram",
               to: "123",
-              ...(policy === "default" ? {} : { bestEffort: policy === "optional" }),
             },
           },
         );
@@ -1567,21 +1565,16 @@ describe("buildGatewayCronService", () => {
 
         expect(mocks.announce).toHaveBeenCalledOnce();
         const expectedDeliveryStatus = recipientReached ? "unknown" : "not-delivered";
-        const required = policy !== "optional";
         const deliveryError = `cron delivery ${recipientReached ? "outcome is unknown" : "was suppressed"}: ${reason}`;
         const updated = state.cron.getJob(job.id);
-        if (required) {
-          expect(updated?.state).toMatchObject({
-            lastDeliveryStatus: expectedDeliveryStatus,
-            lastDeliveryError: deliveryError,
-          });
-        } else {
-          expect(updated).toBeUndefined();
-        }
+        expect(updated?.state).toMatchObject({
+          lastDeliveryStatus: expectedDeliveryStatus,
+          lastDeliveryError: deliveryError,
+        });
         const finished = finishedEvent(job.id);
         expect(finished).toMatchObject({
           status: "ok",
-          completionStatus: required ? (recipientReached ? "unknown" : "failed") : "succeeded",
+          completionStatus: recipientReached ? "unknown" : "failed",
           deliveryStatus: expectedDeliveryStatus,
           deliveryError,
         });
@@ -1778,7 +1771,7 @@ describe("buildGatewayCronService", () => {
         state,
         "successful-command-required-delivery",
         "process.stdout.write('ok')",
-        { deleteAfterRun: true, delivery: { mode: "announce", bestEffort: false } },
+        { deleteAfterRun: true, delivery: { mode: "announce" } },
       );
 
       await state.cron.run(job.id, "force");
@@ -1884,7 +1877,7 @@ describe("buildGatewayCronService", () => {
       async (state) => {
         const job = await addScriptJob(state, "script failure detail", "return invalid", {
           deleteAfterRun: false,
-          failureAlert: { after: 1 },
+          failureAlert: true,
           delivery: {
             mode: "announce",
             channel: "telegram",
@@ -1893,7 +1886,6 @@ describe("buildGatewayCronService", () => {
               mode: "webhook",
               to: "https://example.invalid/cron-finished",
             },
-            failureDestination: { mode: "announce", channel: "telegram", to: "456" },
           },
         });
         broadcast.mockClear();
@@ -1935,15 +1927,12 @@ describe("buildGatewayCronService", () => {
   it.each([
     {
       name: "default required",
-      bestEffort: undefined,
       retained: true,
       completion: "failed",
     },
-    { name: "explicit required", bestEffort: false, retained: true, completion: "failed" },
-    { name: "explicit best-effort", bestEffort: true, retained: false, completion: "succeeded" },
   ])(
     "keeps script execution successful after $name announce failure",
-    async ({ name, bestEffort, retained, completion }) => {
+    async ({ name, retained, completion }) => {
       const cfg = createTriggerConfig(`server-cron-script-${name}`);
 
       mockScriptResult("queue changed");
@@ -1960,7 +1949,6 @@ describe("buildGatewayCronService", () => {
               mode: "announce",
               channel: "telegram",
               to: "123",
-              ...(bestEffort === undefined ? {} : { bestEffort }),
             },
           },
         );

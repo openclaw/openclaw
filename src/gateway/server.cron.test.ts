@@ -256,7 +256,7 @@ async function addWebhookCronJob(params: {
   sessionTarget?: "main" | "isolated";
   payloadText?: string;
   delivery: Record<string, unknown>;
-  failureAlert?: Record<string, unknown>;
+  failureAlert?: boolean;
 }) {
   const { ws, name, sessionTarget = "main", payloadText, delivery, failureAlert } = params;
   const response = await rpcReq(ws, "cron.add", {
@@ -897,12 +897,12 @@ describe("gateway server cron", () => {
         }
       });
     };
-    const runFailureAlert = async (name: string, failureAlert: Record<string, unknown>) => {
+    const runFailureAlert = async (name: string, delivery: Record<string, unknown>) => {
       cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
       const jobId = await add(name, {
         sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        failureAlert: { after: 1, ...failureAlert },
+        delivery,
+        failureAlert: true,
       });
       await run(jobId);
       return jobId;

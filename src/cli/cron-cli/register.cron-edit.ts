@@ -1,5 +1,4 @@
 import {
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -11,7 +10,6 @@ import { defaultRuntime } from "../../runtime.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
@@ -35,7 +33,6 @@ import {
   parseCronNoOutputTimeoutOption,
   parseCronStringList,
   parseCronThinkingOption,
-  getCronChannelOptions,
   handleCronCliError,
   parseCronIntegerOption,
   parseCronStringOption,
@@ -120,25 +117,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-account", "Unset the per-job delivery account override", false)
       .option("--clear-delivery-target", "Remove dynamic owner targeting", false)
       .option("--clear-direct-policy", "Remove the per-job direct-message policy", false)
-      .option("--no-best-effort-deliver", "Fail job when delivery fails")
-      .option("--failure-alert", "Enable failure alerts for this job")
-      .option("--no-failure-alert", "Disable failure alerts for this job")
-      .option("--failure-alert-after <n>", "Alert after N consecutive job errors")
-      .option(
-        "--failure-alert-channel <channel>",
-        `Failure alert channel (${getCronChannelOptions()})`,
-      )
-      .option("--failure-alert-to <dest>", "Failure alert destination")
-      .option("--failure-alert-thread-id <id>", "Thread ID for failure alerts")
-      .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
-      .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
-      .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
-      .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
-      .option(
-        "--failure-alert-account-id <id>",
-        "Account ID for failure alert channel (multi-account setups)",
-      )
-      .action(async (idArg, opts: CronEditOptions) => {
+      .action(async (idArg, opts: CronEditOptions, cmd) => {
         try {
           const id = requireCronJobId(idArg);
           if (opts.clearTools && opts.tools !== undefined) {
@@ -420,7 +399,6 @@ export function registerCronEditCommand(cron: Command) {
             present: key === "threadId" ? typeof value === "number" : typeof value === "string",
           }));
           const hasDeliveryTarget = deliveryFields.some((field) => field.present || field.clear);
-          const hasBestEffort = typeof opts.bestEffortDeliver === "boolean";
           if (hasWebhookDelivery && hasDeliveryTarget) {
             throw new CronCliError("--webhook cannot be combined with chat delivery options.");
           }
@@ -559,7 +537,7 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort || hasDeliveryPolicy) {
+          if (hasDeliveryModeFlag || hasDeliveryTarget || hasDeliveryPolicy) {
             const delivery: Record<string, unknown> = { ...deliveryPolicy };
             if (hasDeliveryModeFlag) {
               delivery.mode = hasWebhookDelivery
@@ -567,9 +545,6 @@ export function registerCronEditCommand(cron: Command) {
                 : opts.announce || opts.deliver === true
                   ? "announce"
                   : "none";
-            } else if (opts.bestEffortDeliver === true) {
-              // Back-compat: enabling best-effort historically implied announce mode.
-              delivery.mode = "announce";
             }
             for (const { key, value, present, clear } of deliveryFields) {
               if (key === "to" && hasWebhookDelivery) {
@@ -581,9 +556,6 @@ export function registerCronEditCommand(cron: Command) {
                     ? value
                     : normalizeOptionalString(value);
               }
-            }
-            if (typeof opts.bestEffortDeliver === "boolean") {
-              delivery.bestEffort = opts.bestEffortDeliver;
             }
             if (
               hasDeliveryPolicy ||
@@ -628,79 +600,8 @@ export function registerCronEditCommand(cron: Command) {
             patch.delivery = delivery;
           }
 
-          const hasFailureAlertIncludeSkipped =
-            typeof opts.failureAlertIncludeSkipped === "boolean";
-          const hasFailureAlertExcludeSkipped =
-            typeof opts.failureAlertExcludeSkipped === "boolean";
-          if (hasFailureAlertIncludeSkipped && hasFailureAlertExcludeSkipped) {
-            throw new CronCliError(
-              "Use either --failure-alert-include-skipped or --failure-alert-exclude-skipped.",
-            );
-          }
-          const hasFailureAlertFields =
-            [
-              "failureAlertAfter",
-              "failureAlertChannel",
-              "failureAlertTo",
-              "failureAlertThreadId",
-              "failureAlertCooldown",
-              "failureAlertMode",
-              "failureAlertAccountId",
-            ].some((key) => typeof opts[key] === "string") ||
-            hasFailureAlertIncludeSkipped ||
-            hasFailureAlertExcludeSkipped;
-          const failureAlertFlag =
-            typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
-          if (failureAlertFlag === false && hasFailureAlertFields) {
-            throw new CronCliError(
-              "Use --no-failure-alert alone (without failure-alert-* options).",
-            );
-          }
-          if (failureAlertFlag === false) {
-            patch.failureAlert = false;
-          } else if (failureAlertFlag === true || hasFailureAlertFields) {
-            const failureAlert: Record<string, unknown> = {};
-            if (typeof opts.failureAlertAfter === "string") {
-              failureAlert.after = parseCronIntegerOption(
-                opts.failureAlertAfter,
-                "--failure-alert-after",
-              );
-            }
-            if (typeof opts.failureAlertChannel === "string") {
-              failureAlert.channel =
-                normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
-            }
-            if (typeof opts.failureAlertThreadId === "string") {
-              failureAlert.threadId = normalizeOptionalString(opts.failureAlertThreadId) ?? null;
-            }
-            if (typeof opts.failureAlertTo === "string") {
-              failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;
-            }
-            if (typeof opts.failureAlertCooldown === "string") {
-              let cooldownMs: number;
-              try {
-                cooldownMs = parseDurationMs(opts.failureAlertCooldown);
-              } catch {
-                throw new CronCliError("Invalid --failure-alert-cooldown.");
-              }
-              failureAlert.cooldownMs = cooldownMs;
-            }
-            if (hasFailureAlertIncludeSkipped || hasFailureAlertExcludeSkipped) {
-              failureAlert.includeSkipped = hasFailureAlertIncludeSkipped;
-            }
-            if (typeof opts.failureAlertMode === "string") {
-              const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);
-              if (mode !== "announce" && mode !== "webhook") {
-                throw new CronCliError(
-                  "Invalid --failure-alert-mode (must be 'announce' or 'webhook').",
-                );
-              }
-              failureAlert.mode = mode;
-            }
-            if (typeof opts.failureAlertAccountId === "string") {
-              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? null;
-            }
-            patch.failureAlert = failureAlert;
+          if (cmd.getOptionValueSource("failureAlert") === "cli") {
+            patch.failureAlert = opts.failureAlert;
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {

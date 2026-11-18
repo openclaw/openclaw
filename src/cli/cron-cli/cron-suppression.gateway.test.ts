@@ -184,7 +184,6 @@ describe("cron CLI delivery suppression readback", () => {
               satisfiesSourceDelivery: false,
               unverifiedMessageToolDelivery: false,
             },
-            deliveryBestEffort: job.delivery?.bestEffort === true,
             deliveryPayloads: text ? [{ text }] : [],
             synthesizedText: text,
             summary: text,
@@ -251,7 +250,6 @@ describe("cron CLI delivery suppression readback", () => {
                       mode: "announce",
                       channel: "telegram",
                       to: "123",
-                      bestEffort: phase === "delivery-error",
                     },
             });
             runReleased = undefined;

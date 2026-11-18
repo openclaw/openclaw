@@ -35,18 +35,10 @@ export function assertCronDeliveryInputNonBlankFields(delivery: unknown, fieldPr
   const deliveryRecord = delivery as {
     channel?: unknown;
     to?: unknown;
-    failureDestination?: unknown;
     completionDestination?: unknown;
   };
   assertNonBlankStringField(`${fieldPrefix}.channel`, deliveryRecord.channel);
   assertNonBlankStringField(`${fieldPrefix}.to`, deliveryRecord.to);
-
-  const failureDestination = deliveryRecord.failureDestination;
-  if (failureDestination && typeof failureDestination === "object") {
-    const failureRecord = failureDestination as { channel?: unknown; to?: unknown };
-    assertNonBlankStringField(`${fieldPrefix}.failureDestination.channel`, failureRecord.channel);
-    assertNonBlankStringField(`${fieldPrefix}.failureDestination.to`, failureRecord.to);
-  }
 
   const completionDestination = deliveryRecord.completionDestination;
   if (completionDestination && typeof completionDestination === "object") {

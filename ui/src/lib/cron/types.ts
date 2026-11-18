@@ -68,18 +68,9 @@ export type CronFormState = {
   deliveryChannel: string;
   deliveryTo: string;
   deliveryAccountId: string;
-  deliveryBestEffort: boolean;
   deliveryThreadId: CronDelivery["threadId"] | undefined;
+  failureAlert?: boolean;
   deliveryCompletionDestination: CronFormAnnounceDelivery["completionDestination"] | undefined;
-  deliveryFailureDestination: CronDelivery["failureDestination"] | undefined;
-  failureAlertMode: "inherit" | "disabled" | "custom";
-  failureAlertAfter: string;
-  failureAlertCooldownSeconds: string;
-  failureAlertChannel: string;
-  failureAlertTo: string;
-  failureAlertDeliveryMode: "" | "announce" | "webhook";
-  failureAlertAccountId: string;
-  failureAlertThreadId: CronDelivery["threadId"] | undefined;
   timeoutSeconds: string;
 };
 
@@ -103,9 +94,7 @@ export type CronFieldKey =
   | "timeoutSeconds"
   | "deliveryMode"
   | "deliveryDirectPolicy"
-  | "deliveryTo"
-  | "failureAlertAfter"
-  | "failureAlertCooldownSeconds";
+  | "deliveryTo";
 
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 

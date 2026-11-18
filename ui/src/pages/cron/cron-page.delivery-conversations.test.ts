@@ -79,43 +79,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("keeps primary account directory targets out of failure-alert suggestions", async () => {
-  const savedJob = createCronViewJob("saved-route", {
-    delivery: { mode: "announce", channel: "telegram", to: "-100saved" },
-  });
-  const request = cronRpc({
-    "cron.list": () => cronListResponse([savedJob]),
-    "conversations.list": () =>
-      directoryResult(
-        conversationTarget("-100work", { accountId: "work" }),
-        conversationTarget("-100personal", { accountId: "personal" }),
-      ),
-  });
-  const { page } = await mountPage(request, { render: true });
-  await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(1));
-  page.selectJob(
-    digestJob("editing-route", {
-      delivery: { mode: "announce", channel: "telegram", accountId: "work" },
-      failureAlert: { channel: "telegram", accountId: "personal", to: "-100personal" },
-    }),
-  );
-  // Delivery settings live in the automation's settings, opened from Edit.
-  (await waitForElement(page, '[data-test-id="cron-edit"]')).click();
-  const optionsFor = (selector: string) => {
-    const input = page.querySelector<HTMLInputElement>(selector);
-    expect(input).not.toBeNull();
-    return Array.from(input?.list?.options ?? [], (option) => option.value);
-  };
-  await waitForCronPage(() => expect(optionsFor("#cron-delivery-to")).toContain("-100work"));
-  expect(request).toHaveBeenCalledWith("conversations.list", {
-    agentId: "writer",
-    channel: "telegram",
-    limit: 100,
-  });
-  expect(optionsFor("#cron-failure-alert-to")).toEqual(["-100saved"]);
-  expect(inputValue(page, "#cron-failure-alert-to")).toBe("-100personal");
-});
-
 it("keeps account and topic routing operator-authored without rediscovering cached targets", async () => {
   const request = directoryRequest(() =>
     directoryResult(

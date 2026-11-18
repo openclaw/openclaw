@@ -23,7 +23,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   let modelSuggestions: string[] = [];
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
-  let failureAlertToSuggestions: string[] = [];
   let deliveryToSuggestions: string[] = [];
   // Only the editor consumes these inventories; list updates must not rebuild them.
   if (cron.cronCreateOpen || (cron.cronEditingJob && page.detailTab() !== "history")) {
@@ -71,7 +70,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       cron.cronJobs.map((job) => (job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "")),
     );
     accountSuggestions = accountTargets;
-    failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
     deliveryToSuggestions = forDeliveryMode(deliveryTargets);
   }
   const canManage =
@@ -141,7 +139,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     thinkingSuggestions: THINKING_SUGGESTIONS,
     timezoneSuggestions,
     deliveryToSuggestions,
-    failureAlertToSuggestions,
     accountSuggestions,
   };
 }

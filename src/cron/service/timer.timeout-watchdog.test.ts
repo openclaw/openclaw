@@ -531,8 +531,8 @@ it("gives setup progress the full configured timeout and cleans up an abort-igno
 it("re-arms the pre-execution watchdog when a fallback runner returns to setup (#82811)", async () => {
   const job = dueJob("isolated-before-agent-reply-unhandled", {
     name: "before agent reply unhandled regression",
-    delivery: { mode: "announce", channel: "telegram", to: "19098680", bestEffort: true },
-    failureAlert: { after: 1, mode: "announce", channel: "telegram", to: "12345" },
+    delivery: { mode: "announce", channel: "telegram", to: "19098680" },
+    failureAlert: true,
   });
   const runner = pendingRunner(({ onExecutionStarted, onExecutionPhase }) => {
     onExecutionStarted?.({ jobId: job.id, phase: "runner_entered" });

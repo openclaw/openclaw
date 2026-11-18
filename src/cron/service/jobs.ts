@@ -12,6 +12,8 @@ import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.
 import {
   assertCanonicalCronDeliveryMode,
   hasCanonicalCronDeliveryMode,
+  hasCanonicalCronFailureSettings,
+  CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE,
 } from "../store/delivery-codec.js";
 import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
@@ -23,7 +25,7 @@ import type {
   CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../types.js";
-import { mergeCronDelivery, mergeCronFailureAlert } from "./delivery-merge.js";
+import { mergeCronDelivery } from "./delivery-merge.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
 import { normalizeDeclarativeLabel } from "./jobs-declarative.js";
 import {
@@ -37,7 +39,6 @@ import {
   assertTimeScheduleSatisfiable,
   assertDeliverySupport,
   assertExecutionPolicy,
-  assertFailureDestinationSupport,
   assertPacingSupport,
   assertScriptPayloadSupport,
   assertExternalSourceScheduleSupport,
@@ -175,7 +176,6 @@ function validateFullJob(
     configuredChannels,
     context.kind === "patch" ? context.patch : undefined,
   );
-  assertFailureDestinationSupport(job);
   const scheduleTouched =
     context.kind !== "patch" ||
     context.patch.schedule !== undefined ||
@@ -305,6 +305,9 @@ export function applyJobPatch(
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
 ) {
+  if (!hasCanonicalCronFailureSettings(job)) {
+    throw new Error(CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE);
+  }
   if (!hasCanonicalCronDeliveryMode(job.delivery)) {
     assertCanonicalCronDeliveryMode(patch.delivery ?? job.delivery);
   }
@@ -416,14 +419,13 @@ export function applyJobPatch(
     job.delivery = mergeCronDelivery(job.delivery, patch.delivery, implicitMode);
   }
   if ("failureAlert" in patch) {
-    job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
+    job.failureAlert = patch.failureAlert ?? undefined;
   }
   if (
     job.sessionTarget === "main" &&
     job.payload.kind !== "agentTurn" &&
     job.delivery?.mode !== "webhook"
   ) {
-    assertFailureDestinationSupport(job);
     // Retargeting may discard inherited announce routes, but must not silently
     // accept a newly authored delivery request before cleanup.
     const authoredDelivery =
@@ -446,8 +448,7 @@ export function applyJobPatch(
       });
     }
     // Clear-only failure destinations retain their global-default opt-outs.
-    const failureDestination = job.delivery?.failureDestination;
-    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
+    job.delivery = undefined;
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;
@@ -510,6 +511,9 @@ export function applyDeclarativeJobSpec(
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,
 ) {
+  if (!hasCanonicalCronFailureSettings(job)) {
+    throw new Error(CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE);
+  }
   if (!hasCanonicalCronDeliveryMode(job.delivery)) {
     assertCanonicalCronDeliveryMode(input.delivery ?? job.delivery);
   }

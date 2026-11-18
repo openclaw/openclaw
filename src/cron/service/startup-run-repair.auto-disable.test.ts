@@ -73,8 +73,8 @@ it.each([
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "do not replay" },
       // Current policy is intentionally mutable and must not decide replay.
-      delivery: { mode, bestEffort: true },
-      failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron" },
+      delivery: { mode },
+      failureAlert: true,
       state: { runningAtMs },
     });
     state.deps.sendCronFailureAlert = vi.fn(async () => undefined);

@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
+import type { OpenClawConfig } from "../../../config/types.js";
 import { classifyCronAgentTurnShellPrompt } from "../../../cron/agent-turn-command-prompt.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
@@ -24,6 +25,7 @@ import {
   IMAGE_INSPECTION_TOOL_NAME_MIGRATION,
   TASK_SUGGESTION_TOOL_NAME_MIGRATION,
 } from "../shared/legacy-tool-name-migration.js";
+import { migrateCronFailureSettings } from "./failure-alert-migration.js";
 import { normalizeLegacyDeliveryInput } from "./legacy-delivery.js";
 import {
   collectLegacyOpenAICodexCronModelRoutes,
@@ -102,6 +104,7 @@ type NormalizeCronStoreJobsResult = {
   legacyTriggerScriptJobs: string[];
   unsupportedLegacyTriggerScriptJobs: string[];
   unsupportedDeliveryModeJobs: string[];
+  failureSettingsChanges: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   legacyGatewayExecJobs: string[];
@@ -158,6 +161,7 @@ export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
   options: {
+    cron?: OpenClawConfig["cron"];
     migrateCodexModelRefs?: boolean;
     shouldMigrateCodexRuntimePolicyTarget?: (target: CronCodexRuntimePolicyTarget) => boolean;
   } = {},
@@ -168,6 +172,7 @@ export function normalizeStoredCronJobs(
   const legacyTriggerScriptJobs: string[] = [];
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
+  const failureSettingsChanges: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
   const invalidScheduledToolPolicyJobs: string[] = [];
@@ -498,6 +503,11 @@ export function normalizeStoredCronJobs(
       mutated = true;
     }
 
+    const failureSettingsChange = migrateCronFailureSettings(raw, options.cron);
+    if (failureSettingsChange) {
+      failureSettingsChanges.push(failureSettingsChange);
+      mutated = true;
+    }
     const policyMigration = migrateScheduledToolPolicy(raw);
     if (policyMigration.status === "migrated") {
       trackIssue("migratedScheduledToolPolicy");
@@ -544,6 +554,7 @@ export function normalizeStoredCronJobs(
     legacyTriggerScriptJobs,
     unsupportedLegacyTriggerScriptJobs,
     unsupportedDeliveryModeJobs,
+    failureSettingsChanges,
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,
     legacyGatewayExecJobs,

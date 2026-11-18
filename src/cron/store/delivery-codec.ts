@@ -1,8 +1,5 @@
 /** JSON codec for cron delivery configuration and explicit destination clears. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { CronDelivery } from "../types.js";
-
-const FAILURE_DESTINATION_FIELDS = ["channel", "to", "threadId", "accountId", "mode"] as const;
 
 export const CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE =
   'cron delivery requires an explicit mode: "none", "announce", or "webhook"; run openclaw doctor --fix for legacy settings or explicitly edit delivery.mode';
@@ -22,42 +19,17 @@ export function assertCanonicalCronDeliveryMode(delivery: unknown): void {
   }
 }
 
-/** Encodes explicitly undefined failure overrides as durable JSON null values. */
-export function deliveryToJson(delivery: CronDelivery): Record<string, unknown> {
-  const failureDestination = delivery.failureDestination;
-  if (!failureDestination) {
-    return { ...delivery };
-  }
-  return {
-    ...delivery,
-    failureDestination: Object.fromEntries(
-      FAILURE_DESTINATION_FIELDS.filter((field) => Object.hasOwn(failureDestination, field)).map(
-        (field) => [field, failureDestination[field] ?? null],
-      ),
-    ),
-  };
-}
+export const CRON_FAILURE_SETTINGS_REPAIR_REQUIRED_MESSAGE =
+  "automation has retired failure alert or delivery settings; run openclaw doctor --fix before running or editing it";
 
-/** Restores JSON null overrides as present-but-undefined runtime properties. */
-function deliveryFromJson(value: unknown): CronDelivery | undefined {
-  if (!isRecord(value) || !hasCanonicalCronDeliveryMode(value)) {
-    return undefined;
-  }
-  const failureDestination = value.failureDestination;
-  if (!isRecord(failureDestination)) {
-    return value as CronDelivery;
-  }
-  return {
-    ...value,
-    failureDestination: Object.fromEntries(
-      FAILURE_DESTINATION_FIELDS.filter((field) => Object.hasOwn(failureDestination, field)).map(
-        (field) => [field, failureDestination[field] ?? undefined],
-      ),
-    ),
-  } as CronDelivery;
-}
-
-export function decodeCronJobConfig(jobJson: Record<string, unknown>): Record<string, unknown> {
-  const delivery = deliveryFromJson(jobJson.delivery);
-  return delivery ? { ...jobJson, delivery } : jobJson;
+export function hasCanonicalCronFailureSettings(job: {
+  delivery?: unknown;
+  failureAlert?: unknown;
+}): boolean {
+  return (
+    (job.failureAlert === undefined || typeof job.failureAlert === "boolean") &&
+    (!isRecord(job.delivery) ||
+      (!Object.hasOwn(job.delivery, "failureDestination") &&
+        !Object.hasOwn(job.delivery, "bestEffort")))
+  );
 }

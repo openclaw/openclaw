@@ -102,49 +102,45 @@ it("disables a retained one-shot after success and does not replay it when re-en
 });
 
 it.each([
-  ["default delivery failure", undefined, false, undefined, "failed"],
-  ["best-effort delivery failure", true, false, undefined, "succeeded"],
-  ["unknown delivery", undefined, true, undefined, "unknown"],
-  ["silent suppression", false, false, "silent", "succeeded"],
-] as const)(
-  "cleans up %s once across restart",
-  async (_name, bestEffort, unknown, reason, completion) => {
-    const run = vi.fn(async () => ({
-      status: "ok" as const,
-      summary: "payload completed",
-      delivered: unknown ? undefined : false,
-      deliveryError: unknown || reason ? undefined : "delivery rejected",
-      deliverySuppressionReason: reason,
-    }));
-    await using f = await fixture({ runIsolatedAgentJob: run });
-    const { job, event } = await f.run(isolatedJob({ delivery: { mode: "announce", bestEffort } }));
-    expect(event).toMatchObject({
-      status: "ok",
-      completionStatus: completion,
-      deliveryStatus: unknown ? "unknown" : "not-delivered",
-      nextRunAtMs: undefined,
-      ...(reason ? { deliverySuppressionReason: reason } : {}),
-    });
-    const expectRetained = () => {
-      const retained = f.cron.getJob(job.id);
-      if (completion === "succeeded") {
-        expect(retained).toBeUndefined();
-      } else {
-        expect(retained).toMatchObject({
-          enabled: false,
-          state: { lastRunStatus: "ok", consecutiveErrors: 0 },
-        });
-      }
-      expect(retained?.state.nextRunAtMs).toBeUndefined();
-    };
-    expectRetained();
-    await f.restart();
-    await f.tick(atMs + 60_000);
-    expectRetained();
-    expect(run).toHaveBeenCalledOnce();
-    expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-  },
-);
+  ["required delivery failure", false, undefined, "failed"],
+  ["unknown delivery", true, undefined, "unknown"],
+  ["silent suppression", false, "silent", "succeeded"],
+] as const)("cleans up %s once across restart", async (_name, unknown, reason, completion) => {
+  const run = vi.fn(async () => ({
+    status: "ok" as const,
+    summary: "payload completed",
+    delivered: unknown ? undefined : false,
+    deliveryError: unknown || reason ? undefined : "delivery rejected",
+    deliverySuppressionReason: reason,
+  }));
+  await using f = await fixture({ runIsolatedAgentJob: run });
+  const { job, event } = await f.run(isolatedJob({ delivery: { mode: "announce" } }));
+  expect(event).toMatchObject({
+    status: "ok",
+    completionStatus: completion,
+    deliveryStatus: unknown ? "unknown" : "not-delivered",
+    nextRunAtMs: undefined,
+    ...(reason ? { deliverySuppressionReason: reason } : {}),
+  });
+  const expectRetained = () => {
+    const retained = f.cron.getJob(job.id);
+    if (completion === "succeeded") {
+      expect(retained).toBeUndefined();
+    } else {
+      expect(retained).toMatchObject({
+        enabled: false,
+        state: { lastRunStatus: "ok", consecutiveErrors: 0 },
+      });
+    }
+    expect(retained?.state.nextRunAtMs).toBeUndefined();
+  };
+  expectRetained();
+  await f.restart();
+  await f.tick(atMs + 60_000);
+  expectRetained();
+  expect(run).toHaveBeenCalledOnce();
+  expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+});
 
 it.each([
   ["legacy session", { sessionKey: "agent:ops:telegram:direct:123:thread:123:456" }],

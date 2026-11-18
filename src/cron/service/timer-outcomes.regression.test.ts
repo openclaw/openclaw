@@ -174,7 +174,7 @@ it.each([
   ({ priorErrors, restart }) => {
     const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
       state: { consecutiveErrors: priorErrors },
-      failureAlert: { after: 1, cooldownMs: 0 },
+      failureAlert: true,
     });
     apply({ ...restartFailure(), interruptedByRestart: restart });
 
@@ -338,8 +338,13 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   } satisfies NonNullable<Parameters<typeof applyJobResult>[2]["diagnostics"]>;
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
-    { state: { consecutiveErrors: 8 }, failureAlert: { after: 10, cooldownMs: 0 } },
-    { enqueueSessionEvent, sendCronFailureAlert, log },
+    { state: { consecutiveErrors: 8 }, failureAlert: true },
+    {
+      enqueueSessionEvent,
+      sendCronFailureAlert,
+      log,
+      cronConfig: { failureAlert: { after: 10, cooldownMs: 0 } },
+    },
   );
   apply({ status: "error", error: "ninth failure", diagnostics: structuredClone(diagnostics) });
   expect(job.enabled).toBe(true);
@@ -406,17 +411,25 @@ it.each([
 it.each([
   {
     name: "webhook route, no earlier alert",
-    failureAlert: { after: 20, mode: "webhook", to: "https://alerts.example.com/hook" },
+    delivery: { mode: "webhook", to: "https://alerts.example.com/hook" },
     earlierNotice: false,
   },
-  { name: "announce route, no earlier alert", failureAlert: { after: 20 }, earlierNotice: false },
-  { name: "announce route, earlier owner notice", failureAlert: { after: 2 }, earlierNotice: true },
+  {
+    name: "announce route, no earlier alert",
+    delivery: { mode: "announce", channel: "last" },
+    earlierNotice: false,
+  },
+  {
+    name: "announce route, earlier owner notice",
+    delivery: { mode: "announce", channel: "last" },
+    earlierNotice: true,
+  },
 ] as const)(
   "sends an owned job's auto-disable notice through its route, not a repair turn ($name)",
-  ({ failureAlert, earlierNotice }) => {
+  ({ delivery, earlierNotice }) => {
     const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
       owner: { agentId: "main", sessionKey: "agent:main:main" },
-      failureAlert: { ...failureAlert },
+      delivery,
       state: {
         consecutiveErrors: 9,
         ...(earlierNotice
@@ -620,7 +633,7 @@ it("pauses a parent-linked job once when its parent conversation is gone", () =>
 
 it("sends one notice when an alert route also reports skipped runs", () => {
   const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
-    failureAlert: { after: 1, cooldownMs: 0, includeSkipped: true },
+    failureAlert: true,
   });
   apply(parentPause());
   expect(job.enabled).toBe(false);

@@ -269,38 +269,6 @@ const CronPayloadPatchSchema = Type.Union([
   }),
 ]);
 
-/** Failure alert policy for repeated cron run failures. */
-const CronFailureAlertSchema = closedObject({
-  threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
-  after: Type.Optional(Type.Integer({ minimum: 1 })),
-  channel: Type.Optional(CronAnnounceChannelSchema),
-  to: Type.Optional(NonBlankString),
-  cooldownMs: Type.Optional(Type.Integer({ minimum: 0 })),
-  includeSkipped: Type.Optional(Type.Boolean()),
-  mode: Type.Optional(stringLiteralUnion(["announce", "webhook"])),
-  accountId: Type.Optional(NonEmptyString),
-});
-
-const CronFailureAlertPatchSchema = closedObject({
-  threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
-  after: Type.Optional(Type.Union([Type.Integer({ minimum: 1 }), Type.Null()])),
-  channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
-  to: Type.Optional(Type.Union([NonBlankString, Type.Null()])),
-  cooldownMs: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
-  includeSkipped: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-  mode: Type.Optional(Type.Union([Type.Literal("announce"), Type.Literal("webhook"), Type.Null()])),
-  accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-});
-
-/** Delivery destination used when failure alerts need a separate target. */
-const CronFailureDestinationFields = ["channel", "to", "threadId", "accountId", "mode"] as const;
-const CronFailureDestinationSchema = closedObject(
-  Type.Pick(CronFailureAlertSchema, CronFailureDestinationFields).properties,
-);
-const CronFailureDestinationPatchSchema = closedObject(
-  Type.Pick(CronFailureAlertPatchSchema, CronFailureDestinationFields).properties,
-);
-
 const CronCompletionDestinationSchema = closedObject({
   mode: Type.Literal("webhook"),
   to: NonBlankString,
@@ -310,8 +278,6 @@ const CronDeliverySharedProperties = {
   channel: Type.Optional(CronAnnounceChannelSchema),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
   accountId: Type.Optional(NonEmptyString),
-  bestEffort: Type.Optional(Type.Boolean()),
-  failureDestination: Type.Optional(CronFailureDestinationSchema),
 };
 
 const CronChatDeliveryProperties = {
@@ -327,8 +293,6 @@ const CronDeliveryPatchSharedProperties = {
   channel: Type.Optional(Type.Union([CronAnnounceChannelSchema, Type.Null()])),
   threadId: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Null()])),
   accountId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  bestEffort: Type.Optional(Type.Boolean()),
-  failureDestination: Type.Optional(Type.Union([CronFailureDestinationPatchSchema, Type.Null()])),
 };
 
 const CronDeliveryNoopSchema = closedObject({
@@ -543,7 +507,7 @@ export const CronJobSchema = closedObject({
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
-  failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+  failureAlert: Type.Optional(Type.Boolean()),
   state: CronJobStateSchema,
   nextRunAtMs: Type.Optional(CronDateTimestampMsSchema),
   lastRunAtMs: Type.Optional(CronDateTimestampMsSchema),
@@ -632,7 +596,7 @@ export const CronAddParamsSchema = closedObject({
   wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
-  failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
+  failureAlert: Type.Optional(Type.Boolean()),
 });
 
 /** Dry-run delivery route shown at create and list time without sending. */
@@ -679,9 +643,7 @@ const CronJobPatchSchema = closedObject({
   wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),
   delivery: Type.Optional(CronDeliveryPatchSchema),
-  failureAlert: Type.Optional(
-    Type.Union([Type.Literal(false), CronFailureAlertPatchSchema, Type.Null()]),
-  ),
+  failureAlert: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
   state: Type.Optional(CronJobStatePatchSchema),
 });
 

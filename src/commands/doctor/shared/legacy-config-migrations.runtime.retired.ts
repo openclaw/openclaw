@@ -397,6 +397,29 @@ function probedMigration(
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec[] = [
   LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD,
+  probedMigration(
+    "runtime.cron-scoped-failure-alerts",
+    "Scoped cron failure alert routes are retired; run openclaw doctor --fix.",
+    (raw, changes) => {
+      const cron = getRecord(raw.cron);
+      for (const scope of ["agents", "creators"] as const) {
+        const entries = getRecord(cron?.[scope]);
+        if (!entries) continue;
+        for (const [key, entry] of Object.entries(entries)) {
+          if (deleteRetiredPath(entry, ["failureAlert"])) {
+            changes.push(
+              "Removed cron." +
+                scope +
+                "." +
+                key +
+                ".failureAlert; only the global failure alert policy remains.",
+            );
+            if (Object.keys(getRecord(entry) ?? {}).length === 0) delete entries[key];
+          }
+        }
+      }
+    },
+  ),
   {
     id: "runtime.automatic-local-model-lean",
     legacyRules: [

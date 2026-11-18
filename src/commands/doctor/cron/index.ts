@@ -176,12 +176,15 @@ export async function collectLegacyCronStoreHealthFindings(params: {
     return findings;
   }
 
-  const normalized = normalizeStoredCronJobs(rawJobs);
+  const normalized = normalizeStoredCronJobs(rawJobs, { cron: params.cfg.cron });
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     recordFinding({
       message: line.replace(/^- /u, ""),
       requirement: "legacy-cron-store-shape",
     });
+  }
+  for (const message of normalized.failureSettingsChanges) {
+    recordFinding({ message, requirement: "legacy-cron-failure-settings" });
   }
   for (const job of normalized.unsupportedDeliveryModeJobs) {
     recordFinding({
@@ -378,7 +381,7 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
-  const normalized = normalizeStoredCronJobs(rawJobs);
+  const normalized = normalizeStoredCronJobs(rawJobs, { cron: params.cfg.cron });
   if (normalized.unsupportedDeliveryModeJobs.length > 0) {
     note(
       `Unsupported cron delivery modes were left unchanged: ${normalized.unsupportedDeliveryModeJobs.join(", ")}. Review their intended delivery and set mode to "none", "announce", or "webhook".`,
@@ -412,6 +415,7 @@ export async function maybeRepairLegacyCronStore(params: {
     }
   }
   const previewLines = formatLegacyIssuePreview(normalized.issues);
+  previewLines.push(...normalized.failureSettingsChanges.map((message) => `- ${message}`));
   if (normalized.legacyTriggerScriptJobs.length > 0) {
     previewLines.push(
       `- ${pluralize(normalized.legacyTriggerScriptJobs.length, "legacy cron trigger script")} will be migrated to direct tool calls: ${normalized.legacyTriggerScriptJobs.join(", ")}`,

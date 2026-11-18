@@ -95,20 +95,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 it.each`
-  options                                                                                     | patch
-  ${{ enable: true, json: true }}                                                             | ${{ enabled: true }}
-  ${{ "clear-display-name": true }}                                                           | ${{ displayName: null }}
-  ${{ "clear-model": true }}                                                                  | ${{ payload: turn({ model: null }) }}
-  ${{ "clear-thinking": true }}                                                               | ${{ payload: turn({ thinking: null }) }}
-  ${{ name: "Renamed" }}                                                                      | ${{ name: "Renamed" }}
-  ${{ session: "main", message: "resume" }}                                                   | ${{ sessionTarget: "main", payload: turn({ message: "resume" }) }}
-  ${{ "best-effort-deliver": true }}                                                          | ${{ delivery: { mode: "announce", bestEffort: true } }}
-  ${{ "clear-to": true }}                                                                     | ${{ delivery: { to: null } }}
-  ${{ cron: "0 5 * * *", tz: "UTC", stagger: "10s" }}                                         | ${{ schedule: cron({ expr: "0 5 * * *", tz: "UTC", staggerMs: 10000 }) }}
-  ${{ message: "new", "timeout-seconds": "12", tools: "read" }}                               | ${{ payload: turn({ message: "new", timeoutSeconds: 12, toolsAllow: ["read"] }) }}
-  ${{ "failure-alert-cooldown": "0" }}                                                        | ${{ failureAlert: { cooldownMs: 0 } }}
-  ${{ "failure-alert-cooldown": "1h30m" }}                                                    | ${{ failureAlert: { cooldownMs: 5_400_000 } }}
-  ${{ "failure-alert-channel": "", "failure-alert-to": " ", "failure-alert-account-id": "" }} | ${{ failureAlert: { channel: null, to: null, accountId: null } }}
+  options                                                       | patch
+  ${{ enable: true, json: true }}                               | ${{ enabled: true }}
+  ${{ "clear-display-name": true }}                             | ${{ displayName: null }}
+  ${{ "clear-model": true }}                                    | ${{ payload: turn({ model: null }) }}
+  ${{ "clear-thinking": true }}                                 | ${{ payload: turn({ thinking: null }) }}
+  ${{ name: "Renamed" }}                                        | ${{ name: "Renamed" }}
+  ${{ session: "main", message: "resume" }}                     | ${{ sessionTarget: "main", payload: turn({ message: "resume" }) }}
+  ${{ "clear-to": true }}                                       | ${{ delivery: { to: null } }}
+  ${{ cron: "0 5 * * *", tz: "UTC", stagger: "10s" }}           | ${{ schedule: cron({ expr: "0 5 * * *", tz: "UTC", staggerMs: 10000 }) }}
+  ${{ message: "new", "timeout-seconds": "12", tools: "read" }} | ${{ payload: turn({ message: "new", timeoutSeconds: 12, toolsAllow: ["read"] }) }}
 `(
   "patches $options without loading the old job",
   async ({ options, patch }: Pick<EditCase, "options" | "patch">) => {
@@ -231,7 +227,8 @@ type RejectCase = {
 };
 it.each`
   args                                                                                                       | message                                                                                                                       | job                                                                                                         | reads
-  ${["edit", "job-1", "--failure-alert-cooldown", "not-a-duration"]}                                         | ${"Invalid --failure-alert-cooldown."}                                                                                        | ${undefined}                                                                                                | ${undefined}
+-cooldown."} |
+  ${undefined}                                                                                               | ${undefined}
   ${[...addArgs, "--message", "hello", "--at", "2030-01-01T09:00:00", "--tz", "Invalid/Timezone"]}           | ${"Invalid --tz"}                                                                                                             | ${undefined}                                                                                                | ${undefined}
   ${[...addArgs, "--message", "hello", "--at", "2030-02-30T09:00:00", "--tz", "UTC"]}                        | ${"Invalid --at"}                                                                                                             | ${undefined}                                                                                                | ${undefined}
   ${["edit", "job-1", "--tz", "Invalid/Timezone"]}                                                           | ${"Invalid --tz"}                                                                                                             | ${undefined}                                                                                                | ${undefined}
