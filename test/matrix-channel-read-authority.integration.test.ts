@@ -218,8 +218,11 @@ async function createHarness(origin: RegistrationOrigin) {
         action: ChannelMessageActionName,
         params: Record<string, unknown> = {},
         context: Partial<Pick<ChannelMessageActionContext, "requesterAccountId">> = {},
-      ) =>
-        dispatchChannelMessageAction({
+      ) => {
+        if (!run.admit()) {
+          return Promise.reject(new Error("agent runtime authority is no longer active"));
+        }
+        return dispatchChannelMessageAction({
           cfg,
           channel: "matrix",
           action,
@@ -231,7 +234,8 @@ async function createHarness(origin: RegistrationOrigin) {
           assertDirectAdapterHandoff: run.assert,
           toolContext,
           ...context,
-        }),
+        });
+      },
       dispose: async () => {
         run.dispose();
         try {
@@ -351,7 +355,7 @@ describe("registered installed Matrix reads", () => {
     { owner: "plugin", boundary: "preparation" },
     { owner: "caller", boundary: "result" },
     { owner: "plugin", boundary: "result" },
-  ] as const)("fences $owner revocation at $boundary", async ({ owner, boundary }) => {
+  ] as const)("handles $owner retirement at $boundary", async ({ owner, boundary }) => {
     await withHarness("official-installed", async (fixture) => {
       const revokeAt = boundary === "result" ? messagePath : `${roomPath}/state/m.room.name/`;
       fixture.onRequest((path) => {
@@ -363,13 +367,23 @@ describe("registered installed Matrix reads", () => {
           }
         }
       });
-      await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
-      if (boundary === "preparation") {
-        expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
-      } else {
+      if (owner === "caller") {
+        await expect(fixture.invoke("read", { limit: 1 })).resolves.toMatchObject({
+          details: { ok: true, messages: [{ content: message.content.body }] },
+        });
+        const requests = fixture.requests.length;
+        await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
+        expect(fixture.requests).toHaveLength(requests);
         expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(1);
-      }
-      if (owner === "plugin") {
+      } else {
+        await expect(fixture.invoke("read", { limit: 1 })).rejects.toThrow(/no longer active/);
+        if (boundary === "preparation") {
+          expect(fixture.requests.map((request) => request.path)).toEqual([revokeAt]);
+        } else {
+          expect(fixture.requests.filter((request) => request.path === messagePath)).toHaveLength(
+            1,
+          );
+        }
         expect((await fixture.instance.dispose()).errors).toEqual([]);
         expect(fixture.lifecycle.signal?.aborted).toBe(true);
       }

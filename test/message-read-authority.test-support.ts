@@ -54,15 +54,14 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
     },
   } as GatewayClient;
   const validate = createAgentRuntimeApprovalAuthorityValidator();
-  const assert = createAgentRuntimeAuthorityGuard(
+  const authority = createAgentRuntimeAuthorityGuard(
     client,
     { validateAgentRuntimeApprovalAuthority: validate } as GatewayRequestContext,
     () => {},
-  ).commitGuard;
-  if (!assert) {
+  );
+  if (!authority.ensureActive()) {
     throw new Error("Missing originating message-read authority");
   }
-  assert();
   const options = {
     agentId: "main",
     agentAccountId: "default",
@@ -81,7 +80,8 @@ export function createMessageReadAuthority<T extends InternalChannelThreadingToo
   const revokeTurn = () => revokeMessageActionTurnCapability(capability);
   const releaseClaim = () => releaseAgentRunDelegatedAuthority(delegated);
   return {
-    assert,
+    assert: authority.commitGuard,
+    admit: () => authority.ensureActive(),
     client,
     validate,
     toolContext,

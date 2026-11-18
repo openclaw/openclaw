@@ -199,7 +199,7 @@ async function withDownloadFixture(
   options: FixtureOptions,
   check: (fixture: {
     invoke: () => Promise<DownloadResult>;
-    invokeGateway: () => Promise<GatewayResponse>;
+    invokeGateway: (idempotencyKey?: string) => Promise<GatewayResponse>;
     gatewayResponses: GatewayResponse[];
     gatewayCacheWrites: DedupeEntry[];
     gatewayMirrorSnapshots: GatewayMirrorSnapshot[];
@@ -553,7 +553,7 @@ async function withDownloadFixture(
                 pending.push(operation.catch(() => undefined));
                 return operation;
               };
-              const invokeGateway = () => {
+              const invokeGateway = (idempotencyKey = `gateway-download-${sequence}`) => {
                 const operation = (async () => {
                   const { sendHandlers } = await import("../src/gateway/server-methods/send.js");
                   const handler = sendHandlers["message.action"];
@@ -574,7 +574,7 @@ async function withDownloadFixture(
                       accountId: "default",
                       sessionKey: run.options.agentSessionKey,
                       agentId: "main",
-                      idempotencyKey: `gateway-download-${sequence}`,
+                      idempotencyKey,
                     },
                     respond: (ok, payload, error, meta) => {
                       gatewayResponses.push({ ok, payload, error, meta });
@@ -765,7 +765,6 @@ describe("Slack download authority through artifact completion", () => {
     ["prepublication", {}, 1],
     ["published", { origin: "bundled" }, 1],
     ["image-read", { image: true }, 1],
-    ["result", { image: true, revoke: "claim" }, 1],
   ] satisfies Array<[Phase, FixtureOptions, number]>)(
     "rejects revoked output and retains only preexisting files after %s (%j)",
     async (phase, options, requests) => {
@@ -857,23 +856,34 @@ describe("Gateway message.action Slack download completion", () => {
     },
     { name: "late completion after plugin disablement", phase: "gateway-mirror", revoke: "plugin" },
   ] satisfies Array<FixtureOptions & { name: string; phase: Phase }>)(
-    "does not return or cache revoked download success at $name",
+    "returns and caches the admitted download at $name but refuses the next request",
     async (options) => {
       await withDownloadFixture(options, async (fixture) => {
         const response = await fixture.invokeGateway();
         expect(fixture.phases.has(options.phase)).toBe(true);
-        expect(fixture.binaryRequests()).toHaveLength(1);
         if (options.phase === "gateway-mirror") {
           expect(fixture.gatewayMirrorSnapshots).toHaveLength(1);
           expect(fixture.gatewayMirrorSnapshots[0]).toMatchObject({ responses: 0, cacheWrites: 0 });
           expect(fixture.gatewayMirrorSnapshots[0]?.artifacts).toHaveLength(1);
         }
-        expect(response.ok).toBe(false);
-        expect(response.payload).toBeUndefined();
-        expect(response.error?.message).toMatch(/no longer active/i);
-        expect(fixture.gatewayResponses).toHaveLength(1);
-        expect(fixture.gatewayCacheWrites.some((entry) => entry.ok)).toBe(false);
-        expect(await filesUnder(fixture.mediaDir)).toEqual([fixture.preservedPath]);
+        expect(response).toMatchObject({
+          ok: true,
+          payload: { fileId: FILE_ID, ...("image" in options ? {} : { ok: true }) },
+          error: undefined,
+        });
+        const saved = payloadPath(response.payload);
+        await expect(fs.readFile(saved)).resolves.toEqual(fixture.body);
+        const requestCount = fixture.requests.length;
+
+        const next = await fixture.invokeGateway(`gateway-download-next-${sequence}`);
+        expect(next.ok).toBe(false);
+        expect(next.payload).toBeUndefined();
+        expect(next.error).toBeDefined();
+        expect(fixture.gatewayResponses).toHaveLength(2);
+        expect(fixture.gatewayCacheWrites.filter((entry) => entry.ok)).toHaveLength(1);
+        expect(fixture.requests).toHaveLength(requestCount);
+        expect(fixture.binaryRequests()).toHaveLength(1);
+        expect(await filesUnder(fixture.mediaDir)).toContain(saved);
       });
     },
   );

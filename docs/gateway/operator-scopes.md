@@ -359,9 +359,9 @@ Gateway clients reconnect to receive the current scope ceiling, except for chang
 confined to model policies as described below and identity-scope edits that leave
 an operator WebSocket login’s resolved grant set unchanged. Editing another login
 or reordering the same scopes preserves that connection, its accepted runs, and
-queued inputs. Changing its own resolved grants revokes retained and delegated
-work; restoring the grant does not revive the original authority. Clients without
-verified identities, node connections, HTTP requests, and plugin auth cookies do
+queued inputs. An admitted Gateway operator run keeps its captured role and scope
+ceiling until it finishes; changing those grants applies to the next request.
+Clients without verified identities, node connections, HTTP requests, and plugin auth cookies do
 not consume identity-scope grants and are unaffected by these edits. Pending handshakes and
 mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
@@ -585,19 +585,20 @@ clients with current authority, including when combined with a model-policy edit
 Disabling config reload leaves the current policy active until config application
 resumes.
 
-The original role ceiling follows queued work and child runs. Accepted work must
-satisfy both its original model ceiling and the current policy. Removing one
-source model cancels its active model requests and blocks later calls using it,
-while still-permitted sibling models and unrelated work retain their authority.
-New requests use the updated source choices. Direct model requests, title
-previews, and user-invoked model completion or decision tools apply the same
-policy. Interactive plugin runtime attempts must certify exact model-policy
+Gateway operator runs capture their model-policy ceiling at admission. A policy
+reload neither cancels their active model requests nor changes their allowed
+models. The next run uses the updated policy. Explicit user model selections
+still apply, within the admitted run's captured ceiling. Queued, retried, and
+replayed work checks current authority when it starts.
+
+Direct model requests, title previews, and user-invoked model completion or
+decision tools apply their source's model policy.
+Interactive plugin runtime attempts must certify exact model-policy
 enforcement before they can execute restricted requests, regardless of who supplies
 their credentials. Currently the built-in OpenClaw runtime supports these attempts;
 uncertified plugin runtimes, including Codex, refuse them with a compatible-runtime error.
-Adding a policy also cancels uncertified work that started without one, including
-retained work after its foreground turn finishes. An outer selected model does
-not establish which model a native runtime actually uses. Isolated prompt-only
+An outer selected model does not establish which model a native runtime actually
+uses. Isolated prompt-only
 completions keep their separate exact-route contract and bind the selected model
 through completion and cleanup.
 

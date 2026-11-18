@@ -216,11 +216,6 @@ const counters: [string, string, string][] = [
     "authority.sources",
   ],
   [
-    "src/gateway/operator-run-authority.ts",
-    "  const assertRoleCurrent = () => {",
-    "authority.role",
-  ],
-  [
     "src/gateway/operator-role-policy.ts",
     '): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {',
     "role.selection",

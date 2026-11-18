@@ -1,6 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
-import type { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
 import type { performGatewaySessionReset } from "../session-reset-service.js";
 import {
@@ -14,8 +13,6 @@ import {
   invokeAgent,
 } from "./agent.test-harness.js";
 
-type PatchOptions = NonNullable<Parameters<typeof patchSessionEntryTarget>[2]>;
-
 export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAgentTestMocks>) {
   const resetRunId = "test-idem-reset-closed-authority";
   const sessionKey = "agent:main:main";
@@ -27,40 +24,13 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
     "before ingress",
     "before reset commit",
     "after reset commit",
-    "after reset commit with follow-up",
-    "during follow-up persistence",
     "reset fails",
     "never",
-  ] as const)("contains /reset effects when runtime authority closes %s", async (closeAt) => {
+  ] as const)("keeps admitted /reset authority when it closes %s", async (closeAt) => {
     let authorityActive = closeAt !== "before ingress";
     let resetCommitted = false;
-    const closesAfterCommit = closeAt.startsWith("after reset commit");
-    const closesDuringFollowUp = closeAt === "during follow-up persistence";
-    const hasFollowUp = closeAt.endsWith("with follow-up") || closesDuringFollowUp;
-    const message = hasFollowUp ? "/reset continue working" : "/reset";
-    let followUpCommitted = false;
-    mockMainSessionEntry({
-      sessionId: closesDuringFollowUp ? sessionId : "existing-session-id",
-      ...(closesDuringFollowUp ? { lifecycleRevision: "before-reset" } : {}),
-    });
+    mockMainSessionEntry({ sessionId: "existing-session-id" });
     mocks.performGatewaySessionReset.mockClear();
-    if (closesDuringFollowUp) {
-      mocks.patchSessionEntryTarget.mockImplementationOnce(
-        async (scope, _update, options: PatchOptions) => {
-          expect(scope).toMatchObject({ agentId: "main", target: { canonicalKey: sessionKey } });
-          expect(options.fallbackEntry).toMatchObject({
-            sessionId,
-            lifecycleRevision: "after-reset",
-          });
-          expect([resetCommitted, authorityActive]).toEqual([true, true]);
-          await Promise.resolve();
-          authorityActive = false;
-          requireValue(options.workerGuard?.source, "missing follow-up authority guard")();
-          followUpCommitted = true;
-          return null;
-        },
-      );
-    }
     mocks.performGatewaySessionReset.mockImplementation(
       async (options: Parameters<typeof performGatewaySessionReset>[0]) => {
         await Promise.resolve();
@@ -77,11 +47,8 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
         }
         resetCommitted = true;
         options.onCommitted?.({ key: sessionKey, sessionId });
-        mockMainSessionEntry({
-          sessionId,
-          ...(closesDuringFollowUp ? { lifecycleRevision: "after-reset" } : {}),
-        });
-        if (closesAfterCommit) {
+        mockMainSessionEntry({ sessionId });
+        if (closeAt === "after reset commit") {
           authorityActive = false;
         }
         return { ok: true, key: sessionKey, entry: { sessionId } };
@@ -106,41 +73,26 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
     const context = makeContext();
     context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
 
-    const respond = await reset(message, { client, context });
-
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(
-      closeAt === "before ingress" ? 0 : 1,
-    );
-    expect(resetCommitted).toBe(closesAfterCommit || closesDuringFollowUp || closeAt === "never");
-    expect(followUpCommitted).toBe(false);
-    if (closesDuringFollowUp) {
-      expect(mocks.patchSessionEntryTarget).toHaveBeenCalledOnce();
-    }
+    const respond = await reset("/reset", { client, context });
+    const admitted = closeAt !== "before ingress";
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(admitted ? 1 : 0);
+    expect(resetCommitted).toBe(admitted && closeAt !== "reset fails");
     expect(mocks.agentCommand).not.toHaveBeenCalled();
-    if (closeAt === "never") {
-      expect(mockCallArg(respond)).toBe(true);
+    if (closeAt === "before ingress") {
+      expectRespondError(respond, { message: "agent runtime authority is no longer active" });
     } else if (closeAt === "reset fails") {
       expectRespondError(respond, { message: "reset storage unavailable" });
       expect(context.dedupe.get(`agent:${resetRunId}`)).toBeUndefined();
     } else {
-      expectRespondError(respond, { message: "agent runtime authority is no longer active" });
-      expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);
+      expect(mockCallArg(respond)).toBe(true);
     }
-    if (closesAfterCommit || closesDuringFollowUp) {
-      authorityActive = true;
-      const retry = await reset(message, { client, context });
-      expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-      expect([mockCallArg(retry), mockCallArg(retry, 0, 3)]).toEqual([true, { cached: true }]);
-      expect(mockCallArg(retry, 0, 1)).toMatchObject({
-        status: "ok",
-        result: {
-          meta: { agentMeta: { sessionId } },
-          ...(hasFollowUp
-            ? { payloads: [{ text: expect.stringContaining("before the follow-up ran") }] }
-            : {}),
-        },
-      });
+    if (!authorityActive) {
+      const next = await invokeAgent(
+        { message: "/reset", sessionKey, idempotencyKey: `${resetRunId}-next` },
+        { client, context },
+      );
+      expectRespondError(next, { message: "agent runtime authority is no longer active" });
+      expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(admitted ? 1 : 0);
     }
   });
 

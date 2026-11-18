@@ -471,7 +471,8 @@ it.each([
           await expect(inject(changed)).resolves.toMatchObject(rejected);
         }
         reconnectedRevocation.abort();
-        await expect(inject()).resolves.toMatchObject(rejected);
+        const afterRetirement = grant === undefined ? rejected : { status: "accepted" };
+        await expect(inject()).resolves.toMatchObject(afterRetirement);
         const liveReplacement = await capture(
           reconnectedClient,
           new AbortController().signal,
@@ -479,9 +480,11 @@ it.each([
         );
         originalRevocation.abort();
         await expect(inject({ operatorAuthority: liveReplacement })).resolves.toMatchObject(
-          rejected,
+          afterRetirement,
         );
-        expect(queueMessage).toHaveBeenCalledTimes(acceptedMessages);
+        expect(queueMessage).toHaveBeenCalledTimes(
+          acceptedMessages + (grant === undefined ? 0 : 2),
+        );
       } finally {
         for (const release of cleanups.toReversed()) {
           release();

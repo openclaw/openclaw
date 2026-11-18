@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,7 +30,6 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { bindInProcessSessionDeliveryGeneration } from "../in-process-session-delivery.js";
 import { revokeMessageActionTurnCapability } from "../message-action-turn-capability.js";
@@ -41,6 +39,7 @@ import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { createGatewayMaintenanceStateForTest } from "../test-helpers.maintenance-state.js";
 import { registerSendDeliveryAttemptTests } from "./send.delivery-attempt.test-support.js";
 import { registerSendSessionRoutingTests } from "./send.session-routing.test-support.js";
+import { fixedStoreContext, withTempOpenClawStateDir } from "./send.state.test-support.js";
 import {
   agentRuntimeClientForTests as agentRuntimeClient,
   createTelegramSourceSendRequest,
@@ -223,18 +222,6 @@ function startRequest(
   return { respond, promise };
 }
 
-async function withTempOpenClawStateDir<T>(test: (stateDir: string) => Promise<T>): Promise<T> {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "gateway-send-state-"));
-  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-  try {
-    return await test(stateDir);
-  } finally {
-    envSnapshot.restore();
-    await fs.rm(stateDir, { recursive: true, force: true });
-  }
-}
-
 function mockArgument(calls: unknown[][], index = 0): Record<string, any> | undefined {
   return calls.at(index)?.[0] as ReturnType<typeof mockArgument>;
 }
@@ -261,17 +248,6 @@ async function expectRejectedSend(params: Record<string, unknown>, message: stri
   expect(response[2]?.message).toContain(message);
   expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   return response;
-}
-
-function fixedStoreContext(): GatewayRequestContext {
-  return makeContext(() => ({
-    session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-    agents: {
-      ownership: "explicit",
-      entries: { ops: {}, research: {} },
-      defaults: { sessionStore: { agentId: "ops" } },
-    },
-  }));
 }
 
 function routePlugin(channel: string, config: Partial<ChannelPlugin["config"]> = {}) {
@@ -392,7 +368,7 @@ function holdDelivery(boundary: "dispatch" | "handoff" | "read") {
     platformSend();
     return boundary === "read"
       ? { details: { ok: true } }
-      : [{ channel: "slack", messageId: "must-not-send" }];
+      : [{ channel: "slack", messageId: "admitted-send" }];
   });
   return { entered, release, platformSend };
 }
@@ -702,7 +678,7 @@ describe("gateway send conversation ownership", () => {
     },
   );
 
-  it("stops Telegram plugin sends when their live owner closes between deliveries", async () => {
+  it("finishes admitted Telegram deliveries after runtime revocation and refuses the next request", async () => {
     const { telegramMessageActions } = await loadBundledPluginFacade<{
       telegramMessageActions: NonNullable<ChannelPlugin["actions"]>;
     }>({ pluginId: "telegram", artifactBasename: "runtime-api.js" });
@@ -733,80 +709,95 @@ describe("gateway send conversation ownership", () => {
       channels: { telegram: { botToken: "123456:fixture" } },
     }));
     const sessionKey = "agent:main:telegram:direct:12345";
-    const request = runMessageActionRequest(
-      {
-        channel: "telegram",
-        params: {
-          to: "12345",
-          message: "photos",
-          mediaUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"],
+    const invoke = (idempotencyKey: string) =>
+      runMessageActionRequest(
+        {
+          channel: "telegram",
+          idempotencyKey,
+          params: {
+            to: "12345",
+            message: "photos",
+            mediaUrls: ["https://example.com/one.jpg", "https://example.com/two.jpg"],
+          },
+          sessionKey,
         },
-        sessionKey,
-      },
-      agentRuntimeClient(sessionKey),
-      authority.context,
-    );
+        agentRuntimeClient(sessionKey),
+        authority.context,
+      );
+    const request = invoke("telegram-admitted");
     await firstSendStarted.promise;
     authority.revoke();
     releaseFirstSend.resolve();
     const { respond } = await request;
 
-    expect(physicalSends).toEqual(["album"]);
+    expect(physicalSends).toEqual(["album", "last-photo"]);
     expect(deliveryCall()?.skipQueue).toBe(true);
-    expectAuthorityDenied(respond);
+    expectSuccess(respond);
+    expectAuthorityDenied((await invoke("telegram-next")).respond);
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
   });
 
   it.each(["dispatch", "handoff"] as const)(
-    "does not send or queue after delegated authority closes during delivery preflight (%s)",
+    "finishes admitted delivery after runtime revocation at %s and refuses the next request",
     async (boundary) => {
       const delivery = holdDelivery(boundary);
       const authority = liveAuthority();
-      const request = runSendWithClient(
-        {
-          message: "must not escape",
-          sessionKey: "agent:main:slack:channel:C1",
-        },
-        agentRuntimeClient("agent:main:slack:channel:C1"),
-        authority.context,
-      );
+      const invoke = (idempotencyKey: string) =>
+        runSendWithClient(
+          {
+            message: "admitted reply",
+            idempotencyKey,
+            sessionKey: "agent:main:slack:channel:C1",
+          },
+          agentRuntimeClient("agent:main:slack:channel:C1"),
+          authority.context,
+        );
+      const request = invoke("delivery-admitted");
       await delivery.entered.promise;
       authority.revoke();
       delivery.release.resolve();
 
       const { respond } = await request;
-      expectAuthorityDenied(respond);
+      expectSuccess(respond);
       expect(deliveryCall()?.skipQueue).toBe(true);
-      expect(delivery.platformSend).not.toHaveBeenCalled();
+      expect(delivery.platformSend).toHaveBeenCalledOnce();
+      expectAuthorityDenied((await invoke("delivery-next")).respond);
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
     },
   );
 
   it.each(["read", "send"] as const)(
-    "fences delegated %s when its turn closes during provider work",
+    "finishes admitted delegated %s after turn revocation and refuses the next request",
     async (action) => {
       const delivery = holdDelivery(action === "read" ? "read" : "dispatch");
       const sessionKey = "agent:main:slack:channel:C1";
       const owned = createMessageActionTurnClientForTests({
         sessionKey,
-        runId: `${action}-turn-revocation`,
+        runId: `${action}-turn-admission`,
       });
       try {
-        const request =
+        const invoke = (idempotencyKey: string) =>
           action === "read"
             ? runMessageActionRequest(
-                { action, params: { channelId: "C2", limit: 1 }, sessionKey },
+                { action, params: { channelId: "C2", limit: 1 }, sessionKey, idempotencyKey },
                 owned.client,
                 owned.context,
               )
             : runSendWithClient(
-                { message: "must not escape", sessionKey },
+                { message: "admitted reply", sessionKey, idempotencyKey },
                 owned.client,
                 owned.context,
               );
+        const request = invoke("turn-admitted");
         await delivery.entered.promise;
         expect(revokeMessageActionTurnCapability(owned.turnCapability)).toBe(true);
         delivery.release.resolve();
-        expectAuthorityDenied((await request).respond);
-        expect(delivery.platformSend).not.toHaveBeenCalled();
+        expectSuccess((await request).respond);
+        expect(delivery.platformSend).toHaveBeenCalledOnce();
+        expectAuthorityDenied((await invoke("turn-next")).respond);
+        const provider =
+          action === "read" ? mocks.dispatchChannelMessageAction : mocks.deliverOutboundPayloads;
+        expect(provider).toHaveBeenCalledOnce();
       } finally {
         delivery.release.resolve();
         owned.close();
@@ -1516,27 +1507,32 @@ describe("gateway send conversation ownership", () => {
     });
 
     it.each(["dispatch", "handoff"] as const)(
-      "fences canonical outbound send at %s when runtime authority closes",
+      "finishes canonical outbound send after runtime revocation at %s and refuses the next request",
       async (boundary) => {
         const delivery = holdDelivery(boundary);
         const authority = liveAuthority();
         const sessionKey = "agent:main:twitch:group:explicit-room";
-        const request = runMessageActionRequest(
-          {
-            channel: "twitch",
-            params: { to: "explicit-room", message: "must not escape" },
-            sessionKey,
-          },
-          agentRuntimeClient(sessionKey),
-          authority.context,
-        );
+        const invoke = (idempotencyKey: string) =>
+          runMessageActionRequest(
+            {
+              channel: "twitch",
+              params: { to: "explicit-room", message: "admitted reply" },
+              idempotencyKey,
+              sessionKey,
+            },
+            agentRuntimeClient(sessionKey),
+            authority.context,
+          );
+        const request = invoke("canonical-admitted");
         await delivery.entered.promise;
         authority.revoke();
         delivery.release.resolve();
-        expectAuthorityDenied((await request).respond);
+        expectSuccess((await request).respond);
         expect(deliveryCall()?.skipQueue).toBe(true);
-        expect(delivery.platformSend).not.toHaveBeenCalled();
-        expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+        expect(delivery.platformSend).toHaveBeenCalledOnce();
+        expectAuthorityDenied((await invoke("canonical-next")).respond);
+        expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
+        expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
       },
     );
   });

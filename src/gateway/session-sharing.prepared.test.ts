@@ -64,6 +64,34 @@ it("keeps retained policies isolated across memberships and current across autho
   });
 });
 
+it("finishes an admitted sharing read after a role change and denies the next read", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const profile = ensureProfileForEmail("admitted-sharing@example.test");
+    setUserProfileRole(profile.id, "view");
+    const client = sharingPolicyClient({ user: profile.id });
+    const cfg = rolePolicyConfig();
+    const target = sharingPolicyTarget({ type: "human", id: "another-person" });
+    target.entry.visibility = "shared";
+    const profiles = await prepareSessionSharingProfiles(client);
+    profiles.admit();
+    setUserProfileRole(profile.id, "none");
+    const admitted = prepareProjectedSessionSharing({
+      cfg,
+      client,
+      profiles,
+      isMember: () => false,
+    });
+    const next = prepareProjectedSessionSharing({
+      cfg,
+      client,
+      profiles: await prepareSessionSharingProfiles(client),
+      isMember: () => false,
+    });
+    expect(admitted.canReadTarget(target)).toBe(true);
+    expect(next.canReadTarget(target)).toBe(false);
+  });
+});
+
 it("reuses interleaved audience keys and copies scope snapshots without iteration", () => {
   const cfg = rolePolicyConfig();
   const clients = ["alice", "bob"].map((user) => sharingPolicyClient({ user }));

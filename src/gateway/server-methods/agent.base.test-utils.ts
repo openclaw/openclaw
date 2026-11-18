@@ -583,20 +583,19 @@ describe("gateway agent handler", () => {
       });
       const source = requireValue(getReservedRpcSourceInput(runId), "expected routing source");
       callerActive = false;
+      const rejected = expect(pending).rejects.toThrow(
+        "Gateway caller authority is no longer active.",
+      );
       route.resolve({ sessionKey });
-      await pending;
+      await rejected;
       await source.settlement.promise;
-      expectRespondError(respond, {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "agent runtime authority is no longer active",
-      });
       expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
       expect(getReservedRpcSourceInput(runId)).toBeUndefined();
       expect(source.target).toBeUndefined();
       expect(mocks.agentCommand).not.toHaveBeenCalled();
     } finally {
       route.resolve({ sessionKey });
-      await pending;
+      await Promise.resolve(pending).catch(() => {});
     }
   });
 

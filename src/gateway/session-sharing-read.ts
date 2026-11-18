@@ -152,6 +152,7 @@ export function prepareSessionSharing(
 }
 
 export type PreparedSessionSharingProfiles = {
+  admit: () => void;
   readCurrent: () => {
     profile: UserProfileIdentity | undefined;
     roleProfile: UserProfileIdentity | undefined;
@@ -244,6 +245,7 @@ export async function prepareSessionSharingProfiles(
   const identityId = sharingIdentity(client, actor)?.id;
   const roleProfileId = actor?.kind === "operator" ? actor.profileId : undefined;
   const runAuthority = client?.internal?.operatorRunAuthority;
+  let admitted = runAuthority !== undefined;
   const unavailable = () => {
     throw new SessionMutationAuthorizationChangedError(authenticatedProfileUnavailableError());
   };
@@ -278,10 +280,12 @@ export async function prepareSessionSharingProfiles(
     return () => {
       if (prepared && !prepared.isCurrent()) {
         prepared.readSource();
-        throw new SessionSharingProfileFactsChangedError(
-          authenticatedProfileUnavailableError(),
-          prepared.readSource,
-        );
+        if (!admitted) {
+          throw new SessionSharingProfileFactsChangedError(
+            authenticatedProfileUnavailableError(),
+            prepared.readSource,
+          );
+        }
       }
       return profile;
     };
@@ -305,7 +309,13 @@ export async function prepareSessionSharingProfiles(
     return { profile: readProfile(), roleProfile: readRoleProfile() };
   };
   readCurrent();
-  return { readCurrent };
+  return {
+    readCurrent,
+    admit: () => {
+      readCurrent();
+      admitted = true;
+    },
+  };
 }
 
 /** Refresh changed profile facts only before the synchronous consumer has begun effects. */
@@ -391,7 +401,7 @@ export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
   client: GatewayClient | null;
   isMember: (target: SessionSharingTarget, identityId: string) => boolean;
-  profiles?: PreparedSessionSharingProfiles;
+  profiles?: Pick<PreparedSessionSharingProfiles, "readCurrent">;
   /** Retained consumers lend current membership; viewer facts still revalidate on every call. */
   owner?: object;
 }): ProjectedSessionSharing {
