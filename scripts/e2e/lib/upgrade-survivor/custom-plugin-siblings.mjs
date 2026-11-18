@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
+import { compareReleaseVersions } from "../../../lib/release-version.mjs";
 import { readJson, write } from "../fixtures/common.mjs";
 import { readDatabase } from "./observations.mjs";
 
@@ -223,6 +224,15 @@ function digest(file) {
 }
 
 function seed() {
+  // This scenario exits before the shared config recipe; adapt its own baseline seed.
+  const heartbeatRetired = compareReleaseVersions(
+    process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION ?? "",
+    "2026.11.5-beta.1",
+  );
+  const defaults = { workspace: path.join(root, "workspace") };
+  if (heartbeatRetired === null || heartbeatRetired < 0) {
+    defaults.heartbeat = { every: "0m" };
+  }
   write(registrations, "");
   const observe = (surface) => `fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({
       value,
@@ -354,7 +364,7 @@ for (let offset = 0; offset < bytes.length; offset += 64 * 1024) {
         auth: { mode: "token", token: "survivor-sibling-token" },
         controlUi: { enabled: false },
       },
-      agents: { defaults: { workspace: path.join(root, "workspace"), heartbeat: { every: "0m" } } },
+      agents: { defaults },
       plugins: {
         allow: [pluginId],
         load: { paths: [pluginRoot] },

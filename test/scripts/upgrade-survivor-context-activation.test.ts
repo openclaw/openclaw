@@ -9,6 +9,36 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 
+it.each([
+  { version: "2026.9.4", heartbeat: { every: "0m" } },
+  { version: "2026.11.4", heartbeat: { every: "0m" } },
+  { version: "2026.11.5-beta.1", heartbeat: undefined },
+  { version: "2026.11.5", heartbeat: undefined },
+])("seeds sibling-plugin config for the $version baseline schema", ({ version, heartbeat }) => {
+  const root = fs.realpathSync(dirs.make("survivor-sibling-schema-"));
+  const configPath = path.join(root, "state", "openclaw.json");
+  const seeded = spawnSync(
+    resolveTestNodeExecPath(),
+    [path.resolve("scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs"), "seed"],
+    {
+      encoding: "utf8",
+      env: {
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: path.join(root, "artifacts"),
+        OPENCLAW_STATE_DIR: path.dirname(configPath),
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION: version,
+      },
+    },
+  );
+  expect(seeded.status, seeded.stderr).toBe(0);
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  expect(config.agents.defaults).toEqual({
+    workspace: path.join(root, "workspace"),
+    ...(heartbeat ? { heartbeat } : {}),
+  });
+});
+
 it("requires selected activation cleanup while preserving another engine and process", () => {
   const root = fs.realpathSync(dirs.make("survivor-context-activation-"));
   const state = path.join(root, "state");

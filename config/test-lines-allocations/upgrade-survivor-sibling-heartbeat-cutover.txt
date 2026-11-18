@@ -1,0 +1,2 @@
+# Standalone sibling-plugin seed regression preserves older baseline heartbeat configuration and rejects retired keys at the 11.5 cutover.
+30
