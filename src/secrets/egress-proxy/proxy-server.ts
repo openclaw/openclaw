@@ -484,6 +484,8 @@ export async function startSecretEgressProxyServer(params: {
           const tlsServer = createTlsServer(leaf).on("secureConnection", (socket) => {
             ownResource(registered, socket);
             httpServer.emit("connection", socket);
+            // The HTTP parser now owns the guarded stream; release the handoff pause.
+            socket.resume();
           });
           tlsServer.on("tlsClientError", (_error, socket) => socket.destroy());
           return {
