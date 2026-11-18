@@ -27,6 +27,8 @@ final class OnboardingAISetupModel {
     private(set) var detectedPrepareOptions: [PrepareOption]?
     private(set) var prepareAvailable = false
     private(set) var activeAuthOption: AuthOption?
+    /// The name the user picked, such as ChatGPT, used in sign-in errors instead of the option's own label.
+    private var authDisplayName: String?
     private(set) var providerWizardKind: ProviderWizardKind?
     private(set) var authStep: WizardStep?
     private(set) var authError: Failure?
@@ -1157,7 +1159,11 @@ extension OnboardingAISetupModel {
 extension OnboardingAISetupModel {
     /// Provider wizard actions return the task that settles their reply, including stale-reply handling.
     @discardableResult
-    func startProviderWizard(_ option: AuthOption, kind: ProviderWizardKind) -> Task<Void, Never>? {
+    func startProviderWizard(
+        _ option: AuthOption,
+        kind: ProviderWizardKind,
+        displayName: String? = nil) -> Task<Void, Never>?
+    {
         guard !isBusy, self.activeAuthOption == nil else { return nil }
         if kind == .auth, option.kind == "custom", self.connectionModeProvider() == .remote {
             self.clearProviderAuth()
@@ -1177,11 +1183,13 @@ extension OnboardingAISetupModel {
         if self.nativeSessionCatalogPreferenceRequired, !self.nativeSessionCatalogs.isEmpty {
             params["nativeSessionCatalogsEnabled"] = AnyCodable(self.nativeSessionCatalogsEnabled)
         }
-        return self.startSetupWizard(
+        let task = self.startSetupWizard(
             option,
             kind: kind,
             params: params,
             serverLease: serverLease)
+        self.authDisplayName = displayName
+        return task
     }
 
     @discardableResult
@@ -1466,7 +1474,7 @@ extension OnboardingAISetupModel {
         if status == "error" || (done && error != nil) {
             self.retireProviderAuthSession()
             self.authError = Self.failure(
-                label: option.label,
+                label: self.authDisplayName ?? option.label,
                 status: "unavailable",
                 error: error)
             return
@@ -1509,7 +1517,7 @@ extension OnboardingAISetupModel {
         self.authStep = step
         if validationError {
             self.authError = Self.failure(
-                label: option.label,
+                label: self.authDisplayName ?? option.label,
                 status: "format",
                 error: error)
         }
@@ -1583,6 +1591,7 @@ extension OnboardingAISetupModel {
     private func clearProviderAuth() {
         self.retireProviderAuthSession()
         self.activeAuthOption = nil
+        self.authDisplayName = nil
         self.providerWizardKind = nil
         self.authError = nil
         self.authBusy = false

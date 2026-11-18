@@ -446,7 +446,7 @@ struct OnboardingAISetupView: View {
             case let .candidate(kind):
                 self.model.userSelect(kind: kind)
             case let .signIn(option):
-                self.model.startProviderWizard(option, kind: .auth)
+                self.model.startProviderWizard(option, kind: .auth, displayName: self.displayName(for: row))
             case let .apiKey(providerID):
                 if let providerID { self.model.manualProviderID = providerID }
             case .localModel:
