@@ -1,0 +1,2 @@
+86
+# Worktree activity and removed-binding regressions, reusing existing lifecycle fixtures.
