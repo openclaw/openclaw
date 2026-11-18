@@ -145,6 +145,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       ] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
+  const filtering = createMemo(() => Boolean(search?.query().trim()));
   const catalog = createMemo<ChatModelSearchCatalog>(() => {
     const [defaultLabel] = searchCopy();
     const current = state();
@@ -152,7 +153,11 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
     const providerGroups = unlocked ? current.orderedProviderGroups : [];
     const targetGroups = unlocked ? current.targetGroups : [];
     const account = accounts();
+    const starred = new Set(filtering() ? opening().keys : []);
+    const modelRefs = new Set(filtering() ? runtimeModelOptions().map((entry) => entry.value) : []);
     const modelSearchProps = {
+      starred,
+      modelRefs,
       disabled: disabled(),
       selectedModelValue: selectedModelValue(),
       selectedAgentRuntime: selectedAgentRuntime(),
@@ -174,29 +179,20 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       ],
       rows: [
         ...providerGroups
-          .filter(([provider]) => provider !== FAVORITES_GROUP || !search?.query().trim())
-          .flatMap(([provider, group]) =>
-            group.lead
-              .map((entry) =>
-                Object.assign(modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel), {
-                  key: modelRowKey(entry, provider),
-                  provider,
-                  list: provider,
-                }),
-              )
-              .concat(
-                group.more.map((entry) =>
-                  Object.assign(
-                    modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel),
-                    {
-                      provider,
-                      more: true,
-                      list: `${provider}:more`,
-                    },
-                  ),
-                ),
-              ),
-          ),
+          .filter(([provider]) => provider !== FAVORITES_GROUP || !filtering())
+          .flatMap(([provider, { lead, more }]) => {
+            const row = (entry: ModelPickerOption, collapsed: boolean) => {
+              const result = modelOptionSearchRow({ ...modelSearchProps, entry }, defaultLabel);
+              result.key = modelRowKey(entry, provider);
+              result.provider = provider;
+              result.list = collapsed ? `${provider}:more` : provider;
+              result.more = collapsed;
+              return result;
+            };
+            return lead
+              .map((entry) => row(entry, false))
+              .concat(more.map((entry) => row(entry, true)));
+          }),
         ...targetGroups.flatMap((group) =>
           group.options.map((entry) => ({
             key: `target:${group.id}:${entry.value}`,

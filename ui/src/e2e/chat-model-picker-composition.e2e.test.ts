@@ -98,6 +98,71 @@ suite.define(() => {
     });
   });
 
+  it("puts exact model searches ahead of favorites, and favorites and recommendations ahead of provider ties", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const opus = "anthropic/claude-opus-5.5";
+        const models = [
+          { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+          { provider: "openai", id: "gpt-5.5-pro", name: "GPT-5.5 Pro" },
+          { provider: "openai", id: "gpt-5.5-2026-04-23", name: "GPT-5.5-2026-04-23" },
+          { provider: "anthropic", id: "claude-opus-5.5", name: "Claude Opus 5.5" },
+          {
+            provider: "anthropic",
+            id: "claude-sonnet-5.5",
+            name: "Claude Sonnet 5.5",
+            recommended: true,
+          },
+          { provider: "anthropic", id: "claude-haiku-5.5", name: "Claude Haiku 5.5" },
+        ];
+        const gateway = await installMockGateway(page, {
+          agentModel: "openai/gpt-5.5",
+          models,
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          bootstrapPreferences: {
+            profileId: "synthetic-operator",
+            entries: { "ui.modelFavorites:main": [opus] },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const { picker, trigger, search, option } = modelPicker(page);
+        await trigger.click();
+        await picker.getByRole("tab", { name: "Favorites" }).waitFor();
+        await search.fill("5.5");
+        const visualOrder = () =>
+          picker
+            .locator("[data-chat-model-option]:visible")
+            .evaluateAll((rows) =>
+              rows
+                .toSorted((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+                .map((r) => r.getAttribute("data-chat-model-option")),
+            );
+        await expect.poll(async () => (await visualOrder()).length).toBe(models.length);
+        expect(await visualOrder()).toEqual([
+          opus,
+          "anthropic/claude-sonnet-5.5",
+          "openai/gpt-5.5",
+          "openai/gpt-5.5-pro",
+          "anthropic/claude-haiku-5.5",
+          "openai/gpt-5.5-2026-04-23",
+        ]);
+        await search.fill("gpt-5.5");
+        await expect.poll(async () => (await visualOrder())[0]).toBe("openai/gpt-5.5");
+        await search.fill("openai/gpt-5.5-2026-04-23");
+        await expect
+          .poll(() => search.getAttribute("aria-activedescendant"))
+          .toBe(await option("openai/gpt-5.5-2026-04-23").getAttribute("id"));
+        await search.fill("5.5");
+        await search.press("Enter");
+        expect((await gateway.waitForRequest("sessions.patch")).params).toMatchObject({
+          model: opus,
+        });
+      },
+    );
+  });
+
   it("refreshes the mounted composer's account identity after an auth publication", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const models = [{ id: "shared-alpha", name: "Shared Alpha", provider: "openai" }];
