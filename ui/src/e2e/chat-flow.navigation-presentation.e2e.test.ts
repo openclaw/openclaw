@@ -215,6 +215,71 @@ suite.define(() => {
     await finishEndReturn(false);
   });
 
+  it("keeps the previous conversation as a session opened for the first time loads", async () => {
+    const { page } = await newChatPage(suite, { viewport: { height: 720, width: 1280 } });
+    const sessionB = "agent:main:session-b";
+    const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
+      sessionKey: "agent:main:session-a",
+      historyMessages: [timedText("assistant", "Session A reply")],
+      sessionTranscripts: { [sessionB]: { messages: [timedText("assistant", "Session B reply")] } },
+      methodResponses: { "sessions.list": chatSessionListResponse() },
+    });
+    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-a"));
+    await expectTextContains(
+      page.locator(".chat-pane-cache__pane--visible .chat-thread"),
+      "Session A reply",
+    );
+
+    const before = (await gateway.getRequests("chat.startup", { sessionKey: sessionB })).length;
+    await gateway.deferNext("chat.startup", { sessionKey: sessionB });
+    await page
+      .locator(
+        `.sidebar-recent-session[data-session-key="${sessionB}"] a.sidebar-recent-session__link`,
+      )
+      .click();
+    await gateway.waitForRequest("chat.startup", {
+      after: before,
+      match: { sessionKey: sessionB },
+    });
+    // The destination shows only its loading state; the pane the user left is
+    // marked so split-view.css can keep it painted instead of an empty pane.
+    await expectCount(
+      page.locator(
+        ".chat-pane-cache__pane--visible :is(.chat-conversation-loading, .lazy-view-state--loading, openclaw-panel-loading-skeleton)",
+      ),
+      1,
+    );
+    await expectTextContains(
+      page.locator(".chat-pane-cache__pane--leaving[inert]"),
+      "Session A reply",
+    );
+
+    // Leave startup pending past the hold. A slow destination shows its own
+    // loading state; background work must not resurrect the previous pane.
+    await expectCount(page.locator(".chat-pane-cache__pane--leaving"), 0);
+    await expect
+      .poll(() =>
+        page
+          .locator(".chat-pane-cache__pane--visible")
+          .evaluate((pane) => getComputedStyle(pane).visibility),
+      )
+      .toBe("visible");
+
+    await gateway.resolveDeferred("chat.startup", undefined, { match: { sessionKey: sessionB } });
+    await expectTextContains(
+      page.locator(".chat-pane-cache__pane--visible .chat-thread"),
+      "Session B reply",
+    );
+    await expect
+      .poll(() =>
+        page
+          .locator(".chat-pane-cache__pane--leaving *")
+          .evaluateAll((nodes) => nodes.filter((node) => node.checkVisibility()).length),
+      )
+      .toBe(0);
+  });
+
   it("renders always-on pane headers without desktop topbar chrome", async () => {
     const { page, gateway } = await chatFixture(
       suite,

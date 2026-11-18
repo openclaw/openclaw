@@ -316,7 +316,10 @@ export class ChatTranscriptRenderer {
 
   syncInitialPosition(): void {
     if (this.element && this.accepted) {
-      this.element.style.visibility = this.accepted.initialPositionPending() ? "hidden" : "";
+      this.element.toggleAttribute(
+        "data-initial-position-pending",
+        this.accepted.initialPositionPending(),
+      );
     }
   }
 
@@ -407,8 +410,8 @@ export class ChatTranscriptRenderer {
     if (!this.element) {
       const element = document.createElement("div");
       element.className = "chat-thread-inner chat-thread-inner--virtual";
-      element.style.visibility = next.initialPositionPending() ? "hidden" : "";
       this.element = element;
+      this.syncInitialPosition();
       // This retained transcript island outlives the computation that introduces its DOM.
       // Its session owner disposes the detached root, including while the pane is parked.
       this.disposeRoot = runWithOwner(null, () =>

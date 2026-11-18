@@ -78,6 +78,31 @@ openclaw-pending-session-create .chat-pane__header:not(.chat-pane__header--mobil
   z-index: 1;
 }
 
+/* A session opened for the first time paints its pane a frame or more before
+   its transcript. While the destination shows only a loading state, keep the
+   conversation the user just left on screen (inert) instead of flashing an
+   empty pane. The hold ends with the loaders' own 500 ms reveal. */
+.chat-pane-cache:has(> .chat-pane-cache__pane--leaving[inert]):has(
+    > .chat-pane-cache__pane--visible
+      :is(
+        .chat-conversation-loading,
+        .chat-thread-inner[data-initial-position-pending],
+        .chat-thread-inner > openclaw-panel-loading-skeleton,
+        .chat-thread-inner > .lazy-view-state--loading
+      )
+  ) {
+  > .chat-pane-cache__pane--leaving {
+    content-visibility: visible;
+    opacity: 1;
+    pointer-events: none;
+  }
+
+  > .chat-pane-cache__pane--visible {
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
 .chat-pane-cache__pane:not(.chat-pane-cache__pane--active) .chat-inline-approval {
   display: none;
 }
