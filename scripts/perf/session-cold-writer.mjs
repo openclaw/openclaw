@@ -37,6 +37,7 @@ const { values } = parseArgs({
     sweep: { type: "boolean" },
     profile: { type: "boolean" },
     flow: { type: "boolean" },
+    "restore-flow": { type: "boolean" },
     appends: { type: "string", default: "200" },
     events: { type: "string", default: "50000" },
     sessions: { type: "string", default: "1" },
@@ -63,7 +64,10 @@ const { readSessionColdTranscript } = await load(
   "src/config/sessions/session-cold-storage-state.ts",
 );
 const { readTranscriptPayload } = await load("src/config/sessions/transcript-payload.ts");
-const owner = await load("src/config/sessions/session-cold-storage-worker.ts");
+const owner = { ...(await load("src/config/sessions/session-cold-storage-worker.ts")) };
+if (fs.existsSync(path.join(source, "src/config/sessions/session-cold-storage-restore.ts"))) {
+  Object.assign(owner, await load("src/config/sessions/session-cold-storage-restore.ts"));
+}
 const options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 const manifestPath = path.join(root, "fixture.json");
 const environment = () => ({
@@ -373,16 +377,20 @@ async function measureOwners() {
         sessionId,
         archive: readSessionColdTranscript(database.db, sessionId),
       };
-      const records = await owner.prepareSessionColdRestoreInWorker(plan);
-      const replay = values.profile
-        ? (current) => ({
-            [Symbol.iterator]() {
-              const iterator = records(current)[Symbol.iterator]();
-              return { next: () => timed("decodeNext", () => iterator.next()) };
-            },
-          })
-        : records;
-      assert(owner.mutateSessionColdTranscriptInWorker(plan, replay, () => {}).restored);
+      if (owner.restoreSessionColdTranscriptInWorker) {
+        assert(
+          (
+            await owner.restoreSessionColdTranscriptInWorker(
+              plan,
+              async (run) => run(),
+              () => {},
+            )
+          ).restored,
+        );
+      } else {
+        const records = await owner.prepareSessionColdRestoreInWorker(plan);
+        assert(owner.mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored);
+      }
     }
     const restore = {
       elapsedMs: performance.now() - restoreStart,
@@ -413,7 +421,7 @@ async function measureOwners() {
 }
 
 async function measureFlow() {
-  const { runSessionColdStorageMaintenance } = await load(
+  const { runSessionColdStorageMaintenance, restoreSessionColdTranscript } = await load(
     "src/config/sessions/session-cold-storage.ts",
   );
   const { acquireGatewayStateOwner } = await load("src/infra/gateway-state-owner.ts");
@@ -432,11 +440,12 @@ async function measureFlow() {
   const { appendTranscriptEvent } = await load(
     "src/config/sessions/session-accessor.sqlite-transcript-write.ts",
   );
+  const interactiveId = values["restore-flow"] ? "restore-interactive" : "interactive";
   const scope = {
     agentId: "main",
     storePath: options.path,
-    sessionKey: "agent:main:interactive",
-    sessionId: "interactive",
+    sessionKey: `agent:main:${interactiveId}`,
+    sessionId: interactiveId,
   };
   const channel = new BroadcastChannel("cold-writer-proof");
   const reservations = [];
@@ -448,7 +457,7 @@ async function measureFlow() {
   const sessionWriteChannel = diagnosticChannel("openclaw.session.write");
   sessionWriteChannel.subscribe(observeReservation);
   try {
-    await entry.replaceSessionEntry(scope, { sessionId: "interactive", updatedAt: Date.now() });
+    await entry.replaceSessionEntry(scope, { sessionId: interactiveId, updatedAt: Date.now() });
     await appendTranscriptEvent(scope, {
       type: "custom",
       customType: "synthetic",
@@ -468,7 +477,10 @@ async function measureFlow() {
       } else if (data.type === "close") {
         closes.push(data);
       }
-      if (data.type === "archiving" && archivalStartedAt === undefined) {
+      if (
+        data.type === (values["restore-flow"] ? "restoring" : "archiving") &&
+        archivalStartedAt === undefined
+      ) {
         archivalStartedAt = performance.now();
         for (let index = 0; index < appendCount; index++) {
           appends.push(
@@ -501,15 +513,22 @@ async function measureFlow() {
     const cpuStart = process.cpuUsage();
     const heapStart = process.memoryUsage();
     const start = performance.now();
-    const result = await runSessionColdStorageMaintenance({
-      config: {
-        agents: { entries: { main: {} } },
-        session: {
-          store: options.path,
-          maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-        },
-      },
-    });
+    const result = values["restore-flow"]
+      ? await restoreSessionColdTranscript({
+          agentId: "main",
+          storePath: options.path,
+          sessionKey: "agent:main:synthetic-0",
+          sessionId: "synthetic-0",
+        })
+      : await runSessionColdStorageMaintenance({
+          config: {
+            agents: { entries: { main: {} } },
+            session: {
+              store: options.path,
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
+          },
+        });
     const finishedAt = performance.now();
     assert(
       appends.length === appendCount,
@@ -600,7 +619,7 @@ async function measureFlow() {
 try {
   if (values.prepare) {
     await prepare();
-  } else if (values.flow) {
+  } else if (values.flow || values["restore-flow"]) {
     await measureFlow();
   } else {
     await measureOwners();

@@ -9,16 +9,105 @@ import {
 } from "../../trajectory/runtime-store.test-support.js";
 import * as archiveWorkers from "./session-accessor.sqlite-archive.js";
 import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
-import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   currentId,
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
+import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("bounds restore reservations and lets a foreground writer finish before hot publication", async () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = await createSessionColdStorageFixture(state.statePath("restore.sqlite"));
+    await replaceTranscriptEvents(
+      fixture.scope,
+      Array.from({ length: 10_000 }, (_, index) => ({
+        type: "message",
+        id: `restore-${index}`,
+        parentId: index ? `restore-${index - 1}` : null,
+        message: { role: "user", content: "synthetic restoration payload ".repeat(150) },
+      })),
+    );
+    await waitForSessionTranscriptIndexReconcile(fixture.options);
+    fixture
+      .database()
+      .prepare(
+        "UPDATE session_windows SET updated_at=1, transcript_updated_at=1 WHERE session_id=?",
+      )
+      .run(historicalId);
+    const expected = fixture.snapshot();
+    await runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.options.path) });
+    const holds: number[] = [];
+    const writes: Promise<void>[] = [];
+    let foregroundSawCold = false;
+    const originalWorker = archiveWorkers.runSqliteTranscriptArchiveWorkerOperation;
+    vi.spyOn(archiveWorkers, "runSqliteTranscriptArchiveWorkerOperation").mockImplementation(
+      (params) => {
+        if (
+          params.expectedMessageType !== "reclaimed" ||
+          params.diagnostics?.kind !== "cold-restore"
+        ) {
+          return originalWorker(params);
+        }
+        let inAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
+        return originalWorker({
+          ...params,
+          withWriteAdmission: (run, diagnostics, operation) =>
+            params.withWriteAdmission(
+              async (refusal) => {
+                inAdmission = AsyncLocalStorage.snapshot();
+                const started = performance.now();
+                try {
+                  return await run(refusal);
+                } finally {
+                  holds.push(performance.now() - started);
+                }
+              },
+              diagnostics,
+              operation,
+            ),
+          onCommitRequest: () => {
+            inAdmission!(() => {
+              const write = withOpenClawAgentDatabaseWrite(
+                fixture.options,
+                () => {
+                  foregroundSawCold = Boolean(
+                    readSessionColdTranscript(fixture.database(), historicalId),
+                  );
+                  const trace = createTrajectoryEvent({
+                    type: "restore-interleave",
+                    sessionId: currentId,
+                    seq: 0,
+                  });
+                  appendSqliteTrajectoryRuntimeEvents({ ...fixture.scope, sessionId: currentId }, [
+                    trace,
+                  ]);
+                },
+                fixture.database(),
+              );
+              void write.catch(() => {});
+              writes.push(write);
+            });
+            params.onCommitRequest();
+          },
+        });
+      },
+    );
+    await restoreSessionColdTranscript(fixture.scope);
+    await Promise.all(writes);
+    expect(Math.max(...holds)).toBeLessThan(1_000);
+    expect(foregroundSawCold).toBe(true);
+    expect(fixture.snapshot()).toEqual(expected);
+  }));
 
 it("queues a borrowed foreground write while a cold Worker owns admission", async () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {

@@ -11,7 +11,10 @@ import {
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { SqliteWorkerExecutionAuthority } from "../../infra/sqlite-worker-contract.js";
 import { assertDatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
-import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
+import {
+  retainOpenClawAgentDatabaseReadOnly,
+  withOpenClawAgentDatabaseReadOnly,
+} from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -29,18 +32,18 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { readVerifiedSessionColdChunks } from "./session-cold-storage-chunks.js";
 import {
-  iterateSessionColdRecords,
-  readVerifiedSessionColdChunks,
-} from "./session-cold-storage-chunks.js";
-import {
+  decodeSessionColdRecords,
   verifyPublishedSessionColdArchive,
-  type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
 import type { SessionColdRestorationGuard } from "./session-cold-storage-guard.types.js";
 import { retainSessionColdNavigationInTransaction } from "./session-cold-storage-navigation.js";
-import { writeSessionColdRecordsInTransaction } from "./session-cold-storage-records.js";
+import {
+  writeSessionColdRecordsInTransaction,
+  type SessionColdWriteRecord,
+} from "./session-cold-storage-records.js";
 import { readSessionAdmissionProtectionKeys } from "./session-cold-storage-selection.js";
 import {
   readSessionColdLockedValidation,
@@ -66,6 +69,7 @@ import {
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
 import { resolveSessionWorkStartError } from "./session-work-start.js";
+import { prepareTranscriptPayloadForReuse } from "./transcript-payload.js";
 
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
@@ -117,7 +121,7 @@ export function assertSessionColdSourceCurrent(pathname: string, source: Session
 
 export async function prepareSessionColdRestoreInWorker(
   plan: Extract<SessionColdMutationPlan, { kind: "cold-restore" }>,
-): Promise<(database: OpenClawAgentDatabase) => Iterable<SessionColdRecord>> {
+): Promise<() => Generator<SessionColdWriteRecord>> {
   const opened = withOpenClawAgentDatabaseReadOnly(
     (database) => readSessionColdTranscript(database.db, plan.sessionId),
     plan.databaseOptions,
@@ -130,8 +134,7 @@ export async function prepareSessionColdRestoreInWorker(
     throw new Error("Cold transcript changed before restoration");
   }
   const archive = opened.value;
-  // Publication verified the envelope. Check its immutable bytes before admission;
-  // decode and validate records once inside the guarded, all-or-nothing transaction.
+  // Verify immutable files before any writes; each bounded unit decodes before admission.
   const verify = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteReadSnapshotSync(
@@ -152,7 +155,61 @@ export async function prepareSessionColdRestoreInWorker(
   if (!verify.found) {
     throw new Error("Cold transcript disappeared before restoration");
   }
-  return (database) => iterateSessionColdRecords(database.db, plan.databaseOptions.path, archive);
+  return function* () {
+    const retained = retainOpenClawAgentDatabaseReadOnly(plan.databaseOptions);
+    if (!retained.found) {
+      throw new Error("Cold transcript disappeared before restoration");
+    }
+    try {
+      const database = retained.database.db;
+      // Current archives keep their complete identity and active projections. Legacy
+      // archives, and interrupted legacy replays, still rebuild them from the archive.
+      const retainedProjection =
+        executeSqliteQueryTakeFirstSync(
+          database,
+          getNodeSqliteKysely<DB>(database)
+            .selectFrom("session_transcript_index_state")
+            .select("indexed_seq")
+            .where("session_id", "=", plan.sessionId),
+        )?.indexed_seq === archive.last_seq;
+      for (const chunk of readVerifiedSessionColdChunks(
+        database,
+        plan.databaseOptions.path,
+        archive,
+      )) {
+        const navigation = new Map(
+          executeSqliteQuerySync(
+            database,
+            getNodeSqliteKysely<DB>(database)
+              .selectFrom("transcript_events")
+              .select(["seq", "navigation_json"])
+              .where("session_id", "=", plan.sessionId)
+              .where("seq", ">=", "first_seq" in chunk.archive ? chunk.archive.first_seq : 0)
+              .where("seq", "<=", chunk.archive.last_seq)
+              .where("navigation_json", "is not", null),
+          ).rows.map((row) => [row.seq, row.navigation_json!]),
+        );
+        for (const record of decodeSessionColdRecords(chunk.bytes, chunk.archive)) {
+          if (retainedProjection && record.kind !== "event" && record.kind !== "fts") {
+            continue;
+          }
+          yield record.kind === "event"
+            ? {
+                ...record,
+                preparedPayload: prepareTranscriptPayloadForReuse(
+                  database,
+                  record.row.event_json,
+                  undefined,
+                  navigation.get(record.row.seq),
+                ),
+              }
+            : record;
+        }
+      }
+    } finally {
+      retained.claim.release();
+    }
+  };
 }
 
 /** Recheck the marker before each bounded unit so a restore cancels remaining cleanup. */
@@ -210,7 +267,10 @@ export function sweepSessionColdInTransaction(
 
 export function mutateSessionColdTranscriptInWorker(
   plan: SessionColdMutationPlan,
-  records: ((database: OpenClawAgentDatabase) => Iterable<SessionColdRecord>) | undefined,
+  restore:
+    | { phase: "clear" | "complete" }
+    | { phase: "rows"; records: readonly SessionColdWriteRecord[] }
+    | undefined,
   onCommit: (database: OpenClawAgentDatabase, validation?: SessionSourceValidation) => void,
   sourceGuard?: ReturnType<typeof prepareSessionColdSourceGuard>,
 ): SessionColdMutationResult {
@@ -374,30 +434,37 @@ export function mutateSessionColdTranscriptInWorker(
         if (
           current.generation !== plan.archive.generation ||
           current.archive_sha256 !== plan.archive.archive_sha256 ||
-          !records
+          !restore
         ) {
           throw new Error("Cold transcript changed during restoration");
         }
         const session_id = plan.sessionId;
         withSqliteDatabaseWriteScope(database.db, [sqliteSessionIdWriteScope(session_id)], () => {
-          // Navigation rows are derived; replay the archive's exact identities with its payloads.
-          executeSqliteQuerySync(
-            database.db,
-            db.deleteFrom("transcript_events").where("session_id", "=", session_id),
-          );
-          executeSqliteQuerySync(
-            database.db,
-            db.deleteFrom("session_transcript_index_state").where("session_id", "=", session_id),
-          );
-          // A crash or an early restore can precede the deferred cold FTS sweep.
-          deleteSessionTranscriptFtsRowsInTransaction(database.db, session_id);
-          writeSessionColdRecordsInTransaction(database, session_id, records(database), "restore");
-          executeSqliteQuerySync(
-            database.db,
-            db.deleteFrom("session_transcript_cold_archives").where("session_id", "=", session_id),
-          );
+          if (restore.phase === "clear") {
+            result.restoreCleanupRows = deleteSessionTranscriptFtsRowsInTransaction(
+              database.db,
+              session_id,
+              { maxRows: 256 },
+            );
+          } else if (restore.phase === "rows") {
+            // Retained navigation stays complete while the cold marker owns all reads.
+            writeSessionColdRecordsInTransaction(database, session_id, restore.records, "restore");
+          } else {
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .deleteFrom("session_transcript_cold_archives")
+                .where("session_id", "=", session_id),
+            );
+            result.restored = true;
+          }
         });
-        result.restored = true;
+        if (!result.restored) {
+          result.restorePending = true;
+          onCommit(database, sourceValidation);
+          sourceGuard?.assertForeign();
+          return result;
+        }
         result.sessionKey = executeSqliteQueryTakeFirstSync(
           database.db,
           db
