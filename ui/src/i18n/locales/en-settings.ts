@@ -1066,20 +1066,15 @@ const enSettings = {
     },
   },
   modelProviders: {
-    title: "Configured providers",
-    configureModels: "Set up a model",
     actionNamed: "{action}: {name}",
     login: {
       action: "Add account",
       title: "Add an account",
-      noOptions: "No sign-in methods are available.",
       accounts: "Accounts available to this agent",
       noAccounts: "No saved accounts for this provider yet.",
       connectAccount: "Add an account",
       apiKeyHint: "Use an API key from your provider account.",
       compareMethods: "Compare sign-in methods",
-      searchProviders: "Search providers…",
-      noMatches: "No providers match your search.",
       noProviders: "No providers available yet.",
       discover: "On this Gateway",
       description: "Add an account for this agent. Choose the model separately.",
@@ -1110,14 +1105,11 @@ const enSettings = {
     search: "Search providers…",
     noMatches: "No providers match your search.",
     updated: "Updated {time}",
-    refreshing: "Refreshing…",
-    disconnected: "Connect to the gateway to see configured model providers.",
     emptyTitle: "No model providers configured",
     emptySubtitle: "Sign in to a provider or add an API key, then refresh.",
     status: {
       ok: "Signed in",
       ready: "Ready",
-      checking: "Checking models…",
       expiring: "Expiring",
       expired: "Expired",
       missing: "Not signed in",
@@ -1167,7 +1159,6 @@ const enSettings = {
     },
     profiles: {
       title: "Accounts",
-      accountOne: "1 account",
       kindApiKey: "API key",
       kindToken: "Access token",
       kindOauth: "Signed-in account",
@@ -1176,7 +1167,6 @@ const enSettings = {
       reorderHint: "Drag to reorder",
       reorder: "Reorder {account}, position {position}",
       priority: "Priority {position}",
-      automaticOrder: "Account selection is automatic.",
       priorityManagedByProvider: "Priority is managed by provider configuration.",
       priorityManagedByAuth: "Priority is managed by auth.order.",
       partialOrder: "Priority is inherited or managed across provider routes.",
@@ -1237,7 +1227,6 @@ const enSettings = {
       notConfigured: "Add a provider and test the model OpenClaw will use.",
       noModels: "No models available",
       modelRequired: "Model required",
-      chooseProvider: "Choose another provider",
     },
     logout: {
       action: "Sign out",
@@ -1245,8 +1234,6 @@ const enSettings = {
       title: "Sign out of {account}?",
       confirm:
         "The saved sign-in for {provider} is removed from OpenClaw. You can add this account again later.",
-      loggingOut: "Signing out…",
-      done: "Signed out",
     },
     remove: {
       action: "Remove provider",

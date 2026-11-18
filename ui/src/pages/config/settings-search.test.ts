@@ -61,7 +61,7 @@ it("keeps target metadata cold and loads Settings English when search opens", as
     "configPage.themeImported",
     "configView.chatPrefs.title",
     "updates.page.buildTitle",
-    "modelProviders.title",
+    "modelProviders.emptyTitle",
   ];
   try {
     await import("./settings-targets.ts");
