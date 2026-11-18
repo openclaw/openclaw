@@ -4859,18 +4859,13 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-page-end {
   position: relative;
-}
-
-.chat-controls__account-page-end--loading {
-  position: sticky;
-  bottom: 0;
-  background: var(--popover);
+  min-height: 28px;
 }
 
 /* Intersect just inside the last row, including when keyboard focus reveals it. */
 .chat-controls__account-page-sentinel {
   position: absolute;
-  inset: auto 0 12px;
+  inset: -12px 0 auto;
   height: 1px;
   pointer-events: none;
 }
@@ -4901,6 +4896,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-popover .chat-controls__account-manage {
   min-height: 36px;
+  scroll-margin-bottom: 28px;
   padding: 0 12px 0 8px;
   gap: 8px;
 }

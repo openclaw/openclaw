@@ -169,13 +169,8 @@ export function ChatModelAccountOptions(
           }}
         </For>
       </div>
-      <Show when={!renderRow() && props.open}>
-        <div
-          class={[
-            "chat-controls__account-page-end",
-            { "chat-controls__account-page-end--loading": Boolean(props.loading) },
-          ]}
-        >
+      <Show when={!renderRow() && props.open && (props.onNextPage || props.loading)}>
+        <div class="chat-controls__account-page-end">
           <Show when={props.onNextPage}>
             {(next) => <AccountPageSentinel onVisible={next()} />}
           </Show>

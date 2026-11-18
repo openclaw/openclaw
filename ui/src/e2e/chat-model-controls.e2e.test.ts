@@ -402,6 +402,9 @@ suite.define(() => {
             }),
           )
           .toBe(true);
+        expect((await loading.boundingBox())!.y).toBeGreaterThanOrEqual(
+          (await manage.boundingBox())!.y + (await manage.boundingBox())!.height - 1,
+        );
         expect(await currentOption.isVisible()).toBe(true);
         expect(await gateway.getRequests(rpc)).toHaveLength(baseline + 1);
         await gateway.deferNext(rpc, { cursor: "accounts-page-3" });
