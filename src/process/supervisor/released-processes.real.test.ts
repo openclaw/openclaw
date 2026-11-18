@@ -82,7 +82,8 @@ it.runIf(process.platform !== "win32")(
     const pid = survivor.pid!;
     groups.push(pid);
     await new Promise((resolve) => setTimeout(resolve, 300));
-    const adopted = adoptReleasedProcess("group-kill-denied", { pid, pgid: pid }, () => {});
+    const onExit = vi.fn();
+    const adopted = adoptReleasedProcess("group-kill-denied", { pid, pgid: pid }, onExit);
     const realKill = process.kill.bind(process);
     vi.spyOn(process, "kill").mockImplementation((target, signal) => {
       if (target === -pid && signal === "SIGKILL") {
@@ -96,6 +97,13 @@ it.runIf(process.platform !== "win32")(
     });
 
     expect(await adopted!.stop({ group: true })).toMatchObject({ status: "uncertain" });
+    // Custody holds while the group runs: the reaper does not settle it, and a retry stops it.
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    expect(onExit).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    expect(await adopted!.stop({ group: true })).toEqual({ status: "stopped" });
+    expect(onExit).toHaveBeenCalledOnce();
+    expect(() => process.kill(-pid, 0)).toThrow();
   },
-  30_000,
+  40_000,
 );
