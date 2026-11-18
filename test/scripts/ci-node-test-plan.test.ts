@@ -3378,6 +3378,32 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("preserves the worker allocation and timing of already-serial hosted selections", async () => {
+    const target = "src/infra/ports-probe.test.ts";
+    mockProject("core-runtime", configPath("infra"), "src/infra", [target], {
+      "core-runtime-infra-system-runtime": 160,
+    });
+    mockOriginal("database", {
+      databaseWorkerCoreTestFiles: [],
+      isDatabaseWorkerCoreTestFile: () => false,
+    });
+    await mockFastPaths();
+    mockUnbuiltRuntime();
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "build",
+      "database",
+    ]);
+    const original = only(required(select([target], { runnerBackend: "github" })));
+    expect(original.planConcurrency).toBe(1);
+    // Hosted serial rows inherit the workflow's three-worker allocation unless explicitly capped.
+    expect(Number(original.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 3)).toBe(3);
+    const isolated = only(
+      required(select([target], { runnerBackend: "github", isolateSystemRuntime: true })),
+    );
+    expect(Number(isolated.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 3)).toBe(3);
+    expect(isolated).toEqual(original);
+  });
+
   async function createToolingFixturePlan(params: {
     files: string[];
     shards: typeof fullSuiteVitestShards;

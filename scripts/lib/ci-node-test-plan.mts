@@ -4672,6 +4672,7 @@ export function createSelectedNodeTestShardBundles(
     };
     if (
       options.isolateSystemRuntime &&
+      job.planConcurrency === 2 &&
       groups.some((group) =>
         /^core-runtime-infra-system-runtime(?:-hosted-\d+)?$/u.test(group.shard_name),
       )

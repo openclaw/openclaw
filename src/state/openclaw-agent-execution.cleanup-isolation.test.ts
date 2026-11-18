@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import type { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { AUTH_NONE, sendRequest, withGatewayServer } from "../gateway/server-http.test-harness.js";
+import { AUTH_TOKEN, withGatewayServer } from "../gateway/server-http.test-harness.js";
 import { createReadinessChecker } from "../gateway/server/readiness.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import {
@@ -149,23 +151,49 @@ it("keeps healthy agents usable while real worker lease cleanup fails, then reco
       startedAt: Date.now(),
       getAgentDatabaseCleanupFailures: () => getOpenClawAgentDatabaseCleanupFailures(shared.path),
     });
+    const proxyConfig = { gateway: { trustedProxies: ["127.0.0.1"] } };
     await withGatewayServer({
       prefix: "cleanup-readiness-",
-      resolvedAuth: AUTH_NONE,
-      overrides: { getReadiness },
+      resolvedAuth: AUTH_TOKEN,
+      overrides: { getReadiness, getRuntimeConfig: () => proxyConfig },
       run: async (server) => {
-        const before = await sendRequest(server, { path: "/readyz" });
-        expect(before.res.statusCode).toBe(200);
-        expect(before.getBody()).toContain("cleanup-canary-private");
-        applyLoggingConfig({
-          ...previousLogging,
-          redactPatterns: [...(previousLogging?.redactPatterns ?? []), "cleanup-canary-private"],
+        const reserved = await reserveTestPortListener({
+          offsets: [0],
+          createListener: () => server,
         });
-        const after = await sendRequest(server, { path: "/readyz" });
-        expect(after.res.statusCode).toBe(200);
-        expect.soft(after.getBody()).not.toContain("cleanup-canary-private");
-        expect.soft(after.getBody()).toContain("errcode=5");
-        expect(after.getBody()).not.toContain("synthetic-cleanup-secret");
+        await runQaGatewayFixture(
+          async () => {
+            const url = `http://127.0.0.1:${reserved.claim.port}/readyz`;
+            const remote = { "x-forwarded-for": "198.51.100.8" };
+            const authenticated = { ...remote, authorization: "Bearer test-token" };
+            const before = await fetch(url, { headers: authenticated });
+            const beforeBody = await before.text();
+            expect(before.status).toBe(200);
+            expect(beforeBody).toContain("cleanup-canary-private");
+            applyLoggingConfig({
+              ...previousLogging,
+              redactPatterns: [
+                ...(previousLogging?.redactPatterns ?? []),
+                "cleanup-canary-private",
+              ],
+            });
+            const after = await fetch(url, { headers: authenticated });
+            const afterBody = await after.text();
+            expect(after.status).toBe(200);
+            expect.soft(afterBody).not.toContain("cleanup-canary-private");
+            expect.soft(afterBody).toContain("errcode=5");
+            expect(afterBody).not.toContain("synthetic-cleanup-secret");
+            const unauthenticated = await fetch(url, { headers: remote });
+            const publicBody: unknown = await unauthenticated.json();
+            expect(unauthenticated.status).toBe(200);
+            expect(publicBody).toEqual({ ready: true });
+          },
+          () => {
+            server.closeAllConnections();
+            return reserved.releaseListener();
+          },
+          reserved.claim.release,
+        );
       },
     });
     applyLoggingConfig(previousLogging);
