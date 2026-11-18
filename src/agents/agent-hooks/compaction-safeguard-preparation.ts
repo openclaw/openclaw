@@ -22,6 +22,7 @@ import {
 } from "./compaction-safeguard-context.js";
 import {
   extractOpaqueIdentifiers,
+  extractOpaqueIdentifiersFromFacts,
   normalizeLegacySplitTurnSummary,
 } from "./compaction-safeguard-quality.js";
 import {
@@ -161,6 +162,69 @@ export function prepareCompactionSafeguardContext(params: {
   };
 }
 
+/** Undefined is a non-user; false is an independent input that stops ask lookup. */
+export function collectCompactionSafeguardAskFact(message: AgentMessage): boolean | undefined {
+  return message.role === "user"
+    ? extractCurrentCompactionUserRequest([message], () => "") !== null
+    : undefined;
+}
+
+/** Return a selected-sequence locator; reread only that row for the exact, uncapped ask. */
+export function selectCompactionSafeguardAskIndex(
+  facts: readonly (boolean | undefined)[],
+): number | null {
+  for (let index = facts.length - 1; index >= 0; index--) {
+    if (facts[index] !== undefined) {
+      return facts[index] ? index : null;
+    }
+  }
+  return null;
+}
+
+function readSelectedAsk(messages: AgentMessage[]): string | null {
+  const index = selectCompactionSafeguardAskIndex(messages.map(collectCompactionSafeguardAskFact));
+  return index === null ? null : extractMessageText(messages[index]!);
+}
+
+/** Final scalar policy shared by array preparation and a selected compaction view. */
+export function prepareCompactionSafeguardSummaryFacts(params: {
+  previousSummary: string | undefined;
+  requestSelection: CompactionPreparation["requestSelection"];
+  latestUnresolvedUserRequest: string | undefined;
+  oracleAsk: string | null;
+  splitUserAsk: string | null;
+  latestPreparedAsk: string | null;
+  preservedTurnsText: string;
+  summarizableMessageCount: number;
+  turnPrefixMessageCount: number;
+  qualityGuardEnabled: boolean;
+}) {
+  const latestUserAsk = params.requestSelection
+    ? params.requestSelection.state === "unresolved"
+      ? params.requestSelection.request
+      : null
+    : params.oracleAsk;
+  const latestAskInRetainedTurn =
+    params.splitUserAsk !== null && params.splitUserAsk === latestUserAsk;
+  const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
+  const includePreservedContext =
+    !params.latestUnresolvedUserRequest &&
+    params.qualityGuardEnabled &&
+    params.latestPreparedAsk === latestUserAsk &&
+    !params.preservedTurnsText.includes(requiredAskContext);
+  return {
+    latestUserAsk,
+    latestAskInRetainedTurn,
+    requiredAskContext,
+    reconcile: Boolean(
+      params.previousSummary ||
+      includePreservedContext ||
+      params.summarizableMessageCount > 0 ||
+      params.turnPrefixMessageCount > 0,
+    ),
+  };
+}
+
 /** Built-in reconciliation policy, evaluated after provider fallback and auth in the hook. */
 export function prepareCompactionSafeguardSummary(params: {
   history: CompactionSafeguardHistory;
@@ -178,50 +242,36 @@ export function prepareCompactionSafeguardSummary(params: {
     turnPrefixMessages.length > 0
       ? [...messagesToSummarize, ...turnPrefixMessages]
       : messagesToSummarize;
-  const splitUserAsk = params.preparation.isSplitTurn
-    ? extractCurrentCompactionUserRequest(turnPrefixMessages, extractMessageText)
-    : null;
-  const latestUserAsk = requestSelection
-    ? requestSelection.state === "unresolved"
-      ? requestSelection.request
-      : null
-    : extractCurrentCompactionUserRequest(oracleMessages, extractMessageText);
-  const latestAskInRetainedTurn = splitUserAsk !== null && splitUserAsk === latestUserAsk;
-  const identifiers = extractOpaqueIdentifiers(
-    oracleMessages.slice(-10).map(extractMessageText).filter(Boolean).join("\n"),
+  const identifiers = extractOpaqueIdentifiersFromFacts(
+    oracleMessages
+      .slice(-10)
+      .map((message) => extractOpaqueIdentifiers(extractMessageText(message))),
   );
   const context = prepareCompactionSafeguardContext({
     messagesToSummarize,
     recentTurnsPreserve: params.recentTurnsPreserve,
     splitTurnContextChars: params.splitTurnContextChars,
   });
-  const latestPreparedAsk = extractCurrentCompactionUserRequest(
-    messagesToSummarize,
-    extractMessageText,
-  );
-  const requiredAskContext = formatRequiredAskContext(latestUserAsk ?? "");
-  const includePreservedContext =
-    !latestUnresolvedUserRequest &&
-    params.qualityGuardEnabled &&
-    latestPreparedAsk === latestUserAsk &&
-    !context.preservedTurnsSection.text.includes(requiredAskContext);
-  // Retained excerpts cannot update an older decision by themselves. Reconcile
-  // the complete window when there is earlier or non-preserved work to update.
-  const reconciliationMessages =
-    previousSummary ||
-    includePreservedContext ||
-    context.summarizableMessages.length > 0 ||
-    turnPrefixMessages.length > 0
-      ? oracleMessages
-      : [];
+  const { reconcile, ...summaryFacts } = prepareCompactionSafeguardSummaryFacts({
+    previousSummary,
+    requestSelection,
+    latestUnresolvedUserRequest,
+    oracleAsk: requestSelection ? null : readSelectedAsk(oracleMessages),
+    splitUserAsk: params.preparation.isSplitTurn ? readSelectedAsk(turnPrefixMessages) : null,
+    latestPreparedAsk: readSelectedAsk(messagesToSummarize),
+    preservedTurnsText: context.preservedTurnsSection.text,
+    summarizableMessageCount: context.summarizableMessages.length,
+    turnPrefixMessageCount: turnPrefixMessages.length,
+    qualityGuardEnabled: params.qualityGuardEnabled,
+  });
+  // Retained excerpts cannot update an older decision by themselves.
+  const reconciliationMessages = reconcile ? oracleMessages : [];
   return {
     ...context,
     turnPrefixMessages,
     oracleMessages,
     reconciliationMessages,
-    latestUserAsk,
-    latestAskInRetainedTurn,
+    ...summaryFacts,
     identifiers,
-    requiredAskContext,
   };
 }

@@ -164,6 +164,8 @@ type ActiveContextReadOptions = SessionTranscriptContextSelection & {
   readOnly?: boolean;
   resolvedScope?: ResolvedTranscriptReadScope;
   transaction?: CurrentTranscriptProjection["database"];
+  /** Consume one decoded row inside this snapshot; retain facts, not its payload. */
+  onEntry?: (event: TranscriptEvent, row: { rawSeq: number; serializedBytes: number }) => void;
   onRead?: (
     projection: CurrentTranscriptProjection,
     rows: Array<{ rawSeq: number; serializedBytes: number }>,
@@ -519,6 +521,10 @@ function readActiveContext(
       injectedBoundarySeq = undefined;
     }
     const payloadSequences = header ? [header.seq, ...contextSequences] : contextSequences;
+    const sizes = new Map(fitted.rows.map((row) => [row.seq, row.serialized_bytes]));
+    if (header) {
+      sizes.set(header.seq, headerBytes);
+    }
     const payloads = new Map<number, TranscriptEvent>();
     let firstSelected: (typeof selectedRows)[number] | undefined;
     let anchorEntry: Record<string, unknown> | undefined;
@@ -531,6 +537,17 @@ function readActiveContext(
           .where("seq", "in", transcriptPositionSet(projection, payloadSequences)),
       )) {
         const event: TranscriptEvent = JSON.parse(readTranscriptPayload(row));
+        if (options.onEntry) {
+          const rowBytes = sizes.get(row.seq);
+          if (rowBytes === undefined) {
+            throw new Error("Selected transcript row has no recorded payload size");
+          }
+          const consumed = options.onEntry(event, { rawSeq: row.seq, serializedBytes: rowBytes });
+          if (isPromiseLike(consumed)) {
+            void Promise.resolve(consumed).catch(() => {});
+            throw new Error("Transcript snapshot consumers must remain synchronous");
+          }
+        }
         const entry = asOptionalRecord(event);
         const selected = selectedBySeq.get(row.seq);
         // Preserve only the two full anchors needed by cache-TTL projection; all
@@ -551,14 +568,21 @@ function readActiveContext(
         // message content or compaction summaries beside the acknowledged byte stream.
         payloads.set(
           row.seq,
-          materializeEvents || !entry
+          materializeEvents
             ? event
-            : {
-                type: entry.type,
-                ...("id" in entry ? { id: entry.id } : {}),
-                ...("parentId" in entry ? { parentId: entry.parentId } : {}),
-                firstKeptEntryId: entry.firstKeptEntryId,
-              },
+            : entry
+              ? {
+                  type: typeof entry.type === "string" ? entry.type : undefined,
+                  ...("id" in entry
+                    ? { id: typeof entry.id === "string" ? entry.id : undefined }
+                    : {}),
+                  ...("parentId" in entry
+                    ? { parentId: typeof entry.parentId === "string" ? entry.parentId : null }
+                    : {}),
+                  firstKeptEntryId:
+                    typeof entry.firstKeptEntryId === "string" ? entry.firstKeptEntryId : undefined,
+                }
+              : undefined,
         );
       }
     }
@@ -621,7 +645,6 @@ function readActiveContext(
     // outside the byte-counted events so excluded payloads cannot change either boundary.
     const firstKeptRanges = readBoundedRetentionRanges(projection, rows, header ? 1 : 0);
     const version = projection.version;
-    const sizes = new Map(fitted.rows.map((row) => [row.seq, row.serialized_bytes]));
     consume(
       [
         ...(header ? [{ rawSeq: header.seq, serializedBytes: headerBytes }] : []),

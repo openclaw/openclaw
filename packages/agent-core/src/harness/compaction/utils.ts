@@ -1,15 +1,9 @@
-import {
-  hasRuntimeContextMarker,
-  type AssistantMessage,
-  type Message,
-  type ToolCall,
-} from "@openclaw/llm-core";
+import { hasRuntimeContextMarker, type AssistantMessage, type Message } from "@openclaw/llm-core";
 import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { AgentMessage } from "../../types.js";
 import { createToolCallOccurrenceQueue } from "../session/tool-result-pairing.js";
-import type { FileOperations } from "../types.js";
 import { copyString } from "../utils/truncate.js";
 import {
   ELISION_MARKER_RESERVE_CHARS,
@@ -31,169 +25,16 @@ export {
 
 export type { FileOperations } from "../types.js";
 
-function normalizeFileToolName(value: string): string {
-  const name = value.toLowerCase();
-  const separator = name.indexOf("__", name.startsWith("mcp__") ? 5 : 0);
-  return separator < 0 ? name : name.slice(separator + 2);
-}
-
-function addFilePaths(target: Set<string>, value: unknown): void {
-  for (const path of Array.isArray(value) ? value : []) {
-    if (typeof path === "string") {
-      target.add(path);
-    }
-  }
-}
-
-/** Create an empty file-operation accumulator. */
-export function createFileOps(): FileOperations {
-  return { read: new Set(), written: new Set(), edited: new Set() };
-}
-
-/** Restore file metadata recorded by an earlier compaction or branch summary. */
-export function mergeSummaryFileOperations(
-  fileOps: FileOperations,
-  details: { readFiles: string[]; modifiedFiles: string[] },
-): void {
-  addFilePaths(fileOps.read, details.readFiles);
-  addFilePaths(fileOps.edited, details.modifiedFiles);
-}
-
-/** Pair outcomes within each tool turn before collecting conservative file metadata. */
-export function extractFileOpsFromMessages(
-  messages: readonly AgentMessage[],
-  fileOps: FileOperations,
-): void {
-  const calls = createToolCallOccurrenceQueue<{ call: ToolCall; name: string }>();
-  const unchanged = new Set<ToolCall>();
-  for (const message of messages) {
-    if (message.role === "assistant") {
-      calls.clear();
-      for (const call of message.content) {
-        if (call.type === "toolCall") {
-          calls.add(call.id, { call, name: normalizeFileToolName(call.name) });
-        }
-      }
-    } else if (message.role === "toolResult") {
-      const occurrence = calls.claim(message.toolCallId);
-      const name = normalizeFileToolName(message.toolName);
-      if (
-        occurrence?.name === name &&
-        (name === "edit" || name === "write") &&
-        asRecord(message.details)?.changed === false
-      ) {
-        unchanged.add(occurrence.call);
-      }
-    } else {
-      calls.clear();
-    }
-  }
-  for (const message of messages) {
-    extractFileOpsFromMessage(message, fileOps, unchanged);
-  }
-}
-
-function extractFileOpsFromMessage(
-  message: AgentMessage,
-  fileOps: FileOperations,
-  unchanged: ReadonlySet<ToolCall>,
-): void {
-  if (message.role === "toolResult") {
-    if (normalizeFileToolName(message.toolName) !== "apply_patch") {
-      return;
-    }
-    for (const result of [message, ...(Array.isArray(message.content) ? message.content : [])]) {
-      const details = asRecord(asRecord(result)?.details);
-      const summary = asRecord(details?.summary);
-      addFilePaths(fileOps.written, summary?.added);
-      addFilePaths(fileOps.edited, summary?.modified);
-    }
-    // Deleted paths no longer exist for a continuation to inspect, so omit them.
-    return;
-  }
-
-  if (message.role !== "assistant") {
-    return;
-  }
-  for (const toolCall of message.content) {
-    if (toolCall.type !== "toolCall" || unchanged.has(toolCall)) {
-      continue;
-    }
-    const args = asRecord(toolCall.arguments);
-    const path = [args?.path, args?.file_path, args?.filePath].find(
-      (value): value is string => typeof value === "string",
-    );
-    if (!path) {
-      continue;
-    }
-    switch (normalizeFileToolName(toolCall.name)) {
-      case "read":
-        fileOps.read.add(path);
-        break;
-      case "write":
-        fileOps.written.add(path);
-        break;
-      case "edit":
-        fileOps.edited.add(path);
-        break;
-    }
-  }
-}
-
-/** Compute sorted read-only and modified file lists from accumulated operations. */
-export function computeFileLists(fileOps: FileOperations): {
-  readFiles: string[];
-  modifiedFiles: string[];
-} {
-  const modified = new Set([...fileOps.edited, ...fileOps.written]);
-  const readOnly = [...fileOps.read].filter((f) => !modified.has(f)).toSorted();
-  const modifiedFiles = [...modified].toSorted();
-  return { readFiles: readOnly, modifiedFiles };
-}
-
-// File lists ratchet across compactions (prior summary entries merge into the
-// next accumulation), so an unbounded join grows without limit in long
-// sessions. Hard caps keep the model-visible section bounded per the
-// context-budget invariant; overflow collapses to a "...and N more" line.
-const MAX_FILE_OPS_LIST_CHARS = 900;
-
-function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
-  if (files.length === 0 || maxChars <= 0) {
-    return "";
-  }
-  const openTag = `<${tag}>\n`;
-  const closeTag = `\n</${tag}>`;
-  const lines: string[] = [];
-  let usedChars = openTag.length + closeTag.length;
-
-  for (let i = 0; i < files.length; i++) {
-    const line = `${files[i]}\n`;
-    const remaining = files.length - i - 1;
-    const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
-    const projected = usedChars + line.length + overflowLine.length;
-    if (projected > maxChars) {
-      const overflow = `...and ${files.length - i} more\n`;
-      if (usedChars + overflow.length <= maxChars) {
-        lines.push(overflow);
-      }
-      break;
-    }
-    lines.push(line);
-    usedChars += line.length;
-  }
-
-  return lines.length > 0 ? `${openTag}${lines.join("").trimEnd()}${closeTag}` : "";
-}
-
-/** Format file lists as bounded summary metadata tags. */
-export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  const sections = [
-    formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS),
-    formatBoundedFileList("modified-files", modifiedFiles, MAX_FILE_OPS_LIST_CHARS),
-  ].filter(Boolean);
-  // Both 900-character lists and their separators fit the 2,000-character section cap.
-  return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
-}
+export {
+  collectFileOperationMessageFact,
+  computeFileLists,
+  createFileOps,
+  extractFileOpsFromFacts,
+  extractFileOpsFromMessages,
+  formatFileOperations,
+  mergeSummaryFileOperations,
+  type FileOperationMessageFact,
+} from "./file-operations.js";
 
 /** Extract visible summary text without normalizing valid model output. */
 export function extractSummaryText(response: AssistantMessage): string | undefined {
@@ -502,15 +343,21 @@ function formatCallLabel(name: string, args: ReadonlyArray<readonly [string, str
 
 type ConversationProjectionState = { omissionMessages: number; callLabel?: string };
 
+function omissionPhase(count: number): 0 | 1 | 2 {
+  return count < MAX_OMISSION_MESSAGES ? 0 : count === MAX_OMISSION_MESSAGES ? 1 : 2;
+}
+
+type ConversationPart = ConversationEntryText & { user?: boolean; toolResult?: true };
+
 /** Project one actual source row, sharing exactly the same text rules on collection and reads. */
 function projectConversationMessage(
   msg: Message,
   state: ConversationProjectionState,
   registerCall?: (id: string, label: string) => void,
-): Array<ConversationEntryText & { user?: boolean }> {
-  const parts: Array<ConversationEntryText & { user?: boolean }> = [];
-  const add = (full: string, labeled = full, short = labeled, user = false) => {
-    parts.push({ full, labeled, short, user });
+): ConversationPart[] {
+  const parts: ConversationPart[] = [];
+  const add = (full: string, labeled = full, short = labeled, user = false, toolResult?: true) => {
+    parts.push({ full, labeled, short, user, toolResult });
   };
   // Carriers remain in replay for thinking-prefix binding, never in summaries.
   if (hasRuntimeContextMarker(msg)) {
@@ -519,10 +366,14 @@ function projectConversationMessage(
   if (msg.role === "user" || msg.role === "toolResult") {
     const { text, omissionText } = getCompactionContent(msg.content);
     // At most eight per-message omission notes and one aggregate overflow note.
-    if (omissionText && state.omissionMessages++ === MAX_OMISSION_MESSAGES) {
+    const phase = omissionPhase(state.omissionMessages);
+    if (omissionText) {
+      state.omissionMessages += 1;
+    }
+    if (omissionText && phase === 1) {
       add(OMISSION_OVERFLOW);
     }
-    const omission = state.omissionMessages <= MAX_OMISSION_MESSAGES ? omissionText : "";
+    const omission = phase === 0 ? omissionText : "";
     const project = (maxChars: number) =>
       [omission, msg.role === "toolResult" ? truncateForSummary(text, maxChars) : text]
         .filter(Boolean)
@@ -535,6 +386,8 @@ function projectConversationMessage(
           `[Tool result]: ${content}`,
           `[Tool result of ${label}]: ${content}`,
           `[Tool result of ${label}]: ${project(SAMPLED_TOOL_RESULT_MAX_CHARS)}`,
+          false,
+          true,
         );
       } else {
         const full = `[${formatCompactionUserLabel(msg)}]: ${content}`;
@@ -567,26 +420,158 @@ function projectConversationMessage(
 }
 
 /** Carry occurrence and omission state across rows, never source messages or full text. */
-function createConversationProjector() {
+function createConversationSequenceState() {
   const callLabels = createToolCallOccurrenceQueue<string>();
   let omissionMessages = 0;
+  return {
+    begin(role: Message["role"], resultId?: string): ConversationProjectionState {
+      if (role === "assistant") {
+        // Results answer the latest assistant turn, not an earlier aborted one.
+        callLabels.clear();
+      }
+      return {
+        omissionMessages,
+        // Empty results still claim their occurrence. Intervening users do not clear it.
+        callLabel:
+          role === "toolResult" && resultId !== undefined ? callLabels.claim(resultId) : undefined,
+      };
+    },
+    finish(state: ConversationProjectionState) {
+      omissionMessages = state.omissionMessages;
+    },
+    add: callLabels.add,
+  };
+}
+
+function createConversationProjector() {
+  const sequence = createConversationSequenceState();
   return (message: Message) => {
     if (hasRuntimeContextMarker(message)) {
-      return { parts: [], omissionMessages, callLabel: undefined };
+      return { parts: [], omissionMessages: 0, callLabel: undefined };
     }
-    if (message.role === "assistant") {
-      // Results answer the latest assistant turn, not an earlier aborted one.
-      callLabels.clear();
-    }
-    // Empty results still claim their occurrence. Intervening users do not clear it.
-    const callLabel =
-      message.role === "toolResult" ? callLabels.claim(message.toolCallId) : undefined;
-    const before = omissionMessages;
-    const state = { omissionMessages, callLabel };
-    const parts = projectConversationMessage(message, state, callLabels.add);
-    omissionMessages = state.omissionMessages;
-    return { parts, omissionMessages: before, callLabel };
+    const state = sequence.begin(
+      message.role,
+      message.role === "toolResult" ? message.toolCallId : undefined,
+    );
+    const before = state.omissionMessages;
+    const parts = projectConversationMessage(message, state, sequence.add);
+    sequence.finish(state);
+    return { parts, omissionMessages: before, callLabel: state.callLabel };
   };
+}
+
+function describeConversationParts<TSource>(
+  parts: ConversationPart[],
+  source: TSource,
+  state: ConversationProjectionState,
+) {
+  return parts.map((text, partIndex) => {
+    const fullChars = estimateStringChars(text.full);
+    const labeledChars = text.labeled === text.full ? fullChars : estimateStringChars(text.labeled);
+    const shortChars = text.short === text.labeled ? labeledChars : estimateStringChars(text.short);
+    return {
+      descriptor: {
+        source,
+        partIndex,
+        fullChars,
+        labeledChars,
+        shortChars,
+        fullLength: text.full.length,
+        labeledLength: text.labeled.length,
+        shortLength: text.short.length,
+        user: text.user === true,
+        toolResult: text.toolResult,
+        ...state,
+      },
+      text,
+    };
+  });
+}
+
+export type ConversationMessageFact<TSource = number> = {
+  role: Message["role"];
+  skipped: boolean;
+  resultId?: string;
+  resultLabelChars: number;
+  resultLabelLength: number;
+  calls: Array<{ id: string; label: string }>;
+  omission: boolean;
+  variants: [
+    ConversationEntryDescriptor<TSource>[],
+    ConversationEntryDescriptor<TSource>[],
+    ConversationEntryDescriptor<TSource>[],
+  ];
+};
+
+/** Retain range-independent descriptors, never the source row or its serialized text. */
+export function collectConversationMessageFact<TSource>(
+  message: Message,
+  source: TSource,
+): ConversationMessageFact<TSource> {
+  const calls: ConversationMessageFact<TSource>["calls"] = [];
+  const state = { omissionMessages: 0 };
+  const parts = projectConversationMessage(message, state, (id, label) =>
+    calls.push({ id, label }),
+  );
+  const normal = describeConversationParts(parts, source, { omissionMessages: 0 }).map(
+    ({ descriptor }) => descriptor,
+  );
+  const omission = state.omissionMessages > 0;
+  const variant = (omissionMessages: number) =>
+    omission
+      ? describeConversationParts(
+          projectConversationMessage(message, { omissionMessages }),
+          source,
+          { omissionMessages },
+        ).map(({ descriptor }) => descriptor)
+      : normal;
+  const resultLabel = message.role === "toolResult" ? `${message.toolName}(...)` : "";
+  // Only media-bearing rows need all three omission states. This makes arbitrary
+  // selected ranges exact without another full-window payload decode.
+  return {
+    role: message.role,
+    skipped: hasRuntimeContextMarker(message),
+    resultId: message.role === "toolResult" ? message.toolCallId : undefined,
+    resultLabelChars: estimateStringChars(resultLabel),
+    resultLabelLength: resultLabel.length,
+    calls,
+    omission,
+    variants: [normal, variant(MAX_OMISSION_MESSAGES), variant(MAX_OMISSION_MESSAGES + 1)],
+  };
+}
+
+/** Rebase call occurrences and omission state over the exact selected sequence. */
+export function collectConversationRangeDescriptors<TSource>(
+  facts: Iterable<ConversationMessageFact<TSource>>,
+): ConversationEntryDescriptor<TSource>[] {
+  const sequence = createConversationSequenceState();
+  const descriptors: ConversationEntryDescriptor<TSource>[] = [];
+  for (const fact of facts) {
+    if (fact.skipped) {
+      continue;
+    }
+    const state = sequence.begin(fact.role, fact.resultId);
+    for (const descriptor of fact.variants[omissionPhase(state.omissionMessages)]) {
+      const label = descriptor.toolResult ? state.callLabel : undefined;
+      const chars = label === undefined ? 0 : estimateStringChars(label) - fact.resultLabelChars;
+      const length = label === undefined ? 0 : label.length - fact.resultLabelLength;
+      descriptors.push({
+        ...descriptor,
+        omissionMessages: state.omissionMessages,
+        callLabel: label,
+        labeledChars: descriptor.labeledChars + chars,
+        shortChars: descriptor.shortChars + chars,
+        labeledLength: descriptor.labeledLength + length,
+        shortLength: descriptor.shortLength + length,
+      });
+    }
+    state.omissionMessages += Number(fact.omission);
+    sequence.finish(state);
+    for (const call of fact.calls) {
+      sequence.add(call.id, call.label);
+    }
+  }
+  return descriptors;
 }
 
 /**
@@ -601,29 +586,7 @@ export function createConversationEntryCollector<TSource = number>(): (
   const project = createConversationProjector();
   return (message, source) => {
     const { parts, omissionMessages, callLabel } = project(message);
-    return parts.map((text, partIndex) => {
-      const fullChars = estimateStringChars(text.full);
-      const labeledChars =
-        text.labeled === text.full ? fullChars : estimateStringChars(text.labeled);
-      const shortChars =
-        text.short === text.labeled ? labeledChars : estimateStringChars(text.short);
-      return {
-        descriptor: {
-          source,
-          partIndex,
-          fullChars,
-          labeledChars,
-          shortChars,
-          fullLength: text.full.length,
-          labeledLength: text.labeled.length,
-          shortLength: text.short.length,
-          user: text.user === true,
-          omissionMessages,
-          callLabel,
-        },
-        text,
-      };
-    });
+    return describeConversationParts(parts, source, { omissionMessages, callLabel });
   };
 }
 

@@ -21,6 +21,7 @@ export interface ConversationEntryDescriptor<TSource = number> {
   /** State immediately before this source message in the collected sequence. */
   omissionMessages: number;
   callLabel?: string;
+  toolResult?: true;
 }
 
 /**

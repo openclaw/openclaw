@@ -3,6 +3,7 @@ import { localeLowercasePreservingWhitespace } from "@openclaw/normalization-cor
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { capCompactionSummary } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { copyString } from "../../../packages/agent-core/src/harness/utils/truncate.js";
 import type { Model } from "../../llm/types.js";
 import { extractKeywords, isQueryStopWordToken } from "../../memory-host-sdk/query.js";
 import type { CompactionSummarizationInstructions } from "../compaction-summary.types.js";
@@ -441,7 +442,7 @@ function summaryIncludesIdentifier(summary: string, identifier: string): boolean
 export function extractOpaqueIdentifiers(text: string): string[] {
   // Decimal/scientific syntax is unambiguous numeric data, including unit suffixes. Integer tokens
   // with letters remain opaque because the suffix may be part of an exact identifier.
-  return uniqueStrings(
+  return extractOpaqueIdentifiersFromFacts([
     Array.from(
       text.matchAll(
         /(https?:\/\/\S+|(?<![A-Za-z0-9._-])\/[\w.-]{2,}(?:\/[\w.-]+)+|[A-Za-z]:\\[\w\\.-]+|(?<![A-Za-z0-9._-])[A-Za-z0-9._-]+\.[A-Za-z0-9._/-]+:\d{1,5})|(?:(?:(?:\d+\.\d+|\.\d+)(?:[eE][+-]?\d+)?|\d+\.[eE][+-]?\d+|\d+\.?[eE][+-]\d+|(?![A-Fa-f0-9]{8,}(?![A-Fa-f0-9]))\d+\.?[eE]\d+)(?:(?=[A-Za-z]+(?![A-Za-z0-9]))(?=[A-Za-z]*[G-Zg-z])[A-Za-z]+)?(?![A-Za-z0-9])|(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*(?:[A-Fa-f0-9]{8,}|\d{6,}))([A-Za-z0-9_-]+))/g,
@@ -450,7 +451,14 @@ export function extractOpaqueIdentifiers(text: string): string[] {
     )
       .map((value) => normalizeOpaqueIdentifier(sanitizeExtractedIdentifier(value)))
       .filter((value) => value.length >= 4),
-  ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
+  ]).map(copyString);
+}
+
+/** Newline-separated message text cannot form a cross-message identifier match. */
+export function extractOpaqueIdentifiersFromFacts(facts: readonly (readonly string[])[]): string[] {
+  // Twelve unique identifiers from a single row already fill the final quota;
+  // no later identifier in that row can enter the first twelve of the sequence.
+  return uniqueStrings(facts.flat()).slice(0, MAX_EXTRACTED_IDENTIFIERS);
 }
 
 function tokenizeAskOverlapText(text: string, includeFallbackTokens = false): string[] {

@@ -3,12 +3,24 @@ import type { CompactionPreparation } from "../../../packages/agent-core/src/har
 import type { AgentMessage, SessionTreeEntry } from "../runtime/index.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
+  buildPreservedTurnsSectionFromFacts,
+  buildSplitTurnContextSectionFromFacts,
+  collectCompactionContextMessageFact,
+  selectPreservedRecentTurnIndexes,
+} from "./compaction-safeguard-context.js";
+import {
+  collectCompactionSafeguardAskFact,
+  selectCompactionSafeguardAskIndex,
   prepareCompactionSafeguardContext,
   prepareCompactionSafeguardHistory,
   prepareCompactionSafeguardMessages,
   prepareCompactionSafeguardSections,
   prepareCompactionSafeguardSummary,
 } from "./compaction-safeguard-preparation.js";
+import {
+  extractOpaqueIdentifiers,
+  extractOpaqueIdentifiersFromFacts,
+} from "./compaction-safeguard-quality.js";
 
 const user = (content: string): AgentMessage => ({ role: "user", content, timestamp: 1 });
 const runtimeContext = castAgentMessage({
@@ -68,6 +80,59 @@ const summarize = (
   });
 
 describe("canonical safeguard preparation", () => {
+  it("reduces selected fact ranges without retaining payloads or searching past independent asks", () => {
+    const assistant = castAgentMessage({
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking" },
+        {
+          type: "toolCall",
+          id: "check-1",
+          name: "exec",
+          arguments: { command: "private-argument" },
+        },
+      ],
+      timestamp: 1,
+    });
+    const messages = [
+      user("old"),
+      assistant,
+      failure,
+      user("new"),
+      assistant,
+      { ...failure, content: [{ type: "text" as const, text: "latest result" }] },
+    ];
+    const facts = messages.map(collectCompactionContextMessageFact);
+    expect(JSON.stringify(facts)).not.toContain("private-argument");
+    const selected = facts.slice(3);
+    expect([...selectPreservedRecentTurnIndexes(selected, 1)]).toEqual([0, 1, 2]);
+    const section = buildPreservedTurnsSectionFromFacts(selected, 8000);
+    expect(section.text).toBe(
+      "\n\n## Recent turns preserved verbatim\n- User: new\n- Assistant: Checking\n[non-text content: toolCall]\n- Tool result (exec): latest result",
+    );
+    expect(buildSplitTurnContextSectionFromFacts(selected.slice(2)).text).toBe("");
+    expect(buildPreservedTurnsSectionFromFacts(selected, 100).truncatedLoss).toBe(
+      "preserved-turn-head",
+    );
+    const largeAsk = user("x".repeat(50_000));
+    const barrier = Object.assign(user("independent input"), {
+      provenance: { kind: "inter_session" as const, sourceTool: "sessions_send" },
+    });
+    const askFacts = [largeAsk, barrier, failure].map(collectCompactionSafeguardAskFact);
+    expect(askFacts).toEqual([true, false, undefined]);
+    expect(selectCompactionSafeguardAskIndex(askFacts)).toBeNull();
+    expect(selectCompactionSafeguardAskIndex(askFacts.slice(0, 1))).toBe(0);
+    expect(summarize(preparation([largeAsk])).latestUserAsk).toBe(largeAsk.content);
+    const texts = Array.from(
+      { length: 15 },
+      (_, index) => `https://example.test/${index} deadbeef 1.2e6`,
+    );
+    const identifiers = texts.map(extractOpaqueIdentifiers);
+    expect(extractOpaqueIdentifiersFromFacts(identifiers.slice(-10))).toEqual(
+      extractOpaqueIdentifiers(texts.slice(-10).join("\n")),
+    );
+  });
+
   it("keeps source identity and metadata, strips only runtime carriers, and normalizes legacy summaries", () => {
     const message = Object.assign(user("Check https://example.test/work/123456"), {
       provenance: { kind: "inter_session", sourceTool: "sessions_send" },

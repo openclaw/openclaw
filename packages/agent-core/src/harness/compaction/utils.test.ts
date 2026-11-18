@@ -13,10 +13,14 @@ import {
   user,
 } from "./shard-fixtures.test-support.js";
 import {
+  collectConversationMessageFact,
+  collectConversationRangeDescriptors,
+  collectFileOperationMessageFact,
   computeFileLists,
   createConversationEntryCollector,
   createFileOps,
   extractFileOpsFromMessages,
+  extractFileOpsFromFacts,
   formatFileOperations,
   mergeSummaryFileOperations,
   renderConversationEntriesWithinBudget,
@@ -58,6 +62,27 @@ function serializationFixture(): Message[] {
   );
   return messages;
 }
+
+it("rebases arbitrary source ranges without another payload collection pass", () => {
+  const messages = serializationFixture();
+  const facts = messages.map((message, index) => collectConversationMessageFact(message, index));
+  expect(JSON.stringify(facts)).not.toMatch(/constraint|evidence|output|runtime secret/);
+  for (const start of [0, 1, 3, 8, 40, 43, 53, 161]) {
+    for (const end of [55, messages.length]) {
+      const descriptors = collectConversationRangeDescriptors(facts.slice(start, end));
+      for (const budget of [300, 4_000, 20_000, 1_000_000]) {
+        expect(
+          renderConversationEntriesWithinBudget(descriptors, budget, (descriptor, variant) => {
+            const message = messages[descriptor.source];
+            assert(message);
+            return serializeConversationEntry(message, descriptor, variant);
+          }),
+          `range ${start}:${end}, budget ${budget}`,
+        ).toEqual(serializeConversationWithinBudget(messages.slice(start, end), budget));
+      }
+    }
+  }
+});
 
 it("renders row descriptors lazily with exact pre-refactor text, gaps and trim counts", () => {
   const messages = serializationFixture();
@@ -117,6 +142,12 @@ function serializeToolResult(text: string): string {
 function fileLists(messages: AgentMessage[]) {
   const fileOps = createFileOps();
   extractFileOpsFromMessages(messages, fileOps);
+  const factOps = createFileOps();
+  extractFileOpsFromFacts(
+    messages.map((message) => collectFileOperationMessageFact(message)),
+    factOps,
+  );
+  expect(factOps).toEqual(fileOps);
   return computeFileLists(fileOps);
 }
 it.each([false, true, undefined])("extracts namespaced outcomes: %s", (changed) => {
