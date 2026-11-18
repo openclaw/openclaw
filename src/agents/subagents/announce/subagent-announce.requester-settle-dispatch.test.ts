@@ -1,6 +1,7 @@
 import "./subagent-announce.requester-settle-dispatch-mocks.test-support.js";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayClientRequestError } from "../../../../packages/gateway-client/src/request-error.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -10,25 +11,34 @@ import { resolveGatewayAgentAbortStopReason } from "../../../gateway/agent-turn/
 import type { AgentTurnStartRequest } from "../../../gateway/agent-turn/agent-turn-start-request.types.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { getCurrentSessionControllerClaim } from "../../../sessions/session-controller.lifecycle.js";
 import { getExistingSessionControllerMailbox } from "../../../sessions/session-controller.mailbox.js";
 import { markReplyOperationExecutionStarted } from "../../../sessions/session-controller.state.js";
 import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { prepareEmbeddedAttemptTimeout } from "../../embedded-agent-runner/run/attempt-timeout-prepare.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import {
   createAgentRunDirectAbortError,
   resolveAgentRunAbortLifecycleFields,
 } from "../../run-termination.js";
+import { toSandboxProvisioningError } from "../../sandbox/provisioning-error.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { SessionFollowupCompletion } from "../completion/session-followup-completion.js";
 import { consumeSubagentPauseNotice } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { retainedOperatorFixture } from "../registry/subagent-registry.completed-followup-authority.test-support.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   registerRequesterFinalAttachment,
@@ -100,6 +110,88 @@ describe("requester settle dispatch deadline", () => {
 
   beforeEach(() => setRuntimeConfigSnapshot({}));
 
+  it.each([false, true])(
+    "delivers overlapping completions under their own invocations (frozen=%s)",
+    (frozen) =>
+      withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const context = createContext();
+        const source = await retainedOperatorFixture("settle-owner", context);
+        const children = ["first", "second"].map((name) => {
+          const child = settledChild();
+          child.runId = name;
+          child.childSessionKey = `agent:main:subagent:${name}`;
+          child.completion!.resultText = `${name} result`;
+          child.completion!.terminalReply = { disposition: "visible", text: `${name} result` };
+          child.delivery = { status: "pending" };
+          if (frozen) {
+            child.requesterSettleWake!.batchRunIds = ["first", "second"];
+          }
+          subagentRuns.set(child.runId, child);
+          return child;
+        });
+        const invocations = [{}, {}];
+        try {
+          for (const [index, child] of children.entries()) {
+            const client = {
+              ...source.client,
+              internal: {
+                operatorRunAuthority: createAdmittedRunOperatorAuthority({
+                  ...source.source.authority,
+                  invocation: invocations[index]!,
+                }),
+              },
+            };
+            const custody = await withPluginRuntimeGatewayRequestScope(
+              { ...source, client, isWebchatConnect: () => false },
+              () => captureOperatorToolGatewayContinuationContext(),
+            );
+            if (!custody) {
+              throw new Error("Missing completion custody");
+            }
+            subagentRuns.bindCompletionAuthority(child, custody);
+          }
+          registryRead.listSubagentRunsForRequester.mockReturnValue(children);
+          useDirectDelivery();
+          const received: string[] = [];
+          startTurn.mockImplementation(async (turn) => {
+            const index = received.length;
+            expect(
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority
+                ?.invocation,
+            ).toBe(invocations[index]);
+            expect(turn.preflight.request.message).toContain(`${children[index]!.runId} result`);
+            expect(turn.preflight.request.message).not.toContain(
+              `${children[1 - index]!.runId} result`,
+            );
+            received.push(children[index]!.runId);
+            acceptTurn(turn);
+            finishTurn(turn.io, "Completion received.");
+          });
+          for (const child of children) {
+            await expect(
+              withGateway(context, () =>
+                maybeWakeRequesterAfterAllChildrenSettled(
+                  wakeParams(child, (batch, _generation, delivery) => {
+                    expect(delivery?.delivered).toBe(true);
+                    for (const entry of batch) {
+                      entry.requesterSettleWake = undefined;
+                    }
+                  }),
+                ),
+              ),
+            ).resolves.toBe(true);
+          }
+          expect(received).toEqual(["first", "second"]);
+        } finally {
+          for (const child of children) {
+            subagentRuns.releaseCompletionAuthority(child);
+            subagentRuns.delete(child.runId);
+          }
+          source.source.release();
+        }
+      }),
+  );
+
   it.each([
     { persistent: false, returned: false },
     { persistent: true, returned: false },
@@ -113,6 +205,8 @@ describe("requester settle dispatch deadline", () => {
     { persistent: true, returned: false, failure: "worker" },
     { persistent: false, returned: true, failure: "timeout" },
     { persistent: true, returned: true, failure: "timeout" },
+    { persistent: false, returned: false, failure: "sandbox" },
+    { persistent: false, returned: false, failure: "unavailable" },
   ])(
     "keeps interrupted settlement owed with no attempt limit ($persistent, returned=$returned, aborted=$aborted, failure=$failure)",
     async ({ persistent, returned, aborted, failure }) => {
@@ -125,6 +219,14 @@ describe("requester settle dispatch deadline", () => {
         acceptTurn(turn);
         runIds.push(turn.preflight.request.idempotencyKey);
         if (runIds.length <= failingAttempts) {
+          if (failure === "sandbox" || failure === "unavailable") {
+            throw failure === "sandbox"
+              ? toSandboxProvisioningError(new Error("Aborted"), "synthetic")
+              : new GatewayClientRequestError({
+                  code: "UNAVAILABLE",
+                  message: "Aborted | sandbox_provisioning",
+                });
+          }
           if (failure === "timeout") {
             turn.io.emitFinal([
               true,
@@ -198,9 +300,11 @@ describe("requester settle dispatch deadline", () => {
           delivered: false,
           reason: aborted
             ? "requester_aborted"
-            : failure === "preparation"
-              ? "requester_preparation_changed"
-              : "requester_timed_out",
+            : failure === "sandbox" || failure === "unavailable"
+              ? undefined
+              : failure === "preparation"
+                ? "requester_preparation_changed"
+                : "requester_timed_out",
           disposition: "retryable",
         });
       }

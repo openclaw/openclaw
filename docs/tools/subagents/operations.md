@@ -107,6 +107,11 @@ short notice to the requester session. If that session is unavailable, the failu
 is logged without retrying the wake. Retained wakes converge on their next
 attempt; no manual database edits are needed.
 
+Completions from different operator invocations use separate settle wakes, each
+with its own retained authority. Sandbox setup failures and an unavailable Gateway
+leave uncommitted results owed for retry. Results already committed to the
+requester transcript are not replayed.
+
 A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
 Gateway lifetime. Children do not resume independently. Inspect their saved work
