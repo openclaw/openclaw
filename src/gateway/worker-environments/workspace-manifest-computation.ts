@@ -85,6 +85,7 @@ export type WorkspaceManifestValueInputs = {
     stagingRoot: string;
     baseEntries: WorkerWorkspaceManifestEntry[];
     appliedEntries: WorkerWorkspaceManifestEntry[];
+    publicationCopy?: boolean;
   };
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
@@ -117,6 +118,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
   buildCacheInputs?: string[];
   gitHistory?: WorkerWorkspaceGitHistory;
   parentCommit?: string;
+  blobsOnly?: true;
 };
 
 export type WorkspaceManifestValueOutputs = {
@@ -141,6 +143,7 @@ export type WorkspaceManifestValueOutputs = {
     patch: Uint8Array<ArrayBuffer>;
     baseTree: string;
     basePack: Uint8Array<ArrayBuffer>;
+    publicationPack?: Uint8Array<ArrayBuffer>;
     basePackSha256: string;
   };
   "workspace.reconcile.preflight": WorkspaceComputationHashResult<{
@@ -204,8 +207,10 @@ export type WorkspaceManifestComputationOperations = {
     };
     "workspace.manifest.base-refresh": {
       input: {
-        beforeRoot: string;
-        afterRoot: string;
+        root: string;
+        beforeTree: string;
+        afterTree: string;
+        temporaryRoot: string;
         baseCommit: string;
         baseRaw: Uint8Array<ArrayBuffer>;
         baseRef: string;

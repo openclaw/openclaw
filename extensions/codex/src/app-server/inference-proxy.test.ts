@@ -376,6 +376,10 @@ describe("private inference HTTP relay", () => {
     for (const path of ["/models", "/responses/compact", "/responses?other=1"]) {
       expect((await post(proxy.baseUrl + path, body)).status).toBe(502);
     }
+    const catalog = await fetch(proxy.baseUrl + "/models?client_version=0.169.0");
+    expect(catalog.status).toBe(502);
+    await catalog.text();
+    expect(transport.fetch).not.toHaveBeenCalled();
     expect(resolve).not.toHaveBeenCalled();
     const result = await post(proxy.baseUrl + "/responses", body, {
       authorization: "Bearer local-placeholder",

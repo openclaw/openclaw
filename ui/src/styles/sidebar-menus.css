@@ -47,6 +47,12 @@
   overscroll-behavior: contain;
 }
 
+/* A scroller's own scrollbar is not clipped by its border radius. Half the radius
+   keeps the thumb inside each rounded corner without a visible gap at the ends. */
+.session-menu__list-submenu + .oc-menu::-webkit-scrollbar-track {
+  margin-block: calc(var(--menu-radius) / 2);
+}
+
 .people-menu__submenu + .oc-menu {
   width: min(320px, calc(100vw - 24px));
 }

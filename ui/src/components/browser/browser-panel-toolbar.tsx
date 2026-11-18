@@ -316,7 +316,6 @@ export function BrowserToolbar(
             aria-label={t("browser.address")}
             aria-invalid={invalid() ? "true" : undefined}
             aria-describedby={invalid() ? hintId : undefined}
-            title={props.controller.urlDraft}
             disabled={Boolean(props.controller.host.fixedTab && !props.controller.activeTargetId)}
             placeholder={t("browser.urlPlaceholder")}
             value={props.controller.urlDraft}

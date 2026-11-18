@@ -409,24 +409,6 @@ for (const scenario of [
           expect(await wakeSavedBatch(subagentRuns.get(childId)!)).toBe(false);
           expect(synthesisCount).toBe(count);
         };
-        const makeRetryDue = async () => {
-          const current = subagentRuns.get(childId);
-          if (!current?.requesterSettleWake) {
-            throw new Error("Missing pending completion");
-          }
-          const result = await mutateRequesterCompletionBatch({
-            entries: [current],
-            operation: {
-              kind: "transition",
-              state: { ...current.requesterSettleWake, nextAttemptAt: 0 },
-            },
-            assertCurrent: () => {
-              currentBatch([current]);
-            },
-          });
-          expect(result.publication).toBe("published");
-          return subagentRuns.get(childId)!;
-        };
         const startSynthesis = async (entry: SubagentRunRecord) => {
           started = createDeferred();
           release = createDeferred();
@@ -549,31 +531,25 @@ for (const scenario of [
             await expectNoRetry(1);
             return;
           }
-          if (index === 3) {
-            expectDelivery("failed");
-            expect(readChild()?.delivery).toMatchObject({
-              status: "failed",
-              lastError: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
-            });
-            expect(synthesisCount).toBe(3);
-            return;
-          }
+          // An uncommitted result stays owed and is due at once: no ladder, no attempt limit.
           expect(readChild()?.requesterSettleWake).toMatchObject({
             status: "pending",
             attemptCount: index,
+            lastError: `SQLite transcript changed while preparing rewrite for ${sessionId}`,
           });
-          expect(readChild()?.requesterSettleWake?.nextAttemptAt).toBeGreaterThan(Date.now());
-          await startSynthesis(await makeRetryDue());
+          expect(readChild()?.requesterSettleWake?.nextAttemptAt).toBeLessThanOrEqual(Date.now());
+          await startSynthesis(subagentRuns.get(childId)!);
         }
         // A fresh admission observes the newer human input; the rejected answer is never rebased.
         expect(synthesisBodies[1]).toContain(humanText + 1);
         release.resolve();
         expect(await wake).toBe(true);
-        expect(transcriptText()).not.toContain("Requester synthesis 1.");
-        expect(transcriptText().split("Requester synthesis 2.")).toHaveLength(2);
+        const delivering = conflictCount + 1;
+        expect(transcriptText()).not.toContain(`Requester synthesis ${conflictCount}.`);
+        expect(transcriptText().split(`Requester synthesis ${delivering}.`)).toHaveLength(2);
         expectDelivery("delivered");
         expect(childTranscript()).toBe(completedChildTranscript);
-        await expectNoRetry(2);
+        await expectNoRetry(delivering);
       } finally {
         release.resolve();
         if (wake) {

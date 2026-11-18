@@ -193,6 +193,18 @@ suite.define(() => {
         await selected.hover();
         await expect.poll(() => check.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
         expect(await selected.boundingBox()).toEqual(rowBounds);
+        const rowHover = await selected.evaluate((el) => getComputedStyle(el).backgroundColor);
+        const idleStarColor = await selectedStar.evaluate((el) => getComputedStyle(el).color);
+        await selectedStar.hover();
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
+          "rgba(0, 0, 0, 0)",
+        );
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).color)).not.toBe(
+          idleStarColor,
+        );
+        expect(await selected.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
+          rowHover,
+        );
         await page.mouse.move(0, 0);
         await expect.poll(() => check.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
         await expect
@@ -238,6 +250,10 @@ suite.define(() => {
           .poll(() => selectedStar.evaluate((el) => el === document.activeElement))
           .toBe(true);
         expect(await selectedStar.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe(
+          "solid",
+        );
+        expect(await selectedStar.evaluate((el) => getComputedStyle(el).outlineWidth)).toBe("2px");
         expect(await check.evaluate((el) => getComputedStyle(el).opacity)).toBe("0");
         await other.focus();
         await page.keyboard.press("Tab");

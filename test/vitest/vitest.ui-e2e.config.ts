@@ -27,6 +27,7 @@ const uiE2eIncludePatterns = [
 // These files own their server instead of leasing the global production bundle.
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
+  "extensions/openclaw-id-access/browser/recovery-uses.e2e.test.ts",
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
   "ui/src/e2e/agents-settings-delete.e2e.test.ts",
@@ -51,6 +52,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-provider-failure-cause.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-quota-account-identity.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-send-leaf-ancestor.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-companion-private.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
@@ -107,9 +109,11 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/shell-module-loading.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+  "ui/src/e2e/sidebar-publication-tasks.e2e.test.ts",
   "ui/src/e2e/skill-workshop-plugin-enable.real-gateway.e2e.test.ts",
   "ui/src/e2e/stale-build-recovery.production.e2e.test.ts",
   "ui/src/e2e/template-chat-review-source.e2e.test.ts",
+  "ui/src/e2e/template-upload.real-gateway.e2e.test.ts",
   "ui/src/e2e/terminal-fonts.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
   "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",

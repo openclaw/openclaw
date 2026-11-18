@@ -473,6 +473,53 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(second).borderTopColor).not.toBe("rgba(0, 0, 0, 0)");
   });
 
+  it.each([
+    { width: 480, height: 634 },
+    { width: 354, height: 178 },
+  ])(
+    "fits a page dashboard inside a $width×$height side panel across expansion",
+    async ({ width, height }) => {
+      const host = document.createElement("div");
+      host.className = "sidebar-region sidebar-region--open";
+      host.style.width = `${width}px`;
+      const panel = document.createElement("div");
+      panel.dataset.region = "side";
+      const parent = document.createElement("div");
+      parent.className = "board-session-surface__board";
+      parent.style.height = `${height}px`;
+      panel.append(parent);
+      host.append(panel);
+      document.body.append(host);
+      const view = await mount(undefined, parent);
+      view.pageWidgetName = "first";
+      await updateSnapshot(view, {
+        tabs: [source.tabs[0]!],
+        widgets: [{ ...source.widgets[0]!, sizeW: 12, sizeH: 20, presentation: "full-bleed" }],
+      });
+      const frame = view.querySelector("iframe")!;
+
+      for (const expanded of [false, true, false]) {
+        host.classList.toggle("sidebar-region--expanded", expanded);
+        await vi.waitFor(() => {
+          const available = parent.getBoundingClientRect();
+          const bounds = frame.getBoundingClientRect();
+          expect(bounds.height).toBeGreaterThan(0);
+          expect(bounds.top).toBeGreaterThanOrEqual(available.top - 1);
+          expect(bounds.bottom).toBeLessThanOrEqual(available.bottom + 1);
+          expect(view.scrollHeight).toBeLessThanOrEqual(view.clientHeight + 1);
+        });
+        expect(view.querySelector("iframe")).toBe(frame);
+      }
+
+      // An ordinary grid still uses its saved rows rather than clipping its cards.
+      view.pageWidgetName = "";
+      await settle(view);
+      expect(view.scrollHeight).toBeGreaterThan(view.clientHeight);
+      expect(frame.getBoundingClientRect().height).toBeGreaterThan(height);
+      expect(view.querySelector("iframe")).toBe(frame);
+    },
+  );
+
   it.each(
     (["card", "full-bleed", "frameless"] as const).flatMap((presentation) => [
       { presentation, surface: "grid" },

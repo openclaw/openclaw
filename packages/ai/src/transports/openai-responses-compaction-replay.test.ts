@@ -294,7 +294,6 @@ describe("OpenAI Responses compaction replay", () => {
   });
 
   it.each<[string, Partial<ProviderReplayState>, { sessionId?: string }]>([
-    ["model", { model: "other-model" }, replayIdentity],
     ["base route", { baseUrlHash: "0000000000000000" }, replayIdentity],
     ["session", {}, { ...replayIdentity, sessionId: "session-b" }],
     ["missing identity", {}, {}],
@@ -325,6 +324,22 @@ describe("OpenAI Responses compaction replay", () => {
       "newer incompatible assistant",
       "active user",
     ]);
+  });
+
+  it("replays a checkpoint written by another model in the same session", () => {
+    const owner = createAssistant(
+      "checkpoint from gpt-6-astra",
+      compactionState(model, { replayIndex: 0, model: "gpt-6-astra" }),
+    );
+    const input = convertTransport({
+      messages: [
+        fixtures.userMessage("first user", 1),
+        owner,
+        fixtures.userMessage("active user", 2),
+      ],
+    });
+
+    expect(input.filter((item) => item.type === "compaction")).toHaveLength(1);
   });
 
   it("ignores a newer foreign-route suppression tombstone", () => {

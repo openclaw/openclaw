@@ -90,13 +90,14 @@ it("serves HTTP liveness while runtime IO is held and publishes current draining
         expect(initial.status).toBe(200);
         expect(initial.json()).toMatchObject({ ready: true, coreReady: true, failing: [] });
 
-        const access = fsp.access;
-        using _ = vi.spyOn(fsp, "access").mockImplementation(async (file, mode) => {
-          await access(file, mode);
-          if (file === process.execPath) {
+        const stat = fsp.stat;
+        using _ = vi.spyOn(fsp, "stat").mockImplementation(async (...args) => {
+          const identity = await stat(...args);
+          if (args[0] === process.execPath) {
             entered.resolve();
             await resume.promise;
           }
+          return identity;
         });
         const ready = probe("/readyz").then((response) => {
           readyResponded = true;
