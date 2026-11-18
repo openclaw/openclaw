@@ -31,6 +31,7 @@ export function createProviderDynamicModelContext(params: {
 export async function runSingleProviderCatalog(
   provider: Pick<ProviderPlugin, "catalog">,
   params: {
+    config?: ProviderCatalogContext["config"];
     resolveProviderApiKey?: ProviderCatalogContext["resolveProviderApiKey"];
     resolveProviderAuth?: ProviderCatalogContext["resolveProviderAuth"];
   } = {},
@@ -40,7 +41,7 @@ export async function runSingleProviderCatalog(
   }
 
   const catalog = await provider.catalog.run({
-    config: {},
+    config: params.config ?? {},
     env: {},
     resolveProviderApiKey: params.resolveProviderApiKey ?? (() => ({ apiKey: "test-key" })),
     resolveProviderAuth:
