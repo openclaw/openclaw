@@ -1,6 +1,7 @@
 import { createDeferred } from "@solidjs/signals";
 import {
   createMemo,
+  createSignal,
   Errored,
   For,
   isPending,
@@ -57,6 +58,8 @@ import { createModeGlide } from "./command-palette-mode-glide.ts";
 import { CommandPaletteResult } from "./command-palette-result.tsx";
 import { SESSION_ACTION_PREFIX } from "./command-palette-session-search.ts";
 import type { CommandPaletteState, PaletteFilter } from "./command-palette-state.ts";
+import { ImageLightboxItemView } from "./image-lightbox.tsx";
+import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import {
   CUSTODIAN_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
@@ -172,9 +175,7 @@ function handleKeydown(
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
     event.preventDefault();
     event.stopPropagation();
-    if (props.mode === "compose") {
-      void props.draft.submit();
-    }
+    void props.draft.submit();
     return;
   }
   if (event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) {
@@ -292,6 +293,7 @@ function PaletteSearch(props: {
     Boolean(current().searchQuery.trim()) &&
     !sessionSearchPending() &&
     !catalogSearchPending() &&
+    !isPending(props.modelRead) &&
     !current().remoteSearchOffline &&
     !current().modelSearchError &&
     !current().sessionSearchFailed &&
@@ -441,11 +443,12 @@ function PaletteSearch(props: {
 export function CommandPaletteView(props: { readProps: () => CommandPaletteProps }) {
   let initialInput!: HTMLTextAreaElement;
   let stack!: HTMLDivElement;
+  const [image, setImage] = createSignal<ImageLightboxItem | null>(null);
   // Share one presentation snapshot; event handlers retain synchronous owner reads.
   const current = createMemo(() => props.readProps());
   const readCurrent = () => props.readProps();
   const drop = PaletteSessionDraft.createDropHandlers(() => readCurrent().draft);
-  const error = createMemo(() => current().draft.error);
+  const error = createMemo(() => current().draft.error ?? current().draft.blockedSubmitNotice);
   const saving = createSubmissionAction(
     () => readCurrent().draft,
     current,
@@ -516,7 +519,11 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             onDrop={drop.onDrop}
           >
             <Show when={current().mode === "compose"}>
-              <PaletteSessionAttachments draft={current().draft} revision={current()} />
+              <PaletteSessionAttachments
+                draft={current().draft}
+                revision={current()}
+                onOpenImage={setImage}
+              />
             </Show>
             <CommandPaletteInput
               onAutofocusRef={(element) => {
@@ -667,7 +674,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
               </div>
             </Show>
           </div>
-          <Show when={current().mode === "compose" && error()}>
+          <Show when={error()}>
             <div
               class="cmd-palette__creation-error agent-chat__composer-status agent-chat__composer-status-band agent-chat__composer-status-band--wrap"
               data-tone="danger"
@@ -707,6 +714,7 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
         </div>
       </openclaw-modal-dialog>
       <PaletteSessionAuxiliary draft={current().draft} revision={current()} />
+      <ImageLightboxItemView item={image()} onClose={() => setImage(null)} />
     </>
   );
 }

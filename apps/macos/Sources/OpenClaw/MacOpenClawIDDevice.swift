@@ -4,7 +4,7 @@ import OpenClawKit
 /// This Mac as an OpenClaw ID device of one claw. Preferences select it; D, W and W_node live in
 /// their own Keychain items and the pin and restart inputs in the native trust store.
 struct MacOpenClawIDDevice: Equatable {
-    enum Approval: String { case device, recoveryKit }
+    enum Approval: String { case device, recoveryKit, invite }
 
     let hostname: String
     let clawID: String
@@ -14,9 +14,37 @@ struct MacOpenClawIDDevice: Equatable {
     /// Selects W_node and its trust row while this Mac runs tools for the claw.
     var nodeEnrollmentID: UUID?
     let approvedWith: Approval
+    /// The invite's role when this Mac joined as a member; nil for an owner device. Members have
+    /// no node and none of the owner's device actions.
+    var memberRole: String?
+    /// The OpenClaw ID account a member device joined for. Only its Discovery session can tell that
+    /// the claw no longer lists this member; another account's session is asked to sign in again.
+    var memberAccountID: String?
+
+    var admission: OpenClawIDAdmission {
+        self.memberRole == nil ? .owner : .member
+    }
 }
 
-/// Owns which claw this Mac is an owner device of, its Discovery session and the Keychain keys.
+/// A member join waiting for an owner's approval. D and W are already in the Keychain under
+/// `deviceEnrollmentID`; the redemption is with the claw's Gateway.
+struct MacOpenClawIDPendingJoin: Equatable {
+    let hostname: String
+    let clawID: String
+    let rootFingerprint: String
+    let discoveryOrigin: URL
+    let deviceEnrollmentID: UUID
+    /// The OpenClaw ID account the request was sent for; another account's sign-in does not resume it.
+    let accountID: String
+    let requestedAt: Date
+
+    /// A redemption no owner decided on expires at the Gateway after seven days.
+    func expired(now: Date = Date()) -> Bool {
+        now.timeIntervalSince(self.requestedAt) >= 7 * 86400
+    }
+}
+
+/// Owns which claw this Mac is an owner or member device of, its Discovery session and the Keychain keys.
 /// The node worker only ever receives W_node through the node coordinator's selection.
 @MainActor
 final class MacOpenClawIDDeviceStore {
@@ -27,6 +55,7 @@ final class MacOpenClawIDDeviceStore {
     private var localRemoval: UUID?
     private let defaults: UserDefaults
     private let removalKey = "openclaw.mac.openClawID.lastRemoval"
+    private let pendingKey = "openclaw.mac.openClawID.pendingJoin"
     private let key = "openclaw.mac.openClawID.device"
     let databaseURL: URL
 
@@ -48,7 +77,9 @@ final class MacOpenClawIDDeviceStore {
             discoveryOrigin: origin,
             deviceEnrollmentID: device,
             nodeEnrollmentID: fields["nodeEnrollmentID"].flatMap(UUID.init(uuidString:)),
-            approvedWith: approval)
+            approvedWith: approval,
+            memberRole: fields["memberRole"],
+            memberAccountID: fields["memberAccountID"])
     }
 
     func save(_ device: MacOpenClawIDDevice?) {
@@ -64,8 +95,41 @@ final class MacOpenClawIDDeviceStore {
             "approvedWith": device.approvedWith.rawValue,
         ]
         fields["nodeEnrollmentID"] = device.nodeEnrollmentID?.uuidString
+        fields["memberRole"] = device.memberRole
+        fields["memberAccountID"] = device.memberAccountID
         self.defaults.set(fields, forKey: self.key)
         self.clearRemoval()
+    }
+
+    func pendingJoin() -> MacOpenClawIDPendingJoin? {
+        guard let fields = self.defaults.dictionary(forKey: self.pendingKey),
+              let hostname = fields["hostname"] as? String, let clawID = fields["clawID"] as? String,
+              let root = fields["rootFingerprint"] as? String,
+              let origin = (fields["discoveryOrigin"] as? String).flatMap(URL.init(string:)),
+              let device = (fields["deviceEnrollmentID"] as? String).flatMap(UUID.init(uuidString:)),
+              let account = fields["accountID"] as? String, let requested = fields["requestedAt"] as? Double
+        else { return nil }
+        return .init(
+            hostname: hostname,
+            clawID: clawID,
+            rootFingerprint: root,
+            discoveryOrigin: origin,
+            deviceEnrollmentID: device,
+            accountID: account,
+            requestedAt: Date(timeIntervalSince1970: requested))
+    }
+
+    func savePendingJoin(_ join: MacOpenClawIDPendingJoin?) {
+        guard let join else {
+            self.defaults.removeObject(forKey: self.pendingKey)
+            return
+        }
+        self.defaults.set([
+            "hostname": join.hostname, "clawID": join.clawID, "rootFingerprint": join.rootFingerprint,
+            "discoveryOrigin": join.discoveryOrigin.absoluteString,
+            "deviceEnrollmentID": join.deviceEnrollmentID.uuidString, "accountID": join.accountID,
+            "requestedAt": join.requestedAt.timeIntervalSince1970,
+        ], forKey: self.pendingKey)
     }
 
     func lastRemoval() -> MacOpenClawIDRemoval? {
@@ -74,7 +138,11 @@ final class MacOpenClawIDDeviceStore {
               let timestamp = fields["timestamp"] as? Double,
               let origin = (fields["origin"] as? String).flatMap(MacOpenClawIDRemoval.Origin.init(rawValue:))
         else { return nil }
-        return .init(hostname: hostname, date: Date(timeIntervalSince1970: timestamp), origin: origin)
+        return .init(
+            hostname: hostname,
+            date: Date(timeIntervalSince1970: timestamp),
+            origin: origin,
+            member: fields["member"] as? Bool ?? false)
     }
 
     func clearRemoval() {
@@ -105,10 +173,12 @@ final class MacOpenClawIDDeviceStore {
         let removal = MacOpenClawIDRemoval(
             hostname: device.hostname,
             date: now,
-            origin: self.localRemoval == device.deviceEnrollmentID ? .here : origin)
+            origin: self.localRemoval == device.deviceEnrollmentID ? .here : origin,
+            member: device.memberRole != nil)
         self.defaults.set([
             "hostname": removal.hostname, "shortName": removal.shortName,
             "timestamp": removal.date.timeIntervalSince1970, "origin": removal.origin.rawValue,
+            "member": removal.member,
         ], forKey: self.removalKey)
         stopRoute()
         deselectNode()
@@ -147,7 +217,9 @@ final class MacOpenClawIDDeviceStore {
             return MacOpenClawIDOperatorCredential(
                 identity: peer,
                 verifiedTarget: {
-                    let (nodeID, session) = await MainActor.run { (self.load()?.nodeEnrollmentID, self.session()) }
+                    let (nodeID, session) = await MainActor.run {
+                        (self.load()?.nodeEnrollmentID, self.session(for: device))
+                    }
                     let node = try await nodeID.asyncMap {
                         try await OpenClawIDNodeIdentity.loadOrCreate(
                             store: OpenClawIDNodeIdentityKeychainStore(enrollmentID: $0, purpose: .node))
@@ -157,7 +229,7 @@ final class MacOpenClawIDDeviceStore {
                             hostname: device.hostname,
                             discoveryOrigin: device.discoveryOrigin,
                             peer: peer,
-                            admission: .owner,
+                            admission: device.admission,
                             node: node,
                             session: session,
                             store: store)
@@ -179,11 +251,16 @@ final class MacOpenClawIDDeviceStore {
 
     /// Deletes only the retired enrollment's keys, not a newly joined device's preferences.
     private func forgetKeys(_ device: MacOpenClawIDDevice) async {
+        await Self.forgetKeys(device: device.deviceEnrollmentID, node: device.nodeEnrollmentID)
+    }
+
+    /// Deletes D and W (and W_node) of one enrollment from the Keychain.
+    static func forgetKeys(device: UUID, node: UUID? = nil) async {
         var stores = [
-            OpenClawIDNodeIdentityKeychainStore(enrollmentID: device.deviceEnrollmentID, purpose: .device),
-            OpenClawIDNodeIdentityKeychainStore(enrollmentID: device.deviceEnrollmentID, purpose: .devicePeer),
+            OpenClawIDNodeIdentityKeychainStore(enrollmentID: device, purpose: .device),
+            OpenClawIDNodeIdentityKeychainStore(enrollmentID: device, purpose: .devicePeer),
         ]
-        if let node = device.nodeEnrollmentID {
+        if let node {
             stores.append(OpenClawIDNodeIdentityKeychainStore(enrollmentID: node, purpose: .node))
         }
         for store in stores {
@@ -205,6 +282,14 @@ final class MacOpenClawIDDeviceStore {
               expires > Int64(Date().timeIntervalSince1970)
         else { return nil }
         return .init(token: token, accountID: account, email: fields["email"] as? String, expiresAt: expires)
+    }
+
+    /// The saved Discovery session when it may re-read this device's claw: a member device's own
+    /// account only.
+    func session(for device: MacOpenClawIDDevice) -> OpenClawIDDiscoverySession? {
+        guard let session = self.session() else { return nil }
+        if let account = device.memberAccountID, account != session.accountID { return nil }
+        return session
     }
 
     func saveSession(_ session: OpenClawIDDiscoverySession?) {

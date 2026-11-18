@@ -707,9 +707,7 @@ export class CommandPaletteState {
       sessionSearchRead: this.sessionSearchRead,
       catalogSearchRead: this.catalogLoad,
       modelSearchRead: this.modelSearchRead,
-      catalogSearchPending:
-        Boolean(this.catalogLoad && this.catalogLoad.loadedAt === undefined) ||
-        this.modelReader.pending,
+      catalogSearchPending: Boolean(this.catalogLoad && this.catalogLoad.loadedAt === undefined),
       sessionSearchFailed: this.sessionSearchFailed,
       sessionSearchPartial: this.sessionSearchPartial,
       sessionSearchIndexing: this.sessionSearchIndexing,

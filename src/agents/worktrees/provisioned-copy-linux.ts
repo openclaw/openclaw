@@ -92,7 +92,7 @@ export async function copyProvisionedPathsLinux(
   await using destinationRootHandle = await openRoot(destinationRoot);
   let command: ReturnType<typeof createProvisionCopyCommand> | undefined;
   const copied: string[] = [];
-  const batch: { path: string; target: string; fd: number; mode: number }[] = [];
+  const batch: { path: string; target: string; fd: number; mode: number; bytes: number }[] = [];
   const destinations = new Map<string, number>();
   let admitted = 0;
   const check = () => options.signal?.throwIfAborted();
@@ -121,10 +121,7 @@ export async function copyProvisionedPathsLinux(
       check();
       options.assertCurrent?.();
       check();
-      await command!.copy(
-        staging.fd,
-        batch.map((file) => file.fd),
-      );
+      await command!.copy(staging.fd, batch);
       check();
       options.assertCurrent?.();
       check();
@@ -197,6 +194,7 @@ export async function copyProvisionedPathsLinux(
             target: `/proc/self/fd/${target}/${name}`,
             fd,
             mode: stat.mode & 0o7777,
+            bytes: stat.size,
           });
           retained = true;
           admitted++;

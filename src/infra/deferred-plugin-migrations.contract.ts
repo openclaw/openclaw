@@ -15,12 +15,14 @@ export const deferredPluginMigrationSchema = z.object({
 
 export type DeferredPluginMigration = z.infer<typeof deferredPluginMigrationSchema>;
 
-/** Doctor can reword guidance without changing the requirements protecting retained inputs. */
+/** Discovery order and Doctor guidance do not change the requirements protecting retained inputs. */
 export function sameDeferredPluginMigrationInputs(
   current: readonly DeferredPluginMigration[],
   expected: readonly DeferredPluginMigration[],
 ) {
   const inputs = (pending: readonly DeferredPluginMigration[]) =>
-    pending.map(({ reason: _reason, command: _command, ...fields }) => fields);
+    pending
+      .map(({ reason: _reason, command: _command, ...fields }) => fields)
+      .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
   return isDeepStrictEqual(inputs(current), inputs(expected));
 }

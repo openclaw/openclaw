@@ -10,7 +10,10 @@ import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { SqliteTransactionOptions } from "../infra/sqlite-transaction.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { retainOpenClawStateDatabaseForIdle } from "./openclaw-state-db-cache.js";
-import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
+import {
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  type OpenClawStateDatabase,
+} from "./openclaw-state-db-contract.js";
 import { isStatePostgres } from "./openclaw-state-db-engine.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import { withOpenClawStateDatabaseReadOnly } from "./openclaw-state-db-readonly.js";
@@ -305,7 +308,7 @@ export async function releaseOpenClawStateLeaseBestEffort(
   params: Parameters<typeof releaseOpenClawStateLease>[0],
   execute?: () => Promise<void>,
 ): Promise<void> {
-  const deadline = performance.now() + LEASE_CONTENTION_RETRY_TIMEOUT_MS;
+  const startedAt = performance.now();
   let attempt = 0;
   while (true) {
     try {
@@ -317,12 +320,16 @@ export async function releaseOpenClawStateLeaseBestEffort(
       return;
     } catch (error) {
       const now = performance.now();
-      if (
-        (!isSqliteLockError(error) && !isStateDatabaseMaintenanceContention(error)) ||
-        now >= deadline
-      ) {
-        if (execute) {
-          // The async resource owner retains failed cleanup for exact-owner retry.
+      const lockContention = isSqliteLockError(error);
+      // A writer's transaction settles within the busy timeout every shared-state writer
+      // waits for; giving up sooner reports finished work as failed (#197083).
+      const deadline =
+        startedAt +
+        (lockContention ? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS : LEASE_CONTENTION_RETRY_TIMEOUT_MS);
+      if ((!lockContention && !isStateDatabaseMaintenanceContention(error)) || now >= deadline) {
+        if (execute || isStateDatabaseMaintenanceContention(error)) {
+          // Startup can fail before worker cleanup is available. Preserve maintenance
+          // refusal so the resource owner retries this exact lease after custody ends.
           throw error;
         }
         return;

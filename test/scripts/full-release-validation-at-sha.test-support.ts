@@ -143,7 +143,7 @@ export function createDispatchFixture(
   writeFileSync(npmCallsPath, "");
   writeFileSync(
     publishedVersionsPath,
-    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.9.6"]),
+    JSON.stringify(["2026.6.34", "2026.7.8", "2026.7.9", "2026.7.35", "2026.9.6"]),
   );
   const npmPath = join(binDir, "npm");
   writeFileSync(
@@ -706,7 +706,11 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
         MOCK_REQUEST_FILE: extraArgs.includes("--request-file")
           ? extraArgs[extraArgs.indexOf("--request-file") + 1]
           : "",
-        MOCK_WORKFLOW_SHA: options.candidateOwned ? targetSha : workflowSha,
+        MOCK_WORKFLOW_SHA: extraArgs.includes("--workflow-sha")
+          ? extraArgs[extraArgs.indexOf("--workflow-sha") + 1]
+          : options.candidateOwned
+            ? targetSha
+            : workflowSha,
         MOCK_VERIFIER_SHA: workflowSha,
         MOCK_ADVANCED_P_PATH: admissionCapturePath + ".advanced",
         GIT_AUTHOR_NAME: "Release Fixture",

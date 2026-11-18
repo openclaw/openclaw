@@ -140,6 +140,7 @@ exports and restore them into fresh namespaces for disaster recovery.
 
 ## Notes
 
+- Archive compression uses dedicated worker threads on hosts with seven or more available cores, up to eight workers while reserving two cores for archive traversal and writing. Hosts with six or fewer cores keep the existing shared-pool compression path. Larger hosts may use more memory and CPU during compression; the archive remains a standard `.tar.gz` file.
 - The archive embeds a schema-version-1 `manifest.json` with the resolved source paths and archive layout. Additive ownership metadata records configured agent ids and roots, including agent roots already covered by another asset; existing archive layout and older archives remain supported. New archives also record the current-layout SQLite snapshots captured at creation; standalone verification rejects missing or mismatched inventory entries. Legacy archives without this inventory remain readable, but verification reports `sqliteInventoryVerified: false` because complete database coverage cannot be established. An empty inventory means no current-layout databases were captured (for example, a config-only export), not a full database recovery point.
 - Without `--to`, default output is a timestamped `.tar.gz` archive in the current working directory. Local timestamped filenames use your machine's local timezone and include the UTC offset. If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location. With `--to`, the default archive is temporary; pass `--output` as well to retain a local copy.
 - Existing archive files are never overwritten. Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
@@ -812,6 +813,25 @@ paths remain included. Config, credentials, workspaces, agent directories, and
 plugin-included resources nested inside a template remain protected. The dry-run
 plan and archive manifest report existing omitted templates as `regenerable`.
 This flag does not delete or modify local templates.
+
+Archives include Doctor's retained pre-migration originals by default, because
+they are the only way to return a database to the generation before its last
+migration or repair. Use `--exclude-migration-backups` to omit them when you
+keep a separate pre-upgrade backup. It matches only the exact names Doctor
+writes beside the shared state database and each agent database:
+
+- `<database>.pre-startup-migration-<id>.bak`: full SQLite original.
+- `<database>.pre-startup-migration-<id>.scoped.bak`: scoped SQLite original.
+- `<database>.pre-startup-migration-<id>.postgres.bak`: PostgreSQL backup
+  directory, omitted as a whole.
+- `<database>.pre-startup-migration-restart-recovery-<id>.bak`: SQLite original
+  saved before a restart-recovery session repair.
+
+Similar files stay included. The dry-run plan, JSON result, and archive
+manifest list each omitted original once as `excluded`. The live databases are
+still captured as usual. A restored archive cannot roll back the last migration
+with those originals. This flag does not delete or modify them; `openclaw
+update cleanup` still owns the retention of the originals it tracks.
 
 `--only-config` skips state, agent, credentials-directory, workspace, and
 plugin-resource discovery and archives only the active config file path.

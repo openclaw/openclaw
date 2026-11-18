@@ -59,6 +59,7 @@ export function prepareGatewayOperatorSessionRun(params: {
     scopes: [...params.authority.scopes],
   });
   const creation = resolveOperatorSessionCreation({
+    ...client,
     authenticatedUserProfile: { profileId: params.authority.profileId },
   });
   return {

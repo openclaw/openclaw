@@ -389,6 +389,96 @@ No service URL has a production default yet; the Gateway reports
 `unconfigured` until `relayUrl` is set. Changes apply without a restart. See the
 [`openclawId` configuration keys](/gateway/config-gateway) for the full list.
 
+### Member roles
+
+OpenClaw ID members use their membership role's definition in
+`gateway.roles.definitions`, not a named role assigned to their Gateway profile.
+When OpenClaw ID turns on, and at Gateway start when it is already on, the Gateway
+writes any missing presets without overwriting owner-edited definitions. Installing
+presets uses the standard config writer: it rewrites the config file as JSON and
+removes JSON5 comments.
+
+The presets are:
+
+- `operator`: other people's sessions are writable, all agents are allowed, and
+  scopes are `operator.read`, `operator.write`, `operator.approvals`,
+  `operator.questions`, and `operator.talk`.
+- `guest`: other people's sessions are viewable, all agents are allowed, and
+  `operator.sessions.write` allows starting and continuing their own work.
+  `sandbox: "required"` runs their sessions' exec and file tools in a per-person
+  sandbox.
+- `viewer`: other people's sessions are viewable, all agents are allowed, and the
+  only scope is `operator.sessions.read`. Viewers can read visible conversations,
+  but not logs, the private user directory, or Gateway-wide diagnostic catalogs.
+
+Operator remains the default invite role. A sandbox-required member's new sessions,
+forks, checkpoint branches, delegated children, and authorized scheduled or
+recovered work retain the sandbox requirement even without named-role enforcement.
+For those sessions' exec and file tools, an unavailable sandbox backend or failed
+provisioning is an error, not a fallback to a host or node target. The **Access**
+invite form warns when the selected role requires a sandbox and the configured
+Docker or Podman backend is unavailable. See [Sandboxing](/gateway/sandboxing)
+for setup.
+
+The sandbox requirement does not contain every execution path. Before inviting
+someone you do not trust with the machine, review the
+[sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions):
+
+- Select the [QuickJS Code Mode executor](/tools/code-mode/executors#choose-an-executor);
+  the default Node executor runs cells in the Gateway process.
+- Exclude [CLI backends](/gateway/cli-backends) with the role's
+  [modelPolicy](/gateway/operator-scopes#model-policy); their native tools and
+  sandboxing are separate from session exec and file tools.
+- Keep such roles off worker profiles, which can receive the agent's shared
+  GitHub identity independently of the session sandbox setting.
+- Do not add `operator.write` or `operator.admin` if the person must not invoke
+  commands directly on paired nodes outside a session. The stock guest preset
+  has neither scope; node command policy and approvals still apply.
+
+Also review shared transcripts and Gateway-brokered GitHub publication in that
+exclusions list: a session sandbox does not limit what shared conversations reveal
+or what the shared publication account can do.
+
+Presets are ordinary editable definitions, not reserved names or a hardcoded
+permission ceiling. Custom definitions may include `operator.admin`. A member
+whose role has no definition cannot connect or start retained/recovered work.
+Editing a definition reconnects affected members with current permissions;
+removing one denies that role. Missing presets are installed again on the next
+activation or Gateway start. Manage membership on **Access**, not `users.setRole`;
+clearing a stored profile role with `null` remains allowed.
+
+On **Access**, choose an invite's role from the claw's defined roles. **Operator**
+is selected when it is defined; otherwise the first role alphabetically is selected.
+Each option describes access to other people's sessions, sandbox requirements, and
+administrator access. Roles with `operator.admin` are marked **Administrator access**
+and require confirmation before creating an invite. With no roles defined, add a
+definition in config before inviting anyone; there is no role-definition editor here.
+Member role names use 1–64 lowercase letters, digits, `-`, or `_`, starting with a
+letter. Other configured names are shown as unavailable rather than renamed.
+Approving a request grants exactly the role named in its invite.
+
+From an approved owner browser, choose **Change role** on a member, select a defined
+role, and save. The browser signs the membership change with its owner device key.
+The member's devices disconnect and reconnect with the new limits. Members whose
+role was deleted are marked **Blocked** with the missing role's name; choose another
+role to restore access. Members who can load the Access plugin see their own role,
+not other people's access or owner controls. The plugin currently requires
+`operator.read`; session-read-only members, including the Viewer preset, cannot
+open it.
+
+Preset installation never sets or changes `gateway.roles.default` or
+`gateway.roles.assignments`. Without a default, other sign-in methods keep their
+existing behavior, including device-token-only reconnects. Existing team Gateways
+keep their default and enforcement. Owner devices and nodes are unchanged.
+A preset-write failure is logged and reported in OpenClaw ID service status;
+undefined member roles remain refused and owners retain access. Nothing is written
+while OpenClaw ID is off. Startup finishes installing presets before publishing
+its runtime policy, including when `gateway.reload.mode` is `"off"`. If runtime
+reload policy prevents a saved activation from applying, service status asks you
+to restart the Gateway to finish turning on member roles. See [Named operator roles](/gateway/operator-scopes#named-operator-roles).
+
+### Managing remote access
+
 Labs only switches the feature on or off. Everything else lives outside Labs:
 
 - **Account menu** (your avatar, bottom left of the sidebar): **Sign in with
@@ -397,9 +487,14 @@ Labs only switches the feature on or off. Everything else lives outside Labs:
 - **Access**, under **Pages**: the **Remote access** page from the bundled
   `openclaw-id-access` plugin (enabled by default). It shows who may reach this
   claw through OpenClaw ID; its **People** section lets you invite someone,
-  approve or deny their request, and remove members. Use an approved owner
+  approve or deny their request, change a member's role, and remove members. Use an approved owner
   browser to change access. Devices paired with this Gateway are in
   **Settings → Devices**.
+- **Member names**: an approved member is named from their OpenClaw ID account,
+  or from the part of their email before the `@` when the account reports no
+  name. Their first visit opens a new session, which asks for a name and photo
+  before it offers a composer; they can skip it and set both later in
+  **Settings → Profile**. Both are stored only in this Gateway's profile.
 - **Your devices**, in the account menu: view approved owner browsers and choose
   **Remove access** for a browser. The confirmation lists any other devices that
   will also lose access. They disconnect immediately; use another approved owner
@@ -465,6 +560,24 @@ shows one device code as before.
 - **Unlink** returns owner devices to the shared owner on their next connection.
   Sessions they already created are not rewritten. While signed in, **Turn on remote access**
   gets its link code from your account instead of asking you to paste one.
+
+### Invite someone who already has a profile
+
+On **Access → Invite someone**, optionally choose **Existing person on this claw**.
+The picker lists personal profiles that have no OpenClaw ID linked yet, such as a
+teammate's Tailscale profile. It never offers the shared owner profile.
+
+The approval card says **Will join as** the selected person. Your selection and
+approval are enough: the member does not need to confirm the profile or match its
+email. Approval links their OpenClaw ID to that profile, so their name and existing
+conversations stay together. The selection alone gives no access, and the member's
+permissions still come from their approved membership role.
+
+The selection stays on this Gateway; it is not in the invite link or signed invite.
+If the selected profile was deleted, merged away, or linked to another account
+before approval, the Gateway uses the normal member-profile path and shows why on
+Access. Leave **Create a new person** selected for the usual invite behavior.
+This option is hidden while the OpenClaw ID lab is off.
 
 ### How the tunnel reaches the Gateway
 

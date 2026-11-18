@@ -24,7 +24,7 @@ import {
 // own bounds: the newest few of each kind, then a byte cap on the whole list.
 const MAX_EVIDENCE_PER_KIND = 4;
 const MAX_EVIDENCE_BYTES = 6 * 1024;
-export const MAX_COMPLETION_CLAIMS = 4;
+const MAX_COMPLETION_CLAIMS = 4;
 const MAX_EVIDENCE_TEXT = 300;
 const MAX_EVIDENCE_URL = 500;
 

@@ -120,7 +120,6 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   const prediction = createComposerPrediction(readPredictionSource);
   const questionPanel = createComposerQuestionPanel(
     () => props.questions,
-    composition,
     () => props.getTranscriptElement,
   );
   const streaming = createMemo(() => currentProps.stream !== null);
@@ -176,7 +175,6 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
         directory: current.mentionDirectory,
         host:
           current.mentionDirectory &&
-          current.showComposer &&
           !state.composerComposing &&
           !state.dictation?.locksComposer &&
           state.composerTextarea?.isConnected
@@ -193,6 +191,15 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
   onSettled(() =>
     listen(document, "visibilitychange", () => prediction.sync(readPredictionSource())),
   );
+  onSettled(() => {
+    const stop = () => context().stopRunFromEscape();
+    state.stopRunFromEscape = stop;
+    return () => {
+      if (state.stopRunFromEscape === stop) {
+        state.stopRunFromEscape = null;
+      }
+    };
+  });
 
   // Owners and handlers retain live reads; only scalar presentation values filter updates.
   const scalarContext = createProjection(() => {
@@ -207,7 +214,7 @@ function PaneComposer(props: ChatComposerProps & { questions: ComposerQuestions 
       runStatusAnnouncement: current.runStatusAnnouncement,
       cancellationCaveat: current.cancellationCaveat,
       sendShortcut: current.sendShortcut,
-      showComposer: current.showComposer,
+      showComposerProgress: current.showComposerProgress,
       draftKey: current.draftKey,
       mentionError: current.mentionError,
     };

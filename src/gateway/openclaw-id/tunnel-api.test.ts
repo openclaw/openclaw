@@ -1,6 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   bytesToBase64url,
   formatEd25519PublicKey,
@@ -12,7 +12,12 @@ import {
   signStatement,
   type IrohEndpointKey,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { applyMailboxMessage } from "./mailbox-reader.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import {
   linkedClaw,
   nowSeconds,
@@ -24,7 +29,13 @@ import {
 
 let server: http.Server | undefined;
 
+beforeEach(() =>
+  setRuntimeConfigSnapshot({
+    gateway: { roles: { definitions: MEMBER_ROLE_PRESETS } },
+  }),
+);
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   server?.close();
   server = undefined;
 });
@@ -194,11 +205,16 @@ describe("OpenClaw ID tunnel API", () => {
       "binding_seq",
       "claw_id",
       "devices",
+      "hostname",
+      "recovery_kit",
       "role",
+      "root_fp",
       "seq",
     ]);
     expect(view).toMatchObject({
       account_id: "bob",
+      root_fp: await fingerprint(formatEd25519PublicKey(claw.root.publicKey)),
+      recovery_kit: null,
       binding_seq: 1,
       role: "operator",
       devices: [
@@ -282,7 +298,7 @@ describe("OpenClaw ID tunnel API", () => {
         await claw.sign({
           op: "add",
           account_id: "acct-guest",
-          role: "guest",
+          role: "unconfigured-role",
           peer_keys: [peer],
           invite_id: null,
         }),

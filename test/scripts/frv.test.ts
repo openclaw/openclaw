@@ -536,6 +536,129 @@ describe("FRV continuation preflight", () => {
     return { client, producer, logs, selected, plan: plan([selected]) };
   }
 
+  function pluginArtifactFixture(distTag = "extended-stable") {
+    const fixture = artifactFixture();
+    const evidence = fixture.client.getReleaseEvidenceClient();
+    fixture.client.getReleaseEvidenceClient = () => ({
+      ...evidence,
+      getWorkflowSource: () =>
+        [
+          "name: Full Release Validation",
+          "env:",
+          '  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"',
+          "jobs:",
+          "  prepare_plugin_npm:",
+          "    name: Prepare exact plugin npm artifacts",
+          "    env:",
+          "      CHILD_WORKFLOW_KIND: plugin-npm-preflight",
+        ].join("\n"),
+    });
+    const parentJobs = fixture.client.getParentJobs;
+    fixture.client.getParentJobs = async () => [
+      ...(await parentJobs()).filter((entry) => entry.id !== 90),
+      {
+        id: 90,
+        name: "Prepare exact plugin npm artifacts",
+        run_attempt: 1,
+        status: "completed",
+        conclusion: "failure",
+      },
+    ];
+    fixture.logs.dispatch = [
+      `TARGET_SHA: ${TARGET_SHA}`,
+      `  NPM_DIST_TAG: ${distTag}`,
+      `  NPM_DIST_TAG: ${distTag}`,
+      `Dispatched plugin-npm-release.yml: https://github.com/${REPOSITORY}/actions/runs/81 (attempt 1)`,
+    ].join("\n");
+    fixture.producer.path = ".github/workflows/plugin-npm-release.yml";
+    fixture.producer.display_title = `Plugin NPM Artifact Preflight [${distTag}] ${TARGET_SHA} (full-release-validation-77-1-plugin-npm-preflight)`;
+    fixture.producer.conclusion = "failure";
+    const getAttemptJobs = fixture.client.getAttemptJobs;
+    fixture.client.getAttemptJobs = async (runId: string, attempt: number) =>
+      runId === "81"
+        ? [
+            { ...job("preview_plugins_npm"), id: 810 },
+            { ...job("Firecrawl", fixture.producer.conclusion ?? ""), id: 811 },
+          ]
+        : getAttemptJobs(runId, attempt);
+    return fixture;
+  }
+
+  it.each(["default", "extended-stable"])(
+    "discovers the original failed plugin artifact producer (%s)",
+    async (distTag) => {
+      const fixture = pluginArtifactFixture(distTag);
+      await expect(
+        preflightContinuation(fixture.plan, "77", fixture.client),
+      ).resolves.toMatchObject({
+        artifactProducers: [
+          {
+            request: { stage: "plugin-npm", toolingSha: SHA, workflowRef: SOURCE_REF },
+            runId: "81",
+            runAttempt: "1",
+          },
+        ],
+        pendingArtifactProducers: false,
+      });
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects conflicting plugin dispatch tags without retrying", async () => {
+    const fixture = pluginArtifactFixture();
+    fixture.logs.dispatch += "\n  NPM_DIST_TAG: default";
+    await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+      "Original plugin-npm dispatch inputs are unavailable or ambiguous",
+    );
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+  });
+
+  it("retries the complete plugin producer and strictly verifies the resealed parent", async () => {
+    const fixture = pluginArtifactFixture();
+    let parentAttempt = 1;
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) =>
+      id === "77"
+        ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+        : structuredClone(await read(id)),
+    );
+    fixture.client.rerunFailed.mockImplementation(async (id: string) => {
+      expect(id).toBe("810");
+      fixture.producer.run_attempt = 2;
+      fixture.producer.conclusion = "success";
+    });
+    fixture.client.rerunParent.mockImplementation(async () => {
+      parentAttempt = 2;
+    });
+    const verify = vi.fn();
+    await expect(
+      continueFailed(fixture.plan, "77", { ...fixture.client, verify }),
+    ).resolves.toMatchObject({
+      action: "reran-parent",
+    });
+    expect(fixture.client.rerunFailed).toHaveBeenCalledExactlyOnceWith("810");
+    expect(fixture.client.rerunParent).toHaveBeenCalledExactlyOnceWith("77");
+    expect(verify).toHaveBeenCalledWith("77", fixture.plan, expect.any(Number), {
+      "77": 2,
+      "101": 1,
+    });
+  });
+
+  it.each(["path", "head_sha", "head_branch", "display_title"] as const)(
+    "rejects plugin producer %s drift before any retry",
+    async (field) => {
+      const fixture = pluginArtifactFixture();
+      fixture.producer[field] = "changed";
+      await expect(continueFailed(fixture.plan, "77", fixture.client)).rejects.toThrow(
+        "Artifact producer run identity changed",
+      );
+      expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+      expect(fixture.client.rerunParent).not.toHaveBeenCalled();
+    },
+  );
+
   it("retains authenticated npm recovery for frozen workflows without the expanded contract", async () => {
     const fixture = artifactFixture("npm");
     const evidenceClient = fixture.client.getReleaseEvidenceClient();
@@ -1383,6 +1506,26 @@ describe("FRV continuation preflight", () => {
 });
 
 describe("FRV same-parent recovery", () => {
+  it("keeps raw failure while classifying only the plan-bound candidate exception as passed", async () => {
+    const selected = child("normalCi", "101");
+    const client = {
+      repository: REPOSITORY,
+      getRun: async () => runFor(selected, 1, "failure"),
+      getAttemptJobs: async () => [job("macos-swift (tests)", "failure")],
+    };
+    const accepted = {
+      ...plan([selected]),
+      targetVersion: "2026.11.4",
+      targetSha: "5eb2d8052ddc363245bea3ca4ec0833815ab6e93",
+    };
+    expect((await inspectContinuation(accepted, client)).passed).toEqual([
+      expect.objectContaining({ conclusion: "failure", key: "normalCi" }),
+    ]);
+    expect(
+      (await inspectContinuation({ ...accepted, targetSha: TARGET_SHA }, client)).failed,
+    ).toHaveLength(1);
+  });
+
   it("reports missing selected children without reading nonexistent runs", async () => {
     const selected = child("normalCi", "101");
     const missing = withoutChildRunIdentity(child("pluginPrerelease", "202"));

@@ -4,18 +4,14 @@ import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtim
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
-import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
+import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
 import { ChatModelAuthState, modelAuthState } from "./chat-model-auth-state.tsx";
-import {
-  ChatModelCatalogRefresh,
-  ChatModelCatalogState,
-  isModelCatalogLoading,
-} from "./chat-model-catalog-state.tsx";
+import { ChatModelCatalogState, isModelCatalogLoading } from "./chat-model-catalog-state.tsx";
 import {
   createChatModelFavorites,
   createChatModelFavoritesOpening,
@@ -55,13 +51,12 @@ import {
   modelRuntimeId,
   providerRuntimeOptions,
 } from "./chat-model-settings.tsx";
+import { saveModelPickerFavoritesTab } from "./model-provider-order.ts";
 
-registerSettingsEnglish();
+registerModelProviderAuthEnglish();
 
 type ChatModelPickerPanelProps = {
   params: ChatModelPickerParams;
-  onSelectionClose: (event: MouseEvent) => void;
-  searchRef: (element: HTMLInputElement) => void;
 };
 
 export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
@@ -154,7 +149,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       sessionModelPinned: sessionModelPinned(),
     };
     return {
-      activeProvider: current.activeProvider,
+      activeProvider: current.openingProvider,
       providers: [
         ...providerGroups.map(([provider]) => provider),
         ...targetGroups.map((group) => `target:${group.id}`),
@@ -311,7 +306,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       entry.runtimeOverride ??
         (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
     );
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {
     event.stopPropagation();
@@ -320,7 +315,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       return;
     }
     panel.params.onTargetSelect?.(groupId, value);
-    panel.onSelectionClose(event);
+    searchView?.closeAfterSelection(event);
   };
   // Retain the route boundary across unrelated owner publications.
   const renderDirect = (render: () => JSX.Element) => render();
@@ -332,7 +327,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
       <Show when={!activeAuth() || panel.params.modelCatalogState?.status !== "ready"}>
         {renderCatalogStatus()(() => (
           <ChatModelCatalogState
-            loadingSkeleton
             state={panel.params.modelCatalogState}
             hasOptions={modelOptions().length > 0}
             hasSelectableOptions={state().hasSelectableModelOptions}
@@ -356,7 +350,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             entry={props.entry}
             rowKey={key()}
             favorite={
-              !props.entry.isDefault && favorites.available()
+              favorites.available()
                 ? {
                     selected: favorites.keys().includes(props.entry.value),
                     disabled: disabled() || favorites.disabled(),
@@ -509,7 +503,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             <div class="chat-controls__model-search-wrap">
               <Icon name="search" />
               <input
-                ref={[search?.inputRef(), panel.searchRef]}
+                ref={searchView?.inputRef()}
                 class="chat-controls__model-search"
                 data-chat-model-search="true"
                 type="search"
@@ -532,12 +526,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                 }
                 onKeyDown={handleModelSearchKeydown}
               />
-              {modelOptions().length > 0 ? (
-                <ChatModelCatalogRefresh
-                  state={panel.params.modelCatalogState}
-                  providerLabel={providerDisplayLabel}
-                />
-              ) : undefined}
             </div>
           ) : undefined}
           <Show when={favorites.snapshot().error}>
@@ -575,6 +563,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
                     )}
                     disabled={disabled()}
                     onSelect={(provider) => {
+                      saveModelPickerFavoritesTab(provider === FAVORITES_GROUP);
                       if (!searchView?.providerOpen(provider)) {
                         setProviderTransition((previous) => !previous);
                       }

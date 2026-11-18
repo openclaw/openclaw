@@ -94,16 +94,16 @@ const enSessionOrganization = {
     deleteAllArchivedTitle: "Delete {count} archived sessions?",
     archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
-    searchPlaceholder: "Filter by key, agent, label, kind…",
-    transcriptSearchTitle: "Search transcripts",
+    searchPlaceholder: "Search sessions…",
+    transcriptSearchTitle: "Search chats",
     transcriptSearchDescription:
       "Find exact words or phrases in your messages and agent replies across the default agent’s sessions.",
-    transcriptSearchInputLabel: "Search session transcripts",
+    transcriptSearchInputLabel: "Search chats",
     transcriptSearchPlaceholder: "Search exact words or phrases…",
     transcriptSearchAction: "Search",
     transcriptSearchClear: "Clear",
     transcriptSearchRetry: "Retry",
-    transcriptSearchSearching: "Searching transcripts…",
+    transcriptSearchSearching: "Searching chats…",
     transcriptSearchUnavailable: "Reconnect to search messages.",
     transcriptSearchError: "Couldn’t search messages. Try again.",
     transcriptSearchIndexing: "Results may be incomplete. Search again shortly.",
@@ -129,8 +129,8 @@ const enSessionOrganization = {
     goalNote: "Goal note",
     thinking: "Effort",
     fast: "Speed",
-    verbose: "Verbose",
-    reasoning: "Reasoning",
+    verbose: sharedSessions.verbose,
+    reasoning: sharedSessions.reasoning,
     actions: "Actions",
     addToWorkboard: "Add to Workboard",
     openWorkboardCard: "Open Workboard card",
@@ -214,7 +214,7 @@ const enSessionOrganization = {
     cloudWorkerDiskCritical: en.sessionsView.cloudWorkerDiskCritical,
     cloudWorkerDescendantConflict: en.sessionsView.cloudWorkerDescendantConflict,
     cloudWorkerDescendantConflicts: en.sessionsView.cloudWorkerDescendantConflicts,
-    renameSession: "Rename session",
+    renameSession: sharedSessions.renameSession,
     sessionColor: en.sessionsView.sessionColor,
     removeIcon: "Remove icon",
     pinRootSessionsOnly: sharedSessions.pinRootSessionsOnly,
@@ -252,16 +252,6 @@ const enSessionOrganization = {
     stopCloudWorkerConfirmAction: sharedSessions.stopCloudWorkerConfirmAction,
     stopCloudWorkerStale:
       "The connection changed before work stopped on the cloud device for “{session}”. Try again.",
-    deleteSessionTitle: "Delete “{session}”?",
-    deleteSessionConfirm:
-      "This also deletes its transcript. Work on any attached device stops first.",
-    deleteSessionsTitle: "Delete {count} sessions?",
-    deleteSessionsConfirm:
-      "This also deletes their transcripts. Any attached devices will stop working on them first.",
-    deleteSelectedConfirmOne:
-      "Stop work on any attached device, then delete the session entry and archive its transcript.",
-    deleteSelectedConfirm:
-      "Stop work on any attached devices, then delete the session entries and archive their transcripts.",
     archiveSessionTitle: "Also archive nested sessions?",
     archiveSessionNestedOne:
       "“{session}” has 1 directly nested session. If you archive only this session, that nested session moves to the top level.",
@@ -274,9 +264,10 @@ const enSessionOrganization = {
     automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
-    automationPauseDeleteOne: 'Deleting "{session}" pauses its automations.',
-    automationPauseDeleteOther:
-      "Automations are bound to {count} of these conversations. Deleting a conversation pauses its automations.",
+    automationDeleteWarningOne:
+      'Automations linked to "{session}" may keep running after deletion. Disable or remove them separately.',
+    automationDeleteWarningOther:
+      "Automations linked to {count} of these conversations may keep running after deletion. Disable or remove them separately.",
     automationPauseUnlisted: "Automation names are unavailable right now.",
     automationPauseMore: "+{count} more",
     archiveAnyway: "Archive anyway",
@@ -324,6 +315,7 @@ const enSessionOrganization = {
     newGroupStale: sharedSessions.newGroupStale,
     moveToGroup: "Move session to a group",
     groupOptions: en.sessionsView.groupOptions,
+    openSessionsPage: en.sessionsView.openSessionsPage,
     newSessionInGroup: en.sessionsView.newSessionInGroup,
     groupDefaultsFailed: "Couldn’t save the group defaults. Try again.",
     groupDefaultsStale: en.sessionsView.groupDefaultsStale,

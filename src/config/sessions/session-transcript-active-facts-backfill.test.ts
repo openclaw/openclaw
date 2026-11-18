@@ -1,4 +1,6 @@
+import { channel } from "node:diagnostics_channel";
 import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabaseWriteTokenForPath,
@@ -9,12 +11,15 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import * as workerStores from "../../state/openclaw-agent-worker-store.js";
+import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState as withState } from "../../test-utils/openclaw-test-state.js";
 import { readRecentSessionTranscriptActiveEvents } from "./session-accessor.sqlite-active-events.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { updateSqliteTranscriptEventJsonInTransaction } from "./session-accessor.sqlite-transcript-rewrite.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import {
   restoreSessionColdTranscript,
   runSessionColdStorageMaintenance,
@@ -27,6 +32,7 @@ import {
 import {
   backfillTranscriptActiveFactsBatchInTransaction as backfill,
   discoverTranscriptActiveFactsBackfillSessions as discover,
+  probeTranscriptActiveFactsBackfill as probe,
 } from "./session-transcript-active-facts-backfill.worker.js";
 import { createSessionTranscriptFactsBackfill } from "./session-transcript-facts-backfill.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
@@ -113,13 +119,17 @@ it("fills historical active facts exactly and resumes without rereading covered 
     expect(first.done).toBe(false);
     // Losing the process cursor starts an index-only coverage scan, not another payload fill.
     const openStore = workerStores.openOpenClawAgentSqliteWorkerStoreV2;
+    // The first write can wait on worker boot and IO before its reply lands.
+    let chargedMs = 27_000;
     const open = vi
       .spyOn(workerStores, "openOpenClawAgentSqliteWorkerStoreV2")
       .mockImplementation((options, authority, publication) =>
         openStore(options, authority, {
           ...publication,
-          observeWriteExecution: (elapsedMs) =>
-            publication.observeWriteExecution?.(Math.max(100, elapsedMs)),
+          observeWriteExecution: (elapsedMs) => {
+            publication.observeWriteExecution?.(Math.max(chargedMs, elapsedMs));
+            chargedMs = 100;
+          },
         }),
       );
     const resume = createSessionTranscriptFactsBackfill({
@@ -129,7 +139,9 @@ it("fills historical active facts exactly and resumes without rereading covered 
       log: { info() {}, warn() {} },
     });
     try {
-      await resume.runBatch(); // Index-only discovery has its own yield.
+      await resume.runBatch();
+      // A contended write yields a bounded pause, not 20x its charge.
+      expect((await resume.runBatch()).delayMs).toBe(30_000);
       // A short native transaction still charges the writer's preparation/reply occupancy.
       expect((await resume.runBatch()).delayMs).toBeGreaterThanOrEqual(2_000);
       while (!(await resume.runBatch()).complete) {
@@ -150,6 +162,123 @@ it("fills historical active facts exactly and resumes without rereading covered 
     );
     expect(readRecentSessionTranscriptActiveEvents(f.scope, 40)).toEqual(before);
     expect(f.drain()).toMatchObject({ done: true, rowsFilled: 0, bytesRead: 0 });
+  }));
+
+it("probes covered windows without a writer and stops at the first uncovered row", () =>
+  withState({ label: "active-facts-probe", scenario: "minimal" }, async ({ env }) => {
+    const f = fixture(env);
+    await replaceTranscriptEvents(f.scope, f.events);
+    const cursor = { sessionId: f.scope.sessionId, afterPosition: -1 };
+    const position = (seq: number) =>
+      (
+        f
+          .db()
+          .prepare(
+            "SELECT active_position FROM session_transcript_active_events WHERE session_id = ? AND event_seq = ?",
+          )
+          .get(f.scope.sessionId, seq) as { active_position: number }
+      ).active_position;
+    // Ordinary writers already filled every fact: one probe retires the session.
+    expect(probe(f.db(), cursor)).toMatchObject({ done: true, uncovered: false });
+    f.write(({ db }) =>
+      db
+        .prepare(
+          "DELETE FROM session_transcript_active_event_facts WHERE session_id = ? AND seq >= 25",
+        )
+        .run(f.scope.sessionId),
+    );
+    expect(probe(f.db(), cursor)).toEqual(
+      expect.objectContaining({ done: false, uncovered: true, afterPosition: position(24) }),
+    );
+    // The write batch picks up exactly where the probe stopped.
+    const filled = f.drain(position(24));
+    expect(filled).toMatchObject({ done: true, rowsFilled: 15 });
+    expect(probe(f.db(), cursor)).toMatchObject({ done: true, uncovered: false });
+  }));
+
+it("finishes covered probes without reserving the writer ahead of a queued actor append", ({
+  signal,
+}) =>
+  withState({ label: "active-facts-restart", scenario: "minimal" }, async ({ env }) => {
+    const f = fixture(env);
+    for (const sessionId of ["covered-a", "covered-b", "covered-c"]) {
+      f.write((database) =>
+        writeSessionEntry(database, `agent:main:${sessionId}`, {
+          sessionId,
+          updatedAt: 1,
+        }),
+      );
+      await replaceTranscriptEvents(
+        { ...f.scope, sessionId, sessionKey: `agent:main:${sessionId}` },
+        f.events,
+      );
+    }
+    const reservations: unknown[] = [];
+    const diagnostic = channel("openclaw.agent-database.reservation");
+    const observe = (value: unknown) => reservations.push(value);
+    const assertCurrent = () => signal.throwIfAborted();
+    const authority = { assertCurrent, authorize: assertCurrent };
+    const actor = await createSessionActorFactory({
+      ...f.scope,
+      path: openOpenClawAgentDatabase(f.scope).path,
+    }).acquire(
+      { database: { kind: "file" }, sessionKey: "agent:main:covered-a" },
+      { assertCurrent, assertReadable: assertCurrent },
+    );
+    expect((await actor.read(authority)).entry?.sessionId).toBe("covered-a");
+    const entered = createDeferred();
+    const release = createDeferred();
+    let held: Promise<void> | undefined;
+    let append: ReturnType<typeof actor.appendTranscriptEvent> | undefined;
+    const resume = createSessionTranscriptFactsBackfill({
+      database: f.scope,
+      assertCurrent: () => signal.throwIfAborted(),
+      signal,
+      log: { info() {}, warn() {} },
+    });
+    try {
+      diagnostic.subscribe(observe);
+      expect((await resume.runBatch()).complete).toBe(false);
+      expect(reservations).toEqual([]);
+      held = runOpenClawAgentWorkerWrite(f.scope, async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      await withinTest(entered.promise, signal);
+      append = actor.appendTranscriptEvent(
+        {
+          commandId: "foreground-append",
+          phaseId: "synthetic",
+          sessionId: "covered-a",
+          lifecycleRevision: null,
+          eventJson: JSON.stringify({
+            type: "model_change",
+            id: "foreground",
+            parentId: "entry-39",
+            timestamp: "2026-11-05T00:00:00.000Z",
+            provider: "synthetic",
+            modelId: "synthetic",
+          }),
+        },
+        authority,
+      );
+      let result;
+      do {
+        signal.throwIfAborted();
+        result = await withinTest(resume.runBatch(), signal);
+      } while (!result.complete);
+      expect(reservations).toEqual([]);
+      release.resolve();
+      await held;
+      const appended = await append;
+      expect(appended, JSON.stringify(appended)).toMatchObject({ kind: "committed" });
+    } finally {
+      diagnostic.unsubscribe(observe);
+      release.resolve();
+      await Promise.allSettled([held, append]);
+      await resume.close();
+      await actor.release();
+    }
   }));
 
 it("prioritizes recent active paths by size before larger inactive paths", () =>

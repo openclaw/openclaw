@@ -2,6 +2,7 @@ import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { readCronOperatorSnapshot } from "../../cron/operator-source-snapshot.js";
 import { createCronExecutionId } from "../../cron/run-id.js";
 import { resolveCreatorSandbox } from "../../gateway/operator-role-policy.js";
 import {
@@ -21,6 +22,7 @@ import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { CRON_EXECUTION_SOURCE_TOOL } from "../../sessions/input-provenance.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -67,6 +69,26 @@ export function prepareSessionEventInput(text: string, options: SessionEventOpti
     );
   }
   return { cfg, agentId, sessionKey, env, storePath, operatorAuthority };
+}
+
+/** Durably stage the admitted occurrence before the reply owner starts it. */
+export async function stageSessionEventInput(
+  recorder: UserTurnTranscriptRecorder,
+  runId: string,
+  assertCurrent: SessionSourceAssertion,
+  readmissionAttempt: number,
+): Promise<void> {
+  if (
+    !recorder.stageApproved ||
+    !(await recorder.stageApproved({
+      runId,
+      assertCurrent,
+      // Only this live policy retry can reclaim its cancelled attempt.
+      retryCancelled: readmissionAttempt > 0,
+    }))
+  ) {
+    throw new Error("Session event input was not durably admitted");
+  }
 }
 
 /** Validate and claim producer input; execution consumes this occurrence custody. */
@@ -166,6 +188,12 @@ export function buildSessionEventContext(params: {
 }): MsgContext {
   const { agentId, sessionKey, text, options, occurrenceId, deliveryContext, target } = params;
   const automation = options.scheduledAutomation;
+  // An internal session stores no route; its own WebChat route keeps replies in this conversation.
+  const sessionRoute =
+    channelRouteTargetsMatchExact({ left: deliveryContext, right: target.deliveryContext }) ||
+    (!target.deliveryContext &&
+      deliveryContext?.channel === INTERNAL_MESSAGE_CHANNEL &&
+      deliveryContext.to === sessionKey);
   const ctx: MsgContext = {
     AgentId: agentId,
     SessionKey: sessionKey,
@@ -189,12 +217,7 @@ export function buildSessionEventContext(params: {
           ? { runId: options.sourceRunId }
           : {}),
     },
-    ChatType: channelRouteTargetsMatchExact({
-      left: deliveryContext,
-      right: target.deliveryContext,
-    })
-      ? target.chatType
-      : undefined,
+    ChatType: sessionRoute ? target.chatType : undefined,
     Surface: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     Provider: deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
     OriginatingChannel: deliveryContext?.channel,
@@ -211,11 +234,14 @@ export function buildSessionEventContext(params: {
     ctx.SessionCreation = {
       via: "cron",
       actor: automation.job.createdActor ?? { type: "system" },
-      sandbox: resolveCreatorSandbox(params.cfg, { actor: automation.job.createdActor }),
+      sandbox: resolveCreatorSandbox(params.cfg, {
+        actor: automation.job.createdActor,
+        openclawIdPrincipal: readCronOperatorSnapshot(automation.job)?.openclawIdPrincipal,
+      }),
       skillLibrarySelections: automation.job.skillLibrarySelections,
     };
   }
-  const operatorAuthority = automation?.controlUiAdmin
+  const operatorAuthority = automation?.automationAdmin
     ? automation.operatorAuthority
     : options.source === "plugin" ||
         options.source === "tool_handoff" ||
@@ -227,7 +253,7 @@ export function buildSessionEventContext(params: {
   const requesterOwnerCheck = readSessionEventTargetRequesterOwner(target)?.assertCurrent;
   if (
     operatorAuthority &&
-    (automation?.controlUiAdmin ||
+    (automation?.automationAdmin ||
       (options.source === "restart"
         ? operatorAuthority.scopes.includes("operator.admin")
         : readSessionEventTargetOwnerContinuation(target)))

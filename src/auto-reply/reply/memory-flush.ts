@@ -3,6 +3,7 @@ import { resolveOpenAIResponsesServerCompactionPlan } from "@openclaw/ai/interna
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
+import { exceedsContextWindow } from "../../agents/context-pressure.js";
 import { resolveModelExtraParamSources } from "../../agents/model-extra-params.js";
 import { normalizeStaticProviderModelId } from "../../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
@@ -94,6 +95,22 @@ export function resolveResponsesServerCompactionThreshold(params: {
     },
     extraParams,
   ).threshold;
+}
+
+/**
+ * Threshold maintenance is not admission: a failed pre-turn compaction fails the
+ * turn only when the prompt cannot fit the window. Otherwise the turn proceeds.
+ */
+export function settleFailedPreflightCompaction<T>(
+  entry: T,
+  reason: string,
+  tokenCount: number | undefined,
+  contextWindowTokens: number,
+): T {
+  if (exceedsContextWindow(tokenCount, contextWindowTokens)) {
+    throw new Error(`Preflight compaction required but failed: ${reason}`);
+  }
+  return entry;
 }
 
 export function shouldRunPreflightCompaction(params: {
