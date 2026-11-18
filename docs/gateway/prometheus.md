@@ -1350,7 +1350,22 @@ attributes.
 
 ## Plugin metric families
 
-Plugins can add their own counters, gauges, and histograms to this scrape route instead of serving a second metrics endpoint. `api.metrics` is defined only while a diagnostics exporter plugin (`diagnostics-prometheus` or `diagnostics-otel`) is enabled, so plugins that use it stay optional-safe. Today only `diagnostics-prometheus` serves the families; with only `diagnostics-otel` enabled, samples are accepted and dropped:
+Enabling Prometheus alone exports core metrics, not every plugin's metrics. To add a plugin's counters, gauges, and histograms to the same scrape, set `plugins.entries.<id>.allowMetrics` to `true` for **that plugin**. If omitted or `false`, its `api.metrics` is undefined. Other plugins are unaffected.
+
+```json5
+{
+  plugins: {
+    entries: {
+      "diagnostics-prometheus": { enabled: true },
+      "my-plugin": { enabled: true, allowMetrics: true },
+    },
+  },
+}
+```
+
+This controls plugin-published metrics, not core measurements or a plugin's own HTTP routes. Anyone who can read the shared scrape can read these metrics; don't put secrets or personal identifiers in labels. The opt-in does not enable the plugin or an exporter. With only `diagnostics-otel` enabled, opted-in samples are not exported today.
+
+Plugin code can use the optional API:
 
 ```ts
 const metrics = api.metrics?.register({

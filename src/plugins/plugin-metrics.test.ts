@@ -14,9 +14,13 @@ import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 
-const exporterEnabled: OpenClawConfig = {
-  plugins: { entries: { "diagnostics-prometheus": { enabled: true } } },
-};
+function withPluginMetrics(id: string): OpenClawConfig {
+  return {
+    plugins: {
+      entries: { "diagnostics-prometheus": { enabled: true }, [id]: { allowMetrics: true } },
+    },
+  };
+}
 
 function createApi(...args: Parameters<typeof createApiWithRecord>) {
   return createApiWithRecord(...args).api;
@@ -72,7 +76,7 @@ function registerInLoader(loaded: ReturnType<typeof createApiWithRecord>, famili
 
 /** A plugin instance loaded into a registry that the Gateway has published. */
 function loadLive(id: string, families: Families, options: { generationOverlap?: boolean } = {}) {
-  const loaded = createApiWithRecord(id, exporterEnabled, options);
+  const loaded = createApiWithRecord(id, withPluginMetrics(id), options);
   const metrics = registerInLoader(loaded, families);
   markPluginRegistryActive(loaded.registry);
   return { ...loaded, metrics, instance: getPluginInstance(loaded.record)! };
@@ -110,25 +114,41 @@ afterEach(() => {
 });
 
 describe("api.metrics", () => {
-  it("is defined in the live registry only while a diagnostics exporter is enabled", () => {
-    expect(createApi("metrics-off", {}).metrics).toBeUndefined();
+  it("requires both an enabled exporter and permission for the specific plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "diagnostics-prometheus": { enabled: true },
+          allowed: { enabled: true, allowMetrics: true },
+          ordinary: { enabled: true },
+          denied: { enabled: true, allowMetrics: false },
+        },
+      },
+    };
+    expect(createApi("Allowed", config).metrics?.register).toBeTypeOf("function");
+    for (const id of ["ordinary", "denied", "unlisted"]) {
+      expect(createApi(id, config).metrics).toBeUndefined();
+    }
     expect(
-      createApi("metrics-off-explicit", {
-        plugins: { entries: { "diagnostics-prometheus": { enabled: false } } },
-      }).metrics,
+      createApi("allowed", { plugins: { entries: { allowed: { allowMetrics: true } } } }).metrics,
     ).toBeUndefined();
     expect(
-      createApi("metrics-scoped", exporterEnabled, { activateGlobalSideEffects: false }).metrics,
+      createApi("allowed", config, { activateGlobalSideEffects: false }).metrics,
     ).toBeUndefined();
-    expect(
-      createApi("metrics-discovery", exporterEnabled, { registrationMode: "discovery" }).metrics,
-    ).toBeUndefined();
-    expect(createApi("metrics-on", exporterEnabled).metrics?.register).toBeTypeOf("function");
-    expect(
-      createApi("metrics-otel", {
-        plugins: { entries: { "diagnostics-otel": { enabled: true } } },
-      }).metrics?.register,
-    ).toBeTypeOf("function");
+    expect(createApi("allowed", config, { registrationMode: "discovery" }).metrics).toBeUndefined();
+  });
+
+  it("preserves exporter enablement rules after the operator opts in the producer", () => {
+    for (const [exporter, enabled] of [
+      ["diagnostics-prometheus", false],
+      ["diagnostics-otel", true],
+    ] as const) {
+      const config: OpenClawConfig = {
+        plugins: { entries: { [exporter]: { enabled }, producer: { allowMetrics: true } } },
+      };
+      expect(Boolean(createApi("producer", config).metrics)).toBe(enabled);
+      expect(createApi("other", config).metrics).toBeUndefined();
+    }
   });
 
   it("delivers host-prefixed samples to the trusted exporter listener", () => {
@@ -295,7 +315,7 @@ describe("api.metrics", () => {
     live.metrics.gauge("depth").set({}, 1);
 
     // The replacement registers during preparation, before it is committed.
-    const candidate = createApiWithRecord("reload-plugin", exporterEnabled);
+    const candidate = createApiWithRecord("reload-plugin", withPluginMetrics("reload-plugin"));
     const next = registerInLoader(candidate, [
       { name: "depth", type: "gauge", help: "Depth" },
       { name: "fresh", type: "gauge", help: "Fresh" },
@@ -333,7 +353,7 @@ describe("api.metrics", () => {
       { name: "old", type: "gauge", help: "Old" },
     ]);
     live.metrics.gauge("level").set({}, 1);
-    const candidate = createApiWithRecord("swap-plugin", exporterEnabled);
+    const candidate = createApiWithRecord("swap-plugin", withPluginMetrics("swap-plugin"));
     const next = registerInLoader(candidate, [
       { name: "depth", type: "gauge", help: "Depth" },
       // Relabelled across the reload.
@@ -374,7 +394,11 @@ describe("api.metrics", () => {
 
     // Prepare inside the real reload preparation scope: register() and a service start both record.
     const prepare = () => {
-      const candidate = createApiWithRecord("overlap-plugin", exporterEnabled, overlap);
+      const candidate = createApiWithRecord(
+        "overlap-plugin",
+        withPluginMetrics("overlap-plugin"),
+        overlap,
+      );
       return withPluginRegistryPreparationScope(candidate.registry, () => {
         let registered: ReturnType<NonNullable<typeof candidate.api.metrics>["register"]>;
         runPluginRegisterSyncInRegistry(
@@ -443,7 +467,7 @@ describe("api.metrics", () => {
     expect(() => first.api.metrics!.register({ families: stale })).toThrow("no longer current");
 
     // An older instance, still draining, registers after a newer one went live.
-    const older = createApiWithRecord("zombie-plugin", exporterEnabled);
+    const older = createApiWithRecord("zombie-plugin", withPluginMetrics("zombie-plugin"));
     const newer = loadLive("zombie-plugin", families);
     markPluginRegistryRetired(older.registry);
     expect(() => older.api.metrics!.register({ families: stale })).toThrow("no longer current");

@@ -665,6 +665,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.slots.contextEngine": "Context Engine ID",
   "plugins.entries": "Plugin Entries",
   "plugins.entries.*.enabled": "Plugin Enabled",
+  "plugins.entries.*.allowMetrics": "Allow Plugin Metrics",
   "plugins.entries.*.hooks": "Plugin Hook Policy",
   "plugins.entries.*.hooks.allowConversationAccess": "Allow Conversation Access Hooks",
   "plugins.entries.*.hooks.allowPromptModification": "Modify prompts",

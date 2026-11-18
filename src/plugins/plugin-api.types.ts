@@ -221,7 +221,7 @@ export type OpenClawPluginApi = {
   logger: PluginLogger;
   /**
    * Plugin-owned metric families for diagnostics exporters (diagnostics-prometheus serves them).
-   * Undefined unless a diagnostics exporter plugin is enabled; samples are dropped while no
+   * Requires plugins.entries.<id>.allowMetrics and an enabled diagnostics exporter. Samples are dropped while no
    * exporter listens.
    */
   metrics?: import("./plugin-metrics.js").PluginMetricsApi;

@@ -79,22 +79,22 @@ and external URLs. Registering another provider replaces the current provider.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                                               |
-| ------------------------ | ------------------------- | ----------------------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                                                 |
-| `api.name`               | `string`                  | Display name                                                                              |
-| `api.version`            | `string?`                 | Plugin version (optional)                                                                 |
-| `api.description`        | `string?`                 | Plugin description (optional)                                                             |
-| `api.source`             | `string`                  | Plugin source path                                                                        |
-| `api.runtimeSource`      | `string?`                 | Selected runtime entrypoint path, when the loader has selected a runtime artifact         |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                          |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                   |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
-| `api.metrics`            | `{ register }?`           | [Plugin metrics](/gateway/prometheus#plugin-metric-families), if an exporter is enabled   |
-| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
+| Field                    | Type                      | Description                                                                                                                          |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.id`                 | `string`                  | Plugin id                                                                                                                            |
+| `api.name`               | `string`                  | Display name                                                                                                                         |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                                                                            |
+| `api.description`        | `string?`                 | Plugin description (optional)                                                                                                        |
+| `api.source`             | `string`                  | Plugin source path                                                                                                                   |
+| `api.runtimeSource`      | `string?`                 | Selected runtime entrypoint path, when the loader has selected a runtime artifact                                                    |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                                                                     |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                                                           |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                                                            |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                                                              |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                                                                     |
+| `api.metrics`            | `{ register }?`           | [Plugin metrics](/gateway/prometheus#plugin-metric-families), if the operator allows metrics for this plugin and enables an exporter |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available                                            |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                                                                 |
 
 Use `api.runtimeSource` to locate private modules beside the selected runtime
 entrypoint. It records the loader's source, standalone package, or bundled

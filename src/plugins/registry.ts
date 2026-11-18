@@ -17,7 +17,11 @@ import { resolveUserPath } from "../utils.js";
 import { buildPluginApi, createUnavailableRuntime } from "./api-builder.js";
 import { instrumentPluginInstanceApi } from "./api-facades.js";
 import { resolveCapabilityProviderRegistration } from "./capability-catalog.js";
-import { resolveEffectiveEnableState } from "./config-state.js";
+import {
+  normalizePluginId,
+  normalizePluginsConfig,
+  resolveEffectiveEnableState,
+} from "./config-state.js";
 import { DIAGNOSTICS_EXPORTER_PLUGIN_IDS } from "./diagnostics-exporters.js";
 import { resolvePromptInjectionAllowed } from "./hook-policy-decisions.js";
 import {
@@ -262,6 +266,7 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
     const instance =
       getPluginInstance(record) ??
       new PluginInstance(record.id, { record, registry: state.registry });
+    const pluginPolicy = normalizePluginsConfig(params.config.plugins);
     const api = buildPluginApi({
       id: record.id,
       name: record.name,
@@ -291,12 +296,18 @@ export function createPluginRegistry(registryOptions: PluginRegistryParams) {
           }
         : {}),
       // Only the live registry owns the process-wide plugin metric families, and only
-      // while a diagnostics exporter that can subscribe to them is enabled.
+      // for a plugin explicitly opted in by the operator, with an enabled exporter.
       ...(registrationMode === "full" &&
       registryParams.activateGlobalSideEffects !== false &&
+      pluginPolicy.entries[normalizePluginId(record.id)]?.allowMetrics === true &&
       DIAGNOSTICS_EXPORTER_PLUGIN_IDS.some(
         (id) =>
-          resolveEffectiveEnableState({ id, origin: "bundled", rootConfig: params.config }).enabled,
+          resolveEffectiveEnableState({
+            id,
+            origin: "bundled",
+            config: pluginPolicy,
+            rootConfig: params.config,
+          }).enabled,
       )
         ? {
             metrics: createPluginMetricsApi(record.id, registryParams.logger, {

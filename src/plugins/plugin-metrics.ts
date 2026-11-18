@@ -22,7 +22,7 @@ export type PluginMetrics = {
   histogram: (name: string) => { observe: (labels: PluginMetricLabels, value: number) => void };
 };
 
-/** Present only when a diagnostics exporter plugin is enabled; values reach listening exporters. */
+/** Requires operator opt-in for this plugin and an enabled diagnostics exporter. */
 export type PluginMetricsApi = {
   /** Families are exported as `openclaw_plugin_<plugin id>_<name>`. Throws on invalid input. */
   register: (params: { families: readonly PluginMetricFamilyDeclaration[] }) => PluginMetrics;
