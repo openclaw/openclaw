@@ -1007,38 +1007,57 @@ it("does not discover a fallback Home while the route shows a session recovery n
   expect(readShellView(owner).sidebarProperties.sessionKey).toBe("agent:main:main");
 });
 
-it("restores the Sessions sidebar after a rapid router round trip through People", async () => {
-  sidebarImport.resolve();
-  await import("../components/app-sidebar.tsx");
-  const { owner, runtime, query, settle } = await mountShell();
-  owner.connect();
-  await runtime.router.navigate("sessions", runtime.context);
-  await settle();
-  // SAFETY: mountShell has loaded the registered sidebar and settled its bridge.
-  const sidebar = owner.navigationSidebar as AppSidebarElement;
-  expect(sidebar.activeRouteId).toBe("sessions");
-  expect(sidebar.navigationView).toBe("sessions");
+it.each(["loaded", "unresolved"] as const)(
+  "restores the Sessions sidebar after a rapid router round trip through %s Activity",
+  async (activityState) => {
+    sidebarImport.resolve();
+    await import("../components/app-sidebar.tsx");
+    const { owner, runtime, query, settle } = await mountShell();
+    owner.connect();
+    await runtime.router.navigate("sessions", runtime.context);
+    await settle();
+    // SAFETY: mountShell has loaded the registered sidebar and settled its bridge.
+    const sidebar = owner.navigationSidebar as AppSidebarElement;
+    expect(sidebar.activeRouteId).toBe("sessions");
+    expect(sidebar.navigationView).toBe("sessions");
 
-  const returned = Promise.withResolvers<void>();
-  const routes: Array<{ route: string | undefined; bridge: string | undefined }> = [];
-  let returning = false;
-  const stop = runtime.router.subscribe((state) => {
-    const route = selectShellRouteState(state).routeId;
-    routes.push({ route, bridge: sidebar.activeRouteId });
-    if (route === "activity" && !returning) {
-      returning = true;
-      void runtime.router
-        .navigate("sessions", runtime.context)
-        .then(returned.resolve, returned.reject);
+    const activityModule = Promise.withResolvers<{ renderSolid: () => null }>();
+    if (activityState === "unresolved") {
+      vi.spyOn(runtime.router.getRoute("activity")!, "component").mockReturnValue(
+        activityModule.promise,
+      );
     }
-  });
-  onTestFinished(() => {
-    stop();
-  });
-  query<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
-  await returned.promise;
-  await settle();
-  expect(routes.some(({ route }) => route === "activity")).toBe(true);
-  expect(sidebar.activeRouteId).toBe("sessions");
-  expect(sidebar.navigationView, JSON.stringify(routes)).toBe("sessions");
-});
+    onTestFinished(() => activityModule.resolve({ renderSolid: () => null }));
+    const returned = Promise.withResolvers<void>();
+    const routes: Array<{
+      route: string | undefined;
+      bridge: string | undefined;
+      pending: string | undefined;
+    }> = [];
+    let returning = false;
+    const stop = runtime.router.subscribe((state) => {
+      const route = selectShellRouteState(state).routeId;
+      const pending = state.pendingMatches[0]?.routeId;
+      routes.push({ route, bridge: sidebar.activeRouteId, pending });
+      if ((activityState === "unresolved" ? pending : route) === "activity" && !returning) {
+        returning = true;
+        void runtime.router
+          .navigate("sessions", runtime.context)
+          .then(returned.resolve, returned.reject);
+      }
+    });
+    onTestFinished(() => {
+      stop();
+    });
+    query<HTMLButtonElement>('[data-navigation-view="online"]')!.click();
+    await returned.promise;
+    await settle();
+    expect(
+      routes.some(
+        ({ route, pending }) => (activityState === "unresolved" ? pending : route) === "activity",
+      ),
+    ).toBe(true);
+    expect(sidebar.activeRouteId).toBe("sessions");
+    expect(sidebar.navigationView, JSON.stringify(routes)).toBe("sessions");
+  },
+);

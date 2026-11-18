@@ -13,7 +13,6 @@ import {
 } from "solid-js";
 import { sidebarViewForPage } from "../app-navigation.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../app-route-paths.ts";
-import { selectShellRouteState } from "../app/app-host-route-state.ts";
 import { projectApplicationConfig } from "../lib/reactive/application.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -91,16 +90,17 @@ function AppSidebarContent(
   onSettled(() => {
     let previousPage = "";
     const synchronizePage = () => {
-      const state = selectShellRouteState(context.router.getState());
-      const route = state.routeId;
+      const state = context.router.getState();
+      const destination = state.pendingMatches[0] ?? state.matches[0];
+      const route = destination?.routeId;
       if (!route) {
         return;
       }
       const pluginRef =
         route === "plugin"
           ? pluginTabRefFromSearch(
-              state.location?.search ?? "",
-              state.location?.pathname,
+              destination.location.search,
+              destination.location.pathname,
               context.basePath,
             )
           : undefined;
