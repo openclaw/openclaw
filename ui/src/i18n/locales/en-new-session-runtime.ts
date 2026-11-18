@@ -16,7 +16,6 @@ const enNewSessionRuntime = {
     placementCancelled:
       "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
     cloud: "Cloud",
-    runsOn: "Runs on {place}",
     starting: "Starting",
     followUpCommandsUnavailable: "Commands are available after the session is created.",
     followUpReloadBlocked:
