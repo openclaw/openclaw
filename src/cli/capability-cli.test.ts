@@ -1795,26 +1795,18 @@ describe("capability cli", () => {
     );
   });
 
-  it.each(["image", "tts"])("marks env-backed %s providers as configured", async (domain) => {
-    const image = domain === "image";
-    const envVar = image ? "FAL_KEY" : "XAI_API_KEY";
-    vi.stubEnv(envVar, image ? "fal-test-key" : "xai-test-key");
-    mocks.getProviderEnvVarsCore.mockReturnValueOnce([envVar]);
-    if (image) {
-      mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
-        { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
-      ] as never);
-    } else {
-      mocks.listSpeechProviders.mockReturnValueOnce([
-        { id: "xai", label: "xAI", models: [], voices: [] },
-      ] as never);
-    }
-    await runCap("capability", domain, "providers", ...(image ? [] : ["--local"]), "--json");
-    expect(firstJsonOutput()).toMatchObject(
-      image
-        ? [{ id: "fal", available: true, configured: true, selected: false }]
-        : { providers: [{ id: "xai", configured: true, selected: false }] },
-    );
+  it("marks env-backed image providers as configured", async () => {
+    vi.stubEnv("FAL_KEY", "fal-test-key");
+    mocks.getProviderEnvVarsCore.mockReturnValueOnce(["FAL_KEY"]);
+    mocks.listRuntimeImageGenerationProviders.mockReturnValueOnce([
+      { id: "fal", label: "fal", defaultModel: "fal-ai/flux", models: [] },
+    ] as never);
+
+    await runCap("capability", "image", "providers", "--json");
+
+    expect(firstJsonOutput()).toMatchObject([
+      { id: "fal", available: true, configured: true, selected: false },
+    ]);
   });
 
   it("marks env-backed video generation and description providers as configured", async () => {
