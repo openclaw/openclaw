@@ -284,7 +284,7 @@ export function resolveOperatorRolePolicy(
       authority.assertCurrent();
       return undefined;
     }
-    if (roleFacts?.policy) {
+    if (roleFacts && Object.hasOwn(roleFacts, "policy")) {
       return roleFacts.policy;
     }
     if (

@@ -715,7 +715,7 @@ describe("scheduled authenticated operator source", () => {
       }
     }));
   it.each(["before capture", "after admission", "after restoration"] as const)(
-    "revokes the original device authority on Gateway retirement %s",
+    "checks device retirement at new capture and restored owners while retaining admitted work (%s)",
     (timing) =>
       withRecovery(async (fixture) => {
         const caller = acceptedCaller(fixture);
@@ -739,7 +739,7 @@ describe("scheduled authenticated operator source", () => {
           );
           expect(fixture.client.invalidated).toBe(true);
           if (source) {
-            expectRevoked(source.authority);
+            (timing === "after admission" ? expectCurrent : expectRevoked)(source.authority);
           } else {
             await expect(caller.capture()).rejects.toThrow(
               "Gateway caller authority is no longer active",
@@ -776,7 +776,7 @@ describe("scheduled authenticated operator source", () => {
         }
       }),
   );
-  it("keeps accepted device authority through unrelated pairing traffic until Gateway retirement", () =>
+  it("keeps accepted device authority through pairing changes and device retirement", () =>
     withRecovery(async (fixture, stateDir) => {
       const device = pairedOperator();
       const caller = acceptedCaller(fixture);
@@ -798,7 +798,8 @@ describe("scheduled authenticated operator source", () => {
           "device-token-revoked",
         );
         expect(fixture.client.invalidated).toBe(true);
-        expectRevoked(accepted.authority);
+        expectCurrent(accepted.authority);
+        await expect(caller.capture()).rejects.toThrow();
       } finally {
         accepted.release();
         caller.release();
