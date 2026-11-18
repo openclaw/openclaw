@@ -21,7 +21,7 @@ it("counts calls and refusal literals, not comments, declarations or references"
       'owner["captureHttpRequestAuthority"]();',
       'const refusal = "AUTHORITY CHANGED and no longer current";',
       "const template = `caller ${name} authority is no longer active`;",
-      'const unrelated = "safe";',
+      'const unrelated = "safe"; const fence = "pending question is no longer current";',
     ].join("\n"),
   );
   expect(countLifetimeChecks(source)).toBe(5);

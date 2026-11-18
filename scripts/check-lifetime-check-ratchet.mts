@@ -14,8 +14,9 @@ import {
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-// Reviewed lifetime families: harness-redesign/s1/threat-model.md and s1/classification.md
-// in the foundation handoff. Admission, cancellation, secrets and real data fences stay.
+// Constructors and refusals of mid-request authority re-checks (AGENTS.md "Choose good
+// compromises"; docs/gateway/security/trust-model.md). Admission, cancellation, secrets and
+// data fences are not listed: they stay.
 export const LIFETIME_CHECK_CALLS = [
   "captureRequestAuthorityAssertion",
   "bindWebSocketRequestMutationAuthority",
@@ -42,10 +43,12 @@ export const LIFETIME_CHECK_CALLS = [
   "captureCronJobStandingGrantAuthority",
 ] as const;
 const calls: ReadonlySet<string> = new Set(LIFETIME_CHECK_CALLS);
+// Authority wording only: "<owner|lock|generation> is no longer current" is a data or ownership fence.
 const refusals = [
   "authority changed",
   "authority is no longer active",
-  "no longer current",
+  "authority is no longer current",
+  "request connection is no longer current",
   "changing before execution",
 ];
 const roots = ["src", "extensions", "packages"];
