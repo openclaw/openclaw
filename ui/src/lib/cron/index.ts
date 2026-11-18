@@ -247,18 +247,11 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         ? null
         : undefined;
     const agentId = form.clearAgent ? null : form.agentId.trim();
-    const sessionKeyRaw = form.sessionKey.trim();
-    const sessionKey = sessionKeyRaw || (editingJob?.sessionKey ? null : undefined);
     const job: Record<string, unknown> = {
       // Without a name, cron.add names a new automation from its prompt and an edit keeps the old one.
       name: form.name.trim() || undefined,
       description: form.description.trim(),
       agentId: agentId === null ? null : agentId || undefined,
-      sessionKey,
-      enabled: form.enabled,
-      ...(form.scheduleKind === "at" || form.scheduleKind === "on-exit"
-        ? { deleteAfterRun: form.deleteAfterRun }
-        : {}),
       sessionTarget: form.sessionTarget,
       wakeMode: form.wakeMode,
       trigger,
@@ -303,7 +296,11 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     } else {
       let response: CronAddResult;
       try {
-        response = await client.request<CronAddResult>("cron.add", job);
+        response = await client.request<CronAddResult>("cron.add", {
+          ...job,
+          // A duplicate keeps its source’s saved routing. The Gateway owns start and cleanup defaults.
+          sessionKey: sourceJob?.sessionKey,
+        });
       } catch (error) {
         if (!isCurrent()) {
           return;
@@ -354,7 +351,7 @@ async function updateCronJobDefinition(
     );
     if (ownsEditor()) {
       if (operation === "toggle") {
-        setCronEditState(state, updatedJob, { ...form, enabled: updatedJob.enabled });
+        setCronEditState(state, updatedJob, form);
       } else {
         startCronEdit(state, updatedJob);
       }
