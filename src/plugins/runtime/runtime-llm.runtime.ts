@@ -20,6 +20,7 @@ import {
   runIsolatedAgentRuntimeCompletion,
 } from "./runtime-llm-isolated.js";
 import { bindLlmOperatorAuthority } from "./runtime-llm-operator-authority.js";
+import type { LlmCompleteParams, LlmCompleteResult } from "./runtime-llm.types.js";
 import { writeRuntimeLog } from "./runtime-logging.js";
 import {
   assertAllowedAuthProfileOverride,
@@ -31,15 +32,11 @@ import {
   resolvePluginPolicyId,
   resolveRequestedRuntimeAgentId,
   resolveTrustedCaller,
+  resolveInvocationAuthority,
   type RuntimeLlmAuthority,
 } from "./runtime-model-policy.js";
 import { finalizePluginModelUsage } from "./runtime-model-usage.js";
-import type {
-  LlmCompleteParams,
-  LlmCompleteResult,
-  PluginRuntimeCore,
-  RuntimeLogger,
-} from "./types-core.js";
+import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
 export type { RuntimeLlmAuthority } from "./runtime-model-policy.js";
 
@@ -70,9 +67,11 @@ async function resolveAgentId(params: {
   cfg: OpenClawConfig;
   authority?: RuntimeLlmAuthority;
   allowAgentIdOverride: boolean;
+  defaultAgentId?: string;
 }): Promise<string> {
   const agentId = resolveRequestedRuntimeAgentId({
     agentId: params.request.agentId,
+    defaultAgentId: params.defaultAgentId,
     authority: params.authority,
     allowAgentIdOverride: params.allowAgentIdOverride,
   });
@@ -118,15 +117,17 @@ function buildMessages(params: {
     );
 }
 
-export function finalizePluginLlmCompletion(params: {
+export async function finalizePluginLlmCompletion(params: {
   cfg: OpenClawConfig;
+  assertCurrent: () => void;
   hostPluginId?: string;
   suppressUsage?: boolean;
   rawUsage: unknown;
   result: Omit<LlmCompleteResult, "usage">;
-}): LlmCompleteResult {
-  const usage = finalizePluginModelUsage({
+}): Promise<LlmCompleteResult> {
+  const usage = await finalizePluginModelUsage({
     cfg: params.cfg,
+    assertCurrent: params.assertCurrent,
     hostPluginId: params.hostPluginId,
     suppressUsage: params.suppressUsage,
     rawUsage: params.rawUsage,
@@ -150,6 +151,7 @@ export function finalizePluginLlmCompletion(params: {
         usage: recordedUsage,
       }),
   });
+  params.assertCurrent();
   return { ...params.result, usage };
 }
 
@@ -158,9 +160,10 @@ export function createRuntimeLlm(
 ): Pick<PluginRuntimeCore["llm"], "complete"> {
   const llm: Pick<PluginRuntimeCore["llm"], "complete"> = {
     complete: bindLlmOperatorAuthority(options.authority?.caller, async (params, source) => {
-      const caller = resolveTrustedCaller(options.authority);
-      if (options.authority?.allowComplete === false) {
-        const reason = options.authority.denyReason ?? "capability denied";
+      const authority = resolveInvocationAuthority(options.authority, source.agentBinding);
+      const caller = resolveTrustedCaller(authority);
+      if (authority?.allowComplete === false) {
+        const reason = authority.denyReason ?? "capability denied";
         logger.warn("plugin llm completion denied", {
           caller,
           purpose: params.purpose,
@@ -188,21 +191,23 @@ export function createRuntimeLlm(
         import("../../agents/simple-completion-profile-failover.js"),
         Promise.resolve(resolveRuntimeConfig(options)),
       ]);
-      const pluginPolicyId = resolvePluginPolicyId(options.authority, caller);
+      const pluginPolicyId = resolvePluginPolicyId(authority, caller);
       const pluginPolicy = resolvePluginLlmPolicy(cfg, pluginPolicyId);
-      const authorityPolicy = resolveAuthorityModelPolicy(options.authority);
-      const preferredProfile = normalizeOptionalString(options.authority?.preferredProfile);
+      const authorityPolicy = resolveAuthorityModelPolicy(authority);
+      const preferredProfile = normalizeOptionalString(authority?.preferredProfile);
       const audit = {
         caller,
         ...(params.purpose ? { purpose: params.purpose } : {}),
-        ...(options.authority?.sessionKey ? { sessionKey: options.authority.sessionKey } : {}),
+        ...(authority?.sessionKey ? { sessionKey: authority.sessionKey } : {}),
       };
       const agentId = await resolveAgentId({
         request: params,
         cfg,
-        authority: options.authority,
+        defaultAgentId:
+          source.agentBinding?.kind === "foreground" ? source.agentBinding.agentId : undefined,
+        authority,
         allowAgentIdOverride: resolveAllowAgentIdOverride({
-          authority: options.authority,
+          authority,
           authorityPolicy,
           pluginPolicy,
         }),
@@ -272,9 +277,9 @@ export function createRuntimeLlm(
           operatorAuthority,
           assertCurrent,
         });
-        assertCurrent();
         return finalizePluginLlmCompletion({
           cfg,
+          assertCurrent,
           hostPluginId: pluginPolicyId,
           rawUsage: result.usage,
           result: {
@@ -334,6 +339,7 @@ export function createRuntimeLlm(
           throw new Error(`Plugin LLM completion failed: ${preparation.error}`);
         }
         await using prepared = preparation;
+        assertCurrent();
         let assertPreparedCurrent = assertCurrent;
 
         const work = new AsyncWorkScope();
@@ -416,6 +422,7 @@ export function createRuntimeLlm(
                 .join("");
               return finalizePluginLlmCompletion({
                 cfg,
+                assertCurrent: assertPreparedCurrent,
                 hostPluginId: pluginPolicyId,
                 // Provider failures resolve as messages; only visible successful output owns usage.
                 suppressUsage:

@@ -61,7 +61,7 @@ export function validateQualificationBaselinePolicy(request, policy) {
   return baselines;
 }
 
-// P reads these immutable Q blobs, not Q code or today's registry. The selected
+// P reads these immutable C blobs, not Q code or today's registry. The selected
 // tuple already lives in the authenticated request; retain only its source facts.
 export function qualificationBaselinePolicy(request, packageBytes, policyBytes) {
   const candidate = JSON.parse(packageBytes.toString("utf8"));

@@ -59,6 +59,10 @@ export type {
   OpenClawPluginServiceContext,
   OpenClawPluginServiceContextV2,
   OpenClawPluginServiceV2,
+  OpenClawPluginServiceV3,
+  OpenClawPluginServiceContextV3,
+  PluginServiceSessionWorkV1,
+  PluginServiceSessionWorkContextV1,
   OpenClawPluginToolContext,
   OpenClawPluginToolFactory,
   PluginAgentEventEmitParams,
@@ -279,6 +283,16 @@ export type {
   PluginHookBeforeChannelIngressEvent,
   PluginHookBeforeChannelIngressResult,
 } from "../plugins/hook-message.types.js";
+export type {
+  PluginHookBeforeModelRequestEvent,
+  PluginHookBeforeModelRequestResult,
+} from "../plugins/hook-model.types.js";
+export type {
+  PluginMetricFamily,
+  PluginMetricFamilyDeclaration,
+  PluginMetricLabels,
+  PluginMetrics,
+} from "../plugins/plugin-metrics.js";
 
 export type {
   RepositoryIntegration,

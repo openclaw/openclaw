@@ -243,15 +243,13 @@ describe("openrouter provider hooks", () => {
     });
   });
 
-  it("includes current Kimi models in the bundled catalog", () => {
-    const modelIds = buildOpenrouterProvider().models?.map((model) => model.id) ?? [];
-    expect(modelIds).toContain("moonshotai/kimi-k2.6");
-    expect(modelIds).toContain("moonshotai/kimi-k2.5");
-  });
-
-  it("uses the canonical prefixed OpenRouter auto model id", () => {
-    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain("openrouter/auto");
-    expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
+  it("bundles the canonical auto router and current Kimi models", () => {
+    const models = buildOpenrouterProvider().models ?? [];
+    const ids = models.map((model) => model.id);
+    expect(ids).toEqual(expect.arrayContaining(["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"]));
+    expect(ids).not.toContain("auto");
+    // Matches the live catalog, so a pinned thinking level survives a cold Gateway start.
+    expect(models.find((model) => model.id === "openrouter/auto")?.reasoning).toBe(true);
   });
 
   let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
@@ -360,20 +358,23 @@ describe("openrouter provider hooks", () => {
     });
   });
 
-  it.each(["typesafe/jev-1.13", "typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"])(
-    "keeps %s out of dynamic chat resolution",
-    async (modelId) => {
-      loadedCapabilities.mockClear();
-      loadCapabilities.mockClear();
-      const jevProvider = await registerSingleProviderPlugin(openrouterPlugin);
-      const context = dynamicContext(modelId);
+  it.each([
+    "typesafe/jev-1.13",
+    "typesafe/jev-1.14",
+    "openrouter/~typesafe/jev-latest",
+    "parallel/decisions-fast",
+    "openrouter/parallel/decisions-fast:free",
+  ])("keeps %s out of dynamic chat resolution", async (modelId) => {
+    loadedCapabilities.mockClear();
+    loadCapabilities.mockClear();
+    const jevProvider = await registerSingleProviderPlugin(openrouterPlugin);
+    const context = dynamicContext(modelId);
 
-      await jevProvider.prepareDynamicModel?.(context);
-      expect(jevProvider.resolveDynamicModel?.(context)).toBeUndefined();
-      expect(loadCapabilities).not.toHaveBeenCalled();
-      expect(loadedCapabilities).not.toHaveBeenCalled();
-    },
-  );
+    await jevProvider.prepareDynamicModel?.(context);
+    expect(jevProvider.resolveDynamicModel?.(context)).toBeUndefined();
+    expect(loadCapabilities).not.toHaveBeenCalled();
+    expect(loadedCapabilities).not.toHaveBeenCalled();
+  });
 
   it("keeps native OpenRouter namespace ids for capability lookup", async () => {
     loadedCapabilities.mockReset();

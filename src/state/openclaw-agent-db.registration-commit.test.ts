@@ -16,6 +16,38 @@ const { createFixture, observeStores } = useRegistrationFixture();
 
 describe("agent registration commit publication", () => {
   it.each([false, true])(
+    "follows an owned registration after a preceding commit only when unchanged (%s)",
+    async (unrelated) => {
+      const fixture = createFixture();
+      const snapshot = await prepareSnapshot(
+        { env: fixture.env },
+        (mutation) => unrelated && mutation.sources.every((source) => source.agentId === "other"),
+      ).read();
+      openOpenClawAgentDatabase({ agentId: "other", env: fixture.env });
+      let follow = true;
+      const registration = fixture.capture({
+        onRegistryChange(change) {
+          if (follow) {
+            snapshot.followRegistration(change);
+          }
+        },
+      });
+      try {
+        if (unrelated) {
+          expect(() => registration.begin()).not.toThrow();
+          expect(snapshot.assertCurrent).not.toThrow();
+        } else {
+          expect(() => registration.begin()).toThrow("invalidated registry");
+          expect(snapshot.assertCurrent).toThrow("registry changed");
+        }
+      } finally {
+        follow = false;
+        registration.finish();
+      }
+    },
+  );
+
+  it.each([false, true])(
     "clears pre-activation pending registration (admission throws=%s)",
     async (throws) => {
       const fixture = createFixture();

@@ -7,6 +7,12 @@ import { SidebarSessionRowProjection } from "./sidebar-projection-cache.ts";
 export function projectSidebarSession(
   row: Partial<GatewaySessionRow>,
   selfUserId?: string,
+  options: {
+    preparedWorkSession?: boolean;
+    routeSessionKey?: string;
+    highlightCurrentSession?: boolean;
+    hasComposerDraft?: boolean;
+  } = {},
 ): SidebarRecentSession {
   const context = {
     basePath: "",
@@ -20,25 +26,25 @@ export function projectSidebarSession(
       },
     },
     sessions: {
-      isPreparedWorkSession: () => false,
+      isPreparedWorkSession: () => options.preparedWorkSession === true,
       isRunVisuallyActive: isSessionRunStateActive,
       pullRequestSummary: () => undefined,
     },
   } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
   const navigation = buildSidebarSessionNavigationState({
     context,
-    routeSessionKey: "agent:main:main",
+    routeSessionKey: options.routeSessionKey ?? "agent:main:main",
     sessionsResult: null,
     sessionsAgentId: null,
     showCron: false,
     showSystem: false,
     statusFilter: "active",
     compareSessions: () => 0,
-    highlightCurrentSession: false,
+    highlightCurrentSession: options.highlightCurrentSession === true,
     rowProjection: new SidebarSessionRowProjection(),
     loadingChildSessionKeys: new Set(),
     outboxAttentionCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
+    hasSessionDraft: () => options.hasComposerDraft === true,
     resolveAttention: () => ({ kind: "none" }),
     resolveAgentStatusNote: () => undefined,
   });

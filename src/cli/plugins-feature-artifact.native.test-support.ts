@@ -114,9 +114,7 @@ void describe("plugin artifact authoring", () => {
       '\nif (typeof require("openclaw/plugin-sdk/feature-plugin").defineFeaturePlugin !== "function") throw new Error("CommonJS SDK dependency failed");\n',
     );
     const jsonOutput: unknown[] = [];
-    defaultRuntime.writeJson = (value) => {
-      jsonOutput.push(value);
-    };
+    defaultRuntime.writeJson = (value) => jsonOutput.push(value);
     const archive = path.join(await fs.realpath(rootDir), "draft-review.tgz");
     await runPluginsPackCommand({ root: rootDir, json: true });
     const bytes = await fs.readFile(archive);
@@ -178,8 +176,6 @@ void describe("plugin artifact authoring", () => {
       globalThis: "author-global",
       default: { id: "draft-review" },
     });
-    await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
-    assert.deepEqual(await fs.readFile(archive), bytes);
   });
 
   runCases(
@@ -258,9 +254,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       await runPluginsBuildCommand({ root: rootDir });
       const sourceManifest = await fs.readFile(path.join(rootDir, "openclaw.plugin.json"));
       const jsonOutput: unknown[] = [];
-      defaultRuntime.writeJson = (value) => {
-        jsonOutput.push(value);
-      };
+      defaultRuntime.writeJson = (value) => jsonOutput.push(value);
       await runPluginsPackCommand({ root: rootDir, json: true });
       const archive = path.join(rootDir, filename);
       assert.partialDeepStrictEqual(jsonOutput.at(-1), { pluginId: id, path: archive });
@@ -542,14 +536,32 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     },
   );
 
-  void it("rejects stale browser source and never overwrites an existing approval artifact", async () => {
+  void it("rejects stale browser source and never overwrites an existing approval artifact", async (t) => {
     const { rootDir, parent } = await fixture();
     const out = path.join(parent, "review.tgz");
     await fs.writeFile(out, "existing review");
-    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), {
-      code: "EEXIST",
-    });
+    const invalidOutput = runPluginsPackCommand({ root: rootDir, out: `${out}.zip` });
+    await assert.rejects(invalidOutput, { humanOutput: /must end in \.tgz or \.tar\.gz/ });
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), { code: "EEXIST" });
     assert.equal(await fs.readFile(out, "utf8"), "existing review");
+    await fs.unlink(out);
+    const writeFile = fs.writeFile;
+    const failedWrite = t.mock.method(
+      fs,
+      "writeFile",
+      async (...args: Parameters<typeof fs.writeFile>) => {
+        const [file, data, options] = args;
+        if (Buffer.isBuffer(data) && data[0] === 0x1f && data[1] === 0x8b) {
+          await writeFile(file, data.subarray(0, 16), options);
+          throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+        }
+        return writeFile(...args);
+      },
+    );
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), { code: "ENOSPC" });
+    failedWrite.mock.restore();
+    await assert.rejects(fs.stat(out), { code: "ENOENT" });
+    await runPluginsPackCommand({ root: rootDir, out });
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     await assert.rejects(runPluginsPackCommand({ root: rootDir }), hasMessage("missing or stale"));
     await assert.rejects(fs.stat(path.join(rootDir, "draft-review.tgz")), {

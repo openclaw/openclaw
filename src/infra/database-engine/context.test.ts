@@ -17,6 +17,19 @@ const selection = (family?: keyof Selection["effectiveEngines"], input = postgre
 });
 afterEach(resetDatabaseEngineSelectionForTest);
 
+it("preserves read-only selection through async context and rejects a process mode change", async () => {
+  const reader = { ...selection("state"), postgres: { ...postgres, readOnly: true as const } };
+  install(reader);
+  await Promise.resolve();
+  expect(getInput("state")?.readOnly).toBe(true);
+  expect(() => install(selection("state"))).toThrow(/selection conflicts/);
+  await withSelection(selection("state"), async () => {
+    await Promise.resolve();
+    expect(getInput("state")?.readOnly).toBeUndefined();
+  });
+  expect(getInput("state")?.readOnly).toBe(true);
+});
+
 it.each([undefined, "state"] as const)(
   "publishes an immutable, idempotent selection: %s",
   async (family) => {

@@ -33,7 +33,6 @@ const DEFAULT_TIMEOUT_MS = 20_000;
 const MIN_TIMEOUT_MS = 5_000;
 const MAX_TIMEOUT_MS = 60_000;
 const PROBE_CONCURRENCY = 2;
-const PROBE_MAX_TOKENS = 8;
 
 const FAILURE_PRIORITY: readonly AuthProbeStatus[] = [
   "auth",
@@ -65,6 +64,7 @@ const PROBE_REASON_MESSAGES: Partial<Record<AuthProbeReasonCode, string>> = {
   missing_credential:
     "This credential is missing. Add it or remove the stale configuration, then retry.",
   expired: "This credential has expired. Sign in again or replace it, then retry.",
+  refresh_failed: "This sign-in could not be refreshed. Sign in again from Models, then retry.",
   invalid_expires:
     "This credential has invalid expiry metadata. Sign in again or replace it, then retry.",
   unresolved_ref:
@@ -198,7 +198,6 @@ export const modelsProbeHandlers: GatewayRequestHandlers = {
           ...(!profileId ? { includeDirectKeys: true } : {}),
           timeoutMs,
           concurrency: PROBE_CONCURRENCY,
-          maxTokens: PROBE_MAX_TOKENS,
         },
       });
       const result = mapProbeResult(provider, summary.results);

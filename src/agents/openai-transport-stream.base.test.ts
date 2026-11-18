@@ -140,7 +140,6 @@ describe("openai transport stream", () => {
       baseUrl: "https://proxy.example.com/v1",
     });
     const replayMetadata = testing.buildOpenAIResponsesReasoningReplayMetadata(model, {
-      authProfileId: "openai:oauth",
       sessionId: "session-123",
     });
     const reasoning = {

@@ -15,7 +15,7 @@ import {
 } from "../local-model-lean.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-protocol.js";
 import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
@@ -206,6 +206,7 @@ export function createAgentHarnessToolSurfaceRuntimeCore(
       projectedTools: projectedCompactedTools,
       diagnostics: schemaProjection.diagnostics,
       promptToolPolicy: createAgentHarnessPromptToolPolicy({
+        diagnosticIdentity: params,
         tools: effectiveTools,
         catalogRef: toolSearchCatalogRef,
         codeModeControlsEnabled,

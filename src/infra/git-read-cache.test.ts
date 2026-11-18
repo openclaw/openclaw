@@ -159,8 +159,8 @@ describe("typed Git read ownership", () => {
     await drainGlobalSingletonLifecycleState();
   });
 
-  it("rechecks a non-Git folder on a later request when its parent becomes a checkout", async () => {
-    vi.useFakeTimers();
+  it.each([0, -3_600_000])("retries discovery after wall step %i", async (step) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
     onTestFinished(() => drainGlobalSingletonLifecycleState());
     const operation = {
       type: "repository.branches" as const,
@@ -172,13 +172,13 @@ describe("typed Git read ownership", () => {
     await runGitReadOperation(operation, { snapshot: true, onRefresh: initial.resolve });
     await initial.promise;
     expect(await runGitReadOperation(operation, { snapshot: true })).toEqual(notGit);
-
     // Git init in an ancestor does not notify the nested folder's metadata watch.
     const ready = {
       branches: [{ name: "main", kind: "local" as const }],
       repositoryStatus: "git" as const,
     };
     const held = holdRead("repository.branches", ready);
+    vi.setSystemTime(Date.now() + step);
     await vi.advanceTimersByTimeAsync(5_001);
     expect(workerCalls("repository.branches")).toHaveLength(1);
     const refreshed = createDeferredCore();

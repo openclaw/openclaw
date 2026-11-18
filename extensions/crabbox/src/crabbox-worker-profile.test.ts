@@ -123,3 +123,7 @@ it.each([
 ])("rejects invalid Sandbox disk selection %j", (settings) => {
   expect(() => parseCrabboxProfile({ ...PROFILE, ...settings })).toThrow("disk ID requires");
 });
+
+it.each([false, true])("accepts the core-owned setup policy %s", (runSetupScript) => {
+  expect(parseCrabboxProfile({ ...PROFILE, runSetupScript })).toEqual(parseCrabboxProfile(PROFILE));
+});

@@ -89,7 +89,7 @@ it.each(["unlink", "reassign"] as const)(
                     await releaseWrite.promise;
                   }
                 },
-                readFile,
+                readFile: (file, signal) => readFile(file, { signal }),
                 statFile: (file) => readPersistedFileStat(file, isMissingPathError),
                 writeFile: async (file, content) => {
                   writes += 1;

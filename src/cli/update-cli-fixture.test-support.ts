@@ -12,6 +12,7 @@ import { createStatfsFixture } from "../infra/disk-space.test-support.js";
 import { isBetaTag } from "../infra/update-channels.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import { writeFixtureJsonSync } from "./cli-fixtures.test-support.js";
 import * as assert from "./update-cli-assertions.test-support.js";
@@ -25,7 +26,10 @@ import * as packages from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
-export function createUpdateCliFixture() {
+export function createUpdateCliFixture(fixtureOptions: { databaseEngines?: string[] } = {}) {
+  const targetDeclaration = fixtureOptions.databaseEngines
+    ? { databaseEngines: fixtureOptions.databaseEngines }
+    : {};
   // Unique across concurrent runs; realpath normalizes macOS's /var symlink.
   const fixtureRoot = fsSync.realpathSync(
     fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-tests-")),
@@ -38,6 +42,7 @@ export function createUpdateCliFixture() {
   writeFixtureJsonSync(path.join(checkoutRoot, "package.json"), {
     name: "openclaw",
     version: VERSION,
+    ...(fixtureOptions.databaseEngines ? { openclaw: targetDeclaration } : {}),
   });
   const globalNpmConfig = path.join(fixtureRoot, "global-npmrc");
   fsSync.writeFileSync(globalNpmConfig, "");
@@ -143,7 +148,11 @@ export function createUpdateCliFixture() {
       const packageJsonPath = path.join(packageRoot, "package.json");
       fsSync.mkdirSync(path.dirname(entrypoint), { recursive: true });
       fsSync.writeFileSync(entrypoint, "// test entrypoint\n", "utf8");
-      writeFixtureJsonSync(packageJsonPath, { name: "openclaw", version: targetVersion });
+      writeFixtureJsonSync(packageJsonPath, {
+        name: "openclaw",
+        version: targetVersion,
+        ...(fixtureOptions.databaseEngines ? { openclaw: targetDeclaration } : {}),
+      });
       tempDirsToCleanup.add(packageRoot);
     }
     mocks.pathExists.mockImplementation(
@@ -159,10 +168,13 @@ export function createUpdateCliFixture() {
     );
     vi.mocked(update.updateGitCheckout).mockImplementation(async ({ opts: options, gitRoot }) => {
       // Admit the original owner even without activation, as the Git runner does.
-      await options.inspectGitTarget({ version: targetVersion });
+      await options.inspectGitTarget({ version: targetVersion, ...targetDeclaration });
       // Baseline-capture cases separately exercise the actual mutation callback.
       if (params?.admitMutation) {
-        await assert.requireValue(options.beforeGitMutation, "Git mutation admission")({});
+        await assert.requireValue(
+          options.beforeGitMutation,
+          "Git mutation admission",
+        )(targetDeclaration);
       }
       // Explicit inspection-only failures have no published runtime to retain.
       if (params?.admitMutation !== false && options.onTransaction) {
@@ -249,6 +261,21 @@ export function createUpdateCliFixture() {
       overrides: Partial<Parameters<typeof update.completePostCorePluginUpdate>[0]> = {},
     ) => update.completePostCorePluginUpdate(configs.createChangedPostCoreUpdateOptions(overrides)),
     createCaseDir,
+    /** The completion child runs only when the installed launcher exists. */
+    mockCompletionCacheRefresh: (result: Parameters<typeof createCommandResult>[0]) => {
+      const pathExists = mocks.pathExists.getMockImplementation();
+      mocks.pathExists.mockImplementation(
+        async (candidate: string) =>
+          candidate.endsWith("openclaw.mjs") || Boolean(await pathExists?.(candidate)),
+      );
+      const run = assert.requireValue(
+        vi.mocked(update.runCommandWithTimeout).getMockImplementation(),
+        "command fixture",
+      );
+      vi.mocked(update.runCommandWithTimeout).mockImplementation(async (argv, options) =>
+        argv[2] === "completion" ? createCommandResult(result) : run(argv, options),
+      );
+    },
     expectFailedManagedGitRestart: (message: string) => {
       const logs = assert.getLogOutput();
       expect(mocks.serviceStop).toHaveBeenCalledTimes(1);
@@ -292,15 +319,6 @@ export function createUpdateCliFixture() {
         expectDefined(process.env.HOME, "isolated test home"),
         profile === "default" ? ".openclaw" : `.openclaw-${profile}`,
       ),
-    reportCandidateSteps: async <T extends { steps: UpdateRunResult["steps"] }>(
-      options: { onStep?: (step: UpdateRunResult["steps"][number]) => void | Promise<void> },
-      result: T,
-    ): Promise<T> => {
-      for (const step of result.steps) {
-        await options.onStep?.(step);
-      }
-      return result;
-    },
     runControlPlaneUpdate: async (params: {
       meta: Record<string, unknown>;
       options: Parameters<typeof update.updateCommand>[0];
@@ -339,12 +357,17 @@ export function createUpdateCliFixture() {
     runRestartFallbackScenario: async (params: { daemonInstall: "ok" | "fail" }) => {
       mockOwnedGitService();
       const entrypoint = path.join(process.cwd(), "dist", "index.js");
-      update.mockGitUpdateAfterMutation(update.makeOkUpdateResult({ root: process.cwd() }));
+      update.mockGitUpdateAfterMutation(
+        update.makeOkUpdateResult({ root: process.cwd(), after: { version: VERSION } }),
+        false,
+        { databaseEngines: ["sqlite", "postgres"] },
+      );
       vi.mocked(update.resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
       if (params.daemonInstall === "fail") {
         mockGatewayInstallFailure(entrypoint);
       }
       mocks.serviceLoaded.mockResolvedValue(true);
+      mockGatewayHealth(VERSION, "updated-gateway");
 
       await update.updateCommand({});
 
@@ -374,8 +397,10 @@ export function createUpdateCliFixture() {
           root,
           before: { sha: "old-managed-sha", version: "2026.4.26" },
           after: { sha: "new-managed-sha", version: VERSION },
+          ...targetDeclaration,
         }),
         reinspect,
+        targetDeclaration,
       );
       mockFileBackedPathExists();
       mocks.serviceLoaded.mockResolvedValue(true);

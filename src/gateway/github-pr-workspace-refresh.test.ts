@@ -5,11 +5,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import * as gitCommands from "../infra/git-exec.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import {
   commandResult,
   installGitHubPublicationTestHarness,
+  overrideCommands,
 } from "./github-publication.test-support.js";
 
 describe("imported PR source refresh", () => {
@@ -18,6 +20,61 @@ describe("imported PR source refresh", () => {
     sandbox: "required",
     realWorktree: true,
   });
+
+  it("returns actionable oversized-result errors through the PR tool and permits a smaller retry", async () => {
+    const f = await fixture();
+    const { runCommandBuffered } =
+      await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+    const transport = mocks.runCommand.getMockImplementation()!;
+    // The shared small-workspace fixture caps Git replies at 256 KiB; this
+    // scenario must retain the production owner's manifest/tree byte limits.
+    mocks.runCommand.mockImplementation(
+      async (argv: string[], options: Parameters<typeof runCommandBuffered>[1]) =>
+        argv[0] === "git" && (argv.includes("cat-file") || argv.includes("ls-tree"))
+          ? await runCommandBuffered(argv, options)
+          : await transport(argv, options),
+    );
+    await f.invoke();
+    await fs.writeFile(path.join(f.projection, "saved-note.txt"), "keep this guest work\n");
+    await f.local!.git("-C", f.upstream, "checkout", "topic/existing");
+    const generated = path.join(f.upstream, "generated-fixture");
+    await fs.mkdir(generated);
+    // Cross the public changed-path budget with real Git source files. Buckets
+    // keep Git tree insertion linear without changing the result's file count.
+    for (let index = 0; index < 50_001; index++) {
+      const bucket = path.join(generated, String(Math.floor(index / 1000)));
+      if (index % 1000 === 0) {
+        await fs.mkdir(bucket);
+      }
+      await fs.writeFile(path.join(bucket, `${index}.txt`), "synthetic\n");
+    }
+    await f.local!.git("-C", f.upstream, "add", "-A");
+    await f.local!.git(
+      "-C",
+      f.upstream,
+      "commit",
+      "--quiet",
+      "-m",
+      "Accidentally track generated files",
+    );
+    f.pr.head.sha = await f.local!.git("-C", f.upstream, "rev-parse", "HEAD");
+    f.branch.commit.sha = f.pr.head.sha;
+
+    await expect(f.invoke()).rejects.toThrow(/Workspace result changes .*gitignore/u);
+    expect(await fs.readFile(path.join(f.projection, "saved-note.txt"), "utf8")).toBe(
+      "keep this guest work\n",
+    );
+
+    await fs.rm(generated, { recursive: true });
+    await f.local!.git("-C", f.upstream, "add", "-A");
+    await f.local!.git("-C", f.upstream, "commit", "--quiet", "-m", "Remove generated files");
+    const headCommit = await f.advanceHead({ ".gitignore": "generated-fixture/\n" });
+    expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit });
+    expect(await fs.readFile(path.join(f.projection, "saved-note.txt"), "utf8")).toBe(
+      "keep this guest work\n",
+    );
+    expect(f.writes).toEqual([]);
+  }, 120_000);
 
   it.each([false, true])(
     "recovers a pending refresh before a further PR head (bound runtime=%s)",
@@ -55,7 +112,10 @@ describe("imported PR source refresh", () => {
       f.pr.base.ref = "new-destination";
       f.pr.base.sha = f.headCommit;
       if (boundRuntime) {
-        expect(runtime?.isPaused()).toBe(true);
+        // Canonical-only acceptance has not mutated the guest. Recovery must
+        // preserve writes made before it acquires the guest application pause.
+        expect(runtime?.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "during-refresh.txt"), "later guest write\n");
       } else {
         await closeOpenClawAgentDatabasesAsync();
       }
@@ -66,6 +126,11 @@ describe("imported PR source refresh", () => {
         conflictPaths: ["artifact.txt"],
       });
       expect(runtime?.isPaused() ?? false).toBe(false);
+      if (boundRuntime) {
+        expect(await fs.readFile(path.join(f.projection, "during-refresh.txt"), "utf8")).toBe(
+          "later guest write\n",
+        );
+      }
       const conflict = await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8");
       expect(conflict).toContain("guest saved conflict");
       expect(conflict).toContain("remote PR change");
@@ -184,11 +249,46 @@ describe("imported PR source refresh", () => {
       }
     },
   );
-  it("still refuses a bot-authored PR this session did not publish", async () => {
+  it("refuses an unrelated bot-authored PR when the linked account has no commit credit", async () => {
     const f = await fixture({ priorPublication: true });
     f.pr.user = { id: 42, login: "roboclaw-bot" };
-    await expect(f.invoke()).rejects.toThrow("not authored by a GitHub account linked to you");
+    overrideCommands((argv) => {
+      if (!argv.includes("graphql")) {
+        return undefined;
+      }
+      return commandResult(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                headRefOid: f.headCommit,
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        id: "unrelated-commit",
+                        authors: {
+                          nodes: [{ user: { databaseId: 42 } }],
+                          pageInfo: { hasNextPage: false, endCursor: null },
+                        },
+                        committer: { user: { databaseId: 42 } },
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            },
+          },
+        }),
+      );
+    });
+    await expect(f.invoke()).rejects.toThrow(
+      "no linked account was verified as a contributor to this publisher's PR. Continue in the original publication conversation or ask a full-write maintainer to assist.",
+    );
     expect(f.readSession().worktree?.githubPullRequest).toBeUndefined();
+    expect(f.writes).toEqual([]);
+    expect(f.externalWrites).toEqual([]);
   });
   it.each(["private base", "private head", "other PR", "publisher", "author"])(
     "preserves unlinked guest work when the recorded public continuation changes %s",
@@ -593,10 +693,23 @@ describe("imported PR source refresh", () => {
     expect(f.writes).toEqual([]);
   });
 
-  it("finishes a merged refresh after its review base failed to prepare", async () => {
+  it("verifies staged recovery entries with the guest running after review preparation fails", async () => {
     const f = await fixture();
+    const paths = [
+      "pr.txt",
+      "literal[1].txt",
+      "space file.txt",
+      ...(process.platform === "win32"
+        ? []
+        : ["tab\tfile.txt", "line\nfile.txt", "colon:file.txt"]),
+    ];
+    await f.advanceHead(Object.fromEntries(paths.map((name) => [name, "original PR contents\n"])));
     await f.invoke();
-    const acceptedHead = await f.advanceHead({ "pr.txt": "advanced PR\n" });
+    const runtime = await bindFixtureRuntime(f);
+    using _ = runtime.projection;
+    const acceptedHead = await f.advanceHead(
+      Object.fromEntries(paths.map((name) => [name, "advanced PR\n"])),
+    );
     const backend = f.sandbox.backend!;
     const run = backend.runShellCommand.bind(backend);
     let failed = false;
@@ -611,8 +724,25 @@ describe("imported PR source refresh", () => {
     expect(failed).toBe(true);
     // The host merge completed, so the imported file stays staged at its pre-refresh entry.
     expect(await f.guestGit("status", "--porcelain", "pr.txt")).toBe("AM pr.txt");
+    const execute = gitCommands.executeGitCommand;
+    let verifiedWhileRunning = false;
+    using verification = vi.spyOn(gitCommands, "executeGitCommand");
+    verification.mockImplementation(async (cwd, argv, options) => {
+      if (argv.includes("ORIG_HEAD")) {
+        expect(runtime.isPaused()).toBe(false);
+        await fs.writeFile(path.join(f.projection, "during-verification.txt"), "guest work\n");
+        verifiedWhileRunning = true;
+      }
+      return await execute(cwd, argv, options);
+    });
     expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: acceptedHead });
-    expect(await f.guestGit("show", ":pr.txt")).toBe("advanced PR");
+    expect(verifiedWhileRunning).toBe(true);
+    for (const name of paths) {
+      expect(await f.guestGit("show", `:${name}`)).toBe("advanced PR");
+    }
+    expect(await fs.readFile(path.join(f.projection, "during-verification.txt"), "utf8")).toBe(
+      "guest work\n",
+    );
   });
 
   it("refuses unrelated remote history without pinning it as a pending refresh", async () => {

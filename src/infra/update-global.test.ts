@@ -137,7 +137,7 @@ describe("update global helpers", () => {
   });
 
   it.each([
-    ["main", "github:openclaw/openclaw#main"],
+    ["latest", "openclaw@latest"],
     ["github:openclaw/openclaw#feature/my-branch", "github:openclaw/openclaw#feature/my-branch"],
   ] as const)("maps package target %s to its install spec", (tag, expected) => {
     expect(resolveGlobalInstallSpec({ packageName: "openclaw", tag })).toBe(expected);

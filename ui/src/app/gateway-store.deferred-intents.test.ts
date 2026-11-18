@@ -128,7 +128,11 @@ describe("Gateway deferred intents", () => {
     expect(run).not.toHaveBeenCalled();
     expect(discard).toHaveBeenCalledOnce();
     expect(store.gateway.snapshot.deferredIntentCount).toBe(0);
-    expect(showToast).toHaveBeenCalledWith({ message: "Offline changes discarded: 1" });
+    expect(showToast).toHaveBeenCalledWith({
+      severity: undefined,
+      placement: "top-right",
+      message: "Offline changes discarded: 1",
+    });
   });
 
   it.each(["account-a", "account-b"])(
@@ -161,6 +165,8 @@ describe("Gateway deferred intents", () => {
         expect(run).not.toHaveBeenCalled();
         expect(discard).toHaveBeenCalledOnce();
         expect(showToast).toHaveBeenCalledExactlyOnceWith({
+          severity: undefined,
+          placement: "top-right",
           message: "Offline changes discarded: 1",
         });
       }
@@ -204,6 +210,8 @@ describe("Gateway deferred intents", () => {
       expect(run).not.toHaveBeenCalled();
       expect(discard).toHaveBeenCalledOnce();
       expect(showToast).toHaveBeenCalledExactlyOnceWith({
+        severity: undefined,
+        placement: "top-right",
         message: "Offline changes discarded: 1",
       });
       expect(store.gateway.snapshot.deferredIntentCount).toBe(0);

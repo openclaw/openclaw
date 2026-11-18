@@ -158,7 +158,9 @@ async function expectPublished({ databaseFile }: Store, body: Buffer) {
 
 it.each([true, false])("evicts idle readers only when published: %s", async (published) => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const store = createStore();
+  const store = createStore(published ? gzipSync(vienna) : vienna, {
+    databaseUrl: `https://host.test/${published ? "db.mmdb.gz?v=1" : "db.mmdb?x=.gz"}`,
+  });
   if (!published) {
     vi.spyOn(fs, "writeFile").mockRejectedValueOnce(new Error("disk full"));
     store.fetchImpl
@@ -166,14 +168,12 @@ it.each([true, false])("evicts idle readers only when published: %s", async (pub
       .mockRejectedValue(new Error("source unavailable"));
   }
   const readFile = vi.spyOn(fs, "readFile");
-
   expect(cityOf(await store.load())).toBe("Vienna");
   await vi.advanceTimersByTimeAsync(45_000);
   const active = await store.load();
   await vi.advanceTimersByTimeAsync(45_000);
   expect(cityOf(await store.load())).toBe("Vienna");
   expect(readFile).not.toHaveBeenCalled();
-
   await vi.advanceTimersByTimeAsync(60_000);
   const reopened = await Promise.all([store.load(), store.load()]);
   expect(reopened.map(cityOf)).toEqual(["Vienna", "Vienna"]);

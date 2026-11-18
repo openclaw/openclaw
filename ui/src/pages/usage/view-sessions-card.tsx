@@ -2,12 +2,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { IconButton } from "../../components/solid/icon-button.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
 import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
@@ -21,7 +21,10 @@ const SESSION_SORT_OPTIONS = [
 ] as const;
 
 /** Plain facts for a session row: where it ran, on what, and how much happened. */
-const buildSessionMeta = (session: UsageSessionEntry): string[] => {
+const buildSessionMeta = (
+  session: UsageSessionEntry,
+  providerDisplayLabel: (provider: string) => string,
+): string[] => {
   const provider = session.modelProvider ?? session.providerOverride;
   const counts = session.usage?.messageCounts;
   const tools = session.usage?.toolUsage?.totalCalls;
@@ -87,16 +90,6 @@ export function SessionsCard(props: {
               {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
             </span>
           </div>
-          <SettingsSegmented
-            mode="buttons"
-            value={props.usage.display.sessionsTab}
-            onChange={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
-            onReselect={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
-            options={[
-              { value: "all", label: t("usage.sessions.all") },
-              { value: "recent", label: t("usage.sessions.recent") },
-            ]}
-          />
           <label class="sessions-sort">
             <span>{t("usage.sessions.sort")}</span>
             <SettingsSelect
@@ -138,20 +131,9 @@ export function SessionsCard(props: {
           ) : undefined}
         </div>
         {props.sessions.length === 0 ? (
-          <div class="usage-empty-block">
-            {t(
-              props.usage.display.sessionsTab === "recent"
-                ? "usage.sessions.noRecent"
-                : "usage.sessions.noneInRange",
-            )}
-          </div>
+          <div class="usage-empty-block">{t("usage.sessions.noneInRange")}</div>
         ) : (
-          <div
-            class={[
-              "session-bars",
-              { "session-bars--recent": props.usage.display.sessionsTab === "recent" },
-            ]}
-          >
+          <div class="session-bars">
             <SessionRows
               sessions={showAll() ? props.sessions : props.sessions.slice(0, SESSION_PREVIEW)}
               selectedSessions={props.usage.filters.selectedSessions}
@@ -174,7 +156,7 @@ export function SessionsCard(props: {
             </Show>
           </div>
         )}
-        <Show when={props.usage.display.sessionsTab === "all" ? props.overview : undefined}>
+        <Show when={props.overview}>
           {(overview) => (
             <div class="data-table-pagination">
               <div class="data-table-pagination__controls">
@@ -234,6 +216,7 @@ function SessionRows(props: {
   onRowSelected?: (key: string, row: HTMLElement, button: HTMLElement) => void;
   onRowMounted?: (key: string, row: HTMLElement, button: HTMLElement) => void;
 }) {
+  const providerDisplayLabel = useProviderDisplayLabel();
   const orderedKeys = createMemo(() => props.sessions.map((session) => session.key));
   return (
     <For each={props.sessions} keyed={(session) => session.key}>
@@ -247,7 +230,7 @@ function SessionRows(props: {
         };
         const meta = createMemo(() => {
           i18nRevision();
-          return buildSessionMeta(session());
+          return buildSessionMeta(session(), providerDisplayLabel);
         });
         const valueLabel = createMemo(() => {
           i18nRevision();
@@ -308,11 +291,11 @@ function SessionRows(props: {
                   return (
                     <>
                       {" "}
-                      <button
-                        type="button"
-                        class="btn btn--sm btn--icon session-bar-copy"
-                        aria-label={t("usage.sessions.copy")}
-                        title={t("usage.sessions.copy")}
+                      <IconButton
+                        size={28}
+                        class="session-bar-copy"
+                        icon="copy"
+                        label={t("usage.sessions.copy")}
                         onClick={(event: MouseEvent) => {
                           event.stopPropagation();
                           void handleCopyButton(event, label(), t("usage.sessions.copy"), {
@@ -320,9 +303,7 @@ function SessionRows(props: {
                             announcement,
                           });
                         }}
-                      >
-                        <Icon name="copy" />
-                      </button>
+                      />
                       <span
                         ref={(element) => (feedback = element)}
                         class="session-bar-copy-feedback"

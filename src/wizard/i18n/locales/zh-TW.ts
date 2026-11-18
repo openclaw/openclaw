@@ -334,7 +334,7 @@ export const zh_TW = {
       quickstartKeepRunningQuestion: "讓 OpenClaw 在背景持續執行？",
       quickstartDashboard: "儀表板：{url}",
       quickstartForeground: "閘道正在前景執行。按 Ctrl+C 停止。",
-      quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：openclaw gateway install",
+      quickstartBackground: "如需日後讓閘道在背景持續執行，請執行：{command}",
       quickstartReopen: "執行 openclaw 開啟 TUI，或執行 openclaw dashboard 重新開啟網頁儀表板。",
       quickstartBrowserUnavailable: "瀏覽器交接未完成。閘道仍在執行；準備好後請開啟儀表板。",
       quickstartGatewayPending:
@@ -478,6 +478,8 @@ export const zh_TW = {
       testAiProgress: "正在用真實 completion 測試 AI 存取…",
       testAiSuccess: "AI 存取正常，在 {seconds} 秒內回覆。",
       testAiTitle: "AI 存取測試",
+      utilityOnlyNote: "請為 agent 對話選擇供應商，或選擇暫時略過。",
+      utilityOnlyTitle: "選擇 agent 的模型",
       whatSetup: "你想設定什麼？",
       workspaceConflictConfirm: "要將現有 agent fleet 移動到要求的工作區嗎？",
       workspaceConflictNotice:

@@ -4,6 +4,7 @@ import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-ev
 import { checkRequesterOwner } from "../cron/execution-context-admission.js";
 import { resolveScheduledRequester } from "../cron/execution-context.js";
 import type { CronStoredJob } from "../cron/types.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { restoreGatewayOperatorSource } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 
@@ -50,17 +51,20 @@ export async function captureCronJobTurnTarget(params: {
     const target = await capture({ requesterOwner: owner && isOwner ? { assertCurrent } : {} });
     return { target, release: () => {} };
   }
-  // Operator-source jobs are owned by the conversation their source names.
+  // Parent-bound sources follow their chat by key; standalone sources retain device authority independently.
   const { source } = requester;
   const captured = job.operatorSource;
   let operator: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefined;
   try {
-    if (source.agentId !== agentId || source.sessionKey !== sessionKey) {
+    if (
+      source.agentId !== agentId ||
+      (source.kind !== "gateway" && source.sessionKey !== sessionKey)
+    ) {
       throw new Error("Automation operator source names another conversation");
     }
     operator = await restoreGatewayOperatorSource({
       snapshot: source.snapshot,
-      target: { agentId, sessionKey, sessionId: source.sessionId },
+      target: source.kind === "gateway" ? undefined : { agentId, sessionKey },
       context,
       assertCurrent: () => {
         if (!isDeepStrictEqual(context.cron.getJob(job.id)?.operatorSource, captured)) {
@@ -68,15 +72,15 @@ export async function captureCronJobTurnTarget(params: {
         }
       },
     });
-    // As for the job's in-session runs, a restored source is an owner only when it was a
-    // Control UI administrator; otherwise it is the job's non-owner requester.
+    // As for the job's in-session runs, a restored source is an owner only when it was an
+    // authenticated UI administrator; otherwise it is the job's non-owner requester.
     const target = await capture({
       operatorAuthority: operator.authority,
-      ...(operator.controlUiAdmin ? { ownerContinuation: true as const } : {}),
+      ...(operator.automationAdmin &&
+      operatorScopeSatisfied("operator.admin", operator.authority.scopes)
+        ? { ownerContinuation: true as const }
+        : {}),
     });
-    if (target.sessionId !== source.sessionId) {
-      throw new Error("Automation owner conversation was reset");
-    }
     return { target, release: operator.release };
   } catch {
     operator?.release();

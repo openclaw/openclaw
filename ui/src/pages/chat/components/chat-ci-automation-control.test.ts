@@ -122,6 +122,19 @@ describe("CI automation popup scope", () => {
     h = new Fixture();
     await h.paint("first");
   });
+  it("renders and clears the recipe blocker without disabling auto-fix", async () => {
+    const blocked = "Feedback remains unresolved; successful no-op stays quiet but observing";
+    const fix = job("first");
+    fix.state.triggerState = { blocked };
+    h.jobs = [fix];
+    await h.open();
+    expect(h.checkbox().checked).toBe(true);
+    expect(h.root.querySelector('[role="status"]')?.textContent).toContain(blocked);
+    h.jobs = [{ ...fix, state: { triggerState: { blocked: null } } }];
+    h.harness.emit({}, "cron");
+    await waitForSolid(() => expect(h.root.textContent).not.toContain(blocked));
+    expect(h.checkbox().checked).toBe(true);
+  });
   it("keeps controls disabled through an initial read failure and enables an empty retry", async () => {
     const read = createDeferred<ReturnType<typeof inventory>>();
     h.read = read.promise;

@@ -7,7 +7,9 @@
  *   --state-dir .local/sidebar/run-1 --output .local/sidebar/run-1.json
  * Add --owner-file <baseline/session-row-presentation.ts> to substitute only that
  * owner at load time. Repeat --source-file <saved/session-utils-display.ts> (original
- * basename required) to substitute additional Gateway owners; sourceHashes records each.
+ * basename required) to substitute additional Gateway/agent owners; sourceHashes records each.
+ * --background-processes 50 seeds live registry records across the selected page,
+ * split between canonical-key and sessionId scope matching, including agentless records.
  * Alternate baseline/candidate runs (at least five pairs),
  * with matched A/A controls before timing claims. Each run needs a fresh state dir.
  * Use separate --allocations runs for sampled bytes including collected objects;
@@ -18,7 +20,7 @@
  * Timing and GC gates use untraced, unsampled runs. Defaults: 10k rows, 10 clients,
  * two identities, 100-row pages, 1,000 warm reads. --sessions 10 --operations 10
  * is a setup smoke. The clients are in-process recipients, not live sockets.
- * <output>.wire.json captures packed bytes with fixture profile IDs and snapshotAt
+ * <output>.wire.json captures packed bytes with fixture profile IDs, avatar versions, and snapshotAt
  * normalized; packedGolden compares those bytes across revisions and preserves field order.
  * --page-size 200 --churn replaces one visible row before each measured read;
  * measures full-page packing under writes. Call latency excludes the write;
@@ -68,6 +70,7 @@ const { values } = parseArgs({
     "sandbox-required": { type: "boolean", default: false },
     churn: { type: "boolean", default: false },
     clients: { type: "string", default: "10" },
+    "background-processes": { type: "string", default: "0" },
     operations: { type: "string", default: "1000" },
     allocations: { type: "boolean", default: false },
     "max-presentation-bytes-per-call": { type: "string" },
@@ -82,10 +85,11 @@ assert(
 );
 const rowMode = values["row-mode"] === "full" ? undefined : values["row-mode"];
 const integer = (
-  name: "sessions" | "clients" | "operations" | "repeats" | "page-size",
+  name: "sessions" | "clients" | "operations" | "repeats" | "page-size" | "background-processes",
   min: number,
 ) => parseStrictIntegerOption({ raw: values[name], label: name, min, fallback: min });
 const sessions = integer("sessions", 2);
+const backgroundProcesses = integer("background-processes", 0);
 const clients = integer("clients", 2);
 const operations = integer("operations", 1);
 const repeats = integer("repeats", 1);
@@ -131,7 +135,7 @@ if (sources.size) {
     load(url, context, next) {
       const loaded = next(url, context);
       for (const [name, source] of sources) {
-        if (url.endsWith(`/src/gateway/${name}`)) {
+        if (url.endsWith(`/src/gateway/${name}`) || url.endsWith(`/src/agents/${name}`)) {
           replaced.add(name);
           return {
             ...loaded,
@@ -190,6 +194,7 @@ const [
   { serializeGatewayFrame },
   { createEmptyPluginRegistry },
   { setActivePluginRegistry },
+  { addSession, createProcessSession, deleteSession },
 ] = await Promise.all([
   import("../../src/config/runtime-snapshot.js"),
   import("../../src/config/sessions/session-accessor.sqlite-entry-store.js"),
@@ -204,6 +209,7 @@ const [
   import("../../src/gateway/serialized-json.js"),
   import("../../src/plugins/registry-empty.js"),
   import("../../src/plugins/runtime.js"),
+  import("../../src/agents/bash-process-registry.js"),
 ]);
 assert.equal(replaced.size, sources.size, "source substitution did not run");
 setActivePluginRegistry(createEmptyPluginRegistry());
@@ -261,6 +267,28 @@ function distribution(samples: number[]) {
   };
 }
 try {
+  for (let index = 0; index < backgroundProcesses; index++) {
+    const rowIndex = sessions - 1 - (index % pageSize);
+    addSession(
+      createProcessSession({
+        id: `sidebar-process-${index}`,
+        scopeKey: index % 2 ? keyFor(rowIndex) : `sidebar-${rowIndex}`,
+        agentId: index % 3 ? "main" : undefined,
+        command: "synthetic background work",
+        cleanupMs: 60_000,
+        startedAt: 1_800_000_000_000,
+        maxOutputChars: 10_000,
+        totalOutputChars: 0,
+        pendingStdoutChars: 0,
+        pendingStderrChars: 0,
+        pendingOutputDropped: false,
+        exited: false,
+        truncated: false,
+        backgrounded: true,
+        cursorKeyMode: "normal",
+      }),
+    );
+  }
   runOpenClawAgentWriteTransaction(
     (database) => {
       for (let index = 0; index < sessions; index++) {
@@ -347,6 +375,10 @@ try {
       (key, value) => (key === "snapshotAt" ? 1_800_000_000_000 : value),
     );
     for (const [index, profile] of profiles.entries()) {
+      bytes = bytes.replaceAll(
+        `/api/users/${profile.id}/avatar?v=${profile.updatedAt}`,
+        `/api/users/${profile.id}/avatar?v=1800000000000`,
+      );
       bytes = bytes.replaceAll(profile.id, `synthetic-profile-${index}`);
     }
     const digest = createHash("sha256").update(bytes).digest("hex");
@@ -357,6 +389,10 @@ try {
     const result = await list(index, false);
     const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
     assert.equal(rows.length, pageSize);
+    assert.equal(
+      rows.reduce((count, row) => count + (row.backgroundProcessCount ?? 0), 0),
+      backgroundProcesses,
+    );
     assert.equal(rows[0]?.key, keyFor(sessions - 1));
     assert.equal(
       rows[0]?.sharingRole,
@@ -554,12 +590,26 @@ try {
         [
           "session-row-presentation.ts",
           "session-list-view-cache.ts",
+          "session-utils-list.ts",
           "session-row-prepared-read.ts",
           "session-utils-display.ts",
+          "session-utils-core.ts",
+          "session-utils-row.ts",
+          "session-row-projection-record.ts",
+          "bash-process-observation.ts",
         ].map((name) => [
           name,
           createHash("sha256")
-            .update(sources.get(name) ?? readFileSync(path.resolve("src/gateway", name), "utf8"))
+            .update(
+              sources.get(name) ??
+                readFileSync(
+                  path.resolve(
+                    name === "bash-process-observation.ts" ? "src/agents" : "src/gateway",
+                    name,
+                  ),
+                  "utf8",
+                ),
+            )
             .digest("hex"),
         ]),
       ),
@@ -567,6 +617,7 @@ try {
       clients,
       identities: profiles.length,
       pageSize,
+      backgroundProcesses,
       rowMode: values["row-mode"],
       sandboxRequired: values["sandbox-required"],
       operations,
@@ -585,7 +636,7 @@ try {
         "within-run stability only; includes generated profile IDs and presentation timestamps",
       golden,
       packedGoldenScope:
-        "Exact sessions/sharedFacts JSON, with generated profile IDs and snapshotAt normalized",
+        "Exact sessions/sharedFacts JSON, with generated profile IDs, avatar versions, and snapshotAt normalized",
       packedGolden,
       churnPackedGolden,
       loadStart,
@@ -628,6 +679,9 @@ try {
     inspector.disconnect();
   }
   projection?.dispose();
+  for (let index = 0; index < backgroundProcesses; index++) {
+    deleteSession(`sidebar-process-${index}`);
+  }
   catalog.release();
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();

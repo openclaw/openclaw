@@ -132,7 +132,7 @@ export function collectRequestHeaderSecretValues(headers: HeadersInit): string[]
     if (authorization?.[1]?.toLowerCase() === "basic") {
       const bytes = Buffer.from(credentialComponent, "base64");
       if (
-        bytes.toString("base64").replace(/=+$/u, "") === credentialComponent.replace(/=+$/u, "")
+        bytes.toString("base64").replace(/[=]+$/u, "") === credentialComponent.replace(/[=]+$/u, "")
       ) {
         // RFC 7617: proxies may reflect the decoded pair or password. The first
         // colon separates them; deployed Basic credentials use UTF-8 or Latin-1.

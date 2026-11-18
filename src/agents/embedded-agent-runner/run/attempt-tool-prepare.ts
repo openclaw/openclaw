@@ -11,18 +11,14 @@ import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
-import { readSessionForkSource } from "../../../sessions/input-provenance.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import {
   readAdmittedRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
-import {
-  createOpenClawCodingToolsInternalAsync,
-  resolveToolLoopDetectionConfig,
-} from "../../agent-tools.js";
+import { createOpenClawCodingToolsInternalAsync } from "../../agent-tools.async.js";
 import { assertMemoryFlushPersistenceToolAvailable } from "../../agent-tools.memory-flush.js";
-import { getChannelAgentToolMeta } from "../../channel-tools.js";
+import { getChannelAgentToolMeta } from "../../channel-tool-metadata.js";
 import { createCodeModePermissionChangeReason } from "../../code-mode-permission-change.js";
 import type { CodeModeSkill } from "../../code-mode-skills.js";
 import { loadPairedComputerUseAvailabilityForSurface } from "../../computer-use-node-capabilities.js";
@@ -46,7 +42,7 @@ import {
 } from "../../tool-fs-policy.js";
 import { isToolExecutionAllowed } from "../../tool-policy-shared.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
-import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-types.js";
+import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../../tool-search-protocol.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { ComputerContextEpoch } from "../../tools/computer-tool.js";
 import type {
@@ -90,6 +86,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor;
 }) {
   const { attempt } = params;
+  let getRunAbortDeadlineAtMs: (() => number | undefined) | undefined;
   const pluginExecutionAuthority = readAdmittedRunOperatorAuthority(attempt.admittedRunContext);
   const pluginExecutionSkillsSnapshot = attempt.skillsSnapshot;
   const workspaceReadiness = captureAgentWorkspaceReadiness(attempt.sessionKey);
@@ -235,6 +232,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     messageChannel: attempt.messageChannel,
     modelProvider: attempt.provider,
     modelId: attempt.modelId,
+    modelAuthProfileId: attempt.authProfileId,
     modelApi: attempt.model.api,
     modelBaseUrl: attempt.model.baseUrl,
     modelParams: attempt.model.params,
@@ -306,11 +304,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     },
   };
   let webSearchUnconfigured = false;
+  let messageToolAvailable = true;
   const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
     webSearchUnconfigured = false;
+    messageToolAvailable = true;
     additionalInheritedToolNamesRef.length = 0;
     let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
       [];
@@ -321,6 +321,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       );
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
+        getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         pluginExecutionAuthority,
         pluginExecutionSkillsSnapshot,
         assertInvocationCurrent: assertActive,
@@ -361,12 +362,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             resolveWebSearchRoute().kind === "managed";
         },
         githubPublicationAvailable: attempt.githubPublicationAvailable,
+        githubPublicationConfigurationAware:
+          !isRawModelRun && attempt.operation !== "settled-tool-finalization" ? true : undefined,
         abortSignal,
-        skillWorkshop: {
-          // A background fork credits its tool changes to the session it reviews.
-          reviewOf: readSessionForkSource(attempt.inputProvenance),
-          libraryAuthoring: attempt.skillLibraryAuthoring,
-        },
+        skillLibraryAuthoring: attempt.skillLibraryAuthoring,
         modelCompat: extractModelCompat(attempt.model),
         delegationCapability: attempt.delegationCapability,
         modelAuthMode: await resolveModelAuthModeAsync(
@@ -387,6 +386,10 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         inboundEventKind: attempt.currentInboundEventKind,
         inputProvenance: attempt.inputProvenance,
         disableMessageTool: attempt.disableMessageTool,
+        retainUnavailableMessageTool: true,
+        onMessageToolAvailability: (available) => {
+          messageToolAvailable = available;
+        },
         forceMessageTool: attempt.forceMessageTool,
         inheritedToolAllowlistRef: inheritedToolAllowlist,
         additionalInheritedToolNamesRef,
@@ -463,7 +466,11 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   try {
     const toolsRaw = await constructTools(params.setup.sessionPermissionPolicy, toolAbortSignal);
     return {
+      bindRunAbortDeadline: (source: () => number | undefined) => {
+        getRunAbortDeadlineAtMs = source;
+      },
       toolHookContext: {
+        getRunAbortDeadlineAtMs: () => getRunAbortDeadlineAtMs?.(),
         awaitSessionDiffBaseline,
         watchdogAttempt: getGatewayToolCallerIdentity()?.watchdogAttempt,
         agentId: params.setup.sessionAgentId,
@@ -475,10 +482,6 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         approvalReviewerDeviceId: attempt.approvalReviewerDeviceId,
         channelId: attempt.currentChannelId,
         trace: params.runTrace,
-        loopDetection: resolveToolLoopDetectionConfig({
-          cfg: attempt.config,
-          agentId: params.setup.sessionAgentId,
-        }),
         onToolOutcome: attempt.onToolOutcome,
         allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
       },
@@ -523,6 +526,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       codeModeSkills,
       computerContextEpoch,
       skillInstructionDeliveryCache,
+      get messageToolAvailable() {
+        return messageToolAvailable;
+      },
       cronCreatorToolAllowlist,
       cronCreatorToolAllowlistCaptureRef,
       effectiveToolsAllow,

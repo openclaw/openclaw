@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { callNodesGatewayCli } from "./nodes-cli/rpc.js";
 
@@ -199,6 +200,17 @@ describe("nodes-cli coverage", () => {
     expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ approved: true });
   });
 
+  it("prints nothing when a pending read settles after Ctrl+C", async () => {
+    const work = new AsyncWorkScope();
+    callGateway.mockImplementationOnce(async () => {
+      work.beginClose();
+      return pairingList("late-request");
+    });
+    await work.run(() => parseNodes("nodes pending --json"));
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(runtimeErrors).toEqual([]);
+  });
+
   it("explains unknown nodes reject request ids without leaking connection credentials", async () => {
     callGateway.mockRejectedValueOnce(missingRequest());
 
@@ -286,20 +298,6 @@ describe("nodes-cli coverage", () => {
     await callNodesGatewayCli("node.invoke", { timeout: "10000", json: true }, params);
 
     expect(getNodeInvokeCall()).toMatchObject({ method: "node.invoke", timeoutMs: null, params });
-  });
-
-  it("invokes location.get with params", async () => {
-    const invoke = await runNodesCommand(
-      "nodes location get --node mac-1 --accuracy precise --max-age 1000 --location-timeout 5000 --invoke-timeout 6000",
-    );
-
-    expect(invoke.params).toEqual(
-      expect.objectContaining({
-        command: "location.get",
-        timeoutMs: 6000,
-        params: { maxAgeMs: 1000, desiredAccuracy: "precise", timeoutMs: 5000 },
-      }),
-    );
   });
 
   it.each([

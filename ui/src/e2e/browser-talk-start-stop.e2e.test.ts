@@ -405,7 +405,7 @@ suite.define(() => {
     });
   });
 
-  it("renders streamed relay assistant transcript deltas as readable text", async () => {
+  it.each(["Istanbul", "İstanbul"])("renders relay transcripts with %s overlap", async (place) => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
       const relaySessionId = "relay-e2e-transcript";
       const gateway = await installTalkGateway(page, relaySession(relaySessionId), {
@@ -426,18 +426,28 @@ suite.define(() => {
       await expect
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
-      await gateway.emitGatewayEvent("talk.event", {
-        relaySessionId,
-        type: "transcript",
-        role: "user",
-        text: "Hey, what model are you using?",
-        final: true,
-      });
+      const userText = `Meet in ${place} tomorrow`;
+      for (const text of [`Meet in ${place}`, `${place} tomorrow`]) {
+        await gateway.emitGatewayEvent("talk.event", {
+          relaySessionId,
+          type: "transcript",
+          role: "user",
+          text,
+          final: false,
+        });
+      }
       await expect
         .poll(() =>
           page.locator(".agent-chat__voice-turn--user .agent-chat__voice-turn-text").textContent(),
         )
-        .toBe("Hey, what model are you using?");
+        .toBe(userText);
+      await gateway.emitGatewayEvent("talk.event", {
+        relaySessionId,
+        type: "transcript",
+        role: "user",
+        text: userText,
+        final: true,
+      });
       // Assistant audio transcripts stream as verbatim fragments that can split
       // words ("I","'m"," Chat","G","PT"); regression coverage for #102556 where
       // the merge injected spaces mid-word and the turn collapsed while streaming.
@@ -596,7 +606,7 @@ suite.define(() => {
       await waitForTalkReady(page);
       await page.getByRole("button", { name: "Tap to talk" }).click();
       await expect
-        .poll(() => page.getByRole("alert").locator(".agent-chat__talk-status-text").textContent())
+        .poll(() => page.locator(".agent-chat__composer-alert[role=status]").textContent())
         .toBe("Microphone access is blocked. Allow it in browser site settings to list inputs.");
       expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
       expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);

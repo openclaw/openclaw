@@ -50,6 +50,23 @@ export type GatewayProtocolCloseContext = {
   connectRequestSent: boolean;
   connectFailure?: { error: Error; reconnectDelayMs?: number };
 };
+
+export function describeGatewayClientClose(
+  context: GatewayProtocolCloseContext,
+  transportValidated: boolean,
+  error = context.connectFailure?.error,
+): GatewayClientCloseInfo {
+  return {
+    phase: context.helloReceived ? "post-hello" : "pre-hello",
+    socketOpened: context.socketOpened,
+    transportValidated,
+    connectRequestSent: context.connectRequestSent,
+    transientPreHelloCleanClose:
+      !context.helloReceived && context.code === 1000 && context.reason === "",
+    ...(error ? { connectError: error } : {}),
+  };
+}
+
 type GatewayProtocolConnectDecision = {
   closeCode: number;
   closeReason: string;

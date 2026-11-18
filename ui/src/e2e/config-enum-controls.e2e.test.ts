@@ -47,21 +47,21 @@ suite.define(() => {
           .evaluateAll((radios) =>
             radios.map((radio) => radio.closest("label")?.textContent?.trim()),
           );
-      await expect.poll(selected).toEqual(["beta"]);
-      await second.getByRole("radio", { name: "alpha", exact: true }).click();
-      await expect.poll(selected).toEqual(["beta"]);
+      await expect.poll(selected).toEqual(["Beta"]);
+      await second.getByRole("radio", { name: "Alpha", exact: true }).click();
+      await expect.poll(selected).toEqual(["Beta"]);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await second.getByRole("radio", { name: "beta", exact: true }).focus();
+      await second.getByRole("radio", { name: "Beta", exact: true }).focus();
       await page.keyboard.press("ArrowLeft");
-      await expect.poll(selected).toEqual(["beta"]);
+      await expect.poll(selected).toEqual(["Beta"]);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
 
-      await second.getByRole("radio", { name: "gamma", exact: true }).click();
+      await second.getByRole("radio", { name: "Gamma", exact: true }).click();
       const request = await gateway.waitForRequest("config.set");
       const submitted = JSON.parse((request.params as { raw: string }).raw);
       expect(submitted.laboratory.choices).toEqual(["alpha", "gamma"]);
-      await expect.poll(selected).toEqual(["gamma"]);
+      await expect.poll(selected).toEqual(["Gamma"]);
     });
   });
 });

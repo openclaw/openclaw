@@ -64,12 +64,14 @@ export function renderPluginDetailShell(props: {
           </div>
         ) : undefined}
         <div class="plugin-catalog-detail__heading">
-          <div class="plugin-catalog-detail__title-row">
-            <h1 id={titleId()} ref={(element) => (heading = element)}>
-              {props.name}
-            </h1>
+          <div class="plugin-catalog-detail__name">
+            <div class="plugin-catalog-detail__title-row">
+              <h1 id={titleId()} ref={(element) => (heading = element)}>
+                {props.name}
+              </h1>
+            </div>
+            {props.identity}
           </div>
-          {props.identity}
           {props.summary ? (
             <p class="plugin-catalog-detail__summary">{props.summary}</p>
           ) : undefined}
@@ -82,7 +84,9 @@ export function renderPluginDetailShell(props: {
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
             <section class="plugin-catalog-detail__readme-section">
-              <h2>{t("pluginsPage.detailTabs.readme")}</h2>
+              <h2 class="settings-section__heading oc-settings-section-title">
+                {t("pluginsPage.detailTabs.readme")}
+              </h2>
               {props.readme}
             </section>
           ) : undefined}

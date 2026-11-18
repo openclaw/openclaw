@@ -9,6 +9,7 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "../attachment-payload-store.ts";
+import { isPastedTextAttachment } from "../pasted-text-card.ts";
 import { canResizeChatAttachment } from "./chat-attachment-image.ts";
 
 registerChatComposerEnglish();
@@ -108,12 +109,17 @@ function attachmentBytes(attachment: ChatAttachment): number {
   const dataUrl = getChatAttachmentDataUrl(attachment);
   const payload = dataUrl?.match(/^data:[^,]*;base64,([\s\S]*)$/i)?.[1]?.replace(/\s/g, "");
   return payload
-    ? Math.max(0, Math.floor((payload.length * 3) / 4) - (payload.match(/=+$/)?.[0].length ?? 0))
+    ? Math.max(0, Math.floor((payload.length * 3) / 4) - (payload.match(/[=]+$/)?.[0].length ?? 0))
     : 0;
 }
 
+/** Upload bytes only: pasted-text cards are sent as message text. */
 export function chatAttachmentBatchBytes(attachments: readonly ChatAttachment[]): number {
-  return attachments.reduce((total, attachment) => total + attachmentBytes(attachment), 0);
+  return attachments.reduce(
+    (total, attachment) =>
+      isPastedTextAttachment(attachment) ? total : total + attachmentBytes(attachment),
+    0,
+  );
 }
 
 export function attachmentBatchRejection(

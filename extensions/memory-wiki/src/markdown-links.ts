@@ -4,7 +4,8 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 export const WIKI_RELATED_START_MARKER = "<!-- openclaw:wiki:related:start -->";
 export const WIKI_RELATED_END_MARKER = "<!-- openclaw:wiki:related:end -->";
 
-const OBSIDIAN_LINK_PATTERN = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+// An odd backslash run escapes the opening bracket; pairs leave a live link.
+const OBSIDIAN_LINK_PATTERN = /(?<!\\)(?:\\\\)*\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
 const RELATED_BLOCK_PATTERN = new RegExp(
   `${WIKI_RELATED_START_MARKER}[\\s\\S]*?${WIKI_RELATED_END_MARKER}`,
   "g",
@@ -33,12 +34,17 @@ type MarkdownAstNode = {
   children?: MarkdownAstNode[];
 };
 
-function forEachCodeRange(
+function forEachLiteralRange(
   tree: MarkdownAstNode,
   visitRange: (start: number, end: number) => void,
+  includeHtml = false,
 ): void {
   const visit = (node: MarkdownAstNode): void => {
-    if (node.type === "code" || node.type === "inlineCode") {
+    if (
+      node.type === "code" ||
+      node.type === "inlineCode" ||
+      (includeHtml && node.type === "html")
+    ) {
       const start = node.position?.start?.offset;
       const end = node.position?.end?.offset;
       if (start !== undefined && end !== undefined) {
@@ -57,27 +63,35 @@ export function forEachMarkdownCodeRange(
   markdown: string,
   visitRange: (start: number, end: number) => void,
 ): void {
-  forEachCodeRange(fromMarkdown(markdown), visitRange);
+  forEachLiteralRange(fromMarkdown(markdown), visitRange);
 }
 
 export function maskMarkdownCode(markdown: string, keepUnclosedFences = false): string {
   // An extra heading exposes fences that would swallow a local Notes slot.
   const source = keepUnclosedFences ? `${markdown}\n\n#` : markdown;
-  return maskMarkdownCodeFromTree(markdown, fromMarkdown(source));
+  return maskMarkdownLiteralRanges(markdown, fromMarkdown(source));
 }
 
-function maskMarkdownCodeFromTree(markdown: string, tree: MarkdownAstNode): string {
+function maskMarkdownLiteralRanges(
+  markdown: string,
+  tree: MarkdownAstNode,
+  includeHtml = false,
+): string {
   const masked = markdown.split("");
-  forEachCodeRange(tree, (start, end) => {
-    if (end > markdown.length) {
-      return;
-    }
-    for (let index = start; index < end; index++) {
-      if (masked[index] !== "\n" && masked[index] !== "\r") {
-        masked[index] = " ";
+  forEachLiteralRange(
+    tree,
+    (start, end) => {
+      if (end > markdown.length) {
+        return;
       }
-    }
-  });
+      for (let index = start; index < end; index++) {
+        if (masked[index] !== "\n" && masked[index] !== "\r") {
+          masked[index] = " ";
+        }
+      }
+    },
+    includeHtml,
+  );
   return masked.join("");
 }
 
@@ -88,7 +102,7 @@ export function extractWikiLinks(markdown: string, sourceRelativePath: string): 
   }
   const withoutRelatedBlock = markdown.replace(RELATED_BLOCK_PATTERN, "");
   const tree = fromMarkdown(withoutRelatedBlock);
-  const searchable = maskMarkdownCodeFromTree(withoutRelatedBlock, tree);
+  const searchable = maskMarkdownLiteralRanges(withoutRelatedBlock, tree, true);
   const links: string[] = [];
   for (const match of searchable.matchAll(OBSIDIAN_LINK_PATTERN)) {
     const target = match[1]?.trim();

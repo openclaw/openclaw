@@ -571,6 +571,17 @@ export function listUpdateCompatibilityChunkPaths(
   ].toSorted();
 }
 
+/** The 2026.9.37 immutable updater predates leased handoffs and always denied authority.
+ * This export is emitted inline, not imported from the current runtime. Remove it when
+ * 2026.9.37 leaves the supported first-hop upgrade window.
+ */
+export function isInlineUpdateCompatibilityExport(origin: UpdateCompatibilityOrigin): boolean {
+  return (
+    origin.module === "src/infra/update-managed-service-handoff-current.ts" &&
+    origin.symbol === "isImmutableManagedServiceUpdateHandoffProcess"
+  );
+}
+
 /** Follow the old owner's current lexical binding when its implementation moves. */
 function currentOrigin(
   origin: UpdateCompatibilityOrigin,
@@ -597,6 +608,7 @@ export function writeUpdateCompatibilityChunks(params: {
   distDir: string;
   sourceDir: string;
   inventory: UpdateCompatibilityInventory;
+  dryRun?: boolean;
 }): string[] {
   const distDir = path.resolve(params.distDir);
   using parser = createNativeTypeScriptParser({ cwd: params.sourceDir });
@@ -713,6 +725,10 @@ export function writeUpdateCompatibilityChunks(params: {
       );
     }
     for (const entry of chunk.exports) {
+      if (isInlineUpdateCompatibilityExport(entry.origin)) {
+        lines.push(`export async function ${entry.exported}() { return false; }`);
+        continue;
+      }
       const origin = origins.get(`${entry.origin.module}:${entry.origin.symbol}`)!;
       const matches = [...(candidates.get(`${origin.module}:${origin.symbol}`)?.values() ?? [])];
       const match = matches[0];
@@ -760,6 +776,9 @@ export function writeUpdateCompatibilityChunks(params: {
     outputs.set(chunk.path, contents);
   }
   // Finish all mappings before writing any compatibility output.
+  if (params.dryRun) {
+    return [...outputs.keys()].toSorted();
+  }
   for (const [relative, contents] of outputs) {
     const destination = path.join(distDir, relative);
     fs.mkdirSync(path.dirname(destination), { recursive: true });

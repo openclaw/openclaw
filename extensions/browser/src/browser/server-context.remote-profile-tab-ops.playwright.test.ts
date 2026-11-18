@@ -90,6 +90,7 @@ describe("browser remote profile tab ops via Playwright", () => {
       timeoutMs: 60_000,
       cdpPolicy: permissiveRemoteCdpPolicy,
       ssrfPolicy: { allowPrivateNetwork: true },
+      standingSsrfPolicy: { allowPrivateNetwork: true },
     });
 
     await remote.closeTab("T1");
@@ -292,6 +293,7 @@ describe("browser remote profile tab ops via Playwright", () => {
       url: "about:blank",
       cdpPolicy: permissiveRemoteCdpPolicy,
       ssrfPolicy: { allowPrivateNetwork: true },
+      standingSsrfPolicy: { allowPrivateNetwork: true },
     });
   });
 

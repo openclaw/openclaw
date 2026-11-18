@@ -87,9 +87,10 @@ export async function restoreRepairGateway(params: {
     const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: params.root, state });
     assertCurrent();
     if (verdict.kind !== "owned") {
-      throw new Error(
-        "Recovered update's Gateway service ownership could not be verified. Run openclaw gateway status --deep.",
-      );
+      return {
+        restart: false,
+        warning: stoppedGatewayGuidance("its ownership could not be verified", env),
+      };
     }
     const port = await resolveUpdatedGatewayRestartPort({
       config: params.config,

@@ -356,6 +356,11 @@ never from before that room's first activation by this Buzz account. That
 activation floor survives restarts. Sender-supplied timestamps do not advance it.
 Replay deduplication prevents completed messages from running again.
 
+A relay rate limit during history recovery pauses only the affected room and
+honors the relay's retry delay. Other rooms and channels continue delivering.
+After three retries, OpenClaw warns that the room's history recovery is incomplete
+and keeps the connection available for live messages.
+
 Use `groupPolicy: "allowlist"` with `groupAllowFrom` in manual configuration
 when only specific room members should be able to activate the agent.
 Each room can override `groupPolicy`, `groupAllowFrom`, or both. An omitted room

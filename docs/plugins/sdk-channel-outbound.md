@@ -51,6 +51,21 @@ sweep, that bound is 35 minutes from the last refresh, plus scheduling and execu
 `pollIntervalMs` increases the bound. Active local claims keep their existing
 protection, including claims held after a settlement write fails.
 
+During a plugin reload, the monitor retains its queue custody while the plugin
+instance is quiesced. Already claimed work can settle, but new delivery callbacks
+wait until the instance resumes or a successor takes over. A failed reload wakes
+the existing monitor automatically. A retained caller may request `start()` while
+quiesced; delivery waits for resume. If that caller lacks live authority, startup
+throws so the caller can retry.
+
+`stop()` joins accepted writes and retires the drain even when a settlement write
+fails; configured `onError` observers receive that failure. Never-adopted claims
+can then be recovered by a successor immediately. Claims with unresolved terminal
+writes or uncertain write outcomes remain protected against same-process replay
+until the Gateway exits. Restart recovery, stored rows, retention, and schemas are
+unchanged. Permitted callbacks after stop, including `durable-after-stop`
+admissions, use the late caller's own active authority.
+
 The monitor serializes admissions so append backoff cannot invert a lane. The
 default bounded append delays are `0`, `100`, and `300` ms; exhaustion rejects
 the transport callback instead of dispatching an event that was not made
@@ -106,7 +121,7 @@ Plugin-supplied queues can implement optional `enqueueBatch(events)` with the sa
 atomic contract; queues exposing only `enqueue` retain individual admission.
 
 `deliver` receives `onAdopted`, `onDeferred`, `onAdoptionFinalizing`, `onFailed`,
-`onCancelled`, `onAbandoned`, and `abortSignal`. Use `onFailed` for delivery
+`onCancelled`, `onAbandoned`, `onDropped`, and `abortSignal`. Use `onFailed` for delivery
 errors, `onCancelled` for explicit pre-adoption cancellation that must preserve
 retry accounting, and `onAbandoned` when a non-adopted turn should consume a
 retry attempt. Returning without an explicit handoff marks a terminal
@@ -114,6 +129,14 @@ no-dispatch event adopted. `admission` is always `exclusive`. A deferred handoff
 keeps the claim held, while shutdown or abort leaves unadopted work retryable.
 The monitor tracks delivery independently from claim settlement because
 adoption can tombstone a row before the channel's delivery promise returns.
+
+Forward and await `onDropped(reason)` for queue-cap policy drops. They are recorded
+terminal non-outcomes, without a failure notice or replay. A wrapper that spreads
+the lifecycle and overrides `onAbandoned` for cleanup must also wrap `onDropped`
+with that cleanup; invoking `onAbandoned` from `onDropped` would request a retry.
+Wrappers that omit `onDropped` retain the legacy abandonment/replay fallback.
+Only expose a wrapped `onDropped` when the underlying sources support terminal
+drop custody; its presence also suppresses ordinary queue-full notices.
 
 Use optional `drain.onDeadLetter(claim, { reason, message }, signal)` for a transport-owned
 failure reply or reaction. It runs only after this claim's failure write commits;
@@ -171,8 +194,10 @@ The returned monitor exposes `admit`, `ensureQueueAvailable`, `start`, `pause`,
 `stop`, `waitForIdle`, `isRunning`, and `isStopped`. Use the
 `ensureQueueAvailable()` check (safe to repeat) when plugin-owned migration or preparation must
 run after the queue opens but before the drain starts. `stop` first settles
-accepted admissions, then aborts and disposes the drain, waits for the pump and
-active deliveries, and disposes again to close the lazy-creation race.
+accepted admissions, then aborts, joins the pump and configured delivery waits,
+disposes the drain, and releases its custody. Aborting the supplied `abortSignal`
+starts the same teardown; plugins do not need a separate `stop()` call to release
+an aborted monitor.
 
 Keep transport-specific redaction, raw-envelope validation, non-retryable
 classification, and persisted payload shape in the plugin. Webhook transports

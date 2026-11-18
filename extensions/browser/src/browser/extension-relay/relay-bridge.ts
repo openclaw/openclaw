@@ -192,8 +192,8 @@ export class ExtensionRelayBridge {
     const candidateOrdinal = this.nextExtensionCandidateOrdinal++;
     let candidateState: "awaiting-hello" | "active" | "rejected" = "awaiting-hello";
     this.extensionCandidates.add(socket);
-    const helloTimer = onHelloTimeout && setTimeout(onHelloTimeout, EXTENSION_HELLO_TIMEOUT_MS);
-    helloTimer?.unref?.();
+    const helloTimer =
+      onHelloTimeout && setTimeout(onHelloTimeout, EXTENSION_HELLO_TIMEOUT_MS).unref();
     const rejectCandidate = (code: number, reason: string) => {
       candidateState = "rejected";
       this.extensionCandidates.delete(socket);
@@ -353,8 +353,7 @@ export class ExtensionRelayBridge {
         return;
       }
       this.sendToExtension({ type: "ping" });
-    }, EXTENSION_PING_INTERVAL_MS);
-    this.pingTimer.unref?.();
+    }, EXTENSION_PING_INTERVAL_MS).unref();
   }
 
   private stopPing(): void {
@@ -380,8 +379,7 @@ export class ExtensionRelayBridge {
       const timer = setTimeout(() => {
         this.pendingExtension.delete(seq);
         reject(new Error(`extension relay command timed out: ${command.type}`));
-      }, resolveExtensionRelayCommandTimeoutMs(command));
-      timer.unref?.();
+      }, resolveExtensionRelayCommandTimeoutMs(command)).unref();
       this.pendingExtension.set(seq, { resolve, reject, timer });
       if (signal) {
         abortListener = addAbortListener(signal, () => {
@@ -632,7 +630,9 @@ export class ExtensionRelayBridge {
               error instanceof Error &&
               (error.message === "The extensions gallery cannot be scripted." ||
                 error.message === "Cannot access a chrome:// URL" ||
-                error.message === "Cannot access a chrome-extension:// URL of different extension")
+                error.message ===
+                  "Cannot access a chrome-extension:// URL of different extension" ||
+                error.message === "Cannot attach to this target.")
             ) {
               skipped.set(tab, { url, reason: error.message });
             }

@@ -1,3 +1,4 @@
+import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import type {
@@ -48,6 +49,7 @@ export async function refreshSessionMaintenanceStatisticsInWorker(
   database: ReclamationDatabaseOptions,
   execution: OpenClawAgentDatabaseExecution,
   assertCurrent: () => void,
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"],
 ): Promise<void> {
   execution.assertCurrent();
   const identity = execution.fileIdentity;
@@ -64,7 +66,7 @@ export async function refreshSessionMaintenanceStatisticsInWorker(
         input: { kind: "maintenance-statistics" },
       }),
     { identityAgentId: database.agentId },
-    { retainedExecution: execution },
+    { retainedExecution: execution, readCustody },
   );
 }
 
@@ -73,6 +75,7 @@ export function finalizeSessionMaintenanceInWorker(
   plan: SessionMaintenanceFinalizationPlan,
   execution: OpenClawAgentDatabaseExecution,
   assertCurrent: () => void,
+  readCustody?: AgentDatabaseRequestExecutionSource["readCustody"],
 ): Promise<SessionMaintenanceFinalizationResult> {
   const entries = collectReclamationDeletionEntries(plan);
   const captured = captureNativeSessionWorkerDeletion(entries);
@@ -88,6 +91,7 @@ export function finalizeSessionMaintenanceInWorker(
     database: plan.databaseOptions,
     agentId: plan.agentId,
     retainedExecution: execution,
+    readCustody,
     assertCurrent,
     candidateKind: "session-maintenance-finalize",
     onCommitted(candidate, _published, identity) {

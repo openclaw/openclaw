@@ -2,13 +2,15 @@
 export { measureTranscriptDeltaBytes } from "../realtime-transcription/transcript-bytes.js";
 export type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 export type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
+  RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+export type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
-  RealtimeTranscriptionSessionCreateRequest,
 } from "../realtime-transcription/provider-types.js";
 export {
   createRealtimeTranscriptionWebSocketSession,

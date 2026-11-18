@@ -9,6 +9,7 @@ import {
   parseStrictPositiveInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
+import { resolveFilesystemPath } from "../../infra/home-dir.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
 import { positiveDurationError } from "../../shared/positive-duration.js";
@@ -153,7 +154,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
                     extensionForMime(mimeType) ||
                     path.extname(video.fileName ?? "") ||
                     path.extname(output);
-                  const resolvedOutput = path.resolve(output);
+                  const resolvedOutput = resolveFilesystemPath(output);
                   const parsed = path.parse(resolvedOutput);
                   const filePath =
                     result.videos.length <= 1

@@ -257,21 +257,21 @@ describe("resident Codex catalog", () => {
     await index.reconcile();
     readNative.mockRejectedValueOnce(new Error("native unavailable"));
     readNative.mockRejectedValueOnce(new Error("native retry unavailable"));
-    const stat = vi.spyOn(fs, "lstat");
+    const scan = vi.spyOn(fs, "opendir");
     await advance(index, 15 * 60_000);
-    expect(stat).toHaveBeenCalled();
+    expect(scan).toHaveBeenCalled();
     expect(readNative).toHaveBeenCalledOnce();
-    stat.mockClear();
+    scan.mockClear();
     for (const calls of [2, 3]) {
       await index.upsertThread(existing);
       await advance(index, 30_000);
       expect(readNative).toHaveBeenCalledTimes(calls);
-      expect(stat).not.toHaveBeenCalled();
+      expect(scan).not.toHaveBeenCalled();
     }
 
     await writeCatalogRollout(root, idleThread({ id: "external", preview: "External request" }));
     await advance(index, 14 * 60_000);
-    expect(stat).toHaveBeenCalled();
+    expect(scan).toHaveBeenCalled();
     expect(index.get("external")?.preview).toBe("External request");
   });
 

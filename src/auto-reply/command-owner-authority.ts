@@ -4,10 +4,13 @@ import {
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
 import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
+import type { UserChannelIdentity } from "../state/user-profiles.types.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
   isCurrent: () => boolean;
+  /** Exact native identity accepted by the host ingress, never a delivery projection. */
+  channelPrincipal?: Readonly<UserChannelIdentity>;
   /** Prepared source invoked by the full `isCurrent` check, not a replacement for it. */
   sourceAssertion?: SessionSourceAssertion;
   recoveryReference?: CommandOwnerReference;
@@ -31,6 +34,8 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
     authority.recoveryReference && Object.freeze({ ...authority.recoveryReference });
   const capability = {
     recoveryReference,
+    channelPrincipal:
+      authority.channelPrincipal && Object.freeze({ ...authority.channelPrincipal }),
     operatorAuthority,
     successor: authority.successor,
     isCurrent: checkCurrent,

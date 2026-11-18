@@ -32,6 +32,8 @@ export const run = (cwd: string, cmd: string, args: string[] = [], env?: NodeJS.
       PATH: process.env.PATH,
       HOME: cwd,
       TMPDIR: cwd,
+      COREPACK_HOME: process.env.COREPACK_HOME,
+      COREPACK_ENABLE_NETWORK: "0",
       LC_ALL: "C",
       TZ: "UTC",
       ...baseGitEnv,

@@ -55,17 +55,20 @@ it.each(["host", "worker"] as const)(
             expect(fs.readFileSync(artifact.resolve(path.join(root, "index.cjs")), "utf8")).toBe(
               "exports.value = 42;",
             );
+            // Worker preparation captures once, copies custody for transfer, then
+            // reconstructs and admits the same bytes in the host without another copy.
+            const capturePasses = location === "worker" ? 2 : 1;
             expect(metrics).toMatchObject({
-              captures: 1,
-              captureReuse: 0,
-              packageFiles: 2,
-              dependencyFiles: 3,
+              captures: capturePasses,
+              captureReuse: capturePasses - 1,
+              packageFiles: 2 * capturePasses,
+              dependencyFiles: 3 * capturePasses,
               originalBytes: bytes,
-              copiedBytes: bytes,
-              receiptPasses: 1,
-              receiptFileReads: 5,
-              receiptReadBytes: bytes,
-              hashReadBytes: bytes * 2,
+              copiedBytes: bytes * capturePasses,
+              receiptPasses: capturePasses,
+              receiptFileReads: files.length * capturePasses,
+              receiptReadBytes: bytes * capturePasses,
+              hashReadBytes: bytes * (capturePasses + 1),
             });
             if (location === "worker") {
               expect(metrics.workerMs).toBeGreaterThan(0);
@@ -120,29 +123,50 @@ it("accounts for retained custody copies separately from original bytes", async 
     fs.writeFileSync(path.join(root, filename), content);
   }
   const bytes = files.reduce((total, [, content]) => total + Buffer.byteLength(content), 0);
+  const entry = path.join(root, "index.cjs");
   await withPluginSourceCaptureStorage({ stateDir: directory, placement: "temporary" }, () =>
     withPluginGenerationSourceCustody(async () => {
       const firstMetrics = createPluginGenerationMetrics();
-      const first = withPluginGenerationMetrics(firstMetrics, () =>
-        capturePluginGenerationArtifact(root, undefined, (run) => run()),
-      );
+      const first = (
+        await withPluginGenerationMetrics(firstMetrics, () =>
+          preparePluginGenerationArtifact({ rootDir: root, source: entry }),
+        )
+      ).artifact;
       try {
         const metrics = createPluginGenerationMetrics();
-        const second = withPluginGenerationMetrics(metrics, () =>
-          capturePluginGenerationArtifact(root, undefined, (run) => run()),
-        );
+        const second = (
+          await withPluginGenerationMetrics(metrics, () =>
+            preparePluginGenerationArtifact({ rootDir: root, source: entry }),
+          )
+        ).artifact;
         try {
-          expect(firstMetrics).toMatchObject({ originalBytes: bytes, copiedBytes: bytes * 3 });
-          expect(metrics).toMatchObject({
-            captures: 1,
-            captureReuse: 1,
-            originalBytes: 0,
-            copiedBytes: bytes,
-            receiptPasses: 1,
-            receiptFileReads: 2,
-            receiptReadBytes: bytes,
+          // First preparation admits the seed, worker fork, and host reconstruction.
+          // Each consumer copies seed custody and transfer custody, but only the seed
+          // selects original bytes. Both consumer isolates verify their own receipt.
+          expect(firstMetrics).toMatchObject({
+            captures: 3,
+            captureReuse: 2,
+            packageFiles: files.length * 3,
+            dependencyFiles: 0,
+            originalBytes: bytes,
+            copiedBytes: bytes * 3,
+            receiptPasses: 3,
+            receiptFileReads: files.length * 3,
+            receiptReadBytes: bytes * 3,
+            hashReadBytes: bytes * 4,
           });
-          const entry = path.join(root, "index.cjs");
+          expect(metrics).toMatchObject({
+            captures: 2,
+            captureReuse: 2,
+            packageFiles: files.length * 2,
+            dependencyFiles: 0,
+            originalBytes: 0,
+            copiedBytes: bytes * 2,
+            receiptPasses: 2,
+            receiptFileReads: files.length * 2,
+            receiptReadBytes: bytes * 2,
+            hashReadBytes: bytes * 2,
+          });
           expect(second.resolve(entry)).not.toBe(first.resolve(entry));
           expect(fs.readFileSync(second.resolve(entry), "utf8")).toBe(files[1]![1]);
           expect(second.sourceDigest).toBe(first.sourceDigest);

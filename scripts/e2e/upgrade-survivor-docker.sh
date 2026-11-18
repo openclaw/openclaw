@@ -123,7 +123,9 @@ NODE
   *) exit "$context_status" ;;
 esac
 openclaw_resolve_frozen_upgrade_survivor_capabilities "$ROOT_DIR"
+openclaw_resolve_frozen_upgrade_skill_library_contract "$ROOT_DIR"
 UPGRADE_COMPAT_ENV_ARGS+=(
+  -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_SKILL_LIBRARY_MODE"
   -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_TOOL_SEARCH_RECIPE"
   -e "OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE=$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_MEMBERSHIP_MODE"
 )
@@ -341,7 +343,10 @@ prepare_limit_summary() {
 DOCKER_RUN_USER_ARGS=()
 UPGRADE_ENTRYPOINT=()
 if [ "$UPDATE_RESTART_MODE" = auto-auth ] ||
-  { [ "$SCENARIO" = package-installed-recovery ] && [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ]; }; then
+  { [ "$SCENARIO" = package-installed-recovery ] && {
+    [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = older-runtime ] ||
+      [ "${OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT:-}" = live-gateway ]
+  }; }; then
   # MAC_OVERRIDE permits replacing unconfined; the entrypoint drops every capability.
   DOCKER_RUN_USER_ARGS+=(--user root --cgroupns private --cap-add SYS_ADMIN --cap-add MAC_OVERRIDE --security-opt apparmor=unconfined)
   UPGRADE_ENTRYPOINT=(bash /tmp/openclaw-release-harness/scripts/e2e/lib/upgrade-survivor/cgroup-entrypoint.sh)
@@ -478,7 +483,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
 
   if [ "$SCENARIO" = "projects-doctor" ] || [ "$SCENARIO" = "projects-startup-migration" ] || [ "$SCENARIO" = "cron-owner-doctor" ]; then
     WORKER_RUNTIME_HOST_ROOT="$(mktemp -d "$ARTIFACT_DIR/worker-runtime.XXXXXX")"
-    chmod a+rwx "$WORKER_RUNTIME_HOST_ROOT"
+    chmod a+rwxt "$WORKER_RUNTIME_HOST_ROOT"
     UPGRADE_SCENARIO_ARGS+=(
       -v "$WORKER_RUNTIME_HOST_ROOT:$SURVIVOR_RUNTIME_ROOT"
     )

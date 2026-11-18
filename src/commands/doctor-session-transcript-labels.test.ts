@@ -63,7 +63,7 @@ function createMessageEvent({
 }
 
 function expectNote(message: unknown) {
-  expect(note).toHaveBeenCalledWith(message, "Session transcript labels");
+  expect(note).toHaveBeenCalledWith(message, "Chat history labels");
 }
 
 describe("doctor SQLite session transcript label migration", () => {

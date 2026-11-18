@@ -1,7 +1,7 @@
 import { Show, createEffect, createMemo, createProjection } from "solid-js";
 import type { SessionsUsageResult } from "../../api/types.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
-import { formatMissingOperatorReadScopeMessage } from "../../lib/gateway-errors.ts";
+import { formatMissingOperatorReadScopeMessage } from "../../lib/permission-error.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { UsageAgentScope, UsagePageShell } from "./page-shell.tsx";

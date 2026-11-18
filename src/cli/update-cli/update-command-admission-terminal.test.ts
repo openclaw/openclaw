@@ -1,11 +1,11 @@
 import { expect, it, vi } from "vitest";
 import { UPDATE_RUN_DRIVER_LIMIT } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
-import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as reconciliation from "../../infra/update-run-reconciliation.js";
 import { defaultRuntime } from "../../runtime.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { allowPackageRuntime } from "./update-command-fresh-preview.test-support.js";
 import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
@@ -38,7 +38,7 @@ it.each(["readable", "unreadable"] as const)(
         });
         if (state === "unreadable") {
           const read = vi
-            .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+            .spyOn(stateReads, "withExistingOpenClawStateDatabaseArtifactPreservingReadOnly")
             .mockImplementation(() => {
               throw original;
             });
