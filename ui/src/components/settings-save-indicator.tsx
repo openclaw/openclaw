@@ -1,6 +1,5 @@
 import {
   action,
-  affects,
   createMemo,
   createOptimistic,
   createSignal,
@@ -9,7 +8,6 @@ import {
   latest,
   Loading,
   Match,
-  refresh,
   Show,
   Switch,
 } from "solid-js";
@@ -69,8 +67,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
       null,
     );
     const [saving, setSaving] = createOptimistic(false);
-    const needsApply = createMemo(() => props.needsApply);
-    return { retired, command, setCommand, saving, setSaving, needsApply };
+    return { retired, command, setCommand, saving, setSaving };
   });
   const [completion, setCompletion] = createSignal<Promise<unknown> | null>(null);
   const outcome = createMemo(async () => {
@@ -89,13 +86,8 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
       if (current(view)) {
         view.setCommand(command);
         view.setSaving(true);
-        // The owner decides whether the accepted operation still needs an Apply.
-        affects(view.needsApply);
       }
       yield Promise.race([pending, retired]);
-      if (current(view)) {
-        yield refresh(view.needsApply);
-      }
     } catch (error) {
       if (current(view)) {
         throw error;
@@ -153,7 +145,7 @@ export function SettingsSaveIndicator(props: SettingsSaveIndicatorProps) {
     if (props.savedNotice) {
       return "saved";
     }
-    return latest(presentation().needsApply) ? "apply" : undefined;
+    return props.needsApply ? "apply" : undefined;
   });
   // Retry keeps the failure in place until it has an outcome, so the card does not
   // collapse into Saving… and grow back when the same write fails again.
