@@ -5,6 +5,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
     paths:
       - "apps/linux/**"
+      - "ui/src/components/browser/browser-inspect-script.ts"
       - "scripts/lib/openclaw-bun.json"
       - "scripts/stage-openclaw-bun.sh"
       - ".github/workflows/linux-app.yml"
