@@ -106,7 +106,8 @@ export function ChatThread(input: ChatThreadInput) {
   const heldWarmBoot =
     initialRestoring &&
     document.documentElement.getAttribute("data-openclaw-warm-frame") === "holding";
-  const initialReady = initialRestoring && !heldWarmBoot;
+  const initialReady =
+    (initialRestoring && !heldWarmBoot) || Boolean(input.props.initialSubmission);
   const [ready, setReady] = createSignal(initialReady);
   const isPresented = usePanePresentation(() => input.props.transcriptVisible ?? true);
   const reveal = createTimeout(() => {
@@ -250,7 +251,8 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
       return typeof visible === "object" ? visible.isPresented() : visible;
     },
   );
-  const splitColdRows = !input.props.restoring && splitChatConstruction;
+  const splitColdRows =
+    !input.props.restoring && !input.props.initialSubmission && splitChatConstruction;
   const started = splitColdRows ? performance.now() : 0;
   const current = createMemo(() => {
     const searchState = search().read();

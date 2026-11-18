@@ -315,12 +315,26 @@ describe("chat Details presentation", () => {
       );
       expect(panel.querySelector(".chat-details-session")).toBeNull();
       expect(getComputedStyle(panel).visibility).toBe("hidden");
+      expect(getComputedStyle(panel).opacity).toBe("0");
 
       if (release === "transcript paint") {
         update({ contentPending: false });
       } else {
         open(trigger);
       }
+      flush();
+      const fade = panel
+        .getAnimations()
+        .find(
+          (animation) =>
+            animation instanceof CSSTransition && animation.transitionProperty === "opacity",
+        );
+      expect(fade).toBeDefined();
+      fade!.pause();
+      fade!.currentTime = Number(fade!.effect!.getTiming().duration) / 2;
+      expect(Number(getComputedStyle(panel).opacity)).toBeGreaterThan(0);
+      expect(Number(getComputedStyle(panel).opacity)).toBeLessThan(1);
+      fade!.finish();
       await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
       expect(getComputedStyle(panel).visibility).toBe("visible");
       const session = panel.querySelector(".chat-details-session");

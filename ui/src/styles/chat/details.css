@@ -102,8 +102,9 @@ openclaw-chat-details[mobile] {
 
 /* Automatic docking can reserve space before Details mounts. Don't paint an
    empty card in that space before the loading or populated view is available. */
-.chat-details[data-awaiting-content] {
+.chat-details[data-desktop][data-awaiting-content] {
   visibility: hidden;
+  opacity: 0;
 }
 
 .chat-details[data-desktop][data-open] {

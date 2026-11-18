@@ -40,6 +40,7 @@ export function unscaledBorderBox(element: HTMLElement, style = getComputedStyle
 /** The native scroll range changes only at these viewport and content writes. */
 export class TranscriptLayoutOwner {
   ready = false;
+  private initialSubmission = false;
   /** Row-column offset held back from scrollTop while native scrolling is running. */
   rowShift = 0;
   private rowGeometry: readonly TranscriptRowGeometry[] = [];
@@ -54,6 +55,12 @@ export class TranscriptLayoutOwner {
     return this.rowGeometry;
   }
 
+  get canYieldInitialPlacement(): boolean {
+    // New Session already painted this user turn. Place its message and working
+    // row before paint instead of exposing a hidden range during the handoff.
+    return !this.initialSubmission && this.rows.length > 1;
+  }
+
   set rows(rows: readonly TranscriptRowGeometry[]) {
     // Geometry survives rendered bodies; structural types alone do not discard payloads.
     this.rowGeometry = projectedRows(rows, [], () =>
@@ -63,6 +70,7 @@ export class TranscriptLayoutOwner {
 
   configureRows(props: ChatThreadProps, avatarPlacement: string, transient: boolean): void {
     this.ready = !props.loading;
+    this.initialSubmission = props.initialSubmission === true;
     // Expanded and filtered rows are transient; the snapshot cannot restore them.
     this.rowLayout = transient ? undefined : props.widgetLayout;
     const theme = props.applicationContext?.theme;

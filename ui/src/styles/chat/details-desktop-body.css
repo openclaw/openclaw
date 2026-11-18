@@ -10,6 +10,57 @@
   display: flex;
 }
 
+/* Docking and read demand start before any sections are available. Paint the
+   card only around content, rather than expanding for a placeholder. */
+.chat-details[data-desktop]:has(> .chat-details-desktop-body):not(
+    :has(
+      [data-details-group],
+      [data-progress-card-placement="details"],
+      .chat-details__muted,
+      .chat-details__creator,
+      .chat-details__meta-actions,
+      .chat-details-desktop-loading,
+      .lazy-view-error
+    )
+  ) {
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* Replace the one-row skeleton in place when the first real section arrives. */
+.chat-details-desktop-body__content:has(
+    [data-details-group],
+    [data-progress-card-placement="details"],
+    .chat-details__muted,
+    .chat-details__creator,
+    .chat-details__meta-actions,
+    .lazy-view-error
+  )
+  > .chat-details-desktop-loading {
+  display: none;
+}
+
+.chat-details-desktop-loading {
+  --skeleton-base: var(--skeleton-base-raised);
+
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+}
+
+.chat-details-desktop-loading > .skeleton {
+  width: 96px;
+  height: 10px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-details-desktop-loading > .skeleton:first-child {
+  width: 14px;
+  height: 14px;
+}
+
 .chat-details-desktop-body {
   --details-row-font-size: calc(13px * var(--control-ui-text-scale));
   --details-row-line-height: 24px;
@@ -30,7 +81,8 @@
   --details-fade-bottom: 0px;
   font-variant-numeric: tabular-nums;
   flex: 0 1 auto;
-  min-height: 0;
+  /* Keep the compact row's floor when first facts replace it with a growing section. */
+  min-height: 46px;
   min-width: 0;
   overflow: auto;
   overscroll-behavior: contain;

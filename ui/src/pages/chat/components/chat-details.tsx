@@ -415,6 +415,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         isPresented(),
         layoutElements(),
         props.chat?.connected,
+        sessionOpened(),
       ] as const,
     { equals: (before, after) => before.every((value, index) => value === after[index]) },
   );
@@ -433,6 +434,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         isDesktop,
         presented,
         elements,
+        ,
+        contentOpened,
       ],
       previous,
     ) => {
@@ -458,8 +461,8 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         presented === previous[9] &&
         open !== previous[1];
       manualChange = false;
-      const arriving = open && entrancePending && !props.chat?.cachedDetails;
-      if (open) {
+      const arriving = open && entrancePending && !cachedReady();
+      if (open && contentOpened) {
         entrancePending = false;
       }
       panel.toggleAttribute("data-restoring", isDesktop && !manual && !arriving);
