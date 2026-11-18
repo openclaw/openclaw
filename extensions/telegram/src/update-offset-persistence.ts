@@ -1,4 +1,4 @@
-// The durable ingress spool owns delivery; this cursor is monotonic catch-up.
+// The durable ingress spool owns delivery; this cursor follows the latest confirmed response.
 import { asSafeIntegerInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type TelegramUpdateOffsetPersistenceOptions = {
@@ -64,7 +64,8 @@ export function createTelegramUpdateOffsetPersistence(
         options.onInvalidUpdateId(updateId);
         return;
       }
-      if (acceptedUpdateId !== null && normalizedUpdateId <= acceptedUpdateId) {
+      // Telegram can restart update ids lower; a higher stale cursor would never confirm them.
+      if (normalizedUpdateId === acceptedUpdateId) {
         return;
       }
       acceptedUpdateId = normalizedUpdateId;

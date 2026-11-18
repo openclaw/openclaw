@@ -105,6 +105,8 @@ it.each([
   [["apps/linux/omarchy/README.md"], false],
   [["apps/linux/README.md", "apps/linux/src-tauri/src/main.rs"], true],
   [["apps/linux/ui/index.html"], true],
+  [["ui/src/components/browser/browser-inspect-script.ts"], true],
+  [["ui/src/components/browser/browser-client.ts"], false],
   [["apps/linux/src-tauri/resources/README.md"], true],
   [["scripts/stage-openclaw-bun.sh"], true],
   [["test/scripts/stage-openclaw-bun.test.ts"], false],

@@ -162,8 +162,6 @@ function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number):
   return event as PointerEvent;
 }
 
-const mountComposer = (overrides: Parameters<typeof props>[0]) => renderComposer(overrides, true);
-
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
@@ -234,25 +232,26 @@ it("shows actionable connecting guidance in a visible status region", () => {
 });
 
 it("shows dictation starting at once and microphone guidance only when access is slow", async () => {
-  // Load the lazy dictation phase view first, as a browser that already fetched its chunk.
+  // Exercise the pending microphone phase with both lazy dictation modules already loaded.
   await import("./components/composer-dictation-status.tsx");
-  vi.useFakeTimers();
+  await import("./composer-dictation-session.ts");
   openMicrophoneMock.mockReturnValue(new Promise(() => {}));
   const dismissRecovery = vi.fn();
-  const { container, query } = mountComposer({
-    gatewayClient: {
-      request: vi.fn(async () => ({ transcription: { ready: true } })),
-    } as unknown as GatewayBrowserClient,
-    onToggleRealtimeTalk: vi.fn(),
-    realtimeTalkStatus: "error",
-    realtimeTalkDetail: "The selected microphone is unavailable",
-    onUseSystemDefaultMicrophone: vi.fn(),
-    onDismissRealtimeTalkError: dismissRecovery,
-  });
+  const { container, query } = await mountTalk(
+    { transcription: { ready: true } },
+    {
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: "The selected microphone is unavailable",
+      onUseSystemDefaultMicrophone: vi.fn(),
+      onDismissRealtimeTalkError: dismissRecovery,
+    },
+    true,
+  );
   await vi.advanceTimersByTimeAsync(0);
   voiceButton(container).dispatchEvent(dictationPointer("pointerdown", 15));
   expect(dismissRecovery).toHaveBeenCalled();
   await vi.advanceTimersByTimeAsync(800);
+  expect(openMicrophoneMock).toHaveBeenCalledOnce();
   const starting = query('.agent-chat__dictation-status[role="status"]');
   expect(starting?.textContent).toBe(t("chat.composer.dictationStarting"));
   expect(
@@ -490,10 +489,12 @@ it("keeps the microphone picker open without leaking an unavailable hold into Ta
 
 it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
   openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
-  const { container, query } = await mountTalk({
-    realtime: { ready: true },
-    transcription: { ready: true },
-  });
+  // Dictation claims its Gateway session before the microphone opens.
+  const { container, query } = await mountTalk(
+    { realtime: { ready: true }, transcription: { ready: true } },
+    {},
+    true,
+  );
 
   const microphone = voiceButton(container);
   microphone.dispatchEvent(dictationPointer("pointerdown", 12));

@@ -1,3 +1,4 @@
+import { isNativeAppUiClient } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -30,6 +31,7 @@ import type { UserChannelAuthorizationReference } from "../state/user-profiles.t
 import { isBrowserOperatorUiClient, isWebchatClient } from "../utils/message-channel.js";
 import { createChannelOperatorRevocation } from "./channel-operator-revocation.js";
 import {
+  bindGatewayDeviceRevocation,
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
@@ -313,6 +315,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
             return inherited.modelPolicy;
           },
         });
+    bindGatewayDeviceRevocation(authority.assertCurrent, inherited.assertCurrent);
     return { authority, release: inherited.retain?.() ?? (() => {}) };
   }
   const actor = resolveGatewayOperatorRoleActor(params.client);
@@ -515,7 +518,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         assertRoleCurrent();
       } catch (error) {
         if (!isOperatorAuthorityUnavailable(error)) {
-          revoked = true;
+          revoke(error);
         }
         throw error;
       }
@@ -659,17 +662,19 @@ export async function captureGatewayOperatorRunAuthority(input: {
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,
     };
-    const recoverySnapshot = captureGatewayOperatorRecoverySnapshot({
-      client,
-      authority: admission,
-      modelPolicy: modelPolicy.original,
-      identity: preparedProfile,
-      config: getConfig(),
-    });
+    const { snapshot: recoverySnapshot, unavailableReason: recoverySnapshotUnavailableReason } =
+      captureGatewayOperatorRecoverySnapshot({
+        client,
+        authority: admission,
+        modelPolicy: modelPolicy.original,
+        identity: preparedProfile,
+        config: getConfig(),
+      });
     assertCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
       recoverySnapshot,
+      recoverySnapshotUnavailableReason,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),
@@ -693,11 +698,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
           }
         }),
     });
+    bindGatewayDeviceRevocation(authority.assertCurrent, params.hasCurrentClientAuthority);
     if (
       authenticatedOwner &&
       client.usesSharedGatewayAuth === true &&
       client.sharedGatewaySessionGeneration &&
-      (isBrowserOperatorUiClient(client.connect.client) || isWebchatClient(client.connect.client))
+      (isBrowserOperatorUiClient(client.connect.client) ||
+        isWebchatClient(client.connect.client) ||
+        isNativeAppUiClient(client.connect.client))
     ) {
       // The handshake owns the credential/generation checks, including device
       // reconnects bound to that shared credential. The profile name grants nothing.

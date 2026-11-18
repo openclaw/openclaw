@@ -16,7 +16,6 @@ import {
   CatalogDiscoverySearch,
   CatalogDiscoverySection,
 } from "../../components/solid/catalog-discovery.tsx";
-import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
@@ -28,7 +27,10 @@ import { createPageRequestDelay } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
+import { pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { preloadTemplateArtwork, TemplateArtwork } from "./template-artwork.tsx";
+import { TemplateUpload } from "./template-upload.tsx";
 import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
@@ -274,14 +276,20 @@ export function TemplatesExplore(
   const unavailable = () => gateway.connected && !canSearch();
   return (
     <openclaw-templates-explore>
-      <HubPageHeader
+      <PluginsHubHeader
+        actions={<TemplateUpload />}
         active="templates"
         subtitle={t("templatesCatalog.exploreDescription")}
         wide
         class="templates-catalog-header"
+        onSelect={(tab) => {
+          if (tab !== "templates") {
+            context.navigate(tab);
+          }
+        }}
       />
       <SettingsPage wide carapace>
-        <div class="agents-home">
+        <div class="agents-home" {...pluginsHubPanel("templates")}>
           <section
             class="agents-home__explore plugin-catalog-results"
             data-templates-explore

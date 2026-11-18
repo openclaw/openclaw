@@ -13,6 +13,7 @@ import {
 } from "../../routing/session-key.js";
 import type { ProviderReviewTerminalFact } from "../../sessions/provider-review-terminal.js";
 import { buildUpdatedSessionGoalStatus } from "./goals-transitions.js";
+import { createRestartResumeMarker } from "./session-restart-resume-scope.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionLifecycleProviderReview = Pick<
@@ -444,7 +445,7 @@ export function projectSessionLifecyclePatch(
     !restartResumeSkipReason(params.canonicalKey, entry)
   ) {
     // A timed-out shutdown marker must not turn cancellation into a lost continuation.
-    patch.resumeAfterRestart = entry.resumeAfterRestart ?? { queuedInputIds: [] };
+    patch.resumeAfterRestart = entry.resumeAfterRestart ?? createRestartResumeMarker({});
   }
   const stopped =
     patch.status === "killed" &&

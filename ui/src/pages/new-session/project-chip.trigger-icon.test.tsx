@@ -29,7 +29,7 @@ it("shows folder-git-2 by default, the selected project's icon, or GitHub for a 
   await waitForSolid(() => {
     const projectIcon = icon().querySelector("openclaw-workspace-icon");
     expect(projectIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
-    expect(projectIcon?.fallbackIcon).toBe("folderGit2");
+    expect(projectIcon?.querySelector(".workspace-icon-fallback svg")).not.toBeNull();
   });
 
   projectId.mockReturnValue("");

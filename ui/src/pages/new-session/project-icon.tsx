@@ -1,15 +1,11 @@
 import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { resolveWorkspaceIconSource } from "../../components/workspace-icon-source.ts";
 import { WorkspaceIcon } from "../../components/workspace-icon.tsx";
+import { ProjectFolderIcon } from "./project-folder-icon.tsx";
 
 /** A registered project's own icon, served by the Gateway's workspace icon scanner. */
-export function ProjectIcon(props: {
-  context: ApplicationContext | undefined;
-  projectId: string;
-  fallbackIcon: IconName;
-}) {
+export function ProjectIcon(props: { context: ApplicationContext | undefined; projectId: string }) {
   const source = createMemo(() => {
     const context = props.context;
     return context
@@ -24,14 +20,14 @@ export function ProjectIcon(props: {
       : null;
   });
   return (
-    <Show when={source()} fallback={<Icon name={props.fallbackIcon} />}>
+    <Show when={source()} fallback={<ProjectFolderIcon />}>
       {(current) => (
         <WorkspaceIcon
           routeUrl={current().routeUrl}
           authTokens={current().authTokens}
           authReady={current().authReady}
           connectionId={current().connectionId}
-          fallbackIcon={props.fallbackIcon}
+          fallbackIcon={<ProjectFolderIcon />}
         />
       )}
     </Show>

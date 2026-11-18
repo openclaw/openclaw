@@ -10,11 +10,7 @@ import type { ReplyOperation } from "../../sessions/session-controller.contracts
 import { runAfterReplyOperationClear } from "../../sessions/session-controller.state.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { GoalContinuation } from "./goal-continuation.types.js";
-import {
-  isFollowupOperatorAuthorityCurrent,
-  resolveFollowupAbortSignal,
-  type FollowupRun,
-} from "./queue/types.js";
+import { resolveFollowupAbortSignal, type FollowupRun } from "./queue/types.js";
 
 type GoalReturnParams = {
   base: FollowupRun;
@@ -368,7 +364,7 @@ export async function finishGoalContinuationSettlement(
       });
     }
   } catch (error) {
-    if (owner.closed || !isFollowupOperatorAuthorityCurrent(owner.params.base)) {
+    if (owner.closed) {
       return;
     }
     throw error;

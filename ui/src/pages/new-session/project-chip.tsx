@@ -5,6 +5,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { ProjectBrowserFocus } from "./draft-place-browser.ts";
 import { SessionPicker } from "./picker.tsx";
 import type { resolveProjectChip } from "./project-chip.ts";
+import { ProjectFolderIcon } from "./project-folder-icon.tsx";
 import type { NewSessionPlaceControlsOptions } from "./target-controls.ts";
 
 const ProjectPickerContent = lazy(() => import("./project-picker-content.tsx"), {
@@ -22,6 +23,7 @@ export type ProjectChipProps = {
 
 export function ProjectChip(props: ProjectChipProps) {
   // A chosen device folder shows its own name; an empty path shows the choice.
+  const fallback = () => <ProjectFolderIcon />;
   const label = () => {
     const deviceFolder = props.params.place.deviceFolder;
     if (!deviceFolder) {
@@ -38,21 +40,16 @@ export function ProjectChip(props: ProjectChipProps) {
       icon={
         <Show
           when={props.params.place.browser.projectId}
-          fallback={
-            <Icon name={props.params.place.browser.remoteProject ? "github" : "folderGit2"} />
-          }
+          fallback={props.params.place.browser.remoteProject ? <Icon name="github" /> : fallback()}
         >
-          {(projectId) => (
-            <Errored fallback={() => <Icon name="folderGit2" />}>
-              <Loading fallback={<Icon name="folderGit2" />}>
-                <ProjectIcon
-                  context={props.params.context}
-                  projectId={projectId()}
-                  fallbackIcon="folderGit2"
-                />
-              </Loading>
-            </Errored>
-          )}
+          <Errored fallback={fallback}>
+            <Loading fallback={fallback()}>
+              <ProjectIcon
+                context={props.params.context}
+                projectId={props.params.place.browser.projectId}
+              />
+            </Loading>
+          </Errored>
         </Show>
       }
       triggerAttributes={{ "data-project-id": props.params.place.browser.projectId || undefined }}

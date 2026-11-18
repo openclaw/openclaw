@@ -196,18 +196,6 @@ extension RootTabs {
         navigationPath.last ?? baseRoute
     }
 
-    static func shouldShowSidebarRevealInDestinationHeader(
-        isSidebarVisible: Bool,
-        layoutMode: SidebarLayoutMode) -> Bool
-    {
-        switch layoutMode {
-        case .split:
-            true
-        case .drawer:
-            !isSidebarVisible
-        }
-    }
-
     static func requestedInitialSidebarVisibility(arguments: [String]) -> Bool? {
         guard let value = arguments.drop(while: { $0 != "--openclaw-sidebar-visibility" }).dropFirst().first
         else { return nil }

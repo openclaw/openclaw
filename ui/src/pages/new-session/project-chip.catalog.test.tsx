@@ -120,7 +120,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   // Rows request the project's own icon by id and keep folder-git-2 until it loads.
   const alphaIcon = alphaRow?.querySelector("openclaw-workspace-icon");
   expect(alphaIcon?.routeUrl).toMatch(/\/__openclaw__\/project-icon\/alpha$/);
-  expect(alphaIcon?.fallbackIcon).toBe("folderGit2");
+  expect(alphaIcon?.querySelector(".workspace-icon-fallback svg")).not.toBeNull();
   expect(view.container.querySelector('input[type="search"]')).toBe(input);
   expect(document.activeElement).toBe(input);
   type("");

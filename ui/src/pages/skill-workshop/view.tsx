@@ -27,7 +27,7 @@ import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
-import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
+import { PLUGINS_HUB_PANEL_ID, pluginsHubPanel } from "../plugins/plugins-hub.ts";
 import { undoMutationFor } from "./api.ts";
 import { Detail } from "./detail.tsx";
 import { DraftDetail } from "./draft-detail.tsx";
@@ -107,7 +107,7 @@ export function SkillWorkshopView(props: { view: WorkshopView; reads: WorkshopRe
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <div id={PLUGINS_HUB_PANEL_ID} role="tabpanel" aria-labelledby="plugins-tab-skill-workshop">
+        <div {...pluginsHubPanel("skill-workshop")}>
           <SettingsPage wide carapace>
             <Show when={!props.view().plugin} fallback={<PluginUnavailable view={props.view} />}>
               <Toolbar view={props.view} />

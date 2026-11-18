@@ -627,6 +627,18 @@ const schema = objectSchema(
 );
 
 describe("OpenAI completions sampling and response format", () => {
+  it.each(["gpt-6.2-astra", "gpt-6.2-sol", "openai/gpt-6.2-sol"])(
+    "omits rejected sampling controls for %s at the provider-options boundary",
+    (id) => {
+      const model = makeCompletionsModel({ id });
+      for (const mode of ["direct", "managed"] as const) {
+        const params = requestMode(mode, model, { temperature: 0.7, topP: 0.8 });
+        expect(params).not.toHaveProperty("temperature");
+        expect(params).not.toHaveProperty("top_p");
+      }
+    },
+  );
+
   it.each([
     [
       { temperature: 0.4, topP: 0.9 },

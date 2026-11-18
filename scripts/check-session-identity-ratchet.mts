@@ -6,7 +6,8 @@ import { runPerFileCountRatchet } from "./lib/shrink-ratchet.mts";
 // lifecycle revision, run id, generation or leaf id names one attempt and lives only in a
 // TranscriptLease or a view precondition inside the session store. Outside it, no file may
 // compare those values, name a pin, or refuse with a "something changed" message. Existing hits
-// are listed in the allowlist, which may only shrink.
+// are listed in the allowlist, which may only shrink. Checking whether an ID is absent
+// does not pin an identity; null/undefined presence checks are not comparisons between IDs.
 const BASELINE_PATH = "config/session-identity-allowlist.txt";
 const BASELINE_HEADER = [
   "# Identity class A: per-file counts of id compares, pin names and inference refusals.",
@@ -23,6 +24,10 @@ const PATTERNS = [
   new RegExp(String.raw`[!=]==\s*[\w$.?()[\]]*(?:^|[^\w$])${ID}\b`, "gu"),
   /differs from the captured|no longer active|changed before|was replaced/giu,
 ];
+const TYPEOF_COMPARISON = new RegExp(
+  String.raw`(\btypeof\s+[\w$.?()[\]]*${ID}\s*)[!=]==(\s*(["'])(?:undefined|object|boolean|number|bigint|string|symbol|function)\3)(?=\s*(?:$|[),;:?]|&&|\|\|))`,
+  "gu",
+);
 const TOKENS = [
   "essionId",
   "ifecycleRevision",
@@ -47,7 +52,15 @@ const EXCLUDE = [
 
 /** Counts each pin name, id compare and inference refusal on one line. */
 export function countSessionIdentityPins(line: string) {
-  return PATTERNS.reduce((sum, pattern) => sum + (line.match(pattern)?.length ?? 0), 0);
+  // Type and presence checks do not compare identities. Remove only their
+  // operator so adjacent real comparisons and explicit pin names still count.
+  const comparisons = line
+    .replace(TYPEOF_COMPARISON, "$1 $2")
+    .replace(
+      /(?<![\w$.])(?:undefined|null)\s*[!=]==|[!=]==\s*(?:undefined|null)(?=\s*(?:$|[),;:?]|&&|\|\|))/gu,
+      " ",
+    );
+  return PATTERNS.reduce((sum, pattern) => sum + (comparisons.match(pattern)?.length ?? 0), 0);
 }
 
 function countSource(source: string) {
