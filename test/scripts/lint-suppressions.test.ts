@@ -179,6 +179,8 @@ describe("production lint suppressions", () => {
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
+        // Aggregate logs strip only SGR color and reject other control bytes that could hide errors.
+        "scripts/lib/release-validation-waivers.mjs|no-control-regex|2",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         // The frame census retains native methods and supplies their original receivers through .call.
         "scripts/perf/agent-event-frame-census-preload.mjs|typescript/unbound-method|3",

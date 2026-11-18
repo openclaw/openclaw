@@ -2,9 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   classifyReleaseSnapshot,
   terminalPolicyPass,
+  validateReleaseManifestAdvisoryJobs,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { readChild } from "../../scripts/full-release-validation-state.mjs";
-import { RELEASE_VALIDATION_WAIVERS } from "../../scripts/lib/release-validation-waivers.mjs";
+import {
+  RELEASE_VALIDATION_WAIVERS,
+  evaluateReleaseChildPolicy,
+  validateReleaseWaiverAggregates,
+} from "../../scripts/lib/release-validation-waivers.mjs";
 import { child, githubRun } from "./full-release-validation-state.test-support.js";
 
 const VERSION = "2026.10.19";
@@ -251,4 +256,151 @@ describe("checked-in release-tooling waivers", () => {
       }
     },
   );
+});
+
+// Backported 2026.11.6 grant inventory from 51584ca46ce4.
+it.each<{
+  version: string;
+  role: string;
+  names: string[];
+  aggregate: string;
+  step: string;
+  cause: string;
+}>([
+  {
+    version: "2026.11.6",
+    role: "normalCi",
+    names: [
+      "checks-node-compact-large-16 (node)",
+      "checks-node-compact-large-28 (bun)",
+      "checks-node-compact-large-28 (node)",
+      "checks-node-compact-large-31 (node)",
+      "checks-node-compact-large-32 (bun)",
+      "checks-node-compact-large-37 (bun)",
+      "checks-node-compact-large-42 (bun)",
+      "checks-node-compact-large-8 (node)",
+      "checks-node-compact-small-12 (node)",
+    ],
+    aggregate: "openclaw/ci-gate",
+    step: "Verify selected CI lanes",
+    cause: "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+  },
+  ...[
+    { name: "checks-node-compat-node24", key: "checks-node-compat" },
+    { name: "checks-ui (3/3)", key: "checks-ui" },
+    { name: "checks-ui-e2e (10/13)", key: "checks-ui-e2e" },
+    { name: "checks-ui-e2e-real-gateway (2/2)", key: "checks-ui-e2e-real-gateway" },
+  ].map(({ name, key }) => ({
+    version: "2026.11.6",
+    role: "normalCi",
+    names: [name],
+    aggregate: "openclaw/ci-gate",
+    step: "Verify selected CI lanes",
+    cause: key + " finished with failure (selected=true)",
+  })),
+  {
+    version: "2026.11.6",
+    role: "releaseChecksIndependent",
+    names: [
+      "Run repo/live E2E validation / Gateway E2E / Repo E2E (Gateway 3/4)",
+      "Run repo/live E2E validation / Native live suites (Native live agents)",
+      "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+      "Run repo/live E2E validation / Native live suites (Native live gateway OpenAI GPT-5.6 Ultra)",
+      "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+      "Run repo/live E2E validation / UI and plugin E2E / Repo E2E (UI 2/4)",
+    ],
+    aggregate: "Verify release checks",
+    step: "Verify release check results",
+    cause: "live_repo_e2e_release_checks ended with failure",
+  },
+])(
+  "accepts only the recorded $role failures ($cause)",
+  async ({ version, role, names, aggregate: aggregateName, step, cause }) => {
+    const jobs = [
+      ...names.map((name, id) => job(name, id)),
+      job(aggregateName, 100, { steps: [{ name: step, conclusion: "failure" }] }),
+    ];
+    const current = { key: role, status: "completed", conclusion: "failure", jobs };
+    const policy = evaluateReleaseChildPolicy({ child: current, targetVersion: version });
+    expect(policy.waivers.map((row) => row.jobName)).toEqual(names);
+    expect(terminalPolicyPass(current, version)).toBe(true);
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        validationInputs: { targetVersion: version },
+        childEvidence: { [role]: current },
+      }),
+    ).not.toThrow();
+    expect(terminalPolicyPass(current, "2026.11.7")).toBe(false);
+    expect(jobs.every((row) => row.conclusion === "failure")).toBe(true);
+    for (const conclusion of ["cancelled", "timed_out"]) {
+      expect(
+        terminalPolicyPass(
+          { ...current, jobs: jobs.map((row) => ({ ...row, conclusion })) },
+          version,
+        ),
+      ).toBe(false);
+    }
+    for (const name of [
+      "checks-node-compact-large-5 (node)",
+      "checks-ui-e2e (12/13)",
+      "Seal full release child evidence / Seal child receipt",
+    ]) {
+      expect(terminalPolicyPass({ ...current, jobs: [...jobs, job(name, 101)] }, version)).toBe(
+        false,
+      );
+    }
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs, getJobLog: () => "##[error]" + cause }),
+    ).resolves.toBeUndefined();
+    for (const log of [
+      "",
+      "##[error]" + cause + "\n##[error]" + cause,
+      "##[error]" + cause + "\n##[error]artifact integrity failure",
+      "##[error malformed",
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({ policy, jobs, getJobLog: () => log }),
+      ).rejects.toThrow("unwaived failure");
+    }
+  },
+);
+
+it("requires the complete five-cause CI union and retains only this release's grants", async () => {
+  expect(RELEASE_VALIDATION_WAIVERS).toHaveLength(20);
+  expect(RELEASE_VALIDATION_WAIVERS.every((row) => row.targetVersion === "2026.11.6")).toBe(true);
+  const leaves = RELEASE_VALIDATION_WAIVERS.filter((row) => row.childRole === "normalCi").map(
+    (row, id) => job(row.jobName, id),
+  );
+  expect(leaves).toHaveLength(13);
+  const jobs = [
+    ...leaves,
+    job("openclaw/ci-gate", 100, {
+      steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+    }),
+  ];
+  const policy = evaluateReleaseChildPolicy({
+    child: { key: "normalCi", jobs },
+    targetVersion: "2026.11.6",
+  });
+  const causes = [
+    "checks-node-core-test-nondist-shard",
+    "checks-node-compat",
+    "checks-ui",
+    "checks-ui-e2e",
+    "checks-ui-e2e-real-gateway",
+  ].map((key) => "##[error]" + key + " finished with failure (selected=true)");
+  await expect(
+    validateReleaseWaiverAggregates({ policy, jobs, getJobLog: () => causes.join("\n") }),
+  ).resolves.toBeUndefined();
+  await expect(
+    validateReleaseWaiverAggregates({ policy, jobs, getJobLog: () => causes.slice(1).join("\n") }),
+  ).rejects.toThrow("unwaived failure");
+  const kova = {
+    key: "productPerformance",
+    status: "completed",
+    conclusion: "failure",
+    jobs: [job("Kova mock provider performance", 200)],
+  };
+  expect(terminalPolicyPass(kova, "2026.11.6")).toBe(true);
+  expect(terminalPolicyPass(kova, "2026.11.7")).toBe(false);
 });

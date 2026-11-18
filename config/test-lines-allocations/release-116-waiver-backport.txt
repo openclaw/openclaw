@@ -1,0 +1,2 @@
+# Backported 2026.11.6 exact-job grants: preserve raw failures, validate manifest acceptance, and reject incomplete, duplicate, missing, or extra aggregate causes; inventory upstream control-byte regexes.
+154

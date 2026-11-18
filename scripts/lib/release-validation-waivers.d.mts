@@ -14,7 +14,7 @@ export interface ReleasePolicyJob {
 }
 export interface ReleaseChildPolicy {
   waivers: ReleaseValidationWaiver[];
-  aggregates: { jobName: string; stepName: string; causes: string[] }[];
+  aggregates: { jobName: string; stepName: string; causes: string[]; exactCauses?: boolean }[];
   waivedJobNames: Set<string>;
   blockingJobs: ReleasePolicyJob[];
   advisoryJobs: ReleasePolicyJob[];
@@ -46,3 +46,5 @@ export function releaseChildAdvisories(child: {
   runId: string;
   url: string;
 }[];
+
+export class ReleaseAggregateValidationError extends Error {}
