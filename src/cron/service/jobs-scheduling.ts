@@ -21,7 +21,6 @@ import { autoDisableCronJob } from "./auto-disable.js";
 import {
   computeOneShotNextRunAtMs,
   clearInvalidForcePreservedNextRun,
-  isCronOneShotContinuationJob,
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
 import type { CronJobPolicyContext, CronServiceState, DeferredCronNotifications } from "./state.js";
@@ -683,10 +682,7 @@ export function recomputeSingleJobForMaintenance(
   const hasPendingPacedNextRun =
     isFiniteTimestamp(pacedNextRunAtMs) &&
     hasScheduledNextRunAtMs(nextRunAtMs) &&
-    pacedNextRunAtMs === nextRunAtMs &&
-    (now < pacedNextRunAtMs ||
-      isCronOneShotContinuationJob(job) ||
-      opts.preserveExpiredPacedNextRunJobId === job.id);
+    pacedNextRunAtMs === nextRunAtMs;
   if (pacedNextRunAtMs !== undefined && !hasPendingPacedNextRun) {
     job.state.pacedNextRunAtMs = undefined;
     changed = true;

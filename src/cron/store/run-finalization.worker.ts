@@ -153,9 +153,6 @@ export function finalizeCronRunsInWorker(
                     {
                       nowMs: policy.nowMs,
                       recomputeExpired: Boolean(completed.request),
-                      ...(completed.request?.preserveCadence
-                        ? { preserveExpiredPacedNextRunJobId: job.id }
-                        : {}),
                       deferredNotifications: outcome.notifications,
                     },
                     { reservations: new Map(), isJobActive: () => false },
