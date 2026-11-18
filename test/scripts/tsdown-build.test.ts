@@ -733,7 +733,10 @@ describe("resolveTsdownBuildInvocation", () => {
             }
             return "VmRSS: 64 kB\n";
           }
-          return priorRead(filePath, options);
+          return priorRead(
+            filePath,
+            typeof options === "string" ? { encoding: options } : (options ?? {}),
+          );
         },
       );
       const capacity = readProcessMemoryCapacity({
@@ -892,9 +895,9 @@ describe("resolveTsdownBuildInvocation", () => {
         [`${mountPoint}/cpu.max`, "max 100000\n"],
       ],
     );
-    const readFileSync = vi.spyOn(memory.fs!, "readFileSync");
+    const readSnapshotFile = vi.spyOn(memory.fs!, "readFileSync");
     const snapshot = readProcessCgroupV2Snapshot(memory);
-    expect(readFileSync).not.toHaveBeenCalledWith(`${leaf}/memory.stat`, "utf8");
+    expect(readSnapshotFile).not.toHaveBeenCalledWith(`${leaf}/memory.stat`, "utf8");
     expect(snapshot?.[0]?.counters).not.toHaveProperty("memory.max");
     expect(
       readProcessCgroupV2Snapshot(memory, { includeMemoryDetails: true })?.[0]?.counters,
