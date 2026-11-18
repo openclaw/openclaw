@@ -150,7 +150,7 @@ const LEGACY_RESTART_RESUME_WINDOW_MS = 6 * 60 * 60 * 1000;
  */
 export function resolveStartupRestartMarker(
   selected: InternalSessionEntry,
-  snapshotRunId: string | undefined,
+  sameRunAsSnapshot: boolean,
   {
     parked,
     skip,
@@ -164,7 +164,7 @@ export function resolveStartupRestartMarker(
   const orphanedRun =
     (!parked || parked === "resume") &&
     selected.lifecycleRunId &&
-    selected.lifecycleRunId === snapshotRunId &&
+    sameRunAsSnapshot &&
     selected.status === undefined &&
     !skip &&
     !hasAgentRunContextExecutionOwner(selected.lifecycleRunId) &&

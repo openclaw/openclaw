@@ -508,7 +508,8 @@ async function resumeRestartStore(
               ? undefined
               : resolveSessionYieldWait(sessionKey, selected, agentId);
             const skip = restartResumeSkipReason(sessionKey, selected);
-            const resolved = resolveStartupRestartMarker(selected, snapshotEntry.lifecycleRunId, {
+            const sameRun = selected.lifecycleRunId === snapshotEntry.lifecycleRunId;
+            const resolved = resolveStartupRestartMarker(selected, sameRun, {
               parked,
               skip,
               windows,
