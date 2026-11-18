@@ -249,7 +249,6 @@ describe("managed worktrees Workboard-owner product proof", () => {
         enabled: true,
         schedule: { kind: "cron", expr: "0 3 1 1 *", tz: "America/Los_Angeles" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Workboard event nudge proof" },
       })) as { id: string };
       const boardId = "qa-event-nudge";

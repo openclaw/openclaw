@@ -24,7 +24,6 @@ export function registerGatewayCronSystemJobTests({
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "Review outstanding work" },
         delivery: { mode: "none" },
       });

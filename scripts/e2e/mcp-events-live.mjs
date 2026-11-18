@@ -440,7 +440,6 @@ try {
       enabled: true,
       schedule: { kind: "event", source: "mcp-events", options: { server, name, arguments: args } },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", model: ledger.model, message, timeoutSeconds: 180 },
       delivery: { mode: "none" },
     });

@@ -55,7 +55,6 @@ const jobInput = {
   agentId: "main",
   schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: { kind: "agentTurn", message: "fixture work" },
   delivery: { mode: "none" },
 } as const;
@@ -104,7 +103,6 @@ describe("Cron mutation outcomes through the in-process router", () => {
         enabled: true,
         schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic brief" },
       });
       const calls: string[] = [];

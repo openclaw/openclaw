@@ -53,7 +53,6 @@ const job = (id: string, selectedModel = model): CronStoredJob => ({
   updatedAtMs: 1,
   schedule: { kind: "every", everyMs: 60000 },
   sessionTarget: "isolated",
-  wakeMode: "now",
   payload: { kind: "agentTurn", message: "Synthetic work", model: selectedModel },
   delivery: { mode: "none" },
   state: {},

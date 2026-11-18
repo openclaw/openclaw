@@ -24,7 +24,6 @@ it("disables persisted main jobs with empty systemEvent text after skipping them
         enabled: true,
         schedule: { kind: "at", at: new Date(atMs).toISOString() },
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "   " },
       });
       await clock.advanceTo(atMs);

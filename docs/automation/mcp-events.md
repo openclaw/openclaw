@@ -98,7 +98,6 @@ The automation job shape is:
     }
   },
   "sessionTarget": "isolated",
-  "wakeMode": "now",
   "payload": {
     "kind": "agentTurn",
     "message": "Summarize the new review comment. Do not modify the document."

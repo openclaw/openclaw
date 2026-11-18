@@ -38,7 +38,6 @@ it("persists and edits ordinary automation policy through the public Cron bounda
         enabled: false,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "now",
         ...structuredClone(policy),
       });
       expect(validateCronAddParams(input)).toBe(true);

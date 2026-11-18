@@ -141,7 +141,6 @@ function storedJob(id: string, message = "Reply."): CronStoredJob {
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     delivery: { mode: "none" },
     payload: { kind: "agentTurn", message, lightContext: true },
     state: {},
@@ -533,7 +532,6 @@ it.each([
           enabled: false,
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message: "Reply with the account continuity result.",

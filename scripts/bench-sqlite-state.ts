@@ -198,7 +198,6 @@ function seedCronJobs(db: DatabaseSync, count: number): void {
         anchorMs: updatedAt - 60_000,
       },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: `Benchmark payload ${i}`,

@@ -63,7 +63,6 @@ const jobs: CronJob[] = Array.from({ length: 40 }, (_, index) => ({
   createdAtMs: 1,
   updatedAtMs: 1,
   sessionTarget: "main",
-  wakeMode: "now",
   payload: { kind: "systemEvent", text: "Synthetic notification" },
   schedule:
     index % 2 === 0

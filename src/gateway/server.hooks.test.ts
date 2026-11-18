@@ -325,7 +325,6 @@ test("honors immediate wake overrides from mapped hook transforms", async () => 
 
     mockIsolatedRunOk();
     await post("immediate-agent", { subject: "Immediate completion" });
-    expect(cronRunCall().job.wakeMode).toBe("now");
   });
 });
 

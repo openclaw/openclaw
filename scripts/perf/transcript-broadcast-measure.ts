@@ -2799,7 +2799,6 @@ const mock = createServer((req, res) => {
           enabled: false,
           schedule: { kind: "every", everyMs: 3_600_000 },
           sessionTarget: `session:${keys[0]}`,
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message: `Reply with benchmark stream 1. Transcript-broadcast cohort ${cohortId}.`,
@@ -6273,7 +6272,6 @@ try {
       enabled: true,
       schedule: { kind: "every", everyMs: 30_000 },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: "Acknowledge this synthetic scheduled allocation probe.",

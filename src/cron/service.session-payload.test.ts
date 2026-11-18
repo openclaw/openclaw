@@ -71,7 +71,6 @@ const jobInput = (overrides: Partial<CronJobCreate> = {}) =>
   cronTestInput({
     agentId: "main",
     sessionTarget: "main",
-    wakeMode: "now",
     delivery: { mode: "none" },
     ...overrides,
   });

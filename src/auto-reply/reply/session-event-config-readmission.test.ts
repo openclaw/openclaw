@@ -596,7 +596,6 @@ it.for([
                     ...makeCronJob({
                       id: "scheduled-readmission",
                       sessionTarget: `session:${scope.sessionKey}`,
-                      wakeMode: "now",
                       payload,
                     }),
                     inferenceBinding,

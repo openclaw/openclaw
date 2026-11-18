@@ -321,7 +321,6 @@ describe("agent stream approval through the automation tool", () => {
           enabled: true,
           schedule: approvedStreamJob().schedule,
           sessionTarget: "main",
-          wakeMode: "next-heartbeat",
           payload: { kind: "systemEvent", text: "Operator-only stream" },
         });
         const listed = await tools.invoke(AUTOMATIONS_TOOL_NAME, { action: "list" });

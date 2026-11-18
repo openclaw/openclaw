@@ -238,7 +238,6 @@ it(
               enabled: false,
               schedule: { kind: "every", everyMs: 3_600_000 },
               sessionTarget: `session:${sessionKey}`,
-              wakeMode: "now",
               delivery: { mode: "none" },
               payload: {
                 kind: "agentTurn",

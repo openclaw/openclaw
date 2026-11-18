@@ -62,7 +62,6 @@ flow:
                 enabled: false,
                 schedule: { kind: "at", at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() },
                 sessionTarget: "isolated",
-                wakeMode: "now",
                 payload: { kind: "agentTurn", message: "Sibling automation; never runs." },
                 delivery: { mode: "none" },
               }, { timeoutMs: 30000 })

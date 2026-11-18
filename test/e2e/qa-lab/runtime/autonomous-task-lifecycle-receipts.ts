@@ -194,7 +194,6 @@ async function runProof(options: QaProducerOptions): Promise<string> {
       enabled: true,
       schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: `${cronSentinel}: reply CRON-DONE` },
       delivery: { mode: "none" },
     })) as { id: string };

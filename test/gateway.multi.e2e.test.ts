@@ -175,7 +175,6 @@ describe("gateway multi-instance e2e", () => {
             enabled: true,
             schedule: { kind: "every", everyMs: 3_600_000 },
             sessionTarget: "isolated",
-            wakeMode: "now",
             payload: {
               kind: "agentTurn",
               model: `${model.modelRef}@${profileId}`,
@@ -189,7 +188,6 @@ describe("gateway multi-instance e2e", () => {
             enabled: true,
             schedule: { kind: "cron", expr: "0 6 * * *" },
             sessionTarget: "main",
-            wakeMode: "now",
             payload: { kind: "systemEvent", text: "edit target" },
           });
 

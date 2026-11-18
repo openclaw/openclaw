@@ -167,7 +167,6 @@ it.each([
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "current",
           sessionKey: fixture.scope.sessionKey,
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "produce a result" },
           delivery: { mode: "announce", channel: "telegram", to: "12345" },
         });

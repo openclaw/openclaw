@@ -62,7 +62,6 @@ describe("cron image generation", () => {
       enabled: true,
       schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: "Image generation check CRON_IMAGE: generate the QA lighthouse image.",

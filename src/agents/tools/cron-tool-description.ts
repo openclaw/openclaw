@@ -60,7 +60,7 @@ STREAM CONSENT: creation, source changes and reactivation require current creato
     : "";
   return `Schedule saved reminders, recurring work, cross-session follow-ups${params.triggersEnabled ? ", event watchers" : ""}. A one-time wait inside this conversation (CI, a deploy, a short delay) is not an automation: run one background exec that exits when the condition holds. When its running result says the exit wakes this conversation, end the turn; otherwise collect it with process poll. Never model-poll.
 
-ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId [runId,limit,offset] (recorded outcomes and delivery receipts) | wake text (caller-owned session; mode defaults to next-heartbeat) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
+ACTIONS: status | list (enabled-only summaries by default; includeDisabled:true includes paused records; follow nextOffset) | get jobId (full details) | add job | update jobId job (partial; null clears) | remove jobId (operator removal requests active-run cancellation) | run jobId (runMode:"force"=now; waits up to timeoutMs, default 60s; unfinished runs return runId) | runs jobId [runId,limit,offset] (recorded outcomes and delivery receipts) | wake text (queue an immediate notice for the calling session) | bind jobId (owner turn in the automation's parent conversation; links a key-only automation to this conversation). Check unfinished runs later with runs, never a scheduled verification job. wake has no delay; for a later resume use an at job below.
 
 To pause a saved watcher without deleting its record, update job:{enabled:false}, or turn off its Active switch on the Automations page. The enabled flag and list absence do not prove source termination; use get jobId to inspect state.streamStatus.
 
@@ -94,7 +94,7 @@ FAILURE ALERTS: routed jobs notify on the first execution failure (1h cooldown; 
 
 Optional job policy: activeHours{start,end,timezone?} is an end-exclusive execution window (including manual runs); idleOnly:true waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. false/unset uses normal admission. delivery.target:"owner" resolves the owner DM dynamically, never the last group; delivery.directPolicy:"block" prohibits DMs. agentTurn skipIfScratchEmpty skips an explicitly empty checklist, not missing scratch.
 
-Main-job wakeMode: "now"(default)|"next-heartbeat". contextMessages 0-10 embeds recent chat lines in reminder text.
+contextMessages 0-10 embeds recent chat lines in reminder text.
 
 Inside a scheduled run only: ${buildCronSelfDescription({ activeRun: true, nextCheckEnabled: true })}${commandPolicySuffix}`;
 }

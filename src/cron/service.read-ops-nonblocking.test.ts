@@ -132,7 +132,6 @@ function systemEventJob(id: string, schedule: CronJob["schedule"]) {
     enabled: true,
     schedule,
     sessionTarget: "main" as const,
-    wakeMode: "next-heartbeat" as const,
     payload: { kind: "systemEvent" as const, text: id },
   };
 }

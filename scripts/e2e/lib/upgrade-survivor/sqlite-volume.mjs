@@ -167,7 +167,6 @@ function getVolumeCronJob(index) {
       anchorMs: VOLUME_CRON_CREATED_AT_MS + index,
     },
     sessionTarget: "isolated",
-    wakeMode: "now",
     delivery: { mode: "none" },
     payload: {
       kind: "agentTurn",
@@ -369,7 +368,6 @@ export function assertUpgradeVolumeMigrated(stateDir, stage) {
         "createdAtMs",
         "schedule",
         "sessionTarget",
-        "wakeMode",
         "delivery",
         "payload",
       ]) {

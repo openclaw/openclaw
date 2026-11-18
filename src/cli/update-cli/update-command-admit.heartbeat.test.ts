@@ -120,7 +120,6 @@ function fixture(scenario: Omit<Scenario, "name">, withDatabase = true) {
       updatedAtMs: 1,
       schedule: { kind: "every", everyMs: 1_800_000, anchorMs: 37 },
       sessionTarget: "main",
-      wakeMode: "now",
       payload: { kind: "heartbeat" },
       delivery: { mode: "none" },
       state: {},

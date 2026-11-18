@@ -67,7 +67,7 @@ const timedJob = (id: string, nextRunAtMs = AT): CronJob => ({
 function mainJob(id: string, payload: CronJob["payload"]): CronJob {
   const job = dueJob(id);
   delete job.delivery;
-  return { ...job, sessionTarget: "main", wakeMode: "now", payload };
+  return { ...job, sessionTarget: "main", payload };
 }
 const conditionJob = () => ({
   ...mainJob("main-cancel", { kind: "systemEvent", text: "queued downstream work" }),

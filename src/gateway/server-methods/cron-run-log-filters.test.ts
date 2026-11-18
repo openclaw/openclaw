@@ -11,7 +11,6 @@ function createJob(overrides: Partial<CronJob>): CronJob {
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "tick" },
     state: {},
     ...overrides,

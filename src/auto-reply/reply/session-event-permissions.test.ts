@@ -805,7 +805,6 @@ it.for([
           sessionKey: "hook:terminal-first-use",
           sessionMode: "isolated",
           sourcePath: "/hooks/agent",
-          wakeMode: "now",
           deliver: true,
           channel: "last",
           delivery: { mode: "announce", channel: "last" },

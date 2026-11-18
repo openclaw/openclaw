@@ -19,7 +19,6 @@ function repairFixture(overrides: Partial<CronJob> = {}) {
   const job = makeCronJob({
     schedule: { kind: "every", everyMs: 60_000, anchorMs: runningAtMs - 60_000 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "do not replay" },
     state: { nextRunAtMs: runningAtMs, runningAtMs },
     ...overrides,

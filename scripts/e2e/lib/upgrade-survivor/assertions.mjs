@@ -223,7 +223,6 @@ async function seedLegacyCronScheduledAuthority(stateDir, packageRoot) {
     updatedAtMs: createdAtMs,
     schedule: { kind: "every", everyMs: 3_600_000, anchorMs: createdAtMs },
     sessionTarget: "isolated",
-    wakeMode: "now",
     delivery: { mode: "none" },
     state: { nextRunAtMs: createdAtMs + 3_600_000 },
   };

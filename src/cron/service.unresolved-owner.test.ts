@@ -22,7 +22,6 @@ it.each(["startup", "reload"] as const)(
     const unowned = cronTestJob({
       id: "legacy-unowned",
       schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt },
-      wakeMode: "now",
       payload: { kind: "command", argv: ["echo", "tick"] },
       state: { nextRunAtMs: dueAt },
     });

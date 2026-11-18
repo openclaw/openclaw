@@ -55,7 +55,6 @@ describe("cron service ops persist rollback", () => {
       enabled: true,
       schedule: { kind: "cron", expr: "0 0 * * *" },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "do work" },
       ...input,
     });

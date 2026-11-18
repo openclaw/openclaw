@@ -27,7 +27,6 @@ it("records delivered delivery without a duplicate relay", async () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: "hello" },
         delivery: { mode: "announce", channel: "telegram", to: "123" },
       });
@@ -55,7 +54,6 @@ it("rejects an authored delivery object without a mode", async () => {
           enabled: true,
           schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: { kind: "agentTurn", message: "hello" },
           delivery,
         }),

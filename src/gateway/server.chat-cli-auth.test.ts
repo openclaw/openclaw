@@ -287,7 +287,6 @@ async function executeHookAuthCase(fixture: CliAuthFixture, signal: AbortSignal)
           agentId,
           sessionKey,
           sessionMode: "persistent",
-          wakeMode: "next-heartbeat",
           model,
           deliver: false,
           waitForCompletion: true,

@@ -23,7 +23,6 @@ export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}):
     updatedAtMs: 0,
     schedule: { kind: "cron", expr: "0 9 * * *" },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
     ...overrides,
   } as CronJob;
@@ -34,7 +33,6 @@ export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): Cron
     name: "Nightly digest",
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "digest" },
     state: {},
     ...overrides,

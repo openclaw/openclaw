@@ -22,7 +22,6 @@ const job: CronJob = {
   updatedAtMs: 1,
   schedule: { kind: "every", everyMs: 86_400_000 },
   sessionTarget: "isolated",
-  wakeMode: "now",
   payload: { kind: "agentTurn", message: "Summarize the day." },
   state: {},
 };

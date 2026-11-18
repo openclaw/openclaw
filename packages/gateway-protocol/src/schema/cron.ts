@@ -32,8 +32,6 @@ const CronSessionTargetSchema = Type.Union([
   Type.Literal("current"),
   Type.String({ pattern: "^session:.+" }),
 ]);
-/** Legacy wake input; scheduled runs execute their ordinary payload. */
-const CronWakeModeSchema = stringLiteralUnion(["next-heartbeat", "now"]);
 /** Run status factory reused for the active field and deprecated alias metadata. */
 function cronRunStatusSchema(options: Record<string, unknown> = {}) {
   return Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")], options);
@@ -540,7 +538,6 @@ export const CronJobSchema = closedObject({
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
-  wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
@@ -629,7 +626,6 @@ export const CronAddParamsSchema = closedObject({
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
-  wakeMode: CronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
@@ -676,7 +672,6 @@ const CronJobPatchSchema = closedObject({
   cyberAccessProgram: Type.Optional(Type.Union([CyberAccessProgramSchema, Type.Null()])),
   trigger: Type.Optional(Type.Union([CronTriggerSchema, Type.Null()])),
   sessionTarget: Type.Optional(CronSessionTargetSchema),
-  wakeMode: Type.Optional(CronWakeModeSchema),
   payload: Type.Optional(CronPayloadPatchSchema),
   delivery: Type.Optional(CronDeliveryPatchSchema),
   failureAlert: Type.Optional(

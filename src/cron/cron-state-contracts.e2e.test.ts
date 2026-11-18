@@ -59,7 +59,6 @@ it("deduplicates isolated scheduler execution and persisted run history across r
           deleteAfterRun: false,
           schedule: { kind: "at", at: new Date(atMs).toISOString() },
           sessionTarget: "isolated",
-          wakeMode: "now",
           payload: { kind: "agentTurn", message: "prove isolated cron state" },
           delivery: { mode: "none" },
         });

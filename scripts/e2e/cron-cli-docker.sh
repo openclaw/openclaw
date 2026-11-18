@@ -235,7 +235,6 @@ if (phase === "create") {
     let job = callGateway("cron.add", {
       enabled: false,
       schedule,
-      wakeMode: "now",
       delivery: { mode: "none" },
       ...testCase.input,
     });

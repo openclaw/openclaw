@@ -51,7 +51,6 @@ const CRON_SCHEDULE_KINDS = ["at", "every", "cron", "stream", "event"] as const;
 // stream schedules, script payloads, and condition triggers, so the
 // model-facing schema must not advertise them.
 const CRON_SCHEDULE_KINDS_TRIGGERS_DISABLED = ["at", "every", "cron"] as const;
-const CRON_WAKE_MODES = ["now", "next-heartbeat"] as const;
 const CRON_PAYLOAD_KINDS = ["systemEvent", "agentTurn", "script"] as const;
 const CRON_PAYLOAD_KINDS_TRIGGERS_DISABLED = ["systemEvent", "agentTurn"] as const;
 const CRON_DELIVERY_MODES = ["none", "announce", "webhook"] as const;
@@ -450,7 +449,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             description: "main | isolated | current (agentTurn default) | session:<id>",
           }),
         ),
-        wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
         payload: createCronPayloadSchema({
           triggersEnabled,
           management: management && options?.allowCommandJobs !== false,
@@ -529,9 +527,6 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
         }),
       ),
       text: Type.Optional(Type.String({ description: 'systemEvent text for action="wake"' })),
-      mode: optionalStringEnum(CRON_WAKE_MODES, {
-        description: 'Wake mode for action="wake" (default next-heartbeat)',
-      }),
       runMode: optionalStringEnum(CRON_RUN_MODES, {
         description:
           'Run mode for action="run": omitted defaults to "due"; use "force" to trigger now.',

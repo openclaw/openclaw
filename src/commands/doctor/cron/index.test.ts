@@ -94,7 +94,6 @@ function createCurrentCronJob(overrides: StoredJob = {}) {
     updatedAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
     schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "systemEvent", text: "SQLite brief" },
     state: {},
     ...overrides,

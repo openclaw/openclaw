@@ -227,7 +227,6 @@ conformance("post-ready storage consumers", (fixture) => {
         ...structuredClone(retained),
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
       });
       original.stop();
       await original.waitForIdle();

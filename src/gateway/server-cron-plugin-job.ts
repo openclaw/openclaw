@@ -17,7 +17,6 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
     enabled: job.enabled,
     schedule: structuredClone(job.schedule),
     sessionTarget: job.sessionTarget,
-    wakeMode: job.wakeMode,
     payload: structuredClone(job.payload),
     state: {
       nextRunAtMs: job.state.nextRunAtMs,

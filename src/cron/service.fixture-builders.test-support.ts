@@ -26,7 +26,6 @@ export function cronTestInput(overrides: Partial<CronJobCreate> = {}): CronJobCr
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "test" },
     ...overrides,
   };

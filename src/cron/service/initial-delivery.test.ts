@@ -14,7 +14,6 @@ function createInput(
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget,
-    wakeMode: "now",
     failureAlert: false,
     payload,
   };

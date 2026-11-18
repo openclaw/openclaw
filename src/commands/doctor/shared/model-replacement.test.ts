@@ -262,7 +262,6 @@ it("finds and migrates persisted session and scheduled-job aliases after saving 
         updatedAtMs: 1,
         schedule: { kind: "every", everyMs: 60000 },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: {
           kind: "agentTurn",
           message: "Unchanged reminder",

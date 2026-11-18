@@ -90,7 +90,6 @@ flow:
                 kind: every
                 everyMs: 3600000
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 message:

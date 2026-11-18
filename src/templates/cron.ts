@@ -107,7 +107,6 @@ function templateCronGatewayInput(agentId: string, ref: PersistedTemplateCronRef
       ...(job.schedule.timezone ? { tz: job.schedule.timezone } : {}),
     },
     sessionTarget: job.session === "main" ? `session:agent:${agentId}:main` : job.session,
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: job.message },
     delivery: job.delivery
       ? {

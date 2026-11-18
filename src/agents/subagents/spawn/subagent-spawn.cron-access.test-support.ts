@@ -123,7 +123,6 @@ export async function runCronAccessLifecycle({
       schedule: { kind: "every", everyMs: 60000 },
       sessionTarget:
         adapter === "cron-session" ? `session:${options.parentSessionKey}` : "isolated",
-      wakeMode: "now",
       payload: {
         kind: "agentTurn",
         message: "bounded review",

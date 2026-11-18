@@ -31,7 +31,6 @@ suite.define(() => {
           configRevision: "one-shot-proof-revision",
           schedule: { kind: "at", at: "2026-10-30T12:00:00.000Z" },
           sessionTarget: "session:agent:main:build-proof",
-          wakeMode: "now",
           payload: {
             kind: "agentTurn",
             message: "Check whether the fictional build has finished.",

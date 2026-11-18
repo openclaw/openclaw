@@ -22,7 +22,6 @@ describe("add() must not drop a due every-job's pending run", () => {
       updatedAtMs: base,
       schedule: { kind: "every", everyMs: 10_000, anchorMs: base - 10_000 },
       sessionTarget: "isolated",
-      wakeMode: "next-heartbeat",
       payload: { kind: "agentTurn", message: "tick" },
       delivery: { mode: "announce" },
       state: { lastRunAtMs, lastRunStatus: "ok", nextRunAtMs: dueSlot },
@@ -47,7 +46,6 @@ describe("add() must not drop a due every-job's pending run", () => {
         enabled: true,
         schedule: { kind: "cron", expr: "0 9 * * *" },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "daily" },
       });
 

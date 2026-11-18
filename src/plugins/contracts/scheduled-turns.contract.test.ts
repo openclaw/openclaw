@@ -93,7 +93,6 @@ function makeCronJob(input: Partial<CronJob> & { id: string }): CronJob {
     enabled: true,
     schedule: { kind: "at", at: "2026-05-01T00:00:00.000Z" },
     sessionTarget: input.sessionTarget ?? `session:${MAIN_SESSION_KEY}`,
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "wake" },
     delivery: { mode: "announce", channel: "last" },
     state: {},
@@ -496,7 +495,6 @@ describe("plugin scheduled turns", () => {
       sessionTarget: "session:agent:main:main",
       payload: { kind: "agentTurn", message: "wake" },
       deleteAfterRun: true,
-      wakeMode: "now",
       delivery: {
         mode: "announce",
         channel: "last",

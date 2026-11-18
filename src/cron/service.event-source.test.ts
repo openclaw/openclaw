@@ -95,7 +95,6 @@ async function fixture(overrides: Partial<CronServiceDeps> = {}) {
       source: "mcp-events",
       options: { server: "test", name: "changed", arguments: { a: 1, b: 2 } },
     },
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "Summarize the received change.", toolsAllow: ["read"] },
   });
   const job = await cron.add(input);

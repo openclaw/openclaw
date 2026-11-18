@@ -108,7 +108,6 @@ async function runCase(name: string, modelRef: ModelRef = defaultModel, localBas
           enabled: true,
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: { kind: "agentTurn", message: `run ${name}`, model },
           delivery: { mode: "none" },
         });

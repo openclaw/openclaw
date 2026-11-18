@@ -138,7 +138,6 @@ flow:
                             at:
                               ref: scheduledAt
                           sessionTarget: main
-                          wakeMode: now
                           payload:
                             kind: systemEvent
                             text:

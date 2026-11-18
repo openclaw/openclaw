@@ -69,7 +69,6 @@ export function makeJob(payload: CronJob["payload"]): CronJob {
     updatedAtMs: now,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload,
     state: {},
   };

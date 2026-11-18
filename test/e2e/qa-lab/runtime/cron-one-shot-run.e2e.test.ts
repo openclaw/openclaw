@@ -31,7 +31,6 @@ describe("one-shot cron run background work", () => {
       deleteAfterRun: false,
       schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
       sessionTarget: "isolated",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: `Cron one-shot QA mode=${mode}` },
       // Delivery mode none turns off exit wakes entirely; announce keeps them on.
       delivery: { mode: "announce", channel: "qa-channel", to: "channel:qa-one-shot" },

@@ -526,7 +526,6 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           enabled: true,
           schedule: { kind: "every", everyMs: 86_400_000 },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: {
             kind: "command",
             argv: [process.execPath, "-e", "process.exit(1)"],

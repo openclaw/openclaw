@@ -71,7 +71,6 @@ export function onExitJob(id: string, command = "true", enabled = true, cwd?: st
     updatedAtMs: 1,
     schedule: { kind: "on-exit", command, ...(cwd ? { cwd } : {}) },
     sessionTarget: "main",
-    wakeMode: "now",
     payload: { kind: "systemEvent", text: "done" },
     delivery: { mode: "none" },
     state: {},

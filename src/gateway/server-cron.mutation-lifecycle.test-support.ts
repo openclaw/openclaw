@@ -98,7 +98,6 @@ export function registerGatewayCronMutationAuthorityTests(harness: CronMutationH
             owner,
             schedule: { kind: "every", everyMs: 60_000 },
             sessionTarget: "main",
-            wakeMode: "now",
           },
         );
         const update = (next: Parameters<CronFixture["cron"]["update"]>[1]) =>

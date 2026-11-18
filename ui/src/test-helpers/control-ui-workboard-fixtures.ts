@@ -353,7 +353,6 @@ export function buildWorkboardMocks(
     updatedAtMs: baseTime,
     schedule: { kind: "every", everyMs: 86_400_000, anchorMs: baseTime },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: {
       kind: "agentTurn",
       message:

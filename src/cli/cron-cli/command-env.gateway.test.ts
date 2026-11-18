@@ -83,7 +83,6 @@ it("warns only about dropped command environment keys after a successful edit", 
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
         sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
         payload: {
           kind: "command",
           argv: ["echo", "fixture"],

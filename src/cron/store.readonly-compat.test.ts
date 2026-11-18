@@ -11,7 +11,6 @@ it("reads a pre-projection cron table without writable schema repair", async () 
       id: "legacy-reader",
       name: "Legacy reader",
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "tick" },
     });
     const { state: jobState, updatedAtMs, ...jobDefinition } = job;

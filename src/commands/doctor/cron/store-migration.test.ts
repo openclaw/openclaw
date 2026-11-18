@@ -30,7 +30,6 @@ function makeLegacyJob(overrides: Record<string, unknown>): Record<string, unkno
     updatedAtMs: 1_700_000_000_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "tick" },
     state: {},
     ...overrides,
@@ -422,7 +421,6 @@ it("migrates legacy string schedules and command-only payloads (#18445)", () => 
   expect(job).toMatchObject({
     schedule: { kind: "cron", expr: "0 */2 * * *" },
     sessionTarget: "main",
-    wakeMode: "now",
   });
   expect(job?.payload).toEqual({ kind: "systemEvent", text: "bash /tmp/imessage-refresh.sh" });
   for (const key of ["command", "timeout"]) {

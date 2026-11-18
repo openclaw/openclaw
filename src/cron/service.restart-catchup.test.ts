@@ -45,7 +45,6 @@ function job(overrides: Partial<CronJob>): CronJob {
     updatedAtMs: time("2025-12-13T04:01:00Z"),
     schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "tick" },
     ...overrides,
   });
@@ -104,7 +103,6 @@ describe("CronService restart catch-up", () => {
           createdAtMs: now - 120_000,
           updatedAtMs: now - 120_000,
           schedule: { kind: "every", everyMs: 60_000, anchorMs: now - 120_000 },
-          wakeMode: "now",
           state: { nextRunAtMs: now - 60_000 },
         }),
       ],
@@ -156,7 +154,6 @@ describe("CronService restart catch-up", () => {
           enabled: true,
           schedule: { kind: "cron", expr: "* * * * *", tz: "UTC", staggerMs: 0 },
           sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
           payload: { kind: "command", argv: ["synthetic-long-command"] },
           delivery: { mode: "none" },
         });
@@ -469,7 +466,6 @@ describe("CronService restart catch-up", () => {
       await using h = await restartFixture({
         schedule: { kind: "cron", expr, tz },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "command", argv: ["echo", "FIRED"] },
         state: {
           nextRunAtMs: time(next),

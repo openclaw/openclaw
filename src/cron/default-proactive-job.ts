@@ -44,7 +44,6 @@ export function createDefaultProactiveJob(
     schedule: { kind: "every", everyMs: cadenceMs, anchorMs: nowMs },
     sessionTarget: `session:${sessionKey}`,
     sessionKey,
-    wakeMode: "now",
     idleOnly: true,
     payload: { kind: "agentTurn", message: DEFAULT_PROACTIVE_PROMPT, skipIfScratchEmpty: true },
     delivery: { mode: "announce", target: "owner" },

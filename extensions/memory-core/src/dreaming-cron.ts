@@ -45,7 +45,6 @@ type ManagedCronJobCreate = {
   enabled: boolean;
   schedule: CronSchedule;
   sessionTarget: "main" | "isolated";
-  wakeMode: "now";
   payload: CronPayload;
   delivery?: {
     mode: "none";
@@ -66,7 +65,6 @@ type ManagedCronJobLike = {
     tz?: string;
   };
   sessionTarget?: string;
-  wakeMode?: string;
   payload?: {
     kind?: string;
     message?: string;
@@ -116,7 +114,6 @@ function buildManagedDreamingCronJob(
       ...(config.timezone ? { tz: config.timezone } : {}),
     },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: {
       kind: "agentTurn",
       message: MEMORY_DREAMING_SYSTEM_EVENT_TEXT,
@@ -156,10 +153,6 @@ function buildManagedDreamingPatch(
   const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
   if (sessionTarget !== desired.sessionTarget) {
     patch.sessionTarget = desired.sessionTarget;
-  }
-  const wakeMode = normalizeLowercaseStringOrEmpty(job.wakeMode);
-  if (wakeMode !== "now") {
-    patch.wakeMode = "now";
   }
 
   const payloadNeedsUpdate =

@@ -726,7 +726,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         // Automatic dispatch stays disabled; a due occurrence belongs to this manual run.
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: prompt },
         delivery: { mode: "none" },
       });
@@ -768,7 +767,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: unfinishedPrompt },
         delivery: { mode: "none" },
         failureAlert: { after: 1, cooldownMs: 0 },
@@ -855,7 +853,6 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         deleteAfterRun: false,
         schedule: { kind: "at", at: new Date().toISOString() },
         sessionTarget: "isolated",
-        wakeMode: "now",
         payload: { kind: "agentTurn", message: probePrompt },
         delivery: { mode: "none" },
       });

@@ -266,7 +266,6 @@ describe("scheduled backups", () => {
             createdAtMs: 1,
             updatedAtMs: 1,
             sessionTarget: "isolated",
-            wakeMode: "now",
             state: {},
             declarationKey: "openclaw-backup-scheduled",
             schedule: { kind: "every", everyMs: 86_400_000 },
@@ -313,7 +312,6 @@ describe("scheduled backups", () => {
       schedule: { kind: "every", everyMs: 60_000 },
       payload: { kind: "command", argv: ["openclaw", "backup", "git", "create"] },
       sessionTarget: "isolated",
-      wakeMode: "now",
       state: {},
     };
     const jobs = [
@@ -424,7 +422,6 @@ describe("scheduled backups", () => {
             enabled: true,
             schedule: { kind: "every", everyMs: 60_000 },
             sessionTarget: "isolated",
-            wakeMode: "next-heartbeat",
             payload: { kind: "command", argv: ["synthetic-command"] },
             delivery: { mode: "none" },
           });

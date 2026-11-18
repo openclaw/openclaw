@@ -84,7 +84,6 @@ async function createCompletionFixture(
     createdAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload:
       kind === "script"
         ? { kind: "script", script: "return { notify: 'Script finished' };" }

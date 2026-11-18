@@ -3,7 +3,7 @@ import { readCronRunRecordsForTests } from "../run-history.test-support.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob } from "../types.js";
 
-export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }): CronJob {
+export function createDueMainJob(params: { now: number }): CronJob {
   return {
     id: "main-heartbeat-job",
     name: "main heartbeat job",
@@ -12,7 +12,6 @@ export function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeM
     updatedAtMs: params.now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
     sessionTarget: "main",
-    wakeMode: params.wakeMode,
     payload: { kind: "systemEvent", text: "heartbeat seam tick" },
     sessionKey: "agent:main:main",
     state: { nextRunAtMs: params.now - 1 },
@@ -29,7 +28,6 @@ export function createDueIsolatedAgentJob(params: { now: number }): CronJob {
     updatedAtMs: params.now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "run isolated cron" },
     state: { nextRunAtMs: params.now - 1 },
   };
@@ -45,7 +43,6 @@ export function createDueCommandJob(params: { now: number }): CronJob {
     updatedAtMs: params.now - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
     state: { nextRunAtMs: params.now - 1 },
   };
@@ -66,7 +63,6 @@ export function createDueScriptJob(params: {
     schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
     pacing: params.pacing,
     sessionTarget: params.sessionTarget ?? "isolated",
-    wakeMode: "now",
     payload: {
       kind: "script",
       script: "return { notify: 'done' }",

@@ -50,7 +50,6 @@ it(
                 name: "After-turn proof",
                 schedule: { kind: "every", everyMs: 86_400_000 },
                 sessionTarget: `session:${sessionKey}`,
-                wakeMode: "now",
                 payload: {
                   kind: "agentTurn",
                   message: "Return AFTER_TURN_STARTED",

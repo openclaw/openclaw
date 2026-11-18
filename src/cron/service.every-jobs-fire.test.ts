@@ -35,7 +35,6 @@ async function startEveryJob(text: string) {
     enabled: true,
     schedule: { kind: "every", everyMs: 10_000 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text },
   });
   return { ...fixture, store, clock, job, wake };
@@ -114,7 +113,6 @@ describe("CronService interval/cron jobs fire on time", () => {
         updatedAtMs: nowMs,
         schedule,
         sessionTarget: "main",
-        wakeMode: "now",
         payload: { kind: "systemEvent", text },
         state: { nextRunAtMs: nowMs + dueInMs },
       })),

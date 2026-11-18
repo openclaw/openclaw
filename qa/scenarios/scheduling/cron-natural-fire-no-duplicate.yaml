@@ -61,7 +61,6 @@ flow:
                 at:
                   ref: scheduledFor
               sessionTarget: isolated
-              wakeMode: now
               payload:
                 kind: agentTurn
                 timeoutSeconds: 90

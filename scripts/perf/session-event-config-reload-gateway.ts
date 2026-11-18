@@ -184,7 +184,6 @@ try {
         enabled: true,
         schedule: { kind: "cron", expr, tz: "UTC" },
         sessionTarget: `session:${session.key}`,
-        wakeMode: "now",
         pacing: { min: "3s", max: "1h" },
         payload: { kind: "agentTurn", message: "Set next check to three seconds and finish." },
         delivery: { mode: "none" },

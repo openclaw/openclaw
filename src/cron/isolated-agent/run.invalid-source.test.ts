@@ -131,7 +131,6 @@ describe("undecodable scheduled authority", () => {
         createdAtMs: nowMs,
         updatedAtMs: nowMs,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs },
-        wakeMode: "next-heartbeat",
         delivery: { mode: "none" },
         failureAlert: { after: 1, channel: "telegram", to: "fixture-recipient" },
         state: { nextRunAtMs: nowMs + 60_000 },

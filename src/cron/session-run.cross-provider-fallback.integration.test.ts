@@ -154,7 +154,6 @@ it.each(["live", "primary-revoked"] as const)(
               id: "session-fallback",
               agentId: "main",
               sessionTarget: `session:${sessionKey}`,
-              wakeMode: "now",
               delivery: { mode: "none" },
               payload: { kind: "agentTurn", message: "Reply.", model },
             }),

@@ -29,7 +29,6 @@ function watcher(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
     schedule: { kind: "cron", expr: "* * * * * *", staggerMs: 0 },
     trigger: { script: "json({ fire: false })" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "base message" },
     ...overrides,
   };
@@ -40,7 +39,6 @@ function mainWatcher(name: string, overrides: Partial<CronJobCreate> = {}): Cron
     name,
     schedule: { kind: "cron", expr: "* * * * * *", tz: "UTC", staggerMs: 0 },
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: name },
     ...overrides,
   });
@@ -756,7 +754,6 @@ describe("cron webhook optional output", () => {
         watcher({
           trigger: undefined,
           schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
-          wakeMode: "next-heartbeat",
           delivery: { mode: "webhook", to: "https://example.invalid/hook" },
         }),
       );
@@ -812,36 +809,32 @@ describe("cron trigger cadence", () => {
     expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
   });
   it.each([
-    { name: "quiet immediate-wake", wakeMode: "now", result: evaluated(false) },
-    { name: "fired", wakeMode: "next-heartbeat", result: evaluated(true) },
-  ] as const)(
-    "preserves the $name occurrence's scheduling ownership",
-    async ({ result, wakeMode }) => {
-      const { h, evaluate } = await createCadence(() => result);
-      h.cron.pauseScheduling();
-      const job = await h.cron.add(mainWatcher("cadence probe", { wakeMode }));
-      expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });
-      const nextAt = Date.now() + 30_000;
-      expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
-      h.cron.stop();
-      const offline = new CronService({ ...h.deps, cronEnabled: false });
-      expect((await offline.list())[0]?.state.nextRunAtMs).toBe(nextAt);
-      await h.restart(Date.now() + 10_000);
-      h.cron.pauseScheduling();
-      expect(evaluate).toHaveBeenCalledTimes(1);
-      expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
-      vi.setSystemTime(nextAt - 1);
-      expect(await h.cron.run(job.id, "due")).toEqual({ ok: true, ran: false, reason: "not-due" });
-      vi.setSystemTime(nextAt);
-      expect(await h.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
-      expect(evaluate).toHaveBeenCalledTimes(2);
-    },
-  );
-  it("defers an expired quiet immediate-wake occurrence without reevaluating it at startup", async () => {
+    { name: "quiet", result: evaluated(false) },
+    { name: "fired", result: evaluated(true) },
+  ] as const)("preserves the $name occurrence's scheduling ownership", async ({ result }) => {
+    const { h, evaluate } = await createCadence(() => result);
+    h.cron.pauseScheduling();
+    const job = await h.cron.add(mainWatcher("cadence probe"));
+    expect(await runWhenDue(h.cron, job.id)).toEqual({ ok: true, ran: true });
+    const nextAt = Date.now() + 30_000;
+    expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
+    h.cron.stop();
+    const offline = new CronService({ ...h.deps, cronEnabled: false });
+    expect((await offline.list())[0]?.state.nextRunAtMs).toBe(nextAt);
+    await h.restart(Date.now() + 10_000);
+    h.cron.pauseScheduling();
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(h.cron.getJob(job.id)?.state.nextRunAtMs).toBe(nextAt);
+    vi.setSystemTime(nextAt - 1);
+    expect(await h.cron.run(job.id, "due")).toEqual({ ok: true, ran: false, reason: "not-due" });
+    vi.setSystemTime(nextAt);
+    expect(await h.cron.run(job.id, "due")).toEqual({ ok: true, ran: true });
+    expect(evaluate).toHaveBeenCalledTimes(2);
+  });
+  it("defers an expired quiet occurrence without reevaluating it at startup", async () => {
     const { h, evaluate } = await createCadence(() => evaluated(false, { state: { count: 1 } }));
     const job = await h.cron.add(
       mainWatcher("expired quiet occurrence", {
-        wakeMode: "now",
         payload: { kind: "systemEvent", text: "must remain quiet" },
       }),
     );

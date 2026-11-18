@@ -122,7 +122,6 @@ function addJob(cron: CronService, name: string, overrides: Partial<CronJobCreat
     enabled: true,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: name },
     ...overrides,
   });
@@ -335,7 +334,6 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             const job = await addJob(cron, "fallback owner", {
               agentId: "work",
               sessionKey,
-              wakeMode: "now",
               delivery: { mode: "none" },
               failureAlert: {
                 after: 1,

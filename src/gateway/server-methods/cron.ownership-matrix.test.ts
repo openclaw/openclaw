@@ -511,7 +511,6 @@ describe("cron ownership access matrix", () => {
       declarationKey: "daily-check",
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "main",
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "replacement" },
     };
     const matches = (job: CronJob) =>

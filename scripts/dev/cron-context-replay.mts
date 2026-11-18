@@ -392,7 +392,6 @@ export function anonymize(job: CronStoredJob, agentId: string, index: number): C
     updatedAtMs: 0,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: target ? `session:${key(target)}` : job.sessionTarget,
-    wakeMode: "now",
     payload: anonymizePayload(job.payload),
     delivery: { mode: "none" },
     state: {},

@@ -106,7 +106,6 @@ const jobs: CronJob[] = Array.from({ length: jobCount }, (_, index) => ({
   updatedAtMs: now - minute,
   schedule: { kind: "every", everyMs: index === 0 ? minute : 24 * 60 * minute, anchorMs: dueAt },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: { kind: "command", argv: ["echo", "synthetic"] },
   delivery: { mode: "none" },
   state: {

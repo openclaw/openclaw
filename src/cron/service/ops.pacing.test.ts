@@ -60,7 +60,6 @@ it("requires clearing pacing when converting a recurring job to a one-shot", asy
     schedule: { kind: "every", everyMs: 60_000 },
     pacing: { min: "15m" },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "check" },
   });
   job.state.nextRunAtMs = NOW + 4 * 60 * 60_000;

@@ -67,7 +67,6 @@ function job(schedule: CronJob["schedule"]): CronJob {
     updatedAtMs: 0,
     schedule,
     sessionTarget: "main",
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
     state: {},
   };

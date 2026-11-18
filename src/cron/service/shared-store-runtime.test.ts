@@ -56,7 +56,6 @@ function addJob(cron: CronService, name: string, target = false) {
       ? { kind: "cron", expr: "0 6 * * *", tz: "UTC" }
       : { kind: "every", everyMs: 86_400_000, anchorMs: Date.now() + 86_400_000 },
     sessionTarget: target ? "main" : "isolated",
-    wakeMode: "next-heartbeat",
     payload: target
       ? { kind: "systemEvent", text: "target" }
       : { kind: "agentTurn", message: "run canary" },

@@ -51,13 +51,12 @@ await Promise.all([
 ]);
 
 const scope = { agentId: "main", sessionKey: "agent:main:main" };
-const reminder = (text: string, wakeMode: "now" | "next-heartbeat" = "next-heartbeat") => ({
+const reminder = (text: string) => ({
   name: text,
   enabled: false,
   deleteAfterRun: false,
   schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
   sessionTarget: "main" as const,
-  wakeMode,
   payload: { kind: "systemEvent" as const, text },
 });
 const sessionEntry = () => ({
@@ -127,92 +126,89 @@ async function enqueueForeground(text: string, signal: AbortSignal) {
   });
 }
 
-it.for(["next-heartbeat", "now"] as const)(
-  "records an unadopted %s event as interrupted once across restart",
-  async (wakeMode, { signal }) => {
-    await withOpenClawTestState(
-      { label: "cron-event-restart", env: { OPENCLAW_TEST_FAST: "0" } },
-      async (state) => {
-        const queued = createDeferred();
-        const { createService, history } = await prepareCronSessionFixture(state, queued.resolve);
-        const first = createService();
-        const foregroundStarted = createDeferred();
-        const releaseForeground = createDeferred();
-        const prompts: string[] = [];
-        runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
-          prompts.push(params.prompt);
-          await admitModelTurn(params);
-          if (prompts.length === 1) {
-            foregroundStarted.resolve();
-            await releaseForeground.promise;
-          }
-          return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
-        });
-        const foreground = await enqueueForeground("Synthetic foreground work", signal);
-        const gate = waitForGate(signal);
-        let replacement: CronService | undefined;
-        let running: ReturnType<CronService["run"]> | undefined;
-        let afterRestart: Awaited<ReturnType<typeof enqueueForeground>> | undefined;
-        try {
-          await gate(foregroundStarted.promise, foreground.settled, "Foreground never started");
-          await first.start();
-          const job = await first.add(reminder("Synthetic pending reminder", wakeMode));
-          running = first.run(job.id, "force");
-          await gate(queued.promise, running, "Cron event never queued");
-          expect(history(job.id)).toEqual([]);
-          expect(peekSystemEventEntries(scope.sessionKey)).toMatchObject([
-            { text: "Synthetic pending reminder" },
-          ]);
-          expect(prompts).toHaveLength(1);
-
-          abortActiveCronTaskRuns();
-          first.stop();
-          releaseForeground.resolve();
-          await withinTest(Promise.all([running, foreground.settled]), signal);
-          await first.waitForIdle();
-          await drainGlobalSingletonLifecycleState("restart");
-
-          replacement = createService();
-          await replacement.start();
-          const interrupted = history(job.id);
-          expect(interrupted).toEqual([
-            expect.objectContaining({ status: "error", error: expect.stringMatching(/restart/i) }),
-          ]);
-          expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
-          replacement.stop();
-          await replacement.waitForIdle();
-          await replacement.start();
-          expect(history(job.id)).toEqual(interrupted);
-
-          // A later real turn cannot consume or replay the cancelled occurrence.
-          afterRestart = await enqueueForeground("Synthetic work after restart", signal);
-          await expect(withinTest(afterRestart.settled, signal)).resolves.toMatchObject({
-            status: "completed",
-          });
-          expect(prompts).toHaveLength(2);
-          expect(prompts.join("\n")).not.toContain("Synthetic pending reminder");
-          expect(history(job.id)).toEqual(interrupted);
-          expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
-        } finally {
-          abortActiveCronTaskRuns();
-          releaseForeground.resolve();
-          foreground.cancel();
-          afterRestart?.cancel();
-          first.stop();
-          replacement?.stop();
-          await Promise.allSettled([
-            running,
-            foreground.settled,
-            afterRestart?.settled,
-            first.waitForIdle(),
-            replacement?.waitForIdle(),
-          ]);
-          await resetAfterRestart();
+it("records an unadopted event as interrupted once across restart", async ({ signal }) => {
+  await withOpenClawTestState(
+    { label: "cron-event-restart", env: { OPENCLAW_TEST_FAST: "0" } },
+    async (state) => {
+      const queued = createDeferred();
+      const { createService, history } = await prepareCronSessionFixture(state, queued.resolve);
+      const first = createService();
+      const foregroundStarted = createDeferred();
+      const releaseForeground = createDeferred();
+      const prompts: string[] = [];
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        prompts.push(params.prompt);
+        await admitModelTurn(params);
+        if (prompts.length === 1) {
+          foregroundStarted.resolve();
+          await releaseForeground.promise;
         }
-      },
-    );
-  },
-);
+        return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+      });
+      const foreground = await enqueueForeground("Synthetic foreground work", signal);
+      const gate = waitForGate(signal);
+      let replacement: CronService | undefined;
+      let running: ReturnType<CronService["run"]> | undefined;
+      let afterRestart: Awaited<ReturnType<typeof enqueueForeground>> | undefined;
+      try {
+        await gate(foregroundStarted.promise, foreground.settled, "Foreground never started");
+        await first.start();
+        const job = await first.add(reminder("Synthetic pending reminder"));
+        running = first.run(job.id, "force");
+        await gate(queued.promise, running, "Cron event never queued");
+        expect(history(job.id)).toEqual([]);
+        expect(peekSystemEventEntries(scope.sessionKey)).toMatchObject([
+          { text: "Synthetic pending reminder" },
+        ]);
+        expect(prompts).toHaveLength(1);
+
+        abortActiveCronTaskRuns();
+        first.stop();
+        releaseForeground.resolve();
+        await withinTest(Promise.all([running, foreground.settled]), signal);
+        await first.waitForIdle();
+        await drainGlobalSingletonLifecycleState("restart");
+
+        replacement = createService();
+        await replacement.start();
+        const interrupted = history(job.id);
+        expect(interrupted).toEqual([
+          expect.objectContaining({ status: "error", error: expect.stringMatching(/restart/i) }),
+        ]);
+        expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+        replacement.stop();
+        await replacement.waitForIdle();
+        await replacement.start();
+        expect(history(job.id)).toEqual(interrupted);
+
+        // A later real turn cannot consume or replay the cancelled occurrence.
+        afterRestart = await enqueueForeground("Synthetic work after restart", signal);
+        await expect(withinTest(afterRestart.settled, signal)).resolves.toMatchObject({
+          status: "completed",
+        });
+        expect(prompts).toHaveLength(2);
+        expect(prompts.join("\n")).not.toContain("Synthetic pending reminder");
+        expect(history(job.id)).toEqual(interrupted);
+        expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
+      } finally {
+        abortActiveCronTaskRuns();
+        releaseForeground.resolve();
+        foreground.cancel();
+        afterRestart?.cancel();
+        first.stop();
+        replacement?.stop();
+        await Promise.allSettled([
+          running,
+          foreground.settled,
+          afterRestart?.settled,
+          first.waitForIdle(),
+          replacement?.waitForIdle(),
+        ]);
+        await resetAfterRestart();
+      }
+    },
+  );
+});
 
 it("finishes a queued Cron event only after its adopted turn and transport settle", async ({
   signal,

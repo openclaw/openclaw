@@ -49,7 +49,6 @@ function createScheduledAutomation(): ScheduledSessionAutomation {
       updatedAtMs: 1,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "session:main",
-      wakeMode: "now",
       payload: { kind: "agentTurn", message: "Check for updates" },
       state: {},
     },

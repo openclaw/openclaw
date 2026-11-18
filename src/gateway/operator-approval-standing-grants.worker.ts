@@ -94,21 +94,32 @@ function decodeDefinitionGeneration(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 ? value : null;
 }
 
-/** Preserve derivative references when offline Doctor only narrows a legacy job to an account. */
-export function migrateCronInferenceStandingGrantReferences(
+/** Preserve derivative references for an offline, authority-preserving definition repair. */
+export function migrateCronStandingGrantReferencesForDoctor(
   db: EngineConnection,
   previous: CronStoredJob,
   next: CronStoredJob,
   generation: number,
+  repair: "add-inference-binding" | "drop-wake-mode",
 ): void {
   const maintenance = getOpenClawDatabaseMaintenanceScope();
   if (!maintenance?.ownsSchemaMaintenance) {
-    throw new Error(
-      "Cron inference grant reference migration requires offline Doctor maintenance.",
-    );
+    throw new Error("Cron grant reference migration requires offline Doctor maintenance.");
   }
   maintenance.assertAdmission();
-  const { inferenceBinding, ...unchanged } = next;
+  const unchanged = { ...next };
+  const expected = { ...previous };
+  if (repair === "add-inference-binding" && !previous.inferenceBinding && next.inferenceBinding) {
+    delete unchanged.inferenceBinding;
+  } else if (
+    repair === "drop-wake-mode" &&
+    Object.hasOwn(previous, "wakeMode") &&
+    !Object.hasOwn(next, "wakeMode")
+  ) {
+    Reflect.deleteProperty(expected, "wakeMode");
+  } else {
+    throw new Error("Invalid cron definition repair for standing grant migration.");
+  }
   const source = previous.operatorSource;
   if (
     source?.executionRevision === resolveCronOperatorExecutionRevision(previous) &&
@@ -120,12 +131,8 @@ export function migrateCronInferenceStandingGrantReferences(
     // Doctor may update only the derivative revision, never the captured authority.
     unchanged.operatorSource = source;
   }
-  if (
-    previous.inferenceBinding !== undefined ||
-    !inferenceBinding ||
-    !isDeepStrictEqual(previous, unchanged)
-  ) {
-    throw new Error("Cron inference migration must preserve the entire approved job definition.");
+  if (!isDeepStrictEqual(expected, unchanged)) {
+    throw new Error("Cron migration must preserve the approved job definition.");
   }
   if (!tableExists(db, STANDING_GRANT_TABLE) || !tableExists(db, STANDING_GRANT_GENERATION_TABLE)) {
     return;

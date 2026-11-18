@@ -31,7 +31,6 @@ function scheduledJob(): CronStoredJob {
     updatedAtMs: now,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "session:agent:main:parent",
-    wakeMode: "next-heartbeat",
     payload: {
       kind: "agentTurn",
       message: PLUGIN_COMMAND_SCHEDULE_MESSAGE,

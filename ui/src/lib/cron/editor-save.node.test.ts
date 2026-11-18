@@ -46,7 +46,6 @@ function storedJob(overrides: Partial<CronStoredJob>): CronStoredJob {
     updatedAtMs: 0,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "run" },
     state: {},
     ...overrides,
@@ -303,7 +302,6 @@ it.each<
     const stored = storedJob({
       schedule: { kind: "cron", expr: originalExpr ?? expr, tz: "UTC", staggerMs: original },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: "Synthetic paused task" },
     });
     const readJob = () => readPublicJob(stored);
@@ -360,7 +358,6 @@ it.each(["create", "edit"] as const)(
       storedJob({
         schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic paused task" },
       }),
     );

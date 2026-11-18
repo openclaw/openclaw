@@ -240,7 +240,6 @@ export async function schedulePluginSessionTurn(params: {
       payload: cronPayload,
       ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
       deleteAfterRun: params.schedule.deleteAfterRun ?? cronSchedule.kind === "at",
-      wakeMode: "now",
       delivery: {
         mode: cronDeliveryMode,
         ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),

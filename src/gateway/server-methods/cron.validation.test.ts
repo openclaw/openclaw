@@ -889,7 +889,6 @@ describe("cron method validation", () => {
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: "main",
       sessionKey: "agent:main:harness:codex:supervision:native-thread",
-      wakeMode: "now",
       payload: { kind: "systemEvent", text: "remind me" },
     });
 
@@ -1226,7 +1225,6 @@ describe("cron method validation", () => {
         enabled: true,
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "main",
-        wakeMode: "next-heartbeat",
         agentId: "main",
         payload: { kind: "systemEvent", text: "before replacement" },
         delivery: { mode: "none" },

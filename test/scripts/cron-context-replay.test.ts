@@ -40,7 +40,6 @@ function storedJob(overrides: Partial<CronStoredJob>): CronStoredJob {
     updatedAtMs: 1,
     schedule: { kind: "every", everyMs: 60_000 },
     sessionTarget: "isolated",
-    wakeMode: "now",
     payload: { kind: "agentTurn", message: "private prompt" },
     delivery: { mode: "none" },
     state: {},

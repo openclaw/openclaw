@@ -81,7 +81,6 @@ const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
   "displayName",
   "description",
   "deleteAfterRun",
-  "wakeMode",
   "pacing",
   "activeHours",
   "idleOnly",

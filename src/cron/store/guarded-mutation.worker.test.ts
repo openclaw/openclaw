@@ -56,7 +56,6 @@ it("reuses one inventory per mutation while publishing names and preserving defi
             enabled: true,
             schedule: { kind: "every", everyMs: 60_000 },
             sessionTarget: "main",
-            wakeMode: "next-heartbeat",
             payload: { kind: "systemEvent", text: "Synthetic event" },
           },
           options: { captured: false },

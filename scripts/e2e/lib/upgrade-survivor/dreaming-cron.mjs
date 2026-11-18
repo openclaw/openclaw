@@ -203,7 +203,6 @@ function seed(stateDir, artifacts, baselineRoot, candidateTarball) {
       createdAtMs,
       schedule: { kind: "cron", expr: "17 3 * * *", tz: "UTC", staggerMs: 0 },
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: dreamingMessage },
       delivery: { mode: "none" },
       state: {},
@@ -329,7 +328,6 @@ function assertMigratedHeartbeat(fixture, row, receipt) {
     },
     sessionTarget: "session:agent:main:main",
     sessionKey: "agent:main:main",
-    wakeMode: "now",
     idleOnly: true,
     delivery: { mode: "announce", target: "owner" },
   };
@@ -409,7 +407,7 @@ function assertRepaired(fixture, current) {
     assert.equal(definition.payload.text, undefined);
     assert.equal(definition.delivery.mode, "none");
     const original = JSON.parse(before.job_json);
-    for (const field of ["createdAtMs", "schedule", "enabled", "owner", "agentId", "wakeMode"]) {
+    for (const field of ["createdAtMs", "schedule", "enabled", "owner", "agentId"]) {
       assert.deepEqual(
         definition[field],
         original[field],
@@ -743,7 +741,7 @@ function assertRuntimeCanonical(row, runtime) {
   assert.equal(definition.schedule.expr, runtime.frequency);
   assert.equal(definition.schedule.tz, "UTC");
   assert.equal(definition.sessionTarget, "isolated");
-  assert.equal(definition.wakeMode, "now");
+  assert.equal(Object.hasOwn(definition, "wakeMode"), false);
   assert.equal(definition.payload.kind, "agentTurn");
   assert.equal(definition.payload.message, dreamingMessage);
   assert.equal(definition.payload.lightContext, true);
@@ -839,7 +837,6 @@ export function assertRuntimePersistence(runtime, rows) {
       description: row.description,
       enabled: true,
       schedule: { kind: "cron", expr: runtime.frequency, tz: "UTC" },
-      wakeMode: "now",
     });
     assert.deepEqual(state, {
       ...JSON.parse(before.state_json),

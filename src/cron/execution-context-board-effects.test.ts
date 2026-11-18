@@ -45,7 +45,6 @@ const LINKED_JOB = {
   agentId: "main",
   createdAtMs: 0,
   updatedAtMs: 0,
-  wakeMode: "now",
   payload: { kind: "agentTurn", message: "report", toolsAllow: TOOLS },
   delivery: { mode: "none" },
   owner: { agentId: "main", sessionKey: PARENT.sessionKey, accountId: "default" },

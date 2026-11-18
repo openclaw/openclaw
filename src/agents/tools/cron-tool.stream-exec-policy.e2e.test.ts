@@ -190,7 +190,6 @@ describe("cron stream agent authority final effects", () => {
             cwd: instance.state.workspaceDir,
           },
           sessionTarget: "isolated" as const,
-          wakeMode: "now" as const,
           payload: { kind: "agentTurn" as const, message: "handle events" },
         };
         const strong = createAuthorityTool([{ name: "exec", execOrigin: "openclaw" }]);
