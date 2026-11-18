@@ -1,24 +1,25 @@
-// Status test support builds reusable gateway, update, heartbeat, and service fixtures for command tests.
 import os from "node:os";
 import path from "node:path";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { MemoryPluginStatus } from "../status/memory-plugin.js";
 import type { StatusSummary } from "../status/summary.js";
+import type { HealthSummary } from "./health.js";
+import { healthSummary } from "./health.test-fixtures.js";
 import { buildStatusOverviewSurfaceRows } from "./status-all/format.js";
 import type { buildStatusCommandOverviewRows } from "./status-overview-rows.ts";
 import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import type { AgentLocalStatus } from "./status.agent-local.js";
-import type { buildStatusCommandReportData } from "./status.command-report-data.ts";
+import type { buildStatusCommandReportLines } from "./status.command-report.ts";
 import type { StatusScanResult } from "./status.scan-result.ts";
 import type { MemoryStatusSnapshot } from "./status.scan.shared.js";
 
 type StatusCommandOverviewRowsParams = Parameters<typeof buildStatusCommandOverviewRows>[0];
-type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportData>[0];
+type StatusCommandReportDataParams = Parameters<typeof buildStatusCommandReportLines>[0];
 
 const STATUS_TEST_STATE_DIR = path.join(os.tmpdir(), `openclaw-status-test-${process.pid}-absent`);
 
-export const baseStatusCfg = {
+const baseStatusCfg = {
   update: { channel: "stable" },
   gateway: { bind: "loopback" },
 } as const;
@@ -37,14 +38,6 @@ const baseStatusUpdate = {
   registry: { latestVersion: "2026.4.10" },
 } as never;
 
-export const baseStatusExpectedUpdateChannelInfo = {
-  channel: "stable",
-  source: "config",
-  label: "stable (config)",
-} as const;
-
-export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
-
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",
   remoteUrlMissing: false,
@@ -60,38 +53,29 @@ export const baseStatusGatewaySnapshot = {
   gatewaySelf: { host: "gateway", version: "1.2.3" },
 } as const;
 
-const baseStatusOverviewScanFields = {
+const installedService = <T extends object>(label: string, extra: T) => ({
+  label,
+  installed: true,
+  loadedText: "loaded",
+  ...extra,
+});
+
+export const baseStatusServices = {
+  gatewayService: installedService("LaunchAgent", {
+    managedByOpenClaw: true,
+    runtimeShort: "running",
+  }),
+  nodeService: installedService("node", { runtime: { status: "running", pid: 42 } }),
+  nodeOnlyGateway: null,
+};
+
+export const baseStatusOverviewSurface = {
   cfg: baseStatusCfg,
   update: baseStatusUpdate,
   tailscaleMode: "serve",
   tailscaleDns: "box.tail.ts.net",
   tailscaleHttpsUrl: "https://box.tail.ts.net",
   ...baseStatusGatewaySnapshot,
-};
-
-const baseStatusGatewayService = {
-  label: "LaunchAgent",
-  installed: true,
-  managedByOpenClaw: true,
-  loadedText: "loaded",
-  runtimeShort: "running",
-};
-
-const baseStatusNodeService = {
-  label: "node",
-  installed: true,
-  loadedText: "loaded",
-  runtime: { status: "running", pid: 42 },
-};
-
-export const baseStatusServices = {
-  gatewayService: baseStatusGatewayService,
-  nodeService: baseStatusNodeService,
-  nodeOnlyGateway: null,
-};
-
-export const baseStatusOverviewSurface = {
-  ...baseStatusOverviewScanFields,
   ...baseStatusServices,
 } as unknown as StatusOverviewSurface;
 
@@ -106,6 +90,24 @@ export function getStatusOverviewRowValue(
   }).find((row) => row.Item === item)?.Value;
 }
 
+export const baseStatusSession = {
+  key: "session-key",
+  kind: "direct" as const,
+  updatedAt: 1,
+  age: 5_000,
+  model: "gpt-5.5",
+  configuredModel: "openai/gpt-5.5",
+  selectedModel: "openai/gpt-5.5",
+  modelSelectionReason: null,
+  runtime: "OpenClaw Default",
+  totalTokens: 12_000,
+  totalTokensFresh: true,
+  remainingTokens: 4_000,
+  percentUsed: 75,
+  contextTokens: 16_000,
+  flags: [],
+};
+
 const baseStatusSummary = {
   heartbeat: {
     defaultAgentId: "main",
@@ -117,55 +119,47 @@ const baseStatusSummary = {
     count: 2,
     paths: ["store.json"],
     defaults: { model: "gpt-5.5", contextTokens: 12_000 },
-    recent: [
-      {
-        key: "session-key",
-        kind: "direct",
-        updatedAt: 1,
-        age: 5_000,
-        model: "gpt-5.5",
-        configuredModel: "openai/gpt-5.5",
-        selectedModel: "openai/gpt-5.5",
-        modelSelectionReason: null,
-        runtime: "OpenClaw Default",
-        totalTokens: 12_000,
-        totalTokensFresh: true,
-        remainingTokens: 4_000,
-        percentUsed: 75,
-        contextTokens: 16_000,
-        flags: [],
-      },
-    ],
+    recent: [baseStatusSession],
     byAgent: [],
   },
 } as unknown as StatusSummary;
 
-const baseStatusAgentStatus = {
-  defaultId: "main",
-  ownership: "sole" as const,
-  selectionRequired: false,
-  bootstrapPendingCount: 1,
-  totalSessions: 2,
-  agents: [{ id: "main", lastActiveAgeMs: 60_000 }] as AgentLocalStatus[],
+const baseStatusObservations = {
+  summary: baseStatusSummary,
+  agentStatus: {
+    defaultId: "main",
+    ownership: "sole" as const,
+    selectionRequired: false,
+    bootstrapPendingCount: 1,
+    totalSessions: 2,
+    agents: [
+      {
+        id: "main",
+        workspaceDir: null,
+        bootstrapPending: false,
+        sessionsCount: 2,
+        sessionsPath: "/tmp/main/sessions.json",
+        lastUpdatedAt: null,
+        lastActiveAgeMs: 60_000,
+      },
+    ] satisfies AgentLocalStatus[],
+  },
+  memory: {
+    agentId: "main",
+    files: 1,
+    chunks: 2,
+    vector: {},
+    fts: {},
+    cache: {},
+  } as unknown as MemoryStatusSnapshot,
+  memoryPlugin: {
+    enabled: true,
+    slot: "memory",
+  } as const satisfies MemoryPluginStatus,
+  pluginCompatibility: [
+    { pluginId: "a", severity: "warn", message: "legacy" },
+  ] as PluginCompatibilityNotice[],
 };
-
-const baseStatusMemory = {
-  agentId: "main",
-  files: 1,
-  chunks: 2,
-  vector: {},
-  fts: {},
-  cache: {},
-} as unknown as MemoryStatusSnapshot;
-
-const baseStatusMemoryPlugin = {
-  enabled: true,
-  slot: "memory",
-} as const satisfies MemoryPluginStatus;
-
-const baseStatusPluginCompatibility = [
-  { pluginId: "a", severity: "warn", message: "legacy" },
-] as PluginCompatibilityNotice[];
 
 export function createStatusScanResultFixture(
   overrides: Partial<StatusScanResult> = {},
@@ -176,12 +170,7 @@ export function createStatusScanResultFixture(
     sourceConfig: baseStatusCfg,
     configDiagnostics: null,
     secretDiagnostics: [],
-    osSummary: {
-      platform: "linux",
-      arch: "x64",
-      release: "test",
-      label: "linux (x64)",
-    },
+    osSummary: { platform: "linux", arch: "x64", release: "test", label: "linux (x64)" },
     tailscaleMode: "off",
     tailscaleDns: null,
     tailscaleHttpsUrl: null,
@@ -189,40 +178,36 @@ export function createStatusScanResultFixture(
     ...baseStatusGatewaySnapshot,
     channelIssues: [],
     channels: { rows: [], details: [] },
-    agentStatus: baseStatusAgentStatus,
-    summary: baseStatusSummary,
-    memory: baseStatusMemory,
-    memoryPlugin: baseStatusMemoryPlugin,
-    pluginCompatibility: baseStatusPluginCompatibility,
+    ...baseStatusObservations,
     ...overrides,
   };
 }
 
 function createStatusLastHeartbeat(): HeartbeatEventPayload {
-  return {
-    ts: Date.now() - 30_000,
-    status: "ok-token",
-    channel: "quietchat",
-    accountId: "acct",
-  };
+  return { ts: Date.now() - 30_000, status: "ok-token", channel: "quietchat", accountId: "acct" };
 }
 
-function createStatusHealth() {
-  return {
-    ok: true as const,
-    ts: Date.now(),
+export function createStatusHealth(overrides: Partial<HealthSummary> = {}): HealthSummary {
+  return healthSummary({
     durationMs: 42,
-    channels: {},
-    channelOrder: [],
-    channelLabels: {},
-    heartbeatSeconds: 60,
-    defaultAgentId: "main",
     agents: [],
     sessions: {
       path: "store.json",
       count: 2,
       recent: [{ key: "session-key", updatedAt: 1, age: 5_000 }],
     },
+    ...overrides,
+  });
+}
+
+function createStatusCommandFields() {
+  return {
+    env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
+    surface: baseStatusOverviewSurface,
+    ...baseStatusObservations,
+    health: createStatusHealth(),
+    lastHeartbeat: createStatusLastHeartbeat(),
+    updateValue: "available · custom update",
   };
 }
 
@@ -230,19 +215,10 @@ export function createStatusCommandOverviewRowsParams(
   overrides: Partial<StatusCommandOverviewRowsParams> = {},
 ): StatusCommandOverviewRowsParams {
   return {
+    ...createStatusCommandFields(),
     backupFreshness: {},
-    env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
     opts: { deep: true },
-    surface: baseStatusOverviewSurface,
     osLabel: "macOS",
-    summary: baseStatusSummary,
-    health: createStatusHealth(),
-    lastHeartbeat: createStatusLastHeartbeat(),
-    agentStatus: baseStatusAgentStatus,
-    memory: baseStatusMemory,
-    memoryPlugin: baseStatusMemoryPlugin,
-    pluginCompatibility: baseStatusPluginCompatibility,
-    updateValue: "available · custom update",
     ...overrides,
   };
 }
@@ -251,37 +227,23 @@ export function createStatusCommandReportDataParams(
   overrides: Partial<StatusCommandReportDataParams> = {},
 ): StatusCommandReportDataParams {
   return {
-    env: { OPENCLAW_STATE_DIR: STATUS_TEST_STATE_DIR },
+    ...createStatusCommandFields(),
     opts: { deep: true, verbose: true },
-    surface: baseStatusOverviewSurface,
     osSummary: { label: "macOS" } as never,
-    summary: baseStatusSummary,
     securityAudit: {
       ts: Date.now(),
       summary: { critical: 0, warn: 1, info: 0 },
       findings: [
-        {
-          checkId: "warn-first",
-          severity: "warn",
-          title: "Warn first",
-          detail: "warn detail",
-        },
+        { checkId: "warn-first", severity: "warn", title: "Warn first", detail: "warn detail" },
       ],
     },
-    health: createStatusHealth(),
     usageLines: ["usage line"],
-    lastHeartbeat: createStatusLastHeartbeat(),
-    agentStatus: baseStatusAgentStatus,
     channels: {
       rows: [{ id: "quietchat", label: "QuietChat", enabled: true, state: "ok", detail: "ready" }],
     },
     channelIssues: [{ channel: "quietchat", message: "warn msg" }],
-    memory: baseStatusMemory,
-    memoryPlugin: baseStatusMemoryPlugin,
-    pluginCompatibility: baseStatusPluginCompatibility,
     pairingRecovery: { requestId: "req-1", reason: null, remediationHint: null },
     tableWidth: 120,
-    updateValue: "available · custom update",
     ...overrides,
   };
 }

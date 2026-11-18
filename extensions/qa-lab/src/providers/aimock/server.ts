@@ -12,6 +12,7 @@ import {
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveQaDebugRequestCursor } from "../shared/debug-request-cursor.js";
 import { writeJson } from "../shared/http-json.js";
+import { countImageInputs } from "../shared/image-inputs.js";
 import { resolveMockProviderVariant } from "../shared/mock-provider-variant.js";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import type { QaMockRequestSnapshot } from "../shared/types.js";
@@ -38,30 +39,13 @@ type AimockJournalAdd = (
   entry: Omit<JournalEntry, "id" | "timestamp">,
   matchedFixture?: Fixture,
 ) => JournalEntry;
-type AimockRequestObservation =
+type AimockRequestObservation = { cursor: number } & (
   | { kind: "retained-body"; body: ChatCompletionRequest; tools: AimockToolFacts }
-  | { kind: "projected"; projection: AimockRequestProjection };
+  | { kind: "projected"; projection: AimockRequestProjection }
+);
 
 function requestMessages(body: ChatCompletionRequest | null | undefined) {
   return Array.isArray(body?.messages) ? body.messages : [];
-}
-
-function countImageInputs(value: unknown): number {
-  if (Array.isArray(value)) {
-    return value.reduce((sum, entry) => sum + countImageInputs(entry), 0);
-  }
-  if (!value || typeof value !== "object") {
-    return 0;
-  }
-  const record = value as Record<string, unknown>;
-  const type = typeof record.type === "string" ? record.type : "";
-  const imageLikeType =
-    type === "input_image" || type === "image" || type === "image_url" || type === "media";
-  const nested =
-    countImageInputs(record.content) +
-    countImageInputs(record.image_url) +
-    countImageInputs(record.source);
-  return (imageLikeType ? 1 : 0) + nested;
 }
 
 function extractToolFacts(entry: AimockChatJournalEntry): AimockToolFacts {
@@ -100,7 +84,7 @@ function extractRequestFacts(
     model,
     prompt: user ? (getTextContent(user.content) ?? "") : "",
     providerVariant: resolveMockProviderVariant(model, "aimock"),
-    imageInputCount: countImageInputs(messages),
+    imageInputCount: countImageInputs(messages, Infinity),
     ...(outputRecord?.isError === true || outputRecord?.is_error === true
       ? { toolOutputStructuredError: true }
       : {}),
@@ -160,17 +144,10 @@ function resolvePlannedToolCallIds(snapshots: AimockToolFacts[]): Map<number, st
 function createDebugMount(): Mountable {
   let journal: Journal | undefined;
   let nextRequestCursor = 1;
-  const requestCursors = new Map<string, number>();
   const observations = new WeakMap<JournalEntry, AimockRequestObservation>();
 
   return {
     setJournal(nextJournal) {
-      if (journal === nextJournal) {
-        return;
-      }
-      if (journal) {
-        throw new Error("AIMock debug request cursor journal changed unexpectedly");
-      }
       journal = nextJournal;
       const addJournalEntry: AimockJournalAdd = journal.add.bind(journal);
       // AIMock evicts its request journal FIFO. Assign cursors at insertion time
@@ -184,9 +161,9 @@ function createDebugMount(): Mountable {
         const tools = extractToolFacts({ response: entry.response, body });
         // Upstream keeps <=64 KiB bodies intact; only discarded bodies need an
         // extra bounded projection. Weak entry ownership follows eviction/reset.
-        observations.set(
-          recorded,
-          recorded.body === entry.body
+        observations.set(recorded, {
+          cursor: nextRequestCursor++,
+          ...(recorded.body === entry.body
             ? { kind: "retained-body", body, tools }
             : {
                 kind: "projected",
@@ -194,15 +171,8 @@ function createDebugMount(): Mountable {
                   complete: true,
                   facts: extractRequestFacts(body, tools),
                 }),
-              },
-        );
-        requestCursors.set(recorded.id, nextRequestCursor++);
-        if (requestCursors.size > AIMOCK_DEBUG_REQUEST_LIMIT) {
-          const oldestRequestId = requestCursors.keys().next().value;
-          if (oldestRequestId !== undefined) {
-            requestCursors.delete(oldestRequestId);
-          }
-        }
+              }),
+        });
         return recorded;
       };
     },
@@ -226,15 +196,11 @@ function createDebugMount(): Mountable {
         return false;
       }
       let selected = entries
-        .filter((entry) => observations.has(entry))
-        .map((entry, index) => {
-          const cursor = requestCursors.get(entry.id);
+        .flatMap((entry) => {
           const observation = observations.get(entry);
-          if (cursor === undefined || observation === undefined) {
-            throw new Error(`AIMock debug request observation missing for ${entry.id}`);
-          }
-          return { cursor, entry, observation, index };
-        });
+          return observation ? [{ cursor: observation.cursor, entry, observation }] : [];
+        })
+        .map((request, index) => Object.assign(request, { index }));
       // Pair against retained tool facts before selecting a window: a result
       // inside the window may belong to a plan before its cursor.
       const plannedToolCallIds = resolvePlannedToolCallIds(

@@ -50,7 +50,7 @@ describe.runIf(process.env.OPENCLAW_DOCKER_NODE_WORKER_E2E === "1")(
         let workerNode: PairedNodeWorkerHost | undefined;
         let operator: Awaited<ReturnType<typeof connectWireClient>> | undefined;
         let observedContainer: Promise<string> | undefined;
-        const image = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:24-bookworm";
+        const image = process.env.OPENCLAW_DOCKER_NODE_WORKER_IMAGE ?? "node:24-trixie";
         const docker = async (...args: string[]) =>
           (
             await execFileAsync("docker", args, { encoding: "utf8", timeout: 15_000 })

@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionPendingInputAuthorityFacts } from "./session-pending-input-authority.js";
+import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
 import type {
   SessionPendingInputRow,
   SessionInputCompletion,
@@ -30,6 +31,7 @@ export type PendingInputSourceSnapshot = {
   current: boolean;
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
+  committedMessageSeq?: number;
 };
 
 export type PendingInputSnapshot = {
@@ -54,6 +56,7 @@ export type PendingInputMutation =
       trackCompletion: boolean;
       inputId: string;
       messageJson: string;
+      originSourceJson?: string;
     })
   | (PendingInputSettlementIdentity & {
       kind: "complete";
@@ -63,6 +66,7 @@ export type PendingInputMutation =
       kind: "finish";
       inputId: string;
       disposition: "cancelled" | "interrupted";
+      endCause: SessionPendingInputEndCause;
     });
 
 export type PendingInputMutationReceipt = PendingInputIdentity & {
@@ -83,22 +87,11 @@ export type PendingInputCustodyGrant = {
   authority?: SessionPendingInputAuthorityFacts;
 };
 
-/** Only the paired kernel's receipt for this exact accepted input may settle its custody. */
+/** Decode the retained operation's paired native receipt. */
 export function readPendingInputMutationReceipt(
   facts: unknown,
-  input: PendingInputMutation,
 ): PendingInputMutationReceipt | undefined {
-  if (
-    !isRecord(facts) ||
-    facts.kind !== "pending-input-settlement" ||
-    facts.operation !== input.kind ||
-    facts.sessionKey !== input.sessionKey ||
-    facts.sessionId !== input.sessionId ||
-    facts.idempotencyKey !== input.idempotencyKey ||
-    facts.runId !== input.runId ||
-    facts.requestHash !== input.requestHash ||
-    facts.lifecycleGeneration !== input.lifecycleGeneration
-  ) {
+  if (!isRecord(facts) || facts.kind !== "pending-input-settlement") {
     return undefined;
   }
   // SAFETY: The exact paired kernel and admission own this tagged native receipt.

@@ -1,4 +1,5 @@
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { recordRequiredCompletionFailure } from "../completion/subagent-completion-admission.store.js";
 import { isDeliverySuspended } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import {
@@ -62,11 +63,10 @@ export async function discardSuspendedPendingFinalDelivery(params: {
 }): Promise<void> {
   const { runId, entry, now, resumedRuns } = params;
   const stateContext = captureOpenClawStateWorkerContext();
-  const generation = entry.generation;
   const resumeKey = getSubagentRunRuntimeKey(entry);
   const isCurrent = () => {
     assertSubagentRegistryWriteSourceCurrent(stateContext);
-    return entry.generation === generation && params.isCurrent();
+    return params.isCurrent();
   };
   const assertCurrent = () => {
     if (!isCurrent()) {
@@ -86,7 +86,7 @@ export async function discardSuspendedPendingFinalDelivery(params: {
     skipRequesterSettleWake: true,
     stateContext,
     isCurrent,
-    discardDelivery: (draft) => params.discardTerminalDelivery(draft, now, "expired"),
+    finalizeDelivery: (draft) => params.discardTerminalDelivery(draft, now),
   });
   assertCurrent();
   resumedRuns.delete(resumeKey);
@@ -120,4 +120,13 @@ export async function discardSuspendedPendingFinalDelivery(params: {
       prepareCurrent: prepareHookCurrent,
     });
   }
+  // Retiring the obligation is the final failure: the requester sees it, not only the log.
+  // The discard is already committed, so the notice is best-effort and cannot undo it.
+  await recordRequiredCompletionFailure(entry, "expired").catch((error: unknown) => {
+    params.warn("subagent expiry notice could not be recorded", {
+      runId: entry.runId,
+      requesterSessionKey: entry.requesterSessionKey,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  });
 }

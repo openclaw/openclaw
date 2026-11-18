@@ -2,13 +2,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import type { LegacyAuthProfileSource } from "./legacy-source-files.js";
 import type { AuthProfileDatabase } from "./sqlite.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
 export type LoadAuthProfileStoreOptions = {
   /** Limit a credential-read refusal to the provider being resolved; writes stay owner-wide. */
   migrationProvider?: string;
   deferScopedMigrationRefusals?: boolean;
   onReadOwner?: (owner: AuthProfileReadOwner) => void;
+  onReadSource?: (source: { databasePath: string; hasStore: boolean }) => void;
   /** Materialize only this explicitly selected personal account into the returned view. */
   profileId?: string;
   allowKeychainPrompt?: boolean;
@@ -26,6 +27,7 @@ export type AuthProfileReadOwner = {
   databasePath: string;
   candidates: LegacyAuthProfileSource[];
   readStore: () => AuthProfileStore | null;
+  readCurrentCredential?: () => AuthProfileCredential | undefined;
 };
 
 export type PreparedAuthProfileStoreReads = {
@@ -40,4 +42,5 @@ export type PreparedAuthProfileStoreReads = {
   ) => Promise<AuthProfileStore>;
   assertCurrent: () => void;
   materializePersonalProfile: (store: AuthProfileStore) => Promise<AuthProfileStore>;
+  readFreshStore: () => Promise<AuthProfileStore>;
 };

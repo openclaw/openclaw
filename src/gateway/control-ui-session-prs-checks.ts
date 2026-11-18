@@ -346,20 +346,6 @@ export async function fetchSessionPullRequestCheckDetails(
       "Some Actions steps exceeded the CI detail limit; open the job on GitHub",
     );
   }
-  if (suites.length > 0 && !error) {
-    const latest = parseChecks(await fetchSessionPullRequestCheckRuns(target, request), target);
-    const identity = (values: ParsedCheck[]) =>
-      values
-        .map(({ check, suiteId }) => `${check.id}:${suiteId ?? ""}`)
-        .toSorted()
-        .join(",");
-    if (identity(latest) !== identity(rows)) {
-      throw new gitHubPublicApi.ControlUiGitHubError(
-        409,
-        "CI jobs were rerun while loading; reopen CI details",
-      );
-    }
-  }
   return {
     checks: orderedRows.map(({ check }) => details.get(check.id) ?? check).toSorted(compareChecks),
     error,

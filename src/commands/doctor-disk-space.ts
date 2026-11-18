@@ -31,8 +31,7 @@ export function formatBytes(bytes: number): string {
   });
 }
 
-function collectDiskSpaceWarnings() {
-  const env = process.env;
+function collectDiskSpaceWarnings(env: NodeJS.ProcessEnv) {
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
 
@@ -57,7 +56,7 @@ function collectDiskSpaceWarnings() {
       : `Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
     details: critical
       ? [
-          "Config writes, session transcripts, and log rotation may fail silently.",
+          "Config writes, chat history, and log rotation may fail silently.",
           "Free up disk space immediately to avoid data loss.",
         ]
       : ["Consider freeing space to prevent future config/session write failures."],
@@ -65,8 +64,10 @@ function collectDiskSpaceWarnings() {
 }
 
 /** Collects read-only structured findings for low disk space around the state directory. */
-export function collectDiskSpaceHealthFindings(): readonly HealthFinding[] {
-  const result = collectDiskSpaceWarnings();
+export function collectDiskSpaceHealthFindings(
+  env: NodeJS.ProcessEnv = process.env,
+): readonly HealthFinding[] {
+  const result = collectDiskSpaceWarnings(env);
   if (!result) {
     return [];
   }
@@ -85,7 +86,7 @@ export function collectDiskSpaceHealthFindings(): readonly HealthFinding[] {
 }
 
 export function noteDiskSpace(): void {
-  const result = collectDiskSpaceWarnings();
+  const result = collectDiskSpaceWarnings(process.env);
   if (!result) {
     return;
   }

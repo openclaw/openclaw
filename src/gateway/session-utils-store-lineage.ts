@@ -1,28 +1,31 @@
+import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";
+import { resolveSessionParentSessionKey } from "../channels/plugins/session-conversation.js";
+import { readSessionEntriesFromStoreInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
-import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { selectStoredSessionLineage } from "./session-store-key.js";
-import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
-  readGatewayStoredSessionEntry,
-  resolveGatewaySessionStoreTargetWithStore,
-} from "./session-utils-store-lookup.js";
-import { readGatewaySessionStore } from "./session-utils-store-read.js";
+  isIncognitoSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import { resolveDirectStoredModelOverride } from "../sessions/stored-model-overrides.js";
+import {
+  resolveStoredSessionKeyForAgentStore,
+  selectStoredSessionLineage,
+} from "./session-store-key.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
+import { resolveGatewaySessionStoreTargetWithStoreAsync } from "./session-utils-store-lookup.js";
 
-/** Stored-address joins share discovery without passing selected keys through request aliases. */
-export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
+/** Prepare ordinary stored lineage through the existing Gateway worker owner. */
+export function createGatewaySessionLineageReaderAsync(cfg: OpenClawConfig) {
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  function readAlias(key: string, agentId: string) {
-    const metadata = captureSessionEntryMetadataRead({ sessionKey: key, agentId });
-    if (metadata) {
-      return metadata.readCurrent();
-    }
-    const target = resolveGatewaySessionStoreTargetWithStore({
+  const read = async (agentId: string, key: string, preserveQualifiedAddress: boolean) => {
+    const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
       cfg,
       key,
       ...(parseAgentSessionKey(key) ? {} : { agentId }),
+      preserveQualifiedAddress,
       readOnly: true,
       exactRead: true,
       clone: false,
@@ -30,50 +33,82 @@ export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
       targetDiscoveryCache,
     });
     return target.store[target.canonicalKey];
-  }
-  const readStored = (agentId: string, key: string): SessionEntry | undefined => {
-    if (isIncognitoSessionKey(key)) {
-      return readAlias(key, agentId);
-    }
-    return readGatewayStoredSessionEntry({
-      cfg,
-      agentId,
-      key,
-      targetDiscoveryCache,
-    });
   };
-  return { readStored, readAlias };
+  return {
+    readStored: (agentId: string, key: string) => read(agentId, key, true),
+    readAlias: (key: string, agentId: string) => read(agentId, key, false),
+  };
 }
 
-/** Exact row owners supply missing parent facts without expanding their selected store. */
-export function createGatewaySessionEntryReader(params: {
+/** A model selection consumes its one prepared parent without synchronous fallback reads. */
+export async function prepareGatewaySessionEntryReader(params: {
   cfg: OpenClawConfig;
   agentId: string;
+  sessionKey: string;
+  entry?: SessionEntry;
   store: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
-}): (key: string) => SessionEntry | undefined {
-  const reader = createGatewaySessionLineageReader(params.cfg);
-  return (key) => {
-    if (params.store[key]) {
-      return params.store[key];
-    }
-    if (key === "global" || key === "unknown") {
-      const readSource = params.readSource;
-      if (!readSource) {
-        return undefined;
+}): Promise<(key: string) => SessionEntry | undefined> {
+  if (
+    params.entry?.modelOverrideSource === "default" ||
+    resolveDirectStoredModelOverride({
+      sessionEntry: params.entry,
+      defaultProvider: resolveSessionConfiguredDefault(params.cfg, params.agentId).provider,
+    })
+  ) {
+    return (key) => params.store[key];
+  }
+  const explicitParent = params.entry?.parentSessionKey?.trim();
+  const parentKey =
+    explicitParent && explicitParent !== params.sessionKey
+      ? explicitParent
+      : resolveSessionParentSessionKey(params.sessionKey);
+  const prepared = new Map<string, SessionEntry | undefined>();
+  if (parentKey && parentKey !== params.sessionKey && !params.store[parentKey]) {
+    if (parentKey === "global" || parentKey === "unknown") {
+      const source =
+        params.readSource ??
+        (
+          await resolveGatewaySessionStoreTargetWithStoreAsync({
+            cfg: params.cfg,
+            agentId: params.agentId,
+            key: params.sessionKey,
+            readOnly: true,
+            exactRead: true,
+          })
+        ).readSource;
+      if (source) {
+        const rows = await readSessionEntriesFromStoreInWorker({
+          agentId: source.agentId,
+          storePath: source.path,
+          sessionKeys: [parentKey],
+          snapshotFields: [],
+        });
+        prepared.set(parentKey, rows.entries.find((row) => row.sessionKey === parentKey)?.entry);
       }
-      return readGatewaySessionStore({
-        agentId: readSource.agentId,
-        storePath: readSource.path,
-        options: { readSource, readOnly: true, exactKeys: [key], projection: "list" },
-      })[key];
+    } else {
+      const reader = createGatewaySessionLineageReaderAsync(params.cfg);
+      const owner = normalizeAgentId(parseAgentSessionKey(parentKey)?.agentId ?? params.agentId);
+      const storedKey = resolveStoredSessionKeyForAgentStore({
+        cfg: params.cfg,
+        agentId: owner,
+        sessionKey: parentKey,
+        preserveQualifiedAddress: true,
+      });
+      const stored = await reader.readStored(owner, storedKey);
+      const alias =
+        stored === undefined && !isIncognitoSessionKey(storedKey)
+          ? await reader.readAlias(parentKey, params.agentId)
+          : undefined;
+      const selected = selectStoredSessionLineage({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        sessionKey: parentKey,
+        read: () => stored,
+        readAlias: () => alias,
+      });
+      prepared.set(parentKey, selected.value);
     }
-    return selectStoredSessionLineage({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: key,
-      read: reader.readStored,
-      readAlias: () => reader.readAlias(key, params.agentId),
-    }).value;
-  };
+  }
+  return (key) => params.store[key] ?? prepared.get(key);
 }

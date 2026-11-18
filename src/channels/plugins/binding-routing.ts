@@ -255,7 +255,7 @@ export async function resolveRuntimeConversationBindingRouteAsync(
   return result;
 }
 
-/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveRuntimeConversationBindingRoute(
   params: RuntimeConversationBindingRouteInput & {
     touchBinding?: boolean;
@@ -286,30 +286,17 @@ export async function ensureConfiguredBindingRouteReady(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
-  const readyPromise = ensureConfiguredBindingTargetReady(params);
-  const timeoutToken = Symbol("configured-binding-route-ready-timeout");
-  const result = await raceWithTimeout(
-    readyPromise,
+  return await raceWithTimeout(
+    ensureConfiguredBindingTargetReady(params),
     CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS,
-    (): typeof timeoutToken => timeoutToken,
+    (): { ok: false; error: string } => {
+      logVerbose(
+        `configured binding route ready check timed out after ${
+          CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
+        }s`,
+      );
+      return { ok: false, error: "Configured binding route ready check timed out" };
+    },
     { ref: false },
   );
-  if (result !== timeoutToken) {
-    return result;
-  }
-  // Let late driver work finish for diagnostics, but return a bounded failure to the caller.
-  logVerbose(
-    `configured binding route ready check timed out after ${
-      CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
-    }s`,
-  );
-  readyPromise.then(
-    (lateResult) =>
-      logVerbose(
-        `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
-      ),
-    (err: unknown) =>
-      logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
-  );
-  return { ok: false, error: "Configured binding route ready check timed out" };
 }

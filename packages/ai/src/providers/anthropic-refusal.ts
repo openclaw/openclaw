@@ -2,14 +2,12 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type { AssistantMessageDiagnostic } from "../types.js";
 
-type AnthropicRefusalOutput = {
-  stopReason: string;
-  errorMessage?: string;
-  diagnostics?: AssistantMessageDiagnostic[];
-};
-
 export function applyAnthropicRefusal(
-  output: AnthropicRefusalOutput,
+  output: {
+    stopReason: string;
+    errorMessage?: string;
+    diagnostics?: AssistantMessageDiagnostic[];
+  },
   stopDetails: unknown,
   provider: string,
 ): void {

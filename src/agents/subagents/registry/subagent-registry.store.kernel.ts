@@ -1,94 +1,27 @@
-import type { DatabaseSync } from "node:sqlite";
-import { toUSVString } from "node:util";
-import {
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  sqliteStringSet,
-} from "../../../infra/kysely-sync.js";
-import { parseSqliteTableDefinition } from "../../../infra/sqlite-schema-contract-assembly.js";
-import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../../../infra/sqlite-schema-facts.js";
+import { getPostgresPhysicalFacts } from "../../../infra/database-engine/physical-facts.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../../infra/sql-connection.js";
+import { getAdmittedSqliteSchemaFacts } from "../../../infra/sqlite-schema-facts.js";
+import { parseAgentSessionKey } from "../../../routing/session-key.js";
+import { recordSessionStateEventsInDatabase } from "../../../sessions/session-state-events.kernel.js";
 import type { OpenClawStateDatabase } from "../../../state/openclaw-state-db-contract.js";
-import { ensureColumn } from "../../../state/openclaw-state-db-schema-helpers.js";
+import { ensureColumn, readTableColumns } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import { subagentRunRowVersion, type SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
-import type { SubagentRegistryWrite } from "./subagent-registry.store.types.js";
-import { isSubagentRunGenerationCandidate } from "./subagent-run-generation.js";
+import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 // Eight bound columns per row keep each statement within 1,024 parameters.
 const MAX_SUBAGENT_UPSERT_ROWS = 128;
 
-/** Check every admitted row before any row or companion effect is changed. */
-export function conflictingSubagentRunVersions(
-  database: OpenClawStateDatabase,
-  versions: SubagentRegistryWrite["versions"],
-): string[] {
-  if (versions.length === 0) {
-    return [];
-  }
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .selectFrom("subagent_runs")
-      .selectAll()
-      .where("run_id", "in", sqliteStringSet(versions.map(({ runId }) => runId))),
-  ).rows;
-  const current = new Map(rows.map((row) => [row.run_id, subagentRunRowVersion(row)]));
-  return versions.flatMap(({ runId, version }) =>
-    (current.get(toUSVString(runId)) ?? null) === version ? [] : [runId],
-  );
-}
-
-export function conflictingSubagentRegistrationCohort(
-  database: OpenClawStateDatabase,
-  cohort: SubagentRegistryWrite["registrationCohort"],
-): string[] {
-  if (!cohort) {
-    return [];
-  }
-  const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
-  const actual = new Set(
-    executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .selectFrom("subagent_runs")
-        .selectAll()
-        .where("child_session_key", "=", toUSVString(cohort.childSessionKey)),
-    ).rows.flatMap((row) => {
-      const entry = rowToSubagentRunRecord(row);
-      return !entry ||
-        isSubagentRunGenerationCandidate(entry, cohort.childSessionKey, cohort.childAgentId)
-        ? [row.run_id]
-        : [];
-    }),
-  );
-  const expected = new Set(cohort.runIds.map(toUSVString));
-  return [
-    ...[...actual].filter((runId) => !expected.has(runId)),
-    ...[...expected].filter((runId) => !actual.has(runId)),
-  ];
-}
-
-const parentStoreSchemas = new WeakMap<SqliteSchemaFacts, boolean>();
-
-export function hasParentStoreColumns(db: DatabaseSync): boolean {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+export function hasParentStoreColumns(db: EngineConnection): boolean {
+  const schema = getPostgresPhysicalFacts(db) ?? getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Subagent rows require admitted schema facts");
   }
-  let present = parentStoreSchemas.get(schema);
-  if (present === undefined) {
-    const table = schema.tableSql.get("subagent_runs");
-    const columns = table ? parseSqliteTableDefinition(table, "subagent_runs").columns : undefined;
-    present = Boolean(columns?.has("requester_store_path") && columns.has("controller_store_path"));
-    parentStoreSchemas.set(schema, present);
-  }
-  return present;
+  const columns = readTableColumns(db, "subagent_runs");
+  return columns.has("requester_store_path") && columns.has("controller_store_path");
 }
 
 /** Applies selected row changes inside the caller's transaction. */
@@ -96,6 +29,7 @@ export function writeSubagentRunValuesInDatabase(
   database: OpenClawStateDatabase,
   values: readonly SubagentRunSqliteRow[],
   deleteRunIds: readonly string[],
+  removal?: { reason: string; terminalRows?: ReadonlyMap<string, SubagentRunRecord> },
 ): void {
   const { db } = database;
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(db);
@@ -123,9 +57,50 @@ export function writeSubagentRunValuesInDatabase(
     );
   }
   if (deleteRunIds.length > 0) {
-    executeSqliteQuerySync(
+    const removed = executeSqliteQuerySync(
       db,
-      stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds),
+      stateDb.deleteFrom("subagent_runs").where("run_id", "in", deleteRunIds).returningAll(),
+    ).rows;
+    const now = Date.now();
+    // A removal and its terminal receipt commit together, including native completion retirement.
+    recordSessionStateEventsInDatabase(
+      db,
+      removed.map((row) => {
+        const entry = removal?.terminalRows?.get(row.run_id) ?? rowToSubagentRunRecord(row);
+        const delivery = entry?.delivery;
+        const outcome =
+          delivery?.status === "delivered" || delivery?.status === "suspended"
+            ? delivery.status
+            : "discarded";
+        return {
+          now,
+          event: {
+            kind: "child_delivery_removed" as const,
+            actorType: "system" as const,
+            sessionKey: row.requester_session_key,
+            sessionId: entry?.completionRequesterSessionId,
+            agentId:
+              entry?.requesterAgentId ??
+              parseAgentSessionKey(row.requester_session_key)?.agentId ??
+              "main",
+            runId: row.run_id,
+            summary: `Subagent delivery ${outcome}; registry row removed`,
+            payload: {
+              outcome,
+              reason:
+                delivery?.discardReason ??
+                delivery?.suspendedReason ??
+                removal?.reason ??
+                "owner_released",
+              previousStatus: delivery?.status,
+              childSessionKey: row.child_session_key,
+              deliveredAt: delivery?.deliveredAt,
+              suspendedAt: delivery?.suspendedAt,
+              lastError: delivery?.lastError ?? delivery?.discardedPayloadSummary?.lastError,
+            },
+          },
+        };
+      }),
     );
   }
 }

@@ -26,6 +26,8 @@ import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 type MessageInput = TranscriptMessageAppendOptions<unknown> & {
   messageJson?: string;
   appendMode?: "side";
+  /** Entry id this branch-rewrite copy replaces; absent on ordinary appends. */
+  supersedesEntryId?: string;
   custody?: { facts: SessionPendingInputWorkerFacts; relocation?: string };
   preparedMessage?: SessionTurnPlan["options"]["messages"][number]["preparedMessage"];
   fresh?: () => void;
@@ -152,6 +154,7 @@ export function createSessionActorMemoryMessages(
               state.pendingInputs.set(source.idempotencyKey, {
                 ...current,
                 consumed_event_id: facts.transcriptInputId,
+                origin_source_json: null,
               });
             } else {
               state.pendingInputs.delete(source.idempotencyKey);
@@ -240,6 +243,7 @@ export function createSessionActorMemoryMessages(
       parentId: parent(input),
       timestamp: resolveTimestampMsToIsoString(input.now ?? Date.now()),
       ...(input.appendMode ? { appendMode: input.appendMode } : {}),
+      ...(input.supersedesEntryId ? { supersedesEntryId: input.supersedesEntryId } : {}),
     };
     const eventJson = `${JSON.stringify(envelope).slice(0, -1)},"message":${messageJson}}`;
     const event: unknown = JSON.parse(eventJson);

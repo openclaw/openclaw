@@ -38,21 +38,21 @@ controller.
 
 Slice 2 adds a versioned, explicitly enabled adoption record and a native
 activation/recovery owner. It reuses the suspension drain, native systemd
-lifecycle, restart health, and config audit owners. Activation journals pointer
+lifecycle and restart health owners. Activation journals pointer
 intent before publication, verifies the selected physical generation and stable
-service definition, and accepts only candidate-authored additive config writes
-with matching audit evidence and unchanged policy. Startup inspection remains a
+service definition, and accepts additive startup config writes with unchanged
+policy and file ownership without requiring optional audit receipts. Startup inspection remains a
 bounded pending outcome. Successful verification retires the record; safe
 rollback preserves it. `openclaw update recover --root <installation-root>`
 reconciles uncertain effects and verifies an already healthy candidate or
 predecessor without restarting it.
 
-The startup-only canary runs before drain and again on a fresh private state
-copy after live readiness, while the selected Gateway serves. Accepted startup
-config migration protection is persisted before that second canary. A final
-check must observe the same live PID and boot before the owner retires the
-operation. These receipts prove the existing canary contract, not a native model
-marker turn. Ordinary `update.status` requests refresh verified immutable
+Before drain, the owner loads the candidate's recovery runtime
+(`update-migrated-finalize --check`) and refuses a candidate that cannot load it.
+Startup is proven live: accepted startup config migration protection is persisted
+after the selected Gateway reaches readiness with the expected generation, and the
+owner then retires the operation. A failed start restores the predecessor. These
+receipts prove readiness, not a native model marker turn. Ordinary `update.status` requests refresh verified immutable
 installation facts through the existing refresh owner and bypass private
 manager status, keeping the activation record authoritative.
 
@@ -77,12 +77,12 @@ cannot retrofit it into an older running Gateway. After that bridge is healthy,
 enable adoption and prove a native cutover to a different reviewed generation
 before retiring the old controller. The immutable
 `--drain-timeout` flag independently selects the drain budget, such as 30 seconds,
-while `--timeout` retains canary/readiness phase budgets. Healthy recovery never
+while `--timeout` retains candidate check and readiness phase budgets. Healthy recovery never
 uses the drain budget. Gateway RPC privilege handoff is
 not part of this slice. Activation requires cgroup v2 and matching schema
-contracts; incompatible schema requirements refuse before drain. Startup-only
-canary rehearsal uses private copies before cutover, without Doctor pre-repair,
-so the candidate must handle its own additive startup migration. No live Doctor
+contracts; incompatible schema requirements refuse before drain. No private-copy
+rehearsal runs before cutover and Doctor does not pre-repair, so the candidate
+must handle its own additive startup migration. No live Doctor
 or optional NOCOW rewrite runs during activation. General incompatible database migration/rewind,
 generation collection, deployment adoption/proof, and private-controller
 retirement remain separate work. The broader proposed contracts below describe
@@ -169,7 +169,7 @@ The CLI entry is `src/cli/update-cli.ts` and `src/cli/update-cli/*`, rather than
 | systemd lifecycle              | `update-immutable-service.ts` delegates to the native system-scope lifecycle owner, preserves the sealed definition, and checks original cgroup extinction before pointer publication.                                                                                                                                       | Lifecycle is integrated; broader host-maintenance coordination remains separate.                                                                       |
 | Doctor                         | `src/commands/doctor-maintenance.ts`, `doctor-maintenance-state.ts`, and `src/infra/update-doctor-result.ts` own maintenance custody, config/schema repair, typed results, config-write chains, and database generation evidence.                                                                                            | Pass the prepared migration requirements and existing authority into candidate Doctor. Controller profile strings are not a new migration API.         |
 | WAL-aware backup               | `update-database-backup.ts`, `update-database-generations.ts`, and `update-database-restore.ts` capture verified SQLite snapshots and reject unsafe restoration. Snapshot-volume admission reserves `2 × total family bytes + 3 × largest family + 64 MiB`; each source volume also reserves restoration space.              | Reuse coverage, space, identity, digest, and foreign-write checks. A pointer rollback alone cannot undo a database migration.                          |
-| NOCOW                          | `doctor-sqlite-nocow.ts` already owns btrfs inspection, verified WAL-aware snapshots, NOCOW copies, ACL/mode preservation, integrity checks, atomic directory exchange, and retained originals. `doctor/shared/update-phase.ts` and `src/flows/doctor-health.ts` defer it during managed updates unless explicitly opted in. | Preserve that default. Add phase work/progress accounting to Doctor where required; delete the deployment-side rewrite/verifier implementation.        |
+| NOCOW                          | `doctor-sqlite-nocow.ts` already owns btrfs inspection, verified WAL-aware snapshots, NOCOW copies, ACL/mode preservation, integrity checks, atomic exchanges of files, and retained originals. `doctor/shared/update-phase.ts` and `src/flows/doctor-health.ts` defer it during managed updates unless explicitly opted in. | Preserve that default. Add phase work/progress accounting to Doctor where required; delete the deployment-side rewrite/verifier implementation.        |
 | Durable run history            | `update-run-ledger.ts`, `update-run-schema.ts`, and `update-run-recovery-store.ts` store run history and recovery descriptors in the shared state database, including phase timings and intent/observed effects.                                                                                                             | Reporting cannot be the sole authority for restoring its own database.                                                                                 |
 | Independent activation journal | `package-update-activation-immutable.ts` and the immutable-pointer adapter use installation-sibling `.control/operation.sqlite`; the retained product runtime runs through sealed `recovery.mjs`.                                                                                                                            | Same-schema recovery is implemented. Compose Doctor migration evidence and forward recovery in this owner.                                             |
 | Rollback                       | `update-immutable-activation.ts` restores a verified compatible predecessor or retains pending recovery; independent recovery reconciles pointer effects and verifies an already healthy generation without restart.                                                                                                         | Schema crossings still refuse before drain. Full immutable migration recovery is not implemented.                                                      |
@@ -212,7 +212,7 @@ is already proven.
 
 Recognize an installation rooted at `/opt/<name>` with `current` selecting a
 direct, sealed `releases/<sha>` child. Directory shape is only a discovery hint.
-Require an updater-owned installation record binding the canonical parent,
+Require an updater-owned installation record binding the resolved parent directory,
 service identity/scope/account, state/config/profile, runtime executable, source
 authority, and generation build identity. Validate symlink containment, ownership,
 same-filesystem atomic publication support, and absence of a competing updater
@@ -355,7 +355,7 @@ Main already has size-derived inspection budgets. In
 is `300 seconds + ceil(40 × family bytes / 32 MiB) seconds`: four copy/comparison
 passes with tenfold slow-hardware headroom. `update-candidate-state.sizes.ts`
 includes SQLite sidecars; aggregate inspection sums serial families.
-`update-finalization-budget.ts` combines state, step, observed startup, and plugin
+`update-finalization-budget.ts` combines state, step, and plugin
 work. Defaults of 20-minute runner, 30-minute step, and 45-minute automatic step
 in `update-run-timeouts.ts` are distinct from the private 2,400-second deadline.
 
@@ -511,14 +511,14 @@ Gateway and do not prove updater-owned restart.
 | Fetch/build/admission/canary failure       | Old PID remains healthy, pointer unchanged, candidate never admitted to live state.                                                                                                                                                                                             | Candidate preparation integration.                                                                                                                     |
 | Native systemd                             | Real system unit, preserved definition, updater outside service cgroup, correct account/environment, physical generation for parent and lazy child imports. Include insufficient privilege and competing service.                                                               | Isolated Linux Testbox/VM with real systemd.                                                                                                           |
 | Drain and concurrency                      | Busy ordinary work, write custody, lease expiry, second updater, resident replacement, cancellation and failed stop all settle without stealing authority.                                                                                                                      | Lifecycle boundary integration.                                                                                                                        |
-| Crash/restart at each effect               | Inject termination before/after durable intent, pointer rename, Doctor publication, native stop/start and terminal receipt; observe before replay.                                                                                                                              | Activation/recovery integration, deterministic fault hooks.                                                                                            |
+| Crash/restart at each effect               | Inject termination before/after durable intent, pointer rename, Doctor publication, native stop/start and terminal receipt; observe before replay.                                                                                                                              | Activation/recovery integration, repeatable fault hooks.                                                                                               |
 | Migration and restore                      | WAL-bearing shared/agent stores, backup shortage, safe pre-start restore, changed config, foreign writes and post-start rollback refusal; independent journal survives shared-DB restoration.                                                                                   | Doctor/update integration.                                                                                                                             |
 | Reported verifier failures                 | Checkpoint changes source/snapshot sizes; Doctor legitimately refreshes schema metadata. Recovery accepts authorized changes and rejects unrelated mutations.                                                                                                                   | Regression through Doctor plus rollback boundary.                                                                                                      |
 | NOCOW and large state                      | Actual btrfs, retained ACLs/originals, unsupported exchange tool, partial copy/cancellation, throughput/progress and adequate parent/child budgets for a representative 38-GB store.                                                                                            | Separately budgeted release/performance cell; synthetic or authorized copied data.                                                                     |
 | Readiness and status                       | `update-immutable-verification.ts` verifies readiness and generation/process identity. The immutable record projection exposes prepared/pending facts, safe failure codes, retained recovery commands, and optional historical Gateway verification to CLI and protocol status. | Historical accepted/restored receipts are not live health or pending-update success. Model markers and broader application acceptance remain separate. |
 | Retention                                  | Current/previous/live/recovery/unknown references survive; only eligible owned generations retire after verification. Migration backups remain untouched.                                                                                                                       | Recovery/cleanup boundary.                                                                                                                             |
 
-Keep focused regressions deterministic and cheap. Real multi-GB work, real
+Keep focused regressions repeatable and cheap. Real multi-GB work, real
 service boots, btrfs and crash-recovery compositions belong in release/performance
 proof. Record before/after outage and phase durations from the same fixture and
 storage class. The original design-only lane ran no such behavior proof; each

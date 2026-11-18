@@ -5,10 +5,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { runBestEffortCleanup } from "./non-fatal-cleanup.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "./path-existence.js";
 import { isPathInside } from "./path-guards.js";
 
 const log = createSubsystemLogger("infra:temp-artifacts");
@@ -113,7 +113,7 @@ export async function maintainRetainedUpdateRuntimes(params: {
   temporaryDirectories?: readonly string[];
   repair: boolean;
   assertCurrent: () => void;
-  assertResourcesSettled?: () => void;
+  assertResourcesSettled?: (directory: string) => void;
 }): Promise<string[]> {
   const messages: string[] = [];
   // Native spelling matches the projection, registration, and marker realpaths
@@ -168,16 +168,21 @@ export async function maintainRetainedUpdateRuntimes(params: {
             throw new Error("directory identity or custody changed");
           }
           params.assertCurrent();
-          const census = inspectOtherOpenClawProcesses();
+          const census = inspectOtherOpenClawProcesses(directory);
           if ("error" in census) {
             throw new Error(census.error);
+          }
+          for (const warning of census.warnings ?? []) {
+            if (!messages.includes(warning)) {
+              messages.push(warning);
+            }
           }
           if (census.pids.length) {
             throw new Error(
               `other OpenClaw processes are still running (PIDs: ${census.pids.join(", ")}); let these holders finish, then rerun openclaw doctor --fix`,
             );
           }
-          params.assertResourcesSettled?.();
+          params.assertResourcesSettled?.(directory);
           params.assertCurrent();
           let failure: string | undefined;
           await removeTemporaryArtifacts(directory, "Updater runtime", (error) => {

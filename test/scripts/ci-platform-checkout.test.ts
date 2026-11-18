@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, expect, it, vi } from "vitest";
+import { parse } from "yaml";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import {
@@ -38,38 +39,69 @@ beforeAll(() => {
   return () => vi.resetConfig();
 });
 
-function expectedHarnessSparseCheckoutArgs(linux: boolean) {
-  return [
-    "sparse-checkout",
-    "set",
-    "--no-cone",
-    "/.github/actions/",
-    "/scripts/lib/pnpm-lockfile-documents.mjs",
-    "/scripts/ios-screenshot-evidence.mjs",
-    "/scripts/lib/direct-run.mjs",
-    "/scripts/ci-static-step.sh",
-    ...(linux
-      ? [
-          "/scripts/lib/release-upgrade-baseline.mjs",
-          "/scripts/lib/release-version.mjs",
-          "/scripts/lib/canonical-json.mjs",
-          "/scripts/lib/upgrade-survivor-policy.mjs",
-          "/scripts/lib/upgrade-survivor-scenarios.json",
-          "/scripts/ci-npm-lock-admission.mjs",
-          "/scripts/generate-npm-package-lock.mjs",
-          "/scripts/generate-npm-package-lock.mts",
-          "/scripts/changed-lanes.mts",
-          "/scripts/lib/merge-head-diff-base.mjs",
-          "/scripts/ci-additional-checks.sh",
-          "/scripts/stage-openclaw-bun.sh",
-          "/scripts/lib/openclaw-bun.json",
-        ]
-      : [
-          "/scripts/lib/swift-toolchain.sh",
-          "/scripts/lib/ci-ios-smoke-plan.mjs",
-          "/scripts/ci-xcodebuild.py",
-        ]),
-  ];
+function readFiles(names: string[]) {
+  return Object.fromEntries(names.map((name) => [name, readFileSync(name, "utf8")]));
+}
+
+function expectFiles(directory: string, files: Record<string, string>) {
+  for (const [name, contents] of Object.entries(files)) {
+    expect(readFileSync(path.join(directory, name), "utf8"), name).toBe(contents);
+  }
+}
+
+// Workflow consumers define the required files; the real Git fixture below
+// checks both index exports and sparse fetches against the owner, not a copied list.
+const harnessReferences = new Map<string, Map<string, string>>();
+const workflowDefinition = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+  jobs: Record<
+    string,
+    {
+      "runs-on"?: unknown;
+      steps?: {
+        env?: Record<string, string>;
+        with?: { path?: string; "sparse-checkout"?: string };
+      }[];
+    }
+  >;
+};
+for (const [jobId, job] of Object.entries(workflowDefinition.jobs)) {
+  const checkout = job.steps?.find((step) => step.env?.CHECKOUT_REPO);
+  const kind =
+    checkout?.env?.CHECKOUT_KIND ??
+    (/(?:macos|windows|xcode)-/u.test(JSON.stringify(job["runs-on"])) ? "platform" : "linux-node");
+  const references = new Map<string, string>();
+  for (const step of job.steps ?? []) {
+    for (const match of JSON.stringify(step).matchAll(/\.ci-harness\/([\w./-]+)/gu)) {
+      references.set(expectDefined(match[1], "harness reference"), jobId);
+    }
+  }
+  if (references.size === 0) {
+    continue;
+  }
+  const sparse = job.steps?.find((step) => step.with?.path === ".ci-harness");
+  if (sparse) {
+    it(`exports every harness reference for ${jobId}'s sparse checkout`, () => {
+      const paths = (sparse.with?.["sparse-checkout"] ?? "")
+        .split(/\s+/u)
+        .filter(Boolean)
+        .map((entry) => entry.replace(/^\/|\/$/gu, ""));
+      for (const reference of references.keys()) {
+        expect(
+          paths.some((entry) => reference === entry || reference.startsWith(`${entry}/`)),
+          `${jobId}: .ci-harness/${reference}`,
+        ).toBe(true);
+      }
+    });
+    // Preflight uses the owner's index export when workflow and target match.
+    if (kind !== "preflight") {
+      continue;
+    }
+  }
+  const required = harnessReferences.get(kind) ?? new Map<string, string>();
+  for (const [reference, consumer] of references) {
+    required.set(reference, consumer);
+  }
+  harnessReferences.set(kind, required);
 }
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
@@ -313,9 +345,6 @@ syncFixtureBuiltinExports();
           expect(fetches.at(-1)?.args).toContain(
             `+${"b".repeat(40)}:refs/remotes/origin/ci-harness`,
           );
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
           expect(report.commands.at(-1)?.args).toEqual([
             "checkout",
             "--force",
@@ -406,37 +435,40 @@ it.concurrent.for([
     };
     const evidenceScripts = {
       "scripts/ios-screenshot-evidence.mjs": "workflow evidence script\n",
+      "scripts/lib/ios-test-results.mjs": "workflow XCTest result verifier\n",
       "scripts/lib/direct-run.mjs": "workflow direct-run script\n",
       "scripts/ci-static-step.sh": "workflow static-step script\n",
+      "scripts/ci-collect-checks.sh": "workflow collect-checks script\n",
+      "scripts/macos-native-runtime-artifact.mjs": "workflow native runtime artifact script\n",
+      ...readFiles([
+        "scripts/lib/process-memory.mts",
+        "packages/normalization-core/src/mountinfo-path.ts",
+      ]),
     };
-    const nodeSetupScripts = {
-      "scripts/lib/pnpm-lockfile-documents.mjs": readFileSync(
-        "scripts/lib/pnpm-lockfile-documents.mjs",
-        "utf8",
-      ),
-    };
+    const nodeSetupScripts = readFiles(["scripts/lib/pnpm-lockfile-documents.mjs"]);
     const platformScripts = {
       "scripts/lib/swift-toolchain.sh": "workflow Swift toolchain helper\n",
       "scripts/ci-xcodebuild.py": "workflow Xcode diagnostics helper\n",
     };
-    const preflightScripts = {
-      "scripts/ci-build-manifest.mjs": readFileSync("scripts/ci-build-manifest.mjs", "utf8"),
-    };
-    const simulatorScripts = {
-      "scripts/lib/ci-ios-smoke-plan.mjs": readFileSync(
-        "scripts/lib/ci-ios-smoke-plan.mjs",
-        "utf8",
-      ),
-    };
-    const releasePolicy = Object.fromEntries(
-      [
-        "scripts/lib/release-context.mjs",
-        "scripts/lib/release-version.mjs",
-        "scripts/lib/release-upgrade-baseline.mjs",
-        "scripts/lib/canonical-json.mjs",
-        "scripts/lib/upgrade-survivor-policy.mjs",
-        "scripts/lib/upgrade-survivor-scenarios.json",
-      ].map((name) => [name, readFileSync(name, "utf8")]),
+    const preflightScripts = readFiles([
+      "scripts/ci-build-manifest.mjs",
+      "scripts/lib/ci-blacksmith-capacity.mjs",
+    ]);
+    const simulatorScripts = readFiles(["scripts/lib/ci-ios-smoke-plan.mjs"]);
+    const releasePolicy = readFiles([
+      "scripts/lib/release-context.mjs",
+      "scripts/lib/release-version.mjs",
+      "scripts/lib/release-upgrade-baseline.mjs",
+      "scripts/lib/canonical-json.mjs",
+      "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
+    ]);
+    const references = harnessReferences.get(kind) ?? new Map<string, string>();
+    const referencedFiles = Object.fromEntries(
+      [...references.keys()].map((reference) => {
+        const file = statSync(reference).isDirectory() ? `${reference}/action.yml` : reference;
+        return [file, readFileSync(file, "utf8")];
+      }),
     );
     const candidateFiles = {
       "candidate-only.txt": "candidate stays intact\n",
@@ -499,6 +531,7 @@ it.concurrent.for([
           }).trim();
         run("init");
         for (const [name, contents] of Object.entries({
+          ...referencedFiles,
           ...files,
           ...evidenceScripts,
           ...nodeSetupScripts,
@@ -569,10 +602,20 @@ it.concurrent.for([
           mkdirSync(path.dirname(staleAction), { recursive: true });
           writeFileSync(staleAction, "name: stale platform action\n");
         }
+        let configuredGit = git;
+        if (kind === "linux-node" && workflow === "same") {
+          configuredGit = path.join(root, "configured-git");
+          // Bound re-entry so a leaked fixture PATH fails instead of spawning recursively.
+          writeFileSync(
+            configuredGit,
+            '#!/bin/sh\n[ "${CI_FIXTURE_GIT_FORWARDING:-}" != 1 ] || exit 87\nexport CI_FIXTURE_GIT_FORWARDING=1\nexec git "$@"\n',
+            { mode: 0o755 },
+          );
+        }
         writeFileSync(
           path.join(root, "fixture-options.json"),
           JSON.stringify({
-            localGit: { git, remote: source },
+            localGit: { git: configuredGit, remote: source },
             fetchResults: [0, 0],
             cooperativeTrees: true,
             env: {
@@ -626,21 +669,12 @@ it.concurrent.for([
         expect(readFileSync(path.join(workspace, ".git/config"), "utf8")).not.toContain(
           "AUTHORIZATION",
         );
-        for (const [name, contents] of Object.entries(candidateFiles)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(contents);
+        expectFiles(workspace, candidateFiles);
+        for (const name of Object.keys(candidateFiles)) {
           expect(existsSync(path.join(harness, name))).toBe(false);
         }
         const workflowOwnsEvidence = kind === "platform" || kind === "linux-node";
-        for (const name of Object.keys(evidenceScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidateEvidenceScripts[name],
-          );
-        }
-        for (const name of Object.keys(platformScripts)) {
-          expect(readFileSync(path.join(workspace, name), "utf8")).toBe(
-            candidatePlatformScripts[name],
-          );
-        }
+        expectFiles(workspace, { ...candidateEvidenceScripts, ...candidatePlatformScripts });
         if (workflow === "missing-action") {
           expect(existsSync(path.join(workspace, action))).toBe(false);
           expect(existsSync(path.join(harness, action))).toBe(false);
@@ -652,6 +686,12 @@ it.concurrent.for([
           expect(existsSync(harness)).toBe(false);
           return;
         }
+        for (const [reference, consumer] of references) {
+          expect(
+            existsSync(path.join(harness, reference)),
+            `${consumer} (${kind}, workflow=${workflow}): .ci-harness/${reference}`,
+          ).toBe(true);
+        }
         const sourceStatus = expectDefined(readSourceStatus, "native source status");
         expect(sourceStatus()).toEqual([]);
         expect(readFileSync(path.join(workspace, ".git/info/exclude"), "utf8")).toBe(
@@ -660,9 +700,7 @@ it.concurrent.for([
         if (workflow === "same") {
           expect(existsSync(path.join(harness, ".git"))).toBe(false);
         }
-        for (const [name, contents] of Object.entries(files)) {
-          expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-        }
+        expectFiles(harness, files);
         const fingerprint = spawnSync(
           process.execPath,
           [
@@ -676,47 +714,26 @@ it.concurrent.for([
         );
         expect(fingerprint.status, fingerprint.stderr).toBe(0);
         expect(fingerprint.stdout.trim()).toMatch(/^v2-[a-f0-9]{64}$/u);
-        for (const [name, contents] of Object.entries(evidenceScripts)) {
-          expect(existsSync(path.join(harness, name))).toBe(workflowOwnsEvidence);
-          if (workflowOwnsEvidence) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(platformScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(kind === "platform");
-          if (kind === "platform") {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(preflightScripts)) {
-          expect(existsSync(path.join(harness, name)), name).toBe(preflight);
-          if (preflight) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(simulatorScripts)) {
-          const ownsSimulator = preflight || kind === "platform";
-          expect(existsSync(path.join(harness, name)), name).toBe(ownsSimulator);
-          if (ownsSimulator) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate planner');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-          }
-        }
-        for (const [name, contents] of Object.entries(releasePolicy)) {
-          const ownsPolicy = preflight
-            ? ![
-                "scripts/lib/release-upgrade-baseline.mjs",
-                "scripts/lib/canonical-json.mjs",
-                "scripts/lib/upgrade-survivor-policy.mjs",
-                "scripts/lib/upgrade-survivor-scenarios.json",
-              ].includes(name)
+        const ownsPolicy = (name: string) =>
+          preflight
+            ? ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"].includes(name)
             : kind === "linux-node" && name !== "scripts/lib/release-context.mjs";
-          expect(existsSync(path.join(harness, name))).toBe(ownsPolicy);
-          if (ownsPolicy) {
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
-            writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
-            expect(readFileSync(path.join(harness, name), "utf8")).toBe(contents);
+        for (const [scripts, owns, mutate] of [
+          [evidenceScripts, () => workflowOwnsEvidence, false],
+          [platformScripts, () => kind === "platform", false],
+          [preflightScripts, () => preflight, false],
+          [simulatorScripts, () => preflight || kind === "platform", true],
+          [releasePolicy, ownsPolicy, true],
+        ] as const) {
+          for (const [name, contents] of Object.entries(scripts)) {
+            expect(existsSync(path.join(harness, name)), name).toBe(owns(name));
+            if (owns(name)) {
+              expectFiles(harness, { [name]: contents });
+              if (mutate) {
+                writeFileSync(path.join(workspace, name), "throw new Error('candidate policy');\n");
+                expectFiles(harness, { [name]: contents });
+              }
+            }
           }
         }
         if (kind === "linux-node") {
@@ -740,11 +757,6 @@ it.concurrent.for([
           // Git tracks only executable state; checkout materialization applies the process umask.
           expect(statSync(path.join(harness, executable)).mode & 0o111).not.toBe(0);
           expect(readlinkSync(path.join(harness, link))).toBe("line\nbreak.sh");
-        }
-        if (workflow !== "same" && workflowOwnsEvidence) {
-          expect(report.commands.find(({ args }) => args[0] === "sparse-checkout")?.args).toEqual(
-            expectedHarnessSparseCheckoutArgs(linux),
-          );
         }
         writeFileSync(path.join(workspace, action), "later candidate edit\n");
         expect(readFileSync(path.join(harness, action), "utf8")).toBe(files[action]);
@@ -1044,6 +1056,8 @@ it("does not revive a terminated fixture instance when its PID is reused", () =>
       String.raw`
 import contextlib, json, os, pathlib, runpy, subprocess, sys, tempfile
 
+fixture_lifetime_fds = ((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+    item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
 with tempfile.TemporaryDirectory(prefix="checkout-pid-reuse-") as directory:
     root = pathlib.Path(directory).resolve()
     workspace = root / "workspace"
@@ -1081,7 +1095,7 @@ cp.spawnSync = (command, args, options) => {
                           stdin=subprocess.PIPE) as child, contextlib.ExitStack() as cleanup:
         lease_owner = cleanup.enter_context(subprocess.Popen([
             sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=fixture_lifetime_fds))
         def close_lease_owner():
             lease_owner.communicate(timeout=4)
             assert lease_owner.returncode == 0, "lease owner failed during retirement"
@@ -1098,7 +1112,7 @@ try {
   console.log("ready");
   await new Promise(resolve => { process.stdin.once("end", resolve); process.stdin.resume(); });
 } finally { await owner.close(); }
-""", sys.argv[4], str(root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+""", sys.argv[4], str(root)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=fixture_lifetime_fds))
             # EOF retires the broker and sampler before the Python namespace owner leaves.
             cleanup.callback(lambda: broker.communicate(timeout=4))
             assert broker.stdout.readline().strip() == "ready", "census owner failed to initialize"
@@ -1118,7 +1132,7 @@ try {
 
         def observe():
             subprocess.run([sys.argv[1], "--require", str(guard), sys.argv[2], "git", str(root), "early-leader-exit",
-                            "-C", str(workspace), "checkout"], cwd=workspace, check=True)
+                            "-C", str(workspace), "checkout"], cwd=workspace, check=True, pass_fds=fixture_lifetime_fds)
             observed = json.loads((root / "events.jsonl").read_text().splitlines()[-1])
             assert observed["sentinelAlive"], "unrelated live sentinel was lost"
             return observed["alive"]
@@ -1162,9 +1176,11 @@ it.skipIf(process.platform === "win32")(
         String.raw`
 import ast, contextlib, errno, io, json, os, pathlib, re, signal, subprocess, sys, tempfile, time
 
+fixture_lifetime_fds = ((7,) if os.environ.get("OPENCLAW_PR_LIFETIME_FILE") else ()) + tuple(
+    item["fd"] for item in json.loads(os.environ.get("OPENCLAW_PR_LIFETIME_ANCESTORS", "[]")))
 # Load only the actual boundary functions; never execute checkout or real Git.
 functions = [node for node in ast.parse(sys.stdin.read()).body
-             if isinstance(node, ast.FunctionDef) and node.name in ("group_alive", "group_signal", "group_states", "drain")]
+             if isinstance(node, ast.FunctionDef) and node.name in ("lifetime_fds", "group_alive", "group_signal", "group_states", "drain")]
 exec(compile(ast.Module(body=functions, type_ignores=[]), "checkout-owner.py", "exec"))
 cleanup_seconds = 10
 
@@ -1188,7 +1204,7 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
         (root / "lease").write_text("owned")
         lease_owner = cleanup.enter_context(subprocess.Popen([
             sys.argv[1], sys.argv[2], "lease-owner", str(root), "standalone"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True))
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, pass_fds=fixture_lifetime_fds))
         def close_lease_owner():
             lease_owner.communicate(timeout=4)
             assert lease_owner.returncode == 0, "lease owner failed during retirement"
@@ -1197,7 +1213,7 @@ with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_sess
         for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
             (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt, instance=str(pid))))
         subprocess.run([sys.argv[1], sys.argv[2], "git", str(root), "early-leader-exit",
-                        "-C", str(root / "workspace"), "checkout"], cwd=root / "workspace", check=True)
+                        "-C", str(root / "workspace"), "checkout"], cwd=root / "workspace", check=True, pass_fds=fixture_lifetime_fds)
         observed = json.loads((root / "events.jsonl").read_text())
         assert observed["alive"] == [], "fixture counted a terminated zombie as a live writer"
         assert observed["sentinelAlive"]

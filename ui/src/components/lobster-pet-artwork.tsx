@@ -1,15 +1,14 @@
 import "../styles/lobster-pet.css";
-import { dynamic } from "@solidjs/web";
+import { dynamic, type JSX } from "@solidjs/web";
 import type { LobsterPetLook, LobsterPetPaletteId } from "./lobster-pet-contract.ts";
 import { moonPhaseFraction } from "./lobster-pet-moon.ts";
-import {
-  GLITCH_GHOSTS,
-  PALETTE_OVERLAYS,
-  PALETTE_RIGHT_CLAW_PROPS,
-  PATTERNED_PALETTES,
-} from "./lobster-pet-palette-sprites.tsx";
+import { LobsterClosedEyes, staticSprite } from "./lobster-pet-sprite.tsx";
 import {
   ACTUAL_LOBSTER,
+  CHIMERA_STITCHES,
+  ECLIPSE_CORONA,
+  NOTEXTURE_CHECKER,
+  WATERMELON_RIND,
   ASCII_LOBSTER,
   BALLOON_LOBSTER,
   FLATPACK_LOBSTER,
@@ -34,6 +33,404 @@ import {
   TAIL_FAN,
 } from "./lobster-pet-sprites.tsx";
 
+const GLITCH_GHOSTS = staticSprite(`
+<g class="lob-glitch-ghosts">
+  <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(-3 0)" fill="#ff3355" opacity="0.4"></path>
+  <path d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" transform="translate(3 1)" fill="#22d3ee" opacity="0.4"></path>
+</g>
+`);
+
+// Direct claw paths inherit the existing size transform as well as wave/snip.
+const MICROPHONE = staticSprite(`
+<path class="lob-microphone" d="M106 32 L112 34 L106 56 Q105 58 103 57 Q101 56 102 54 Z" fill="#343747"></path>
+<path class="lob-microphone" d="M103 27 A7 7 0 1 1 117 27 A7 7 0 1 1 103 27 Z" fill="#666a80"></path>
+<path class="lob-microphone" d="M106 23 L114 25 M105 27 L113 29" fill="none" stroke="#e7e7f0" stroke-width="1.5" stroke-linecap="round"></path>
+`);
+
+const PALETTE_RIGHT_CLAW_PROPS: Partial<Record<LobsterPetPaletteId, () => JSX.Element>> = {
+  taylorpinch: MICROPHONE,
+  shellvis: MICROPHONE,
+  leonardodepinchy: staticSprite(`
+<path class="lob-leonardodepinchy__brush" d="M107 32 L112 33 L106 57 Q104 59 102 56 Z" fill="#855233"></path>
+<path class="lob-leonardodepinchy__brush" d="M106 27 L114 29 L112 36 L104 34 Z" fill="#b4b7b5"></path>
+<path class="lob-leonardodepinchy__brush" d="M106 27 C105 21 110 18 111 11 C119 21 118 26 114 29 Z" fill="#e6c88e"></path>
+<path class="lob-leonardodepinchy__brush" d="M111 11 Q114 16 115 18 Q111 21 108 22 Q110 16 111 11 Z" fill="#4a89b8"></path>
+`),
+  alexandergrahamshell: staticSprite(`
+<path class="lob-telephone-receiver" d="M105 33 L112 34 L108 56 Q105 59 102 55 Z" fill="#4b3c30"></path>
+<path class="lob-telephone-receiver" d="M102 29 C104 21 113 21 117 29 L117 34 Q109 39 101 34 Z" fill="#35312f"></path>
+<path class="lob-telephone-receiver" d="M103 30 Q110 34 116 30" fill="none" stroke="#bc955c" stroke-width="2" stroke-linecap="round"></path>
+<path class="lob-telephone-receiver" d="M105 56 Q101 63 108 65 Q115 67 110 71 Q106 74 112 77" fill="none" stroke="#574631" stroke-width="1.8" stroke-linecap="round"></path>
+`),
+  santaclaws: staticSprite(`
+<path class="lob-candy-cane" d="M104 58 L109.5 25 Q111.5 16 117.5 17.5 Q122 19 120 25" fill="none" stroke="#f6f1e8" stroke-width="4.5" stroke-linecap="round"></path>
+<path class="lob-candy-cane" d="M104 58 L109.5 25 Q111.5 16 117.5 17.5 Q122 19 120 25" fill="none" stroke="#c41f2b" stroke-width="4.5" stroke-dasharray="3 3"></path>
+`),
+  clawnadian: staticSprite(`
+<path class="lob-hockey-stick" d="M97 66 L100.6 66.5 L111.6 15.5 L108 14.6 Z" fill="#d6a15d"></path>
+<path class="lob-hockey-stick" d="M99.6 64 L110 16" fill="none" stroke="#a8733a" stroke-width="1" stroke-linecap="round"></path>
+<path class="lob-hockey-stick" d="M108 14.6 L111.6 15.5 Q114.5 12.8 119.5 11.2 Q121.6 10.2 120.6 7.6 Q115 7.8 108.6 11 Z" fill="#d6a15d"></path>
+<path class="lob-hockey-stick" d="M111.4 11.4 L113 14.4 M113.9 10.2 L115.5 13.1 M116.4 9.2 L118 12 M118.9 8.3 L120.4 10.8" fill="none" stroke="#26252b" stroke-width="1.5" stroke-linecap="round"></path>
+`),
+  clawlombian: staticSprite(`
+<path class="lob-maraca" d="M110.5 30.7 L104.1 54.8 L100.6 53.9 L107.1 29.7 Z" fill="#b5793f"></path>
+<path class="lob-maraca" d="M117.8 23.8 A7 9 15 1 1 103.9 22.5 A7 9 15 1 1 117.8 23.8 Z" fill="#ce1126"></path>
+<path class="lob-maraca" d="M117.8 23.8 L117.4 24.9 L117.3 25.1 L104 21.6 L104 21.3 L104.2 20.2 L104.6 19.1 L104.8 18.7 L118.1 22.2 L118 22.7 Z" fill="#fcd116"></path>
+<path class="lob-maraca" d="M117.3 25.1 L116.9 26 L116.4 27 L116.1 27.3 L103.9 24 L103.9 23.7 L103.9 22.5 L104 21.6 Z" fill="#003893"></path>
+<path class="lob-maraca" d="M108.7 16.7 Q109.4 14.1 111.8 14.5" fill="none" stroke="#ff8a8f" stroke-width="1.4" stroke-linecap="round"></path>
+`),
+};
+
+// Every registered pattern suppresses freckles. Null entries use geometry or CSS instead of an overlay.
+const PALETTE_PATTERNS: Partial<Record<LobsterPetPaletteId, (() => JSX.Element) | null>> = {
+  // Lumen photophores: dotted running lights along the shell. The glow (and
+  // its dark-theme-only intensity) lives in lobster-pet.css.
+  lumen: staticSprite(`
+<g class="lob-lumen" fill="#7ef5dd">
+  <circle cx="36" cy="54" r="2.4"></circle>
+  <circle cx="50" cy="66" r="2"></circle>
+  <circle cx="66" cy="70" r="2.2"></circle>
+  <circle cx="80" cy="60" r="2"></circle>
+  <circle cx="88" cy="46" r="1.7"></circle>
+  <circle cx="60" cy="86" r="1.7"></circle>
+</g>
+`),
+  magma: staticSprite(`
+<g class="lob-magma" fill="none" stroke="#ff6a3d" stroke-width="2" stroke-linecap="round">
+  <path d="M40 44 L48 54 L42 66 L50 78"></path>
+  <path d="M74 40 L68 52 L78 64"></path>
+  <path d="M56 82 L62 90"></path>
+</g>
+`),
+  oilslick: staticSprite(`
+<g class="lob-oilsheen">
+  <ellipse cx="46" cy="60" rx="22" ry="11" fill="#7f77dd" opacity="0.3" transform="rotate(-14 46 60)"></ellipse>
+  <ellipse cx="76" cy="74" rx="17" ry="8" fill="#1d9e75" opacity="0.28" transform="rotate(10 76 74)"></ellipse>
+</g>
+`),
+  aurora: staticSprite(`
+<g class="lob-aurora" fill="none" stroke-linecap="round">
+  <path class="lob-aurora__band1" d="M24 62 Q48 48 70 58 T102 54" stroke="#4ecfa6" stroke-width="6" opacity="0.5"></path>
+  <path class="lob-aurora__band2" d="M28 76 Q54 62 78 72 T100 68" stroke="#a184ec" stroke-width="5" opacity="0.45"></path>
+</g>
+`),
+  nebula: staticSprite(`
+<g class="lob-nebula-stars">
+  <circle cx="38" cy="52" r="1" fill="#fff"></circle>
+  <circle cx="52" cy="70" r="1.2" fill="#fff"></circle>
+  <circle cx="84" cy="48" r="1.4" fill="#fff"></circle>
+  <circle cx="66" cy="86" r="1" fill="#fff"></circle>
+  <circle cx="72" cy="60" r="1.6" fill="#8be9fd"></circle>
+  <circle cx="46" cy="40" r="1.4" fill="#ff9de2"></circle>
+  <path class="lob-twinkle" d="M60 52 L61.5 55.5 L65 57 L61.5 58.5 L60 62 L58.5 58.5 L55 57 L58.5 55.5 Z" fill="#fff"></path>
+</g>
+`),
+  glass: staticSprite(`
+<g class="lob-glass-glints" fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" opacity="0.7">
+  <path d="M34 22 L28 32"></path>
+  <path d="M40 16 L37 22"></path>
+</g>
+`),
+  geode: staticSprite(`
+<g class="lob-geode-facets">
+  <polygon points="70,34 80,30 78,44" fill="#9b6ff0"></polygon>
+  <polygon points="82,46 94,42 88,58" fill="#b48ef0"></polygon>
+  <polygon points="72,58 84,62 74,74" fill="#7a4fd0"></polygon>
+  <polygon points="86,68 96,64 90,80" fill="#9b6ff0"></polygon>
+  <circle class="lob-twinkle" cx="90" cy="50" r="1.8" fill="#fff"></circle>
+</g>
+`),
+  phosphor: staticSprite(`
+<g class="lob-scanlines" stroke="#3fff7d" stroke-width="1" opacity="0.16">
+  <path d="M40 20 H80 M30 27 H90 M26 34 H94 M21 41 H99 M18 48 H102 M17 55 H103 M17 62 H103 M18 69 H102 M22 76 H98 M31 83 H89 M45 90 H75"></path>
+</g>
+`),
+  blueprint: staticSprite(`
+<g class="lob-blueprint" fill="none" stroke="#cfe3ff">
+  <path class="lob-bp-outline" d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z" stroke-width="1.5" stroke-dasharray="5 3"></path>
+  <path d="M54 58 H66 M60 52 V64" stroke-width="1" opacity="0.7"></path>
+  <path d="M16 100 H104" stroke-width="1" stroke-dasharray="2 3" opacity="0.7"></path>
+</g>
+`),
+  // Laurel and imperial sash belong to the shell, not the random wardrobe.
+  // The sash's lower edge follows the shell contour; its highlight stays inset.
+  clawnstantine: staticSprite(`
+<g class="lob-clawnstantine">
+  <path d="M18 48 Q60 62 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#4e296e"></path>
+  <path d="M28 61 Q30 72 39 78 M70 88 Q82 82 91 65" fill="none" stroke="#a576c4" stroke-width="1.6" stroke-linecap="round"></path>
+  <path d="M81.5 45.5 C70 64 50 78 29.9 85.444 C32.971 88.632 36.349 91.249 39.814 93.121 C62 85 81 68 90.5 50.5 Z" fill="#e5bc62"></path>
+  <path d="M84 51 C73 68 57 80 39 87" fill="none" stroke="#fff0bc" stroke-width="1.6" stroke-linecap="round"></path>
+  <circle cx="85" cy="49" r="6" fill="#e5bc62"></circle>
+  <circle cx="85" cy="49" r="3" fill="#58c8b5"></circle>
+  <g class="lob-clawnstantine__laurel" fill="#e5bc62" stroke="#bd8a38" stroke-width="0.6">
+    <path d="M31 27 Q31 15 50 11 M89 27 Q89 15 70 11" fill="none" stroke="#e5bc62" stroke-width="2"></path>
+    <path d="M33 25 Q23 21 28 15 Q35 17 33 25 Z M37 19 Q28 13 34 9 Q41 12 37 19 Z M43 14 Q38 7 44 6 Q49 9 43 14 Z"></path>
+    <path d="M87 25 Q97 21 92 15 Q85 17 87 25 Z M83 19 Q92 13 86 9 Q79 12 83 19 Z M77 14 Q82 7 76 6 Q71 9 77 14 Z"></path>
+  </g>
+</g>
+`),
+  // Face paint rides the shell; the shared renderer draws the eyes above it.
+  clawiestardust: staticSprite(`
+<g class="lob-clawiestardust">
+  <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#4dc8eb" transform="translate(2.5 0)"></path>
+  <path d="M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z" fill="#e6393d"></path>
+</g>
+`),
+  taylorpinch: staticSprite(`
+<g class="lob-taylorpinch">
+  <path d="M51 44 Q56 40 60 43 Q64 40 69 44 Q60 54 51 44 Z" fill="#c92e48"></path>
+  <path d="M16 52 Q37 50 60 62 Q83 50 104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#9c82cf"></path>
+  <path d="M22 57 Q40 56 60 68 Q80 56 98 57" fill="none" stroke="#d5c4f2" stroke-width="2" stroke-linecap="round"></path>
+  <g fill="#fff4fb">
+    <path d="M36 65 L37.5 69.5 L42 71 L37.5 72.5 L36 77 L34.5 72.5 L30 71 L34.5 69.5 Z"></path>
+    <path d="M79 72 L80.5 76.5 L85 78 L80.5 79.5 L79 84 L77.5 79.5 L73 78 L77.5 76.5 Z"></path>
+    <circle cx="57" cy="79" r="1.5"></circle>
+    <circle cx="67" cy="88" r="1.5"></circle>
+    <circle cx="87" cy="64" r="1.5"></circle>
+  </g>
+</g>
+`),
+  clawtoodeetoo: staticSprite(`
+<g class="lob-clawtoodeetoo">
+  <path d="M27 26 C35 14 45 8 60 8 C75 8 85 14 93 26 Q60 19 27 26 Z" fill="#b8c3cf"></path>
+  <g fill="#2d5cbd">
+    <path d="M37 17 L46 12 L46 22 L34 24 Z M54 9 H66 L67 21 H53 Z M74 12 L84 17 L86 24 L74 22 Z"></path>
+    <path d="M20 46 Q60 42 100 46 L101 53 Q60 49 19 53 Z"></path>
+    <rect x="53" y="58" width="14" height="9" rx="1.5"></rect>
+    <rect x="53" y="71" width="14" height="9" rx="1.5"></rect>
+  </g>
+  <g fill="none" stroke="#9ba8b7" stroke-width="1.5">
+    <rect x="32" y="59" width="13" height="25" rx="2"></rect>
+    <rect x="75" y="59" width="13" height="25" rx="2"></rect>
+    <path d="M54 86 H66 M54 90 H66" stroke-linecap="round"></path>
+  </g>
+  <circle cx="87" cy="49" r="2.5" fill="#ef5261"></circle>
+</g>
+`),
+  leonardodepinchy: staticSprite(`
+<g class="lob-leonardodepinchy">
+  <path d="M18 48 Q60 61 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#5f6950"></path>
+  <path d="M60 63 V93 M27 64 Q31 77 40 84 M93 64 Q89 77 80 84" fill="none" stroke="#87906e" stroke-width="1.6" stroke-linecap="round"></path>
+  <path d="M40 42 Q60 52 80 42 Q78 58 60 66 Q42 58 40 42 Z" fill="#eee3ce"></path>
+  <path d="M52 49 Q60 54 68 49" fill="none" stroke="#c7b99e" stroke-width="1.5" stroke-linecap="round"></path>
+  <path d="M25 24 C29 9 51 5 67 8 C83 4 96 10 95 20 Q71 29 25 24 Z" fill="#49352c"></path>
+  <path d="M28 23 Q61 27 91 21" fill="none" stroke="#765545" stroke-width="2" stroke-linecap="round"></path>
+  <circle cx="38" cy="72" r="3" fill="#bd644f"></circle>
+  <circle cx="77" cy="81" r="3" fill="#4a89b8"></circle>
+  <circle cx="83" cy="65" r="2.5" fill="#dfb34f"></circle>
+</g>
+`),
+  shellvis: staticSprite(`
+<g class="lob-shellvis">
+  <path d="M18 48 L43 47 L60 62 L77 47 L102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#fff7e9"></path>
+  <path d="M43 49 L48 66 L60 61 L72 66 L77 49 M26 80 Q60 87 94 80" fill="none" stroke="#d7ab4c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+  <path d="M53 46 L60 50 L67 46 L64 54 L72 74 L65 71 L59 56 L51 68 L48 63 L56 53 Z" fill="#c84248"></path>
+  <rect x="56" y="80" width="8" height="6" rx="1.5" fill="#d7ab4c"></rect>
+  <path d="M24 26 Q21 10 41 9 Q42 1 62 5 C76 1 96 7 96 19 L91 29 Q82 21 77 20 Q59 31 43 21 Q34 21 24 26 Z" fill="#29272d"></path>
+  <path d="M35 17 Q50 10 61 13 Q75 8 85 15" fill="none" stroke="#4d4750" stroke-width="2" stroke-linecap="round"></path>
+  <path d="M25 27 L32 25 L32 42 L26 38 Z M88 25 L95 27 L94 38 L88 42 Z" fill="#29272d"></path>
+</g>
+`),
+  alexandergrahamshell: staticSprite(`
+<g class="lob-alexandergrahamshell">
+  <path d="M18 48 Q60 58 102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#3d4b53"></path>
+  <path d="M37 47 L49 73 L60 63 L71 73 L83 47" fill="#f1ebdf"></path>
+  <path d="M35 61 L45 86 M85 61 L75 86" fill="none" stroke="#65747a" stroke-width="1.6" stroke-linecap="round"></path>
+  <path d="M28 29 Q25 18 35 15 L38 32 L32 42 Z M92 29 Q95 18 85 15 L82 32 L88 42 Z" fill="#c9ceca"></path>
+  <path d="M31 38 Q40 47 47 43 Q60 52 73 43 Q80 47 89 38 Q88 59 76 66 Q71 76 60 77 Q49 76 44 66 Q32 59 31 38 Z" fill="#dfe0dc"></path>
+  <path d="M51 52 Q60 57 69 52 M49 65 Q60 72 71 65" fill="none" stroke="#b8beba" stroke-width="1.5" stroke-linecap="round"></path>
+  <path d="M50 78 L60 81 L70 78 V86 L60 83 L50 86 Z" fill="#8f3347"></path>
+  <circle cx="60" cy="91" r="1.8" fill="#bc955c"></circle>
+</g>
+`),
+  // Suit trim, belt and beard sit on the red shell; the hat covers the
+  // antennae and flops away from the candy-cane claw. Belt ends meet the outline.
+  santaclaws: staticSprite(`
+<g class="lob-santaclaws">
+  <path d="M56 82 L64 82 L64 96.6 Q60 97.3 56 96.6 Z" fill="#f6f1e8"></path>
+  <path d="M21.8 74 Q60 78 98.2 74 L95.4 80 Q60 84 24.6 80 Z" fill="#26252b"></path>
+  <rect x="53.5" y="75.2" width="13" height="7.6" rx="1.5" fill="none" stroke="#e8b422" stroke-width="2"></rect>
+  <path d="M31 40 Q40 47 47 44 Q60 50 73 44 Q80 47 89 40 Q90 56 80 63 Q76 70 68 69 Q64 74 60 72 Q56 74 52 69 Q44 70 40 63 Q30 56 31 40 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#d8cdbd" stroke-width="1.2" stroke-linecap="round">
+    <path d="M40 55 Q44 59 48 56 M54 62 Q60 66 66 62 M72 56 Q76 59 80 55"></path>
+  </g>
+  <path d="M56 52.5 Q60 55.5 64 52.5" fill="none" stroke="#8f1720" stroke-width="1.6" stroke-linecap="round"></path>
+  <path d="M43 47 Q51 41.5 60 46.5 Q69 41.5 77 47 Q69 51.5 60 49.5 Q51 51.5 43 47 Z" fill="#e9e1d3"></path>
+  <path d="M96 20 C94 6 76 -1 56 0 C38 1 22 8 14 23 L20 24.5 Q21.5 21 24 20 Q60 6 96 20 Z" fill="#c41f2b"></path>
+  <path d="M50 3 Q31 8 21 19" fill="none" stroke="#8f1720" stroke-width="1.2" stroke-linecap="round" opacity="0.55"></path>
+  <path d="M24 20 Q60 6 96 20 L97 28 Q60 14 23 28 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#d8cdbd" stroke-width="1" stroke-linecap="round">
+    <path d="M30 18.5 V25.5 M38 16 V23 M46 14.3 V21.4 M54 13.4 V20.4 M66 13.4 V20.4 M74 14.3 V21.4 M82 16 V23 M90 18.5 V25.5"></path>
+  </g>
+  <circle cx="16" cy="25.5" r="5" fill="#f6f1e8"></circle>
+</g>
+`),
+  // Toque and buffalo-check flannel belong to the shell; the antennae poke
+  // out under the toque. Plaid bands are pre-clipped to the shirt outline.
+  clawnadian: staticSprite(`
+<g class="lob-clawnadian">
+  <path d="M18 48 L44 47 L60 60 L76 47 L102 48 L104 52 C104 72 90 90 76 95 Q60 98 44 95 C30 90 16 72 16 52 Z" fill="#c41f2b"></path>
+  <g fill="#1d1416" opacity="0.6">
+    <path d="M18 48 L24 47.8 L24 77.9 L22.6 75.7 L20.7 72.2 L19.1 68.4 L17.8 64.5 L16.8 60.4 L16.2 56.3 L16 52 Z M32 47.5 L40 47.2 L40 93.2 L38 92.1 L35.1 90.1 L32.3 87.8 L32 87.5 Z M48 50.2 L56 56.8 L56 96.4 L53.6 96.3 L50.4 96 L48 95.6 Z M64 56.8 L72 50.2 L72 95.6 L69.6 96 L66.4 96.3 L64 96.4 Z M80 47.2 L88 47.5 L88 87.5 L87.7 87.8 L84.9 90.1 L82 92.1 L80 93.2 Z M96 47.8 L102 48 L104 52 L103.8 56.3 L103.2 60.4 L102.2 64.5 L100.9 68.4 L99.3 72.2 L97.4 75.7 L96 77.9 Z"></path>
+    <path d="M52.6 54 L60 60 L67.4 54 L103.9 54 L103.8 56.3 L103.2 60.4 L102.8 62 L17.2 62 L16.8 60.4 L16.2 56.3 L16.1 54 Z M100.2 70 L99.3 72.2 L97.4 75.7 L96 78 L24 78 L22.6 75.7 L20.7 72.2 L19.8 70 Z M89.5 86 L87.7 87.8 L84.9 90.1 L82 92.1 L79 93.7 L78.4 94 L41.6 94 L41 93.7 L38 92.1 L35.1 90.1 L32.3 87.8 L30.5 86 Z"></path>
+  </g>
+  <path d="M44 47 L60 60 L76 47 Z" fill="#eee3d1"></path>
+  <path d="M46 49 Q60 56 74 49" fill="none" stroke="#d3c5ae" stroke-width="1.2" stroke-linecap="round"></path>
+  <path d="M42 46 L60 60 L49 64 L38 52 Z M78 46 L60 60 L71 64 L82 52 Z" fill="#7d1219"></path>
+  <g fill="#eee3d1"><circle cx="60" cy="70" r="1.5"></circle><circle cx="60" cy="81" r="1.5"></circle></g>
+  <path d="M24 20 C25 6 42 0 60 0 C78 0 95 6 96 20 Q60 6 24 20 Z" fill="#c41f2b"></path>
+  <path d="M27.5 12 Q60 -2 92.5 12 L94.5 16 Q60 2 25.5 16 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#8f1720" stroke-width="1" stroke-linecap="round" opacity="0.55">
+    <path d="M40 4.5 L37 15 M50 1.5 L49 11 M60 0.5 V9.5 M70 1.5 L71 11 M80 4.5 L83 15"></path>
+  </g>
+  <path d="M24 20 Q60 6 96 20 L97 28 Q60 14 23 28 Z" fill="#f6f1e8"></path>
+  <g fill="none" stroke="#d8cdbd" stroke-width="1" stroke-linecap="round">
+    <path d="M30 18.5 V25.5 M38 16 V23 M46 14.3 V21.4 M74 14.3 V21.4 M82 16 V23 M90 18.5 V25.5"></path>
+  </g>
+  <path d="M59.8 20.3 L59.9 18.6 L58.1 18.7 L58.3 18 L56.5 16.6 L57 16.3 L56.7 15.2 L57.8 15.3 L58 14.9 L58.9 15.7 L58.6 13.7 L59.3 14 L60 12.8 L60.7 14 L61.4 13.7 L61.1 15.7 L62 14.9 L62.2 15.3 L63.3 15.2 L63 16.3 L63.5 16.6 L61.7 18 L61.9 18.7 L60.1 18.6 L60.2 20.3 Z" fill="#c41f2b" transform="translate(60 16.5) scale(1.25) translate(-60 -16.5)"></path>
+  <circle cx="60" cy="-1.5" r="5.5" fill="#f6f1e8"></circle>
+</g>
+`),
+  // Sombrero vueltiao and ruana belong to the shell; the antennae poke out
+  // under the brim. Ruana bands are pre-clipped to the open front panels.
+  clawlombian: staticSprite(`
+<g class="lob-clawlombian">
+  <path d="M18 48 L20.5 47.5 L23 47 L25.5 46.5 L27.9 46.1 L30.4 45.8 L32.9 45.5 L35.3 45.2 L37.8 45 L40.2 44.8 L42.6 44.7 L45 44.6 L47.4 44.6 L49.8 44.6 L52.2 44.7 L54.6 44.8 L57 45 L55.6 73 L21.1 73 L20.1 70.9 L19.2 68.7 L18.4 66.5 L17.7 64.1 L17.1 61.8 L16.6 59.4 L16.3 57 L16.1 54.5 L16 52 Z M104 52 L103.9 54.5 L103.7 57 L103.4 59.4 L102.9 61.8 L102.3 64.1 L101.6 66.5 L100.8 68.7 L99.9 70.9 L98.9 73 L64.4 73 L63 45 L65.4 44.8 L67.8 44.7 L70.2 44.6 L72.6 44.6 L75 44.6 L77.4 44.7 L79.8 44.8 L82.2 45 L84.7 45.2 L87.1 45.5 L89.6 45.8 L92.1 46.1 L94.5 46.5 L97 47 L99.5 47.5 L102 48 Z" fill="#fcd116"></path>
+  <path d="M55.6 73 L55.1 85 L29.5 85 L29 84.5 L27.5 82.8 L26.1 81 L24.8 79.1 L23.5 77.2 L22.3 75.2 L21.2 73.1 L21.1 73 Z M98.9 73 L98.8 73.1 L97.7 75.2 L96.5 77.2 L95.2 79.1 L93.9 81 L92.5 82.8 L91 84.5 L90.5 85 L64.9 85 L64.4 73 Z" fill="#003893"></path>
+  <path d="M55.1 85 L54.5 96.3 L54 96.3 L53 96.2 L52 96.1 L51 96 L50 95.9 L49 95.8 L48 95.7 L47 95.5 L46 95.4 L45 95.2 L44 95 L42.3 94.3 L40.5 93.5 L38.8 92.5 L37.1 91.5 L35.4 90.3 L33.7 89 L32.1 87.6 L30.5 86.1 L29.5 85 Z M90.5 85 L89.5 86.1 L87.9 87.6 L86.3 89 L84.6 90.3 L82.9 91.5 L81.2 92.5 L79.5 93.5 L77.7 94.3 L76 95 L75 95.2 L74 95.4 L73 95.5 L72 95.7 L71 95.8 L70 95.9 L69 96 L68 96.1 L67 96.2 L66 96.3 L65.5 96.3 L64.9 85 Z" fill="#ce1126"></path>
+  <path d="M57 45 L54.5 96.3 M63 45 L65.5 96.3 M18 48 Q38 43.5 57 45 M102 48 Q82 43.5 63 45" fill="none" stroke="#1d1416" stroke-width="1" stroke-linecap="round" opacity="0.3"></path>
+  <ellipse cx="60" cy="19" rx="44" ry="6.5" fill="#efe3c4"></ellipse>
+  <g fill="none" stroke-width="1.6">
+    <ellipse cx="60" cy="19" rx="40.5" ry="5.4" stroke="#221c18"></ellipse>
+    <ellipse cx="60" cy="19" rx="34.5" ry="4.4" stroke="#221c18"></ellipse>
+    <g stroke="#efe3c4" stroke-width="0.7" stroke-dasharray="1.6 1.6">
+      <ellipse cx="60" cy="19" rx="40.5" ry="5.4"></ellipse>
+      <ellipse cx="60" cy="19" rx="34.5" ry="4.4"></ellipse>
+    </g>
+  </g>
+  <path d="M45.5 19.5 C45 10 49 3 60 3 C71 3 75 10 74.5 19.5 Q60 22.5 45.5 19.5 Z" fill="#f3e9cf"></path>
+  <path d="M47.4 8.6 Q60 5.6 72.6 8.6 L73.4 11 Q60 8 46.6 11 Z" fill="#221c18"></path>
+  <path d="M47 9.8 Q60 6.8 73 9.8" fill="none" stroke="#f3e9cf" stroke-width="0.7" stroke-dasharray="1.6 1.6"></path>
+  <path d="M45.7 14 Q60 11.4 74.3 14 L74.5 19.5 Q60 22.5 45.5 19.5 Z" fill="#221c18"></path>
+  <path d="M47 18 L49.6 15.2 L52.2 18 L54.8 15.2 L57.4 18 L60 15.2 L62.6 18 L65.2 15.2 L67.8 18 L70.4 15.2 L73 18" fill="none" stroke="#f3e9cf" stroke-width="1.1" stroke-linejoin="round"></path>
+</g>
+`),
+  clawtron: staticSprite(`
+<g class="lob-mecha">
+  <g fill="none" stroke="#5f6a75" stroke-width="1.5">
+    <path d="M28 56 Q60 66 92 56"></path>
+    <path d="M34 74 Q60 82 86 74"></path>
+  </g>
+  <g fill="#5f6a75">
+    <circle cx="36" cy="61" r="1.4"></circle>
+    <circle cx="60" cy="64" r="1.4"></circle>
+    <circle cx="84" cy="61" r="1.4"></circle>
+  </g>
+  <circle class="lob-led" cx="89" cy="7" r="3" fill="#ff4444"></circle>
+</g>
+`),
+  banana: staticSprite(`
+<g fill="#8a6430">
+  <rect x="56" y="8" width="8" height="6" rx="2.5"></rect>
+  <ellipse cx="60" cy="91" rx="6" ry="3.5"></ellipse>
+  <circle cx="37" cy="48" r="2.5"></circle>
+  <circle cx="79" cy="55" r="2"></circle>
+  <circle cx="47" cy="70" r="1.8"></circle>
+  <circle cx="72" cy="79" r="2.3"></circle>
+</g>
+`),
+  bee: staticSprite(`
+<g class="lob-bee-wings" fill="#ffffff" opacity="0.45">
+  <ellipse cx="38" cy="14" rx="8" ry="4.5" transform="rotate(-24 38 14)"></ellipse>
+  <ellipse cx="82" cy="14" rx="8" ry="4.5" transform="rotate(24 82 14)"></ellipse>
+</g>
+<g fill="#2b2b23" opacity="0.9">
+  <path d="M19 42 Q60 51 101 42 L103 50 Q60 60 17 50 Z"></path>
+  <path d="M17 58 Q60 67 103 58 L101 67 Q60 76 19 67 Z"></path>
+  <path d="M24 76 Q60 84 96 76 L90 85 Q60 92 30 85 Z"></path>
+</g>
+`),
+  rubberduck: staticSprite(`
+<g>
+  <ellipse cx="60" cy="71" rx="21" ry="14" fill="#ffffff" opacity="0.5"></ellipse>
+  <rect x="47" y="41" width="26" height="8" rx="4" fill="#ff9a2e"></rect>
+  <rect x="50" y="47" width="20" height="5" rx="2.5" fill="#e98322"></rect>
+</g>
+`),
+  sourdough: staticSprite(`
+<g fill="none" stroke="#a8763e" stroke-width="2.5" stroke-linecap="round">
+  <path d="M38 23 Q45 29 52 30"></path>
+  <path d="M52 17 Q59 24 66 25"></path>
+  <path d="M67 18 Q74 24 81 25"></path>
+</g>
+<g fill="#ffffff" opacity="0.5">
+  <circle cx="34" cy="39" r="1.2"></circle>
+  <circle cx="86" cy="38" r="1"></circle>
+  <circle cx="45" cy="57" r="1.4"></circle>
+  <circle cx="74" cy="62" r="1.1"></circle>
+  <circle cx="56" cy="78" r="1"></circle>
+  <circle cx="83" cy="75" r="1.3"></circle>
+</g>
+`),
+  zombie: staticSprite(`
+<g fill="none" stroke="#5a6b52" stroke-width="2" stroke-linecap="round">
+  <path d="M32 24 Q47 19 61 23"></path>
+  <path d="M38 19 L40 26 M46 18 L47 25 M54 19 L53 26"></path>
+  <path d="M57 72 Q72 78 87 72"></path>
+  <path d="M65 72 L63 79 M73 73 L72 80 M81 71 L83 78"></path>
+</g>
+<ellipse cx="35" cy="61" rx="9" ry="6" fill="#86987a" opacity="0.8" transform="rotate(-18 35 61)"></ellipse>
+`),
+  plush: staticSprite(`
+<g fill="none" stroke="#c97a5e" stroke-width="1.5" stroke-dasharray="3 3">
+  <path d="M30 32 Q60 4 90 32"></path>
+  <path d="M60 50 Q58 72 60 96"></path>
+</g>
+<g class="lob-plush-button">
+  <circle cx="78" cy="44" r="3.5" fill="#7a4a3a"></circle>
+  <circle cx="76.8" cy="44" r="0.7" fill="#e8967a"></circle>
+  <circle cx="79.2" cy="44" r="0.7" fill="#e8967a"></circle>
+</g>
+`),
+  disco: staticSprite(`
+<g class="lob-disco" fill="#ffffff">
+  <rect x="42" y="18" width="4" height="4" opacity="0.3"></rect>
+  <rect x="52" y="16" width="4" height="4" opacity="0.5"></rect>
+  <rect x="63" y="17" width="4" height="4" opacity="0.25"></rect>
+  <rect x="74" y="20" width="4" height="4" opacity="0.4"></rect>
+  <rect x="31" y="40" width="4" height="4" opacity="0.4"></rect>
+  <rect x="53" y="39" width="4" height="4" opacity="0.25"></rect>
+  <rect x="65" y="42" width="4" height="4" opacity="0.5"></rect>
+  <rect x="86" y="40" width="4" height="4" opacity="0.3"></rect>
+  <rect x="39" y="59" width="4" height="4" opacity="0.25"></rect>
+  <rect x="51" y="62" width="4" height="4" opacity="0.45"></rect>
+  <rect x="68" y="60" width="4" height="4" opacity="0.3"></rect>
+  <rect x="80" y="58" width="4" height="4" opacity="0.5"></rect>
+  <rect x="49" y="79" width="4" height="4" opacity="0.35"></rect>
+  <rect x="70" y="80" width="4" height="4" opacity="0.25"></rect>
+</g>
+`),
+  watermelon: WATERMELON_RIND,
+  eclipse: ECLIPSE_CORONA,
+  notexture: NOTEXTURE_CHECKER,
+  chimera: CHIMERA_STITCHES,
+  split: null,
+  retro: null,
+  heisenbug: null,
+  selene: null,
+  pixel: null,
+  balloon: null,
+  cryptid: null,
+  flatpack: null,
+  tinfoil: null,
+  actual: null,
+  loading: null,
+  ascii: null,
+  portal: null,
+  invisible: null,
+  goldenretro: null,
+};
+
 const RETRO_GEOMETRY_PALETTES: ReadonlySet<LobsterPetPaletteId> = new Set(["retro", "goldenretro"]);
 
 const PALETTE_FRAME_CLASSES: Partial<Record<LobsterPetPaletteId, string>> = {
@@ -52,35 +449,22 @@ const PALETTE_GEOMETRY: Partial<Record<LobsterPetPaletteId, typeof PIXEL_LOBSTER
   pixel: PIXEL_LOBSTER,
 };
 
-const ReadingBook = () => (
-  <>
-    <g class="lob-reading-book" transform="translate(0 2)">
-      <path
-        d="M25 62 Q43 56 59 66 L59 92 Q43 82 25 86 Z M61 66 Q77 56 95 62 L95 86 Q77 82 61 92 Z"
-        fill="var(--lob-claw)"
-        stroke="color-mix(in srgb, var(--lob-claw) 72%, #0a1014)"
-        stroke-width="2.5"
-        stroke-linejoin="round"
-      />
-      <path d="M29 62 Q44 58 59 68 L59 88 Q44 79 29 82 Z" fill="#fffaf0" />
-      <path d="M61 68 Q76 58 91 62 L91 82 Q76 79 61 88 Z" fill="#fffaf0" />
-      <path d="M60 67 L60 89" stroke="#d7cfc0" stroke-width="1.5" />
-      <g stroke="#b8b0a3" stroke-width="1.25" stroke-linecap="round" opacity="0.58">
-        <path d="M34 67 L51 71" />
-        <path d="M34 72 L50 75" />
-        <path d="M67 71 L85 67" />
-        <path d="M68 76 L85 72" />
-        <path d="M70 80 L83 77" />
-      </g>
-      <path
-        class="lob-reading-book__page-glow"
-        d="M31 62 Q45 59 57 68 L57 72 Q44 65 31 67 Z"
-        fill="#ffffff"
-        opacity="0"
-      />
-    </g>
-  </>
-);
+const ReadingBook = staticSprite(`
+<g class="lob-reading-book" transform="translate(0 2)">
+  <path d="M25 62 Q43 56 59 66 L59 92 Q43 82 25 86 Z M61 66 Q77 56 95 62 L95 86 Q77 82 61 92 Z" fill="var(--lob-claw)" stroke="color-mix(in srgb, var(--lob-claw) 72%, #0a1014)" stroke-width="2.5" stroke-linejoin="round"></path>
+  <path d="M29 62 Q44 58 59 68 L59 88 Q44 79 29 82 Z" fill="#fffaf0"></path>
+  <path d="M61 68 Q76 58 91 62 L91 82 Q76 79 61 88 Z" fill="#fffaf0"></path>
+  <path d="M60 67 L60 89" stroke="#d7cfc0" stroke-width="1.5"></path>
+  <g stroke="#b8b0a3" stroke-width="1.25" stroke-linecap="round" opacity="0.58">
+    <path d="M34 67 L51 71"></path>
+    <path d="M34 72 L50 75"></path>
+    <path d="M67 71 L85 67"></path>
+    <path d="M68 76 L85 72"></path>
+    <path d="M70 80 L83 77"></path>
+  </g>
+  <path class="lob-reading-book__page-glow" d="M31 62 Q45 59 57 68 L57 72 Q44 65 31 67 Z" fill="#ffffff" opacity="0"></path>
+</g>
+`);
 
 export type LobsterSvgProps = {
   look: LobsterPetLook;
@@ -106,118 +490,103 @@ export function LobsterSvg(props: LobsterSvgProps) {
     eyesClosed() ? "opacity:1" : props.standalone || props.reading ? "display:none" : "";
   const selenePhase = Math.round(moonPhaseFraction(new Date()) * 8) % 8;
   return (
-    <>
-      <svg
-        class="lobster-pet__svg"
-        viewBox="0 0 120 105"
-        preserveAspectRatio="xMidYMax meet"
-        aria-hidden="true"
-      >
-        <g class={PALETTE_FRAME_CLASSES[props.look.palette.id] ?? ""}>
-          {paletteGeometry() ? (
-            <PaletteGeometry openEyeStyle={openEyeStyle()} closedEyeStyle={closedEyeStyle()} />
-          ) : (
-            <>
-              {hasRetroGeometry() ? RETRO_ANTENNAE() : ANTENNAE_SPRITES[props.look.antennae]()}
-              {props.look.tailFan ? TAIL_FAN() : null}
-              <g class="lob-claw lob-claw--l">
+    <svg
+      class="lobster-pet__svg"
+      viewBox="0 0 120 105"
+      preserveAspectRatio="xMidYMax meet"
+      aria-hidden="true"
+    >
+      <g class={PALETTE_FRAME_CLASSES[props.look.palette.id] ?? ""}>
+        {paletteGeometry() ? (
+          <PaletteGeometry openEyeStyle={openEyeStyle()} closedEyeStyle={closedEyeStyle()} />
+        ) : (
+          <>
+            {hasRetroGeometry() ? RETRO_ANTENNAE() : ANTENNAE_SPRITES[props.look.antennae]()}
+            {props.look.tailFan ? TAIL_FAN() : null}
+            <g class="lob-claw lob-claw--l">
+              <path
+                d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
+                fill="var(--lob-claw)"
+              />
+            </g>
+            {hasRetroGeometry() ? null : (
+              <g class="lob-claw lob-claw--r">
+                {clawProp()?.() ?? null}
                 <path
-                  d="M20 42 C5 37 0 47 5 57 C10 67 20 62 25 52 C28 45 25 42 20 42 Z"
+                  d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
                   fill="var(--lob-claw)"
                 />
               </g>
-              {hasRetroGeometry() ? null : (
-                <>
-                  <g class="lob-claw lob-claw--r">
-                    {clawProp()?.() ?? null}
-                    <path
-                      d="M100 42 C115 37 120 47 115 57 C110 67 100 62 95 52 C92 45 95 42 100 42 Z"
-                      fill="var(--lob-claw)"
-                    />
-                  </g>
-                </>
-              )}
-              {props.look.palette.id === "heisenbug" ? GLITCH_GHOSTS() : null}
-              <path
-                class="lob-standard-dome"
-                d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z"
-                fill="var(--lob-shell)"
-              />
-              {props.look.palette.id === "split" || props.look.palette.id === "geode"
-                ? SPLIT_HALF()
-                : null}
-              {props.look.palette.id === "selene" ? seleneMoon(selenePhase) : null}
-              {PALETTE_OVERLAYS[props.look.palette.id]?.() ?? null}
-              {props.look.palette.id === "tinfoil"
-                ? TINFOIL_PARTS(!HEADWEAR.has(props.look.accessory))
-                : null}
-              {props.look.freckles && !PATTERNED_PALETTES.has(props.look.palette.id)
-                ? FRECKLE_SPOTS()
-                : null}
-              {props.look.palette.id === "invisible" ? null : (
-                <>
-                  <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
-                </>
-              )}
-              <g class="lob-eye-open" style={openEyeStyle()}>
-                <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
-                <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
-                <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
-                <circle cx="76.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
+            )}
+            {props.look.palette.id === "heisenbug" ? GLITCH_GHOSTS() : null}
+            <path
+              class="lob-standard-dome"
+              d="M60 8 C32 8 16 32 16 52 C16 72 30 90 44 95 L44 104 L54 104 L54 96 C58 97.5 62 97.5 66 96 L66 104 L76 104 L76 95 C90 90 104 72 104 52 C104 32 88 8 60 8 Z"
+              fill="var(--lob-shell)"
+            />
+            {props.look.palette.id === "split" || props.look.palette.id === "geode"
+              ? SPLIT_HALF()
+              : null}
+            {props.look.palette.id === "selene" ? seleneMoon(selenePhase) : null}
+            {PALETTE_PATTERNS[props.look.palette.id]?.() ?? null}
+            {props.look.palette.id === "tinfoil"
+              ? TINFOIL_PARTS(!HEADWEAR.has(props.look.accessory))
+              : null}
+            {props.look.freckles && !Object.hasOwn(PALETTE_PATTERNS, props.look.palette.id)
+              ? FRECKLE_SPOTS()
+              : null}
+            {props.look.palette.id === "invisible" ? null : (
+              <ellipse cx="48" cy="28" rx="20" ry="11" fill="#ffffff" opacity="0.1" />
+            )}
+            <g class="lob-eye-open" style={openEyeStyle()}>
+              <circle cx="45" cy="32" r="5.5" fill="#0a1014" />
+              <circle cx="75" cy="32" r="5.5" fill="#0a1014" />
+              <circle cx="46.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
+              <circle cx="76.5" cy="30.5" r="2.2" fill="var(--lob-glint, #00e5cc)" />
+            </g>
+            {props.sleeping && !props.reading ? (
+              <g class="lob-eye-peek">
+                <circle cx="45" cy="32" r="4" fill="#0a1014" />
+                <circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" />
               </g>
-              {props.sleeping && !props.reading ? (
-                <>
-                  <g class="lob-eye-peek">
-                    <circle cx="45" cy="32" r="4" fill="#0a1014" />
-                    <circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" />
-                  </g>
-                </>
-              ) : null}
-              <g
-                class="lob-eye-closed"
-                stroke="#0a1014"
-                stroke-width="3"
-                stroke-linecap="round"
-                fill="none"
-                style={closedEyeStyle()}
-              >
-                <path d="M39 33 Q45 28 51 33" />
-                <path d="M69 33 Q75 28 81 33" />
-              </g>
-            </>
-          )}
-          {hasRetroGeometry() ? (
-            <>
-              {RETRO_FACE()}
-              <g class="lob-claw lob-claw--r">{RETRO_MEGA_CLAW()}</g>
-            </>
-          ) : null}
-          {props.grumpy &&
-          !hasRetroGeometry() &&
-          (!paletteGeometry() || props.look.palette.id === "pixel")
-            ? GRUMPY_FACE()
-            : null}
-          {props.look.accessory === "none" || props.shell || isFlatpack()
-            ? null
-            : ACCESSORY_SPRITES[props.look.accessory]()}
-          {
-            // Oversized claws and signature props already occupy the carrying shoulder.
-            props.bindle && !hasRetroGeometry() && !isFlatpack() && !clawProp() ? BINDLE() : null
-          }
-          {
-            // The foil hat is palette identity; Mulder declines the navy-issued
-            // sailor cap rather than stacking two hats on lobster days.
-            props.sailorCap &&
-            !props.shell &&
-            !isFlatpack() &&
-            !HEADWEAR.has(props.look.accessory) &&
-            props.look.palette.id !== "tinfoil"
-              ? SAILOR_CAP()
-              : null
-          }
-          {props.reading ? ReadingBook() : null}
-        </g>
-      </svg>
-    </>
+            ) : null}
+            <LobsterClosedEyes stroke-width="3" style={closedEyeStyle()}>
+              <path d="M39 33 Q45 28 51 33" />
+              <path d="M69 33 Q75 28 81 33" />
+            </LobsterClosedEyes>
+          </>
+        )}
+        {hasRetroGeometry() ? (
+          <>
+            {RETRO_FACE()}
+            <g class="lob-claw lob-claw--r">{RETRO_MEGA_CLAW()}</g>
+          </>
+        ) : null}
+        {props.grumpy &&
+        !hasRetroGeometry() &&
+        (!paletteGeometry() || props.look.palette.id === "pixel")
+          ? GRUMPY_FACE()
+          : null}
+        {props.look.accessory === "none" || props.shell || isFlatpack()
+          ? null
+          : ACCESSORY_SPRITES[props.look.accessory]()}
+        {
+          // Oversized claws and signature props already occupy the carrying shoulder.
+          props.bindle && !hasRetroGeometry() && !isFlatpack() && !clawProp() ? BINDLE() : null
+        }
+        {
+          // The foil hat is palette identity; Mulder declines the navy-issued
+          // sailor cap rather than stacking two hats on lobster days.
+          props.sailorCap &&
+          !props.shell &&
+          !isFlatpack() &&
+          !HEADWEAR.has(props.look.accessory) &&
+          props.look.palette.id !== "tinfoil"
+            ? SAILOR_CAP()
+            : null
+        }
+        {props.reading ? ReadingBook() : null}
+      </g>
+    </svg>
   );
 }

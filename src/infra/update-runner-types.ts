@@ -38,6 +38,8 @@ type GitUpdateTarget = {
   sha?: string;
   version?: string;
   schemaVersions?: OpenClawSchemaVersions;
+  databaseEngines?: unknown;
+  postgresFamilies?: unknown;
   metadataUnreadable?: string;
 };
 
@@ -56,7 +58,13 @@ export type UpdateRunnerOptions = {
   /** Accepted candidate checks join the update's step results. */
   validateCandidate: (root: string) => Promise<readonly UpdateStepResult[] | void>;
   beforeGitMutation: (target: GitUpdateTarget) => Promise<void>;
-  /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
+  /** Build the target as a release behind the release link instead of updating the checkout in place. */
+  gitReleases?: boolean;
+  /** `--no-restart`: the next service start selects the release instead of this update. */
+  deferReleaseActivation?: boolean;
+  /** The service's Node, which must load a Git release before the link names it. */
+  releaseNode?: string;
+  /** Required work uses the caller's deadline; probes, cleanup, and optional replay keep finite defaults. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
   /** Retain source/runtime before Doctor; the finalizer owns state-safe rollback. */
@@ -93,6 +101,7 @@ export type RunStepOptions = {
   argv: string[];
   cwd: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   input?: string;
   progress?: UpdateStepProgress;

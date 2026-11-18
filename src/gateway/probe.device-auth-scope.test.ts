@@ -1,23 +1,21 @@
-// Probe device-auth scope tests exercise the real probe -> client -> connect-frame path.
 import { Buffer } from "node:buffer";
+import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createStatusGatewayProbeBudget } from "../commands/status.gateway-probe-budget.js";
 import { resolveGatewayProbeSnapshot } from "../commands/status.scan.shared.js";
 import {
-  seedDeviceAuthToken,
-  seedOriginDeviceToken,
-} from "../infra/device-auth-store.test-support.js";
+  storeDeviceAuthToken as seedDeviceAuthToken,
+  storeOriginDeviceToken as seedOriginDeviceToken,
+} from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 
-type WebSocketEvent = "open" | "message" | "close" | "error" | "unexpected-response";
-
 let onSocketCreated: ((socket: ProbeWebSocket) => void) | undefined;
 
-class ProbeWebSocket {
+class ProbeWebSocket extends EventEmitter {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
@@ -26,20 +24,9 @@ class ProbeWebSocket {
   readonly firstSent = createDeferred<string>();
   readyState = ProbeWebSocket.CONNECTING;
   binaryType = "nodebuffer";
-  private readonly handlers: Record<WebSocketEvent, Array<(...args: unknown[]) => void>> = {
-    open: [],
-    message: [],
-    close: [],
-    error: [],
-    "unexpected-response": [],
-  };
-
   constructor(_url: string, _options?: unknown) {
+    super();
     onSocketCreated?.(this);
-  }
-
-  on(event: WebSocketEvent, handler: (...args: unknown[]) => void): void {
-    this.handlers[event].push(handler);
   }
 
   send(data: string): void {
@@ -59,22 +46,12 @@ class ProbeWebSocket {
 
   emitOpen(): void {
     this.readyState = ProbeWebSocket.OPEN;
-    for (const handler of this.handlers.open) {
-      handler();
-    }
-  }
-
-  emitMessage(data: string): void {
-    for (const handler of this.handlers.message) {
-      handler(data);
-    }
+    this.emit("open");
   }
 
   emitClose(code: number, reason: string): void {
     this.readyState = ProbeWebSocket.CLOSED;
-    for (const handler of this.handlers.close) {
-      handler(code, Buffer.from(reason));
-    }
+    this.emit("close", code, Buffer.from(reason));
   }
 }
 
@@ -101,21 +78,53 @@ type ConnectFrame = {
   };
 };
 
-function createEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" };
+const loopbackUrl = "ws://127.0.0.1:18789";
+type AuthFixture = { stateDir: string; env: NodeJS.ProcessEnv; deviceId: string };
+type StoredTokens = { legacy?: string; origin: string; scope?: string };
+
+function withAuth(tokens: StoredTokens, run: (fixture: AuthFixture) => Promise<void>) {
+  return withTempDir("openclaw-probe-scope-", async (stateDir) => {
+    const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_TEST_FAST: "1" };
+    const { deviceId } = loadOrCreateDeviceIdentity({ env });
+    const lookup = { deviceId, role: "operator", env };
+    if (tokens.legacy) {
+      await seedDeviceAuthToken({ ...lookup, token: tokens.legacy });
+    }
+    await seedOriginDeviceToken({
+      ...lookup,
+      gatewayScope: gatewayOriginScope(tokens.scope ?? loopbackUrl),
+      token: tokens.origin,
+    });
+    return run({ stateDir, env, deviceId });
+  });
 }
 
-async function captureProbeConnectFrame(params: {
-  url: string;
-  env: NodeJS.ProcessEnv;
-  auth?: { token?: string; password?: string };
-  originScopedDeviceAuth?: boolean;
-  suppressStoredDeviceAuth?: boolean;
-}): Promise<ConnectFrame> {
-  return captureConnectFrame(() =>
-    probeGateway({ ...params, timeoutMs: 2_000, includeDetails: false }),
-  );
+function challenge(socket: ProbeWebSocket, nonce: string) {
+  socket.emitOpen();
+  const payload = { nonce, ts: Date.now() };
+  socket.emit("message", JSON.stringify({ type: "event", event: "connect.challenge", payload }));
 }
+
+const direct =
+  (params: Omit<Parameters<typeof probeGateway>[0], "timeoutMs" | "env">) =>
+  ({ env }: AuthFixture) =>
+    probeGateway({ ...params, env, timeoutMs: 2_000, includeDetails: false });
+
+const status =
+  (mode: "local" | "remote", url: string, envOverride = false) =>
+  ({ stateDir, env }: AuthFixture) => {
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", envOverride ? url : undefined);
+    return resolveGatewayProbeSnapshot({
+      cfg: { gateway: { mode, port: 18789, remote: { url } } },
+      configPath: `${stateDir}/openclaw.json`,
+      env,
+      opts: {
+        ...createStatusGatewayProbeBudget(2_000),
+        detailLevel: "none",
+        localStatusRpcFallback: false,
+      },
+    });
+  };
 
 async function captureConnectFrame(startProbe: () => Promise<unknown>): Promise<ConnectFrame> {
   const created = createDeferred<ProbeWebSocket>();
@@ -127,29 +136,16 @@ async function captureConnectFrame(startProbe: () => Promise<unknown>): Promise<
   let socket: ProbeWebSocket | undefined;
   try {
     socket = await Promise.race([created.promise, endedWithoutConnect]);
-    socket.emitOpen();
-    socket.emitMessage(
-      JSON.stringify({
-        type: "event",
-        event: "connect.challenge",
-        payload: { nonce: "probe-scope-nonce", ts: Date.now() },
-      }),
-    );
+    challenge(socket, "probe-scope-nonce");
     const rawConnect = await Promise.race([socket.firstSent.promise, endedWithoutConnect]);
     expect(rawConnect).toContain('"method":"connect"');
     const connect = JSON.parse(rawConnect) as ConnectFrame;
-    socket.emitMessage(
-      JSON.stringify({
-        type: "res",
-        id: connect.id,
-        ok: true,
-        payload: {
-          type: "hello-ok",
-          auth: { role: "operator", scopes: ["operator.read"] },
-          server: { connId: "probe-scope-test", version: "test" },
-        },
-      }),
-    );
+    const payload = {
+      type: "hello-ok",
+      auth: { role: "operator", scopes: ["operator.read"] },
+      server: { connId: "probe-scope-test", version: "test" },
+    };
+    socket.emit("message", JSON.stringify({ type: "res", id: connect.id, ok: true, payload }));
     await probePromise;
     expect(socket.readyState).toBe(ProbeWebSocket.CLOSED);
     return connect;
@@ -167,37 +163,20 @@ afterEach(() => {
 
 describe("probeGateway device auth scope", () => {
   it("does not send a connect frame to an unverified unmanaged restart listener", async () => {
-    await withTempDir("openclaw-restart-probe-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
+    await withAuth({ origin: "local-origin-token" }, async ({ stateDir, env }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
       vi.stubEnv("OPENCLAW_CONFIG_PATH", `${stateDir}/openclaw.json`);
       vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
       vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedOriginDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        gatewayScope: "ws://127.0.0.1:18789",
-        token: "local-origin-token",
-        env,
-      });
       let connect: ConnectFrame | undefined;
-      onSocketCreated = (socket) => {
+      onSocketCreated = (socket) =>
         queueMicrotask(() => {
-          socket.emitOpen();
-          socket.emitMessage(
-            JSON.stringify({
-              type: "event",
-              event: "connect.challenge",
-              payload: { nonce: "restart-probe-nonce", ts: Date.now() },
-            }),
-          );
+          challenge(socket, "restart-probe-nonce");
           void socket.firstSent.promise.then((raw) => {
             connect = JSON.parse(raw) as ConnectFrame;
             socket.emitClose(1008, "unverified listener");
           });
         });
-      };
       try {
         await expect(
           signalGatewayRestart(18789, {
@@ -214,171 +193,66 @@ describe("probeGateway device auth scope", () => {
     });
   });
 
-  it.each([
-    {
-      mode: "local" as const,
-      url: "ws://127.0.0.1:18789",
-      envOverride: false,
-      expectedToken: "local-token",
-    },
-    {
-      mode: "remote" as const,
-      url: "ws://127.0.0.1:18789",
-      envOverride: false,
-      expectedToken: undefined,
-    },
-    {
-      mode: "remote" as const,
-      url: "wss://gateway.example",
-      envOverride: false,
-      expectedToken: "scoped-token",
-    },
-    {
-      mode: "local" as const,
-      url: "ws://127.0.0.1:18789",
-      envOverride: true,
-      expectedToken: undefined,
-    },
-  ])(
-    "binds status credentials to the $mode target at $url (env override=$envOverride)",
-    async ({ mode, url, envOverride, expectedToken }) => {
-      vi.stubEnv("OPENCLAW_GATEWAY_URL", envOverride ? url : undefined);
-      await withTempDir("openclaw-status-probe-scope-", async (stateDir) => {
-        const env = createEnv(stateDir);
-        const identity = loadOrCreateDeviceIdentity({ env });
-        const lookup = { deviceId: identity.deviceId, role: "operator", env };
-        seedDeviceAuthToken({ ...lookup, token: "local-token" });
-        seedOriginDeviceToken({
-          ...lookup,
-          gatewayScope: gatewayOriginScope(url),
-          token: "scoped-token",
-        });
-
-        const connect = await captureConnectFrame(() =>
-          resolveGatewayProbeSnapshot({
-            cfg: { gateway: { mode, port: 18789, remote: { url } } },
-            configPath: `${stateDir}/openclaw.json`,
-            env,
-            opts: {
-              ...createStatusGatewayProbeBudget(2_000),
-              detailLevel: "none",
-              localStatusRpcFallback: false,
-            },
-          }),
-        );
-
-        expect(connect.params?.auth).toEqual(
-          expectedToken ? { deviceToken: expectedToken } : undefined,
-        );
-        expect(connect.params?.device?.id).toBe(expectedToken ? identity.deviceId : undefined);
-      });
-    },
-  );
-
-  it("does not serialize origin-A legacy or scoped tokens to a remote origin", async () => {
-    await withTempDir("openclaw-probe-origin-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "origin-a-legacy-token",
-        env,
-      });
-      seedOriginDeviceToken({
-        gatewayScope: gatewayOriginScope("wss://origin-a.example/rpc"),
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "origin-a-scoped-token",
-        env,
-      });
-
-      const connect = await captureProbeConnectFrame({
-        url: "wss://origin-b.example/rpc",
-        originScopedDeviceAuth: false,
-        env,
-      });
-
-      expect(connect.params?.auth).toBeUndefined();
-      expect(connect.params?.device).toBeUndefined();
-    });
-  });
-
-  it("rejects unverified origin-only device auth for a local loopback probe", async () => {
-    await withTempDir("openclaw-probe-local-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedOriginDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        env,
-        gatewayScope: "ws://127.0.0.1:18789",
-        token: "retired-tunnel-device-token",
-      });
-
-      const connect = await captureProbeConnectFrame({ url: "ws://127.0.0.1:18789", env });
-      expect(connect.params?.auth).toBeUndefined();
-      expect(connect.params?.device?.id).toBeUndefined();
-    });
-  });
-
-  it("keeps explicit tokens authoritative for a paired remote loopback probe", async () => {
-    const url = "ws://127.0.0.1:18789";
-    await withTempDir("openclaw-probe-explicit-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "legacy-device-token",
-        env,
-      });
-      seedOriginDeviceToken({
-        gatewayScope: gatewayOriginScope(url),
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "cached-origin-token",
-        env,
-      });
-
-      const connect = await captureProbeConnectFrame({
-        url,
+  const saved = { legacy: "local-token", origin: "scoped-token" };
+  const remoteUrl = "wss://gateway.example";
+  it.for<
+    [
+      string,
+      StoredTokens,
+      (fixture: AuthFixture) => Promise<unknown>,
+      NonNullable<ConnectFrame["params"]>["auth"],
+      boolean | "absent-id",
+    ]
+  >([
+    ["local status", saved, status("local", loopbackUrl), { deviceToken: saved.legacy }, true],
+    ["remote loopback status", saved, status("remote", loopbackUrl), undefined, "absent-id"],
+    [
+      "remote origin status",
+      { ...saved, scope: remoteUrl },
+      status("remote", remoteUrl),
+      { deviceToken: saved.origin },
+      true,
+    ],
+    ["URL override", saved, status("local", loopbackUrl, true), undefined, "absent-id"],
+    [
+      "foreign origin",
+      { ...saved, scope: "wss://origin-a.example/rpc" },
+      direct({ url: "wss://origin-b.example/rpc", originScopedDeviceAuth: false }),
+      undefined,
+      false,
+    ],
+    [
+      "unverified loopback issuance",
+      { origin: saved.origin },
+      direct({ url: loopbackUrl }),
+      undefined,
+      "absent-id",
+    ],
+    [
+      "forwarded SSH port",
+      saved,
+      direct({ url: loopbackUrl, suppressStoredDeviceAuth: true }),
+      undefined,
+      false,
+    ],
+    [
+      "explicit remote token",
+      saved,
+      direct({
+        url: loopbackUrl,
         originScopedDeviceAuth: true,
         auth: { token: "explicit-remote-token" },
-        env,
-      });
-
-      expect(connect.params?.auth).toEqual({ token: "explicit-remote-token" });
-      expect(connect.params?.device?.id).toBe(identity.deviceId);
-    });
-  });
-
-  it("does not reuse stored auth across SSH targets sharing a forwarded port", async () => {
-    await withTempDir("openclaw-probe-ssh-scope-", async (stateDir) => {
-      const env = createEnv(stateDir);
-      const identity = loadOrCreateDeviceIdentity({ env });
-      seedDeviceAuthToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "local-device-token",
-        env,
-      });
-      seedOriginDeviceToken({
-        gatewayScope: gatewayOriginScope("ws://127.0.0.1:18789"),
-        deviceId: identity.deviceId,
-        role: "operator",
-        token: "prior-ssh-target-token",
-        env,
-      });
-
-      const connect = await captureProbeConnectFrame({
-        url: "ws://127.0.0.1:18789",
-        suppressStoredDeviceAuth: true,
-        env,
-      });
-
-      expect(connect.params?.auth).toBeUndefined();
-      expect(connect.params?.device).toBeUndefined();
+      }),
+      { token: "explicit-remote-token" },
+      true,
+    ],
+  ])("binds credentials to %s", async ([_name, tokens, startProbe, auth, identity]) => {
+    await withAuth(tokens, async (fixture) => {
+      const connect = await captureConnectFrame(() => startProbe(fixture));
+      expect(connect.params?.auth).toEqual(auth);
+      expect(identity ? connect.params?.device?.id : connect.params?.device).toBe(
+        identity === true ? fixture.deviceId : undefined,
+      );
     });
   });
 });

@@ -57,7 +57,7 @@ openclaw onboard
 On a fresh install the guided flow offers **Quick start** and **Custom setup**,
 detects the AI access you already have, verifies your one chosen connection with
 a real completion, and only then configures the rest of the setup. Both lanes,
-the provider picker, **Skip for now**, and the foreground Gateway are described
+the provider picker, **Skip for now**, and the background Gateway choice are described
 step by step in [Onboarding (CLI)](/start/wizard#guided-default).
 
 After inference passes, OpenClaw can hand channel setup to a masked terminal
@@ -100,6 +100,10 @@ connections in this order:
 5. Eligible loaded models in Ollama, LM Studio, or llama.cpp.
 
 The first connection that passes a live completion becomes the primary model.
+If Codex detection or runtime inspection fails, automatic setup shows the error
+and stops rather than selecting a local model. Fix the reported problem and
+retry, or choose another available provider manually. A missing Codex executable
+or login still allows the remaining connections to be tried.
 If none works, OpenClaw installs or enables the official Codex plugin and uses
 its existing login, or asks you to sign in with ChatGPT. Apple Foundation Models
 is a utility option and is never chosen as the primary model.
@@ -107,8 +111,8 @@ is a utility option and is never chosen as the primary model.
 When automatic setup reuses Codex, it shares the Gateway user's `CODEX_HOME`
 (or `~/.codex`), including the login, threads, and `config.toml`. Codex owns
 authentication and token refresh; OpenClaw does not copy the OAuth tokens into
-its auth store. Choose **Use a separate login** on the setup card, or sign in
-with ChatGPT or an OpenAI API key through **Model Setup**, to use an isolated
+its auth store. Choose **Sign in separately** on the setup card, or sign in
+with ChatGPT or an OpenAI API key through **Models**, to use an isolated
 OpenClaw agent home, even after reusing a native login.
 See [Codex login and isolation](/start/onboarding#codex-login-and-isolation)
 to switch between these modes.
@@ -141,7 +145,7 @@ discovered Gateway, a manually entered Gateway URL, or a Gateway reached through
 an SSH tunnel;
 token and password authentication are supported.
 
-Model Setup checks existing provider access and offers sign-in or API-key entry
+Models checks existing provider access and offers sign-in or API-key entry
 when needed. The selected Gateway verifies a real model response before guided
 onboarding begins. An already configured Gateway opens the normal agent UI
 after verification instead. Restart/reopen recovery uses a temporary record
@@ -171,7 +175,15 @@ classic wizard also retains its custom-provider setup.
 If the endpoint refuses the connection or its hostname cannot be found, setup
 reports the failed connection immediately instead of waiting through normal
 chat retries. Start the server or correct the URL and network settings on the
-Gateway host, then retry. Ordinary agent sessions keep their connection retries.
+Gateway host, then retry. Server errors, rate limits, and overload responses
+are also reported after the first attempt, so retry setup once the provider
+recovers. Ordinary agent sessions keep their retries.
+
+While the check runs, the dialog shows how long it has been waiting, and you
+can cancel at any time without changing your configuration. A remote API that
+has not answered after 30 seconds fails the check. Local model servers, CLI
+runtimes, and native harnesses get up to 90 seconds because they may need to
+start or load a model first.
 
 ## Related
 

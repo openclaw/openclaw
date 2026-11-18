@@ -1,3 +1,4 @@
+import { createCronExecutionId } from "../../../../src/cron/run-id.js";
 import type { CronJob } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
@@ -7,64 +8,77 @@ import { formatUiError } from "../../lib/format-error.ts";
 export function resolveCronRouteData(search: string): {
   jobId: string | null;
   runId: string | null;
-  session?: { sessionKey: string; sessionAgentId: string };
+  /** `?new` opens the create panel, as the sidebar's New automation does. */
+  create?: true;
+  /** `?activity` opens every automation's run history, as the sidebar's Activity does. */
+  activity?: true;
 } {
   const params = new URLSearchParams(search);
   const jobId = params.get("job")?.trim() || null;
-  const sessionKey = params.get("session")?.trim();
-  const agentId = params.get("agent")?.trim();
   return {
     jobId,
     runId: jobId ? params.get("run")?.trim() || null : null,
-    ...(!jobId && sessionKey && agentId
-      ? { session: { sessionKey, sessionAgentId: agentId } }
-      : {}),
+    ...(!jobId && params.has("new") ? { create: true as const } : {}),
+    ...(!jobId && params.has("activity") ? { activity: true as const } : {}),
   };
 }
 
 /** Keeps current selection intent separate from transport-owned reads and job data. */
-export class CronRouteSelection {
-  target: ReturnType<typeof resolveCronRouteData> | null = null;
-  requested = false;
-  private scope: ReturnType<typeof gatewayPresentationScope> | undefined;
+export function createCronRouteSelection() {
+  const selection: { target: ReturnType<typeof resolveCronRouteData> | null; requested: boolean } =
+    { target: null, requested: false };
+  let scope: ReturnType<typeof gatewayPresentationScope> | undefined;
 
-  bind(gateway: ApplicationGateway): boolean {
-    const scope = gatewayPresentationScope(gateway);
-    const changed = this.scope !== undefined && this.scope !== scope;
-    this.scope = scope;
+  function bind(gateway: ApplicationGateway): boolean {
+    const nextScope = gatewayPresentationScope(gateway);
+    const changed = scope !== undefined && scope !== nextScope;
+    scope = nextScope;
     if (changed) {
-      this.target = null;
+      selection.target = null;
     }
     return changed;
   }
 
-  async resolve(
+  async function resolve(
     state: CronState,
     isCurrent: () => boolean,
-    select: (job: CronJob, runId: string | null) => void,
+    apply: (job: CronJob, runId: string | null) => void,
   ) {
-    const target = this.target;
-    if (!target?.jobId || !state.client || !state.connected || this.requested) {
+    const target = selection.target;
+    if (!target?.jobId || !state.client || !state.connected || selection.requested) {
       return;
     }
-    this.requested = true;
-    const ownsSelection = () => isCurrent() && this.target === target;
+    selection.requested = true;
+    const ownsSelection = () => isCurrent() && selection.target === target;
     try {
       // A filtered inventory cannot resolve an exact link or a resumed selection.
       const job = await state.client.request<CronJob>("cron.get", { id: target.jobId });
       if (ownsSelection()) {
-        select(job, target.runId);
+        apply(job, target.runId);
       }
     } catch (error) {
       if (ownsSelection()) {
-        this.target = null;
+        selection.target = null;
         state.cronError = formatUiError(error);
       }
     }
   }
 
-  select(jobId: string, runId: string | null) {
-    this.target = { jobId, runId };
-    this.requested = true;
+  function select(jobId: string, runId: string | null) {
+    selection.target = { jobId, runId };
+    selection.requested = true;
   }
+  return Object.assign(selection, { bind, resolve, select });
+}
+
+/** The run a failure banner reviews: the saved job's last run, when the job recorded one. */
+export function failedRunId(job: CronJob): string | null {
+  return typeof job.state.lastRunAtMs === "number"
+    ? createCronExecutionId(job.id, job.state.lastRunAtMs)
+    : null;
+}
+
+/** An automation opens on its prompt and history; its settings open from Edit. */
+export function resolveCronDetailTab(job: CronJob | null): "history" | "settings" {
+  return job ? "history" : "settings";
 }

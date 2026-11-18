@@ -20,7 +20,7 @@ import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 type CapturedWriteOptions = Required<
   Pick<UpdateRunWriteOptions, "env" | "context" | "assertAccepting" | "retainSettlement">
 > &
-  Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs">;
+  Pick<UpdateRunWriteOptions, "requireNoRecovery" | "busyTimeoutMs" | "pluginCohort">;
 
 export type UpdateCommandExecutionGuards = {
   recordPhase: (phase: UpdateRunPhase, patch?: UpdateRunPhasePatch) => Promise<void>;
@@ -29,14 +29,19 @@ export type UpdateCommandExecutionGuards = {
   onStateHandoff: () => void;
   admitExecutor: (acquired: UpdateRecoveryFence) => void;
   assertCurrent: (phase?: "restore") => void;
+  waitForCurrent: () => Promise<void>;
   assertBoundChildCurrent: () => void;
 };
 
 export type MutableUpdateExecutionParams = {
   root: string;
   installKind: "git" | "package" | "unknown";
-  updateInstallKind: "git" | "package";
   switchToGit: boolean;
+  /**
+   * A POSIX Git checkout update switches a release link: the serving Gateway keeps its
+   * own release until the service restarts, so nothing is verified, stopped or parked first.
+   */
+  gitRelease?: boolean;
   timeoutMs: number | undefined;
   updateStepTimeoutMs: number;
   startedAt: number;
@@ -50,7 +55,6 @@ export type MutableUpdateExecutionParams = {
   devTarget?: DevUpdateTarget;
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
-  packageInstallTarget?: ResolvedGlobalInstallTarget;
   stagedPackage?: StagedPackageInstallUpdate;
   packageTargetVersion?: string;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
@@ -70,4 +74,7 @@ export type MutableUpdateExecutionParams = {
     installTarget?: ResolvedGlobalInstallTarget,
   ) => Promise<void>;
   onActivation?: () => void;
-};
+} & (
+  | { updateInstallKind: "package"; packageInstallTarget: ResolvedGlobalInstallTarget }
+  | { updateInstallKind: "git"; packageInstallTarget?: ResolvedGlobalInstallTarget }
+);

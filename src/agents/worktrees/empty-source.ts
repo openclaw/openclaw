@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex as sourceName } from "@openclaw/normalization-core/node-crypto";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { gitNullConfigPath } from "../../infra/git-exec.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
+import { withWorktreeMutationLease } from "./allocation.js";
 import { listGitWorktrees, requireGit, worktreePathExists } from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
@@ -20,8 +22,25 @@ function sourceParent(env: NodeJS.ProcessEnv): string {
   return path.join(resolveStateDir(env), "worktree-sources", "empty");
 }
 
-function sourceName(ownerId: string): string {
-  return createHash("sha256").update(ownerId).digest("hex");
+function sourceGitOptions(params: {
+  env: NodeJS.ProcessEnv;
+  signal?: AbortSignal;
+  commitGuard: () => void;
+}) {
+  const gitEnv = Object.fromEntries(
+    Object.entries(mergeProcessEnv([process.env, params.env])).filter(
+      ([key]) => !key.toUpperCase().startsWith("GIT_"),
+    ),
+  );
+  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
+  gitEnv.GIT_CONFIG_GLOBAL = gitNullConfigPath();
+  gitEnv.GIT_NO_REPLACE_OBJECTS = "1";
+  return {
+    baseEnv: gitEnv,
+    env: gitEnv,
+    signal: params.signal,
+    beforeRun: params.commitGuard,
+  };
 }
 
 async function hasEmptySourceLayout(sourceRoot: string): Promise<boolean> {
@@ -48,7 +67,30 @@ async function validateSource(
   }
 }
 
-/** Called under the managed-worktree allocation lease, including source publication. */
+/** Only the session's immutable empty source permits adopting unrelated Git ancestry. */
+export async function isEmptyWorktreeSource(params: {
+  env: NodeJS.ProcessEnv;
+  ownerId: string;
+  repoRoot: string;
+  signal?: AbortSignal;
+  commitGuard: () => void;
+}): Promise<boolean> {
+  params.commitGuard();
+  const parent = sourceParent(params.env);
+  if (!(await worktreePathExists(parent))) {
+    return false;
+  }
+  const expected = path.join(await fs.realpath(parent), sourceName(params.ownerId), "workspace");
+  params.commitGuard();
+  if (path.relative(expected, params.repoRoot) !== "") {
+    return false;
+  }
+  await validateSource(expected, sourceGitOptions(params));
+  params.commitGuard();
+  return true;
+}
+
+/** Creation retains this session's empty-source lease through pending publication. */
 export async function ensureEmptyWorktreeSource(params: {
   env: NodeJS.ProcessEnv;
   ownerId: string;
@@ -59,20 +101,7 @@ export async function ensureEmptyWorktreeSource(params: {
   const context = captureWorktreeRunEndContext(env);
   const sourceDirectory = sourceParent(context.environment);
   // Isolate each session's Git metadata and configuration from other tasks.
-  const gitEnv = Object.fromEntries(
-    Object.entries(mergeProcessEnv([process.env, env])).filter(
-      ([key]) => !key.toUpperCase().startsWith("GIT_"),
-    ),
-  );
-  gitEnv.GIT_CONFIG_NOSYSTEM = "1";
-  gitEnv.GIT_CONFIG_GLOBAL = gitNullConfigPath();
-  gitEnv.GIT_NO_REPLACE_OBJECTS = "1";
-  const gitOptions = {
-    baseEnv: gitEnv,
-    env: gitEnv,
-    signal: params.signal,
-    beforeRun: commitGuard,
-  };
+  const gitOptions = sourceGitOptions(params);
   params.signal?.throwIfAborted();
   commitGuard();
   await fs.mkdir(sourceDirectory, { recursive: true, mode: 0o700 });
@@ -138,13 +167,26 @@ export async function ensureEmptyWorktreeSource(params: {
   return sourceRoot;
 }
 
-/** Called under the allocation lease after failed creation or final snapshot expiry. */
+/** Serialize source deletion with creation without retaining global allocation custody. */
 export async function removeUnusedEmptyWorktreeSource(params: {
   env: NodeJS.ProcessEnv;
   record: Pick<ManagedWorktreeRecord, "repoRoot" | "ownerKind" | "ownerId"> & { id?: string };
   signal?: AbortSignal;
   commitGuard: () => void;
 }): Promise<void> {
+  if (params.record.ownerKind !== "session" || !params.record.ownerId) {
+    return;
+  }
+  // Creation holds source before checkout custody; retirement must not wait in reverse order.
+  return withWorktreeMutationLease(
+    { ...params, id: `empty-source:${params.record.ownerId}`, waitBudget: { remainingMs: 0 } },
+    (guard) => removeUnusedSource({ ...params, ...guard }),
+  );
+}
+
+async function removeUnusedSource(
+  params: Parameters<typeof removeUnusedEmptyWorktreeSource>[0],
+): Promise<void> {
   const { env, record, commitGuard } = params;
   const context = captureWorktreeRunEndContext(env);
   const sourceDirectory = sourceParent(context.environment);

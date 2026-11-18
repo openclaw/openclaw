@@ -349,7 +349,7 @@ describe("operator approval decision receipts", () => {
     });
   });
 
-  it("pages equal-time approvals by row key and bounds oversized presentations", async () => {
+  it("pages portable approval cursors after maximum reuse and bounds oversized presentations", async () => {
     const database = databaseOptions();
     for (const id of ["page-a", "page-b", "page-c"]) {
       await insertOperatorApproval({ approval: approval(id), databaseOptions: database });
@@ -362,6 +362,19 @@ describe("operator approval decision receipts", () => {
       });
     }
     const db = openOpenClawStateDatabase(database).db;
+    db.exec("UPDATE operator_approvals SET rowid = 100 WHERE approval_id = 'page-a'");
+    db.exec("DELETE FROM operator_approvals WHERE approval_id = 'page-c'");
+    await insertOperatorApproval({ approval: approval("page-c"), databaseOptions: database });
+    await resolveOperatorApproval({
+      id: "page-c",
+      decision: "deny",
+      resolver: { kind: "device", id: "reviewer" },
+      nowMs: 2_000,
+      databaseOptions: database,
+    });
+    expect(
+      db.prepare("SELECT cursor_id FROM operator_approvals WHERE approval_id = 'page-c'").get(),
+    ).toEqual({ cursor_id: 3 });
     db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?").run(
       JSON.stringify({ kind: "exec", commandText: "x".repeat(70_000) }),
       "page-b",
@@ -372,7 +385,7 @@ describe("operator approval decision receipts", () => {
       { context, limit: 1, nowMs: 3_000 },
     );
     expect(first.entries[0]?.receipt.receiptId).toContain("approval:");
-    expect(first.nextCursor).toEqual({ occurredAt: 2_000, rowId: expect.any(Number) });
+    expect(first.nextCursor).toEqual({ occurredAt: 2_000, rowId: 1 });
     const firstDisplay = presentExecutionDecisionReceiptsInDatabase(db, {
       schema: {
         cronRunReceipts: tableExists(db, "cron_run_receipts"),

@@ -1,5 +1,6 @@
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { monotonicDeadlineAfter, remainingMonotonicMs } from "../shared/monotonic-time.js";
 
 /**
  * Run bounded work; dynamic labels identify the stage pending at the deadline.
@@ -17,11 +18,13 @@ export async function runAbortableTimeout<T>(
   }
 
   const abortCtrl = new AbortController();
-  const deadline = maxTotalMs === undefined ? undefined : Date.now() + maxTotalMs;
+  // Keep the deadline on the monotonic clock setTimeout arms on, so wall-clock jumps
+  // can't inflate or collapse the remaining window resetTimeout re-reads across ticks.
+  const deadline = maxTotalMs === undefined ? undefined : monotonicDeadlineAfter(maxTotalMs);
   let timer: ReturnType<typeof setTimeout> | undefined;
   let settled = false;
   const resetTimeout = () => {
-    const remainingMs = (deadline ?? Number.POSITIVE_INFINITY) - Date.now();
+    const remainingMs = remainingMonotonicMs(deadline ?? Number.POSITIVE_INFINITY);
     // At the deadline the armed window is already due; re-arming would postpone it.
     if (settled || abortCtrl.signal.aborted || (timer && remainingMs <= 0)) {
       return;

@@ -19,8 +19,8 @@ const TOOL_FOLLOWUPS = [
   [
     "gateway",
     "openclaw",
-    "Never via shell.",
-    "Never via shell. Other system changes: use openclaw tool.",
+    "Use runtime-owned actions.",
+    "Use runtime-owned actions. Other system changes: use openclaw tool.",
   ],
   [
     "sessions_search",
@@ -36,10 +36,10 @@ const TOOL_FOLLOWUPS = [
   ],
   ["sessions_spawn", "agents_list", "configured agent;", "configured agent (see agents_list);"],
   [
-    "sessions_yield",
-    "agents_wait",
-    "Collector runs require explicit collection instead.",
-    "Collector runs require agents_wait instead.",
+    "nodes",
+    "exec",
+    "fs.listDir returns sub-directories only)",
+    "fs.listDir returns sub-directories only; use the exec tool with host=node to list files)",
   ],
 ] as const;
 

@@ -2,13 +2,23 @@ import type { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CDPSession, Frame, Page } from "playwright-core";
 import { getPwAiModule } from "../pw-ai-module.js";
 import { clearBrowserScreencastTokens, type BrowserScreencastTokenParams } from "./tokens.js";
-import { encodeBrowserScreencastFrame } from "./wire.js";
 
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024;
-const FRAME_INTERVAL_MS = 50;
+// Ack retry delay while every viewer socket is congested.
+const CONGESTED_ACK_DELAY_MS = 50;
 const sessions = new Map<string, BrowserScreencastSession>();
 
-type ScreencastFrame = Parameters<typeof encodeBrowserScreencastFrame>[1] & { sessionId: number };
+type ScreencastFrame = {
+  sessionId: number;
+  data: string;
+  metadata: {
+    deviceWidth: number;
+    deviceHeight: number;
+    scrollOffsetX: number;
+    scrollOffsetY: number;
+    timestamp?: number;
+  };
+};
 type ViewerRequester = {
   signal?: AbortSignal;
   isCurrent?: () => boolean;
@@ -21,6 +31,8 @@ class BrowserScreencastSession {
   readonly viewers = new Map<WebSocket, ViewerRequester>();
   private readonly readyViewers = new Set<WebSocket>();
   private readonly acknowledgements = new Set<ReturnType<typeof setTimeout>>();
+  // Acknowledges the frame still waiting on a viewer's write, if any.
+  private pendingAck: (() => void) | undefined;
   private page?: Page;
   private capture?: { cdp: CDPSession; onFrame: (frame: ScreencastFrame) => void };
   private captureDrain: Promise<void> = Promise.resolve();
@@ -230,6 +242,7 @@ class BrowserScreencastSession {
     ) {
       return;
     }
+    let joined = false;
     for (const ws of this.viewers.keys()) {
       if (
         !this.readyViewers.has(ws) &&
@@ -239,11 +252,17 @@ class BrowserScreencastSession {
         )
       ) {
         this.readyViewers.add(ws);
+        joined = true;
       }
+    }
+    if (joined) {
+      // A viewer that joins while the only writer stalls must not inherit its frozen
+      // capture: release Chrome's held frame so the next one reaches everyone.
+      this.pendingAck?.();
     }
   }
 
-  private send(ws: WebSocket, data: string | Buffer): boolean {
+  private send(ws: WebSocket, data: string | Buffer, onWritten?: () => void): boolean {
     if (!this.isViewerCurrent(ws) || ws.readyState !== 1) {
       return false;
     }
@@ -255,6 +274,7 @@ class BrowserScreencastSession {
         if (error) {
           ws.terminate();
         }
+        onWritten?.();
       });
       return true;
     } catch {
@@ -277,12 +297,34 @@ class BrowserScreencastSession {
     if (url === undefined) {
       return;
     }
-    // Chrome retains one unacked frame; delayed acks bound work without a frame queue.
-    const timer = setTimeout(() => {
-      this.acknowledgements.delete(timer);
-      if (this.capture?.cdp !== cdp || !this.isCurrent()) {
+    const header = Buffer.from(
+      JSON.stringify({
+        url,
+        cssWidth: frame.metadata.deviceWidth,
+        cssHeight: frame.metadata.deviceHeight,
+        scrollX: frame.metadata.scrollOffsetX,
+        scrollY: frame.metadata.scrollOffsetY,
+        ts: frame.metadata.timestamp,
+      }),
+      "utf8",
+    );
+    const jpeg = Buffer.from(frame.data, "base64");
+    const wire = Buffer.allocUnsafe(4 + header.length + jpeg.length);
+    wire.writeUInt32BE(header.length, 0);
+    header.copy(wire, 4);
+    jpeg.copy(wire, 4 + header.length);
+    // Chrome retains one unacked frame. Acking once the first viewer has taken this
+    // frame paces capture to the fastest delivery without a frame queue; slower
+    // viewers fall behind to MAX_BUFFERED_BYTES and then skip frames.
+    let acked = false;
+    const ack = () => {
+      if (this.pendingAck === ack) {
+        this.pendingAck = undefined;
+      }
+      if (acked || this.capture?.cdp !== cdp || !this.isCurrent()) {
         return;
       }
+      acked = true;
       void this.trackWork(
         cdp
           .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
@@ -293,13 +335,24 @@ class BrowserScreencastSession {
             }
           }),
       );
-    }, FRAME_INTERVAL_MS);
+    };
+    let accepted = false;
+    for (const ws of this.readyViewers) {
+      accepted = this.send(ws, wire, ack) || accepted;
+    }
+    if (accepted) {
+      if (!acked) {
+        this.pendingAck = ack;
+      }
+      return;
+    }
+    // No viewer took the frame: back off before asking Chrome for another.
+    const timer = setTimeout(() => {
+      this.acknowledgements.delete(timer);
+      ack();
+    }, CONGESTED_ACK_DELAY_MS);
     timer.unref();
     this.acknowledgements.add(timer);
-    const wire = encodeBrowserScreencastFrame(url, frame);
-    for (const ws of this.readyViewers) {
-      this.send(ws, wire);
-    }
   }
 
   close(code?: number, reason?: string): Promise<void> {
@@ -336,6 +389,7 @@ class BrowserScreencastSession {
     this.navigationEpoch += 1;
     const capture = this.capture;
     this.capture = undefined;
+    this.pendingAck = undefined;
     for (const timer of this.acknowledgements) {
       clearTimeout(timer);
     }

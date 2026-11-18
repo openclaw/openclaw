@@ -5,7 +5,6 @@
 import {
   captureBrowserSessionTabAuthority,
   isBrowserStateRuntimeCurrent,
-  readCurrentBrowserState,
   type BrowserSessionTabAuthority,
 } from "../browser-runtime-state.js";
 import {
@@ -14,9 +13,14 @@ import {
   closeDurableTab,
   isIgnorableTabCloseError,
 } from "./session-tab-cleanup-claim.js";
-import { resolveBrowserSessionKey } from "./session-tab-identity.js";
 import {
+  browserSessionTabNativeIdentity,
+  resolveBrowserSessionKey,
+} from "./session-tab-identity.js";
+import {
+  activeDurableStorageKeys,
   deleteVolatileRegistrations,
+  readColdNativeActivity,
   sameVolatileSessionTab,
   type VolatileSessionTab as VolatileTab,
   volatileRegistrationsForTarget,
@@ -29,10 +33,6 @@ import {
   withBrowserSessionTabOperation,
   type BrowserSessionTabRecord,
 } from "./session-tab-store.js";
-import {
-  selectStaleTrackedTabs,
-  selectTrackedTabsForSessions,
-} from "./session-tab-sweep-selection.js";
 import { readDurableTabs, resolveVolatile, type DurableTab } from "./session-tab-tracking.js";
 
 export {
@@ -43,6 +43,108 @@ export {
 } from "./session-tab-tracking.js";
 
 type TrackedTab = VolatileTab | DurableTab;
+
+function trackedTabIdentity(tab: TrackedTab): string {
+  return tab.kind === "durable"
+    ? `durable:${tab.storageKey}`
+    : `volatile:${tab.sessionKey}:${volatileSessionTabTargetKey(tab)}`;
+}
+
+function selectStaleTrackedTabs(params: {
+  tabs: TrackedTab[];
+  now: number;
+  idleMs?: number;
+  maxTabsPerSession?: number;
+  sessionFilter?: (sessionKey: string) => boolean;
+}): TrackedTab[] {
+  const selected = new Map<string, TrackedTab>();
+  const activeBySession = new Map<string, TrackedTab[]>();
+  const nativeIdentityCounts = new Map<string, number>();
+  const observedNativeActivity = new Map<string, number>();
+  for (const tab of params.tabs) {
+    if (tab.kind !== "durable" || tab.interactionTargetKind !== "native") {
+      continue;
+    }
+    const identity = browserSessionTabNativeIdentity(tab);
+    nativeIdentityCounts.set(identity, (nativeIdentityCounts.get(identity) ?? 0) + 1);
+    const observedAt = readColdNativeActivity(identity);
+    if (observedAt !== undefined) {
+      observedNativeActivity.set(tab.storageKey, observedAt);
+    }
+  }
+  const effectiveLastUsedAt = (tab: TrackedTab): number =>
+    tab.kind === "durable"
+      ? Math.max(tab.lastUsedAt, observedNativeActivity.get(tab.storageKey) ?? 0)
+      : tab.lastUsedAt;
+
+  for (const tab of params.tabs) {
+    if (tab.kind === "durable" && tab.dashboard) {
+      // The dashboard lifetime reconciler owns these targets, including pending closes.
+      continue;
+    }
+    const observedAt =
+      tab.kind === "durable" ? observedNativeActivity.get(tab.storageKey) : undefined;
+    const isActiveDurable =
+      tab.kind === "durable" && activeDurableStorageKeys().has(tab.storageKey);
+    const isUnambiguousNative =
+      tab.kind === "durable" &&
+      tab.interactionTargetKind === "native" &&
+      nativeIdentityCounts.get(browserSessionTabNativeIdentity(tab)) === 1;
+    const activitySupersedesSweep =
+      tab.kind === "durable" &&
+      tab.cleanupKind === "sweep" &&
+      observedAt !== undefined &&
+      observedAt >= (tab.cleanupRequestedAt ?? 0);
+    // A prior lifecycle failure remains mandatory even when normal periodic
+    // sweeps exclude that terminated session.
+    if (tab.kind === "durable" && tab.cleanupAttemptToken && !activitySupersedesSweep) {
+      if (tab.cleanupKind === "lifecycle" || isActiveDurable || isUnambiguousNative) {
+        selected.set(trackedTabIdentity(tab), tab);
+      }
+      continue;
+    }
+    if (params.sessionFilter && !params.sessionFilter(tab.sessionKey)) {
+      continue;
+    }
+    // Process-scoped handles and ambiguous native ids cannot prove which durable
+    // row was used after restart. Lifecycle cleanup can still verify ownership,
+    // but an idle sweep must wait for safe process-local activity evidence.
+    if (
+      tab.kind === "durable" &&
+      !isActiveDurable &&
+      (tab.interactionTargetKind === "opaque" || !isUnambiguousNative)
+    ) {
+      continue;
+    }
+    const active = activeBySession.get(tab.sessionKey) ?? [];
+    active.push(tab);
+    activeBySession.set(tab.sessionKey, active);
+  }
+  for (const tabs of activeBySession.values()) {
+    tabs.sort(
+      (left, right) =>
+        effectiveLastUsedAt(left) - effectiveLastUsedAt(right) || left.trackedAt - right.trackedAt,
+    );
+    if (params.idleMs && params.idleMs > 0) {
+      for (const tab of tabs) {
+        if (params.now - effectiveLastUsedAt(tab) >= params.idleMs) {
+          selected.set(trackedTabIdentity(tab), tab);
+        }
+      }
+    }
+    const remaining = tabs.filter((tab) => !selected.has(trackedTabIdentity(tab)));
+    if (
+      params.maxTabsPerSession &&
+      params.maxTabsPerSession > 0 &&
+      remaining.length > params.maxTabsPerSession
+    ) {
+      for (const tab of remaining.slice(0, remaining.length - params.maxTabsPerSession)) {
+        selected.set(trackedTabIdentity(tab), tab);
+      }
+    }
+  }
+  return [...selected.values()];
+}
 
 function readVolatileTabs(sessionKeys?: ReadonlySet<string>): Map<string, VolatileTab[]> {
   const current = volatileTabsBySession();
@@ -66,20 +168,26 @@ async function performVolatileCleanup(
 ): Promise<number> {
   const inFlight = volatileTabCleanupByTarget();
   const targetKey = volatileSessionTabTargetKey(candidate);
+  let cancelledByActivity = false;
   const resolveCurrent = () => {
     const current = resolveVolatile(candidate)?.tab;
-    return current?.registration === candidate.registration &&
-      (cleanupKind !== "sweep" || sameVolatileSessionTab(current, candidate))
-      ? current
-      : undefined;
+    if (current?.registration !== candidate.registration) {
+      return undefined;
+    }
+    if (cleanupKind === "sweep" && !sameVolatileSessionTab(current, candidate)) {
+      cancelledByActivity = true;
+      return undefined;
+    }
+    return current;
   };
-  const existing = inFlight.get(targetKey);
-  if (existing) {
-    await existing;
-    // A replaced registration is picked up by the next sweep, not handed off mid-close.
-    return 0;
+  for (let existing = inFlight.get(targetKey); existing; existing = inFlight.get(targetKey)) {
+    const result = await existing;
+    // Activity cancels a sweep, but not lifecycle cleanup of the same registration.
+    if (cleanupKind !== "lifecycle" || !result.cancelledByActivity || !resolveCurrent()) {
+      return 0;
+    }
   }
-  const cleanup = Promise.resolve().then(async () => {
+  const attempt = Promise.resolve().then(async () => {
     if (params.prepareCurrent && !(await params.prepareCurrent())) {
       return 0;
     }
@@ -146,12 +254,13 @@ async function performVolatileCleanup(
     deleteVolatileRegistrations(registrations);
     return 1;
   });
+  const cleanup = attempt
+    .then((closed) => ({ closed, cancelledByActivity }))
+    .finally(() => {
+      inFlight.delete(targetKey);
+    });
   inFlight.set(targetKey, cleanup);
-  try {
-    return await cleanup;
-  } finally {
-    inFlight.delete(targetKey);
-  }
+  return (await cleanup).closed;
 }
 
 async function closeTrackedTabs(
@@ -188,32 +297,17 @@ async function prepareTrackedTabCleanup(
   params: CloseParams & { sessionKeys?: Array<string | undefined> },
 ) {
   let dashboardClosed = 0;
-  const readDurable = () =>
-    readCurrentBrowserState(
-      params.authority?.runtime,
-      () => readDurableTabs(params.onWarn, params.authority),
-      params.isCurrent,
-    );
-  let durable = await readDurable();
-  if (!durable) {
-    return { dashboardClosed, durable };
-  }
+  let durable = await readDurableTabs(params.onWarn, params.authority);
   const hasDashboard =
     durable.some((tab) => tab.dashboard) ||
-    (
-      await readCurrentBrowserState(
-        params.authority?.runtime,
-        () => readBrowserDashboardStopIntents(params.authority),
-        params.isCurrent,
-      )
-    )?.length;
+    (await readBrowserDashboardStopIntents(params.authority)).length;
   if (hasDashboard) {
     const { reconcileBrowserDashboards } = await import("../browser-dashboard.js");
     if (!isCleanupCurrent(params)) {
       return { dashboardClosed, durable: undefined };
     }
     dashboardClosed = await reconcileBrowserDashboards(params);
-    durable = await readDurable();
+    durable = await readDurableTabs(params.onWarn, params.authority);
   }
   return { dashboardClosed, durable: isCleanupCurrent(params) ? durable : undefined };
 }
@@ -249,11 +343,11 @@ export async function closeTrackedBrowserTabsForSessions(
     if (!durable || !isCleanupCurrent(params)) {
       return dashboardClosed;
     }
-    const tabs = selectTrackedTabsForSessions({
-      durable,
-      volatile,
-      sessionKeys,
-    });
+    const volatileTabs: VolatileTab[] = [];
+    for (const sessionKey of sessionKeys) {
+      volatileTabs.push(...(volatile.get(sessionKey) ?? []));
+    }
+    const tabs = [...durable.filter((tab) => sessionKeys.has(tab.sessionKey)), ...volatileTabs];
     return (
       dashboardClosed +
       (await closeTrackedTabs(tabs, {

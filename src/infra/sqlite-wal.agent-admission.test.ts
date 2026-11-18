@@ -19,12 +19,56 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { onSqliteWalCheckpoint } from "./sqlite-wal-checkpoint.js";
 import { observeSqliteWalPeriodicWork } from "./sqlite-wal-scheduler.test-support.js";
+import * as walAdmission from "./sqlite-wal-write-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("maintains missing and growth-stale agent statistics only on periodic worker passes", async () => {
+  const root = tempDirs.make("openclaw-agent-planner-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    openOpenClawStateDatabase();
+    const scheduled = observeSqliteWalPeriodicWork();
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    scheduled.restore();
+    const db = database.db;
+    const stats = () =>
+      db.prepare("SELECT 1 FROM sqlite_schema WHERE name='sqlite_stat1'").get()
+        ? db
+            .prepare("SELECT stat FROM sqlite_stat1 WHERE idx='sqlite_autoindex_cache_entries_1'")
+            .get()?.stat
+        : undefined;
+    const grow = (start: number, end: number) =>
+      db.exec(`
+      WITH RECURSIVE rows(n) AS (VALUES(${start}) UNION ALL SELECT n+1 FROM rows WHERE n<${end})
+      INSERT INTO cache_entries(scope,key,value_json,updated_at)
+      SELECT 'planner',printf('%08d',n),'{}',1 FROM rows;
+    `);
+    grow(1, 32);
+    expect(stats()).toBeUndefined();
+    const exec = vi.spyOn(db, "exec");
+    try {
+      await scheduled.periodic();
+      const small = stats();
+      expect(small).toBe("32 32 1");
+      grow(33, 8192);
+      // Writes do not refresh planner statistics in their hot path.
+      expect(stats()).toBe(small);
+      await scheduled.periodic();
+      expect(Number(String(stats()).split(" ")[0])).toBeGreaterThan(1000);
+      expect(
+        db.prepare("SELECT COUNT(*) AS n FROM cache_entries WHERE scope='planner'").get(),
+      ).toEqual({ n: 8192 });
+      // The published main-thread handle must never execute planner maintenance.
+      expect(exec.mock.calls.filter(([sql]) => /ANALYZE|optimize/i.test(sql))).toEqual([]);
+    } finally {
+      exec.mockRestore();
+    }
+  });
 });
 
 it.each(["keep", "close", "replace"] as const)(
@@ -34,9 +78,31 @@ it.each(["keep", "close", "replace"] as const)(
     await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       openOpenClawStateDatabase();
       const scheduled = observeSqliteWalPeriodicWork();
-      const database = openOpenClawAgentDatabase({ agentId: "main" });
-      scheduled.restore();
+      const queued = createDeferredCore();
+      const register = walAdmission.registerSqliteWalWorkerMaintenance;
+      const registration = vi
+        .spyOn(walAdmission, "registerSqliteWalWorkerMaintenance")
+        .mockImplementation((database, execute, cancel) =>
+          register(
+            database,
+            (request) => {
+              const work = execute(request);
+              queued.resolve();
+              return work;
+            },
+            cancel,
+          ),
+        );
+      let database: ReturnType<typeof openOpenClawAgentDatabase>;
+      try {
+        database = openOpenClawAgentDatabase({ agentId: "main" });
+      } finally {
+        registration.mockRestore();
+        scheduled.restore();
+      }
       const periodic = scheduled.periodic;
+      // Allocate SQLite's statistics pages before measuring vacuum's page budget.
+      database.db.exec("ANALYZE");
       database.db
         .prepare(
           "INSERT INTO cache_entries(scope, key, value_json, blob, updated_at) VALUES ('wal-proof', 'pages', '{}', randomblob(4194304), 1)",
@@ -84,11 +150,11 @@ it.each(["keep", "close", "replace"] as const)(
           await release.promise;
         });
         await entered.promise;
-        const initialPeriodicWork: Promise<unknown>[] = [];
+        let initialPeriodicWork: Promise<unknown> | undefined;
         try {
-          initialPeriodicWork.push(Promise.resolve(periodic()));
-          initialPeriodicWork.push(Promise.resolve(periodic()));
-          initialPeriodicWork.push(Promise.resolve(periodic()));
+          initialPeriodicWork = Promise.resolve(periodic());
+          // Retire queued maintenance only after sidecar inspection has released its guard.
+          await queued.promise;
           expect(vacuumCalls()).toHaveLength(0);
           expect(checkpointCalls()).toHaveLength(0);
           expect(freePages()).toBe(before);
@@ -110,7 +176,7 @@ it.each(["keep", "close", "replace"] as const)(
             await runOpenClawAgentWriteAdmission(options, () => undefined);
             await foreground;
           } finally {
-            await Promise.all(initialPeriodicWork);
+            await initialPeriodicWork;
           }
         }
         if (retirement === "keep") {
@@ -176,6 +242,7 @@ it.each(["keep", "close", "replace"] as const)(
 
 const workerSource = String.raw`
   const { parentPort, workerData } = require("node:worker_threads");
+  const { setImmediate: nextTurn } = require("node:timers/promises");
   const messages = [];
   let receiver;
   parentPort.on("message", (message) => {
@@ -222,6 +289,11 @@ const workerSource = String.raw`
     scheduled.restore();
     const periodic = scheduled.periodic;
     const periodicWork = [];
+    const fs = require("node:fs");
+    const readdir = fs.promises.readdir.bind(fs.promises);
+    // Sidecar identity has separate coverage; drain this scan to the real deferred admission.
+    fs.promises.readdir = (pathname, ...args) => pathname === "/proc/self/fd"
+      ? Promise.resolve([]) : readdir(pathname, ...args);
     const nativeExec = database.db.exec.bind(database.db);
     const withinAdmission = [];
     database.db.exec = (sql) => {
@@ -231,21 +303,24 @@ const workerSource = String.raw`
     parentPort.postMessage({ type: "ready" });
     const command = await receive();
     if (command.type !== "tick") throw new Error("Expected timer command");
-    if (!workerData.revoke) { periodicWork.push(periodic(), periodic(), periodic()); }
+    if (!workerData.revoke) {
+      periodicWork.push(periodic(), periodic(), periodic());
+      await nextTurn();
+    }
     parentPort.postMessage({ type: "ticked", count: withinAdmission.length });
     if (!workerData.retire) {
       phase = "flush";
       await agent.withOpenClawAgentDatabaseAdmission(workerData.options, withAdmission, async () => {
         if (workerData.revoke) {
           periodicWork.push(periodic());
-          await Promise.resolve();
+          await nextTurn();
           authorized = false;
         }
       });
     }
     phase = "close";
-    await withAdmission(() => {
-      const cleanup = agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
+    await withAdmission(async () => {
+      const cleanup = await agent.settleOpenClawAgentDatabaseWorkerClose(database.path);
       if (!cleanup.settled) throw new Error("Worker database cleanup did not settle");
       state.closeOpenClawStateDatabaseForTest();
     });

@@ -28,7 +28,8 @@ import {
   startPairedNodeWorkerGateway,
   type PairedNodeWorkerHost,
 } from "./paired-node-worker-wire-fixture.js";
-import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
+import { createQaScriptEvidenceWriter } from "./script-evidence.js";
+import { produceQaScriptProof } from "./script-proof.js";
 
 const SCENARIO_ID = "subagent-lineage-inspection";
 const SUMMARY_FILE = `${SCENARIO_ID}-summary.json`;
@@ -59,13 +60,6 @@ type WorkerTopology = {
   privateValues: string[];
   root: SessionRef;
   runIds: [string, string, string];
-};
-
-type ProofResult = {
-  artifacts?: Array<{ filePath: string; kind: string }>;
-  details?: string;
-  durationMs: number;
-  status: QaScriptEvidenceStatus;
 };
 
 function parseOptions(argv: readonly string[]): ProducerOptions {
@@ -939,24 +933,6 @@ async function runProof(options: ProducerOptions): Promise<string> {
   return `actual worker and nested-worker sessions_spawn lineage passed; redacted chain sha256=${enabledDigest}`;
 }
 
-async function produceProof(options: ProducerOptions): Promise<ProofResult> {
-  const startedAt = Date.now();
-  try {
-    return {
-      artifacts: [{ filePath: SUMMARY_FILE, kind: "summary" }],
-      details: await runProof(options),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "pass",
-    };
-  } catch (error) {
-    return {
-      details: formatErrorMessage(error),
-      durationMs: Math.max(1, Date.now() - startedAt),
-      status: "fail",
-    };
-  }
-}
-
 async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJson> {
   const writer = createQaScriptEvidenceWriter({
     artifactBase: options.artifactBase,
@@ -979,7 +955,7 @@ async function runProducer(options: ProducerOptions): Promise<QaEvidenceSummaryJ
       ],
     },
   });
-  const result = await produceProof(options);
+  const result = await produceQaScriptProof(options, runProof, SUMMARY_FILE);
   writer.appendLog(`${result.status}: ${result.details ?? "no details"}\n`);
   return await writer.write(result);
 }

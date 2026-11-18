@@ -2,6 +2,10 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  discoverManagedGatewayBindings,
+  readManagedGatewayBindingState,
+} from "../../daemon/managed-gateway-bindings.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
@@ -10,13 +14,17 @@ import {
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
+import { isGatewayServiceStateLive } from "../../daemon/service-runtime.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { readSystemdServiceCommandLocation } from "../../daemon/systemd-service-files.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { hasNodeErrorCode, isPathInside } from "../../infra/path-guards.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -74,7 +82,7 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           : "";
       throw new UpdatePreMutationError(
         "runtime-artifact-publication",
-        `${inspectionDetail}Runtime artifacts changed, but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
+        `${inspectionDetail}Runtime artifacts must be republished (this update changed them or they were already stale), but the affected Gateway is running or its offline state could not be verified. Run \`${formatCliCommand("openclaw gateway status --deep", params.env)}\`, stop the affected Gateway with \`${formatCliCommand("openclaw gateway stop", params.env)}\`, and retry the original command.`,
         { cause },
       );
     };
@@ -99,17 +107,10 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         return await identity(file);
       } catch (error) {
         assertCurrent();
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         // Missing descendants retain their existing ancestor's physical namespace;
         // a dangling symlink cannot attest a disjoint publication destination.
-        const present = await fs.lstat(file).catch((statError: unknown) => {
-          if (!hasNodeErrorCode(statError, "ENOENT")) {
-            throw statError;
-          }
-          return undefined;
-        });
+        const present = await fs.lstat(file).catch(ignoreMissingPath);
         assertCurrent();
         if (present) {
           throw error;
@@ -152,15 +153,6 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         outputPaths.map((output) => outputIdentity(path.join(params.root, output))),
       );
       assertCurrent();
-      const state = await readGatewayServiceState(service, {
-        env: params.env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        timeoutMs: params.timeoutMs,
-      });
-      assertCurrent();
-      const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
-      assertCurrent();
       const inspectServing = async (command: GatewayServiceState["command"]) => {
         const layout = await summarizeGatewayServiceLayout(command);
         assertCurrent();
@@ -191,6 +183,99 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           );
         return { serving: { root: installed, entrypoint }, disjoint };
       };
+      let linuxBindingsVerified = false;
+      let linuxInspectionError: unknown;
+      if (process.platform === "linux") {
+        // Discover both managers: an unloaded user unit cannot hide a live system unit.
+        // Artifact separation needs loaded commands, not service credentials.
+        const serving = await (async () => {
+          const bindings = await discoverManagedGatewayBindings(params.env, {
+            requireComplete: true,
+            includeInvoking: true,
+          });
+          assertCurrent();
+          let observedServing: Awaited<ReturnType<typeof inspectServing>>;
+          let allDisjoint = true;
+          for (const binding of bindings) {
+            const location = await readSystemdServiceCommandLocation(
+              binding.env,
+              binding.systemdReadTarget,
+            ).catch((error: unknown) => {
+              if (hasCommandProcessCleanupError(error)) {
+                throw error;
+              }
+              return undefined;
+            });
+            assertCurrent();
+            if (location?.kind === "not-loaded") {
+              continue;
+            }
+            const located = location ? await inspectServing(location.command) : undefined;
+            if (located?.disjoint && located.serving.entrypoint.stat) {
+              observedServing ??= located;
+              continue;
+            }
+            // A risky sibling must prove its own safety; the invoking service's
+            // readable environment cannot replace this exact manager observation.
+            const boundState = await readManagedGatewayBindingState(binding, {
+              timeoutMs: params.timeoutMs,
+            });
+            assertCurrent();
+            const inspected = await inspectServing(boundState.command);
+            const absent =
+              !boundState.command &&
+              !boundState.installed &&
+              boundState.loadState.status === "not-loaded" &&
+              boundState.runtime?.missingUnit === true;
+            if (
+              (!inspected && !absent) ||
+              (inspected && !inspected.serving.entrypoint.stat) ||
+              (!inspected?.disjoint &&
+                (isGatewayServiceStateLive(boundState) ||
+                  (!absent &&
+                    (boundState.loadState.status === "unknown" ||
+                      observedSystemdManagerUid(boundState) === undefined ||
+                      !(await isManagedGatewayServiceOffline(boundState))))))
+            ) {
+              refuse();
+            }
+            allDisjoint &&= inspected?.disjoint === true;
+            observedServing ??= inspected;
+          }
+          linuxBindingsVerified = true;
+          return allDisjoint ? observedServing?.serving : undefined;
+        })().catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error) || error instanceof UpdatePreMutationError) {
+            throw error;
+          }
+          linuxInspectionError = error;
+          return undefined;
+        });
+        assertCurrent();
+        if (serving) {
+          return { disjoint: true as const, serving, root: target.real, destinations };
+        }
+      }
+      const state = await readGatewayServiceState(service, {
+        env: params.env,
+        requireEffective: true,
+        requireLoadedCommand: true,
+        timeoutMs: params.timeoutMs,
+      });
+      assertCurrent();
+      // Only the native owner's proven non-systemd host can supersede an
+      // incomplete inventory; ordinary invoking-service absence proves no sibling safe.
+      if (
+        linuxInspectionError &&
+        !(
+          state.inspectionReason === "service-manager-unavailable" &&
+          state.runtime?.missingUnit === true
+        )
+      ) {
+        refuse(linuxInspectionError);
+      }
+      const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
+      assertCurrent();
       const inspected = await inspectServing(state.command);
       const serving = inspected?.serving;
       const disjoint = inspected?.disjoint ?? false;
@@ -233,18 +318,20 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           refuse();
         }
       }
-      await assertManagedGatewayArtifactPublication({
-        roots: [params.root],
-        env: params.env,
-        timeoutMs: params.timeoutMs,
-        assertCurrent,
-        updateInstallKind: "git",
-        shouldRestart: false,
-        inspectOverlap: async (_root, command) => {
-          const consumer = await inspectServing(command);
-          return consumer ? !consumer.disjoint : null;
-        },
-      });
+      if (!linuxBindingsVerified) {
+        await assertManagedGatewayArtifactPublication({
+          roots: [params.root],
+          env: params.env,
+          timeoutMs: params.timeoutMs,
+          assertCurrent,
+          updateInstallKind: "git",
+          shouldRestart: false,
+          inspectOverlap: async (_root, command) => {
+            const consumer = await inspectServing(command);
+            return consumer ? !consumer.disjoint : null;
+          },
+        });
+      }
       return { disjoint, database, serving, root: target.real, destinations };
     };
     const inspect = () => readInspection().catch(inspectionFailed);

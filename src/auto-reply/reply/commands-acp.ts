@@ -1,12 +1,7 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { logVerbose } from "../../globals.js";
-import {
-  commandReply,
-  matchCommandPrefix,
-  rejectNonOwnerCommand,
-  requireGatewayClientScope,
-} from "./command-gates.js";
+import { commandReply, rejectNonOwnerCommand, requireGatewayClientScope } from "./command-gates.js";
 import { COMMAND, resolveAcpHelpText } from "./commands-acp/shared.js";
+import { matchSlashCommandToken, splitCommandAction } from "./commands-slash-parse.js";
 import type {
   CommandHandler,
   CommandHandlerResult,
@@ -16,6 +11,8 @@ import type {
 type AcpActionHandler = (
   params: HandleCommandsParams,
   tokens: string[],
+  // The argument text after the action, with line breaks and spacing intact.
+  text: string,
 ) => Promise<CommandHandlerResult> | CommandHandlerResult;
 
 const ACP_ACTION_LOADERS: Readonly<Record<string, () => Promise<AcpActionHandler>>> = {
@@ -42,7 +39,7 @@ const ACP_ACTION_LOADERS: Readonly<Record<string, () => Promise<AcpActionHandler
 const ACP_PUBLIC_ACTIONS = new Set(["doctor", "install", "sessions"]);
 
 export const handleAcpCommand: CommandHandler = async (params, _allowTextCommands) => {
-  const rest = matchCommandPrefix(params.command.commandBodyNormalized, COMMAND);
+  const rest = matchSlashCommandToken(params.command.commandBodyNormalized, COMMAND);
   if (rest === null) {
     return null;
   }
@@ -52,8 +49,7 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
     return { shouldContinue: false };
   }
 
-  const tokens = rest.split(/\s+/).filter(Boolean);
-  const action = normalizeOptionalLowercaseString(tokens[0]) ?? "";
+  const { action, args } = splitCommandAction(rest);
   const loadHandler = Object.hasOwn(ACP_ACTION_LOADERS, action)
     ? ACP_ACTION_LOADERS[action]
     : undefined;
@@ -61,7 +57,6 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
     return commandReply(resolveAcpHelpText());
   }
 
-  tokens.shift();
   if (!ACP_PUBLIC_ACTIONS.has(action)) {
     const scopeBlock = requireGatewayClientScope(params, {
       label: "/acp",
@@ -80,5 +75,5 @@ export const handleAcpCommand: CommandHandler = async (params, _allowTextCommand
   }
 
   const handler = await loadHandler();
-  return await handler(params, tokens);
+  return await handler(params, args.split(/\s+/).filter(Boolean), args);
 };

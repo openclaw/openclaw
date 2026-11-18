@@ -25,7 +25,7 @@ export async function prepareMissingRegistrationFixture() {
     providerStream.end();
   });
   streamMocks.streamSimple.mockImplementation(() => providerStream);
-  const publish = vi.spyOn(embeddedRuns, "setActiveEmbeddedRun").mockImplementation(() => {});
+  const publish = vi.spyOn(embeddedRuns, "attachActiveEmbeddedRun").mockImplementation(() => {});
   const assertions = vi.fn(async () => {});
   const prepared = await prepareParkedNativeTask(
     assertions,

@@ -45,11 +45,7 @@ export async function migrateAgentsApiBinding(
     ...(mcpTools.length ? [mcpTools] : []),
   ];
   const fingerprint = createHash("sha256").update(JSON.stringify(identity)).digest("hex");
-  if (
-    binding.authFingerprint !== fingerprint ||
-    !webSearchEnabled ||
-    (environment.type === "self_hosted" && config.executorController)
-  ) {
+  if (binding.authFingerprint !== fingerprint || !webSearchEnabled) {
     // A digest cannot separate changed credentials from changed configuration.
     // Session retrieval is not equivalent evidence: MCP responses omit secrets,
     // and effective environment defaults do not recover the authored identity.
@@ -63,14 +59,11 @@ export async function migrateAgentsApiBinding(
     const signal = params.abortSignal
       ? AbortSignal.any([params.abortSignal, AbortSignal.timeout(30_000)])
       : AbortSignal.timeout(30_000);
-    const session = await new AgentsApiClient(
-      params.resolvedApiKey!,
-      assertMigrationCurrent,
-    ).session(binding.sessionId, signal);
+    await new AgentsApiClient(params.resolvedApiKey!, assertMigrationCurrent).session(
+      binding.sessionId,
+      signal,
+    );
     assertMigrationCurrent();
-    if (session.id !== binding.sessionId) {
-      throw new Error("Agents API returned a different session during legacy migration");
-    }
   } catch (error) {
     throw resolveAgentsApiSessionAccessError(error, binding.sessionId);
   }

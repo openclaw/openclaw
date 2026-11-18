@@ -11,7 +11,6 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
-import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
@@ -201,14 +200,11 @@ export function resolveModelCandidateChain(
   const { cacheKey, manifestPlugins } = resolveFallbackCandidateContext(params);
   const cached = cacheKey ? fallbackCandidateCache.get(cacheKey) : undefined;
   if (cached) {
-    return cached.map((candidate) => Object.assign({}, candidate));
+    return cached;
   }
   const candidates = resolveFallbackCandidatesUncached({ ...params, manifestPlugins });
   if (cacheKey) {
-    fallbackCandidateCache.set(
-      cacheKey,
-      candidates.map((candidate) => Object.assign({}, candidate)),
-    );
+    fallbackCandidateCache.set(cacheKey, candidates);
     pruneMapToMaxSize(fallbackCandidateCache, MAX_FALLBACK_CANDIDATE_CACHE_ENTRIES);
   }
   return candidates;
@@ -242,18 +238,11 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     allowWorkspaceScopedSnapshot: true,
     requireDefaultDiscoveryContext: params.cfg === undefined,
   });
-  if (
-    isPluginProvidersLoadInFlight({
-      config: params.cfg,
-      workspaceDir,
-      env,
-      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
-      activate: false,
-    })
-  ) {
+  const registryState = getPluginRegistryState();
+  // register() can add provider hooks between lookups in the same growing registry.
+  if (registryState?.registrationContext) {
     return { cacheKey: null, manifestPlugins: providerLoadMetadata };
   }
-  const registryState = getPluginRegistryState();
   const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
   const agentConfig =
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
@@ -298,12 +287,8 @@ function resolveFallbackCandidateModelProviderCacheParts(cfg: OpenClawConfig | u
   }
   return Object.entries(providers).map(([providerId, providerConfig]) => ({
     providerId,
-    api: typeof providerConfig?.api === "string" ? providerConfig.api : undefined,
-    models: Array.isArray(providerConfig?.models)
-      ? providerConfig.models
-          .map((entry) => (typeof entry?.id === "string" ? entry.id : undefined))
-          .filter((id): id is string => id !== undefined)
-      : [],
+    api: providerConfig.api,
+    models: providerConfig.models?.map((entry) => entry.id) ?? [],
   }));
 }
 

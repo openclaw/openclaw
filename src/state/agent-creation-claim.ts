@@ -1,8 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type {
   OpenClawAgentDatabase,

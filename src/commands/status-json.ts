@@ -1,4 +1,3 @@
-// Thin `openclaw status --json` wrapper.
 // Command wiring lives here; scan/payload behavior lives in the shared JSON command runner.
 
 import type { RuntimeEnv } from "../runtime.js";

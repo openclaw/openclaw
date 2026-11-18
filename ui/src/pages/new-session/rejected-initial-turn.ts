@@ -4,7 +4,7 @@ import { outboxStorageScope } from "../../lib/chat/outbox-payload-store.runtime.
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { admitStoredChatComposerQueueItem } from "../chat/composer-persistence.ts";
+import { admitStoredChatComposerQueueItemResult } from "../chat/composer-queue-persistence.ts";
 import { prepareInitialTurnHandoff } from "../chat/initial-turn-handoff.ts";
 
 /** Returns true when attachment payload ownership moved to the volatile handoff. */
@@ -51,7 +51,8 @@ export function retainRejectedInitialTurn(options: {
     scope: { sessionKey: rejectedItem.sessionKey, agentId: rejectedItem.agentId },
     awaitingDefaults: false,
   };
-  const persisted = admitStoredChatComposerQueueItem(host, admission, ownedItem);
+  const persisted =
+    admitStoredChatComposerQueueItemResult(host, admission, ownedItem) === "admitted";
   if (!persisted || options.retryAfter) {
     // The pane owns delivery, including volatile payloads that cannot fit in storage.
     prepareInitialTurnHandoff(

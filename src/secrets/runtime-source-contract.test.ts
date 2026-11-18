@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createProviderConfigFixture as configWithRef } from "../config/runtime-snapshot.test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   collectSecretStoreRefKeysInSnapshot,
@@ -51,18 +52,6 @@ describe("secrets runtime source contract", () => {
   });
 
   it("includes env shorthand SecretRefs in the reload contract", () => {
-    const configWithRef = (apiKey: string): OpenClawConfig => ({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey,
-            models: [],
-          },
-        },
-      },
-    });
-
     expect(
       hasSameSecretReloadContract(
         configWithRef("$OPENAI_API_KEY"),

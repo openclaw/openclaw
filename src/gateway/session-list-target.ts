@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -6,6 +7,7 @@ import {
   isSubagentSessionRow,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
+import { isGitHubPublicationTaskSession } from "./session-classification.js";
 import type { materializeSessionRow } from "./session-utils-row.js";
 
 export function readSessionListSelectionFacts(
@@ -16,7 +18,8 @@ export function readSessionListSelectionFacts(
     spawnedBy?: string;
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
-    createdSurface?: "plugin-dock";
+    createdSurface?: SessionEntry["createdSurface"];
+    parentSessionKey?: string;
   } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
 ) {
   const parsed = parseAgentSessionKey(key);
@@ -29,10 +32,15 @@ export function readSessionListSelectionFacts(
       key,
       createdActor: entry?.createdActor,
       createdVia: entry?.createdVia,
+      createdSurface: entry?.createdSurface,
       label: entry?.label,
       displayName: entry?.displayName,
       subject: entry?.subject,
-      classification: entry?.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
+      classification: entry?.heartbeatIsolatedBaseSessionKey
+        ? "heartbeat"
+        : isGitHubPublicationTaskSession(key, entry)
+          ? "github-publication"
+          : undefined,
     }),
     isSubagent: isSubagentSessionRow(key, entry),
     isPhantom:
@@ -45,8 +53,10 @@ export function readSessionListSelectionFacts(
 export type SessionListTargetLookup = (key: string) =>
   | {
       agentId: string;
+      entry: SessionEntry;
       selection: ReturnType<typeof readSessionListSelectionFacts>;
       storeKey?: string;
+      hasBoard?: boolean;
     }
   | undefined;
 

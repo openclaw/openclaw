@@ -16,6 +16,9 @@ ChatGPT (SIWC) cannot authorize this tool. Codex OAuth here means an OpenClaw
 model auth profile; signing in only to a native Codex user home does not supply
 `image_generate` with a credential.
 
+Direct Images API generation and editing preserve provider-reported token usage
+in result metadata, including text/image breakdowns and zero-valued counters.
+
 | Capability                | OpenAI API key                     | Codex OAuth                          |
 | ------------------------- | ---------------------------------- | ------------------------------------ |
 | Model ref                 | `openai/gpt-image-2`               | `openai/gpt-image-2`                 |
@@ -48,10 +51,17 @@ as explicit model overrides. Use `openai/gpt-image-1.5` for
 transparent-background PNG/WebP output; the current `gpt-image-2` API rejects
 `background: "transparent"`.
 
-### GPT Image 2.5
+<a id="gpt-image-2.5" />
 
-Select `openai/gpt-image-2.5-flare` or `openai/gpt-image-2.5-sunburst` explicitly.
-Both support generation and edits through the direct Images API.
+### GPT Image 2.5 and 2.6
+
+Select one of these models explicitly:
+
+- `openai/gpt-image-2.6-sunburst`: detailed work such as dense text, complex layouts, and consistent multi-step edits.
+- `openai/gpt-image-2.6-flare`: fast iteration.
+- `openai/gpt-image-2.5-sunburst` and `openai/gpt-image-2.5-flare`.
+
+All four support generation and edits through the direct Images API.
 The default remains `openai/gpt-image-2`.
 
 Export `OPENAI_API_KEY` and select API-key authentication:
@@ -72,20 +82,20 @@ Export `OPENAI_API_KEY` and select API-key authentication:
 
 This explicit selection matters when an OpenAI OAuth profile also exists.
 Exporting the environment variable alone does not override that profile.
-GPT Image 2.5 subscription access is not established by this API-key setup.
+GPT Image 2.5 and 2.6 subscription access is not established by this API-key setup.
 
-Both variants accept `low`, `medium`, `high`, `xhigh`, `max`, or `auto` quality.
+All four models accept `low`, `medium`, `high`, `xhigh`, `max`, or `auto` quality.
 Use PNG or WebP for transparent backgrounds. Edits accept up to 5 reference
 images through OpenClaw.
 
 ```bash
 openclaw infer image generate \
-  --model openai/gpt-image-2.5-flare \
+  --model openai/gpt-image-2.6-flare \
   --prompt "A simple red circle sticker on a transparent background" \
   --quality low --output-format webp --background transparent --json
 
 openclaw infer image edit \
-  --model openai/gpt-image-2.5-sunburst \
+  --model openai/gpt-image-2.6-sunburst \
   --file /path/to/reference.png \
   --prompt "Keep the shape and change the color to blue" \
   --quality low --size auto --json
@@ -95,7 +105,17 @@ openclaw infer image edit \
 with no edge above 3840 pixels and total pixels between 655,360 and 8,294,400.
 The aspect ratio must be between 1:3 and 3:1.
 
+OpenClaw does not yet send the GPT Image 2.6 `complexity` field, markup-guided
+edits, SVG output, or animated GIF output. OpenAI applies its `complexity`
+default (`high`).
+
 ### Other Image Models
+
+OpenClaw maps size and aspect-ratio hints to the selected model's supported
+dimensions. GPT Image 1.x uses `1024x1024`, `1536x1024`, or `1024x1536`.
+Explicit `dall-e-2` and `dall-e-3` overrides use their legacy size limits;
+OpenAI has retired these models, so this does not restore public API access.
+Custom deployment names retain their endpoint's geometry behavior.
 
 For a transparent-background request, call `image_generate` with
 `model: "openai/gpt-image-1.5"`, `outputFormat: "png"` or `"webp"`, and

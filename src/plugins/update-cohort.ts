@@ -5,6 +5,7 @@ import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
   attachPluginInstallOwnerMigrations,
+  copyPluginInstallTransactionRequest,
   resolvePluginInstallOwnerMigrations,
 } from "./install-transaction.js";
 import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
@@ -22,6 +23,7 @@ import {
 import { resolveOfficialPluginCohortNpmSpecs } from "./plugin-version-drift.js";
 import type { PluginChannelSyncResult } from "./update-channel.js";
 import {
+  createOperatorManagedPluginUpdateOutcome,
   isPluginInstallRecordUpdateSource,
   type PluginUpdateIntegrityDriftParams,
   type PluginUpdateLogger,
@@ -92,44 +94,32 @@ async function convergePluginReleaseCohortWithLease(
       if (resolved.value.kind !== "operator-managed") {
         continue;
       }
-      const { source, rootDir, shadowedInstallOwner, shadowedInstallRecord } = resolved.value;
+      const { shadowedInstallOwner } = resolved.value;
       operatorManagedIds.add(plugin.pluginId);
       if (shadowedInstallOwner) {
         operatorManagedIds.add(shadowedInstallOwner);
       }
-      const shadowed = shadowedInstallRecord
-        ? ` It shadows the ${shadowedInstallRecord.source} install ${shadowedInstallRecord.spec ?? plugin.pluginId}${shadowedInstallRecord.installPath ? ` at ${shadowedInstallRecord.installPath}` : ""}.`
-        : "";
-      const guidance = `This copy was not updated; verify it against ${params.coreVersion ?? "the updated OpenClaw version"} or remove it from plugins.load.paths.`;
-      const message = `Plugin "${plugin.pluginId}" is operator-managed by plugins.load.paths. ${guidance} Source: ${rootDir}.${shadowed}`;
-      operatorManaged.push({
-        pluginId: plugin.pluginId,
-        status: "skipped",
-        code: "plugin-operator-managed",
-        source,
-        rootDir,
-        shadowedInstallOwner,
-        shadowedInstallRecord,
-        message,
-        guidance: [guidance],
-      });
-      params.logger?.warn?.(message);
+      const outcome = createOperatorManagedPluginUpdateOutcome(resolved.value, params.coreVersion);
+      operatorManaged.push(outcome);
+      params.logger?.warn?.(outcome.message);
     }
   }
-  const sync = await syncPluginsForUpdateChannel({
-    config: params.config,
-    channel: params.channel,
-    timeoutMs: params.timeoutMs,
-    workTimeoutMs: params.workTimeoutMs,
-    coreVersion: params.coreVersion,
-    skipIds: operatorManagedIds,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    externalizedBundledPluginBridges: params.externalizedBundledPluginBridges,
-    logger: params.logger,
-    onCapabilityConsent: params.onCapabilityConsent,
-    beforePersistentEffect: params.beforePersistentEffect,
-  });
+  const sync = await syncPluginsForUpdateChannel(
+    copyPluginInstallTransactionRequest(params, {
+      config: params.config,
+      channel: params.channel,
+      timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
+      coreVersion: params.coreVersion,
+      skipIds: operatorManagedIds,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      externalizedBundledPluginBridges: params.externalizedBundledPluginBridges,
+      logger: params.logger,
+      onCapabilityConsent: params.onCapabilityConsent,
+      beforePersistentEffect: params.beforePersistentEffect,
+    }),
+  );
   params.beforePersistentEffect?.();
   let config = sync.config;
   const npmInstallSpecOverrides = params.coreVersion
@@ -179,23 +169,25 @@ async function convergePluginReleaseCohortWithLease(
   const updateInstalled = async (
     selection: Pick<Parameters<typeof updateNpmInstalledPlugins>[0], "pluginIds" | "skipIds">,
   ) => {
-    const result = await updateNpmInstalledPlugins({
-      config,
-      npmInstallSpecOverrides,
-      ...selection,
-      timeoutMs: params.timeoutMs,
-      workTimeoutMs: params.workTimeoutMs,
-      updateChannel: params.channel,
-      coreVersion: params.coreVersion,
-      versionBoundPluginIds: params.versionBoundPluginIds,
-      skipDisabledPlugins: true,
-      syncOfficialPluginInstalls: true,
-      retainOnUnavailable: true,
-      logger: params.logger,
-      onIntegrityDrift: params.onIntegrityDrift,
-      onCapabilityConsent: params.onCapabilityConsent,
-      beforePersistentEffect: params.beforePersistentEffect,
-    });
+    const result = await updateNpmInstalledPlugins(
+      copyPluginInstallTransactionRequest(params, {
+        config,
+        npmInstallSpecOverrides,
+        ...selection,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
+        updateChannel: params.channel,
+        coreVersion: params.coreVersion,
+        versionBoundPluginIds: params.versionBoundPluginIds,
+        skipDisabledPlugins: true,
+        syncOfficialPluginInstalls: true,
+        retainOnUnavailable: true,
+        onIntegrityDrift: params.onIntegrityDrift,
+        logger: params.logger,
+        onCapabilityConsent: params.onCapabilityConsent,
+        beforePersistentEffect: params.beforePersistentEffect,
+      }),
+    );
     params.beforePersistentEffect?.();
     config = result.config;
     changed ||= result.changed;

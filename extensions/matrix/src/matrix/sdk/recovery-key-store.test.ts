@@ -1,6 +1,6 @@
-// Matrix tests cover recovery key store plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { createClient } from "matrix-js-sdk";
 import type { CryptoCallbacks } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { encodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
@@ -22,16 +22,53 @@ import { LogService } from "./logger.js";
 import { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
 import type { MatrixCryptoBootstrapApi, MatrixSecretStorageStatus } from "./types.js";
 
+const stores: MatrixRecoveryKeyStore[] = [];
+const releases: (() => void)[] = [];
+const pending: Promise<unknown>[] = [];
+const clients: (() => void)[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    releases.splice(0).forEach((release) => release());
+    await Promise.all(pending.splice(0));
+    await Promise.all(stores.splice(0).map((store) => store.close()));
+    clients.splice(0).forEach((stop) => stop());
     await closeOpenClawStateDatabaseAsync();
     cleanup();
   }),
 );
 
 function createTempRecoveryKeyPath(): string {
-  const dir = tempDirs.make("matrix-recovery-key-store-");
-  return path.join(dir, "recovery-key.json");
+  return path.join(tempDirs.make("matrix-recovery-key-store-"), "recovery-key.json");
+}
+
+function createStore(
+  runtime?: MatrixSnapshotStateRuntime,
+  recoveryKeyPath = createTempRecoveryKeyPath(),
+) {
+  const store = new MatrixRecoveryKeyStore(recoveryKeyPath, runtime);
+  stores.push(store);
+  return { recoveryKeyPath, store, callbacks: store.buildCryptoCallbacks() };
+}
+
+function createReleaseGate() {
+  const gate = createDeferred<void>();
+  releases.push(() => gate.resolve());
+  return gate;
+}
+
+function readKey(store: MatrixRecoveryKeyStore, ...keyIds: string[]) {
+  return store.buildCryptoCallbacks().getSecretStorageKey(
+    {
+      keys: Object.fromEntries(keyIds.map((keyId) => [keyId, {}])),
+    },
+    "m.cross_signing.master",
+  );
+}
+
+function encodedKey(start: number) {
+  const bytes = Array.from({ length: 32 }, (_, i) => i + start);
+  const encoded = expectDefined(encodeRecoveryKey(new Uint8Array(bytes)), "synthetic key");
+  return { bytes, encoded };
 }
 
 async function writeStoredRecoveryKey(
@@ -53,17 +90,12 @@ async function writeStoredRecoveryKey(
   });
 }
 
-function createGeneratedRecoveryKey(params: {
-  keyId: string;
-  name: string;
-  bytes: number[];
-  encodedPrivateKey: string;
-}) {
+function createGeneratedRecoveryKey(keyId: string, bytes: number[], encodedPrivateKey: string) {
   return {
-    keyId: params.keyId,
-    keyInfo: { name: params.name },
-    privateKey: new Uint8Array(params.bytes),
-    encodedPrivateKey: params.encodedPrivateKey,
+    keyId,
+    keyInfo: { name: keyId },
+    privateKey: new Uint8Array(bytes),
+    encodedPrivateKey,
   };
 }
 
@@ -83,102 +115,63 @@ function createBootstrapSecretStorageMock(errorMessage?: string) {
 }
 
 function createRecoveryKeyCrypto(params: {
-  bootstrapSecretStorage: MatrixCryptoBootstrapApi["bootstrapSecretStorage"];
-  createRecoveryKeyFromPassphrase: MatrixCryptoBootstrapApi["createRecoveryKeyFromPassphrase"];
+  bootstrapSecretStorage?: MatrixCryptoBootstrapApi["bootstrapSecretStorage"];
+  createRecoveryKeyFromPassphrase?: MatrixCryptoBootstrapApi["createRecoveryKeyFromPassphrase"];
   status: MatrixSecretStorageStatus;
 }): MatrixCryptoBootstrapApi {
   return createMatrixCryptoApi({
-    bootstrapSecretStorage: params.bootstrapSecretStorage,
-    createRecoveryKeyFromPassphrase: params.createRecoveryKeyFromPassphrase,
+    bootstrapSecretStorage: params.bootstrapSecretStorage ?? vi.fn(async () => {}),
+    createRecoveryKeyFromPassphrase:
+      params.createRecoveryKeyFromPassphrase ??
+      vi.fn(async () => {
+        throw new Error("should not be called");
+      }),
     getSecretStorageStatus: vi.fn(async () => params.status),
   });
 }
 
-function bootstrapSecretStorageCallArg(
-  bootstrapSecretStorage: ReturnType<typeof vi.fn>,
-  index: number,
-) {
-  const call = bootstrapSecretStorage.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected bootstrapSecretStorage call ${index}`);
-  }
-  return call[0] as { setupNewSecretStorage?: boolean } | undefined;
-}
-
-async function expectRecoveryKeySummary(
-  store: MatrixRecoveryKeyStore,
-  expected: { keyId: string; encodedPrivateKey?: string },
-) {
-  const summary = await store.getRecoveryKeySummary();
-  if (!summary) {
-    throw new Error("expected recovery key summary");
-  }
-  expect(summary.keyId).toBe(expected.keyId);
-  if (expected.encodedPrivateKey !== undefined) {
-    expect(summary.encodedPrivateKey).toBe(expected.encodedPrivateKey);
-  }
-}
+const readRecoveryState = (recoveryKeyPath: string) =>
+  readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state);
 
 async function readStoredRecoveryKey(recoveryKeyPath: string) {
-  const state = await readMatrixRecoveryKeyStateForPathAsync(
-    recoveryKeyPath,
-    getMatrixRuntime().state,
-  );
-  if (!state) {
-    throw new Error("expected stored recovery key state");
-  }
-  return state;
+  return expectDefined(await readRecoveryState(recoveryKeyPath), "stored recovery key state");
 }
 
-async function runSecretStorageBootstrapScenario(params: {
-  generated: ReturnType<typeof createGeneratedRecoveryKey>;
-  status: MatrixSecretStorageStatus;
-  allowSecretStorageRecreateWithoutRecoveryKey?: boolean;
-  firstBootstrapError?: string;
-}) {
-  const recoveryKeyPath = createTempRecoveryKeyPath();
-  const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-  const createRecoveryKeyFromPassphrase = vi.fn(async () => params.generated);
-  const bootstrapSecretStorage = createBootstrapSecretStorageMock(params.firstBootstrapError);
-  const crypto = createRecoveryKeyCrypto({
-    bootstrapSecretStorage,
-    createRecoveryKeyFromPassphrase,
-    status: params.status,
-  });
-
-  await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
-    allowSecretStorageRecreateWithoutRecoveryKey:
-      params.allowSecretStorageRecreateWithoutRecoveryKey ?? false,
-  });
-
+function interceptRecoveryStore(hooks: {
+  beforeRead?: () => Promise<void>;
+  afterRead?: () => Promise<void>;
+  beforeWrite?: () => Promise<void>;
+}): MatrixSnapshotStateRuntime {
+  const original = getMatrixRuntime().state.openKeyedStoreV2;
   return {
-    store,
-    createRecoveryKeyFromPassphrase,
-    bootstrapSecretStorage,
+    openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
+      const store = original<T>(options);
+      return {
+        ...store,
+        async lookup(key: string) {
+          await hooks.beforeRead?.();
+          const value = await store.lookup(key);
+          await hooks.afterRead?.();
+          return value;
+        },
+        async compareAndApply(...args: Parameters<typeof store.compareAndApply>) {
+          await hooks.beforeWrite?.();
+          return store.compareAndApply(...args);
+        },
+      };
+    },
   };
 }
 
 function holdRecoveryWrites() {
   const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const original = getMatrixRuntime().state.openKeyedStoreV2;
-  const runtime: MatrixSnapshotStateRuntime = {
-    openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
-      const store = original<T>(options);
-      const compareAndApply = store.compareAndApply;
-      if (!compareAndApply) {
-        throw new Error("expected real SQLite comparison support");
-      }
-      return {
-        ...store,
-        compareAndApply: async (...args: Parameters<typeof compareAndApply>) => {
-          entered.resolve();
-          await release.promise;
-          return compareAndApply(...args);
-        },
-      };
+  const release = createReleaseGate();
+  const runtime = interceptRecoveryStore({
+    beforeWrite: async () => {
+      entered.resolve();
+      await release.promise;
     },
-  };
+  });
   return { entered, release, runtime };
 }
 
@@ -192,22 +185,15 @@ describe("MatrixRecoveryKeyStore", () => {
   it.each(["cached", "staged"] as const)(
     "joins the cache write before real SDK cross-signing encryption with a %s key",
     async (source) => {
-      const recoveryKeyPath = createTempRecoveryKeyPath();
       const held = holdRecoveryWrites();
-      const store = new MatrixRecoveryKeyStore(recoveryKeyPath, held.runtime);
+      const { recoveryKeyPath, store, callbacks } = createStore(held.runtime);
       const privateKey = new Uint8Array(32).fill(7);
-      const encodedPrivateKey = encodeRecoveryKey(privateKey);
-      if (!encodedPrivateKey) {
-        throw new Error("expected encoded synthetic key");
-      }
+      const encodedPrivateKey = expectDefined(encodeRecoveryKey(privateKey), "synthetic key");
       await store.drainPendingPersistence();
       if (source === "staged") {
         await store.stageEncodedRecoveryKey({ encodedPrivateKey });
-        expect(
-          await readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state),
-        ).toBeNull();
+        expect(await readRecoveryState(recoveryKeyPath)).toBeNull();
       }
-      const callbacks = store.buildCryptoCallbacks();
       const sdkCallbacks: CryptoCallbacks = {
         async getSecretStorageKey({ keys }, name) {
           const result = await callbacks.getSecretStorageKey?.(
@@ -251,7 +237,7 @@ describe("MatrixRecoveryKeyStore", () => {
             : Response.json({ errcode: "M_NOT_FOUND", error: "fixture missing" }, { status: 404 });
         },
       });
-      // The actual SDK bootstrap is driven with synthetic local crypto dependencies.
+      clients.push(() => sdk.stopClient());
       const receiver = Object.assign(Object.create(RustCrypto.prototype) as RustCrypto, {
         logger: { info() {} },
         secretStorage: sdk.secretStorage,
@@ -278,37 +264,29 @@ describe("MatrixRecoveryKeyStore", () => {
         ),
       });
       const bootstrap = store.bootstrapSecretStorageWithRecoveryKey(crypto);
-      try {
-        await Promise.race([
-          held.entered.promise,
-          bootstrap.then(() => {
-            throw new Error("bootstrap completed before persistence admission");
-          }),
-        ]);
-        expect(encryptedWrites).toEqual([]);
-        held.release.resolve();
-        await bootstrap;
-        expect(encryptedWrites).toEqual([
-          "m.cross_signing.master",
-          "m.cross_signing.user_signing",
-          "m.cross_signing.self_signing",
-        ]);
-      } finally {
-        held.release.resolve();
-        await bootstrap.catch(() => {});
-        await store.close();
-        sdk.stopClient();
-      }
+      pending.push(Promise.allSettled([bootstrap]));
+      await Promise.race([
+        held.entered.promise,
+        bootstrap.then(() => {
+          throw new Error("bootstrap completed before persistence admission");
+        }),
+      ]);
+      expect(encryptedWrites).toEqual([]);
+      held.release.resolve();
+      await bootstrap;
+      expect(encryptedWrites).toEqual([
+        "m.cross_signing.master",
+        "m.cross_signing.user_signing",
+        "m.cross_signing.self_signing",
+      ]);
     },
   );
 
   it.each([false, true])(
     "settles a no-getter bootstrap before returning or throwing (failure=%s)",
     async (fail) => {
-      const recoveryKeyPath = createTempRecoveryKeyPath();
       const held = holdRecoveryWrites();
-      const store = new MatrixRecoveryKeyStore(recoveryKeyPath, held.runtime);
-      const callbacks = store.buildCryptoCallbacks();
+      const { recoveryKeyPath, store, callbacks } = createStore(held.runtime);
       const error = new Error("synthetic bootstrap failure");
       const crypto = createRecoveryKeyCrypto({
         status: { ready: true, defaultKeyId: "fixture" },
@@ -321,161 +299,116 @@ describe("MatrixRecoveryKeyStore", () => {
         }),
       });
       let settled = false;
-      const bootstrap = store.bootstrapSecretStorageWithRecoveryKey(crypto).then(
-        () => {
+      const bootstrap = store
+        .bootstrapSecretStorageWithRecoveryKey(crypto)
+        .then(
+          () => null,
+          (cause: unknown) => cause,
+        )
+        .finally(() => {
           settled = true;
-          return null;
-        },
-        (cause: unknown) => {
-          settled = true;
-          return cause;
-        },
-      );
-      try {
-        await held.entered.promise;
-        expect(settled).toBe(false);
-        held.release.resolve();
-        expect(await bootstrap).toBe(fail ? error : null);
-        expect((await readStoredRecoveryKey(recoveryKeyPath)).keyId).toBe("fixture");
-      } finally {
-        held.release.resolve();
-        await bootstrap;
-        await store.close();
-      }
+        });
+      pending.push(Promise.allSettled([bootstrap]));
+      await held.entered.promise;
+      expect(settled).toBe(false);
+      held.release.resolve();
+      expect(await bootstrap).toBe(fail ? error : null);
+      expect((await readStoredRecoveryKey(recoveryKeyPath)).keyId).toBe("fixture");
     },
   );
 
   it("preserves a concurrent durable encoding and FIFO callback writes through the worker", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
     const held = holdRecoveryWrites();
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath, held.runtime);
+    const { recoveryKeyPath, store, callbacks } = createStore(held.runtime);
     await store.drainPendingPersistence();
-    const callbacks = store.buildCryptoCallbacks();
     callbacks.cacheSecretStorageKey?.("first", {}, new Uint8Array([1]));
     callbacks.cacheSecretStorageKey?.("second", {}, new Uint8Array([2]));
-    try {
-      await held.entered.promise;
-      await writeMatrixRecoveryKeyStateForPathAsync({
-        recoveryKeyPath,
-        stateRuntime: getMatrixRuntime().state,
-        payload: {
-          version: 1,
-          createdAt: "2026-01-01T00:00:00Z",
-          keyId: "concurrent",
-          privateKeyBase64: "Aw==",
-          encodedPrivateKey: "fixture-concurrent-encoding",
+    await held.entered.promise;
+    await writeStoredRecoveryKey(recoveryKeyPath, "concurrent", [3], "fixture-concurrent-encoding");
+    held.release.resolve();
+    await store.drainPendingPersistence();
+    expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
+      keyId: "second",
+      privateKeyBase64: "Ag==",
+      encodedPrivateKey: "fixture-concurrent-encoding",
+    });
+  });
+
+  it("does not recreate secret storage when the local recovery key cannot be read", async () => {
+    const failure = new Error("synthetic recovery-key read failure");
+    const { store } = createStore(
+      interceptRecoveryStore({
+        beforeRead: async () => {
+          throw failure;
         },
-      });
-      held.release.resolve();
-      await store.drainPendingPersistence();
-      expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
-        keyId: "second",
-        privateKeyBase64: "Ag==",
-        encodedPrivateKey: "fixture-concurrent-encoding",
-      });
-    } finally {
-      held.release.resolve();
-      await store.close();
-    }
+      }),
+    );
+    const crypto = createRecoveryKeyCrypto({ status: { ready: false, defaultKeyId: "EXISTING" } });
+    await expect(store.bootstrapSecretStorageWithRecoveryKey(crypto)).rejects.toBe(failure);
+    expect(crypto.createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
+    expect(crypto.bootstrapSecretStorage).not.toHaveBeenCalled();
   });
 
   it("keeps failed writes best-effort and drains later writes on the worker store", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    const original = getMatrixRuntime().state.openKeyedStoreV2;
     const failure = new Error("synthetic persistence failure");
     let failNext = true;
     const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
-    const stateRuntime: MatrixSnapshotStateRuntime = {
-      openKeyedStoreV2: <T>(options: Parameters<typeof original>[0]) => {
-        const backing = original<T>(options);
-        return {
-          ...backing,
-          compareAndApply: async (...args: Parameters<typeof backing.compareAndApply>) => {
-            if (failNext) {
-              failNext = false;
-              throw failure;
-            }
-            return backing.compareAndApply(...args);
-          },
-        };
+    const runtime = interceptRecoveryStore({
+      beforeWrite: async () => {
+        if (failNext) {
+          failNext = false;
+          throw failure;
+        }
       },
-    };
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath, stateRuntime);
-    const callbacks = store.buildCryptoCallbacks();
-    try {
-      await store.drainPendingPersistence();
-      callbacks.cacheSecretStorageKey?.("failed", {}, new Uint8Array([1]));
-      await expect(
-        callbacks.getSecretStorageKey?.({ keys: { failed: {} } }, "fixture"),
-      ).resolves.toEqual(["failed", new Uint8Array([1])]);
-      expect(await store.getSecretStorageKeyCandidate("failed")).toBeNull();
-      expect(warn).toHaveBeenCalledWith(
-        "MatrixClientLite",
-        "Failed to persist recovery key:",
-        failure,
-      );
-      callbacks.cacheSecretStorageKey?.("saved", {}, new Uint8Array([2]));
-      await store.close();
-      expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
-        keyId: "saved",
-        privateKeyBase64: "Ag==",
-      });
-    } finally {
-      await store.close();
-    }
+    });
+    const { recoveryKeyPath, store, callbacks } = createStore(runtime);
+    await store.drainPendingPersistence();
+    callbacks.cacheSecretStorageKey?.("failed", {}, new Uint8Array([1]));
+    await expect(
+      callbacks.getSecretStorageKey?.({ keys: { failed: {} } }, "fixture"),
+    ).resolves.toEqual(["failed", new Uint8Array([1])]);
+    expect(await store.getSecretStorageKeyCandidate("failed")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      "MatrixClientLite",
+      "Failed to persist recovery key:",
+      failure,
+    );
+    callbacks.cacheSecretStorageKey?.("saved", {}, new Uint8Array([2]));
+    await store.close();
+    expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
+      keyId: "saved",
+      privateKeyBase64: "Ag==",
+    });
   });
 
   it.each(["SDK callback", "reset candidate"] as const)(
     "does not return a durable key after closure during a %s read",
     async (reader) => {
       const recoveryKeyPath = createTempRecoveryKeyPath();
-      const runtime = getMatrixRuntime().state;
-      await writeMatrixRecoveryKeyStateForPathAsync({
-        recoveryKeyPath,
-        stateRuntime: runtime,
-        payload: {
-          version: 1,
-          createdAt: "2026-01-01T00:00:00Z",
-          keyId: "fixture",
-          privateKeyBase64: "AQID",
+      await writeStoredRecoveryKey(recoveryKeyPath, "fixture", [1, 2, 3]);
+      const readCompleted = createDeferred<void>();
+      const releaseRead = createReleaseGate();
+      let delayRead = false;
+      const stateRuntime = interceptRecoveryStore({
+        afterRead: async () => {
+          if (delayRead) {
+            readCompleted.resolve();
+            await releaseRead.promise;
+          }
         },
       });
-      const readCompleted = createDeferred<void>();
-      const releaseRead = createDeferred<void>();
-      let delayRead = false;
-      const stateRuntime: MatrixSnapshotStateRuntime = {
-        openKeyedStoreV2: <T>(options: Parameters<typeof runtime.openKeyedStoreV2>[0]) => {
-          const backing = runtime.openKeyedStoreV2<T>(options);
-          return {
-            ...backing,
-            async lookup(key: string) {
-              const value = await backing.lookup(key);
-              if (delayRead) {
-                readCompleted.resolve();
-                await releaseRead.promise;
-              }
-              return value;
-            },
-          };
-        },
-      };
-      const store = new MatrixRecoveryKeyStore(recoveryKeyPath, stateRuntime);
+      const { store } = createStore(stateRuntime, recoveryKeyPath);
       await store.drainPendingPersistence();
       delayRead = true;
       const result =
         reader === "SDK callback"
           ? store.buildCryptoCallbacks().getSecretStorageKey?.({ keys: { fixture: {} } }, "fixture")
           : store.getSecretStorageKeyCandidate("fixture");
-      try {
-        await readCompleted.promise;
-        await store.close();
-        releaseRead.resolve();
-        await expect(result).resolves.toBeNull();
-      } finally {
-        releaseRead.resolve();
-        await result;
-        await store.close();
-      }
+      pending.push(Promise.allSettled([result]));
+      await readCompleted.promise;
+      await store.close();
+      releaseRead.resolve();
+      await expect(result).resolves.toBeNull();
     },
   );
 
@@ -483,24 +416,12 @@ describe("MatrixRecoveryKeyStore", () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
     await writeStoredRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
 
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+    const { store } = createStore(undefined, recoveryKeyPath);
     await store.drainPendingPersistence();
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
-    const callbacks = store.buildCryptoCallbacks();
     expect(await store.getSecretStorageKeyCandidate("SSSS")).toEqual(new Uint8Array([1, 2, 3, 4]));
-    const resolved = await callbacks.getSecretStorageKey?.(
-      { keys: { SSSS: { name: "test" } } },
-      "m.cross_signing.master",
-    );
-
-    expect(resolved?.[0]).toBe("SSSS");
-    expect(Array.from(resolved?.[1] ?? [])).toEqual([1, 2, 3, 4]);
-
-    const resolvedFromMultipleKeys = await callbacks.getSecretStorageKey?.(
-      { keys: { OLD: { name: "old" }, SSSS: { name: "active" } } },
-      "m.cross_signing.master",
-    );
-    expect(resolvedFromMultipleKeys?.[0]).toBe("SSSS");
+    expect(await readKey(store, "SSSS")).toEqual(["SSSS", new Uint8Array([1, 2, 3, 4])]);
+    expect((await readKey(store, "OLD", "SSSS"))?.[0]).toBe("SSSS");
   });
 
   it.each([false, true])(
@@ -510,10 +431,7 @@ describe("MatrixRecoveryKeyStore", () => {
       if (hasStoredKey) {
         await writeStoredRecoveryKey(recoveryKeyPath, "CURRENT", [4, 3, 2, 1]);
       }
-      const previousState = await readMatrixRecoveryKeyStateForPathAsync(
-        recoveryKeyPath,
-        getMatrixRuntime().state,
-      );
+      const previousState = await readRecoveryState(recoveryKeyPath);
       const legacyJson = JSON.stringify({
         version: 1,
         createdAt: "2026-03-12T00:00:00.000Z",
@@ -522,33 +440,23 @@ describe("MatrixRecoveryKeyStore", () => {
       });
       fs.writeFileSync(recoveryKeyPath, legacyJson, "utf8");
       const warn = vi.spyOn(LogService, "warn").mockImplementation(() => {});
-      const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-      const callbacks = store.buildCryptoCallbacks();
+      const { store, callbacks } = createStore(undefined, recoveryKeyPath);
       const remediation =
         'Install OpenClaw 2026.9.5, run "openclaw doctor --fix", and start the Matrix channel once to migrate it, then upgrade to latest.';
 
-      try {
-        await expect(store.getRecoveryKeySummary()).rejects.toThrow(remediation);
-        await expect(store.getSecretStorageKeyCandidate("SSSS")).rejects.toThrow(remediation);
-        await expect(
-          callbacks.getSecretStorageKey?.({ keys: { SSSS: {} } }, "m.cross_signing.master"),
-        ).rejects.toThrow(remediation);
-
-        callbacks.cacheSecretStorageKey?.("NEW", {}, new Uint8Array([9, 8, 7]));
-        await expect(store.drainPendingPersistence()).resolves.toBeUndefined();
-        expect(warn).toHaveBeenCalledWith(
-          "MatrixClientLite",
-          "Failed to persist recovery key:",
-          expect.objectContaining({ message: expect.stringContaining(remediation) }),
-        );
-        expect(
-          await readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state),
-        ).toEqual(previousState);
-        expect(fs.readFileSync(recoveryKeyPath, "utf8")).toBe(legacyJson);
-        expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(false);
-      } finally {
-        await store.close();
-      }
+      await expect(store.getRecoveryKeySummary()).rejects.toThrow(remediation);
+      await expect(store.getSecretStorageKeyCandidate("SSSS")).rejects.toThrow(remediation);
+      await expect(readKey(store, "SSSS")).rejects.toThrow(remediation);
+      callbacks.cacheSecretStorageKey?.("NEW", {}, new Uint8Array([9, 8, 7]));
+      await expect(store.drainPendingPersistence()).resolves.toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        "MatrixClientLite",
+        "Failed to persist recovery key:",
+        expect.objectContaining({ message: expect.stringContaining(remediation) }),
+      );
+      expect(await readRecoveryState(recoveryKeyPath)).toEqual(previousState);
+      expect(fs.readFileSync(recoveryKeyPath, "utf8")).toBe(legacyJson);
+      expect(fs.existsSync(`${recoveryKeyPath}.migrated`)).toBe(false);
     },
   );
 
@@ -558,25 +466,13 @@ describe("MatrixRecoveryKeyStore", () => {
     await writeStoredRecoveryKey(path.join(dir, "recovery-key.json"), "DEFAULT", [1, 2, 3, 4]);
     await writeStoredRecoveryKey(recoveryKeyPath, "CUSTOM", [4, 3, 2, 1]);
 
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const callbacks = store.buildCryptoCallbacks();
-    const resolved = await callbacks.getSecretStorageKey?.(
-      { keys: { CUSTOM: { name: "custom" } } },
-      "m.cross_signing.master",
-    );
-
-    expect(resolved?.[0]).toBe("CUSTOM");
-    expect(Array.from(resolved?.[1] ?? [])).toEqual([4, 3, 2, 1]);
-    expect(
-      await readMatrixRecoveryKeyStateForPathAsync(
-        path.join(dir, "recovery-key.json"),
-        getMatrixRuntime().state,
-      ),
-    ).toMatchObject({ keyId: "DEFAULT", privateKeyBase64: "AQIDBA==" });
-    expect(
-      (await readMatrixRecoveryKeyStateForPathAsync(recoveryKeyPath, getMatrixRuntime().state))
-        ?.keyId,
-    ).toBe("CUSTOM");
+    const { store } = createStore(undefined, recoveryKeyPath);
+    expect(await readKey(store, "CUSTOM")).toEqual(["CUSTOM", new Uint8Array([4, 3, 2, 1])]);
+    expect(await readRecoveryState(path.join(dir, "recovery-key.json"))).toMatchObject({
+      keyId: "DEFAULT",
+      privateKeyBase64: "AQIDBA==",
+    });
+    expect(await readRecoveryState(recoveryKeyPath)).toMatchObject({ keyId: "CUSTOM" });
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
   });
 
@@ -592,150 +488,110 @@ describe("MatrixRecoveryKeyStore", () => {
   it("rebinds stored recovery key to server default key id when it changes", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
     await writeStoredRecoveryKey(recoveryKeyPath, "OLD", [1, 2, 3, 4]);
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+    const { store } = createStore(undefined, recoveryKeyPath);
 
-    const bootstrapSecretStorage = vi.fn(async () => {});
-    const createRecoveryKeyFromPassphrase = vi.fn(async () => {
-      throw new Error("should not be called");
-    });
-    const crypto = createMatrixCryptoApi({
-      bootstrapSecretStorage,
-      createRecoveryKeyFromPassphrase,
-      getSecretStorageStatus: vi.fn(async () => ({ ready: true, defaultKeyId: "NEW" })),
-    });
+    const crypto = createRecoveryKeyCrypto({ status: { ready: true, defaultKeyId: "NEW" } });
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 
-    expect(createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
-    await expectRecoveryKeySummary(store, {
-      keyId: "NEW",
-    });
+    expect(crypto.createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
+    await expect(store.getRecoveryKeySummary()).resolves.toMatchObject({ keyId: "NEW" });
   });
 
   it("recreates secret storage during explicit bootstrap when the server key exists but no local recovery key is available", async () => {
-    const { store, createRecoveryKeyFromPassphrase, bootstrapSecretStorage } =
-      await runSecretStorageBootstrapScenario({
-        generated: createGeneratedRecoveryKey({
-          keyId: "REPAIRED",
-          name: "repaired",
-          bytes: [7, 7, 8, 9],
-          encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
-        }),
+    const { store } = createStore();
+    const createRecoveryKeyFromPassphrase = vi.fn(async () =>
+      createGeneratedRecoveryKey(
+        "REPAIRED",
+        [7, 7, 8, 9],
+        "encoded-repaired-key", // pragma: allowlist secret
+      ),
+    );
+    const bootstrapSecretStorage = createBootstrapSecretStorageMock(
+      "getSecretStorageKey callback returned falsey",
+    );
+    await store.bootstrapSecretStorageWithRecoveryKey(
+      createRecoveryKeyCrypto({
+        bootstrapSecretStorage,
+        createRecoveryKeyFromPassphrase,
         status: {
           ready: true,
           defaultKeyId: "LEGACY",
           secretStorageKeyValidityMap: { LEGACY: true },
         },
-        allowSecretStorageRecreateWithoutRecoveryKey: true,
-        firstBootstrapError: "getSecretStorageKey callback returned falsey",
-      });
+      }),
+      { allowSecretStorageRecreateWithoutRecoveryKey: true },
+    );
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledTimes(2);
-    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 1)?.setupNewSecretStorage).toBe(
-      true,
+    expect(bootstrapSecretStorage).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ setupNewSecretStorage: true }),
     );
-    await expectRecoveryKeySummary(store, {
+    await expect(store.getRecoveryKeySummary()).resolves.toMatchObject({
       keyId: "REPAIRED",
       encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
     });
   });
 
   it("stages a recovery key for secret storage without persisting it until commit", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    fs.rmSync(recoveryKeyPath, { force: true });
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const encoded = encodeRecoveryKey(
-      new Uint8Array(Array.from({ length: 32 }, (_, i) => (i + 11) % 255)),
-    );
+    const { recoveryKeyPath, store } = createStore();
+    const { encoded } = encodedKey(11);
     expect(encoded).toBeTypeOf("string");
 
     await store.stageEncodedRecoveryKey({
-      encodedPrivateKey: encoded as string,
+      encodedPrivateKey: encoded,
       keyId: "SSSSKEY",
     });
 
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
-    const callbacks = store.buildCryptoCallbacks();
-    const resolved = await callbacks.getSecretStorageKey?.(
-      { keys: { SSSSKEY: { name: "test" } } },
-      "m.cross_signing.master",
-    );
-    expect(resolved?.[0]).toBe("SSSSKEY");
+    expect((await readKey(store, "SSSSKEY"))?.[0]).toBe("SSSSKEY");
 
     await store.commitStagedRecoveryKey({ keyId: "SSSSKEY" });
 
-    const persisted = await readStoredRecoveryKey(recoveryKeyPath);
-    expect(persisted.keyId).toBe("SSSSKEY");
-    expect(persisted.encodedPrivateKey).toBe(encoded);
+    expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
+      keyId: "SSSSKEY",
+      encodedPrivateKey: encoded,
+    });
   });
 
   it("does not overwrite the stored recovery key while a staged key is only being validated", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    const storedEncoded = encodeRecoveryKey(
-      new Uint8Array(Array.from({ length: 32 }, (_, i) => (i + 1) % 255)),
-    );
-    await writeStoredRecoveryKey(
-      recoveryKeyPath,
-      "OLD",
-      Array.from({ length: 32 }, (_, i) => (i + 1) % 255),
-      storedEncoded,
-    );
+    const { bytes, encoded: storedEncoded } = encodedKey(1);
+    await writeStoredRecoveryKey(recoveryKeyPath, "OLD", bytes, storedEncoded);
 
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
-    const stagedEncoded = encodeRecoveryKey(
-      new Uint8Array(Array.from({ length: 32 }, (_, i) => (i + 101) % 255)),
-    );
+    const { store } = createStore(undefined, recoveryKeyPath);
+    const { encoded: stagedEncoded } = encodedKey(101);
     await store.stageEncodedRecoveryKey({
-      encodedPrivateKey: stagedEncoded as string,
+      encodedPrivateKey: stagedEncoded,
       keyId: "NEW",
     });
 
-    const crypto = createMatrixCryptoApi({
-      bootstrapSecretStorage: vi.fn(async () => {}),
-      createRecoveryKeyFromPassphrase: vi.fn(async () => {
-        throw new Error("should not be called");
-      }),
-      getSecretStorageStatus: vi.fn(async () => ({ ready: true, defaultKeyId: "NEW" })),
-    });
+    const crypto = createRecoveryKeyCrypto({ status: { ready: true, defaultKeyId: "NEW" } });
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 
     const persisted = await readStoredRecoveryKey(recoveryKeyPath);
-    expect(persisted.keyId).toBe("OLD");
-    expect(persisted.encodedPrivateKey).toBe(storedEncoded);
+    expect(persisted).toMatchObject({ keyId: "OLD", encodedPrivateKey: storedEncoded });
   });
 
   it("generates a fresh recovery key when secret storage is explicitly rotated", async () => {
     const recoveryKeyPath = createTempRecoveryKeyPath();
-    const oldEncoded = encodeRecoveryKey(
-      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
-    );
-    await writeStoredRecoveryKey(
-      recoveryKeyPath,
-      "OLD",
-      Array.from({ length: 32 }, (_, i) => i + 1),
-      oldEncoded,
-    );
+    const oldKey = encodedKey(1);
+    await writeStoredRecoveryKey(recoveryKeyPath, "OLD", oldKey.bytes, oldKey.encoded);
 
-    const freshEncoded = encodeRecoveryKey(
-      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 101)),
-    ) as string;
+    const freshKey = encodedKey(101);
     const bootstrapSecretStorage = createBootstrapSecretStorageMock();
     const createRecoveryKeyFromPassphrase = vi.fn(async () =>
-      createGeneratedRecoveryKey({
-        keyId: "NEW",
-        name: "Fresh key",
-        bytes: Array.from({ length: 32 }, (_, i) => i + 101),
-        encodedPrivateKey: freshEncoded,
-      }),
+      createGeneratedRecoveryKey("NEW", freshKey.bytes, freshKey.encoded),
     );
     const crypto = createRecoveryKeyCrypto({
       bootstrapSecretStorage,
       createRecoveryKeyFromPassphrase,
       status: { ready: true, defaultKeyId: "OLD" },
     });
-    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+    const { store } = createStore(undefined, recoveryKeyPath);
 
     await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
       forceNewRecoveryKey: true,
@@ -744,8 +600,7 @@ describe("MatrixRecoveryKeyStore", () => {
 
     const persisted = await readStoredRecoveryKey(recoveryKeyPath);
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(persisted.keyId).toBe("NEW");
-    expect(persisted.encodedPrivateKey).toBe(freshEncoded);
-    expect(persisted.encodedPrivateKey).not.toBe(oldEncoded);
+    expect(persisted).toMatchObject({ keyId: "NEW", encodedPrivateKey: freshKey.encoded });
+    expect(persisted.encodedPrivateKey).not.toBe(oldKey.encoded);
   });
 });

@@ -11,6 +11,7 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
+  type NodeRunnerInventoryDeclaration,
   type NodeWorkerHostDeclaration,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
@@ -64,6 +65,24 @@ export type NodeRunnerInventoryRecord = Omit<
   protocolFeatures: readonly string[];
   workerHost?: NodeWorkerHostDeclaration;
 };
+
+export function createNodeRunnerInventoryRecord(
+  node: NodeRunnerRegistrySession & { pairingIdentity: string },
+  clientId: NodeWorkerHostClientId,
+  declaration: NodeRunnerInventoryDeclaration,
+): NodeRunnerInventoryRecord {
+  const workerHost = "workerHost" in declaration ? declaration.workerHost : undefined;
+  return {
+    nodeId: node.nodeId,
+    connId: node.connId,
+    pairingIdentity: node.pairingIdentity,
+    ...(node.pairingGeneration ? { pairingGeneration: node.pairingGeneration } : {}),
+    clientId,
+    clientMode: "node",
+    protocolFeatures: [...declaration.protocolFeatures],
+    ...(workerHost ? { workerHost: structuredClone(workerHost) } : {}),
+  };
+}
 
 export type NodeRunnerStateChange = {
   inventoryChanged: boolean;
@@ -175,6 +194,7 @@ export function collectNodeRunnerCatalogState(params: {
   };
 }) {
   const sessionHostNodeIds = new Set<string>();
+  const deviceFolderNodeIds = new Set<string>();
   const issuesByNodeId = new Map<string, NodeRunnerInventoryIssue[]>();
   const workerSlotsByNodeId = new Map<string, NodeWorkerCapacitySnapshot>();
   const workerBundleByNodeId = new Map<string, NodeWorkerBundleStatus>();
@@ -187,6 +207,9 @@ export function collectNodeRunnerCatalogState(params: {
     const proof = resolveNodeWorkerSupervisorState(current, state.runnerInventoryByConn);
     if (proof && proof.pairingGeneration === node.pairingGeneration) {
       sessionHostNodeIds.add(node.nodeId);
+      if (proof.workerHost.deviceFolders === true) {
+        deviceFolderNodeIds.add(node.nodeId);
+      }
     }
     const issue =
       resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn) ??
@@ -197,14 +220,20 @@ export function collectNodeRunnerCatalogState(params: {
       issuesByNodeId.set(node.nodeId, [issue]);
     }
     if (proof) {
-      workerSlotsByNodeId.set(node.nodeId, { ...proof.workerHost.capacity });
+      workerSlotsByNodeId.set(node.nodeId, proof.workerHost.capacity);
     }
     const observation = state.bundleStatusByConn.get(node.connId);
     if (observation) {
-      workerBundleByNodeId.set(node.nodeId, structuredClone(observation.status));
+      workerBundleByNodeId.set(node.nodeId, observation.status);
     }
   }
-  return { sessionHostNodeIds, issuesByNodeId, workerSlotsByNodeId, workerBundleByNodeId };
+  return {
+    sessionHostNodeIds,
+    deviceFolderNodeIds,
+    issuesByNodeId,
+    workerSlotsByNodeId,
+    workerBundleByNodeId,
+  };
 }
 
 export function resolveNodeWorkerSupervisorProof(

@@ -76,12 +76,7 @@ type DesktopSessionEntry = {
 };
 
 /** Owns per-source desktop sessions and their connected observer lifetimes. */
-export function createDesktopSessionRegistry(
-  deps: {
-    lingerMs?: number;
-  } = {},
-) {
-  const lingerMs = deps.lingerMs ?? DEFAULT_LINGER_MS;
+export function createDesktopSessionRegistry() {
   const entries = new Map<string, DesktopSessionEntry>();
   const owners = new Set<DesktopSessionEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
@@ -204,8 +199,7 @@ export function createDesktopSessionRegistry(
       return;
     }
     clearTimeout(entry.lingerTimer);
-    entry.lingerTimer = setTimeout(() => void stopEntry(entry), lingerMs);
-    entry.lingerTimer.unref?.();
+    entry.lingerTimer = setTimeout(() => void stopEntry(entry), DEFAULT_LINGER_MS).unref();
   };
 
   const waitForReady = async (entry: DesktopSessionEntry): Promise<DesktopSessionStartResult> => {
@@ -434,8 +428,7 @@ export function createDesktopSessionRegistry(
             }
           },
           Math.max(0, expiresAtMs - Date.now()),
-        );
-        unclaimedTimer.unref?.();
+        ).unref();
       },
       stop: stopStream,
     };

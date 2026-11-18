@@ -3,9 +3,11 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { ControlUiSessionNamespace } from "@openclaw/session-url-contract";
 import type { MarkdownIt, Token } from "markdown-it";
 import { resolveGatewayPublicOrigin } from "../../../src/config/gateway-public-origin.js";
+import { templateCatalogPackageNameFromPath } from "../app-route-paths.ts";
 import { sessionRefFromPath } from "../app-session-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { currentDisplayRuntimeConfig } from "../lib/config/config-state-model.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
@@ -29,6 +31,21 @@ type SessionPathTarget = {
 };
 
 export type SessionLinkTarget = SessionKeyTarget | SessionPathTarget;
+
+function markdownTemplatePackage(raw: string): string | null {
+  const location = globalThis.location;
+  if (!location) {
+    return null;
+  }
+  const url = URL.parse(raw, location.href);
+  if (!url || url.origin !== location.origin || url.search || url.hash) {
+    return null;
+  }
+  return templateCatalogPackageNameFromPath(
+    url.pathname,
+    resolveControlUiPaths(location.pathname)[0],
+  );
+}
 
 function parseSessionLinkKey(raw: string): SessionKeyTarget | null {
   const sessionKey = raw.trim();
@@ -104,7 +121,15 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
           continue;
         }
         if (token.type === "link_open") {
-          decorate(token, String(token.attrGet("href") ?? ""));
+          const href = String(token.attrGet("href") ?? "");
+          const template = markdownTemplatePackage(href);
+          if (template) {
+            token.attrJoin("class", "markdown-template-link");
+            token.attrSet("data-template-package", template);
+            token.attrSet("aria-haspopup", "dialog");
+          } else {
+            decorate(token, href);
+          }
           linkDepth++;
         } else if (token.type === "link_close") {
           linkDepth--;
@@ -145,7 +170,9 @@ export function installMarkdownSessionLinks(markdownParser: MarkdownIt): void {
 export function markdownSessionPublicOrigin(
   context?: ApplicationContext | null,
 ): string | undefined {
-  const config = context?.runtimeConfig?.state.configSnapshot?.runtimeConfig;
+  const config = context?.runtimeConfig
+    ? currentDisplayRuntimeConfig(context.runtimeConfig.state)
+    : null;
   return resolveGatewayPublicOrigin({
     gateway: { publicOrigin: readNonBlankString(asOptionalRecord(config?.gateway)?.publicOrigin) },
   });

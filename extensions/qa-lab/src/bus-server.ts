@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sendLengthFramedJson as writeJson } from "openclaw/plugin-sdk/http-response-runtime";
 import type {
   QaBusPollInput,
   QaBusSearchMessagesInput,
@@ -12,7 +13,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { z } from "zod";
-import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
 
 const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
@@ -211,14 +211,7 @@ export async function readQaJsonBody(
   }
 }
 
-export function writeJson(res: ServerResponse, statusCode: number, body: unknown) {
-  const payload = JSON.stringify(body);
-  res.writeHead(statusCode, {
-    "content-type": "application/json; charset=utf-8",
-    "content-length": Buffer.byteLength(payload),
-  });
-  res.end(payload);
-}
+export { writeJson };
 
 export function writeError(res: ServerResponse, statusCode: number, error: unknown) {
   writeJson(res, statusCode, {
@@ -286,12 +279,22 @@ function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput
     label: "poll cursor",
     min: 0,
   });
-  const acknowledgedCursor = readOptionalIntegerField(input, "acknowledgedCursor", {
-    label: "acknowledged poll cursor",
-    min: 0,
-  });
-  if (acknowledgedCursor !== undefined && acknowledgedCursor > (cursor ?? 0)) {
-    throw new Error("acknowledged poll cursor must not exceed the requested poll cursor.");
+  for (const [field, label] of [
+    ["adoptedEventCursors", "adopted"],
+    ["completedEventCursors", "completed"],
+  ] as const) {
+    const eventCursors = input[field];
+    if (
+      eventCursors !== undefined &&
+      (!Array.isArray(eventCursors) ||
+        eventCursors.some(
+          (value) => !Number.isSafeInteger(value) || value < 1 || value > (cursor ?? 0),
+        ))
+    ) {
+      throw new Error(
+        `${label} event cursors must be positive integers within the requested poll cursor.`,
+      );
+    }
   }
   const limit = readOptionalIntegerField(input, "limit", {
     label: "poll limit",
@@ -306,7 +309,6 @@ function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput
   return {
     ...input,
     ...(cursor !== undefined ? { cursor } : {}),
-    ...(acknowledgedCursor !== undefined ? { acknowledgedCursor } : {}),
     ...(limit !== undefined ? { limit } : {}),
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
   } as QaBusPollInput;
@@ -394,31 +396,25 @@ export async function handleQaBusRequest(params: {
         return true;
       case "/v1/poll": {
         const input = normalizeQaBusPollInput(body);
-        const pollInput = {
-          ...input,
-          cursor: params.state.resolvePollCursor(input),
-        };
+        params.state.recordPollReceipts(input);
         const timeoutMs = input.timeoutMs ?? 0;
-        const accountId = normalizeAccountId(input.accountId);
-        const initial = params.state.poll(pollInput);
-        const effectiveStartCursor = resolveQaBusPollStartCursor({
-          currentCursor: initial.cursor,
-          requestedCursor: pollInput.cursor,
-        });
+        const initial = params.state.poll(input);
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
           return true;
         }
         try {
-          await params.state.waitForCursorAdvance(effectiveStartCursor, timeoutMs, (snapshot) => {
-            return snapshot.events.some(
-              (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
-            );
-          });
+          // An empty eligible page has consumed the current tail. Retained adopted
+          // inputs must not wake it; use the same query that owns replay filtering.
+          await params.state.waitForCursorAdvance(
+            initial.cursor,
+            timeoutMs,
+            () => params.state.poll(input).events.length > 0,
+          );
         } catch {
           // timeout ok for long-poll
         }
-        writeJson(params.res, 200, params.state.poll(pollInput));
+        writeJson(params.res, 200, params.state.poll(input));
         return true;
       }
       case "/v1/wait":

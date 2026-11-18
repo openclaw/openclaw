@@ -2,15 +2,20 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { PwAiModule } from "../pw-ai-module.js";
-import type { InteractionTargetOptions } from "../pw-tools-core.interactions.navigation.js";
+import type { NavigationTargetOptions } from "../pw-tools-core.interactions.navigation.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { readBody, resolveProfileContext, withPlaywrightRouteContext } from "./agent.shared.js";
+import {
+  browserNavigationPolicyForProfile,
+  readBody,
+  resolveProfileContext,
+  withPlaywrightRouteContext,
+} from "./agent.shared.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError } from "./utils.js";
 
 type PreparedOperation = (
   pw: PwAiModule,
-  target: InteractionTargetOptions,
+  target: NavigationTargetOptions,
   signal: AbortSignal,
 ) => Promise<void | object | null>;
 
@@ -62,13 +67,24 @@ export function createPlaywrightRouteRegistrar(
         feature,
         // State mutations are not tab exports; inspection and state reads are guarded.
         ...(mode === "inspection" || method === "get" ? { enforceCurrentUrlAllowed: true } : {}),
-        run: async ({ pw, cdpUrl, tab, signal, assertCurrent, resolveTabUrl }) => {
+        run: async ({
+          pw,
+          profileCtx: operationProfile,
+          cdpUrl,
+          tab,
+          signal,
+          assertCurrent,
+          resolveTabUrl,
+        }) => {
           const result = await run(
             pw,
             {
               ...(mode === "state" && assertCurrent ? { assertCurrent } : {}),
               cdpUrl,
               targetId: tab.targetId,
+              ...(mode === "inspection"
+                ? browserNavigationPolicyForProfile(ctx, operationProfile)
+                : {}),
             },
             signal,
           );

@@ -4,13 +4,13 @@ export type SelectedAgentSource = {
   subscribe: (listener: () => void) => () => void;
 };
 
-/** Distinguish deliberate navigation from automatic default-agent reconciliation. */
 export function watchSelectedAgent(
   selection: SelectedAgentSource,
   changed: (agentId: string | null, foreground: boolean) => void,
 ): () => void {
   let selectedId = selection.state.selectedId;
   let intentRevision = selection.intentRevision;
+  // Distinguish deliberate navigation from automatic default-agent reconciliation.
   return selection.subscribe(() => {
     const nextId = selection.state.selectedId;
     const foreground =

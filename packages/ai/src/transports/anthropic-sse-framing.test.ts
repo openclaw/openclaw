@@ -1,21 +1,47 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import {
   anthropicModel,
   context,
   anthropicEvents,
-  createAnthropicResponse,
   registerParityHostLifecycle,
 } from "../provider-transport-parity.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 
 registerParityHostLifecycle();
+const encoder = new TextEncoder();
+function frame(events = anthropicEvents, newline = "\n", blankLine = newline) {
+  return events
+    .map(
+      (event) =>
+        `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${blankLine}`,
+    )
+    .join("");
+}
+function chunks(parts: string[], beforeNext = () => {}) {
+  let index = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(source) {
+        if (index > 0) {
+          beforeNext();
+        }
+        source.enqueue(encoder.encode(parts[index++]));
+        if (index === parts.length) {
+          source.close();
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
 
-async function runResponse(response: Response, signal?: AbortSignal) {
+async function runResponse(body: BodyInit, signal?: AbortSignal) {
   configureAiTransportHost({
     ...getAiTransportHost(),
-    buildModelFetch: () => async () => response,
+    buildModelFetch: () => async () =>
+      new Response(body, { headers: { "content-type": "text/event-stream" } }),
   });
   const stream = await createAnthropicMessagesTransportStreamFn()(anthropicModel, context, {
     apiKey: "test-key",
@@ -24,93 +50,76 @@ async function runResponse(response: Response, signal?: AbortSignal) {
   return stream.result();
 }
 
-describe("Anthropic SSE framing", () => {
-  it.each([
-    { name: "LF", newline: "\n", blankLine: "\n" },
-    { name: "CRLF", newline: "\r\n", blankLine: "\r\n" },
-    { name: "CR", newline: "\r", blankLine: "\r" },
-    { name: "LF/CRLF", newline: "\n", blankLine: "\r\n" },
-    { name: "CRLF/LF", newline: "\r\n", blankLine: "\n" },
-  ])("parses fragmented $name framing", async ({ newline, blankLine }) => {
-    const body = anthropicEvents
-      .map(
-        (event) =>
-          `event: ${event.type}${newline}data: ${JSON.stringify(event)}${newline}${blankLine}`,
-      )
-      .join("");
-    const encoder = new TextEncoder();
-    const result = await runResponse(
-      new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const chunk of body) {
-              controller.enqueue(encoder.encode(chunk));
-            }
-            controller.close();
-          },
-        }),
-        { headers: { "content-type": "text/event-stream" } },
-      ),
-    );
-    expect(result.stopReason).toBe("stop");
-    expect(
-      result.content.filter((block) => block.type === "text").map((block) => block.text),
-    ).toEqual(["Hello world"]);
-  });
+it.each([
+  ["\n", "\n"],
+  ["\r\n", "\r\n"],
+  ["\r", "\r"],
+  ["\n", "\r\n"],
+  ["\r\n", "\n"],
+])("parses fragmented %j/%j framing", async (newline, blankLine) => {
+  const result = await runResponse(chunks(frame(anthropicEvents, newline, blankLine).split("")));
+  expect(result.stopReason).toBe("stop");
+  expect(
+    result.content.filter((block) => block.type === "text").map((block) => block.text),
+  ).toEqual(["Hello world"]);
+});
 
-  it.each([false, true])("handles an undelimited EOF event (malformed=%s)", async (malformed) => {
-    const body = (await createAnthropicResponse(anthropicEvents).text()).trimEnd();
+it.each([false, true])("handles an undelimited EOF event (malformed=%s)", async (malformed) => {
+  const body = frame().trimEnd();
+  const result = await runResponse(malformed ? body.slice(0, -1) : body);
+  expect(result.stopReason).toBe(malformed ? "error" : "stop");
+  if (malformed) {
+    expect(result.errorMessage).toContain("malformed_streaming_fragment");
+  }
+});
+
+it("consumes complete CR frames before requesting more input", async () => {
+  const prefix = frame(anthropicEvents.slice(0, -2), "\r");
+  const terminal = frame(anthropicEvents.slice(-2), "\r");
+  const controller = new AbortController();
+  const activity = vi.fn();
+  const unsubscribe = onLlmRequestActivity(controller.signal, activity);
+  let consumedBeforeNextRead = 0;
+  try {
     const result = await runResponse(
-      new Response(malformed ? body.slice(0, -1) : body, {
-        headers: { "content-type": "text/event-stream" },
+      chunks([prefix, terminal], () => {
+        consumedBeforeNextRead = activity.mock.calls.length;
       }),
+      controller.signal,
     );
-    expect(result.stopReason).toBe(malformed ? "error" : "stop");
-    if (malformed) {
-      expect(result.errorMessage).toContain("malformed_streaming_fragment");
-    }
-  });
+    expect(consumedBeforeNextRead).toBe(8);
+    expect(result.stopReason).toBe("stop");
+  } finally {
+    unsubscribe();
+  }
+});
 
-  it("consumes complete CR frames before requesting more input", async () => {
-    const prefix = (await createAnthropicResponse(anthropicEvents.slice(0, -2)).text()).replaceAll(
-      "\n",
-      "\r",
-    );
-    const terminal = (await createAnthropicResponse(anthropicEvents.slice(-2)).text()).replaceAll(
-      "\n",
-      "\r",
-    );
-    const encoder = new TextEncoder();
-    const controller = new AbortController();
-    const activity = vi.fn();
-    const unsubscribe = onLlmRequestActivity(controller.signal, activity);
-    let pulls = 0;
-    let consumedBeforeNextRead = 0;
-    try {
-      const result = await runResponse(
-        new Response(
-          new ReadableStream<Uint8Array>(
-            {
-              pull(source) {
-                if (pulls++ === 0) {
-                  source.enqueue(encoder.encode(prefix));
-                } else {
-                  consumedBeforeNextRead = activity.mock.calls.length;
-                  source.enqueue(encoder.encode(terminal));
-                  source.close();
-                }
-              },
-            },
-            { highWaterMark: 0 },
-          ),
-          { headers: { "content-type": "text/event-stream" } },
-        ),
-        controller.signal,
-      );
-      expect(consumedBeforeNextRead).toBe(8);
-      expect(result.stopReason).toBe("stop");
-    } finally {
-      unsubscribe();
+it("assembles a fragmented large frame once while enforcing the pending limit", async () => {
+  const padding = "x".repeat(1024 * 1024);
+  const wire = `: ${padding}\n\n${frame()}`;
+  const parts = wire.match(/.{1,1024}/gs) ?? [];
+  const join = Array.prototype.join;
+  let joinedChars = 0;
+  const spy = vi.spyOn(Array.prototype, "join").mockImplementation(function (
+    this: unknown[],
+    separator,
+  ) {
+    for (const part of this) {
+      if (typeof part === "string") {
+        joinedChars += part.length;
+      }
     }
+    return join.call(this, separator);
   });
+  let result;
+  try {
+    result = await runResponse(chunks(parts));
+  } finally {
+    spy.mockRestore();
+  }
+  expect(result.stopReason).toBe("stop");
+  expect(
+    result.content.filter((block) => block.type === "text").map((block) => block.text),
+  ).toEqual(["Hello world"]);
+  expect(joinedChars).toBeLessThan(wire.length * 4);
 });

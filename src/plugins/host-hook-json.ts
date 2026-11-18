@@ -46,14 +46,15 @@ function isPluginJsonValueWithinLimits(
   if (prototype !== Object.prototype && prototype !== null) {
     return false;
   }
-  const entries = Object.entries(value);
-  if (entries.length > limits.maxObjectKeys) {
+  const keys = Object.keys(value);
+  if (keys.length > limits.maxObjectKeys) {
     return false;
   }
   state.depth += 1;
-  const ok = entries.every(
-    ([key, entry]) =>
-      key.length <= limits.maxStringLength && isPluginJsonValueWithinLimits(entry, state),
+  const ok = keys.every(
+    (key) =>
+      key.length <= limits.maxStringLength &&
+      isPluginJsonValueWithinLimits(Reflect.get(value, key), state),
   );
   state.depth -= 1;
   return ok;

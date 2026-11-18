@@ -188,12 +188,11 @@ function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | und
 function resolveCommandTextForSession(
   params: SessionResetCommandContext & { commandText: string },
 ): string {
-  const messageStart = resolveExplicitMessageStart(params.commandText, params.ctx);
-  const anchored =
-    messageStart === undefined ? params.commandText.trim() : params.commandText.slice(messageStart);
+  // commandText is the authoritative sender projection. Unwrap raw transport
+  // envelopes only when extracting the payload of an already admitted reset.
   const withoutMentions = params.isGroup
-    ? stripMentions(anchored, params.ctx, params.cfg, params.agentId)
-    : anchored;
+    ? stripMentions(params.commandText, params.ctx, params.cfg, params.agentId)
+    : params.commandText;
   return withoutMentions.replace(/\\n/g, " ").trim();
 }
 
@@ -218,7 +217,7 @@ export function resolveSessionResetCommand(
   if (
     !params.resetAuthorized ||
     softResetMatched ||
-    (typeof params.ctx.Transcript === "string" &&
+    (params.ctx.Transcript !== undefined &&
       params.commandText === params.ctx.Transcript.replace(/\\n/g, " ").trim())
   ) {
     return result;

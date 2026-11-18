@@ -7,6 +7,8 @@ import { planTargetedDockerLaneGroups } from "./plan-targeted-docker-lane-groups
 
 export const RELEASE_PACKAGE_ACCEPTANCE_LANES =
   "release-typed-onboarding doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor update-first-hop-compat published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape";
+const QUALIFIED_PACKAGE_SMOKE_LANES =
+  "npm-onboard-channel-agent published-upgrade-survivor plugins-offline plugin-update";
 
 const DOCKER_E2E_CHUNKS = [
   {
@@ -94,8 +96,8 @@ const LIVE_MODEL_PROVIDERS = [
     // The release workspace does not enable Global regions, so the default high-signal
     // selection includes DeepSeek routes that reject every request. Keep this list aligned
     // with models proven reachable from the release workspace.
-    models: "opencode-go/deepseek-v4-flash-vision-exp,opencode-go/glm-5.2,opencode-go/glm-5.3",
-    max_models: "3",
+    models: "opencode-go/glm-5.2,opencode-go/glm-5.3",
+    max_models: "2",
     profiles: "full",
   },
   {
@@ -299,7 +301,7 @@ export function createReleaseCheckSelection(options = {}) {
   const group = options.rerunGroup ?? "all";
   let groups;
   if (group === "all") {
-    groups = ["install-smoke", "cross-os", "package", "qa-parity"];
+    groups = ["install-smoke", "cross-os", "windows-node", "package", "qa-parity"];
     if (isEnabled(options.runReleaseSoak)) {
       groups.push("live-e2e");
     }
@@ -309,7 +311,16 @@ export function createReleaseCheckSelection(options = {}) {
   } else if (group === "qa") {
     groups = ["qa-parity", "qa-live"];
   } else if (
-    ["install-smoke", "cross-os", "live-e2e", "package", "qa-parity", "qa-live"].includes(group)
+    [
+      "install-smoke",
+      "cross-os",
+      "windows-node",
+      "live-e2e",
+      "package",
+      "qualified-package",
+      "qa-parity",
+      "qa-live",
+    ].includes(group)
   ) {
     groups = [group];
   } else {
@@ -322,17 +333,24 @@ export function createReleaseCheckSelection(options = {}) {
     release_check_groups_json: JSON.stringify(groups),
     install_smoke_scheduled: independent && selected("install-smoke"),
     cross_os_scheduled: candidate && selected("cross-os"),
+    windows_node_scheduled: candidate && selected("windows-node"),
     live_e2e_scheduled: independent && selected("live-e2e"),
-    package_acceptance_scheduled: candidate && selected("package"),
+    package_acceptance_scheduled:
+      candidate && (selected("package") || selected("qualified-package")),
     qa_parity_scheduled: independent && selected("qa-parity"),
     qa_live_scheduled: independent && selected("qa-live"),
     docker_required: candidate && selected("live-e2e") && isBlank(options.repoLiveSuiteFilter),
   };
   return {
     ...result,
-    package_acceptance_lanes: RELEASE_PACKAGE_ACCEPTANCE_LANES,
+    package_acceptance_lanes: selected("qualified-package")
+      ? QUALIFIED_PACKAGE_SMOKE_LANES
+      : RELEASE_PACKAGE_ACCEPTANCE_LANES,
     package_required:
-      result.cross_os_scheduled || result.package_acceptance_scheduled || result.docker_required,
+      result.cross_os_scheduled ||
+      result.windows_node_scheduled ||
+      result.package_acceptance_scheduled ||
+      result.docker_required,
   };
 }
 

@@ -17,20 +17,6 @@ export function findSubcommand(
   );
 }
 
-function shouldOptionConsumeFollowingToken(
-  option: CommanderOption | undefined,
-  token: string,
-  next: string | undefined,
-): boolean {
-  if (!option || token.includes("=")) {
-    return false;
-  }
-  if (option.required) {
-    return true;
-  }
-  return option.optional && isValueToken(next);
-}
-
 export function resolveRootOptionRole(
   program: CommanderCommand,
   remainingArgs: readonly string[],
@@ -53,7 +39,10 @@ export function resolveRootOptionRole(
         // Unknown option surfaces may allow arbitrary flags; keep the value-safe behavior there.
         return "value";
       }
-      pendingValue = shouldOptionConsumeFollowingToken(option, arg, remainingArgs[index + 1]);
+      pendingValue =
+        option !== undefined &&
+        !arg.includes("=") &&
+        (option.required || (option.optional && isValueToken(remainingArgs[index + 1])));
       continue;
     }
     command = findSubcommand(command, arg) ?? command;

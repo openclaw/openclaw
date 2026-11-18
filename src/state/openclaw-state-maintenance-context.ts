@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs from "node:fs";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import fs, { type BigIntStats } from "node:fs";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type MaintenanceResource = {
@@ -23,8 +23,11 @@ export type AgentSchemaMigration = {
 
 export type OpenClawDatabaseMaintenanceScope = {
   readonly ownsSchemaMaintenance: boolean;
+  /** SQLite admission coverage for this offline Doctor operation; absent at runtime. */
+  readonly sqliteIntegrityCheck?: "quick" | "full";
   assertOwnerCurrent(this: void, access?: "read"): void;
   assertDatabaseAccess(this: void, databasePath: string): void;
+  assertCleanupDatabaseAccess(this: void, databasePath: string): void;
   assertAdmission(this: void): void;
   assertReadAdmission(this: void): void;
   addAgentSchemaMigrationCheck(check: (migration: AgentSchemaMigration) => void): void;
@@ -71,6 +74,21 @@ export function maintenanceOwnerHasSourceCustody(
   }
   scope.assertReadAdmission();
   return !allowsMaintenanceLiveAuthorityReads(scope, pathname);
+}
+
+/** An orphaned WAL read can reset its commit counter; only drained sources preserve custody. */
+export function readCustodiedDrainedSqliteSource(pathname: string): BigIntStats | undefined {
+  if (!maintenanceOwnerHasSourceCustody(getOpenClawDatabaseMaintenanceScope(), pathname)) {
+    return undefined;
+  }
+  const canonicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
+  if (
+    fs.existsSync(`${canonicalPath}-journal`) ||
+    (fs.statSync(`${canonicalPath}-wal`, { throwIfNoEntry: false })?.size ?? 0) > 0
+  ) {
+    return undefined;
+  }
+  return fs.statSync(canonicalPath, { bigint: true });
 }
 
 const MAINTENANCE_IN_PROCESS_COPY_MAX_BYTES = 64 * 1024 * 1024;

@@ -1,57 +1,40 @@
-// Matrix tests cover setup core plugin behavior.
 import type { ChannelSetupWizardAdapter } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { createMatrixSetupWizardProxy, matrixSetupAdapter } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
-function applyOpsAccountConfig(cfg: CoreConfig): CoreConfig {
+const opsInput = {
+  name: "Ops",
+  homeserver: "https://matrix.example.org",
+  accessToken: "ops-token",
+} satisfies MatrixSetupInput;
+
+function applyOpsAccountConfig(cfg: CoreConfig, input: Partial<MatrixSetupInput> = {}): CoreConfig {
   return matrixSetupAdapter.applyAccountConfig({
     cfg,
     accountId: "ops",
-    input: {
-      name: "Ops",
-      homeserver: "https://matrix.example.org",
-      accessToken: "ops-token",
-    } as MatrixSetupInput,
+    input: { ...opsInput, ...input },
   }) as CoreConfig;
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (value === undefined || value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("expected object with fields");
-  }
-  const record = value as Record<string, unknown>;
-  Object.entries(expected).forEach(([key, expectedValue]) => {
-    expect(record[key]).toEqual(expectedValue);
-  });
+  expect(value).toEqual(expect.objectContaining(expected));
 }
 
-function expectPromotedDefaultAccount(next: CoreConfig): void {
-  expectFields(next.channels?.matrix?.accounts?.Default, {
-    enabled: true,
-    deviceName: "Legacy raw key",
-    homeserver: "https://matrix.example.org",
-    userId: "@default:example.org",
-    accessToken: "tok-default",
-    avatarUrl: "mxc://example.org/default-avatar",
-  });
-  expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
-}
+const credentials = {
+  homeserver: "https://matrix.example.org",
+  userId: "@default:example.org",
+  accessToken: "tok-default",
+};
+const withMatrix = (matrix: NonNullable<CoreConfig["channels"]>["matrix"]): CoreConfig => ({
+  channels: { matrix },
+});
+const withDm = (dm: { policy?: "open"; allowFrom: string[] }) =>
+  withMatrix({ accounts: { ops: { dm } } });
 
-function expectOpsAccount(next: CoreConfig): void {
-  expectFields(next.channels?.matrix?.accounts?.ops, {
-    name: "Ops",
-    enabled: true,
-    homeserver: "https://matrix.example.org",
-    accessToken: "ops-token",
-  });
-}
-
-function makeFakeSetupWizard(
-  overrides: Partial<ChannelSetupWizardAdapter> = {},
-): ChannelSetupWizardAdapter {
-  return {
+function setupProxy(overrides: Partial<ChannelSetupWizardAdapter> = {}) {
+  const matrixSetupWizard: ChannelSetupWizardAdapter = {
     channel: "matrix",
     getStatus: vi.fn(async () => ({
       channel: "matrix",
@@ -60,7 +43,9 @@ function makeFakeSetupWizard(
     })),
     configure: vi.fn(async ({ cfg }) => ({ cfg })),
     ...overrides,
-  } as ChannelSetupWizardAdapter;
+  };
+  const loader = vi.fn(async () => ({ matrixSetupWizard }));
+  return { loader, proxy: createMatrixSetupWizardProxy(loader) };
 }
 
 describe("createMatrixSetupWizardProxy", () => {
@@ -72,10 +57,7 @@ describe("createMatrixSetupWizardProxy", () => {
     };
     const getStatus = vi.fn(async () => status);
     const configure = vi.fn(async ({ cfg }) => ({ cfg }));
-    const loader = vi.fn(async () => ({
-      matrixSetupWizard: makeFakeSetupWizard({ configure, getStatus }),
-    }));
-    const proxy = createMatrixSetupWizardProxy(loader);
+    const { loader, proxy } = setupProxy({ configure, getStatus });
     const cfg = { channels: { matrix: {} } } as CoreConfig;
 
     const result = await proxy.getStatus({ cfg, accountOverrides: {} });
@@ -97,33 +79,18 @@ describe("createMatrixSetupWizardProxy", () => {
 
   it("keeps sync dmPolicy helpers local and lazy-loads only promptAllowFrom", async () => {
     const promptAllowFrom = vi.fn(async ({ cfg }) => cfg);
-    const loader = vi.fn(async () => ({
-      matrixSetupWizard: makeFakeSetupWizard({
-        dmPolicy: {
-          label: "Matrix",
-          channel: "matrix",
-          policyKey: "unused",
-          allowFromKey: "unused",
-          getCurrent: () => "pairing",
-          setPolicy: (cfg) => cfg,
-          promptAllowFrom,
-        },
-      }),
-    }));
-    const proxy = createMatrixSetupWizardProxy(loader);
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              dm: {
-                allowFrom: ["  @ops:example.org  ", "", "*"],
-              },
-            },
-          },
-        },
+    const { loader, proxy } = setupProxy({
+      dmPolicy: {
+        label: "Matrix",
+        channel: "matrix",
+        policyKey: "unused",
+        allowFromKey: "unused",
+        getCurrent: () => "pairing",
+        setPolicy: (cfg) => cfg,
+        promptAllowFrom,
       },
-    } as CoreConfig;
+    });
+    const cfg = withDm({ allowFrom: ["  @ops:example.org  ", "", "*"] });
 
     expect(proxy.dmPolicy?.getCurrent(cfg, "ops")).toBe("pairing");
     const next = proxy.dmPolicy?.setPolicy(cfg, "open", "ops") as CoreConfig;
@@ -144,22 +111,8 @@ describe("createMatrixSetupWizardProxy", () => {
   });
 
   it("removes wildcard allowFrom when switching from open to a restrictive policy", () => {
-    const loader = vi.fn(async () => ({ matrixSetupWizard: makeFakeSetupWizard() }));
-    const proxy = createMatrixSetupWizardProxy(loader);
-    const cfg = {
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              dm: {
-                policy: "open",
-                allowFrom: ["*", "  @ops:example.org  "],
-              },
-            },
-          },
-        },
-      },
-    } as CoreConfig;
+    const { loader, proxy } = setupProxy();
+    const cfg = withDm({ policy: "open", allowFrom: ["*", "  @ops:example.org  "] });
 
     const next = proxy.dmPolicy?.setPolicy(cfg, "allowlist", "ops") as CoreConfig;
 
@@ -173,28 +126,25 @@ describe("createMatrixSetupWizardProxy", () => {
 
 describe("matrixSetupAdapter", () => {
   it("reuses an existing raw default-account key during promotion", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          defaultAccount: "default",
-          homeserver: "https://matrix.example.org",
-          userId: "@default:example.org",
-          accessToken: "tok-default",
-          avatarUrl: "mxc://example.org/default-avatar",
-          accounts: {
-            Default: {
-              enabled: true,
-              deviceName: "Legacy raw key",
-            },
-          },
-        },
-      },
-    } as CoreConfig;
+    const cfg = withMatrix({
+      ...credentials,
+      defaultAccount: "default",
+      avatarUrl: "mxc://example.org/default-avatar",
+      accounts: { Default: { enabled: true, deviceName: "Legacy raw key" } },
+    });
 
     const next = applyOpsAccountConfig(cfg);
 
-    expectPromotedDefaultAccount(next);
-    expectOpsAccount(next);
+    expect(next.channels?.matrix?.accounts).toMatchObject({
+      Default: {
+        ...credentials,
+        enabled: true,
+        deviceName: "Legacy raw key",
+        avatarUrl: "mxc://example.org/default-avatar",
+      },
+      ops: { ...opsInput, enabled: true },
+    });
+    expect(next.channels?.matrix?.accounts?.default).toBeUndefined();
   });
 
   it("rejects unsupported avatar URL schemes during setup validation", () => {
@@ -212,14 +162,15 @@ describe("matrixSetupAdapter", () => {
   });
 
   it("stores canonical dangerous private-network opt-in from setup input", () => {
+    const input: MatrixSetupInput = {
+      homeserver: "http://matrix.internal:8008",
+      accessToken: "ops-token",
+      dangerouslyAllowPrivateNetwork: true,
+    };
     const next = matrixSetupAdapter.applyAccountConfig({
-      cfg: {} as CoreConfig,
+      cfg: {},
       accountId: "ops",
-      input: {
-        homeserver: "http://matrix.internal:8008",
-        accessToken: "ops-token",
-        dangerouslyAllowPrivateNetwork: true,
-      } as MatrixSetupInput,
+      input,
     }) as CoreConfig;
 
     expectFields(next.channels?.matrix?.accounts?.ops, {
@@ -233,42 +184,20 @@ describe("matrixSetupAdapter", () => {
   });
 
   it("keeps top-level block streaming as a shared default when named accounts already exist", () => {
-    const cfg = {
-      channels: {
-        matrix: {
-          homeserver: "https://matrix.example.org",
-          userId: "@default:example.org",
-          accessToken: "tok-default",
-          streaming: { block: { enabled: true } },
-          accounts: {
-            support: {
-              homeserver: "https://matrix.example.org",
-              userId: "@support:example.org",
-              accessToken: "tok-support",
-            },
-          },
-        },
+    const cfg = withMatrix({
+      ...credentials,
+      streaming: { block: { enabled: true } },
+      accounts: {
+        support: { ...credentials, userId: "@support:example.org", accessToken: "tok-support" },
       },
-    } as CoreConfig;
-
-    const next = matrixSetupAdapter.applyAccountConfig({
-      cfg,
-      accountId: "ops",
-      input: {
-        name: "Ops",
-        homeserver: "https://matrix.example.org",
-        userId: "@ops:example.org",
-        accessToken: "ops-token",
-      } as MatrixSetupInput,
-    }) as CoreConfig;
+    });
+    const next = applyOpsAccountConfig(cfg, { userId: "@ops:example.org" });
 
     expect(next.channels?.matrix?.streaming).toEqual({ block: { enabled: true } });
     expectFields(next.channels?.matrix?.accounts?.ops, {
-      name: "Ops",
+      ...opsInput,
       enabled: true,
-      homeserver: "https://matrix.example.org",
       userId: "@ops:example.org",
-      accessToken: "ops-token",
     });
     expect(next.channels?.matrix?.accounts?.ops?.streaming).toBeUndefined();
   });

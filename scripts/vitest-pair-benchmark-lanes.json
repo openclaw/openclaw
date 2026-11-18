@@ -16,7 +16,6 @@
       "files": [
         "packages/markdown-core/src/chunk-text.test.ts",
         "packages/media-core/src/mime.test.ts",
-        "src/acp/commands.test.ts",
         "src/agents/agent-run-terminal-outcome.test.ts"
       ]
     },

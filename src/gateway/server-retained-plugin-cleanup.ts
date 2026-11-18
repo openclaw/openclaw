@@ -1,11 +1,16 @@
-type RetainedPluginCleanupLogger = {
-  info: (message: string) => void;
-  warn: (message: string) => void;
-};
+import path from "node:path";
+import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.js";
+import { visitConfigValueTree } from "../config/value-tree.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 
 export async function cleanupGatewayRetiredPluginArtifacts(params: {
-  log: RetainedPluginCleanupLogger;
+  log: {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+  };
   startupInstallPaths: Iterable<string>;
+  startupConfig: OpenClawConfig;
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<void> {
@@ -15,17 +20,21 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
   };
   assertCurrent();
   try {
-    const [retention, captures, { hasPluginNativeCaptureCleanupCandidates }, paths] =
-      await Promise.all([
-        import("../plugins/managed-npm-retention.js"),
-        import("../plugins/plugin-source-capture-report.js"),
-        import("../plugins/plugin-source-capture-directory.js"),
-        import("../config/paths.js"),
-      ]);
+    const [
+      { hasRetainedManagedNpmInstallCandidates, cleanupRetainedManagedNpmInstallGenerations },
+      captures,
+      { hasPluginNativeCaptureCleanupCandidates },
+      paths,
+    ] = await Promise.all([
+      import("../plugins/managed-npm-retention.js"),
+      import("../plugins/plugin-source-capture-report.js"),
+      import("../plugins/plugin-source-capture-directory.js"),
+      import("../config/paths.js"),
+    ]);
     assertCurrent();
     const stateDir = paths.resolveStateDir();
     const candidates = await Promise.all([
-      retention.hasRetainedManagedNpmInstallCandidates(),
+      hasRetainedManagedNpmInstallCandidates(),
       hasPluginNativeCaptureCleanupCandidates(stateDir),
     ]);
     assertCurrent();
@@ -66,10 +75,28 @@ export async function cleanupGatewayRetiredPluginArtifacts(params: {
             params.log.warn(warning);
           }
           await assertInventoryCurrent();
-          const removedGenerations = await retention.cleanupRetainedManagedNpmInstallGenerations({
+          const configuredPaths: string[] = [];
+          // Config can deliberately pin executables/assets from an older generation.
+          // Keep both boot-time users and current references; an incidental path
+          // may retain extra files, which is preferable to breaking a configured tool.
+          visitConfigValueTree([params.startupConfig, getRuntimeConfigSnapshot()], (value) => {
+            if (typeof value === "string") {
+              const trimmed = value.trim();
+              if (
+                path.isAbsolute(trimmed) ||
+                trimmed.startsWith("~/") ||
+                trimmed.startsWith("~\\")
+              ) {
+                configuredPaths.push(resolveUserPath(trimmed));
+              }
+            }
+            return true;
+          });
+          const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
             assertCurrent: assertInventoryCurrent,
             activeInstallPaths: [
               ...params.startupInstallPaths,
+              ...configuredPaths,
               ...Object.values(records).flatMap((record) =>
                 record.installPath ? [record.installPath] : [],
               ),

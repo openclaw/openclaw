@@ -170,13 +170,37 @@ export function parseStoredTriggerKeywords(value: string): string[] {
   }
 }
 
-export function tokenizeIntentText(text: string): string[] {
-  return text.toLowerCase().match(/[\p{L}\p{N}_-]+/gu) ?? [];
+function tokenizeNormalizedIntentText(text: string): string[] {
+  return text.match(/[\p{L}\p{N}_-]+/gu) ?? [];
+}
+
+/** Scripts written without spaces between words; `unicode61` tokenizes a whole run as one token. */
+const UNSPACED_SCRIPT_TERM =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+
+export function needsLiteralIntentCandidates(promptText: string): boolean {
+  return UNSPACED_SCRIPT_TERM.test(promptText);
+}
+
+/** Unspaced-script terms match literally; other terms retain whole-word boundaries. */
+export function triggerKeywordMatchesPrompt(
+  keyword: string,
+  promptTokens: ReadonlySet<string>,
+  promptText: string,
+): boolean {
+  const terms = tokenizeNormalizedIntentText(keyword.toLowerCase().normalize("NFC"));
+  return (
+    terms.length > 0 &&
+    terms.every((term) =>
+      UNSPACED_SCRIPT_TERM.test(term) ? promptText.includes(term) : promptTokens.has(term),
+    )
+  );
 }
 
 export type StandingIntentMatchInput = {
   promptTokens: string[];
-  ftsQuery: string;
+  promptText: string;
+  ftsQuery: import("openclaw/plugin-sdk/database-engine-worker-runtime").TextQuery;
   channelScopes: string[];
   senderScope?: string;
   nowMs?: number;
@@ -190,7 +214,8 @@ export function prepareStandingIntentMatch(params: {
   senderId?: string;
   nowMs?: number;
 }): StandingIntentMatchInput | undefined {
-  const promptTokens = [...new Set(tokenizeIntentText(params.prompt))];
+  const promptText = params.prompt.toLowerCase().normalize("NFC");
+  const promptTokens = [...new Set(tokenizeNormalizedIntentText(promptText))];
   if (promptTokens.length === 0) {
     return undefined;
   }
@@ -223,7 +248,8 @@ export function prepareStandingIntentMatch(params: {
       : undefined;
   return {
     promptTokens,
-    ftsQuery: promptTokens.map((token) => `"${token.replaceAll('"', '""')}"`).join(" OR "),
+    promptText,
+    ftsQuery: { kind: "any", clauses: promptTokens.map((text) => ({ kind: "phrase", text })) },
     channelScopes,
     senderScope: storedSenderScope,
     nowMs: params.nowMs,
@@ -241,9 +267,10 @@ export type StandingIntentOperations = {
 export type StandingIntentWorkerOperations = {
   [Key in keyof StandingIntentOperations]: {
     input: StandingIntentOperations[Key]["input"];
-    output:
-      | { kind: "schema-prepared" }
-      | { kind: "result"; value: StandingIntentOperations[Key]["output"] };
+    output: {
+      value: StandingIntentOperations[Key]["output"];
+      nextDueAt: number | null;
+    };
   };
 };
 

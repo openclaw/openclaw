@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import { getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
+import { createRuntimeFactory } from "./server-worker-placement.test-support.js";
 import type { WorkerSessionPlacementIdentity } from "./worker-environments/placement-record.js";
 import type { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import * as support from "./worker-environments/service.test-support.js";
@@ -33,21 +33,17 @@ export function createHeldWorkspacePreflight() {
   };
 }
 
+const runtimeFactory = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 export async function createRuntime(
   placements: ReturnType<typeof createWorkerSessionPlacementStore>,
   environments: ReturnType<typeof support.createService>,
   cancelSessionWork: WorkerPlacementSessionWorkCancellation = vi.fn(async () => {}),
 ) {
-  return createGatewayWorkerPlacementRuntime({
+  return runtimeFactory({
     initialPlacements: await placements.listAsync(),
-    scheduler: createTestGatewayScheduler(),
-    getCommittedRuntimeConfig: getRuntimeConfig,
     placements,
     environments,
-    gatewayNamespace: "gateway-test",
-    warn: vi.fn(),
     cancelSessionWork,
-    revokeSessionAuthority: vi.fn(),
   });
 }
 
@@ -68,15 +64,14 @@ export function setupSessionFixture(request: WorkerSessionPlacementIdentity) {
       lifecycleRevision: "original",
       worktree: { id: "workspace", branch: "fixture", repoRoot: support.testState.root },
     };
-    const target = {
-      agentId: request.agentId,
-      canonicalKey: request.sessionKey,
-      store: { [request.sessionKey]: entry },
-      storeKeys: [request.sessionKey],
-      storePath: `${support.testState.root}/sessions.sqlite`,
+    const storePath = `${support.testState.root}/sessions.sqlite`;
+    const config = {
+      ...support.testState.config,
+      session: { ...support.testState.config.session, store: storePath },
     };
+    setRuntimeConfigSnapshot(config, config);
     await upsertSessionEntryCore(
-      { agentId: request.agentId, sessionKey: request.sessionKey, storePath: target.storePath },
+      { agentId: request.agentId, sessionKey: request.sessionKey, storePath },
       entry,
     );
     const targetReader = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
@@ -86,7 +81,11 @@ export function setupSessionFixture(request: WorkerSessionPlacementIdentity) {
       targetReader.resolveGatewaySessionStoreTargetInWorker,
     );
     const worktree = { id: "workspace", ownerId: request.sessionKey, path: support.testState.root };
-    const config = { ...support.testState.config, session: { store: target.storePath } };
+    const target = await targetReader.resolveGatewaySessionStoreTargetInWorker({
+      cfg: config,
+      key: request.sessionKey,
+      agentId: request.agentId,
+    });
     moveDestinationMocks.getRuntimeConfig.mockReturnValue(config);
     moveDestinationMocks.resolveGatewaySessionTarget.mockReturnValue(target);
     moveDestinationMocks.resolveCanonicalSession.mockReturnValue(entry);

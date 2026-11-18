@@ -155,12 +155,6 @@ export function resolveExternalCliAuthProfiles(
       ? existing
       : undefined;
   if (existing && !existingOAuth) {
-    authProfilesLog.debug("kept explicit local auth over external cli bootstrap", {
-      profileId,
-      provider: MINIMAX_PROVIDER,
-      localType: existing.type,
-      localProvider: existing.provider,
-    });
     return [];
   }
   if (existingOAuth && hasUsableOAuthCredential(existingOAuth, { now })) {
@@ -201,15 +195,6 @@ export function resolveExternalCliAuthProfiles(
   if (!hasUsableOAuthCredential(creds, { now })) {
     return [];
   }
-  authProfilesLog.debug(
-    "used external cli oauth bootstrap because local oauth was missing or unusable",
-    {
-      profileId,
-      provider: MINIMAX_PROVIDER,
-      localExpires: existingOAuth?.expires,
-      externalExpires: creds.expires,
-    },
-  );
   return [
     {
       profileId,

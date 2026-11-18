@@ -34,7 +34,7 @@ sleep() {
   ticks=$((ticks + 1))
   if [ "$ticks" -eq 480 ]; then printf '[gateway] ready\\n' >>"$GATEWAY_LOG"; fi
 }
-openclaw_e2e_probe_http() { [ "$1" = http://127.0.0.1:18789/readyz ]; }
+openclaw_e2e_probe_http() { [ "$1" = http://127.0.0.1:18789/readyz ] && [ "$ticks" -ge 480 ]; }
 start_gateway
 wait "$gateway_pid"
 `,

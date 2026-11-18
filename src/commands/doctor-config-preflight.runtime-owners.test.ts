@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   readDeferredPluginMigrations,
@@ -36,32 +37,26 @@ async function withRuntimeOwner(run: (configPath: string) => Promise<void>) {
     const bundled = path.join(home, "bundled");
     const root = path.join(bundled, pluginId);
     await fs.mkdir(root, { recursive: true });
-    await fs.writeFile(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        name: pluginId,
-        version: "1.0.0",
-        openclaw: { extensions: ["./index.cjs"] },
-      }),
-    );
+    await writeFixtureJson(path.join(root, "package.json"), {
+      name: pluginId,
+      version: "1.0.0",
+      openclaw: { extensions: ["./index.cjs"] },
+    });
     await fs.writeFile(path.join(root, "index.cjs"), "module.exports = {};\n");
-    await fs.writeFile(
-      path.join(root, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: pluginId,
-        enabledByDefault: true,
-        doctorContract: {},
-        cliBackends: [runtimeId],
-        configSchema: {
-          type: "object",
-          properties: { retained: { type: "boolean" } },
-          additionalProperties: false,
-        },
-      }),
-    );
+    await writeFixtureJson(path.join(root, "openclaw.plugin.json"), {
+      id: pluginId,
+      enabledByDefault: true,
+      doctorContract: {},
+      cliBackends: [runtimeId],
+      configSchema: {
+        type: "object",
+        properties: { retained: { type: "boolean" } },
+        additionalProperties: false,
+      },
+    });
     const configPath = path.join(home, ".openclaw", "openclaw.json");
     await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, JSON.stringify(config));
+    await writeFixtureJson(configPath, config);
     await withEnvAsync({ OPENCLAW_BUNDLED_PLUGINS_DIR: bundled }, () => run(configPath));
   });
 }
@@ -69,16 +64,13 @@ async function withRuntimeOwner(run: (configPath: string) => Promise<void>) {
 describe("runtime plugin migration ownership", () => {
   it("startup preserves the runtime record until Doctor reconciles its owner", async () => {
     await withRuntimeOwner(async (configPath) => {
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          ...config,
-          meta: { migrations: { webhookListeners: true } },
-          plugins: {
-            entries: { "missing-fixture": { enabled: true, config: { retained: true } } },
-          },
-        }),
-      );
+      await writeFixtureJson(configPath, {
+        ...config,
+        meta: { migrations: { webhookListeners: true } },
+        plugins: {
+          entries: { "missing-fixture": { enabled: true, config: { retained: true } } },
+        },
+      });
       await recordDeferredPluginMigrations({ pending: [pending] });
       const retained = readDeferredPluginMigrations();
       const original = await fs.readFile(configPath, "utf8");
@@ -104,7 +96,7 @@ describe("runtime plugin migration ownership", () => {
     await withRuntimeOwner(async (configPath) => {
       const obligation = { validationExcludedPaths: [["legacyFixture"]] };
       const protectedConfig = { legacyFixture: { retained: true } };
-      await fs.writeFile(configPath, JSON.stringify({ ...config, ...protectedConfig }));
+      await writeFixtureJson(configPath, { ...config, ...protectedConfig });
       await recordDeferredPluginMigrations({ pending: [{ ...pending, ...obligation }] });
       const result = await runDoctorConfigPreflight(doctorOptions);
       expect(result.snapshot.valid).toBe(true);
@@ -117,13 +109,10 @@ describe("runtime plugin migration ownership", () => {
 
   it("keeps an explicitly configured missing plugin separate from a runtime with the same name", async () => {
     await withRuntimeOwner(async (configPath) => {
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          ...config,
-          plugins: { entries: { [runtimeId]: { enabled: true, config: { retained: true } } } },
-        }),
-      );
+      await writeFixtureJson(configPath, {
+        ...config,
+        plugins: { entries: { [runtimeId]: { enabled: true, config: { retained: true } } } },
+      });
       await recordDeferredPluginMigrations({ pending: [pending] });
       const result = await runDoctorConfigPreflight(doctorOptions);
       expect(result.snapshot.valid).toBe(true);

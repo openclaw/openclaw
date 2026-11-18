@@ -1,9 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import {
+  validateDiagnosticsCpuProfileParams,
   validateDiagnosticsHeapProfileParams,
   validateDiagnosticsHeapSnapshotParams,
 } from "../../../packages/gateway-protocol/src/schema/diagnostics.js";
+import { collectRuntimeCapabilities } from "../../infra/runtime-capabilities.js";
 import { getTrackedWorkerPoolSnapshot } from "../../infra/worker-cpu.js";
 import type { DiagnosticProfileOutcome } from "../../logging/diagnostic-profile.js";
 import {
@@ -11,6 +13,7 @@ import {
   normalizeDiagnosticStabilityQuery,
 } from "../../logging/diagnostic-stability.js";
 import { getCommandLaneDiagnostics } from "../../process/command-lane-diagnostics.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 
 function profileHandler<P>(
@@ -25,7 +28,7 @@ function profileHandler<P>(
   return async ({ req, client, signal, context, respond, hasCurrentClientAuthority }) => {
     const params = req.params === undefined ? {} : req.params;
     if (!validate(params)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, invalidParamsMessage));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, invalidParamsMessage);
       return;
     }
     const lifetime = AbortSignal.any(
@@ -47,33 +50,39 @@ function profileHandler<P>(
         outcome.reason === "tracing-active"
           ? `${label} unavailable: stop active Node tracing, including non-CPU categories, before requesting a profile`
           : `${label} unavailable: ${outcome.reason}`;
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, message, {
-          details: { reason: outcome.reason, cleanupFailed: outcome.cleanupFailed },
-        }),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, message, {
+        details: { reason: outcome.reason, cleanupFailed: outcome.cleanupFailed },
+      });
     }
   };
 }
 
 export const diagnosticsHandlers: GatewayRequestHandlers = {
+  "diagnostics.capabilities": ({ params, respond }) => {
+    if (params !== undefined && (!isRecord(params) || Object.keys(params).length !== 0)) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "diagnostics.capabilities accepts only empty params",
+      );
+      return;
+    }
+    respond(true, collectRuntimeCapabilities(), undefined);
+  },
   "diagnostics.cpuProfile": profileHandler(
     "CPU profile",
-    (params): params is Record<string, unknown> =>
-      isRecord(params) && Object.keys(params).length === 0,
-    "diagnostics.cpuProfile accepts only empty params",
-    async (_params, authority) => {
+    validateDiagnosticsCpuProfileParams,
+    "diagnostics.cpuProfile accepts only integer windows (1–30) and windowMs (100–5000)",
+    async (params, authority) => {
       const { captureDiagnosticCpuProfile } =
         await import("../../logging/diagnostic-cpu-profile.js");
-      return captureDiagnosticCpuProfile(authority);
+      return captureDiagnosticCpuProfile({ ...params, ...authority });
     },
   ),
   "diagnostics.heapProfile": profileHandler(
     "Heap profile",
     validateDiagnosticsHeapProfileParams,
-    "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes, and boolean includeObjectsCollectedByMajorGC and includeObjectsCollectedByMinorGC",
+    "diagnostics.heapProfile accepts only positive integer durationMs and samplingIntervalBytes, and boolean includeCollected, includeObjectsCollectedByMajorGC and includeObjectsCollectedByMinorGC",
     async (params, authority) => {
       const { captureDiagnosticHeapProfile } =
         await import("../../logging/diagnostic-heap-profile.js");
@@ -104,13 +113,10 @@ export const diagnosticsHandlers: GatewayRequestHandlers = {
       const query = normalizeDiagnosticStabilityQuery(params);
       respond(true, getDiagnosticStabilitySnapshot(query), undefined);
     } catch (err) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          err instanceof Error ? err.message : "invalid diagnostics.stability params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        err instanceof Error ? err.message : "invalid diagnostics.stability params",
       );
     }
   },

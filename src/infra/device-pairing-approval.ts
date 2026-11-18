@@ -62,6 +62,17 @@ function approvalAdmission(
   };
 }
 
+function publishApproval(requestId: string, result: ApproveDevicePairingResult, baseDir?: string) {
+  if (result?.status === "approved") {
+    publishDevicePairingResolution(
+      { requestId, deviceId: result.device.deviceId },
+      "approved",
+      baseDir,
+    );
+  }
+  return result;
+}
+
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -92,36 +103,16 @@ export async function approveDevicePairing(
         admit: admission.admit,
       },
     );
-    if (result?.status === "approved") {
-      publishDevicePairingResolution(
-        { requestId, deviceId: result.device.deviceId },
-        "approved",
-        baseDir,
-      );
-    }
-    return result;
-  });
+    return publishApproval(requestId, result, baseDir);
+  }, "devicePairing.approve");
 }
 
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
+  options: DeviceBootstrapApprovalOptions = {},
   baseDir?: string,
-): Promise<ApproveDevicePairingResult>;
-export async function approveBootstrapDevicePairing(
-  requestId: string,
-  bootstrapProfile: DeviceBootstrapProfile,
-  options: DeviceBootstrapApprovalOptions,
-  baseDir?: string,
-): Promise<ApproveDevicePairingResult>;
-export async function approveBootstrapDevicePairing(
-  requestId: string,
-  bootstrapProfile: DeviceBootstrapProfile,
-  optionsOrBaseDir?: DeviceBootstrapApprovalOptions | string,
-  maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
-  const options = typeof optionsOrBaseDir === "object" ? optionsOrBaseDir : undefined;
-  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
     const { result } = await executeDevicePairingMutation(
@@ -141,13 +132,6 @@ export async function approveBootstrapDevicePairing(
         admit: admission.admit,
       },
     );
-    if (result?.status === "approved") {
-      publishDevicePairingResolution(
-        { requestId, deviceId: result.device.deviceId },
-        "approved",
-        baseDir,
-      );
-    }
-    return result;
-  });
+    return publishApproval(requestId, result, baseDir);
+  }, "devicePairing.approveBootstrap");
 }

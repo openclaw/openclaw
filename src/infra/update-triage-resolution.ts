@@ -2,15 +2,12 @@ import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-hea
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
-import {
-  formatDeferredPluginMigration,
-  readDeferredPluginMigrationsAsync,
-} from "./deferred-plugin-migrations.js";
 import { formatErrorMessage } from "./errors.js";
+import { compareSemverStrings } from "./npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
 import { assertNoPendingPackageActivation } from "./package-update-activation.js";
-import { compareSemverStrings } from "./update-check.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { collectGitRuntimeErrors } from "./update-git-runtime.js";
 import { collectInstalledGlobalPackageErrors } from "./update-global.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
@@ -34,7 +31,7 @@ function matchesIdentity(
 
 const failureFamilies = {
   recovery: ["managed-service-handoff-failed", "update-recovery-pending"],
-  package: ["global-install-failed", "runtime-verification-failed"],
+  package: ["global-install-failed", "runtime-verification-failed", ...PACKAGE_REFUSAL_CODES],
   acquisition: [
     "fetch-failed",
     "no-release-tag",
@@ -47,6 +44,7 @@ const failureFamilies = {
     "preflight-worktree-failed",
     "preflight-no-candidates",
     "preflight-no-good-commit",
+    "preflight-local-replay-conflict",
     "preflight-insufficient-space",
     "preflight-node-runtime-incompatible",
   ],
@@ -90,10 +88,9 @@ function unresolved(message: string, stop = true, nextStep = nextUpdate): Update
   return { ok: false, score: -1, summary, ...(stop ? { stopReason: summary } : {}) };
 }
 
-async function validateTriagePendingRecovery(
-  installRoot: string,
-  env: NodeJS.ProcessEnv,
-): Promise<UpdateRepairValidation | undefined> {
+// Pending plugin migrations are notices retried by the next start or update, not
+// an unresolved core update.
+function validateTriagePendingRecovery(installRoot: string): UpdateRepairValidation | undefined {
   try {
     assertNoPendingPackageActivation(resolveUpdateInstallRoot(installRoot));
   } catch (error) {
@@ -103,10 +100,7 @@ async function validateTriagePendingRecovery(
       nextRepair,
     );
   }
-  const warnings = (await readDeferredPluginMigrationsAsync({ env })).map((pending) =>
-    formatDeferredPluginMigration(pending, env),
-  );
-  return warnings.length > 0 ? unresolved(warnings.join(" "), true, nextRepair) : undefined;
+  return undefined;
 }
 
 /** Resolve the attributed blocker without rewriting the updater's historical outcome. */
@@ -120,8 +114,7 @@ export async function validateTriageUpdateResolution(params: {
 }): Promise<UpdateRepairValidation> {
   const { failure, installRoot, env, signal } = params;
   signal.throwIfAborted();
-  const recoveryFailure = await validateTriagePendingRecovery(installRoot, env);
-  signal.throwIfAborted();
+  const recoveryFailure = validateTriagePendingRecovery(installRoot);
   if (recoveryFailure) {
     return recoveryFailure;
   }
@@ -136,18 +129,10 @@ export async function validateTriageUpdateResolution(params: {
   const original =
     (params.implicit ? history.failure : undefined) ??
     (runId ? getUpdateRun(runId, options) : undefined);
-  const validateCurrentOwner = async () => {
-    const currentRecoveryFailure = await validateTriagePendingRecovery(installRoot, env);
-    signal.throwIfAborted();
-    return findActiveUpdateRun(options) ||
-      readUpdateRunResolutionHistory(options).outcome?.runId !== history.outcome?.runId
-      ? unresolved("The update owner changed during verification.")
-      : currentRecoveryFailure;
-  };
   const validateDoctor = async () => {
     const doctor = await params.validateDoctor();
     signal.throwIfAborted();
-    return (await validateCurrentOwner()) ?? doctor;
+    return doctor;
   };
   if (findActiveUpdateRun(options)) {
     return unresolved("An update is still running; wait for its owner to finish.");
@@ -280,10 +265,6 @@ export async function validateTriageUpdateResolution(params: {
     opts: {},
     signal,
     expectedVersion: installedVersion,
-    requirePluginHealth:
-      reason === "plugin-errors" ||
-      reason === "post-update-plugins" ||
-      (failure && "result" in failure && failure.result.postUpdate?.plugins?.status === "error"),
   });
   signal.throwIfAborted();
   if (!serviceVerified) {
@@ -291,15 +272,10 @@ export async function validateTriageUpdateResolution(params: {
       "The managed Gateway's installation, running version, and readiness are not verified.",
     );
   }
-  if ((await readPackageVersion(installRoot)) !== installedVersion) {
-    return unresolved("The installed version changed during verification.");
-  }
-  signal.throwIfAborted();
-  return (
-    (await validateCurrentOwner()) ?? {
-      ok: true,
-      score: 0,
-      summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,
-    }
-  );
+  // This verdict describes the captured update; another update can run after verification.
+  return {
+    ok: true,
+    score: 0,
+    summary: `${rolledBack ? "Rollback" : "Update"} to ${expected.version ?? expected.sha}${expected.version && expected.sha ? ` (${expected.sha})` : ""} recorded by the updater; installed runtime and managed Gateway readiness verified.`,
+  };
 }

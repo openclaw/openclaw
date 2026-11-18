@@ -5,33 +5,53 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inventory.js";
+import { createConfigIO } from "../../config/io.factory.js";
+import { withPluginCohortConfigCapture } from "../../config/plugin-cohort-recovery.js";
 import * as directoryDurability from "../../infra/directory-durability.js";
 import {
-  encodePackageActivationLauncher,
   openPackageActivationJournal,
   packageActivationIdentity,
   resolvePackageActivationHelper,
   resolvePackageActivationJournalPath,
 } from "../../infra/package-update-activation-journal.js";
 import { createPackageActivationLifetimeFixture } from "../../infra/package-update-activation-lifetime.test-support.js";
-import { preparePackageActivationJournal } from "../../infra/package-update-activation-prepare.js";
 import { prepareRemountedPublication } from "../../infra/package-update-activation-remount.test-support.js";
-import { packageActivationRuntimeForTest } from "../../infra/package-update-activation-runtime.test-support.js";
 import {
   assertNoPendingPackageActivation,
   readPackageActivationReceipt,
 } from "../../infra/package-update-activation.js";
 import { createPackageIntegrityReader } from "../../infra/package-update-integrity.js";
+import {
+  publicationActivation,
+  withPublicationFence,
+} from "../../infra/package-update-publication.test-support.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
 import { createPackageSwapFixture } from "../../infra/package-update-swap.test-support.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
+import * as recoveryAdmission from "../../infra/update-run-recovery-admission.js";
+import { loadPluginCohortRecovery } from "../../infra/update-run-recovery-store.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
+import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
+import {
+  createInterruptedPackagePublication,
+  preparePackagePublication,
+} from "./update-package-publication.test-support.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
 const mocks = vi.hoisted(() => ({ root: vi.fn(), finalize: vi.fn() }));
@@ -53,6 +73,7 @@ beforeEach(async () => {
   });
   await state.writeConfig({ plugins: { enabled: false } });
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
   mocks.finalize.mockImplementation(async () => {
     assertNoPendingPackageActivation(await mocks.root());
   });
@@ -154,6 +175,158 @@ async function repair() {
   await updateRepairCommand({ json: true, yes: true });
 }
 
+async function preparePluginCohort() {
+  const installKey = path.join(fixtureRoot, "package");
+  const sourceRoot = path.join(fixtureRoot, "source");
+  await writePackageRoot(installKey, "2026.10.9");
+  mocks.root.mockResolvedValue(installKey);
+  const driver = readUpdateRunDriver();
+  expect(driver).toBeDefined();
+  const run = createUpdateRun({
+    trigger: "cli",
+    // A schema-valid different start identity represents an exited instance of this PID.
+    origin: { driver: { ...driver!, startIdentity: String(BigInt(driver!.startIdentity) + 1n) } },
+  });
+  recordUpdateRunPhase(run.runId, "verifying");
+  const runtime = {
+    root: installKey,
+    nodePath: process.execPath,
+    version: "2026.10.9",
+    buildId: null,
+  };
+  // Retained state is synthetic; configuration publication and native custody are real.
+  const reservation = createRetainedUpdateRecovery({
+    runId: run.runId,
+    from: runtime,
+    to: runtime,
+  });
+  writeConfigMachineState("update.pluginCohort." + run.runId, {
+    runId: run.runId,
+    transactionId: reservation.transactionId,
+    revision: 0,
+    disposition: "pending",
+    installKey,
+    priorArtifacts: [],
+    artifacts: [],
+    publications: [],
+    settledPublications: 0,
+  });
+  await withUpdateCommandExecutor(run.runId, async (executor) => {
+    const fence = await executor.enter(installKey);
+    await withPluginCohortConfigCapture(
+      { runId: run.runId, installKey, env: process.env, assertCurrent: fence.assertCurrent },
+      () =>
+        createConfigIO({ pluginValidation: "skip" }).writeConfigFile({
+          plugins: { enabled: false },
+          gateway: { mode: "local" },
+        }),
+    );
+  });
+  expect(loadPluginCohortRecovery(run.runId)?.cohort.publications).toEqual([
+    expect.objectContaining({ kind: "config" }),
+  ]);
+  return {
+    runId: run.runId,
+    installKey,
+    sourceRoot,
+    publishSource() {
+      fs.renameSync(installKey, sourceRoot);
+      fs.mkdirSync(path.join(sourceRoot, ".git"));
+      fs.symlinkSync(sourceRoot, installKey, "junction");
+      mocks.root.mockResolvedValue(sourceRoot);
+    },
+    invoke: () =>
+      runRegisteredCli({
+        register: registerUpdateCli,
+        argv: ["update", "repair", "--json", "--yes"],
+      }),
+  };
+}
+
+it.each(["package", "source", "package link"] as const)(
+  "settles the named plugin pair before repair finalization from %s",
+  async (entry) => {
+    const f = await preparePluginCohort();
+    if (entry !== "package") {
+      f.publishSource();
+      if (entry === "package link") {
+        mocks.root.mockResolvedValue(f.installKey);
+      }
+    }
+    mocks.finalize.mockImplementation(async () => {
+      expect(loadPluginCohortRecovery(f.runId)).toBeUndefined();
+      expect(loadUpdateRecovery(f.runId)).toBeUndefined();
+      expect(JSON.parse(fs.readFileSync(state.configPath, "utf8"))).not.toHaveProperty(
+        "gateway.mode",
+      );
+      assertNoPendingPackageActivation(f.installKey);
+    });
+    await f.invoke();
+    expect(
+      mocks.finalize,
+      JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls),
+    ).toHaveBeenCalledOnce();
+    expect(loadPluginCohortRecovery(f.runId)).toBeUndefined();
+    expect(loadUpdateRecovery(f.runId)).toBeUndefined();
+  },
+);
+
+it.each([
+  ["live package slot", /owns the occupied slot/u],
+  ["retargeted package link", /installation changed during repair/u],
+  ["unrelated runtime", /different installation/u],
+  ["different configuration", /unfinished recovery/u],
+  ["wrong committed version", /candidate version and build/u],
+] as const)("preserves source recovery and its publication with %s", async (failure, message) => {
+  const f = await preparePluginCohort();
+  const configBefore = fs.readFileSync(state.configPath, "utf8");
+  if (failure === "wrong committed version") {
+    const pair = loadPluginCohortRecovery(f.runId)!;
+    writeConfigMachineState("update.pluginCohort." + f.runId, {
+      ...pair.cohort,
+      disposition: "commit",
+    });
+    await writePackageRoot(f.installKey, "2026.10.10");
+  }
+  const pairBefore = loadPluginCohortRecovery(f.runId);
+  if (failure === "live package slot") {
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      await executor.enter(f.installKey);
+      f.publishSource();
+      // The historical slot alone is busy; the destination can be claimed.
+      await withUpdateCommandExecutor(randomUUID(), async (destination) => {
+        (await destination.enter(f.sourceRoot)).assertCurrent();
+      });
+      await f.invoke();
+    });
+  } else {
+    f.publishSource();
+    if (failure === "unrelated runtime") {
+      mocks.root.mockResolvedValue(fixtureRoot);
+    } else if (failure === "different configuration") {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", state.path("other.json"));
+    } else if (failure === "retargeted package link") {
+      const inspect = recoveryAdmission.inspectPluginCohortRecoveryAdmission;
+      vi.spyOn(recoveryAdmission, "inspectPluginCohortRecoveryAdmission").mockImplementation(
+        async (...args) => {
+          const pair = await inspect(...args);
+          if (args[1] === f.runId) {
+            fs.unlinkSync(f.installKey);
+            fs.symlinkSync(fixtureRoot, f.installKey, "junction");
+          }
+          return pair;
+        },
+      );
+    }
+    await f.invoke();
+  }
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringMatching(message));
+  expect(mocks.finalize).not.toHaveBeenCalled();
+  expect(loadPluginCohortRecovery(f.runId, { env: state.env })).toEqual(pairBefore);
+  expect(fs.readFileSync(state.configPath, "utf8")).toBe(configBefore);
+});
+
 async function prepareNextPackage(
   f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
   version = "3.0.0",
@@ -161,27 +334,9 @@ async function prepareNextPackage(
   await writePackageRoot(f.params.stage.packageRoot, version);
   await fsp.mkdir(f.params.stage.layout.binDir, { recursive: true });
   await fsp.writeFile(path.join(f.params.stage.layout.binDir, "openclaw"), "new launcher\n");
-  await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-    const reader = createPackageIntegrityReader();
-    await preparePackageActivationJournal({
-      options: {
-        fence: await executor.enter(f.packageRoot),
-        runtime: packageActivationRuntimeForTest(),
-        onPrepared: () => {},
-      },
-      liveRoot: f.packageRoot,
-      stageRoot: f.params.stage.packageRoot,
-      launcherRoot: f.params.stage.layout.binDir,
-      binDir: path.dirname(f.launcher),
-      previous: await reader.tree(f.packageRoot),
-      launchers: [
-        {
-          name: "openclaw",
-          previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
-        },
-      ],
-    });
-  });
+  await withPublicationFence(f.packageRoot, (fence) =>
+    preparePackagePublication(f, publicationActivation(fence)),
+  );
 }
 
 async function interruptedPublication(
@@ -193,29 +348,114 @@ async function interruptedPublication(
 }
 
 describe.skipIf(process.platform === "win32")("public package repair of obsolete recovery", () => {
-  it.each(["publishing", "publication-complete"] as const)(
-    "settles a remounted %s journal through public repair",
-    async (phase) => {
+  it.each(["abandoned", "live ownership", "live sibling"] as const)(
+    "repairs historical hostnames independently before remounted journal recovery: %s",
+    async (scenario) => {
       const f = await prepareRemountedPublication(fixtures, fixtureRoot);
       mocks.root.mockResolvedValue(f.packageRoot);
-      if (phase === "publication-complete") {
+      const driver = readUpdateRunDriver();
+      expect(driver).toBeDefined();
+      const runs = ["previous-mac.invalid", "renamed-mac.invalid"].map((host) => {
+        const run = createUpdateRun({ trigger: "cli", origin: { driver: { ...driver!, host } } });
+        recordUpdateRunPhase(run.runId, "verifying");
+        return run.runId;
+      });
+      const ageMs = 14 * 24 * 60 * 60_000;
+      openOpenClawStateDatabase()
+        .db.prepare("UPDATE update_runs SET created_at_ms = ?, updated_at_ms = ?")
+        .run(Date.now() - ageMs, Date.now() - ageMs);
+      const repairCli = () =>
+        runRegisteredCli({
+          register: registerUpdateCli,
+          argv: ["update", "repair", "--json", "--yes"],
+        });
+      if (scenario === "live ownership") {
+        const journal = fs.readFileSync(f.journalPath);
+        await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+          await executor.enter(f.packageRoot);
+          await repairCli();
+        });
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringMatching(/wait.*owning host.*repair/iu),
+        );
+        expect(runs.map((id) => getUpdateRun(id)?.status)).toEqual(["running", "running"]);
+        expect(fs.readFileSync(f.journalPath)).toEqual(journal);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
+      const sibling =
+        scenario === "live sibling"
+          ? createUpdateRun({ trigger: "cli", origin: { driver } })
+          : undefined;
+      await repairCli();
+      expect(runs.map((id) => getUpdateRun(id))).toEqual(
+        runs.map((runId) =>
+          expect.objectContaining({
+            runId,
+            status: "failed",
+            phase: "finished",
+            reason: "abandoned",
+            finishedAtMs: expect.any(Number),
+          }),
+        ),
+      );
+      for (const [index, id] of runs.entries()) {
+        expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(id));
+        expect(defaultRuntime.error).toHaveBeenCalledWith(
+          expect.stringContaining(index ? "renamed-mac.invalid" : "previous-mac.invalid"),
+        );
+      }
+      if (sibling) {
+        expect(getUpdateRun(sibling.runId)?.status).toBe("running");
+        expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+        expect(fs.existsSync(f.anchor)).toBe(true);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
+      }
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+      expect(fs.existsSync(f.anchor)).toBe(false);
+      expect(mocks.finalize).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    "lost acknowledgement",
+    "manual replacement",
+    "published candidate",
+    "replaced published launcher",
+  ] as const)(
+    "repairs remounted custody without accepting a foreign launcher: %s",
+    async (scenario) => {
+      const published =
+        scenario === "published candidate" || scenario === "replaced published launcher";
+      const f = await prepareRemountedPublication(
+        fixtures,
+        fixtureRoot,
+        false,
+        "equal-symlinks",
+        "candidate",
+        published,
+      );
+      mocks.root.mockResolvedValue(f.packageRoot);
+      if (scenario === "manual replacement") {
         const db = new DatabaseSync(f.journalPath);
         try {
-          db.prepare("UPDATE package_activation SET phase = ?, intent_json = 'null'").run(phase);
+          db.prepare(
+            "UPDATE package_activation SET phase = 'publication-complete', intent_json = 'null'",
+          ).run();
         } finally {
           db.close();
         }
         fs.renameSync(f.packageRoot, `${f.packageRoot}.manual-backup`);
         fs.mkdirSync(f.packageRoot);
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({
-            name: "openclaw",
-            version: "2026.10.1",
-            type: "module",
-            bin: { openclaw: "./openclaw.mjs" },
-          }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "2026.10.1",
+          type: "module",
+          bin: { openclaw: "./openclaw.mjs" },
+        });
         fs.writeFileSync(path.join(f.packageRoot, "openclaw.mjs"), "// newer installed launcher\n");
         fs.mkdirSync(path.join(f.packageRoot, "dist"));
         fs.writeFileSync(
@@ -223,6 +463,25 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
           '{"version":"2026.10.1"}',
         );
         await writePackageDistInventory(f.packageRoot);
+      }
+      if (published) {
+        // The writer must publish a new inode; the fixture only remaps device numbers afterward.
+        expect(fs.lstatSync(f.launcher).ino.toString()).not.toBe(
+          f.historical.launchers[0]!.candidateIdentity.split(":")[1],
+        );
+      }
+      if (scenario === "replaced published launcher") {
+        const target = fs.readlinkSync(f.launcher);
+        fs.renameSync(f.launcher, `${f.launcher}.recorded`);
+        fs.symlinkSync(target, f.launcher);
+        const before = fs.readFileSync(f.journalPath);
+        await expect(repair()).rejects.toThrow(
+          "Package settlement inode or device mapping changed",
+        );
+        expect(fs.readFileSync(f.journalPath)).toEqual(before);
+        expect(fs.existsSync(`${f.anchor}.superseded-${f.operationId}`)).toBe(false);
+        expect(mocks.finalize).not.toHaveBeenCalled();
+        return;
       }
       const installed = await createPackageIntegrityReader().tree(f.packageRoot);
       const previous = await createPackageIntegrityReader().tree(path.join(f.anchor, "previous"));
@@ -235,9 +494,9 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
         phase: "superseded",
         intent: {
           kind:
-            phase === "publishing"
-              ? "publication-settled-external-change"
-              : "superseded-by-manual-install",
+            scenario === "manual replacement"
+              ? "superseded-by-manual-install"
+              : "publication-settled-external-change",
           settled: true,
         },
         descriptor: f.historical,
@@ -340,20 +599,35 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
     expect(fs.readFileSync(path.join(retained, "control/recovery.mjs"))).toEqual(helper);
   });
 
-  it.each(supersessionReasons)("keeps unfinished rollback armed after %s", async (reason) => {
-    const f = await preparedOwnershipMismatch();
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(f.packageRoot);
-      const journal = openPackageActivationJournal(f.anchor);
-      journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
-    });
-    await obsoleteRecovery(f, reason);
-    const journal = fs.readFileSync(f.journal);
-    await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
-    expect(fs.readFileSync(f.journal)).toEqual(journal);
-    expect(fs.existsSync(f.retained)).toBe(false);
-    expect(mocks.finalize).not.toHaveBeenCalled();
-  });
+  it.each(supersessionReasons)(
+    "settles rollback only after its installation is replaced: %s",
+    async (reason) => {
+      const f = await preparedOwnershipMismatch();
+      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+        const fence = await executor.enter(f.packageRoot);
+        const journal = openPackageActivationJournal(f.anchor);
+        journal.transition(journal.read(), "rollback-in-progress", null, fence.assertCurrent);
+      });
+      await obsoleteRecovery(f, reason);
+      if (reason === "superseded-by-manual-install") {
+        const installed = await createPackageIntegrityReader().tree(f.packageRoot);
+        await repair();
+        expect(readArchivedSettlement(f.anchor, f.operationId).intent).toMatchObject({
+          kind: reason,
+          settled: true,
+        });
+        expect(await createPackageIntegrityReader().tree(f.packageRoot)).toEqual(installed);
+        expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
+        expect(mocks.finalize).toHaveBeenCalledOnce();
+        return;
+      }
+      const journal = fs.readFileSync(f.journal);
+      await expect(repair()).rejects.toThrow(/restoration|rollback/iu);
+      expect(fs.readFileSync(f.journal)).toEqual(journal);
+      expect(fs.existsSync(f.retained)).toBe(false);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { field: "exports", value: { ".": { import: "./dist/index.js", default: "./missing.js" } } },
@@ -363,7 +637,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       const f = await interruptedPublication();
       const manifestPath = path.join(f.packageRoot, "package.json");
       const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-      fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, [field]: value }));
+      writeFixtureJsonSync(manifestPath, { ...manifest, [field]: value });
       const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
       await expect(repair()).rejects.toThrow("package.json");
       expect(fs.readFileSync(resolvePackageActivationJournalPath(f.anchor))).toEqual(journal);
@@ -440,10 +714,7 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       );
     }
     if (failure === "wrong version") {
-      fs.writeFileSync(
-        path.join(f.packageRoot, "dist/build-info.json"),
-        JSON.stringify({ version: "1.0.0" }),
-      );
+      writeFixtureJsonSync(path.join(f.packageRoot, "dist/build-info.json"), { version: "1.0.0" });
       await writePackageDistInventory(f.packageRoot);
     }
     const journal = fs.readFileSync(resolvePackageActivationJournalPath(f.anchor));
@@ -565,10 +836,10 @@ describe.skipIf(process.platform === "win32")("public package repair of obsolete
       if (source === f.anchor) {
         fs.renameSync(f.packageRoot, `${f.packageRoot}.replaced-again`);
         fs.cpSync(`${f.packageRoot}.replaced-again`, f.packageRoot, { recursive: true });
-        fs.writeFileSync(
-          path.join(f.packageRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "4.0.0" }),
-        );
+        writeFixtureJsonSync(path.join(f.packageRoot, "package.json"), {
+          name: "openclaw",
+          version: "4.0.0",
+        });
       }
     });
 

@@ -4,10 +4,9 @@ import { isServiceInspectionReason } from "../daemon/service-inspection-error.js
 import { normalizeSupportDiagnosticErrorCode } from "../logging/diagnostic-support-redaction.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub-error-codes.js";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install-types.js";
-import {
-  SKIPPED_UPDATE_OUTCOMES,
-  UPDATE_ENVIRONMENT_FAILURE_REASONS,
-} from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
+import { UPDATE_ENVIRONMENT_FAILURE_REASONS } from "../shared/update-outcome.js";
+import { PACKAGE_REFUSAL_CODES } from "./package-update-refusal.js";
 import { UPDATE_PREFLIGHT_DETAILS } from "./update-preflight-details.js";
 import { updateRecoverySchema } from "./update-recovery.js";
 
@@ -21,6 +20,7 @@ export const CANARY_CHECKS = [
 ] as const;
 
 const PUBLIC_CODES = new Set<string>([
+  ...PACKAGE_REFUSAL_CODES,
   ...Object.keys(UPDATE_PREFLIGHT_DETAILS),
   ...Object.keys(SKIPPED_UPDATE_OUTCOMES),
   ...Object.values(PLUGIN_INSTALL_ERROR_CODE),
@@ -28,6 +28,8 @@ const PUBLIC_CODES = new Set<string>([
   PLUGIN_CAPABILITY_CONSENT_REQUIRED,
   ...updateRecoverySchema.options[1].shape.reason.options,
   ...GATEWAY_RESTART_WAIT_OUTCOMES,
+  // Recorded by updaters before plugin load errors became notices.
+  "plugin-errors",
   ...CANARY_CHECKS.map((phase) => `candidate-${phase}-failed`),
   "candidate-readiness-probe-failed",
   "Error",
@@ -38,6 +40,8 @@ const PUBLIC_CODES = new Set<string>([
   "URIError",
   "EvalError",
   "AggregateError",
+  "OpenClawStateLeaseError",
+  "OPENCLAW_STATE_LEASE_LOST",
   "command-failed",
   "doctor-failed",
   "doctor-processes-unsettled",
@@ -46,6 +50,8 @@ const PUBLIC_CODES = new Set<string>([
   "unexpected-error",
   "host-owned-plugin-link",
   "update-failed",
+  "file_lock_timeout",
+  "file_lock_stale",
   "repair-failed",
   "update-recovery-pending",
   "update-executor-settlement-failed",
@@ -72,6 +78,8 @@ const PUBLIC_CODES = new Set<string>([
   "preflight-worktree-failed",
   "preflight-node-runtime-incompatible",
   "preflight-no-good-commit",
+  "preflight-local-replay-conflict",
+  "git-version-unsupported",
   "reference-source-not-fast-forward",
   "reference-source-pnpm-unavailable",
   "preferred-manager-unavailable",
@@ -95,7 +103,9 @@ const PUBLIC_CODES = new Set<string>([
   "verification-result-missing",
   "finalization-timeout",
   "finalization-failed",
+  "ancestry-unverified",
   "no-output-timeout",
+  "output-limit",
   "signal",
   "readyz-unhealthy",
   "service-not-running",
@@ -129,6 +139,7 @@ const PUBLIC_CODES = new Set<string>([
   "config-conflict",
   "config-input-changed",
   "requester-revoked",
+  "interrupted",
   "repair-requires-config-change",
 ]);
 

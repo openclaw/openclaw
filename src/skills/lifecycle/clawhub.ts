@@ -149,7 +149,11 @@ export async function preflightSkillFromClawHub(params: {
         version: resolved.version,
         integrity,
       });
-      return owner.ok && trust.warning ? { ...owner, warning: trust.warning } : owner;
+      return {
+        ...owner,
+        integrity,
+        ...(trust.warning ? { warning: trust.warning } : {}),
+      };
     };
     if (params.expectedIntegrity) {
       return await preflightOwner(normalizeExpectedArtifactIntegrity(params.expectedIntegrity));
@@ -180,12 +184,9 @@ export async function preflightSkillFromClawHub(params: {
 }
 
 export async function installSkillFromClawHub(
-  params: Omit<
-    ClawHubInstallParams,
-    "ownerHandle" | "requestedReference" | "trustState" | "expectedClawHubState"
-  >,
+  params: Omit<ClawHubInstallParams, "ownerHandle" | "requestedReference" | "trustState">,
 ): Promise<InstallClawHubSkillResult> {
-  if (params.clawManaged) {
+  if (params.templateManaged) {
     return await installClawHubSkillReference(params, "requested");
   }
   return await withClawPackageLifecycleLease(
@@ -203,6 +204,8 @@ export async function updateSkillsFromClawHub(params: {
   logger?: Logger;
   config?: OpenClawConfig;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
+  /** Once aborted, no further skill update starts; one already in progress finishes. */
+  signal?: AbortSignal;
 }): Promise<UpdateClawHubSkillResult[]> {
   const tracking = resolveWorkspaceClawHubSkills(params.workspaceDir);
   const lock = await (tracking?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile)(
@@ -219,6 +222,9 @@ export async function updateSkillsFromClawHub(params: {
     : Object.keys(lock.skills).map((slug) => normalizeTrackedSkillSlug(slug));
   const results: UpdateClawHubSkillResult[] = [];
   for (const slug of slugs) {
+    if (params.signal?.aborted) {
+      break;
+    }
     const tracked = await (tracking?.resolveTrackedUpdateTarget ?? resolveTrackedUpdateTarget)({
       workspaceDir: params.workspaceDir,
       slug,

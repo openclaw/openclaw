@@ -6,6 +6,16 @@ import {
 } from "./provider-catalog-live-normalize.internal.js";
 
 describe("live model catalog primitive fields", () => {
+  it("stops reading aliases after the first admitted value, including false", () => {
+    const row = {
+      primary: false,
+      get fallback() {
+        throw new Error("later alias must not be read");
+      },
+    };
+    expect(readLiveModelCatalogBooleanField(row, ["primary", "fallback"])).toBe(false);
+  });
+
   it.each<[unknown, string | readonly string[], string | undefined]>([
     [{ primary: "  ", fallback: "  model-id  " }, ["primary", "fallback"], "model-id"],
     [{ value: 42 }, "value", undefined],

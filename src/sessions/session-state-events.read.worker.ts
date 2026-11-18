@@ -1,7 +1,7 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { SESSION_WATCH_PROVENANCE_AMBIENT_GROUP } from "../state/session-watch-cursor-provenance.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 import {
@@ -12,7 +12,7 @@ import {
 import { isSessionStateWatchAddress } from "./session-state-events.watch-address.js";
 
 export function readSessionStateSequence(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   agentId: string,
 ): number {
@@ -95,7 +95,7 @@ export const sessionStateReadOperations = {
     input: { sessionKey: string; agentId: string; afterSequence: number; limit: number },
     db,
   ) =>
-    runSqliteDeferredTransactionSync(db, () => {
+    runSqliteReadSnapshotSync(db, () => {
       const { sessionKey, agentId, afterSequence } = input;
       const boundedLimit = Math.max(1, Math.min(200, Math.floor(input.limit)));
       const kysely = getSessionStateKysely(db);
@@ -140,4 +140,4 @@ export const sessionStateReadOperations = {
         },
       };
     }),
-} satisfies WorkerOperationHandlers<DatabaseSync>;
+} satisfies WorkerOperationHandlers<EngineConnection>;

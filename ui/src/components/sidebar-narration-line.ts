@@ -4,11 +4,6 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
   stripInternalRuntimeContext,
 } from "../../../src/agents/internal-runtime-context.js";
-import {
-  isSuppressedControlReplyLeadFragment,
-  isSuppressedControlReplyText,
-  stripSuppressedControlReplyToken,
-} from "../../../src/gateway/control-reply-text.js";
 import { stripInlineDirectiveTagsForDisplay } from "../../../src/utils/directive-tags.js";
 import { stripHeartbeatTokenForDisplay } from "../lib/chat/heartbeat-display.ts";
 import { clampText } from "../lib/format.ts";
@@ -20,17 +15,9 @@ export function deriveSidebarNarrationLine(text: string): string {
   // streamed drafts still carry them mid-run; persisted data is already clean.
   // Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
   // default flips to "message_tool".
-  const displayText = stripSuppressedControlReplyToken(
-    stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
-  );
+  const displayText = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
   const heartbeat = stripHeartbeatTokenForDisplay(displayText);
-  if (
-    !displayText ||
-    isSuppressedControlReplyText(displayText) ||
-    isSuppressedControlReplyLeadFragment(displayText) ||
-    heartbeat.shouldSkip ||
-    !heartbeat.text
-  ) {
+  if (!displayText || heartbeat.shouldSkip || !heartbeat.text) {
     return "";
   }
   // Fences are dropped before the paragraph split, not just by the shared

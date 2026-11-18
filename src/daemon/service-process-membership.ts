@@ -11,6 +11,23 @@ type ResourceCoalition = { id: number; name?: string };
 const PROBE_TIMEOUT_MS = 2_000;
 declare const SEALED_RUNTIME_BUILD: boolean;
 
+export function resolveServiceProcessMembershipBlock(
+  membership: ServiceProcessMembership,
+  ancestryComplete: boolean,
+  platform: NodeJS.Platform = process.platform,
+) {
+  if (membership === "inside") {
+    return "inside-gateway-service";
+  }
+  if (membership === "unknown") {
+    return "service-membership-unverified";
+  }
+  // Darwin containment proves an external terminal even when a root-owned login is unreadable.
+  return !ancestryComplete && (platform !== "darwin" || membership !== "outside")
+    ? "service-ancestry-unverified"
+    : undefined;
+}
+
 function readNativeResourceCoalition(pid: number): ResourceCoalition | null | undefined {
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
     return undefined;
@@ -78,7 +95,7 @@ function readResourceCoalition(pid: number): ResourceCoalition | null | undefine
   }
   const headers = result.stdout.match(/^\s*resource coalition\s*=/gm);
   if (!headers) {
-    return /resource coalition/i.test(result.stdout) ? undefined : null;
+    return /resource coalition/i.test(result.stdout) ? undefined : readNativeResourceCoalition(pid);
   }
   const body = /^\s*resource coalition\s*=\s*\{([^{}]*)^\s*\}/m.exec(result.stdout)?.[1];
   if (headers.length !== 1 || !body) {

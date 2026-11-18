@@ -46,6 +46,10 @@ export function loadManifestModelProviderConfigs(params: {
   });
   const rowsByProvider = new Map<string, NormalizedModelCatalogRow[]>();
   for (const row of rows) {
+    // Typed-only declarations have no conversational Model defaults or registry entry.
+    if (row.inference?.chat === false) {
+      continue;
+    }
     const providerRows = rowsByProvider.get(row.provider) ?? [];
     providerRows.push(row);
     rowsByProvider.set(row.provider, providerRows);

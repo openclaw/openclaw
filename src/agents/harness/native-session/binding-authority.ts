@@ -1,4 +1,3 @@
-import type { ReplyToolAuthorityPreparation } from "../../../auto-reply/reply/reply-run-registry.contracts.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import {
   captureNativeSessionEntryCurrentRead,
@@ -13,9 +12,11 @@ import {
   withSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "../../../config/sessions/session-entry-read-runtime.js";
-import type {
-  PreparedSessionSourceAuthority,
-  SessionSourceAssertion,
+import {
+  composeSessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+  type PreparedSessionSourceAssertion,
+  type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import {
   assertSessionStoreReadCandidate,
@@ -29,7 +30,9 @@ import {
 } from "../../../config/sessions/store-entry.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
+import type { ReplyToolAuthorityPreparation } from "../../../sessions/session-controller.contracts.js";
 import {
   capturePreparedToolAuthorityReads,
   type PreparedToolAuthorityRead,
@@ -50,7 +53,7 @@ export type NativeSessionBindingLineage = {
   createSupersededError: (sessionId: string) => Error;
 };
 
-/** A fresh lineage read owns custody only through the synchronous effect admission. */
+/** Admit the synchronous effect against current lineage and caller liveness. */
 export type NativeSessionBindingWithCurrent = <T>(consume: () => T) => Promise<T>;
 type NativePreparedPolicy = ReplyToolAuthorityPreparation & {
   onRefused?: (error: unknown) => "discarded";
@@ -60,9 +63,50 @@ type CapturedNativePolicy = {
   reads: PreparedToolAuthorityRead[];
   assertCompatibility?: () => void;
 };
+
+async function captureNativePolicies(
+  preparations: readonly NativePreparedPolicy[],
+  assertCurrent?: () => void,
+): Promise<CapturedNativePolicy[]> {
+  const policies: CapturedNativePolicy[] = [];
+  for (const preparation of preparations) {
+    assertCurrent?.();
+    try {
+      policies.push({ preparation, ...(await capturePreparedToolAuthorityReads(preparation)) });
+    } catch (error) {
+      if (preparation.onRefused?.(error) !== "discarded") {
+        throw error;
+      }
+    }
+  }
+  return policies;
+}
+
+function assertLegacyNativePolicies(policies: readonly CapturedNativePolicy[]): void {
+  const survivors: CapturedNativePolicy[] = [];
+  for (const policy of policies) {
+    try {
+      policy.preparation.assertCurrent();
+      survivors.push(policy);
+    } catch (error) {
+      if (policy.preparation.onRefused?.(error) !== "discarded") {
+        throw error;
+      }
+    }
+  }
+  // A late compatibility refusal rejects the whole undispatched batch.
+  for (const policy of survivors) {
+    assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
+  }
+  // Refusal callbacks can revoke earlier survivors before the effect.
+  for (const policy of survivors) {
+    policy.preparation.assertCurrent();
+  }
+}
+
 export type NativeSessionBindingAuthority = {
   readonly lineage: readonly NativeSessionBindingLineage[];
-  /** Cancellation and lifecycle only; durable authority is acquired through withCurrent. */
+  /** Prepared authorities include lineage; legacy authorities check it through withCurrent. */
   assertCurrent: () => void;
   /** For shipped synchronous capabilities that cannot await worker admission. */
   assertLegacyCurrent: SessionSourceAssertion;
@@ -76,6 +120,88 @@ export type NativeSessionBindingAuthority = {
     sessionEntryCurrent?: SessionEntriesCurrentCheck;
   }>;
 };
+
+/** A borrowed view; the capture owner releases its shared source after settlement. */
+export type PreparedNativeSessionBindingAuthority = NativeSessionBindingAuthority & {
+  readonly prepared: {
+    source: PreparedSessionSourceAssertion;
+    entryChecks: readonly SessionEntryCurrentCheck[];
+  };
+  withLiveness(assertCurrent: () => void): PreparedNativeSessionBindingAuthority;
+};
+
+/** Bind live owner checks without acquiring any session lineage or storage. */
+export function createNativeSessionBindingScope(
+  assertCurrent: () => void,
+): PreparedNativeSessionBindingAuthority {
+  return createPreparedNativeSessionBindingAuthority({
+    lineage: [],
+    source: composeSessionSourceAssertion([]),
+    entryChecks: [],
+    assertCurrent,
+  });
+}
+
+/** Prepared lineage stays current through the session entry owner's write publications. */
+export function createPreparedNativeSessionBindingAuthority(params: {
+  lineage: readonly NativeSessionBindingLineage[];
+  source: PreparedSessionSourceAssertion;
+  entryChecks: readonly SessionEntryCurrentCheck[];
+  assertCurrent: () => void;
+}): PreparedNativeSessionBindingAuthority {
+  const { lineage, source, entryChecks, assertCurrent } = params;
+  const assertLegacyCurrent = composeSessionSourceAssertion([source], (assertSource) => {
+    assertCurrent();
+    assertSource();
+  });
+  return {
+    lineage,
+    prepared: { source, entryChecks },
+    assertCurrent: assertLegacyCurrent,
+    assertLegacyCurrent,
+    withLiveness: (next) =>
+      createPreparedNativeSessionBindingAuthority({ ...params, assertCurrent: next }),
+    async withCurrent(consume) {
+      assertLegacyCurrent();
+      return consume();
+    },
+    async withPreparedCurrent(consume, preparations) {
+      assertCurrent();
+      const policies = await captureNativePolicies(preparations);
+      if (policies.some((policy) => policy.assertCompatibility)) {
+        // Shipped policy callbacks can read SQLite and cannot run inside a worker grant.
+        return withSessionEntriesFromStoresInWorker([], () => {
+          assertLegacyNativePolicies(policies);
+          assertLegacyCurrent();
+          return consume();
+        });
+      }
+      return readNativeSessionBindingEntries(
+        [],
+        () => {
+          assertLegacyCurrent();
+          return consume();
+        },
+        policies,
+      );
+    },
+    async prepareMutation() {
+      assertLegacyCurrent();
+      return {
+        assertCurrent: assertLegacyCurrent,
+        sessionEntryCurrent: entryChecks.length
+          ? {
+              sources: entryChecks.map((check) => check.source),
+              assertCurrent: (entries) => {
+                assertCurrent();
+                entryChecks.forEach((check, index) => check.assertCurrent(entries[index]));
+              },
+            }
+          : undefined,
+      };
+    },
+  };
+}
 
 export function readNativeSessionBindingEntries<T>(
   reads: readonly NativeSessionBindingRead[],
@@ -171,7 +297,20 @@ export function readNativeSessionBindingEntries<T>(
   );
 }
 
+/** @deprecated Use createPreparedNativeSessionBindingAuthority with retained lineage or createNativeSessionBindingScope; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
 export function createNativeSessionBindingAuthority(
+  lineage: readonly NativeSessionBindingLineage[],
+  assertCurrent: () => void,
+): NativeSessionBindingAuthority {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "createNativeSessionBindingAuthority",
+    replacement: "createPreparedNativeSessionBindingAuthority or createNativeSessionBindingScope",
+  });
+  return createNativeSessionBindingAuthorityInternal(lineage, assertCurrent);
+}
+
+export function createNativeSessionBindingAuthorityInternal(
   lineage: readonly NativeSessionBindingLineage[],
   assertCurrent: () => void,
 ): NativeSessionBindingAuthority {
@@ -246,20 +385,7 @@ export function createNativeSessionBindingAuthority(
           }
         };
       });
-      const policies: CapturedNativePolicy[] = [];
-      for (const preparation of preparations) {
-        assertCurrent();
-        try {
-          policies.push({
-            preparation,
-            ...(await capturePreparedToolAuthorityReads(preparation)),
-          });
-        } catch (error) {
-          if (preparation.onRefused?.(error) !== "discarded") {
-            throw error;
-          }
-        }
-      }
+      const policies = await captureNativePolicies(preparations, assertCurrent);
       for (const check of sources) {
         check();
       }
@@ -267,24 +393,7 @@ export function createNativeSessionBindingAuthority(
         // Released synchronous policies may read this same database. Keep their
         // complete final check outside worker grants, with no await before the effect.
         return withSessionEntriesFromStoresInWorker([], () => {
-          const survivors: CapturedNativePolicy[] = [];
-          for (const policy of policies) {
-            try {
-              policy.preparation.assertCurrent();
-              survivors.push(policy);
-            } catch (error) {
-              if (policy.preparation.onRefused?.(error) !== "discarded") {
-                throw error;
-              }
-            }
-          }
-          // A late compatibility refusal rejects the whole undispatched batch.
-          for (const policy of survivors) {
-            assertLegacyPreparedToolAuthority(policy.preparation, policy.reads);
-          }
-          for (const policy of survivors) {
-            policy.preparation.assertCurrent();
-          }
+          assertLegacyNativePolicies(policies);
           for (const check of sources) {
             check();
           }
@@ -411,15 +520,43 @@ function readNativeBindingLineage(
   return { sessionId: entry.sessionId, previousSessionId };
 }
 
-/** Batch every owner into one retained read rather than nesting writer admissions. */
-export function combineNativeSessionBindingAuthority(
-  ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
-): NativeSessionBindingAuthority {
+/** Combine borrowed owner facts without acquiring another lineage read. */
+export function combinePreparedNativeSessionBindingAuthority(
+  ...authorities: readonly (PreparedNativeSessionBindingAuthority | undefined)[]
+): PreparedNativeSessionBindingAuthority {
   const present = [...new Set(authorities.filter((authority) => authority !== undefined))];
   if (present.length === 1) {
     return present[0]!;
   }
-  return createNativeSessionBindingAuthority(
+  return createPreparedNativeSessionBindingAuthority({
+    lineage: present.flatMap(({ lineage }) => lineage),
+    source: composeSessionSourceAssertion(present.map(({ prepared }) => prepared.source)),
+    entryChecks: present.flatMap(({ prepared }) => prepared.entryChecks),
+    assertCurrent: () => {
+      for (const authority of present) {
+        authority.assertCurrent();
+      }
+    },
+  });
+}
+
+/** @deprecated Use combinePreparedNativeSessionBindingAuthority; removed in the first January 2027 stable release, after the final compatibility day 2026-12-31. */
+export function combineNativeSessionBindingAuthority(
+  ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
+): NativeSessionBindingAuthority {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "combineNativeSessionBindingAuthority",
+    replacement: "combinePreparedNativeSessionBindingAuthority",
+  });
+  return combineNativeSessionBindingAuthorityInternal(...authorities);
+}
+
+export function combineNativeSessionBindingAuthorityInternal(
+  ...authorities: readonly (NativeSessionBindingAuthority | undefined)[]
+): NativeSessionBindingAuthority {
+  const present = [...new Set(authorities.filter((authority) => authority !== undefined))];
+  return createNativeSessionBindingAuthorityInternal(
     present.flatMap(({ lineage }) => lineage),
     () => {
       for (const authority of present) {

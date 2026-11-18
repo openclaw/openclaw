@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,79 +10,74 @@ import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
+import {
+  readJson,
+  readJsonLines,
+  runProcess,
+  writeExecutable,
+  writeJson,
+} from "./upgrade-survivor-shard.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const assertionsPath = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
+const publishedRegistry = "https://published.example.invalid";
+const candidateRegistry = "https://candidate.example.invalid";
 
-function planMissingLoadPath(
-  baselines: string,
-  scenarios = "missing-load-path",
-  selectedLaneNames = ["published-upgrade-survivor"],
-) {
-  return resolveDockerE2ePlan({
-    includeOpenWebUI: false,
-    liveMode: "all",
-    orderLanes: (lanes) => lanes,
-    planReleaseAll: false,
-    profile: "all",
-    releaseChunk: "core",
-    selectedLaneNames,
-    timingStore: undefined,
-    upgradeSurvivorBaselines: baselines,
-    upgradeSurvivorScenarios: scenarios,
-  }).plan;
-}
-
-it.each<{
-  baselines: string;
-  scenarios?: string;
-  selected?: string[];
-  rows: string[] | null;
-}>([
-  { baselines: "2026.9.3", rows: ["2026.9.3-missing-load-path"] },
-  ...["2026.7.1", "2026.7.1-2", "2026.7.2-beta.4"].map((baselines) => ({ baselines, rows: null })),
-  ...["2026.7.2-beta.5", "latest"].map((baselines) => ({
-    baselines,
-    rows: [`${baselines}-missing-load-path`],
-  })),
-  {
-    baselines: "2026.7.1 2026.9.3",
-    scenarios: "base missing-load-path",
-    rows: ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
-  },
-  { baselines: "2026.7.1", scenarios: "base missing-load-path", rows: null },
-  { baselines: "2026.7.1", selected: ["onboard"], rows: ["onboard"] },
-  ...["2026.7.1", "2026.7.1 2026.9.3"].map((baselines) => ({
-    baselines,
-    scenarios: "base missing-load-path",
-    selected: ["published-upgrade-survivor-2026.7.1"],
-    rows: ["2026.7.1"],
-  })),
-])(
-  "plans missing-path admission for $baselines ($scenarios, $selected)",
-  ({ baselines, scenarios, selected, rows }) => {
-    const plan = () => planMissingLoadPath(baselines, scenarios, selected);
-    if (rows === null) {
-      expect(plan).toThrow("missing-load-path has no compatible published baseline");
-      return;
-    }
-    const result = plan();
-    expect(result.lanes.map((lane) => lane.name)).toEqual(
-      rows.map((row) => (row === "onboard" ? row : `published-upgrade-survivor-${row}`)),
+it.each<[string, string[] | null, string?, string[]?]>([
+  ["2026.9.3", ["2026.9.3-missing-load-path"]],
+  ["2026.7.1", null],
+  ["2026.7.1-2", null],
+  ["2026.7.2-beta.4", null],
+  ["2026.7.2-beta.5", ["2026.7.2-beta.5-missing-load-path"]],
+  ["latest", ["latest-missing-load-path"]],
+  [
+    "2026.7.1 2026.9.3",
+    ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
+    "base missing-load-path",
+  ],
+  ["2026.7.1", null, "base missing-load-path"],
+  ["2026.7.1", ["onboard"], undefined, ["onboard"]],
+  ["2026.7.1", ["2026.7.1"], "base missing-load-path", ["published-upgrade-survivor-2026.7.1"]],
+  [
+    "2026.7.1 2026.9.3",
+    ["2026.7.1"],
+    "base missing-load-path",
+    ["published-upgrade-survivor-2026.7.1"],
+  ],
+])("plans missing-path admission for %s (%s, %s, %s)", (baselines, rows, scenarios, selected) => {
+  const plan = () =>
+    resolveDockerE2ePlan({
+      includeOpenWebUI: false,
+      liveMode: "all",
+      orderLanes: (lanes) => lanes,
+      planReleaseAll: false,
+      profile: "all",
+      releaseChunk: "core",
+      selectedLaneNames: selected ?? ["published-upgrade-survivor"],
+      timingStore: undefined,
+      upgradeSurvivorBaselines: baselines,
+      upgradeSurvivorScenarios: scenarios ?? "missing-load-path",
+    }).plan;
+  if (rows === null) {
+    expect(plan).toThrow("missing-load-path has no compatible published baseline");
+    return;
+  }
+  const result = plan();
+  expect(result.lanes.map((lane) => lane.name)).toEqual(
+    rows.map((row) => (row === "onboard" ? row : `published-upgrade-survivor-${row}`)),
+  );
+  if (selected?.[0]?.startsWith("published-upgrade-survivor-")) {
+    expect(result.omittedUnsupportedLanes).toEqual([]);
+  }
+  if (baselines === "2026.9.3") {
+    expect(result.lanes[0]?.command).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='missing-load-path'",
     );
-    if (selected?.[0]?.startsWith("published-upgrade-survivor-")) {
-      expect(result.omittedUnsupportedLanes).toEqual([]);
+    for (const aggregate of ["reported-issues", "far-reaching"]) {
+      expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain("missing-load-path");
     }
-    if (baselines === "2026.9.3") {
-      expect(result.lanes[0]?.command).toContain(
-        "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='missing-load-path'",
-      );
-      for (const aggregate of ["reported-issues", "far-reaching"]) {
-        expect(parseUpgradeSurvivorScenarios(aggregate)).not.toContain("missing-load-path");
-      }
-    }
-  },
-);
+  }
+});
 
 it.skipIf(process.platform === "win32").each([
   { baseline: "2026.7.1", scenario: "base", supported: false },
@@ -90,13 +85,13 @@ it.skipIf(process.platform === "win32").each([
   { baseline: "2026.9.3", scenario: "base", supported: true },
   { baseline: "2026.9.3", scenario: "missing-load-path", supported: true },
 ])(
-  "protects baseline config when selecting missing-path fixture ($baseline/$scenario)",
+  "protects config during missing-path admission: $baseline/$scenario",
   ({ baseline, scenario, supported }) => {
     const root = tempDirs.make("survivor-unsupported-missing-path-");
     const configPath = path.join(root, "openclaw.json");
     const original = JSON.stringify({ plugins: { allow: [], entries: {} } });
     writeFileSync(configPath, original);
-    const result = spawnSync(
+    const result = runProcess(
       "bash",
       [
         "-c",
@@ -127,13 +122,10 @@ printf 'applicability:%s seeded:%s\\n' "\${missing_load_path_applicability:-}" "
         baseline,
       ],
       {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
-          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: path.join(root, "artifacts"),
-        },
+        ...process.env,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: path.join(root, "artifacts"),
       },
     );
     expect(result.status, result.stdout + result.stderr).toBe(
@@ -141,7 +133,7 @@ printf 'applicability:%s seeded:%s\\n' "\${missing_load_path_applicability:-}" "
     );
     expect(existsSync(path.join(root, "custom-plugins"))).toBe(supported);
     if (supported) {
-      expect(JSON.parse(readFileSync(configPath, "utf8")).plugins.load.paths).toEqual([
+      expect(readJson(configPath).plugins.load.paths).toEqual([
         path.join(root, "custom-plugins", "survivor-unavailable-path"),
       ]);
       expect(result.stdout).toContain("applicability:supported seeded:1");
@@ -155,71 +147,64 @@ printf 'applicability:%s seeded:%s\\n' "\${missing_load_path_applicability:-}" "
   },
 );
 
-it.each(["source", "compiled"])(
-  "dispatches missing-load-path stages after loading the %s fixture",
-  (loading) => {
-    const root = tempDirs.make("openclaw-missing-load-path-dispatch-");
-    const configPath = path.join(root, "openclaw.json");
-    const paths = readUpgradeSurvivorPaths(root, {
-      OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
-      OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-load-path",
+it.each(["source", "compiled"])("dispatches missing-path stages with the %s fixture", (loading) => {
+  const root = tempDirs.make("openclaw-missing-load-path-dispatch-");
+  const configPath = path.join(root, "openclaw.json");
+  const paths = readUpgradeSurvivorPaths(root, {
+    OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
+    OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "missing-load-path",
+  });
+  const artifactRoot = paths.artifactRoot;
+  const pluginRoot = path.join(root, "custom-plugins", "survivor-unavailable-path");
+  writeJson(configPath, { plugins: { allow: [], entries: {} } });
+  const env = {
+    ...process.env,
+    OPENCLAW_CONFIG_PATH: configPath,
+    ...paths.env,
+    OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifactRoot,
+  };
+  const run = (stage: string) =>
+    execFileSync(resolveTestNodeExecPath(), [assertionsPath, "missing-load-path", stage], {
+      env,
+      encoding: "utf8",
     });
-    const artifactRoot = paths.artifactRoot;
-    const pluginRoot = path.join(root, "custom-plugins", "survivor-unavailable-path");
-    writeFileSync(configPath, JSON.stringify({ plugins: { allow: [], entries: {} } }));
-    const env = {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: configPath,
-      ...paths.env,
-      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifactRoot,
-    };
-    const run = (stage: string) =>
-      execFileSync(resolveTestNodeExecPath(), [assertionsPath, "missing-load-path", stage], {
-        env,
-        encoding: "utf8",
-      });
 
-    run("seed");
-    expect(existsSync(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
-    const seededConfig = readFileSync(configPath, "utf8");
-    let entry = path.join(pluginRoot, "index.mjs");
-    if (loading === "compiled") {
-      const compiledRoot = path.join(root, "compiled-plugin");
-      mkdirSync(compiledRoot);
-      const compiledEntry = path.join(compiledRoot, "index.mjs");
-      copyFileSync(entry, compiledEntry);
-      entry = compiledEntry;
-    }
-    execFileSync(
-      resolveTestNodeExecPath(),
-      [
-        "--input-type=module",
-        "-e",
-        `const { default: plugin } = await import(${JSON.stringify(pathToFileURL(entry).href)}); plugin.register();`,
-      ],
-      { env },
+  run("seed");
+  expect(existsSync(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
+  const seededConfig = readFileSync(configPath, "utf8");
+  let entry = path.join(pluginRoot, "index.mjs");
+  if (loading === "compiled") {
+    const compiledRoot = path.join(root, "compiled-plugin");
+    mkdirSync(compiledRoot);
+    const compiledEntry = path.join(compiledRoot, "index.mjs");
+    copyFileSync(entry, compiledEntry);
+    entry = compiledEntry;
+  }
+  execFileSync(
+    resolveTestNodeExecPath(),
+    [
+      "--input-type=module",
+      "-e",
+      `const { default: plugin } = await import(${JSON.stringify(pathToFileURL(entry).href)}); plugin.register();`,
+    ],
+    { env },
+  );
+  if (loading === "compiled") {
+    const receiptPath = path.join(artifactRoot, "missing-load-path", "baseline-registration.json");
+    const receipt = readFileSync(receiptPath);
+    writeJson(receiptPath, { registrationToken: "previous-fixture" });
+    expect(() => run("unavailable")).toThrow(
+      "The published baseline did not load the configured fixture plugin",
     );
-    if (loading === "compiled") {
-      const receiptPath = path.join(
-        artifactRoot,
-        "missing-load-path",
-        "baseline-registration.json",
-      );
-      const receipt = readFileSync(receiptPath);
-      writeFileSync(receiptPath, JSON.stringify({ registrationToken: "previous-fixture" }));
-      expect(() => run("unavailable")).toThrow(
-        "The published baseline did not load the configured fixture plugin",
-      );
-      expect(existsSync(pluginRoot)).toBe(true);
-      expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
-      writeFileSync(receiptPath, receipt);
-    }
-
-    expect(run("unavailable")).toContain("Removed loaded baseline plugin source before update:");
-    expect(existsSync(pluginRoot)).toBe(false);
+    expect(existsSync(pluginRoot)).toBe(true);
     expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
-  },
-);
+    writeFileSync(receiptPath, receipt);
+  }
+
+  expect(run("unavailable")).toContain("Removed loaded baseline plugin source before update:");
+  expect(existsSync(pluginRoot)).toBe(false);
+  expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
+});
 
 const convergenceRestartMessage =
   "OpenClaw plugin migration inputs changed during startup convergence; refusing to report the gateway ready. Restart OpenClaw so state migrations run against the final config and plugin inventory.";
@@ -230,13 +215,11 @@ it.skipIf(process.platform === "win32").each([
   { version: "2026.9.1", provision: false, installExit: 0 },
   { version: "2026.8.2", provision: true, installExit: 42 },
 ])(
-  "provisions the published companion cohort for $version (install exit $installExit)",
+  "provisions companions for $version (exit $installExit)",
   ({ version, companionVersion = version, provision, installExit }) => {
-    const result = spawnSync(
-      "bash",
-      [
-        "-c",
-        `set -euo pipefail
+    const result = runProcess("bash", [
+      "-c",
+      `set -euo pipefail
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 baseline_version="$1"
@@ -258,11 +241,9 @@ stop_gateway() { :; }
 run_missing_load_path_fixture baseline
 test "$NPM_CONFIG_REGISTRY" = https://candidate.example.invalid
 `,
-        "published-companion-cohort",
-        version,
-      ],
-      { encoding: "utf8" },
-    );
+      "published-companion-cohort",
+      version,
+    ]);
     expect(result.status, result.stdout + result.stderr).toBe(installExit);
     const plugins = provision ? (installExit ? ["codex"] : ["codex", "discord", "whatsapp"]) : [];
     expect(result.stdout.trim().split("\n")).toEqual([
@@ -300,7 +281,7 @@ it.skipIf(process.platform === "win32").each([
   const authoredConfig = JSON.stringify({ configuredPluginIntent: "preserve-before-candidate" });
   writeFileSync(configPath, authoredConfig);
   writeFileSync(launchFile, "");
-  writeFileSync(
+  writeExecutable(
     path.join(bin, "openclaw"),
     `#!${resolveTestNodeExecPath()}
 const assert = require("node:assert/strict");
@@ -341,18 +322,17 @@ process.on("SIGTERM", () => {
 });
 setInterval(() => {}, 1000);
 `,
-    { mode: 0o755 },
   );
   const runnerSource = readFileSync("scripts/e2e/lib/upgrade-survivor/run.sh", "utf8");
   const startGateway = runnerSource.slice(
     runnerSource.indexOf("start_gateway() {"),
     runnerSource.indexOf("\nensure_gateway_started() {"),
   );
-  const script = path.join(root, "baseline.sh");
-  writeFileSync(
-    script,
-    `#!/usr/bin/env bash
-set -Eeuo pipefail
+  const result = runProcess(
+    "bash",
+    [
+      "-c",
+      `set -Eeuo pipefail
 source scripts/lib/openclaw-e2e-instance.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
@@ -383,19 +363,17 @@ run_missing_load_path_fixture baseline
 test "$NPM_CONFIG_REGISTRY" = https://candidate.example.invalid
 printf 'baseline-complete\\n'
 `,
-  );
-  const result = spawnSync("bash", [script], {
-    encoding: "utf8",
-    timeout: 10_000,
-    env: {
+      "missing-path-baseline",
+    ],
+    {
       PATH: `${bin}${path.delimiter}${path.dirname(resolveTestNodeExecPath())}:/usr/bin:/bin`,
       HOME: root,
       ARTIFACT_ROOT: artifactRoot,
       OPENCLAW_STATE_DIR: state,
       OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "https://candidate.example.invalid",
-      OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://published.example.invalid",
-      NPM_CONFIG_REGISTRY: "https://candidate.example.invalid",
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: candidateRegistry,
+      OPENCLAW_NPM_REGISTRY_UPSTREAM: publishedRegistry,
+      NPM_CONFIG_REGISTRY: candidateRegistry,
       OPENCLAW_GATEWAY_TOKEN: "fixture-inherited-token",
       OPENCLAW_GATEWAY_PASSWORD: "fixture-inherited-password",
       FIXTURE_MODE: mode,
@@ -404,22 +382,16 @@ printf 'baseline-complete\\n'
       FIXTURE_RESTART_MESSAGE: convergenceRestartMessage,
       OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS: mode === "bad-budget" ? "0" : "90",
     },
-  });
+    10_000,
+  );
   expect(result.status, result.stdout + result.stderr).toBe(code);
-  const observed = readFileSync(launchFile, "utf8")
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map(
-      (line) =>
-        JSON.parse(line) as {
-          pid: number;
-          config: string;
-          state: string;
-          token?: string;
-          password?: string;
-        },
-    );
+  const observed = readJsonLines<{
+    pid: number;
+    config: string;
+    state: string;
+    token?: string;
+    password?: string;
+  }>(launchFile);
   expect(observed).toHaveLength(launches);
   expect(new Set(observed.map((entry) => entry.pid)).size).toBe(launches);
   for (const entry of observed) {
@@ -438,9 +410,11 @@ printf 'baseline-complete\\n'
     expect(readFileSync(refusedLog, "utf8")).toBe(`${convergenceRestartMessage}\n`);
     expect(result.stdout).toContain("restarting once with the same config, state, and port");
   }
-  expect(result.stdout.includes("baseline-complete")).toBe(code === 0);
-  expect(result.stdout.includes("baseline-probes")).toBe(code === 0);
-  expect(result.stdout.includes("baseline-stopped")).toBe(code === 0);
+  expect(
+    ["baseline-complete", "baseline-probes", "baseline-stopped"].map((event) =>
+      result.stdout.includes(event),
+    ),
+  ).toEqual([code === 0, code === 0, code === 0]);
   const gatewayLog = path.join(artifactRoot, "missing-load-path", "baseline-gateway.log");
   const observationLog = path.join(artifactRoot, "missing-load-path", "startup-readiness.log");
   const diagnosticLog = [gatewayLog, observationLog]
@@ -452,7 +426,7 @@ printf 'baseline-complete\\n'
   if (liveFailure) {
     expect(diagnosticLog).toContain('{"body":{"ready":true},"status":200}');
     expect(readFileSync(gatewayLog, "utf8")).toContain("Gateway stopped after observation");
-    const captured = spawnSync(
+    const captured = runProcess(
       resolveTestNodeExecPath(),
       [
         "scripts/e2e/lib/upgrade-survivor/diagnostics.mjs",
@@ -464,21 +438,18 @@ printf 'baseline-complete\\n'
         artifactRoot,
       ],
       {
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          PATH: process.env.PATH,
-          HOME: root,
-          OPENCLAW_STATE_DIR: state,
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
-        },
+        PATH: process.env.PATH,
+        HOME: root,
+        OPENCLAW_STATE_DIR: state,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: root,
       },
+      10_000,
     );
     expect(captured.status, captured.stderr).toBe(0);
     const published = path.join(root, "published");
     publishDiagnostics(artifactRoot, published, redactSensitiveText);
-    const report = JSON.parse(readFileSync(path.join(published, "failure.json"), "utf8"));
+    const report = readJson(path.join(published, "failure.json"));
     expect(Object.values(report.logs).join("\n")).toContain('{"body":{"ready":true},"status":200}');
     expect(JSON.stringify(report)).not.toContain("sk-SyntheticStartupTraceSecret1234567890");
     if (mode === "live-refusal") {

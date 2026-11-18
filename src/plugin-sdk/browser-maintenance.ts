@@ -1,6 +1,3 @@
-/**
- * Public SDK facade for browser cleanup and trash operations.
- */
 import type { SessionEntryCurrentPreparation } from "../config/sessions/session-entry-current.types.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModule } from "./facade-runtime.js";
 export { movePathToTrash, type MovePathToTrashOptions } from "./browser-trash.js";

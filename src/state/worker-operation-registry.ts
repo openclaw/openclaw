@@ -3,7 +3,6 @@ import type {
   SqliteWorkerCommand,
   SqliteWorkerOperations,
 } from "../infra/sqlite-worker-contract.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type { OpenClawStateDatabase } from "./openclaw-state-db-contract.js";
 
 export type WorkerOperationContext = {
@@ -17,17 +16,30 @@ export type WorkerWriteOperationContext = WorkerOperationContext & {
     transactionOptions?: Pick<
       SqliteTransactionOptions,
       "busyTimeoutMs" | "operationLabel" | "slowTransactionHoldMs"
-    >,
+    > & { singleStatement?: true },
   ) => T;
   writeAdmitted: <T>(
     operation: (database: OpenClawStateDatabase) => T,
     options?: Parameters<WorkerWriteOperationContext["write"]>[1] & {
+      singleStatement?: never;
       receipt?: "result";
       /** Preserve worker-process ownership checks for native-default callers. */
       transactionEnvironment?: "process";
     },
   ) => T;
 };
+
+export function createCommittedWorkerMutation<Input, Result extends boolean | number>(
+  type: string,
+  apply: (db: OpenClawStateDatabase["db"], input: Input) => Result,
+) {
+  return (input: Input, { writeAdmitted }: WorkerWriteOperationContext) =>
+    writeAdmitted(({ db }) => ({ type, result: apply(db, input) }), {
+      operationLabel: type,
+      receipt: "result",
+      transactionEnvironment: "process",
+    }).result;
+}
 
 export type WorkerOperationHandlers<Context = WorkerOperationContext> = Record<
   string,
@@ -56,10 +68,15 @@ export type WorkerOperationsFromLoaders<
 type Namespace<Key> = Key extends `${infer Domain}.${string}` ? Domain : never;
 type DomainLoaders<Operations extends SqliteWorkerOperations, Context, Domains extends string> = {
   [Domain in Domains]: () => Promise<{
-    [Key in keyof Operations as Key extends Domain | `${Domain}.${string}` ? Key : never]: (
-      input: Operations[Key]["input"],
-      context: Context,
-    ) => Operations[Key]["output"];
+    [
+      Key in keyof Operations as Key extends Domain
+        ? Key
+        : Key extends `${Domain}.${string}`
+          ? Key extends Domains
+            ? never
+            : Key
+          : never
+    ]: (input: Operations[Key]["input"], context: Context) => Operations[Key]["output"];
   }>;
 };
 
@@ -73,11 +90,12 @@ export function createWorkerOperationRegistry<
     {
       load: () => Promise<WorkerOperationHandlers<Context>>;
       handlers?: WorkerOperationHandlers<Context>;
+      pending?: Promise<void>;
     }
   >(
     Object.entries<() => Promise<WorkerOperationHandlers<Context>>>(loaders).map(([name, load]) => [
       name,
-      { load: createLazyRuntimeModule(load) },
+      { load },
     ]),
   );
   const domainFor = (type: PropertyKey) =>
@@ -92,15 +110,17 @@ export function createWorkerOperationRegistry<
     prepare(type: PropertyKey): Promise<void> | undefined {
       const domain = domainFor(type);
       if (domain && !domain.handlers) {
-        return domain.load().then((handlers) => {
-          domain.handlers = handlers;
-        });
+        return (domain.pending ??= Promise.resolve()
+          .then(domain.load)
+          .then((handlers) => {
+            domain.handlers = handlers;
+          }));
       }
       return undefined;
     },
     has(command: {
       type: PropertyKey;
-      input: unknown;
+      input?: unknown;
     }): command is SqliteWorkerCommand<Operations> {
       return handlerFor(command.type) !== undefined;
     },

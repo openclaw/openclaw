@@ -48,6 +48,7 @@ export type MattermostSlashCommandPayload = {
   text: string; // args after the trigger word
   trigger_id?: string;
   response_url?: string;
+  root_id?: string; // set when the command is typed inside a thread
 };
 
 type MattermostCommandCreate = {
@@ -350,6 +351,7 @@ export function parseSlashCommandPayload(
       text: read("text") ?? "",
       trigger_id: read("trigger_id"),
       response_url: read("response_url"),
+      root_id: read("root_id"),
     };
   } catch {
     return null;

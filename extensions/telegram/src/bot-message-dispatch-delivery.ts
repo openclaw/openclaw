@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createStructuredOutboundPayloadPlan,
+  deliverStructuredInboundReplyWithMessageSendContext,
   deriveDurableFinalDeliveryRequirements,
   preserveReplyPayloadMediaSelection,
   resolveTranscriptBackedChannelFinalText,
@@ -19,6 +20,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import {
   resetLaneState,
   rotateAnswerLaneAfterQueuedBlocksSettle,
@@ -61,6 +63,7 @@ import {
   type LaneName,
   type TelegramSendPayloadOptions,
 } from "./lane-delivery-text-deliverer.js";
+import { isTelegramRateLimitError } from "./network-errors.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramPromptContextProjectionSequence,
@@ -107,10 +110,7 @@ const createPromptContextSequence = (
     ...(source ? { source } : {}),
     record: async (record) => {
       const { context } = turn;
-      return await (
-        turn.telegramDeps.recordOutboundMessageForPromptContext ??
-        recordOutboundMessageForPromptContext
-      )({
+      return await recordOutboundMessageForPromptContext({
         cfg: turn.cfg,
         ownerAgentId: turn.opts.ownerAgentId,
         account: {
@@ -170,6 +170,9 @@ export async function sendPayload(
 ): Promise<LivePreviewDeliveryResult> {
   if (options?.durable) {
     sourceTurn.finalDeliveryError = undefined;
+    if (sourceTurn.finalHandoff === "delivery-queue") {
+      sourceTurn.finalHandoff = undefined;
+    }
   }
   if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
@@ -231,14 +234,13 @@ export async function sendPayload(
     : projectedPayload;
   const silent =
     options?.silent ?? (turn.telegramCfg.silentErrorReplies === true && payload.isError === true);
-  const durableDelivery = turn.telegramDeps.deliverStructuredInboundReplyWithMessageSendContext;
-  if (options?.durable && durableDelivery && projectionSequence.isFresh()) {
+  if (options?.durable && projectionSequence.isFresh()) {
     const plan = createStructuredOutboundPayloadPlan([effectivePayload])[0];
     if (!plan) {
       await projectionSequence.fail();
       return { visibleReplySent: false, suppression: { reason: "no_visible_payload" } };
     }
-    const durable = await durableDelivery({
+    const durable = await deliverStructuredInboundReplyWithMessageSendContext({
       cfg: turn.cfg,
       prepareRuntimeHandoff: (cfg) =>
         prepareTelegramFinalDeliveryConfig(cfg, turn.context.route.accountId, turn.opts.token),
@@ -252,8 +254,12 @@ export async function sendPayload(
       ctxPayload: turn.context.ctxPayload,
       plan,
       info: { kind: "final" },
-      retryAmbiguousFinalText: true,
       replyToMode: effectiveReplyToMode,
+      // ReplyToId describes inbound ancestry. Reuse the preview's prepared target
+      // so an untagged final cannot inherit a topic-creation service message.
+      replyToId:
+        effectivePayload.replyToId ??
+        (turn.draftReplyToMessageId !== undefined ? String(turn.draftReplyToMessageId) : null),
       threadId: turn.context.threadSpec.id,
       formatting: {
         textLimit: turn.textLimit,
@@ -275,6 +281,12 @@ export async function sendPayload(
     });
     if (durable.status === "failed") {
       sourceTurn.finalDeliveryError = durable.error;
+      // An unsent flood refusal that the delivery queue still holds is replayed by
+      // recovery once Telegram allows; asking the user to resend would precede it.
+      // Missing or released custody keeps the normal failure handling.
+      if (durable.retainedForRecovery === true && isTelegramRateLimitError(durable.error)) {
+        sourceTurn.finalHandoff = "delivery-queue";
+      }
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {
@@ -291,7 +303,7 @@ export async function sendPayload(
     const transcriptMirror = hasReplyPayloadFinalDeliveryCapture(payload)
       ? undefined
       : createTelegramTranscriptMirror(turn, sourceTurn);
-    const result = await (turn.telegramDeps.deliverStructuredReplies ?? deliverStructuredReplies)({
+    const result = await deliverStructuredReplies({
       ...createDeliveryBaseOptions(turn),
       replyToMode: effectiveReplyToMode,
       transcriptMirror: options?.durable ? transcriptMirror : undefined,
@@ -299,7 +311,7 @@ export async function sendPayload(
       onMediaAccepted: options?.onMediaAccepted,
       onVoiceRecording: turn.context.sendRecordVoice,
       silent,
-      mediaLoader: turn.telegramDeps.loadWebMedia,
+      mediaLoader: loadWebMedia,
       promptContextSequence: projectionSequence,
       onPlatformSendDispatch: options?.onPlatformSendDispatch,
       assertPlatformSendAuthorized: options?.assertPlatformSendAuthorized,
@@ -344,7 +356,7 @@ export async function handlePreviewFinalizedResult(
   if (!turn.isSuperseded()) {
     // A finalized preview is the durable Telegram message. Emit the composite
     // terminal here so plugin and internal observers see that one provider result.
-    (turn.telegramDeps.emitTelegramMessageSentHooks ?? emitTelegramMessageSentHooks)({
+    emitTelegramMessageSentHooks({
       sessionKeyForInternalHooks: turn.context.ctxPayload.SessionKey,
       chatId: String(turn.context.chatId),
       accountId: turn.context.route.accountId,
@@ -385,7 +397,7 @@ export function registerTelegramQuestionDeliveryForMessage(
   const api = turn.bot.api;
   const cfg = turn.cfg;
   const linkPreview = turn.telegramCfg.linkPreview;
-  const editText = turn.telegramDeps.editMessageTelegram ?? editMessageTelegram;
+  const editText = editMessageTelegram;
   const { messageId, text } = delivery;
   registerTelegramQuestionDelivery({
     accountId,
@@ -487,13 +499,12 @@ export async function deliverFinalAnswerText(
   const isFollowUp = turn.previewLifecycle.finalDelivered;
   let result: LaneDeliveryResult;
   if (!isFollowUp && turn.streamMode === "progress") {
-    const afterAcceptedDraft = turn.answerLane.stream?.hasConsumedReplyTarget() === true;
+    // A temporary progress card does not consume the final answer's reply target.
     // Freeze writes, but keep the only visible progress until replacement is accepted.
     await turn.answerLane.stream?.discard().catch((error: unknown) => {
       logVerbose(`telegram progress discard failed: ${formatErrorMessage(error)}`);
     });
     const deliveryResult = await sendPayload(turn, applyTextToPayload(finalPayload, finalText), {
-      afterAcceptedDraft,
       durable: true,
       promptContextSequence,
       onPlatformSendDispatch,
@@ -562,11 +573,11 @@ export async function finalizePendingAnswerBlockDraft(turn: Turn): Promise<void>
 
 export async function deliverFallback(turn: Turn, replies: ReplyPayload[], silent: boolean) {
   try {
-    const result = await (turn.telegramDeps.deliverReplies ?? deliverReplies)({
+    const result = await deliverReplies({
       replies,
       ...createDeliveryBaseOptions(turn),
       silent,
-      mediaLoader: turn.telegramDeps.loadWebMedia,
+      mediaLoader: loadWebMedia,
     });
     if (result.delivered && !turn.previewLifecycle.finalDelivered) {
       await observeFinalDelivery(turn, { visibleReplySent: true, receipt: result.receipt }, true);
@@ -609,19 +620,14 @@ export function createDeliveryState(
     editStreamMessage: async ({ messageId, text, textMode, buttons }) => {
       const turn = getTurn();
       if (!turn.isSuperseded()) {
-        await (turn.telegramDeps.editMessageTelegram ?? editMessageTelegram)(
-          turn.context.chatId,
-          messageId,
-          text,
-          {
-            api: turn.bot.api,
-            cfg: turn.cfg,
-            accountId: turn.context.route.accountId,
-            linkPreview: turn.telegramCfg.linkPreview,
-            textMode,
-            buttons,
-          },
-        );
+        await editMessageTelegram(turn.context.chatId, messageId, text, {
+          api: turn.bot.api,
+          cfg: turn.cfg,
+          accountId: turn.context.route.accountId,
+          linkPreview: turn.telegramCfg.linkPreview,
+          textMode,
+          buttons,
+        });
       }
     },
     createPromptContextSequence: () => createPromptContextSequence(getTurn()),

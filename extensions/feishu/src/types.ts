@@ -26,15 +26,8 @@ export type FeishuConfig = Omit<z.infer<typeof FeishuConfigSchema>, "accounts"> 
 
 export type FeishuDomain = "feishu" | "lark" | (z.infer<typeof FeishuDomainSchema> & {});
 
-export type FeishuDefaultAccountSelectionSource =
-  | "explicit-default"
-  | "mapped-default"
-  | "fallback";
-type FeishuAccountSelectionSource = "explicit" | FeishuDefaultAccountSelectionSource;
-
 export type ResolvedFeishuAccount = {
   accountId: string;
-  selectionSource: FeishuAccountSelectionSource;
   enabled: boolean;
   configured: boolean;
   name?: string;

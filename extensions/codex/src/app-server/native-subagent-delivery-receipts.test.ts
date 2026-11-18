@@ -1,24 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexNativeSubagentNotification } from "./native-subagent-notification.js";
 
-function completedWaitReceipt(message: string, id = "wait"): CodexServerNotification {
-  return {
-    method: "item/completed",
-    params: {
-      threadId: "parent-thread",
-      turnId: "parent-turn",
-      item: {
-        type: "collabAgentToolCall",
-        id,
-        tool: "wait",
-        status: "completed",
-        senderThreadId: "parent-thread",
-        receiverThreadIds: ["child-thread"],
-        agentsStates: { "child-thread": { status: "completed", message } },
-      },
-    },
-  };
+function waitReceipt(message: string, id = "wait"): CodexNativeSubagentNotification["receipts"] {
+  return [{ id: `item/completed:${id}:child-thread`, agentPath: "child-thread", result: message }];
 }
 
 describe("native subagent delivery receipts", () => {
@@ -31,12 +16,10 @@ describe("native subagent delivery receipts", () => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
       receipts.track("first-run", ["child-thread"]);
       if (received) {
-        expect(receipts.observe(completedWaitReceipt("prior rendering", "initial"))).toEqual([
-          "first-run",
-        ]);
+        expect(receipts.observe(waitReceipt("prior rendering", "initial"))).toEqual(["first-run"]);
       }
       receipts.track("second-run", ["child-thread"]);
-      expect(receipts.observe(completedWaitReceipt("shared result"))).toEqual([]);
+      expect(receipts.observe(waitReceipt("shared result"))).toEqual([]);
       expect(receipts.record("second-run", ["child-thread"], "shared result")).toEqual([]);
       receipts.record(
         "first-run",
@@ -58,32 +41,28 @@ describe("native subagent delivery receipts", () => {
       const receipts = new CodexNativeSubagentDeliveryReceipts();
       receipts.record("first-run", ["child-thread"], "first result");
       if (received) {
-        expect(receipts.observe(completedWaitReceipt("first result", "initial"))).toEqual([
-          "first-run",
-        ]);
+        expect(receipts.observe(waitReceipt("first result", "initial"))).toEqual(["first-run"]);
       }
       receipts.record("second-run", ["child-thread"], "second result");
-      expect(receipts.observe(completedWaitReceipt("second result"))).toEqual(["second-run"]);
+      expect(receipts.observe(waitReceipt("second result"))).toEqual(["second-run"]);
     },
   );
 
   it("remembers accepted native renderings", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();
     receipts.track("first-run", ["child-thread"]);
-    expect(receipts.observe(completedWaitReceipt("first rendering", "first"))).toEqual([
-      "first-run",
-    ]);
-    expect(receipts.observe(completedWaitReceipt("other rendering", "other"))).toEqual([]);
+    expect(receipts.observe(waitReceipt("first rendering", "first"))).toEqual(["first-run"]);
+    expect(receipts.observe(waitReceipt("other rendering", "other"))).toEqual([]);
     receipts.record("first-run", ["child-thread"], "canonical result");
     receipts.record("second-run", ["child-thread"], "other rendering");
-    expect(receipts.observe(completedWaitReceipt("other rendering", "duplicate"))).toEqual([]);
+    expect(receipts.observe(waitReceipt("other rendering", "duplicate"))).toEqual([]);
     expect(receipts.track("second-run", ["child-thread"])).toEqual([]);
   });
 
   it("does not acknowledge a known different result even when only one outcome is known", () => {
     const receipts = new CodexNativeSubagentDeliveryReceipts();
     receipts.record("first-run", ["child-thread"], "first result");
-    expect(receipts.observe(completedWaitReceipt("second result"))).toEqual([]);
+    expect(receipts.observe(waitReceipt("second result"))).toEqual([]);
     expect(receipts.track("first-run", ["child-thread"])).toEqual([]);
   });
 
@@ -93,7 +72,7 @@ describe("native subagent delivery receipts", () => {
     receipts.record("first-run", ["child-thread"], "First line Second line value");
     receipts.track("second-run", ["child-thread"]);
     expect(receipts.record("second-run", ["child-thread"], multilineResult)).toEqual([]);
-    expect(receipts.observe(completedWaitReceipt(multilineResult))).toEqual(["first-run"]);
+    expect(receipts.observe(waitReceipt(multilineResult))).toEqual(["first-run"]);
     expect(receipts.track("second-run", ["child-thread"])).toEqual([]);
   });
 });

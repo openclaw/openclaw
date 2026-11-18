@@ -3,7 +3,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaProviderId } from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
-import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./provider-types.js";
+import type { MediaUnderstandingCapability } from "./types.js";
 
 export function resolveDefaultMediaModelFromRegistry(params: {
   providerId: string;
@@ -18,6 +19,7 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
   capability: MediaUnderstandingCapability;
   providerRegistry: Map<string, MediaUnderstandingProvider>;
 }): string[] {
+  /* oxlint-disable unicorn/no-array-sort -- This function only sorts its private flatMap result. */
   return [...params.providerRegistry.values()]
     .filter(
       (provider) =>
@@ -30,7 +32,7 @@ export function resolveAutoMediaKeyProvidersFromRegistry(params: {
         ? [{ provider, priority }]
         : [];
     })
-    .toSorted(
+    .sort(
       (left, right) =>
         left.priority - right.priority || left.provider.id.localeCompare(right.provider.id),
     )

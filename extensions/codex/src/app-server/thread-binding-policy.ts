@@ -52,11 +52,7 @@ export function shouldRotateCodexGpt56MultiAgentBinding(params: {
 export function isTransientWebSearchRestriction(
   params: Pick<
     CodexStartOrResumeThreadParams,
-    | "params"
-    | "nativeCodeModeEnabled"
-    | "nativeProviderWebSearchSupport"
-    | "persistentWebSearchAllowed"
-    | "webSearchAllowed"
+    "params" | "nativeProviderWebSearchSupport" | "persistentWebSearchAllowed" | "webSearchAllowed"
   >,
 ): boolean {
   if (params.nativeProviderWebSearchSupport === "unknown") {
@@ -66,11 +62,6 @@ export function isTransientWebSearchRestriction(
     return false;
   }
   if (params.params.disableTools === true) {
-    return true;
-  }
-  const persistentWebSearchRestriction =
-    params.webSearchAllowed === false && params.persistentWebSearchAllowed === false;
-  if (params.nativeCodeModeEnabled === false && !persistentWebSearchRestriction) {
     return true;
   }
   if (params.webSearchAllowed !== false) {

@@ -102,10 +102,10 @@ Available groups:
 - `group:memory`: `memory_search`, `memory_get`
 - `group:web`: `web_search`, `x_search`, `web_fetch`
 - `group:ui`: `browser`, `screen`, `terminal`, `canvas`, `progress_card`, `show_widget`
-- `group:automation`: `heartbeat_respond`, `cron`, `gateway`
+- `group:automation`: `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`, `computer`
-- `group:agents`: `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`
+- `group:agents`: `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `skill_library`
 - `group:media`: `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`, `pdf`
 - `group:openclaw`: most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins)
 - `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`

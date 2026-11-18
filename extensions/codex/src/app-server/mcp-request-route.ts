@@ -48,7 +48,7 @@ export class CodexMcpRequestRoutes {
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     signal: AbortSignal,
-    setExecutionTimeoutMs?: (timeoutMs: number) => void,
+    setExecutionTimeoutMs?: (timeoutMs: number | null) => void,
   ) {
     if (
       scope.turnId ||

@@ -36,30 +36,20 @@ function decodePendingDial(
 export class PendingFaceTimeDialStore {
   #tail: Promise<void> = Promise.resolve();
   readonly #clearing = new Map<string, Promise<boolean>>();
-  readonly #deleteMatching: (expectedDialID: string) => Promise<boolean>;
 
-  constructor(private readonly store: PluginStateKeyedStore<StoredPendingFaceTimeDial>) {
-    const { observe, compareAndApply, deleteIf } = store;
-    if (observe && compareAndApply) {
-      this.#deleteMatching = async (expectedDialID) => {
-        let observation = await observe(PENDING_DIAL_KEY);
-        for (;;) {
-          const result = await compareAndApply(PENDING_DIAL_KEY, observation.comparison, {
-            operation: "delete",
-            action: observation.value?.dialID === expectedDialID ? "delete" : "keep",
-          });
-          if (result.status !== "conflict") {
-            return result.status === "applied";
-          }
-          observation = result.current;
-        }
-      };
-    } else if (deleteIf) {
-      // Released 2026.9.4 hosts lack comparisons; never select this after a worker failure.
-      this.#deleteMatching = (expectedDialID) =>
-        deleteIf(PENDING_DIAL_KEY, (current) => current.dialID === expectedDialID);
-    } else {
-      throw new Error("FaceTime pending dial cleanup requires atomic plugin-state deletion");
+  constructor(private readonly store: PluginStateKeyedStore<StoredPendingFaceTimeDial, 2>) {}
+
+  async #deleteMatching(expectedDialID: string): Promise<boolean> {
+    let observation = await this.store.observe(PENDING_DIAL_KEY);
+    for (;;) {
+      const result = await this.store.compareAndApply(PENDING_DIAL_KEY, observation.comparison, {
+        operation: "delete",
+        action: observation.value?.dialID === expectedDialID ? "delete" : "keep",
+      });
+      if (result.status !== "conflict") {
+        return result.status === "applied";
+      }
+      observation = result.current;
     }
   }
 

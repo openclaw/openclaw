@@ -174,7 +174,6 @@ export class DiscordVoiceRecording {
         return await processDiscordVoiceSegment({
           ...this.params,
           wavPath: wav.path,
-          durationSeconds: wav.durationSeconds,
           isConversationCurrent: this.params.canConverse,
           onConversationOnly: () => conversationOnly.resolve(),
           recording,

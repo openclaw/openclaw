@@ -1,15 +1,21 @@
-import { dynamic } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
-import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import {
+  createDeferred,
+  createMemo,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  Show,
+} from "solid-js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
-import "../../components/agent-row-chip.tsx";
+import { IpLocation } from "../../components/ip-location.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import "../../components/ip-location.ts";
-import "../../components/viewer-facepile.ts";
-import { formatRelativeTimestamp, formatTimeAgo } from "../../lib/format.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
+import { formatUiError } from "../../lib/format-error.ts";
+import "../../components/solid/viewer-facepile.tsx";
+import { formatTimeAgo } from "../../lib/format.ts";
 import {
   groupPresenceConnections,
   presenceConnectionDescriptions,
@@ -20,42 +26,27 @@ import {
   presenceViewerLabel,
   type PresenceViewer,
 } from "../../lib/presence-users.ts";
-import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../lib/session-display.ts";
-import {
-  isSessionKeyAddressable,
-  resolveSessionNavigationAgentId,
-  resolveSessionPreferredFace,
-  sessionNavigationTarget,
-} from "../../lib/sessions/route-navigation.ts";
-import {
-  isUiGlobalScopeConfigured,
-  parseAgentSessionKey,
-  resolveUiConfiguredMainKey,
-  scopedSessionArtifactKey,
-} from "../../lib/sessions/session-key.ts";
-import { activityRunInspectorHref } from "./run-inspector-model.ts";
-import { ActivitySessionGit } from "./session-activity-git.tsx";
-import { ActivitySessionMedia } from "./session-activity-media.tsx";
+import { registerEnglishCatalog, getLocale, t } from "../../lib/reactive/i18n.ts";
 import { PeopleControl } from "./session-activity-people.tsx";
 import { renderSessionActivityPulse as SessionActivityPulse } from "./session-activity-pulse.tsx";
-import { renderSessionActivitySummary as SessionActivitySummary } from "./session-activity-summary.tsx";
+import { SessionLinkView } from "./session-activity-row.tsx";
 import {
   ACTIVITY_TIME_FILTERS,
   TIME_LABELS,
   projectSessionActivity,
   resolveViewingNow,
-  sessionActivityOwner,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 
+registerEnglishCatalog(registerActivityEnglish);
+
 export type SessionActivityViewProps = {
-  context: ApplicationContext;
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
   presentationRevision?: number;
   result?: SessionsListResult;
+  read?: { promise: Promise<void> };
   loading: boolean;
   retrying: boolean;
   error?: string;
@@ -87,155 +78,6 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
   }).format(timestamp);
 }
 
-function SessionLinkView(props: {
-  context: ApplicationContext;
-  row: GatewaySessionRow;
-  onSummaryRetry?: (row: GatewaySessionRow) => void;
-  presentationRevision?: number;
-}) {
-  const agentId = createMemo(
-    () =>
-      parseAgentSessionKey(props.row.key)?.agentId ??
-      props.row.agentId ??
-      resolveSessionNavigationAgentId(props.context),
-  );
-  const sessionHost = createMemo(() => ({
-    agentsList: props.context.agents.state.agentsList,
-    hello: props.context.gateway.snapshot.hello,
-  }));
-  const face = createMemo(() => resolveSessionPreferredFace(props.row));
-  const addressable = createMemo(() =>
-    isSessionKeyAddressable(props.row.key, isUiGlobalScopeConfigured(sessionHost())),
-  );
-  const target = createMemo(() =>
-    addressable()
-      ? sessionNavigationTarget({
-          face: face(),
-          sessionKey: props.row.key,
-          fallbackAgentId:
-            props.row.key === "global" ? agentId() : resolveSessionNavigationAgentId(props.context),
-          basePath: props.context.basePath,
-          row: props.row,
-          mainKey: resolveUiConfiguredMainKey(sessionHost()),
-        })
-      : null,
-  );
-  const SessionLink = dynamic(() => (target() ? "a" : "div"));
-  const ownerName = createMemo(() => {
-    getLocale();
-    return presenceViewerLabel(sessionActivityOwner(props.row));
-  });
-  const activityAt = () => sessionActivityTimestamp(props.row);
-  const relativeTime = createMemo(() => {
-    void props.presentationRevision;
-    getLocale();
-    return formatRelativeTimestamp(activityAt(), { fallback: "" });
-  });
-  const activeObserverRunId = createMemo(() => {
-    const runId = props.row.observerDigest?.runId;
-    return props.row.hasActiveRun === true && runId && props.row.activeRunIds?.includes(runId)
-      ? runId
-      : undefined;
-  });
-  const headline = createMemo(() =>
-    activeObserverRunId() ? props.row.observerDigest?.headline.trim() : "",
-  );
-  const scope = createMemo(() =>
-    props.row.channel ? t("activityFeed.channelLabel", { value: props.row.channel }) : null,
-  );
-  const showAgent = () => props.row.kind !== "global" || Boolean(props.row.agentId);
-  const source = () => (props.row.createdVia === "cron" ? t("activityFeed.automation") : null);
-  return (
-    <div
-      class={[
-        "activity-feed__session-row",
-        { "activity-feed__session-row--link": Boolean(target()) },
-      ]}
-    >
-      <SessionLink
-        class="activity-feed__session"
-        data-activity-session={props.row.key}
-        href={target()?.href ?? undefined}
-        onClick={(event: MouseEvent) => {
-          const destination = target();
-          if (destination && shouldHandleNavigationClick(event)) {
-            event.preventDefault();
-            props.context.navigate(face(), destination.options);
-          }
-        }}
-      >
-        <span class="activity-feed__session-avatar">
-          {props.row.hasActiveRun === true ? (
-            <span class="activity-feed__presence-dot activity-feed__run-dot" aria-hidden="true" />
-          ) : undefined}
-          <openclaw-viewer-avatar
-            prop:identity={props.row.owner?.actor.identity ?? props.row.createdActor?.identity}
-            prop:user={sessionActivityOwner(props.row)}
-            prop:markAsViewer={false}
-            variant="footer"
-          />
-        </span>
-        <span class="activity-feed__session-main">
-          <span class="activity-feed__session-title">
-            {resolveSessionDisplayName(props.row.key, props.row)}
-          </span>
-          <span class="activity-feed__session-meta">
-            {headline() ? (
-              <span
-                class="activity-feed__session-headline"
-                data-health={props.row.observerDigest?.health ?? undefined}
-              >
-                {headline()}
-              </span>
-            ) : (
-              <span>{ownerName()}</span>
-            )}
-            {source() ? (
-              <span class="activity-feed__session-source" data-activity-created-via="cron">
-                · {source()}
-                {scope() || showAgent() ? " ·" : ""}
-              </span>
-            ) : undefined}
-            {showAgent() ? (
-              <span class="activity-feed__session-scope">
-                <openclaw-agent-row-chip prop:agentId={agentId()} />
-              </span>
-            ) : undefined}
-            {scope() ? <span class="activity-feed__session-scope">{scope()}</span> : undefined}
-          </span>
-        </span>
-        <span class="activity-feed__session-time">
-          {headline() ? <span class="activity-feed__session-owner">{ownerName()}</span> : undefined}
-          {activityAt() > 0 ? <span>{relativeTime()}</span> : undefined}
-        </span>
-      </SessionLink>
-      <SessionActivitySummary row={props.row} onRetry={props.onSummaryRetry} />
-      <ActivitySessionGit
-        context={props.context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-      />
-      <ActivitySessionMedia
-        context={props.context}
-        sessionKey={scopedSessionArtifactKey(props.row.key, agentId())}
-        agentId={agentId()}
-        revision={props.row.updatedAt ?? 0}
-        session={props.row}
-      />
-      <Show when={activeObserverRunId()}>
-        {(runId) => (
-          <a
-            class="activity-feed__inspect-run"
-            href={activityRunInspectorHref(runId(), props.context.basePath)}
-          >
-            {t("activityFeed.inspectRun")}
-          </a>
-        )}
-      </Show>
-    </div>
-  );
-}
-
 function DaySessions(props: {
   view: SessionActivityViewProps;
   day: ReturnType<typeof projectSessionActivity>["days"][number];
@@ -255,7 +97,6 @@ function DaySessions(props: {
       <For each={regular()} keyed={(row) => row.key}>
         {(row) => (
           <SessionLinkView
-            context={props.view.context}
             row={row()}
             onSummaryRetry={props.view.onSummaryRetry}
             presentationRevision={props.view.presentationRevision}
@@ -283,7 +124,6 @@ function DaySessions(props: {
             <For each={automation()} keyed={(row) => row.key}>
               {(row) => (
                 <SessionLinkView
-                  context={props.view.context}
                   row={row()}
                   onSummaryRetry={props.view.onSummaryRetry}
                   presentationRevision={props.view.presentationRevision}
@@ -298,7 +138,6 @@ function DaySessions(props: {
 }
 
 function IdentityHeader(props: {
-  context: ApplicationContext;
   identity: PresenceViewer;
   rows: readonly GatewaySessionRow[];
   presentationRevision?: number;
@@ -353,11 +192,7 @@ function IdentityHeader(props: {
           <div class="activity-feed__viewing-list">
             <For each={viewing()} keyed={(row) => row.key}>
               {(row) => (
-                <SessionLinkView
-                  context={props.context}
-                  row={row()}
-                  presentationRevision={props.presentationRevision}
-                />
+                <SessionLinkView row={row()} presentationRevision={props.presentationRevision} />
               )}
             </For>
           </div>
@@ -397,9 +232,7 @@ function IdentityHeader(props: {
                       .filter(Boolean)
                       .join(" · ")}
                   </span>
-                  {group().entry.ip ? (
-                    <openclaw-ip-location prop:ip={group().entry.ip} />
-                  ) : undefined}
+                  {group().entry.ip ? <IpLocation ip={group().entry.ip} /> : undefined}
                   {group().entry.lastInputSeconds !== undefined ? (
                     <span>
                       {t("activityFeed.lastInput", {
@@ -448,6 +281,9 @@ function renderActivityLoading() {
 }
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
+  const request = createMemo(() => props.read);
+  // Keep accepted rows and scope changes live while their next read settles.
+  const read = createDeferred(() => request()?.promise);
   const projection = createMemo(() => projectSessionActivity(props.result));
   const onlineById = createMemo(
     () =>
@@ -475,6 +311,20 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       ? (people().find((person) => person.id === props.filters.personId) ?? identity())
       : null,
   );
+  function feedback(error: string | undefined, pending: boolean) {
+    return (
+      <>
+        <span role={error ? "alert" : "status"} title={error}>
+          {error ?? (props.retrying && pending ? t("common.refreshing") : undefined)}
+        </span>
+        <Show when={Boolean(error || props.retrying)}>
+          <button class="btn btn--sm" disabled={pending} onClick={() => props.onRetry()}>
+            {t("common.retry")}
+          </button>
+        </Show>
+      </>
+    );
+  }
   return (
     <div class="activity-feed">
       <div class="activity-feed__toolbar">
@@ -512,17 +362,28 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
         />
       </div>
       <div class="activity-feed__feedback">
-        <span role={props.error ? "alert" : "status"} title={props.error ?? undefined}>
-          {props.error ?? (props.retrying ? t("common.refreshing") : undefined)}
-        </span>
-        <Show when={Boolean(props.error || props.retrying)}>
-          <button class="btn btn--sm" disabled={props.loading} onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </Show>
+        <Loading on={request()} fallback={feedback(undefined, true)}>
+          <Errored
+            fallback={(error) => {
+              const failure = error();
+              return feedback(formatUiError(failure), false);
+            }}
+          >
+            {(latest(read), feedback(props.error, props.loading || isPending(read)))}
+          </Errored>
+        </Loading>
       </div>
       <div class="activity-feed__main">
-        {props.loading && !props.result ? renderActivityLoading() : undefined}
+        <Errored fallback={() => null}>
+          <Loading on={request()} fallback={!props.result ? renderActivityLoading() : undefined}>
+            {
+              (latest(read),
+              (props.loading || isPending(read)) && !props.result
+                ? renderActivityLoading()
+                : undefined)
+            }
+          </Loading>
+        </Errored>
         {props.result?.activityPulse ? (
           <SessionActivityPulse
             pulse={props.result.activityPulse}
@@ -535,7 +396,6 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
             <For each={identity() ? [identity()!] : []} keyed={(person) => person.id}>
               {(person) => (
                 <IdentityHeader
-                  context={props.context}
                   identity={person()}
                   rows={projection().sessions}
                   presentationRevision={props.presentationRevision}
@@ -555,7 +415,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
               <For each={projection().days} keyed={(day) => day.key}>
                 {(day) => (
                   <section class="activity-feed__day">
-                    <h3>{dayLabel(day().timestamp)}</h3>
+                    <h3 class="settings-section__heading">{dayLabel(day().timestamp)}</h3>
                     <div class="activity-feed__sessions">
                       <DaySessions view={props} day={day()} />
                     </div>

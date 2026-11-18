@@ -16,7 +16,10 @@ export function isSessionEntryDataSql(sql: string): boolean {
 }
 
 /** Capture SQL during execution; closing a connection invalidates its statement getters. */
-export function observeSqliteReadSql(prototype: StatementSync): {
+export function observeSqliteReadSql(
+  prototype: StatementSync,
+  onRead?: (sql: string, bindings: readonly unknown[]) => void,
+): {
   queries: string[];
   restore: () => void;
 } {
@@ -26,7 +29,9 @@ export function observeSqliteReadSql(prototype: StatementSync): {
     return vi.spyOn(prototype, method).mockImplementation(
       new Proxy(original, {
         apply(target, receiver: StatementSync, args) {
-          queries.push(receiver.sourceSQL);
+          const sql = receiver.sourceSQL;
+          queries.push(sql);
+          onRead?.(sql, args);
           return Reflect.apply(target, receiver, args);
         },
       }),

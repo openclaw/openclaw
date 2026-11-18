@@ -1,9 +1,33 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
+import { resolveTestNodeExecPath } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { CatalogParamsError } from "./session-catalog-parsing.js";
 import { CodexCatalogSourceBackoff } from "./session-catalog-source-backoff.js";
 
 describe("Codex catalog source backoff", () => {
+  it("releases caller data while retaining the catalog failure", async ({ signal }) => {
+    const { stdout } = await promisify(execFile)(
+      resolveTestNodeExecPath(),
+      [
+        "--expose-gc",
+        "--import",
+        fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+        fileURLToPath(
+          new URL("../../../scripts/perf/long-lived-error-stacks-measure.ts", import.meta.url),
+        ),
+        "--owner=catalog-backoff",
+        "--mode=heap",
+        "--records=3",
+        "--assert-collected",
+      ],
+      { signal, maxBuffer: 64 * 1024, env: { ...process.env, NODE_OPTIONS: "" } },
+    );
+    expect(JSON.parse(stdout).retainedFixtures).toBe(0);
+  });
+
   it("bounds retries, permits one recovery probe, and resets the schedule on success", () => {
     let now = 0;
     const backoff = new CodexCatalogSourceBackoff(() => now);

@@ -77,9 +77,8 @@ struct BoundedProcessTests {
     /// instrumenting the deadline showed every one of the 64 exits observed at
     /// ~3.1s, clustered within 100ms of each other, rather than a single slow
     /// straggler. A 1s per-process budget lost that coin flip roughly one run in
-    /// five, failing 63 of 64 at once. A generous budget still fails hard if an
-    /// exit is genuinely missed — the 50ms `pollUntilExit` fallback would never
-    /// complete — while a merely-loaded machine passes.
+    /// five, failing 63 of 64 at once. The budget allows process startup under load;
+    /// the launcher's final non-reaping probe preserves the actual exit result.
     private static let concurrentSpawnTimeout: TimeInterval = 30
 
     @Test func `captures output without waiting for inherited handles`() async throws {

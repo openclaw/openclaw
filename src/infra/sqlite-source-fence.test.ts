@@ -4,7 +4,7 @@ import { existsSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -42,6 +42,12 @@ type Fixture = {
 let forward: Fixture;
 let reverse: Fixture;
 let previousEnvironment: ReturnType<typeof getEnvironmentData>;
+const cleanups: Array<() => void | Promise<void>> = [];
+afterEach(async () => {
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
+});
 
 function initialize(filename: string): DatabaseSync {
   const db = openNodeSqliteDatabase(filename);
@@ -71,6 +77,10 @@ async function openFixture(destination = secondIdentity, source = firstIdentity)
   return { broker, store, destination, source };
 }
 
+function createIdentity(filename: string): SqliteSourceFenceIdentity {
+  return { physical: readDatabasePathIdentitySync(filename), incarnation: randomUUID() };
+}
+
 beforeAll(async () => {
   previousEnvironment = getEnvironmentData(FENCE_FIXTURE_ENV);
   setEnvironmentData(FENCE_FIXTURE_ENV, barriers.buffer);
@@ -79,11 +89,8 @@ beforeAll(async () => {
   const secondPath = path.join(root, "second.sqlite");
   first = initialize(firstPath);
   second = initialize(secondPath);
-  firstIdentity = { physical: readDatabasePathIdentitySync(firstPath), incarnation: randomUUID() };
-  secondIdentity = {
-    physical: readDatabasePathIdentitySync(secondPath),
-    incarnation: randomUUID(),
-  };
+  firstIdentity = createIdentity(firstPath);
+  secondIdentity = createIdentity(secondPath);
   aliasPath = path.join(root, "first-alias.sqlite");
   symlinkSync(firstPath, aliasPath);
   forward = await openFixture();
@@ -119,16 +126,38 @@ function barrier() {
   };
 }
 
+async function pausedPersist(
+  id: string,
+  signal: AbortSignal,
+  phase: "commit" | "validate" | "retry" = "commit",
+) {
+  const gate = barrier();
+  const operation = persist(forward, {
+    id,
+    barrier: gate.slot,
+    ...(phase === "retry" ? { observeRetry: true } : { pause: phase }),
+  });
+  cleanups.push(async () => {
+    gate.release();
+    await operation.result.catch(() => {});
+  });
+  const stage = { retry: 3, commit: 2, validate: 1 }[phase];
+  await withinTest(
+    awaitGateBeforeSettlement(gate.reached(stage), operation.result, `${phase} gate not reached`),
+    signal,
+  );
+  return { ...operation, release: () => gate.release() };
+}
+
 function owner(identity: SqliteSourceFenceIdentity) {
   const controller = new AbortController();
-  const retained: Array<{ settled: boolean; outcome: Promise<SqliteWorkerOperationSettlement> }> =
-    [];
+  const retained: Array<{ settled: boolean }> = [];
   const value: SqliteSourceFenceOwner = {
     identity,
     signal: controller.signal,
     assertCurrent: () => controller.signal.throwIfAborted(),
     retain(operation) {
-      const custody = { settled: false, outcome: operation.settled };
+      const custody = { settled: false };
       retained.push(custody);
       void operation.settled.then(() => {
         custody.settled = true;
@@ -140,9 +169,10 @@ function owner(identity: SqliteSourceFenceIdentity) {
 
 function persist(
   fixture: Fixture,
-  command: FenceFixtureCommand,
+  input: Omit<FenceFixtureCommand, "expectedRevision"> & { expectedRevision?: number },
   options: { deadlineNs?: bigint; source?: ReturnType<typeof owner> } = {},
 ) {
+  const command = { expectedRevision: 1, ...input };
   const controller = new AbortController();
   const source = options.source ?? owner(command.sameStore ? fixture.destination : fixture.source);
   const destination = owner(fixture.destination);
@@ -180,338 +210,209 @@ function rows(database: DatabaseSync, id: string) {
   };
 }
 
-describe("durable source fence through the real SQLite broker", () => {
-  it("retains source exclusion after acceptance and settles independently of a synchronous MAIN waiter", async ({
-    signal,
-  }) => {
-    const gate = barrier();
-    const operation = persist(forward, {
-      id: "native-waiter",
-      expectedRevision: 1,
-      pause: "commit",
-      barrier: gate.slot,
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(2), operation.result, "COMMIT gate not reached"),
-        signal,
-      );
-      expect(() => first.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
-      expect(rows(second, "native-waiter")).toEqual({ request: undefined, lifecycle: undefined });
-      first.exec("PRAGMA busy_timeout = 10000");
-      gate.release();
-      // This raw native call cannot service a host-message admission request.
-      first.exec("BEGIN IMMEDIATE; UPDATE authority SET revision = 2 WHERE id = 1; COMMIT");
-      expect(await operation.result).toEqual({ id: "native-waiter", revision: 1 });
-      expect(rows(second, "native-waiter")).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id: "native-waiter" },
-      });
-      expect(operation.receipts).toEqual([{ id: "native-waiter", revision: 1 }]);
-    } finally {
-      gate.release();
-      await operation.result.catch(() => {});
-      first.exec("PRAGMA busy_timeout = 0; UPDATE authority SET revision = 1 WHERE id = 1");
-    }
-  });
+const fact = (id: string) => ({ id, revision: 1 });
 
-  it("excludes an independent process until destination settlement", async ({ signal }) => {
-    const gate = barrier();
-    const operation = persist(forward, {
-      id: "foreign-writer",
-      expectedRevision: 1,
-      pause: "commit",
-      barrier: gate.slot,
-    });
-    const write = () =>
-      spawnSync(
-        process.execPath,
-        [
-          "-e",
-          `
+function assertRows(database: DatabaseSync, id: string, committed = false) {
+  expect(rows(database, id)).toEqual({
+    request: committed ? { revision: 1 } : undefined,
+    lifecycle: committed ? { id } : undefined,
+  });
+}
+
+it("settles accepted commits while MAIN waits on the source lock", async ({ signal }) => {
+  const operation = await pausedPersist("native-waiter", signal);
+  cleanups.push(() =>
+    first.exec("PRAGMA busy_timeout = 0; UPDATE authority SET revision = 1 WHERE id = 1"),
+  );
+  expect(() => first.exec("BEGIN IMMEDIATE")).toThrow(/locked|busy/i);
+  assertRows(second, "native-waiter");
+  first.exec("PRAGMA busy_timeout = 10000");
+  operation.release();
+  // This native call cannot service host-message admission.
+  first.exec("BEGIN IMMEDIATE; UPDATE authority SET revision = 2 WHERE id = 1; COMMIT");
+  expect(await operation.result).toEqual(fact("native-waiter"));
+  assertRows(second, "native-waiter", true);
+  expect(operation.receipts).toEqual([fact("native-waiter")]);
+});
+
+it("excludes an independent process until destination settlement", async ({ signal }) => {
+  const operation = await pausedPersist("foreign-writer", signal);
+  cleanups.push(() => first.exec("UPDATE authority SET revision = 1 WHERE id = 1"));
+  const write = () =>
+    spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `
       const { DatabaseSync } = require('node:sqlite');
       const db = new DatabaseSync(process.argv[1]);
       try { db.exec('BEGIN IMMEDIATE; UPDATE authority SET revision = 2 WHERE id = 1; COMMIT'); }
       catch (error) { process.stdout.write(String(error.message)); process.exitCode = 7; }
       finally { db.close(); }
     `,
-          firstIdentity.physical.canonicalPath,
-        ],
-        { encoding: "utf8" },
-      );
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(2), operation.result, "COMMIT gate not reached"),
-        signal,
-      );
-      const blocked = write();
-      expect(blocked.status).toBe(7);
-      expect(blocked.stdout).toMatch(/locked|busy/i);
-      gate.release();
-      await operation.result;
-      expect(write().status).toBe(0);
-      expect(rows(second, "foreign-writer").request).toEqual({ revision: 1 });
-    } finally {
-      gate.release();
-      await operation.result.catch(() => {});
-      first.exec("UPDATE authority SET revision = 1 WHERE id = 1");
-    }
-  });
+        firstIdentity.physical.canonicalPath,
+      ],
+      { encoding: "utf8" },
+    );
 
-  it("collapses aliases and same-file source/destination while preserving reverse-direction progress", async ({
-    signal,
-  }) => {
-    await expect(
-      persist(forward, { id: "alias", expectedRevision: 1, alias: true }).result,
-    ).resolves.toEqual({ id: "alias", revision: 1 });
-    await expect(
-      persist(forward, { id: "same-store", expectedRevision: 1, sameStore: true }).result,
-    ).resolves.toEqual({ id: "same-store", revision: 1 });
-    const gate = barrier();
-    const left = persist(forward, {
-      id: "forward",
-      expectedRevision: 1,
-      pause: "validate",
-      barrier: gate.slot,
-    });
-    let right: ReturnType<typeof persist> | undefined;
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(1), left.result, "source validation not reached"),
-        signal,
-      );
-      right = persist(reverse, { id: "reverse", expectedRevision: 1 });
-      gate.release();
-      await expect(Promise.all([left.result, right.result])).resolves.toEqual([
-        { id: "forward", revision: 1 },
-        { id: "reverse", revision: 1 },
-      ]);
-    } finally {
-      gate.release();
-      await Promise.allSettled([left.result, ...(right ? [right.result] : [])]);
-    }
-  });
-
-  it("releases earlier empty reservations when a later physical lock is busy", async ({
-    signal,
-  }) => {
-    const [lower, higher] =
-      firstIdentity.physical.key < secondIdentity.physical.key ? [first, second] : [second, first];
-    higher.exec("BEGIN IMMEDIATE");
-    const gate = barrier();
-    const operation = persist(forward, {
-      id: "all-or-release",
-      expectedRevision: 1,
-      barrier: gate.slot,
-      observeRetry: true,
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          gate.reached(3),
-          operation.result,
-          "empty reservation was not released",
-        ),
-        signal,
-      );
-      expect(() => lower.exec("BEGIN IMMEDIATE; ROLLBACK")).not.toThrow();
-      higher.exec("ROLLBACK");
-      gate.release();
-      await expect(operation.result).resolves.toEqual({ id: "all-or-release", revision: 1 });
-    } finally {
-      if (higher.isTransaction) {
-        higher.exec("ROLLBACK");
-      }
-      gate.release();
-      await operation.result.catch(() => {});
-    }
-  });
-
-  for (const kind of ["caller", "source", "destination"] as const) {
-    it(`refuses ${kind} revocation before acceptance and rolls back both destination rows`, async ({
-      signal,
-    }) => {
-      const gate = barrier();
-      const id = `revoked-${kind}`;
-      const operation = persist(forward, {
-        id,
-        expectedRevision: 1,
-        pause: "validate",
-        barrier: gate.slot,
-      });
-      try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            gate.reached(1),
-            operation.result,
-            "source validation not reached",
-          ),
-          signal,
-        );
-        const controller = kind === "caller" ? operation.controller : operation[kind].controller;
-        controller.abort(new Error("Fixture owner closed"));
-        gate.release();
-        await expect(operation.result).rejects.toThrow();
-        expect(rows(second, id)).toEqual({ request: undefined, lifecycle: undefined });
-        expect(operation.receipts).toEqual([]);
-      } finally {
-        gate.release();
-        await operation.result.catch(() => {});
-      }
-    });
-  }
-
-  it("retains accepted commit custody after cancellation", async ({ signal }) => {
-    const gate = barrier();
-    const operation = persist(forward, {
-      id: "accepted-cancel",
-      expectedRevision: 1,
-      pause: "commit",
-      barrier: gate.slot,
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(gate.reached(2), operation.result, "COMMIT gate not reached"),
-        signal,
-      );
-      operation.controller.abort(new Error("Fixture caller canceled"));
-      operation.source.controller.abort(new Error("Fixture source closed"));
-      operation.destination.controller.abort(new Error("Fixture destination closed"));
-      for (const retained of [operation.source.retained, operation.destination.retained]) {
-        expect(retained).toHaveLength(1);
-        expect(retained[0]?.settled).toBe(false);
-      }
-      gate.release();
-      await operation.result.catch(() => {});
-      expect(rows(second, "accepted-cancel")).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id: "accepted-cancel" },
-      });
-      expect(operation.receipts).toEqual([{ id: "accepted-cancel", revision: 1 }]);
-      expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
-      for (const retained of [operation.source.retained, operation.destination.retained]) {
-        expect(retained[0]?.settled).toBe(true);
-      }
-    } finally {
-      gate.release();
-      await operation.result.catch(() => {});
-    }
-  });
-
-  it("refuses stale predicates, expired admission, and an interrupted destination mutation without partial rows", async () => {
-    for (const [id, command, options] of [
-      ["stale", { expectedRevision: 2 }, {}],
-      ["expired", { expectedRevision: 1 }, { deadlineNs: 0n }],
-      ["kernel", { expectedRevision: 1, fault: "kernel" as const }, {}],
-      ["missing-receipt", { expectedRevision: 1, fault: "missing-receipt" as const }, {}],
-      ["host-admission", { expectedRevision: 1, fault: "host-admission" as const }, {}],
-    ] as const) {
-      const operation = persist(forward, { id, ...command }, options);
-      await expect(operation.result).rejects.toThrow();
-      expect(rows(second, id)).toEqual({ request: undefined, lifecycle: undefined });
-      expect(operation.receipts).toEqual([]);
-    }
-  });
-
-  it("refuses absent rows, captured-incarnation mismatch, and missing durable files", async () => {
-    first.exec("DELETE FROM authority WHERE id = 1");
-    try {
-      await expect(persist(forward, { id: "absent", expectedRevision: 1 }).result).rejects.toThrow(
-        /revoked/,
-      );
-      expect(rows(second, "absent")).toEqual({ request: undefined, lifecycle: undefined });
-    } finally {
-      first.exec("INSERT INTO authority VALUES (1, 1)");
-    }
-    const changed = owner({ ...firstIdentity, incarnation: randomUUID() });
-    await expect(
-      persist(forward, { id: "incarnation", expectedRevision: 1 }, { source: changed }).result,
-    ).rejects.toThrow(/owners/);
-    expect(rows(second, "incarnation")).toEqual({ request: undefined, lifecycle: undefined });
-    const missingPath = path.join(path.dirname(aliasPath), "missing.sqlite");
-    await expect(
-      openFixture(secondIdentity, {
-        ...firstIdentity,
-        physical: { ...firstIdentity.physical, canonicalPath: missingPath },
-      }),
-    ).rejects.toThrow();
-    expect(existsSync(missingPath)).toBe(false);
-  });
-
-  it("refuses a closed native source before running the destination kernel", async () => {
-    const fixture = await openFixture();
-    const operation = persist(fixture, {
-      id: "native-source-close",
-      expectedRevision: 1,
-      fault: "source-close",
-    });
-    await expect(operation.result).rejects.toThrow(/closed/);
-    expect(rows(second, "native-source-close")).toEqual({
-      request: undefined,
-      lifecycle: undefined,
-    });
-    expect(operation.receipts).toEqual([]);
-    await fixture.broker.close();
-  });
-
-  it("preserves the committed receipt when ordinary reply encoding or source cleanup fails", async () => {
-    for (const [fixture, database, id, fault] of [
-      [forward, second, "lost-reply", "reply"],
-      [reverse, first, "cleanup-failure", "source-rollback"],
-    ] as const) {
-      const operation = persist(fixture, { id, expectedRevision: 1, fault });
-      await expect(operation.result).rejects.toThrow();
-      expect(operation.receipts).toEqual([{ id, revision: 1 }]);
-      expect(rows(database, id)).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id },
-      });
-      expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
-    }
-  });
-
-  it("preserves a source revocation acknowledged by a destination postcommit observer", async () => {
-    const operation = persist(forward, {
-      id: "postcommit-revoke",
-      expectedRevision: 1,
-      fault: "postcommit-revoke",
-    });
-    try {
-      await expect(operation.result).resolves.toEqual({
-        id: "postcommit-revoke",
-        revision: 1,
-        notifiedRevision: 2,
-      });
-      expect(first.prepare("SELECT revision FROM authority WHERE id = 1").get()).toEqual({
-        revision: 2,
-      });
-      expect(rows(second, "postcommit-revoke")).toEqual({
-        request: { revision: 1 },
-        lifecycle: { id: "postcommit-revoke" },
-      });
-    } finally {
-      await operation.result.catch(() => {});
-      first.exec("UPDATE authority SET revision = 1 WHERE id = 1");
-    }
-  });
-
-  it.each(["before-commit-exit", "after-commit-exit"] as const)(
-    "joins native loss %s without replay or a leaked source lock",
-    async (fault) => {
-      const fixture = await openFixture();
-      const operation = persist(fixture, { id: fault, expectedRevision: 1, fault });
-      await expect(operation.result).rejects.toThrow();
-      const committed = fault === "after-commit-exit";
-      expect(rows(second, fault)).toEqual(
-        committed
-          ? { request: { revision: 1 }, lifecycle: { id: fault } }
-          : { request: undefined, lifecycle: undefined },
-      );
-      expect(() => first.exec("BEGIN IMMEDIATE; ROLLBACK")).not.toThrow();
-      expect(await Promise.all(operation.settlements)).toEqual([
-        expect.objectContaining({ kind: "unknown", nativeStopped: true }),
-      ]);
-      await fixture.broker.close();
-    },
-  );
+  const blocked = write();
+  expect(blocked).toMatchObject({ status: 7, stdout: expect.stringMatching(/locked|busy/i) });
+  operation.release();
+  await operation.result;
+  expect(write().status).toBe(0);
+  expect(rows(second, "foreign-writer").request).toEqual({ revision: 1 });
 });
+
+it("collapses aliases and permits reverse-direction progress", async ({ signal }) => {
+  for (const command of [
+    { id: "alias", alias: true },
+    { id: "same-store", sameStore: true },
+  ]) {
+    await expect(persist(forward, command).result).resolves.toEqual(fact(command.id));
+  }
+  const left = await pausedPersist("forward", signal, "validate");
+  const right = persist(reverse, { id: "reverse" });
+  cleanups.push(async () => {
+    await Promise.allSettled([right.result]);
+  });
+  left.release();
+  await expect(Promise.all([left.result, right.result])).resolves.toEqual([
+    fact("forward"),
+    fact("reverse"),
+  ]);
+});
+
+it("releases earlier empty reservations when a later physical lock is busy", async ({ signal }) => {
+  const [lower, higher] =
+    firstIdentity.physical.key < secondIdentity.physical.key ? [first, second] : [second, first];
+  higher.exec("BEGIN IMMEDIATE");
+  // Release this lock before draining the paused producer on failure.
+  cleanups.push(() => {
+    if (higher.isTransaction) {
+      higher.exec("ROLLBACK");
+    }
+  });
+  const operation = await pausedPersist("all-or-release", signal, "retry");
+  expect(() => lower.exec("BEGIN IMMEDIATE; ROLLBACK")).not.toThrow();
+  higher.exec("ROLLBACK");
+  operation.release();
+  await expect(operation.result).resolves.toEqual(fact("all-or-release"));
+});
+
+it.for(["caller", "source", "destination"] as const)(
+  "refuses %s revocation before acceptance and rolls back both destination rows",
+  async (kind, { signal }) => {
+    const id = `revoked-${kind}`;
+    const operation = await pausedPersist(id, signal, "validate");
+    const controller = kind === "caller" ? operation.controller : operation[kind].controller;
+    controller.abort(new Error("Fixture owner closed"));
+    operation.release();
+    await expect(operation.result).rejects.toThrow();
+    assertRows(second, id);
+    expect(operation.receipts).toEqual([]);
+  },
+);
+
+it("retains accepted commit custody after cancellation", async ({ signal }) => {
+  const operation = await pausedPersist("accepted-cancel", signal);
+  operation.controller.abort(new Error("Fixture caller canceled"));
+  operation.source.controller.abort(new Error("Fixture source closed"));
+  operation.destination.controller.abort(new Error("Fixture destination closed"));
+  const retained = [operation.source.retained, operation.destination.retained];
+  expect(retained).toEqual([[{ settled: false }], [{ settled: false }]]);
+  operation.release();
+  await operation.result.catch(() => {});
+  assertRows(second, "accepted-cancel", true);
+  expect(operation.receipts).toEqual([fact("accepted-cancel")]);
+  expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
+  expect(retained).toEqual([[{ settled: true }], [{ settled: true }]]);
+});
+
+it.each([
+  ["stale", { expectedRevision: 2 }, {}],
+  ["expired", {}, { deadlineNs: 0n }],
+  ["kernel", { fault: "kernel" }, {}],
+  ["missing-receipt", { fault: "missing-receipt" }, {}],
+  ["host-admission", { fault: "host-admission" }, {}],
+  ["native-source-close", { fault: "source-close" }, {}],
+] as const)("refuses %s without partial destination rows", async (id, command, options) => {
+  const fixture = id === "native-source-close" ? await openFixture() : forward;
+  const operation = persist(fixture, { id, ...command }, options);
+  await expect(operation.result).rejects.toThrow(
+    id === "native-source-close" ? /closed/ : undefined,
+  );
+  assertRows(second, id);
+  expect(operation.receipts).toEqual([]);
+  if (fixture !== forward) {
+    await fixture.broker.close();
+  }
+});
+
+it("refuses absent rows, captured-incarnation mismatch, and missing durable files", async () => {
+  first.exec("DELETE FROM authority WHERE id = 1");
+  try {
+    await expect(persist(forward, { id: "absent" }).result).rejects.toThrow(/revoked/);
+    assertRows(second, "absent");
+  } finally {
+    first.exec("INSERT INTO authority VALUES (1, 1)");
+  }
+  const changed = owner({ ...firstIdentity, incarnation: randomUUID() });
+  await expect(persist(forward, { id: "incarnation" }, { source: changed }).result).rejects.toThrow(
+    /owners/,
+  );
+  assertRows(second, "incarnation");
+  const missingPath = path.join(path.dirname(aliasPath), "missing.sqlite");
+  await expect(
+    openFixture(secondIdentity, {
+      ...firstIdentity,
+      physical: { ...firstIdentity.physical, canonicalPath: missingPath },
+    }),
+  ).rejects.toThrow();
+  expect(existsSync(missingPath)).toBe(false);
+});
+
+it.each(["reply", "source-rollback"] as const)(
+  "preserves the committed receipt despite %s",
+  async (fault) => {
+    const [fixture, database, id] =
+      fault === "reply"
+        ? ([forward, second, "lost-reply"] as const)
+        : ([reverse, first, "cleanup-failure"] as const);
+    const operation = persist(fixture, { id, fault });
+    await expect(operation.result).rejects.toThrow();
+    expect(operation.receipts).toEqual([fact(id)]);
+    assertRows(database, id, true);
+    expect(await Promise.all(operation.settlements)).toEqual([{ kind: "completed" }]);
+  },
+);
+
+it("preserves a source revocation acknowledged by a destination postcommit observer", async () => {
+  const operation = persist(forward, { id: "postcommit-revoke", fault: "postcommit-revoke" });
+  cleanups.push(async () => {
+    await operation.result.catch(() => {});
+    first.exec("UPDATE authority SET revision = 1 WHERE id = 1");
+  });
+  await expect(operation.result).resolves.toEqual({
+    ...fact("postcommit-revoke"),
+    notifiedRevision: 2,
+  });
+  expect(first.prepare("SELECT revision FROM authority WHERE id = 1").get()).toEqual({
+    revision: 2,
+  });
+  assertRows(second, "postcommit-revoke", true);
+});
+
+it.each(["before-commit-exit", "after-commit-exit"] as const)(
+  "joins native loss %s without replay or a leaked source lock",
+  async (fault) => {
+    const fixture = await openFixture();
+    const operation = persist(fixture, { id: fault, fault });
+    await expect(operation.result).rejects.toThrow();
+    assertRows(second, fault, fault === "after-commit-exit");
+    expect(() => first.exec("BEGIN IMMEDIATE; ROLLBACK")).not.toThrow();
+    expect(await Promise.all(operation.settlements)).toEqual([
+      expect.objectContaining({ kind: "unknown", nativeStopped: true }),
+    ]);
+    await fixture.broker.close();
+  },
+);

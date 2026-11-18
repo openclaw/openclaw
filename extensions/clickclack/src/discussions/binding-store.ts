@@ -1,6 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import {
+  assertPluginStateReadAvailable,
+  preparePluginStateRead,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type {
   PluginStateComparisonCondition,
   PluginStateKeyedStore,
@@ -31,6 +35,7 @@ export type ClickClackDiscussionBinding = {
   detachedAt?: number;
 };
 
+/** Retained for the shipped synchronous ScopedSessionAccessProvider contract. */
 export function bindingMatchesActiveSessionIncarnation(
   runtime: PluginRuntime,
   sessionKey: string,
@@ -73,20 +78,8 @@ export async function attachBindingToCurrentActiveSession(params: {
   }
   const { detachedAt: _detachedAt, ...retained } = params.binding;
   const attached = { ...retained, sessionId: entry.sessionId };
-  const applied = await params.store.setIfCurrent(params.sessionKey, params.binding, attached, {
-    assertCurrent: () => {
-      const current = params.store.get(params.sessionKey);
-      if (
-        !current ||
-        current.externalRef !== params.binding.externalRef ||
-        current.serverBaseUrl !== params.binding.serverBaseUrl ||
-        current.channelId !== params.binding.channelId ||
-        !bindingMatchesActiveSessionIncarnation(params.runtime, params.sessionKey, attached)
-      ) {
-        throw new Error("ClickClack discussion session changed before attachment committed");
-      }
-    },
-  });
+  // A later reset is picked up by the next refresh; effects check session authority separately.
+  const applied = await params.store.setIfCurrent(params.sessionKey, params.binding, attached);
   return applied ? attached : undefined;
 }
 
@@ -97,7 +90,6 @@ const BINDING_STORE_OPTIONS = {
   maxEntries: MAX_DISCUSSION_BINDINGS,
   overflowPolicy: "reject-new",
 } as const;
-export const MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS = 1_000;
 const storesByRuntime = new WeakMap<PluginRuntime, ClickClackDiscussionBindingStore>();
 
 function channelKey(serverBaseUrl: string, channelId: string): string {
@@ -117,7 +109,6 @@ export class ClickClackDiscussionBindingStore {
   #preparing:
     | Promise<Array<{ sessionKey: string; binding: ClickClackDiscussionBinding }>>
     | undefined;
-  readonly #changedDuringPreparation = new Set<string>();
 
   constructor(runtime: PluginRuntime) {
     this.#runtime = runtime;
@@ -133,11 +124,25 @@ export class ClickClackDiscussionBindingStore {
     return await this.#workerStore().lookup(sessionKey);
   }
 
+  async prepareRead(sessionKey: string) {
+    return (
+      (await preparePluginStateRead(this.#workerStore(), sessionKey)) ?? {
+        // Custom adapters cannot publish writes through the host's owner.
+        read: () => this.get(sessionKey),
+        release() {},
+      }
+    );
+  }
+
   get(sessionKey: string): ClickClackDiscussionBinding | undefined {
-    // Final tool/disclosure authority stays native until synchronous SDK writers retire.
+    // Retained for synchronous SDK consumers and custom adapters.
     this.#nativeStore ??=
       this.#runtime.state.openSyncKeyedStore<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS);
     return this.#nativeStore.lookup(sessionKey);
+  }
+
+  assertReadAvailable(): void {
+    assertPluginStateReadAvailable(this.#workerStore());
   }
 
   async hasCapacity(sessionKey: string): Promise<boolean> {
@@ -214,52 +219,24 @@ export class ClickClackDiscussionBindingStore {
         this.#publish(sessionKey, observed.value);
         return false;
       }
-      let authorityRejected = false;
-      try {
-        const guarded = options?.assertCurrent
-          ? this.#runtime.state.openKeyedStoreV2<ClickClackDiscussionBinding>(
-              BINDING_STORE_OPTIONS,
-              {
-                assertCurrent: () => {
-                  try {
-                    options.assertCurrent?.();
-                  } catch (error) {
-                    authorityRejected = true;
-                    throw error;
-                  }
-                },
-              },
-            )
-          : worker;
-        const result = await guarded.compareAndApply(
-          sessionKey,
-          observed.comparison,
-          next
-            ? { operation: "update", action: "set", value: next }
-            : { operation: "delete", action: "delete" },
-        );
-        this.#publish(sessionKey, result.status === "conflict" ? result.current.value : next);
-        return result.status === "applied";
-      } catch (error) {
-        // An old session guard can lose authority while its worker request waits.
-        // Only an observed replacement makes that failure an obsolete operation.
-        if (!authorityRejected) {
-          throw error;
-        }
-        const current = await worker.observe(sessionKey);
-        if (current.comparison === observed.comparison) {
-          throw error;
-        }
-        this.#publish(sessionKey, current.value);
-        return false;
-      }
+      const guarded = options?.assertCurrent
+        ? this.#runtime.state.openKeyedStoreV2<ClickClackDiscussionBinding>(BINDING_STORE_OPTIONS, {
+            assertCurrent: options.assertCurrent,
+          })
+        : worker;
+      const result = await guarded.compareAndApply(
+        sessionKey,
+        observed.comparison,
+        next
+          ? { operation: "update", action: "set", value: next }
+          : { operation: "delete", action: "delete" },
+      );
+      this.#publish(sessionKey, result.status === "conflict" ? result.current.value : next);
+      return result.status === "applied";
     });
   }
 
   #publish(sessionKey: string, binding: ClickClackDiscussionBinding | undefined): void {
-    if (!this.#prepared) {
-      this.#changedDuringPreparation.add(sessionKey);
-    }
     this.#unindex(sessionKey);
     if (binding) {
       this.#index(sessionKey, binding);
@@ -275,21 +252,16 @@ export class ClickClackDiscussionBindingStore {
     if (this.#prepared) {
       return await load();
     }
-    this.#preparing ??= load()
-      .then((entries) => {
-        for (const { sessionKey, binding } of entries) {
-          // A mutation may commit while the worker snapshot is in flight.
-          if (!this.#changedDuringPreparation.has(sessionKey)) {
-            this.#index(sessionKey, binding);
-          }
-        }
-        this.#prepared = true;
-        this.#changedDuringPreparation.clear();
-        return entries;
-      })
-      .finally(() => {
-        this.#preparing = undefined;
-      });
+    this.#preparing ??= this.#withMutation(async () => {
+      const entries = await load();
+      for (const { sessionKey, binding } of entries) {
+        this.#index(sessionKey, binding);
+      }
+      this.#prepared = true;
+      return entries;
+    }).finally(() => {
+      this.#preparing = undefined;
+    });
     return await this.#preparing;
   }
 

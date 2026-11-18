@@ -1,7 +1,12 @@
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
-import { createNativeTypeScriptProject } from "./native-typescript.mts";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
+import { SymbolFlags, type Symbol } from "typescript/sync";
+import {
+  createNativeTypeScriptProject,
+  reportNativeTypeScriptPhase,
+  type NativeTypeScriptObserver,
+} from "./native-typescript.mts";
 import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
 // Each entry is a reviewed, released compatibility boundary, not a whole-file exemption.
@@ -24,7 +29,10 @@ const reviewed = new Map<string, readonly string[]>([
       "sdkRunSqliteImmediateTransaction",
     ],
   ],
-  ["src/sessions/session-upstream-links.ts", ["deleteSessionUpstreamLink"]],
+  [
+    "src/sessions/session-upstream-links.ts",
+    ["deleteSessionUpstreamLink", "upsertSessionUpstreamLink"],
+  ],
   ["src/sessions/stored-model-overrides.ts", ["resolveStoredModelOverride"]],
   [
     "src/gateway/session-catalog-identity.ts",
@@ -42,7 +50,18 @@ const reviewed = new Map<string, readonly string[]>([
       "withCodexSessionTranscriptMirrorWriteLock",
     ],
   ],
-  ["src/plugin-sdk/session-transcript-runtime.ts", ["withSessionTranscriptWriteLock"]],
+  [
+    "src/plugin-sdk/session-transcript-runtime.ts",
+    ["withSessionTranscriptWriteLock", "readSessionTranscriptCatalogTitle"],
+  ],
+  [
+    "src/plugin-sdk/session-store-runtime.ts",
+    [
+      "getConversationSession",
+      "readSessionStoreTranscriptStatsSync",
+      "readAmbientTranscriptWatermark",
+    ],
+  ],
   ["src/plugin-sdk/session-transcript-hit.ts", ["loadCombinedSessionStoreForGateway"]],
   ["src/plugin-sdk/provider-selection-runtime.ts", ["resolveConfiguredCapabilityProvider"]],
   ["src/pairing/pairing-store.ts", ["readChannelAllowFromStoreSync"]],
@@ -86,13 +105,51 @@ const reviewed = new Map<string, readonly string[]>([
     ],
   ],
   [
+    "src/agents/harness/native-session/binding-authority.ts",
+    ["createNativeSessionBindingAuthority", "combineNativeSessionBindingAuthority"],
+  ],
+  [
     "src/agents/harness/native-session/binding-generation-authority.ts",
-    ["resolveNativeSessionBindingWithAuthority"],
+    ["prepareNativeSessionGenerationAuthority", "resolveNativeSessionBindingWithAuthority"],
   ],
 ]);
 
 // Mixed SDK receivers retain only these deprecated members, never their live factories.
 const reviewedMembers = new Map<string, readonly string[]>([
+  [
+    "src/gateway/github-oauth-lifecycle.ts",
+    ["createGitHubOAuthLifecycle.cancelAuthorization", "createGitHubOAuthLifecycle.retireProfile"],
+  ],
+  [
+    "src/gateway/github-personal-oauth.ts",
+    [
+      "createPersonalGitHubOAuthLifecycle.cancelAuthorization",
+      "createPersonalGitHubOAuthLifecycle.disconnect",
+    ],
+  ],
+  [
+    "src/agents/sessions/session-manager.ts",
+    [
+      "open",
+      "openBounded",
+      "openDetachedBounded",
+      "openModelContext",
+      "readSessionContext",
+      "prepareTranscriptRewrite",
+    ],
+  ],
+  [
+    "src/agents/sessions/session-manager-core.ts",
+    ["setSessionTarget", "reloadPersistedTranscript"],
+  ],
+  [
+    "src/agents/harness/native-session/initialization.ts",
+    ["createNativeSessionInitializationOwner.prepare.link"],
+  ],
+  [
+    "src/infra/outbound/account-scoped-conversation-bindings.ts",
+    ["createAccountBindingManager.listBySession", "createAccountBindingManager.touch"],
+  ],
   [
     "src/agents/harness/host-capability.ts",
     ["createAgentHarnessHostCapabilities.createToolSurface"],
@@ -109,13 +166,44 @@ const reviewedMembers = new Map<string, readonly string[]>([
       "createModelAccountConnectService.cancel",
     ],
   ],
+  [
+    "src/infra/outbound/session-binding-service.ts",
+    [
+      "DEFAULT_SESSION_BINDING_SERVICE.listBySession",
+      "DEFAULT_SESSION_BINDING_SERVICE.resolveByConversation",
+    ],
+  ],
+  [
+    "src/plugin-state/plugin-state-store.legacy.ts",
+    [
+      "createSyncKeyedStore.lookupMany",
+      "createSyncKeyedStore.consume",
+      "createSyncKeyedStore.clear",
+    ],
+  ],
 ]);
 
 // These are candidates, not exemptions: every value reference must resolve to
 // another proven candidate or an inventory-reviewed worker/maintenance entry.
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
+  [
+    "src/config/sessions/session-cold-storage-chunks.ts",
+    ["readSessionColdChunks", "readVerifiedSessionColdChunk", "iterateSessionColdRecords"],
+  ],
+  [
+    "src/config/sessions/session-cold-storage-navigation.ts",
+    ["retainSessionColdNavigationInTransaction"],
+  ],
+  ["src/config/sessions/session-cold-storage-records.ts", ["writeSessionColdRecordsInTransaction"]],
+  [
+    "src/config/sessions/session-cold-storage-prepare.ts",
+    [
+      "prepareSessionColdArchiveInWorker",
+      "prepareSessionColdBatchInWorker",
+      "prepareExternalization",
+    ],
+  ],
   ["src/state/openclaw-state-db-maintenance.ts", ["writeCurrentStateSchemaMetadata"]],
-  ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
   ["src/state/user-profile-mutation.ts", ["runUserProfileWriteTransaction"]],
   ["src/gateway/channel-operator-authority.ts", ["resolveChannelOperatorIdentityFacts"]],
   [
@@ -125,7 +213,6 @@ const nonRuntimeCandidates = new Map<string, readonly string[]>([
       "selectUserProfileIdentityInDatabase",
       "selectUserProfileDisplaysInDatabase",
       "readUserProfileSnapshotCommand",
-      "readUserProfileIdForEmail",
     ],
   ],
   [
@@ -212,13 +299,27 @@ const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
     new Map([["recordSessionParticipantWithAliasRead", 2]]),
   ],
   [
+    "src/plugin-state/plugin-state-store.sqlite.ts",
+    new Map([
+      ["readPluginState", 2],
+      ["writePluginState", 2],
+    ]),
+  ],
+  [
     "src/state/openclaw-state-db-readonly.ts",
     new Map([["withExistingOpenClawStateDatabaseReadOnly", 0]]),
   ],
+  ["src/state/openclaw-agent-db-readonly.ts", new Map([["withOpenClawAgentDatabaseReadOnly", 0]])],
   ["src/state/openclaw-state-db.ts", new Map([["runOpenClawStateWriteTransaction", 0]])],
   ["src/state/user-profile-mutation.ts", new Map([["runUserProfileWriteTransaction", 0]])],
   ["src/state/user-profiles-internal.ts", new Map([["readResolvedUserProfile", 1]])],
-  ["src/infra/sqlite-transaction.ts", new Map([["runSqliteDeferredTransactionSync", 1]])],
+  [
+    "src/infra/sqlite-transaction.ts",
+    new Map([
+      ["runSqliteDeferredTransactionSync", 1],
+      ["runSqliteReadSnapshotSync", 1],
+    ]),
+  ],
   [
     "src/plugins/runtime/generation-state.ts",
     new Map([["withPluginRuntimeGenerationRegistryScope", 1]]),
@@ -262,6 +363,8 @@ export function inspectDatabaseWorkerBoundaries(
   isNonRuntime: (file: string, operation: string) => boolean = (file) =>
     /\.worker\.[cm]?[jt]s$/.test(file),
   classifyEntry: (file: string, operation: string) => NonRuntimeTier | undefined = () => undefined,
+  validateCredentialWriters = true,
+  observer?: NativeTypeScriptObserver,
 ): {
   operations: Map<string, Set<string>>;
   callLocations: Map<string, Set<string>>;
@@ -279,6 +382,10 @@ export function inspectDatabaseWorkerBoundaries(
   }
   const config = ".openclaw-database-worker-compat.tsconfig.json";
   const files = Object.fromEntries(sourceTexts);
+  // Keep historical snapshots hermetic, but preserve member identities through
+  // Required<T>: without this standard mapped type, noLib erases those receivers.
+  const globals = ".openclaw-database-worker-compat.globals.d.ts";
+  files[globals] = "type Required<T> = { [P in keyof T]-?: T[P] };";
   files[config] = JSON.stringify({
     compilerOptions: {
       allowJs: true,
@@ -295,27 +402,57 @@ export function inspectDatabaseWorkerBoundaries(
         "@openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       },
     },
-    files: [...sourceTexts.keys()],
+    files: [...sourceTexts.keys(), globals],
     include: [],
   });
+  reportNativeTypeScriptPhase(observer, "inputs", { files: sourceTexts.size });
   // The supplied snapshot owns all source bytes, including historical comparisons.
   using session = createNativeTypeScriptProject({
     cwd: root,
     configFileName: config,
+    observer,
     files,
     fs: {
-      readFile: () => null,
+      readFile: () => undefined,
       fileExists: () => false,
       directoryExists: () => false,
-      getAccessibleEntries: () => ({ files: [], directories: [] }),
-      realpath: (file) => file,
+      getAccessibleEntries: () => ({ files: [], directories: [], symlinks: undefined }),
+      realpath: serverFS.identity,
+      stat: serverFS.fakeStat,
+      writeFile: serverFS.error,
+      removeFile: serverFS.error,
     },
   });
   const { checker, program } = session.project;
+  // The snapshot fixes compiler answers, even while graph forwarding is prepared.
+  // Cache raw symbols (including misses); resolveSymbol applies current bindings later.
+  const compilerSymbols = new Map<ts.Node, Symbol | undefined>();
+  const symbolsAt = (nodes: readonly ts.Node[]): (Symbol | undefined)[] => {
+    const missing = [...new Set(nodes.filter((node) => !compilerSymbols.has(node)))];
+    // An unbounded cross-file response can exceed Node's JSON string limit.
+    for (let offset = 0; offset < missing.length; offset += 256) {
+      const batch = missing.slice(offset, offset + 256);
+      const symbols = checker.getSymbolAtLocation(batch);
+      for (const [index, node] of batch.entries()) {
+        compilerSymbols.set(node, symbols[index]);
+      }
+    }
+    return nodes.map((node) => compilerSymbols.get(node));
+  };
+  const symbolAt = (node: ts.Node): Symbol | undefined =>
+    compilerSymbols.has(node) ? compilerSymbols.get(node) : symbolsAt([node])[0];
   const forwarded = new Map<Symbol, Symbol>();
+  // Compiler aliases are immutable; prepared binding overrides are applied separately.
+  const aliasTargets = new Map<Symbol, Symbol>();
   const resolveSymbol = (symbol: Symbol | undefined): Symbol | undefined => {
-    const target =
-      symbol && symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
+    let target = symbol;
+    if (symbol && symbol.flags & SymbolFlags.Alias) {
+      target = aliasTargets.get(symbol);
+      if (!target) {
+        target = checker.getAliasedSymbol(symbol);
+        aliasTargets.set(symbol, target);
+      }
+    }
     return target && (forwarded.get(target) ?? target);
   };
   const operationName = (node: ts.Node) => {
@@ -332,7 +469,13 @@ export function inspectDatabaseWorkerBoundaries(
       } else if (
         (ts.isVariableDeclaration(parent) || ts.isPropertyAssignment(parent)) &&
         parent.initializer &&
-        (ts.isArrowFunction(parent.initializer) || ts.isFunctionExpression(parent.initializer)) &&
+        (ts.isArrowFunction(parent.initializer) ||
+          ts.isFunctionExpression(parent.initializer) ||
+          (ts.isVariableDeclaration(parent) &&
+            ts.isObjectLiteralExpression(parent.initializer) &&
+            ts.isVariableDeclarationList(parent.parent) &&
+            ts.isVariableStatement(parent.parent.parent) &&
+            ts.isSourceFile(parent.parent.parent.parent))) &&
         ts.isIdentifier(parent.name)
       ) {
         parts.unshift(parent.name.text);
@@ -340,6 +483,9 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return parts.join(".");
   };
+  // Both graph walks reuse the exact callback argument after forwarding is complete.
+  // A cached boolean would incorrectly authorize other arguments in the same call.
+  const inlineArguments = new Map<ts.CallExpression, ts.Expression | undefined>();
   const isInlineInvocation = (node: ts.Node): boolean => {
     const call = node.parent;
     if (!ts.isCallExpression(call)) {
@@ -348,7 +494,11 @@ export function inspectDatabaseWorkerBoundaries(
     if (call.expression === node) {
       return true;
     }
-    const symbol = resolveSymbol(checker.getSymbolAtLocation(call.expression));
+    if (inlineArguments.has(call)) {
+      return inlineArguments.get(call) === node;
+    }
+    inlineArguments.set(call, undefined);
+    const symbol = resolveSymbol(symbolAt(call.expression));
     const declaration = symbol?.valueDeclaration?.resolve();
     const callable =
       declaration && ts.isVariableDeclaration(declaration) ? declaration.initializer : declaration;
@@ -357,10 +507,13 @@ export function inspectDatabaseWorkerBoundaries(
     }
     const file = path.relative(root, callable.getSourceFile().fileName).split(path.sep).join("/");
     const argument = synchronousScopes.get(file)?.get(operationName(callable));
-    return argument !== undefined && call.arguments[argument] === node;
+    const inlineArgument = argument === undefined ? undefined : call.arguments[argument];
+    inlineArguments.set(call, inlineArgument);
+    return inlineArgument === node;
   };
   const registered = new Map<Symbol, BoundaryOperation>();
   const declarations = new Map<ts.Node, BoundaryOperation>();
+  const contractDeclarations = new Map<ts.Node, BoundaryOperation>();
   const declarationNames = new Set<ts.Node>();
   const families = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const names = new Set(
@@ -408,7 +561,7 @@ export function inspectDatabaseWorkerBoundaries(
       if (!node || !nameNode) {
         continue;
       }
-      const symbol = resolveSymbol(checker.getSymbolAtLocation(nameNode));
+      const symbol = resolveSymbol(symbolAt(nameNode));
       if (!symbol) {
         throw new Error(`Compatibility scan could not resolve ${file}:${name}`);
       }
@@ -429,12 +582,35 @@ export function inspectDatabaseWorkerBoundaries(
         node,
       };
       registered.set(symbol, operation);
+      const object = ts.isMethodDeclaration(operation.node)
+        ? operation.node.parent
+        : ts.isArrowFunction(operation.node) && ts.isPropertyAssignment(operation.node.parent)
+          ? operation.node.parent.parent
+          : undefined;
+      if (member && object && ts.isObjectLiteralExpression(object)) {
+        // Explicit receiver types create distinct symbols at each instantiation.
+        // Match their member declaration, never the spelling on unrelated stores.
+        const contract = checker.getContextualType(object)?.getProperty(nameNode.getText());
+        if (contract) {
+          forwarded.set(contract, symbol);
+          for (const declaration of contract.declarations) {
+            const resolved = declaration.resolve();
+            if (resolved) {
+              contractDeclarations.set(resolved, operation);
+            }
+          }
+        }
+      }
       declarations.set(node, operation);
       declarationNames.add(nameNode);
     }
     return { file, source };
   });
-  violations.push(...inspectPersonalCredentialWriters(sources, checker));
+  session.checkpoint?.("sources-registration");
+  if (validateCredentialWriters) {
+    violations.push(...inspectPersonalCredentialWriters(sources, checker, symbolsAt));
+    session.checkpoint?.("credential-writers");
+  }
   // Follow named kernels from the reviewed boundaries. A symbol reference from
   // outside this closure (or an escaped callback) will make that kernel live.
   // A returned receiver exists only through its factory. Keep its methods in
@@ -463,7 +639,7 @@ export function inspectDatabaseWorkerBoundaries(
       if (name) {
         declarationNames.add(name);
       }
-      const symbol = name ? resolveSymbol(checker.getSymbolAtLocation(name)) : undefined;
+      const symbol = name ? resolveSymbol(symbolAt(name)) : undefined;
       if (symbol) {
         registered.set(symbol, member);
         if (name && ts.isIdentifier(name)) {
@@ -471,9 +647,13 @@ export function inspectDatabaseWorkerBoundaries(
         }
       }
     }
-    const family = families.get(owner) ?? new Set<BoundaryOperation>();
-    family.add(member);
-    families.set(owner, family);
+    // An explicitly reviewed member has its own compatibility boundary even
+    // when its factory also creates live async methods.
+    if (!member.reviewed) {
+      const family = families.get(owner) ?? new Set<BoundaryOperation>();
+      family.add(member);
+      families.set(owner, family);
+    }
     return member;
   };
   const primitives = new Set([
@@ -484,15 +664,22 @@ export function inspectDatabaseWorkerBoundaries(
     "withOpenClawAgentDatabaseReadOnly",
   ]);
   const examined = new Set<Symbol>();
+  // Factory and member expansion can revisit the same call in this immutable snapshot.
+  // Query each location once; distinct locations still need the symbol-level guard.
+  const seenReferences = new Set<ts.Node>();
   const expandedMembers = new Set<ts.Node>();
   let pending = [...registered.values()];
   while (pending.length > 0) {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
-      if (ts.isTypeNode(node)) {
+      if (ts.isTypeNode(node) || declarations.get(node)?.reviewed) {
         return;
       }
-      if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
+      if (
+        (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
+        !seenReferences.has(node.expression)
+      ) {
+        seenReferences.add(node.expression);
         references.push(node.expression);
       }
       node.forEachChild(visit);
@@ -583,7 +770,7 @@ export function inspectDatabaseWorkerBoundaries(
     for (const member of pending) {
       expandedMembers.add(member.node);
     }
-    const symbols = checker.getSymbolAtLocation(references);
+    const symbols = symbolsAt(references);
     for (const raw of symbols) {
       const symbol = resolveSymbol(raw);
       if (!symbol || examined.has(symbol) || registered.has(symbol)) {
@@ -648,6 +835,7 @@ export function inspectDatabaseWorkerBoundaries(
       pending.push(operation);
     }
   }
+  session.checkpoint?.("closure-expansion");
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
@@ -682,6 +870,12 @@ export function inspectDatabaseWorkerBoundaries(
     const declaration = symbol.valueDeclaration?.resolve();
     const direct =
       registered.get(symbol) ??
+      symbol.declarations
+        .map((contract) => {
+          const resolved = contract.resolve();
+          return resolved ? contractDeclarations.get(resolved) : undefined;
+        })
+        .find((operation) => operation !== undefined) ??
       (declaration
         ? declarations.get(
             ts.isPropertyAssignment(declaration) ? declaration.initializer : declaration,
@@ -698,7 +892,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
     return found;
   };
-  const namespaceSymbols = checker.getSymbolAtLocation(namespaces);
+  const namespaceSymbols = symbolsAt(namespaces);
   for (const [index, namespace] of namespaces.entries()) {
     if (targets(namespaceSymbols[index]).size) {
       names.add(namespace.text);
@@ -716,6 +910,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
   }
   const handledImports = new Set<ts.Node>();
+  const handledImportBindings = new Set<ts.Node>();
   for (const binding of bindings) {
     const initializer = binding.initializer!;
     const expression = ts.isAwaitExpression(initializer) ? initializer.expression : initializer;
@@ -724,15 +919,16 @@ export function inspectDatabaseWorkerBoundaries(
         ? expression
         : undefined;
     const module = dynamicImport?.arguments[0]
-      ? resolveSymbol(checker.getSymbolAtLocation(dynamicImport.arguments[0]))
+      ? resolveSymbol(symbolAt(dynamicImport.arguments[0]))
       : undefined;
     if (!dynamicImport || !module) {
       continue;
     }
     const record = (name: ts.Identifier, target: Symbol | undefined) => {
-      const local = checker.getSymbolAtLocation(name);
+      const local = symbolAt(name);
       if (local && target) {
         forwarded.set(local, target);
+        handledImportBindings.add(name);
         if (targets(target).size) {
           names.add(name.text);
         }
@@ -765,6 +961,7 @@ export function inspectDatabaseWorkerBoundaries(
       handledImports.add(dynamicImport);
     }
   }
+  session.checkpoint?.("binding-forwarding");
   const edges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const callerEdges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const runtimeReferences = new Set<BoundaryOperation>();
@@ -781,7 +978,7 @@ export function inspectDatabaseWorkerBoundaries(
     }
   }
   const accessSymbol = (expression: ts.Expression): Symbol | undefined => {
-    const known = resolveSymbol(checker.getSymbolAtLocation(expression));
+    const known = resolveSymbol(symbolAt(expression));
     if (known) {
       return known;
     }
@@ -793,7 +990,7 @@ export function inspectDatabaseWorkerBoundaries(
       expression.expression.kind === ts.SyntaxKind.ImportKeyword &&
       expression.arguments[0]
     ) {
-      return resolveSymbol(checker.getSymbolAtLocation(expression.arguments[0]));
+      return resolveSymbol(symbolAt(expression.arguments[0]));
     }
     if (ts.isPropertyAccessExpression(expression)) {
       const base = accessSymbol(expression.expression);
@@ -820,7 +1017,8 @@ export function inspectDatabaseWorkerBoundaries(
         ts.isStringLiteral(expression.parent.argumentExpression))
     );
   };
-  for (const { file, source } of sources) {
+  const bindingMembers = new Map<ts.Node, Symbol>();
+  const sourceReferences = sources.map(({ file, source }) => {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
       // `extends` is a runtime reference even though its AST wrapper is a type.
@@ -844,8 +1042,13 @@ export function inspectDatabaseWorkerBoundaries(
             !handledImports.has(node.parent) &&
             !selectsImportMember(node.parent))) &&
         !declarationNames.has(node) &&
+        !handledImportBindings.has(node) &&
         !declarations.has(node.parent) &&
-        !(ts.isBindingElement(node.parent) && node.parent.name === node) &&
+        !(
+          ts.isBindingElement(node.parent) &&
+          node.parent.name === node &&
+          (node.parent.propertyName || !ts.isObjectBindingPattern(node.parent.parent))
+        ) &&
         !(ts.isVariableDeclaration(node.parent) && node.parent.name === node)
       ) {
         references.push(node);
@@ -853,12 +1056,88 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    const symbols = checker.getSymbolAtLocation(references);
+    const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
+    for (const node of references) {
+      if (
+        ts.isIdentifier(node) &&
+        ts.isBindingElement(node.parent) &&
+        node.parent.name === node &&
+        !node.parent.propertyName &&
+        ts.isObjectBindingPattern(node.parent.parent)
+      ) {
+        receiverBindings.set(node, node.parent.parent);
+      }
+    }
+    // Members of one destructuring share a receiver type; query each pattern once.
+    const patterns = [...new Set(receiverBindings.values())];
+    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
+    const bindingTypes = new Map(
+      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
+    );
+    for (const [node, pattern] of receiverBindings) {
+      const member = bindingTypes.get(pattern)!.getProperty(node.text);
+      if (member) {
+        bindingMembers.set(node, member);
+      }
+    }
+    return { file, source, references };
+  });
+  // Reference discovery is independent across files in this immutable snapshot.
+  // Resolved receiver members do not need the raw binding symbol.
+  // Shorthand properties use their value-symbol query during caller classification.
+  symbolsAt(
+    sourceReferences.flatMap(({ references }) =>
+      references.filter(
+        (node) => !bindingMembers.has(node) && !ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ),
+  );
+  session.checkpoint?.("reference-prefetch");
+  // Pack immutable fallback lookups across files without retaining another full inventory.
+  const accessBatch: ts.Expression[] = [];
+  for (const { references } of sourceReferences) {
+    const pendingAccesses = new Set<ts.Expression>();
+    for (const node of references) {
+      if (compilerSymbols.get(node)) {
+        continue;
+      }
+      const parent = node.parent;
+      let receiver: ts.Expression | undefined =
+        ts.isPropertyAccessExpression(parent) && parent.name === node
+          ? parent
+          : ts.isElementAccessExpression(parent) && ts.isStringLiteral(node)
+            ? parent.expression
+            : undefined;
+      while (receiver && !pendingAccesses.has(receiver)) {
+        pendingAccesses.add(receiver);
+        if (!compilerSymbols.has(receiver)) {
+          accessBatch.push(receiver);
+          if (accessBatch.length === 256) {
+            symbolsAt(accessBatch);
+            accessBatch.length = 0;
+          }
+        }
+        receiver =
+          ts.isAwaitExpression(receiver) ||
+          ts.isParenthesizedExpression(receiver) ||
+          ts.isPropertyAccessExpression(receiver)
+            ? receiver.expression
+            : ts.isCallExpression(receiver) &&
+                receiver.expression.kind === ts.SyntaxKind.ImportKeyword
+              ? receiver.arguments[0]
+              : undefined;
+      }
+    }
+  }
+  symbolsAt(accessBatch);
+  for (const { file, source, references } of sourceReferences) {
+    const symbols = references.map((node) => compilerSymbols.get(node));
     for (const [index, node] of references.entries()) {
       let symbol = resolveSymbol(
-        ts.isShorthandPropertyAssignment(node.parent)
-          ? checker.getShorthandAssignmentValueSymbol(node.parent)
-          : symbols[index],
+        bindingMembers.get(node) ??
+          (ts.isShorthandPropertyAssignment(node.parent)
+            ? checker.getShorthandAssignmentValueSymbol(node.parent)
+            : symbols[index]),
       );
       if (!symbol && ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) {
         symbol = resolveSymbol(accessSymbol(node.parent));
@@ -935,28 +1214,29 @@ export function inspectDatabaseWorkerBoundaries(
             const name = enclosingNames.join(".");
             const tier = classifyEntry(file, name);
             const consumer = expression.parent;
-            const receiver =
-              ts.isCallExpression(consumer) &&
-              resolveSymbol(
-                checker.getSymbolAtLocation(consumer.expression),
-              )?.valueDeclaration?.resolve();
             const reviewedForward =
+              !directCall &&
               tier === "T3" &&
               ts.isCallExpression(consumer) &&
-              receiver &&
-              ts.isFunctionDeclaration(receiver) &&
-              path.relative(root, receiver.getSourceFile().fileName).split(path.sep).join("/") ===
-                file &&
-              nonRuntimeMemberForwards
-                .get(file)
-                ?.some(
-                  (forward) =>
-                    forward.caller === name &&
-                    callee.file === file &&
-                    forward.member === callee.name &&
-                    forward.receiver === operationName(receiver) &&
-                    consumer.arguments[forward.argument] === expression,
+              nonRuntimeMemberForwards.get(file)?.some((forward) => {
+                // Receiver identity needs a compiler round trip only after the
+                // local facts select an exact reviewed forwarding contract.
+                const receiver =
+                  forward.caller === name &&
+                  callee.file === file &&
+                  forward.member === callee.name &&
+                  consumer.arguments[forward.argument] === expression &&
+                  resolveSymbol(symbolAt(consumer.expression))?.valueDeclaration?.resolve();
+                return (
+                  receiver &&
+                  ts.isFunctionDeclaration(receiver) &&
+                  path
+                    .relative(root, receiver.getSourceFile().fileName)
+                    .split(path.sep)
+                    .join("/") === file &&
+                  forward.receiver === operationName(receiver)
                 );
+              });
             nonRuntime = Boolean(
               (directCall || reviewedForward) &&
               (tier !== undefined ||
@@ -985,6 +1265,7 @@ export function inspectDatabaseWorkerBoundaries(
       }
     }
   }
+  session.checkpoint?.("caller-classification");
   const compatibilityReachable = new Set(
     [...registered.values()].filter((operation) => operation.reviewed && !operation.candidate),
   );
@@ -1002,7 +1283,7 @@ export function inspectDatabaseWorkerBoundaries(
     ) {
       continue;
     }
-    for (const operation of targets(checker.getSymbolAtLocation(source))) {
+    for (const operation of targets(symbolAt(source))) {
       if (!compatibilityReachable.has(operation)) {
         operation.nonRuntimeValid = false;
       }
@@ -1086,6 +1367,7 @@ export function inspectDatabaseWorkerBoundaries(
       selectedLocations.set(operation.file, locations);
     }
   }
+  session.checkpoint?.("graph-classification");
   return {
     operations,
     callLocations,

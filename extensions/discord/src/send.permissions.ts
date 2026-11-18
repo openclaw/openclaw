@@ -1,15 +1,19 @@
-import type { APIChannel, APIGuild, APIGuildMember, APIRole } from "discord-api-types/v10";
+import type {
+  APIChannel,
+  APIGuildForumChannel,
+  APIGuild,
+  APIGuildMember,
+  APIRole,
+  APITextChannel,
+  APIThreadChannel,
+} from "discord-api-types/v10";
 import { ChannelType, PermissionFlagsBits } from "discord-api-types/v10";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { resolveDiscordRest } from "./client.js";
-import {
-  getChannel,
-  getCurrentUser,
-  getGuild,
-  getGuildMember,
-  getThreadMember,
-  type RequestClient,
-} from "./internal/discord.js";
+import { getGuild, getGuildMember } from "./internal/api.guild.js";
+import { getChannel, getThreadMember } from "./internal/api.messages.js";
+import { getCurrentUser } from "./internal/api.users.js";
+import type { RequestClient } from "./internal/rest.js";
 import type { DiscordPermissionsSummary, DiscordReactOpts } from "./send.types.js";
 
 const PERMISSION_ENTRIES = Object.entries(PermissionFlagsBits).filter(
@@ -49,13 +53,13 @@ async function fetchBotUserId(rest: RequestClient) {
 }
 
 function resolveMemberGuildPermissionBits(params: {
-  guild: Pick<APIGuild, "id" | "roles">;
+  guildId: string;
+  roles: ReadonlyMap<string, APIRole>;
   member: Pick<APIGuildMember, "roles">;
 }) {
-  const rolesByIdLocal = rolesById(params.guild);
-  let permissions = addPermissionBits(0n, rolesByIdLocal.get(params.guild.id)?.permissions);
+  let permissions = addPermissionBits(0n, params.roles.get(params.guildId)?.permissions);
   for (const roleId of params.member.roles ?? []) {
-    permissions = addPermissionBits(permissions, rolesByIdLocal.get(roleId)?.permissions);
+    permissions = addPermissionBits(permissions, params.roles.get(roleId)?.permissions);
   }
   return permissions;
 }
@@ -69,10 +73,9 @@ function rolePosition(role: Pick<APIRole, "position"> | undefined) {
 }
 
 function highestMemberRolePosition(
-  guild: Pick<APIGuild, "roles">,
+  roles: ReadonlyMap<string, APIRole>,
   member: Pick<APIGuildMember, "roles">,
 ) {
-  const roles = rolesById(guild);
   return Math.max(...(member.roles ?? []).map((roleId) => rolePosition(roles.get(roleId))), 0);
 }
 
@@ -84,7 +87,8 @@ function resolveMemberChannelPermissionBits(params: {
   channel: APIChannel;
 }) {
   let permissions = resolveMemberGuildPermissionBits({
-    guild: params.guild,
+    guildId: params.guildId,
+    roles: rolesById(params.guild),
     member: params.member,
   });
 
@@ -145,7 +149,7 @@ export async function fetchMemberGuildPermissionsDiscord(
     if (guild.owner_id === userId) {
       return ALL_PERMISSIONS;
     }
-    return resolveMemberGuildPermissionBits({ guild, member });
+    return resolveMemberGuildPermissionBits({ guildId, roles: rolesById(guild), member });
   } catch {
     // Not a guild member, guild not found, or API failure.
     return null;
@@ -193,6 +197,27 @@ async function checkMemberChannelPermissions(
   }
 }
 
+async function canViewChannel(
+  permissions: bigint,
+  channel: APIChannel,
+  rest: RequestClient,
+  userId: string,
+): Promise<boolean> {
+  if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
+    return false;
+  }
+  if (channel.type === ChannelType.PrivateThread) {
+    if (!hasPermissionBit(permissions, PermissionFlagsBits.ManageThreads)) {
+      try {
+        await getThreadMember(rest, channel.id, userId);
+      } catch {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 export async function canViewDiscordGuildChannel(
   guildId: string,
   channelId: string,
@@ -204,19 +229,56 @@ export async function canViewDiscordGuildChannel(
     channelId,
     userId,
     opts,
-    async (permissions, channel, rest) => {
-      if (!hasPermissionBit(permissions, PermissionFlagsBits.ViewChannel)) {
-        return false;
-      }
-      if ("type" in channel && channel.type === ChannelType.PrivateThread) {
-        if (hasPermissionBit(permissions, PermissionFlagsBits.ManageThreads)) {
-          return true;
-        }
-        await getThreadMember(rest, channel.id, userId);
-      }
-      return true;
-    },
+    (permissions, channel, rest) => canViewChannel(permissions, channel, rest, userId),
   );
+}
+
+/** Fresh facts for one fork qualification; callers must not retain them for creation. */
+export async function fetchThreadForkPermissionsDiscord(
+  guildId: string,
+  source: APIThreadChannel,
+  parent: APITextChannel | APIGuildForumChannel,
+  userId: string,
+  opts: DiscordReactOpts,
+): Promise<{ requesterCanRead: boolean; botPermissions: string[] }> {
+  opts.signal?.throwIfAborted();
+  const rest = resolveDiscordRest(opts);
+  const [guild, requester, botId] = await Promise.all([
+    getGuild(rest, guildId),
+    getGuildMember(rest, guildId, userId),
+    fetchBotUserId(rest),
+  ]);
+  opts.signal?.throwIfAborted();
+  const bot = await getGuildMember(rest, guildId, botId);
+  opts.signal?.throwIfAborted();
+  // Thread visibility and history inherit the same parent overwrites; private
+  // membership remains a separate check, shared with ordinary channel visibility.
+  const requesterPermissions =
+    guild.owner_id === userId
+      ? ALL_PERMISSIONS
+      : resolveMemberChannelPermissionBits({
+          guildId,
+          userId,
+          guild,
+          member: requester,
+          channel: parent,
+        });
+  const requesterCanRead =
+    hasPermissionBit(requesterPermissions, PermissionFlagsBits.ReadMessageHistory) &&
+    (await canViewChannel(requesterPermissions, source, rest, userId));
+  opts.signal?.throwIfAborted();
+  return {
+    requesterCanRead,
+    botPermissions: bitfieldToPermissions(
+      resolveMemberChannelPermissionBits({
+        guildId,
+        userId: botId,
+        guild,
+        member: bot,
+        channel: parent,
+      }),
+    ),
+  };
 }
 
 /**
@@ -257,13 +319,15 @@ export async function canManageGuildMemberRoleDiscord(
       return false;
     }
 
-    const targetRole = rolesById(guild).get(roleId);
+    const roles = rolesById(guild);
+    const targetRole = roles.get(roleId);
     const targetRolePosition = rolePosition(targetRole);
     if (targetRolePosition < 0) {
       return false;
     }
     const senderPermissions = resolveMemberGuildPermissionBits({
-      guild,
+      guildId,
+      roles,
       member: senderMember,
     });
     if (
@@ -273,11 +337,11 @@ export async function canManageGuildMemberRoleDiscord(
     ) {
       return false;
     }
-    const senderHighestRolePosition = highestMemberRolePosition(guild, senderMember);
+    const senderHighestRolePosition = highestMemberRolePosition(roles, senderMember);
     if (senderHighestRolePosition <= targetRolePosition) {
       return false;
     }
-    return senderHighestRolePosition > highestMemberRolePosition(guild, targetMember);
+    return senderHighestRolePosition > highestMemberRolePosition(roles, targetMember);
   } catch {
     return false;
   }
@@ -295,14 +359,15 @@ export async function canManageGuildRoleDiscord(
       getGuild(rest, guildId),
       getGuildMember(rest, guildId, senderUserId),
     ]);
-    const targetRole = rolesById(guild).get(roleId);
+    const roles = rolesById(guild);
+    const targetRole = roles.get(roleId);
     if (!targetRole) {
       return null;
     }
     if (guild.owner_id === senderUserId) {
       return true;
     }
-    return highestMemberRolePosition(guild, senderMember) > rolePosition(targetRole);
+    return highestMemberRolePosition(roles, senderMember) > rolePosition(targetRole);
   } catch {
     return false;
   }

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { signalProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createClaudeCliProcessOwner,
@@ -22,7 +21,7 @@ export type ClaudeCliTransport = {
 };
 
 /** One Claude Code subprocess and its bidirectional stream-json control channel. */
-export function createClaudeCliTransport(params: {
+export async function createClaudeCliTransport(params: {
   context: ClaudeCliProcessContext;
   args: string[];
   initialize: Record<string, unknown>;
@@ -31,14 +30,19 @@ export function createClaudeCliTransport(params: {
   onMessage: (message: Record<string, unknown>) => Promise<void>;
   onRequest: (request: Record<string, unknown>, signal: AbortSignal) => Promise<() => unknown>;
   onError: (error: unknown) => void;
-}): ClaudeCliTransport {
+}): Promise<ClaudeCliTransport> {
   const owner = createClaudeCliProcessOwner(params.currentContext, params.secretInput);
-  let child: ReturnType<typeof owner.spawn>;
+  let child: Awaited<ReturnType<typeof owner.spawn>>;
   try {
     const env = { ...params.context.env };
     delete env.NODE_OPTIONS;
     delete env.DEBUG;
-    child = owner.spawn({ ...params.context, args: params.args, env });
+    child = await owner.spawn({
+      ...params.context,
+      args: params.args,
+      env,
+      signal: params.context.abortSignal,
+    });
   } catch (error) {
     owner[Symbol.dispose]();
     throw error;
@@ -61,23 +65,12 @@ export function createClaudeCliTransport(params: {
   let terminateTimer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const { promise: exited, resolve: resolveExit } = createDeferred<void>();
-  let treeExit = Promise.resolve();
-  const signalTree = (signal: "SIGTERM" | "SIGKILL") =>
-    new Promise<void>((resolve) => {
-      if (!child.pid) {
-        resolve();
-        return;
-      }
-      signalProcessTree(child.pid, signal, {
-        detached: process.platform !== "win32",
-        onComplete: resolve,
-      });
-    });
+
   const terminate = () => {
     forcedExit = true;
-    treeExit = signalTree("SIGTERM");
+    child.kill("SIGTERM");
     killTimer = setTimeout(() => {
-      treeExit = signalTree("SIGKILL");
+      child.kill("SIGKILL");
     }, KILL_GRACE_MS);
     killTimer.unref();
   };
@@ -98,11 +91,14 @@ export function createClaudeCliTransport(params: {
       // /T without /F can fail, and EOF would then erase the root before escalation.
       // Force the owned tree while its root exists and await taskkill's completion.
       forcedExit = true;
-      treeExit = signalTree("SIGKILL");
-      void treeExit.then(() => child.stdin.end());
+      child.kill("SIGKILL");
+      void child.waitForExtinction?.().then(
+        () => child.stdin?.end(),
+        () => {},
+      );
     } else {
       // On POSIX the private process group survives root exit. Let native flush on EOF first.
-      child.stdin.end();
+      child.stdin?.end();
     }
     if (process.platform !== "win32" && !hasExited) {
       terminateTimer = setTimeout(terminate, CLOSE_GRACE_MS);
@@ -133,7 +129,8 @@ export function createClaudeCliTransport(params: {
     inputFailure ??= Promise.resolve()
       .then(async () => {
         beginShutdown();
-        await exited;
+        // Owner loss rejects cleanup without emitting an exit event.
+        await Promise.race([exited, child.waitForExtinction?.() ?? child.wait()]);
         const failure = context?.abortSignal?.aborted
           ? context.abortSignal.reason
           : forcedExit
@@ -165,18 +162,11 @@ export function createClaudeCliTransport(params: {
     clearTimeout(killTimer);
     // Descendants can hold pipes and process-owned resources after the root exits.
     if (process.platform !== "win32" || !closed) {
-      treeExit = signalTree("SIGKILL");
+      child.kill("SIGKILL");
     }
     resolveExit();
   };
-  child.once("error", (error) => {
-    exitError = error;
-    if (!child.pid) {
-      didExit();
-    }
-    void fail(error);
-  });
-  child.once("exit", (code, signal) => {
+  child.onExit((code, signal) => {
     if (code !== 0) {
       exitError = new Error(
         signal
@@ -185,10 +175,6 @@ export function createClaudeCliTransport(params: {
       );
     }
     didExit();
-  });
-  child.stdin.on("error", (error) => {
-    const settling = settleInputError(error);
-    void (settling ? settling.then(fail) : fail(error));
   });
 
   const send = (message: Record<string, unknown>): Promise<void> => {
@@ -201,7 +187,7 @@ export function createClaudeCliTransport(params: {
       return Promise.reject(new Error("Claude CLI control channel is closed."));
     }
     return new Promise((resolve, reject) => {
-      child.stdin.write(`${JSON.stringify(message)}\n`, (error) => {
+      child.stdin!.write(`${JSON.stringify(message)}\n`, (error) => {
         if (error) {
           const settling = settleInputError(error);
           if (settling) {
@@ -286,9 +272,7 @@ export function createClaudeCliTransport(params: {
   };
   const read = async () => {
     let pending = "";
-    child.stdout.setEncoding("utf8");
-    for await (const chunk of child.stdout) {
-      const text = String(chunk);
+    await child.consumeStdout(async (text) => {
       for (let offset = 0; offset < text.length;) {
         const newline = text.indexOf("\n", offset);
         const end = newline < 0 ? text.length : newline;
@@ -303,7 +287,7 @@ export function createClaudeCliTransport(params: {
           await acceptLine(line);
         }
       }
-    }
+    });
     if (pending) {
       await acceptLine(pending);
     }
@@ -312,12 +296,35 @@ export function createClaudeCliTransport(params: {
       throw inputFailure ? await inputFailure : processExitError();
     }
   };
-  void read().catch(fail);
+  const reading = read();
+  child.onError((error, source) => {
+    if (source === "process") {
+      exitError = error;
+    }
+    const settling = source === "stdin" ? settleInputError(error) : undefined;
+    void (settling ? settling.then(fail) : fail(error));
+  });
+  void reading.catch(fail);
   return {
     close,
     waitForExit: async () => {
-      await exited;
-      await treeExit;
+      const extinct = Promise.all([
+        child.wait().catch(() => undefined),
+        child.waitForExtinction?.(),
+      ]).then(
+        () => undefined,
+        (cause: unknown) => {
+          throw new Error(
+            "Claude CLI process cleanup could not be confirmed; retry the message. If it fails again, restart the Gateway.",
+            { cause },
+          );
+        },
+      );
+      // A lost process owner reports an error and never an exit event, so `exited` alone would
+      // wait forever. Its extinction outcome still settles; a rejection means closure is unconfirmed.
+      await Promise.race([exited, extinct]);
+      await extinct;
+      child.dispose();
     },
     send,
     async initialize() {

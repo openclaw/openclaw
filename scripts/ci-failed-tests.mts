@@ -3,7 +3,7 @@ import { pathToFileURL } from "node:url";
 import pLimit from "p-limit";
 import { z } from "zod";
 import { createMainFailureClassifier, readCiRunJobs } from "./ci-known-main-red.mjs";
-import { extractNodeFailedTests } from "./lib/ci-node-test-evidence.mjs";
+import { extractNodeFailedTests, isNodeTestEvidencePath } from "./lib/ci-node-test-evidence.mjs";
 import { execGhReadAsync } from "./lib/plain-gh.mjs";
 
 const runSchema = z.object({
@@ -21,6 +21,7 @@ type Job = {
   name: string;
   conclusion: string;
   html_url: string;
+  check_run_url?: string;
   steps?: { name: string; conclusion: string }[];
 };
 export type Api = (route: string, text?: boolean) => Promise<unknown>;
@@ -128,30 +129,36 @@ function escapeRegex(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
-export function rerunArgs(failures: Failure[], includePreExisting = false) {
+function mergeFailedFiles(entries: FailedFile[]): FailedFile[] {
   const files = new Map<string, { names: Set<string>; whole: boolean }>();
-  for (const failure of failures) {
-    if (failure.class === "pre-existing" && !includePreExisting) {
-      continue;
+  for (const entry of entries) {
+    const selected = files.get(entry.file) ?? { names: new Set<string>(), whole: false };
+    selected.whole ||= entry.tests.length === 0;
+    for (const test of entry.tests) {
+      selected.names.add(test);
     }
-    for (const entry of failure.files) {
-      const selected = files.get(entry.file) ?? { names: new Set<string>(), whole: false };
-      selected.whole ||= entry.tests.length === 0;
-      for (const test of entry.tests) {
-        selected.names.add(test);
-      }
-      files.set(entry.file, selected);
-    }
+    files.set(entry.file, selected);
   }
-  if (files.size === 0) {
+  return [...files]
+    .map(([file, entry]) => ({
+      file,
+      tests: entry.whole ? [] : [...entry.names].toSorted((a, b) => a.localeCompare(b)),
+    }))
+    .toSorted((a, b) => a.file.localeCompare(b.file));
+}
+
+export function rerunArgs(failures: Failure[], includePreExisting = false) {
+  const files = mergeFailedFiles(
+    failures
+      .filter((failure) => failure.class !== "pre-existing" || includePreExisting)
+      .flatMap((failure) => failure.files),
+  );
+  if (files.length === 0) {
     return [];
   }
-  const args = ["test", ...[...files.keys()].toSorted((a, b) => a.localeCompare(b))];
-  const single = files.size === 1 ? [...files.values()][0] : undefined;
-  const names = single ? [...single.names].toSorted((a, b) => a.localeCompare(b)) : [];
+  const args = ["test", ...files.map((entry) => entry.file)];
+  const names = files.length === 1 ? files[0]!.tests : [];
   if (
-    single &&
-    !single.whole &&
     names.length > 0 &&
     names.length <= 3 &&
     names.every((name) => /^[\w .,:/()>+!?-]+$/u.test(name))
@@ -166,6 +173,50 @@ export function formatCommand(args: string[]) {
     return null;
   }
   return `pnpm ${args.map((arg, index) => (index > 0 && args[index - 1] === "-t" ? `'${arg.replaceAll("'", "'\\''")}'` : arg)).join(" ")}`;
+}
+
+function repositoryTestFile(job: Job, file: string) {
+  // UI shards run from ui/; other shards run from the repository root.
+  return job.name.startsWith("checks-ui") && file.startsWith("src/") ? `ui/${file}` : file;
+}
+
+async function annotatedFailures(job: Job, api: Api) {
+  const checkRun = /\/check-runs\/(\d+)$/u.exec(job.check_run_url ?? "")?.[1];
+  const files: FailedFile[] = [];
+  if (checkRun) {
+    try {
+      for (let page = 1; page <= 4; page++) {
+        const annotations = z
+          .array(
+            z.object({
+              annotation_level: z.string(),
+              title: z.string().optional().default(""),
+            }),
+          )
+          .parse(await api(`/check-runs/${checkRun}/annotations?per_page=100&page=${page}`));
+        for (const annotation of annotations) {
+          if (annotation.annotation_level !== "failure") {
+            continue;
+          }
+          const match = /^(?:\[[^\]]+\]\s+)?(\S+?)(?::\d+(?::\d+)?)?(?: > (.+))?$/u.exec(
+            annotation.title,
+          );
+          // Use the test title rather than a throwing helper's path.
+          const file = match?.[1] ? repositoryTestFile(job, match[1]) : undefined;
+          if (!file || !isNodeTestEvidencePath(file)) {
+            continue;
+          }
+          files.push({ file, tests: match?.[2] ? [match[2]] : [] });
+        }
+        if (annotations.length < 100) {
+          break;
+        }
+      }
+    } catch {
+      // Retain already discovered cases when a later annotation page is unavailable.
+    }
+  }
+  return files;
 }
 
 export async function collectFailures(run: Run, repo: string, api: Api) {
@@ -186,10 +237,17 @@ export async function collectFailures(run: Run, repo: string, api: Api) {
         try {
           files = extractNodeFailedTests(
             z.string().parse(await api(`/actions/jobs/${job.id}/logs`, true)),
-          );
+          ).map((entry) => ({ file: repositoryTestFile(job, entry.file), tests: entry.tests }));
         } catch {
           reason += "; job log unavailable";
         }
+        if (files.length === 0) {
+          files = await annotatedFailures(job, api);
+          if (files.length > 0) {
+            reason += "; annotation-only discovery; additional failures may be missing";
+          }
+        }
+        files = mergeFailedFiles(files);
         return {
           job: job.name,
           class: classification.class,
@@ -270,6 +328,7 @@ async function main() {
   if (options.run && command) {
     const child = spawnSync("pnpm", args, {
       stdio: options.json ? ["inherit", 2, 2] : "inherit",
+      env: { ...process.env, OPENCLAW_NODE_TEST_PLAN_CONTINUE_ON_FAILURE: "1" },
     });
     if (child.error) {
       throw child.error;

@@ -1,13 +1,14 @@
 import path from "node:path";
 import type { SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
+import { initializeGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import type {
-  SessionTranscriptTargetParams,
-  TranscriptTurnAdmission,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, vi, type Mock } from "vitest";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import { createAttemptTranscriptJournal } from "./attempt-transcript-journal.js";
 import type { AttemptParamsLike } from "./attempt-types.js";
 import { attachEventBridge, type SessionLike } from "./event-bridge.js";
@@ -25,13 +26,15 @@ type TranscriptRecorder = TranscriptRecorderContract & {
   resolveMessage: Mock<TranscriptRecorderContract["resolveMessage"]>;
 };
 
+type FixtureTranscriptTarget = Parameters<typeof SessionManager.openAsync>[0];
+
 type AttemptTranscriptJournalFixture = {
   attempt: AttemptParamsLike;
   bridge: ReturnType<typeof attachEventBridge>;
   journal: ReturnType<typeof createAttemptTranscriptJournal>;
   recorder: TranscriptRecorder;
   session: FakeSession;
-  target: SessionTranscriptTargetParams;
+  target: FixtureTranscriptTarget;
   tempDir: string;
 };
 
@@ -124,17 +127,16 @@ export async function createFixture(
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
 ): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = sessionDirs.make();
-  const target: SessionTranscriptTargetParams = {
+  const target: FixtureTranscriptTarget = {
     agentId: "main",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
     storePath: path.join(tempDir, "sessions.json"),
   };
-  const userMessage: Extract<AgentMessage, { role: "user" }> = {
-    role: "user",
-    content: "inspect both files",
-    timestamp: 1,
-  };
+  const userMessage: Extract<AgentMessage, { role: "user" }> = makeUserMessage(
+    "inspect both files",
+    1,
+  );
   let blocked = false;
   let persisted = false;
   let admissionReceipt: TranscriptTurnAdmission | undefined;
@@ -202,4 +204,12 @@ export function transcriptMessages(events: unknown[]) {
     };
     return [record];
   });
+}
+
+export function installJournalMessageWriteHook(
+  handler: Parameters<typeof createMockPluginRegistry>[0][number]["handler"],
+) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_message_write", handler }]),
+  );
 }

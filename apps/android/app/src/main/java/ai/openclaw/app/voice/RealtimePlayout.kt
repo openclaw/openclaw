@@ -175,15 +175,7 @@ internal class RealtimePlayout(
         }
       }.invokeOnCompletion {
         // Also runs when cancellation wins before the actor body starts.
-        val pending = mutableListOf<CompletableDeferred<Unit>>()
-        synchronized(mailboxLock) {
-          commands.close()
-          while (true) {
-            val command = commands.tryReceive().getOrNull() ?: break
-            if (command is Command.Clear) pending += command.completion
-          }
-        }
-        pending.forEach { it.cancel() }
+        commands.cancel()
       }
   }
 

@@ -7,6 +7,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import vm from "node:vm";
 import { transformSync } from "esbuild";
+import { resolveRuntimeProcessEntrypointUrl } from "../../src/infra/runtime-process-url.ts";
+import { resolveRuntimeWorkerThreadExecArgv } from "../../src/infra/runtime-worker-url.ts";
 
 export async function createDiskSwap(sourceRoot, base) {
   const require = createRequire(path.join(sourceRoot, "package.json"));
@@ -18,7 +20,7 @@ export async function createDiskSwap(sourceRoot, base) {
   assert.equal(installed, expected, "filesystem dependency must match the candidate manifest");
   const atomic = await import(pathToFileURL(require.resolve("@openclaw/fs-safe/atomic")).href);
   const fsSafe = new Map();
-  for (const subpath of ["errors", "root"]) {
+  for (const subpath of ["errors", "path", "root"]) {
     const specifier = `@openclaw/fs-safe/${subpath}`;
     fsSafe.set(specifier, await import(pathToFileURL(require.resolve(specifier)).href));
   }
@@ -37,6 +39,11 @@ export async function createDiskSwap(sourceRoot, base) {
     MAX_TIMER_TIMEOUT_MS: 2_147_483_647,
     movePathWithCopyFallback: atomic.movePathWithCopyFallback,
     createUpdateFailureFact: (value) => value,
+    resolveRuntimeProcessEntrypointUrl,
+    resolveRuntimeWorkerThreadExecArgv,
+    // The context below reports a platform that may not be the host's, so no host
+    // exchange call may run under it. This fixture's subject is the two moves.
+    supportsPathExchange: () => false,
   };
   const context = vm.createContext({
     // Model an unowned npm prefix; OS package-manager ownership is a separate contract.
@@ -57,6 +64,7 @@ export async function createDiskSwap(sourceRoot, base) {
     "infra/mutation-authority",
     "infra/package-update-backup-paths",
     "infra/package-update-swap",
+    "infra/package-update-swap-publish",
     "infra/package-update-swap-results",
     "infra/package-update-swap-target",
     "infra/package-update-swap-retirement",

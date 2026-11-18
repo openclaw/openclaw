@@ -1,23 +1,19 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
-import { renderChatPullRequests } from "./chat-pull-requests.ts";
+import {
+  paintChatPullRequests,
+  clearChatPullRequests,
+  publication,
+  sessionBranch,
+} from "./chat-pull-requests.test-support.ts";
+import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 
 describe("failed publication account discovery", () => {
   let container: HTMLDivElement;
 
-  function paint(props: Partial<Parameters<typeof renderChatPullRequests>[0]>) {
-    render(
-      renderChatPullRequests({
-        pullRequests: [],
-        status: "ready",
-        onDismiss: () => {},
-        ...props,
-      }),
-      container,
-    );
+  function paint(props: Partial<ChatPullRequestsProps>) {
+    paintChatPullRequests(props, container);
   }
 
   beforeEach(() => {
@@ -26,6 +22,7 @@ describe("failed publication account discovery", () => {
   });
 
   afterEach(() => {
+    clearChatPullRequests(container);
     container.remove();
   });
 
@@ -43,9 +40,9 @@ describe("failed publication account discovery", () => {
     const row = container.querySelector('.chat-pr[data-state="branch"]');
     expect(row?.querySelector(".chat-pr__publication-outcome")).toBeNull();
     expect(row?.querySelector(".chat-pr__create")).toBeNull();
-    expect(row?.textContent).not.toContain("Publication status unavailable");
+    expect(row?.textContent).not.toContain("Couldn’t load publication status");
     expect(row?.querySelector("openclaw-tooltip")?.getAttribute("content")).toBe(
-      "Publication status unavailable: GitHub publication options timed out after 5 seconds; retry the request.",
+      "Couldn’t load publication status: GitHub publication options timed out after 5 seconds; retry the request.",
     );
     row?.querySelector<HTMLButtonElement>(".chat-pr__publication-refresh")?.click();
     expect(onRefresh).toHaveBeenCalledOnce();

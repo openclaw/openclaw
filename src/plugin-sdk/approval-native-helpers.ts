@@ -338,7 +338,7 @@ function createNativeApprovalChannelRoutePolicy<TTarget extends NativeApprovalTa
   };
 }
 
-/** @deprecated Use createNativeApprovalChannelRouteGatesAsync for worker-owned session reads. */
+/** @deprecated Use createNativeApprovalChannelRouteGatesAsync for worker-owned session reads. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createNativeApprovalChannelRouteGates<TTarget extends NativeApprovalTarget>(
   params: NativeApprovalChannelRouteGateParams<TTarget>,
 ): NativeApprovalChannelRouteGates {
@@ -530,7 +530,7 @@ function prepareForwardingMatch<TTarget extends NativeApprovalTarget>(
   };
 }
 
-/** Create a fallback suppressor that avoids duplicate approval prompts after native delivery. */
+/** @deprecated Use createNativeApprovalForwardingFallbackSuppressorAsync with awaited route eligibility. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function createNativeApprovalForwardingFallbackSuppressor<
   TTarget extends NativeApprovalTarget,
 >(
@@ -538,6 +538,11 @@ export function createNativeApprovalForwardingFallbackSuppressor<
 ): NonNullable<
   NonNullable<ChannelApprovalCapability["delivery"]>["shouldSuppressForwardingFallback"]
 > {
+  warnPluginSdkDeprecation({
+    family: "approval-session-routing",
+    method: "createNativeApprovalForwardingFallbackSuppressor",
+    replacement: "createNativeApprovalForwardingFallbackSuppressorAsync",
+  });
   return (input) => {
     const prepared = prepareForwardingMatch(params, input);
     if (!prepared) {

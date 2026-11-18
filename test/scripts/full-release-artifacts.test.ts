@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -14,8 +13,31 @@ const WORKFLOW = ".github/workflows/full-release-artifacts.yml";
 const SOURCE_SHA = "a".repeat(40);
 const TOOLING_SHA = "b".repeat(40);
 const DISPATCH_ID = "full-release-validation-51-1-artifacts-npm";
+const RECEIPT_MISMATCH = "receipt does not match its exact request and producer attempt";
+const JOB_MISMATCH = "unique exact completed producer job";
+const RUN_MISMATCH = "Artifact producer run identity changed";
+const DISPATCH_MISMATCH = "Original artifact dispatch is unavailable or changed";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sha256 = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const readLines = (file: string) =>
+  existsSync(file) ? readFileSync(file, "utf8").trim().split("\n") : [];
+const completed = { status: "completed", conclusion: "success" };
+const dispatchRecord = () => ({ request: artifactRequest(), runId: "81", runAttempt: "1" });
+const bundleOutputs = (raw: unknown, qualified: unknown) => ({
+  prepared_bundle_json: JSON.stringify(raw),
+  qualified_preflight_bundle_json: JSON.stringify(qualified),
+});
+function artifactMetadata(id: number, name: string, digest: string, runId = 81, size = 256) {
+  return {
+    id,
+    name,
+    digest,
+    size_in_bytes: size,
+    expired: false,
+    workflow_run: { id: runId, head_sha: TOOLING_SHA },
+  };
+}
 
 function artifactRequest() {
   return {
@@ -48,10 +70,10 @@ function workflowRun(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function npmBundles() {
+function npmBundles(sourceSha: string, workflowRef: string) {
   const producer = {
     repository: REPOSITORY,
-    workflowRef: `${REPOSITORY}/${WORKFLOW}@refs/heads/main`,
+    workflowRef: `${REPOSITORY}/${WORKFLOW}@refs/heads/${workflowRef}`,
     workflowSha: TOOLING_SHA,
     runId: "81",
     runAttempt: "1",
@@ -61,7 +83,7 @@ function npmBundles() {
   };
   const raw = {
     schema: "openclaw.prepared-npm-bundle/v1",
-    source: { sha: SOURCE_SHA },
+    source: { sha: sourceSha },
     producer,
     artifact: {
       id: "401",
@@ -75,7 +97,7 @@ function npmBundles() {
       version: "2026.8.1",
       fileName: "openclaw-2026.8.1.tgz",
       sha256: "d".repeat(64),
-      sourceSha: SOURCE_SHA,
+      sourceSha,
     },
     corePackages: [],
     manifestSha256: "e".repeat(64),
@@ -88,14 +110,11 @@ function npmBundles() {
       jobId: "902",
       jobName: "Prepare npm artifacts / Qualify prepared npm package",
     },
-    artifact: { ...raw.artifact, id: "402", name: `openclaw-npm-preflight-${SOURCE_SHA}` },
+    artifact: { ...raw.artifact, id: "402", name: `openclaw-npm-preflight-${sourceSha}` },
     preparedBundle: raw,
     manifestSha256: "f".repeat(64),
   };
-  const outputs = {
-    prepared_bundle_json: JSON.stringify(raw),
-    qualified_preflight_bundle_json: JSON.stringify(qualified),
-  };
+  const outputs = bundleOutputs(raw, qualified);
   const jobs = [raw, qualified].map(({ producer: owner }) => ({
     id: Number(owner.jobId),
     name: owner.jobName,
@@ -104,11 +123,13 @@ function npmBundles() {
     head_sha: TOOLING_SHA,
     status: "completed",
     conclusion: "success" as string | null,
+    started_at: "2026-08-01T00:00:00Z",
+    completed_at: "2026-08-01T00:10:00Z",
   }));
   return { raw, qualified, outputs, jobs };
 }
 
-function fixture() {
+function fixture(sourceSha = SOURCE_SHA, workflowRef = "main") {
   const root = tempDirs.make("full-release-artifacts-");
   const bin = join(root, "bin");
   const responsesPath = join(root, "responses.json");
@@ -121,15 +142,20 @@ function fixture() {
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
-const { appendFileSync, readFileSync } = require("node:fs");
+const { readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
-appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["gh", ...args]) + "\\n");
 if (args[0] !== "api" || args.includes("POST")) throw new Error("Unexpected GitHub mutation");
-const { responses } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const fixture = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
-if (response.fixtureError) { process.stderr.write(response.fixtureError); process.exit(1); }
-process.stdout.write(JSON.stringify(response));
+calls[args[1]] = (calls[args[1]] ?? 0) + 1;
+const failure = calls[args[1]] >= (response.fixtureErrorOnRead ?? 1)
+  ? response.fixtureErrorOnce ?? response.fixtureError : undefined;
+delete response.fixtureErrorOnce;
+writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
+if (failure) { process.stderr.write(failure); process.exit(1); }
+process.stdout.write(response.fixtureOutput ?? JSON.stringify(response));
 `,
     { mode: 0o755 },
   );
@@ -139,12 +165,25 @@ process.stdout.write(JSON.stringify(response));
 const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
 if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
   globalThis.setTimeout = () => { throw new Error("Fixture reached another artifact poll"); };
+} else if (process.env.FIXTURE_ADVANCE_RETRY_CLOCK === "true") {
+  let now = Date.now();
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => { now += delay; queueMicrotask(callback); };
 }
 globalThis.fetch = async (input) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
   const endpoint = url.pathname.slice(1) + url.search;
   appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint]) + "\\n");
+  const statuses = responses[endpoint]?.fixtureHttpStatuses;
+  const status = statuses?.shift();
+  if (status && status !== 200) {
+    if (process.env.FIXTURE_EXPIRE_ON_HTTP_ERROR === "true") {
+      const expired = Date.now() + 350 * 60_000 + 1;
+      Date.now = () => expired;
+    }
+    return new Response("fixture unavailable", { status });
+  }
   if (Object.hasOwn(downloads, endpoint)) {
     if (process.env.FIXTURE_RERUN_DURING_DOWNLOAD === "true") {
       const current = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
@@ -162,15 +201,21 @@ globalThis.fetch = async (input) => {
   const api = (path: string, value: unknown) => {
     responses[`repos/${REPOSITORY}/${path}`] = value;
   };
-  const run = (command: string, env: NodeJS.ProcessEnv = {}) => {
+  const list = (path: string, key: string, values: unknown[]) =>
+    api(path, { total_count: values.length, [key]: values });
+  const runApi = (path: string, overrides: Record<string, unknown>) =>
+    api(`actions/runs/${path}`, workflowRun(overrides));
+  const jobsApi = (attempt: number, jobs: unknown[]) =>
+    list(`actions/runs/81/attempts/${attempt}/jobs?per_page=100&page=1`, "jobs", jobs);
+  const run = (command: string, env: NodeJS.ProcessEnv = {}, script = SCRIPT) => {
     const directory = join(root, `invocation-${++invocation}`);
     mkdirSync(directory);
     const outputPath = join(directory, "github-output");
     const callsPath = join(directory, "calls.jsonl");
-    writeFileSync(responsesPath, JSON.stringify({ responses, downloads }));
+    writeFileSync(responsesPath, JSON.stringify({ responses, downloads, calls: {} }));
     const result = spawnSync(
       process.execPath,
-      ["--import", pathToFileURL(preloadPath).href, SCRIPT, command],
+      ["--import", pathToFileURL(preloadPath).href, script, command],
       {
         cwd: root,
         encoding: "utf8",
@@ -180,14 +225,14 @@ globalThis.fetch = async (input) => {
           ...process.env,
           ARTIFACT_STAGE: "npm",
           ARTIFACT_DISPATCH_ID: DISPATCH_ID,
-          TARGET_SHA: SOURCE_SHA,
+          TARGET_SHA: sourceSha,
           PARENT_WORKFLOW_SHA: TOOLING_SHA,
-          CHILD_WORKFLOW_REF: "main",
+          CHILD_WORKFLOW_REF: workflowRef,
           RELEASE_TAG: "v2026.8.1",
           PREFLIGHT_PHASE: "all",
           GITHUB_REPOSITORY: REPOSITORY,
           GITHUB_SHA: TOOLING_SHA,
-          GITHUB_REF_NAME: "main",
+          GITHUB_REF_NAME: workflowRef,
           GITHUB_RUN_ID: "51",
           GITHUB_RUN_ATTEMPT: "1",
           ARTIFACT_RUN_ID: "81",
@@ -205,22 +250,38 @@ globalThis.fetch = async (input) => {
       },
     );
     expect(result.error, result.stderr).toBeUndefined();
-    const outputLines = existsSync(outputPath)
-      ? readFileSync(outputPath, "utf8").trim().split("\n")
-      : [];
     const outputs = Object.fromEntries(
-      outputLines.map((line) => {
+      readLines(outputPath).map((line) => {
         const separator = line.indexOf("=");
         return [line.slice(0, separator), line.slice(separator + 1)];
       }),
     );
-    const calls = existsSync(callsPath)
-      ? readFileSync(callsPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line) as string[])
-      : [];
-    return { ...result, outputs, calls };
+    const calls = readLines(callsPath).map((line) => JSON.parse(line) as string[]);
+    const apiCalls = readJson(responsesPath).calls as Record<string, number>;
+    return { ...result, outputs, calls, apiCalls };
+  };
+  const artifactFiles = (
+    name: string,
+    files: Record<string, string | Buffer>,
+    repositoryListing = false,
+    runId = 81,
+    id = ++artifactId,
+  ) => {
+    const bytes = makeStoredZip(files);
+    const archivePath = join(root, `artifact-${id}.zip`);
+    writeFileSync(archivePath, bytes);
+    const metadata = {
+      ...artifactMetadata(id, name, `sha256:${sha256(bytes)}`, runId, bytes.length),
+      expires_at: "2030-01-01T00:00:00Z",
+    };
+    list(
+      `${repositoryListing ? "actions" : `actions/runs/${runId}`}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
+      "artifacts",
+      [metadata],
+    );
+    api(`actions/artifacts/${id}`, metadata);
+    downloads[`repos/${REPOSITORY}/actions/artifacts/${id}/zip`] = archivePath;
+    return { bytes, archivePath, metadata };
   };
   const artifact = (
     name: string,
@@ -228,80 +289,109 @@ globalThis.fetch = async (input) => {
     value: unknown,
     repositoryListing = false,
     runId = 81,
-  ) => {
-    const bytes = makeStoredZip({ [fileName]: JSON.stringify(value) });
-    const id = ++artifactId;
-    const archivePath = join(root, `artifact-${id}.zip`);
-    writeFileSync(archivePath, bytes);
-    const metadata = {
-      id,
-      name,
-      digest: `sha256:${sha256(bytes)}`,
-      size_in_bytes: bytes.length,
-      expired: false,
-      expires_at: "2030-01-01T00:00:00Z",
-      workflow_run: { id: runId, head_sha: TOOLING_SHA },
-    };
-    api(
-      `${repositoryListing ? "actions" : `actions/runs/${runId}`}/artifacts?name=${encodeURIComponent(name)}&per_page=100`,
-      {
-        total_count: 1,
-        artifacts: [metadata],
-      },
-    );
-    api(`actions/artifacts/${id}`, metadata);
-    downloads[`repos/${REPOSITORY}/actions/artifacts/${id}/zip`] = archivePath;
-    return { bytes, archivePath, metadata };
-  };
-  const npm = npmBundles();
-  api(
-    "actions/runs/51",
-    workflowRun({ id: 51, path: ".github/workflows/full-release-validation.yml" }),
-  );
-  api("actions/runs/81", workflowRun());
-  api("actions/runs/81/attempts/1", workflowRun());
-  api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
-    total_count: npm.jobs.length,
-    jobs: npm.jobs,
-  });
+  ) => artifactFiles(name, { [fileName]: JSON.stringify(value) }, repositoryListing, runId);
+  const npm = npmBundles(sourceSha, workflowRef);
+  runApi("51", { id: 51, path: ".github/workflows/full-release-validation.yml" });
+  runApi("81", {});
+  runApi("81/attempts/1", {});
+  jobsApi(1, npm.jobs);
   for (const job of npm.jobs) {
     api(`actions/jobs/${job.id}`, job);
   }
-  return { root, api, run, artifact, ...npm };
+  const rawArtifact = () =>
+    artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", npm.raw);
+  const wait = (output: string, env: NodeJS.ProcessEnv = {}) =>
+    run("wait", { ARTIFACT_OUTPUT: output, ...env });
+  const collect = (output: string, env: NodeJS.ProcessEnv = {}, error = "") => {
+    const result = wait(output, env);
+    if (error) {
+      expectRejected(result, error);
+    } else {
+      expectSuccess(result);
+    }
+    return result.outputs;
+  };
+  const seal = (attempt = "1") => {
+    const result = expectSuccess(
+      run("receipt", {
+        GITHUB_RUN_ID: "81",
+        GITHUB_RUN_ATTEMPT: attempt,
+        ARTIFACT_OUTPUTS_JSON: JSON.stringify(npm.outputs),
+      }),
+    );
+    return readJson(join(result.outputs.directory!, "artifact-receipt.json"));
+  };
+  const receiptArtifact = (value: unknown, attempt = "1") =>
+    artifact(`full-release-artifact-receipt-81-${attempt}`, "artifact-receipt.json", value);
+  return {
+    root,
+    api,
+    list,
+    runApi,
+    jobsApi,
+    run,
+    wait,
+    collect,
+    artifact,
+    artifactFiles,
+    rawArtifact,
+    seal,
+    receiptArtifact,
+    ...npm,
+  };
 }
 
-function publicationReuseFixture(changedReceipt = false) {
-  const test = fixture();
+function publicationReuseFixture(changedReceipt = false, withPlugin = false) {
   const workflowRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-123`;
+  const test = fixture(SOURCE_SHA, workflowRef);
   const currentRef = `release-ci/${TOOLING_SHA.slice(0, 12)}-456`;
   const fullRef = `refs/heads/${workflowRef}`;
-  test.raw.source.sha = TOOLING_SHA;
-  test.raw.package.sourceSha = TOOLING_SHA;
-  test.raw.producer.workflowRef = `${REPOSITORY}/${WORKFLOW}@${fullRef}`;
-  test.qualified.producer.workflowRef = test.raw.producer.workflowRef;
-  test.qualified.artifact.name = `openclaw-npm-preflight-${TOOLING_SHA}`;
-  const npmRun = workflowRun({
-    status: "completed",
-    conclusion: "success",
+  const npmRun = {
+    ...completed,
     head_branch: workflowRef,
     path: `${WORKFLOW}@${fullRef}`,
+  };
+  test.runApi("81", npmRun);
+  test.runApi("81/attempts/1", npmRun);
+  const packageBytes = Buffer.from("retained original npm package");
+  test.raw.package.sha256 = sha256(packageBytes);
+  const packageManifest = JSON.stringify({
+    schema: "openclaw.npm-package-bundle/v1",
+    packageName: test.raw.package.name,
+    packageVersion: test.raw.package.version,
+    releaseSha: SOURCE_SHA,
+    tarballName: test.raw.package.fileName,
+    tarballSha256: test.raw.package.sha256,
+    producer: test.raw.producer,
+    corePackageTarballs: [],
+    dependencyTarballs: [],
   });
-  test.api("actions/runs/81", npmRun);
-  test.api("actions/runs/81/attempts/1", npmRun);
-  for (const descriptor of [test.raw, test.qualified]) {
-    test.api(`actions/artifacts/${descriptor.artifact.id}`, {
-      id: Number(descriptor.artifact.id),
-      name: descriptor.artifact.name,
-      digest: `sha256:${descriptor.artifact.digest}`,
-      size_in_bytes: 256,
-      expired: false,
-      workflow_run: { id: 81, head_sha: TOOLING_SHA },
-    });
-  }
+  test.raw.manifestSha256 = sha256(Buffer.from(packageManifest));
+  const rawArchive = test.artifactFiles(
+    test.raw.artifact.name,
+    { "package-bundle.json": packageManifest, [test.raw.package.fileName]: packageBytes },
+    false,
+    81,
+    401,
+  );
+  test.raw.artifact.digest = rawArchive.metadata.digest.slice("sha256:".length);
+  const qualifiedManifest = JSON.stringify({ sourceSha: SOURCE_SHA });
+  test.qualified.manifestSha256 = sha256(Buffer.from(qualifiedManifest));
+  const qualifiedArchive = test.artifactFiles(
+    test.qualified.artifact.name,
+    {
+      "preflight-manifest.json": qualifiedManifest,
+      [test.raw.package.fileName]: packageBytes,
+    },
+    false,
+    81,
+    402,
+  );
+  test.qualified.artifact.digest = qualifiedArchive.metadata.digest.slice("sha256:".length);
   const receipt = (stage: string, runId: string, outputs: Record<string, string>) => ({
     schema: "openclaw.full-release-artifact-receipt/v1",
     ...artifactRequest(),
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     workflowRef,
     stage,
     dispatchId: `full-release-validation-51-1-artifacts-${stage}`,
@@ -316,16 +406,13 @@ function publicationReuseFixture(changedReceipt = false) {
   test.artifact(
     "full-release-artifact-receipt-81-1",
     "artifact-receipt.json",
-    receipt("npm", "81", {
-      prepared_bundle_json: JSON.stringify(test.raw),
-      qualified_preflight_bundle_json: JSON.stringify(qualifiedReceipt),
-    }),
+    receipt("npm", "81", bundleOutputs(test.raw, qualifiedReceipt)),
   );
-  const artifactName = `docker-release-${TOOLING_SHA}-1`;
+  const artifactName = `docker-release-${SOURCE_SHA}-1`;
   const dockerManifest = {
     schemaVersion: 1,
     repository: REPOSITORY,
-    sourceSha: TOOLING_SHA,
+    sourceSha: SOURCE_SHA,
     toolingSha: TOOLING_SHA,
     tag: "v2026.8.1",
     version: "2026.8.1",
@@ -362,16 +449,26 @@ function publicationReuseFixture(changedReceipt = false) {
       ],
     })),
   };
+  const architectureArchives = dockerManifest.architectures.map((entry, index) => {
+    const archive = test.artifactFiles(
+      entry.artifact.name,
+      { "image.tar": `image-${entry.architecture}` },
+      false,
+      91,
+      601 + index,
+    );
+    entry.artifact.digest = archive.metadata.digest;
+    return archive;
+  });
   const docker = {
     preparedRunId: "91",
     preparedRunAttempt: "1",
     preparedArtifactName: artifactName,
     preparedManifestSha256: sha256(Buffer.from(JSON.stringify(dockerManifest))),
   };
-  const dockerRun = workflowRun({
+  const dockerRun = {
     id: 91,
-    status: "completed",
-    conclusion: "success",
+    ...completed,
     head_branch: workflowRef,
     path: `${WORKFLOW}@${fullRef}`,
     display_title: "Full Release Artifacts full-release-validation-51-1-artifacts-docker",
@@ -382,30 +479,18 @@ function publicationReuseFixture(changedReceipt = false) {
         ref: fullRef,
       },
     ],
-  });
-  test.api("actions/runs/91", dockerRun);
-  test.api("actions/runs/91/attempts/1", dockerRun);
+  };
+  test.runApi("91", dockerRun);
+  test.runApi("91/attempts/1", dockerRun);
   test.api("actions/jobs/903", {
     id: 903,
     name: dockerManifest.producer.jobName,
     run_id: 91,
     run_attempt: 1,
     head_sha: TOOLING_SHA,
-    status: "completed",
-    conclusion: "success",
+    ...completed,
   });
-  const payloads = dockerManifest.architectures.map(({ artifact }) => {
-    const metadata = {
-      id: Number(artifact.id),
-      name: artifact.name,
-      digest: artifact.digest,
-      size_in_bytes: 256,
-      expired: false,
-      workflow_run: { id: 91, head_sha: TOOLING_SHA },
-    };
-    test.api(`actions/artifacts/${artifact.id}`, metadata);
-    return metadata;
-  });
+  const payloads = architectureArchives.map(({ metadata }) => metadata);
   test.artifact(
     "full-release-artifact-receipt-91-1",
     "artifact-receipt.json",
@@ -419,27 +504,61 @@ function publicationReuseFixture(changedReceipt = false) {
     91,
   );
   test.artifact(artifactName, "manifest.json", dockerManifest, false, 91);
-  const sdk = test.artifact(
+  const sdkArchive = test.artifact(
     "plugin-sdk-api-release-diff-81-1",
     "plugin-sdk-api-release-evidence.json",
     {},
-  ).metadata;
+  );
+  const sdk = sdkArchive.metadata;
+  const pluginArchive = withPlugin
+    ? test.artifactFiles(
+        `plugin-npm-prepared-${SOURCE_SHA}-101-1`,
+        { "prepared.json": "{}" },
+        false,
+        101,
+      )
+    : null;
+  const plugin = pluginArchive
+    ? {
+        repository: REPOSITORY,
+        workflowPath: ".github/workflows/plugin-npm-release.yml",
+        workflowSha: TOOLING_SHA,
+        workflowHeadBranch: workflowRef,
+        workflowEvent: "workflow_dispatch",
+        runId: 101,
+        runAttempt: 1,
+        artifactId: pluginArchive.metadata.id,
+        artifactName: pluginArchive.metadata.name,
+        artifactDigest: pluginArchive.metadata.digest,
+        artifactSizeBytes: pluginArchive.metadata.size_in_bytes,
+      }
+    : null;
+  if (plugin) {
+    for (const suffix of ["101", "101/attempts/1"]) {
+      test.runApi(suffix, {
+        id: 101,
+        ...completed,
+        head_branch: workflowRef,
+        path: plugin.workflowPath,
+      });
+    }
+  }
   const evidence = {
     schema: "openclaw.release-validation-evidence/v4",
     valid: true,
     directRoot: true,
-    conclusions: { allRequiredSucceeded: true },
-    root: { runId: "51", targetSha: TOOLING_SHA },
+    current: { conclusion: "success" },
+    root: { runId: "51", targetSha: SOURCE_SHA },
     manifest: {
       workflowName: "Full Release Validation",
       runId: "51",
       runAttempt: "1",
       sourceParentRunAttempt: 1,
       workflowSha: TOOLING_SHA,
-      targetSha: TOOLING_SHA,
+      targetSha: SOURCE_SHA,
       workflowRef,
       workflowFullRef: fullRef,
-      publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: null },
+      publicationArtifacts: { npmPreflight: test.qualified, docker, pluginNpm: plugin },
     },
   };
   const validator = join(test.root, "validate-evidence.mjs");
@@ -449,7 +568,7 @@ function publicationReuseFixture(changedReceipt = false) {
 import assert from "node:assert/strict";
 const value = (key) => process.argv[process.argv.indexOf(key) + 1];
 const qualification = JSON.parse(value("--qualification-reuse-json"));
-assert.equal(qualification.candidateSha, "${TOOLING_SHA}");
+assert.equal(qualification.candidateSha, "${SOURCE_SHA}");
 assert.equal(qualification.workflowRef, "${currentRef}");
 assert.equal(value("--verifier-source-sha"), "${"f".repeat(40)}");
 process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
@@ -460,12 +579,13 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
     docker,
     sdk,
     payloads,
+    plugin,
     env: {
       EVIDENCE_REUSE: "true",
       EVIDENCE_POLICY: "exact-target-full-validation-v1",
-      EVIDENCE_SHA: TOOLING_SHA,
+      EVIDENCE_SHA: SOURCE_SHA,
       EVIDENCE_ROOT_RUN_ID: "51",
-      TARGET_SHA: TOOLING_SHA,
+      TARGET_SHA: SOURCE_SHA,
       GITHUB_REF_NAME: currentRef,
       GITHUB_RUN_ID: "52",
       QUALIFICATION_INPUTS_JSON: "{}",
@@ -481,7 +601,12 @@ process.stdout.write(${JSON.stringify(JSON.stringify(evidence))});
   };
 }
 
-function expectRejected(result: ReturnType<ReturnType<typeof fixture>["run"]>, message: string) {
+type Result = ReturnType<ReturnType<typeof fixture>["run"]>;
+function expectSuccess(result: Result) {
+  expect(result.status, result.stderr).toBe(0);
+  return result;
+}
+function expectRejected(result: Result, message: string) {
   expect(result.status, result.stderr).not.toBe(0);
   expect(result.stderr).toContain(message);
   expect(result.outputs).toEqual({});
@@ -489,65 +614,159 @@ function expectRejected(result: ReturnType<ReturnType<typeof fixture>["run"]>, m
 
 describe.skipIf(process.platform === "win32")("immutable release artifact CLI", () => {
   it.each([
-    "retained",
-    "expired payload",
-    "deleted archive",
-    "expired SDK archive",
-    "missing SDK archive",
-    "wrong SDK attempt",
-    "changed receipt",
-    "changed digest",
-  ])("resolves original publication artifacts for %s without dispatching producers", (scenario) => {
-    const test = publicationReuseFixture(scenario === "changed receipt");
-    const payload = test.payloads[0];
-    assert(payload, "expected Docker payload fixture");
-    if (scenario === "expired payload") {
-      payload.expired = true;
-    }
-    if (scenario === "changed digest") {
-      payload.digest = `sha256:${"0".repeat(64)}`;
-    }
-    if (scenario === "deleted archive") {
-      test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
-    }
-    if (scenario === "expired SDK archive") {
-      test.sdk.expired = true;
-    }
-    if (scenario === "missing SDK archive") {
-      test.api("actions/runs/81/artifacts?name=plugin-sdk-api-release-diff-81-1&per_page=100", {
-        total_count: 0,
-        artifacts: [],
-      });
-    }
-    if (scenario === "wrong SDK attempt") {
-      test.sdk.name = "plugin-sdk-api-release-diff-81-2";
-    }
-    const result = test.run("reuse", test.env);
-    if (scenario === "changed receipt" || scenario === "changed digest") {
-      expectRejected(
-        result,
-        scenario === "changed receipt" ? "npm receipts differ" : "immutable publication tuple",
+    { label: "brief visibility lag", output: "raw", statuses: [404, 200], reads: 2, ok: true },
+    {
+      label: "persistent missing metadata",
+      output: "raw",
+      statuses: [404, 404, 404, 200],
+      reads: 3,
+    },
+    { label: "missing archive", output: "raw", statuses: [404, 200], reads: 1, archive: true },
+    { label: "unauthorized metadata", output: "raw", statuses: [401, 200], reads: 1 },
+    { label: "forbidden metadata", output: "raw", statuses: [403, 200], reads: 1 },
+    { label: "missing sealed receipt", output: "receipt", statuses: [404, 200], reads: 1 },
+    {
+      label: "changed immutable ID",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 2,
+      changedId: true,
+    },
+    {
+      label: "expired acquisition deadline",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 1,
+      expire: true,
+    },
+  ])("bounds fresh artifact metadata recovery: $label", (scenario) => {
+    const test = fixture();
+    if (scenario.output === "receipt") {
+      test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "success" }));
+      test.api(
+        "actions/runs/81/attempts/1",
+        workflowRun({ status: "completed", conclusion: "success" }),
       );
-    } else {
-      expect(result.status, result.stderr).toBe(0);
-      if (scenario === "retained") {
-        assert(result.outputs.prepared_bundle_json);
-        assert(result.outputs.qualified_preflight_bundle_json);
-        expect(JSON.parse(result.outputs.prepared_bundle_json)).toEqual(test.raw);
-        expect(JSON.parse(result.outputs.qualified_preflight_bundle_json)).toEqual(test.qualified);
-        expect(result.outputs).toMatchObject({
-          publication_artifacts_reused: "true",
-          npm_run_id: "81",
-          npm_run_attempt: "1",
-          prepared_run_id: "91",
-          prepared_run_attempt: "1",
-          prepared_manifest_sha256: test.docker.preparedManifestSha256,
-        });
-      } else {
-        expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
-      }
     }
+    const archive = test.artifact(
+      scenario.output === "raw"
+        ? "openclaw-npm-package-descriptor-81-1"
+        : "full-release-artifact-receipt-81-1",
+      scenario.output === "raw" ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+      test.raw,
+    );
+    const endpoint = "actions/artifacts/" + archive.metadata.id + (scenario.archive ? "/zip" : "");
+    test.api(endpoint, {
+      ...archive.metadata,
+      ...(scenario.changedId ? { id: archive.metadata.id + 1 } : {}),
+      fixtureHttpStatuses: scenario.statuses,
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: scenario.output,
+      FIXTURE_ADVANCE_RETRY_CLOCK: "true",
+      FIXTURE_EXPIRE_ON_HTTP_ERROR: String(scenario.expire === true),
+    });
+    if (scenario.ok) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(result.outputs).toEqual({});
+    }
+    if (!scenario.ok) {
+      expect(result.stderr).toContain(
+        scenario.changedId
+          ? "metadata does not match"
+          : scenario.expire
+            ? "deadline exceeded"
+            : "HTTP " + scenario.statuses[0],
+      );
+    }
+    expect(
+      result.calls.filter(
+        ([kind, path]) => kind === "fetch" && path === "repos/" + REPOSITORY + "/" + endpoint,
+      ),
+    ).toHaveLength(scenario.reads);
+    expect(
+      Object.entries(result.apiCalls).filter(([path]) => path.includes("/artifacts?name=")),
+    ).toHaveLength(1);
   });
+
+  it.each([
+    ["retained", {}, {}, "", ""],
+    ["retained plugin", {}, {}, "", ""],
+    ["expired payload", { expired: true }, {}, "", ""],
+    ["deleted archive", {}, {}, "npm", ""],
+    ["retained metadata 404", {}, {}, "", ""],
+    ["expired SDK archive", {}, { expired: true }, "", ""],
+    ["missing SDK archive", {}, {}, "sdk", ""],
+    ["wrong SDK attempt", {}, { name: "plugin-sdk-api-release-diff-81-2" }, "", ""],
+    ["changed receipt", {}, {}, "", "npm receipts differ"],
+    [
+      "changed digest",
+      { digest: `sha256:${"0".repeat(64)}` },
+      {},
+      "",
+      "immutable publication tuple",
+    ],
+  ] as const)(
+    "reuses publication artifacts without dispatch for %s",
+    (scenario, payloadChanges, sdkChanges, missing, error) => {
+      const test = publicationReuseFixture(
+        scenario === "changed receipt",
+        scenario === "retained plugin",
+      );
+      Object.assign(test.payloads[0]!, payloadChanges);
+      Object.assign(test.sdk, sdkChanges);
+      if (scenario === "retained metadata 404") {
+        test.api("actions/artifacts/501", { fixtureHttpStatuses: [404, 200] });
+      }
+      if (missing === "npm") {
+        test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
+      }
+      if (missing === "sdk") {
+        test.list(
+          "actions/runs/81/artifacts?name=plugin-sdk-api-release-diff-81-1&per_page=100",
+          "artifacts",
+          [],
+        );
+      }
+      const result = test.run("reuse", test.env);
+      if (scenario === "retained metadata 404") {
+        expect(
+          result.calls.filter(
+            ([kind, endpoint]) =>
+              kind === "fetch" && endpoint === `repos/${REPOSITORY}/actions/artifacts/501`,
+          ),
+        ).toHaveLength(1);
+        expect(
+          result.calls.some(([kind, endpoint]) => kind === "fetch" && endpoint?.endsWith("/zip")),
+        ).toBe(false);
+      }
+      if (error) {
+        expectRejected(result, error);
+      } else {
+        expectSuccess(result);
+        if (scenario === "retained" || scenario === "retained plugin") {
+          expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+          expect(JSON.parse(result.outputs.qualified_preflight_bundle_json!)).toEqual(
+            test.qualified,
+          );
+          expect(result.outputs).toMatchObject({
+            publication_artifacts_reused: "true",
+            npm_run_id: "81",
+            npm_run_attempt: "1",
+            prepared_run_id: "91",
+            prepared_run_attempt: "1",
+            prepared_manifest_sha256: test.docker.preparedManifestSha256,
+            descriptor_json: test.plugin ? JSON.stringify(test.plugin) : "",
+          });
+        } else {
+          expect(result.outputs).toEqual({ publication_artifacts_reused: "false" });
+        }
+      }
+    },
+  );
   it.each([
     ["exact active parent", {}, true],
     ["another attempt", { run_attempt: 2 }, false],
@@ -557,183 +776,205 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     ["completed parent", { status: "completed", conclusion: "success" }, false],
   ] as const)("admits only its %s", (_name, override, accepted) => {
     const test = fixture();
-    test.api(
-      "actions/runs/51",
-      workflowRun({ id: 51, path: ".github/workflows/full-release-validation.yml", ...override }),
-    );
+    test.runApi("51", {
+      id: 51,
+      path: ".github/workflows/full-release-validation.yml",
+      ...override,
+    });
     const result = test.run("admit", { GITHUB_RUN_ID: "81" });
     if (accepted) {
-      expect(result.status, result.stderr).toBe(0);
+      expectSuccess(result);
       expect(result.outputs.dispatch_name).toBe(`${DISPATCH_ID}-dispatch`);
-      expect(
-        JSON.parse(readFileSync(join(result.outputs.directory!, "dispatch.json"), "utf8")),
-      ).toEqual({
-        request: artifactRequest(),
-        runId: "81",
-        runAttempt: "1",
-      });
+      expect(readJson(join(result.outputs.directory!, "dispatch.json"))).toEqual(dispatchRecord());
     } else {
       expectRejected(result, "exact active FRV parent and frozen tooling");
     }
   });
 
-  it("restores the original producer on attempt two without dispatching or rebuilding", () => {
-    const test = fixture();
-    const admitted = test.run("admit", { GITHUB_RUN_ID: "81" });
-    expect(admitted.status, admitted.stderr).toBe(0);
-    const recordPath = join(admitted.outputs.directory!, "dispatch.json");
-    const recordBytes = readFileSync(recordPath, "utf8");
-    test.artifact(admitted.outputs.dispatch_name!, "dispatch.json", JSON.parse(recordBytes), true);
-    const first = test.run("resolve");
-    expect(first.status, first.stderr).toBe(0);
-    expect(first.outputs).toMatchObject({
-      run_id: "81",
-      run_attempt: "1",
-      dispatch_id: DISPATCH_ID,
-    });
-    const second = test.run("resolve", {
-      GITHUB_RUN_ATTEMPT: "2",
-      ARTIFACT_RUN_ID: "99",
-      ARTIFACT_RUN_ATTEMPT: "2",
-    });
-    expect(second.status, second.stderr).toBe(0);
-    expect(second.outputs).toEqual(first.outputs);
-    expect(readFileSync(recordPath, "utf8")).toBe(recordBytes);
-    expect(second.calls).toContainEqual([
-      "gh",
-      "api",
-      `repos/${REPOSITORY}/actions/artifacts?name=${DISPATCH_ID}-dispatch&per_page=100`,
-    ]);
-    expect(
-      second.calls.some((call) => call.some((part) => part.includes("actions/runs/51/"))),
-    ).toBe(false);
-    expect(
-      [...first.calls, ...second.calls]
-        .filter(([kind]) => kind === "gh")
-        .every(([, command]) => command === "api"),
-    ).toBe(true);
-  });
-
-  it("adopts a newer producer attempt without replacing its original dispatch", () => {
-    const test = fixture();
-    test.artifact(
-      `${DISPATCH_ID}-dispatch`,
-      "dispatch.json",
-      {
-        request: artifactRequest(),
-        runId: "81",
-        runAttempt: "1",
-      },
-      true,
-    );
-    test.api(
-      "actions/runs/81",
-      workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" }),
-    );
-    const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.outputs).toMatchObject({
-      run_id: "81",
-      run_attempt: "2",
-      dispatch_id: DISPATCH_ID,
-    });
-  });
-
-  it.each(["contents retry", "receipt retry", "replacement preparation failed"] as const)(
-    "collects failed-job recovery with carried-forward npm bytes: %s",
-    (outcome) => {
+  it.each([
+    ["npm", 1],
+    ["npm", 2],
+    ["docker", 2],
+  ] as const)(
+    "restores %s producer attempt %i without dispatching or rebuilding",
+    (stage, attempt) => {
       const test = fixture();
-      const current = workflowRun({ run_attempt: 2, status: "completed", conclusion: "success" });
-      test.api("actions/runs/81", current);
-      test.api(
-        "actions/runs/81/attempts/1",
-        workflowRun({ status: "completed", conclusion: "failure" }),
-      );
-      test.api("actions/runs/81/attempts/2", current);
-      if (outcome === "contents retry") {
-        test.qualified.producer.runAttempt = "2";
-        test.qualified.artifact.runAttempt = "2";
-        test.jobs[1]!.run_attempt = 2;
-        test.outputs.qualified_preflight_bundle_json = JSON.stringify(test.qualified);
-      }
-      test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
-        total_count: outcome === "contents retry" ? 1 : 2,
-        jobs: outcome === "contents retry" ? [test.jobs[0]] : test.jobs,
-      });
-      test.api("actions/runs/81/attempts/2/jobs?per_page=100&page=1", {
-        total_count: 1,
-        jobs:
-          outcome === "receipt retry"
-            ? [{ ...test.jobs[0], id: 990, name: "Seal artifact producer receipt", run_attempt: 2 }]
-            : outcome === "contents retry"
-              ? [test.jobs[1]]
-              : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
-      });
-      test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
-      const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
-      if (outcome === "replacement preparation failed") {
-        expectRejected(raw, "Successful npm preparation was replaced");
-        return;
-      }
-      expect(raw.status, raw.stderr).toBe(0);
-      expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
-      const sealed = test.run("receipt", {
-        GITHUB_RUN_ID: "81",
-        GITHUB_RUN_ATTEMPT: "2",
-        ARTIFACT_OUTPUTS_JSON: JSON.stringify(test.outputs),
-      });
-      expect(sealed.status, sealed.stderr).toBe(0);
+      const dispatchId = `full-release-validation-51-1-artifacts-${stage}`;
+      const env = { ARTIFACT_STAGE: stage, ARTIFACT_DISPATCH_ID: dispatchId };
+      const admitted = expectSuccess(test.run("admit", { ...env, GITHUB_RUN_ID: "81" }));
+      const recordPath = join(admitted.outputs.directory!, "dispatch.json");
+      const recordBytes = readFileSync(recordPath, "utf8");
       test.artifact(
-        "full-release-artifact-receipt-81-2",
-        "artifact-receipt.json",
-        JSON.parse(readFileSync(join(sealed.outputs.directory!, "artifact-receipt.json"), "utf8")),
+        admitted.outputs.dispatch_name!,
+        "dispatch.json",
+        JSON.parse(recordBytes),
+        true,
       );
-      const receipt = test.run("wait", { ARTIFACT_OUTPUT: "receipt", ARTIFACT_RUN_ATTEMPT: "2" });
-      expect(receipt.status, receipt.stderr).toBe(0);
-      expect(receipt.outputs).toEqual(test.outputs);
+      test.runApi("81", { display_title: `Full Release Artifacts ${dispatchId}` });
+      const first = expectSuccess(test.run("resolve", env));
+      expect(first.outputs).toMatchObject({
+        run_id: "81",
+        run_attempt: "1",
+        dispatch_id: dispatchId,
+      });
+      if (attempt === 2) {
+        test.runApi("81", {
+          run_attempt: attempt,
+          ...completed,
+          display_title: `Full Release Artifacts ${dispatchId}`,
+        });
+      }
+      const second = expectSuccess(
+        test.run("resolve", {
+          ...env,
+          GITHUB_RUN_ATTEMPT: "2",
+          ARTIFACT_RUN_ID: "99",
+          ARTIFACT_RUN_ATTEMPT: "2",
+        }),
+      );
+      expect(second.outputs).toEqual({ ...first.outputs, run_attempt: String(attempt) });
+      expect(readFileSync(recordPath, "utf8")).toBe(recordBytes);
     },
   );
 
   it.each([
-    "missing record",
-    "changed request",
-    "record names another producer",
-    "producer attempt regressed",
-    "missing producer",
-  ] as const)("refuses retry reuse with %s", (failure) => {
+    "contents retry",
+    "receipt retry",
+    "carried preparation copy",
+    "replacement preparation failed",
+  ] as const)("collects failed-job recovery with carried-forward npm bytes: %s", (outcome) => {
     const test = fixture();
-    const record = { request: artifactRequest(), runId: "81", runAttempt: "1" };
-    if (failure === "changed request") {
-      record.request.sourceSha = "c".repeat(40);
+    const current = { run_attempt: 2, ...completed };
+    test.runApi("81", current);
+    test.runApi("81/attempts/1", { ...completed, conclusion: "failure" });
+    test.runApi("81/attempts/2", current);
+    if (outcome === "contents retry") {
+      test.qualified.producer.runAttempt = "2";
+      test.qualified.artifact.runAttempt = "2";
+      test.jobs[1]!.run_attempt = 2;
+      test.outputs.qualified_preflight_bundle_json = JSON.stringify(test.qualified);
     }
-    if (failure === "record names another producer") {
-      record.runId = "83";
-      test.api("actions/runs/83", workflowRun({ id: 83 }));
-    }
-    if (failure === "missing record") {
-      test.api(`actions/artifacts?name=${DISPATCH_ID}-dispatch&per_page=100`, {
-        total_count: 0,
-        artifacts: [],
+    test.jobsApi(1, outcome === "contents retry" ? [test.jobs[0]] : test.jobs);
+    test.jobsApi(
+      2,
+      outcome === "receipt retry"
+        ? [{ ...test.jobs[0], id: 990, name: "Seal artifact producer receipt", run_attempt: 2 }]
+        : outcome === "contents retry"
+          ? [test.jobs[1]]
+          : outcome === "carried preparation copy"
+            ? [{ ...test.jobs[0], id: 998, run_attempt: 2 }]
+            : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
+    );
+    test.rawArtifact();
+    if (outcome === "replacement preparation failed") {
+      test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", {
+        ...test.raw,
+        producer: { ...test.raw.producer, jobId: "999", runAttempt: "2" },
+        artifact: {
+          ...test.raw.artifact,
+          id: "499",
+          name: "openclaw-npm-package-81-2",
+          runAttempt: "2",
+        },
       });
+    } else {
+      test.list(
+        "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-2&per_page=100",
+        "artifacts",
+        [],
+      );
+    }
+    const raw = test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" });
+    if (outcome === "replacement preparation failed") {
+      expectRejected(raw, "Successful npm preparation was replaced");
+      return;
+    }
+    expectSuccess(raw);
+    expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(test.raw);
+    test.receiptArtifact(test.seal("2"), "2");
+    const receipt = expectSuccess(test.wait("receipt", { ARTIFACT_RUN_ATTEMPT: "2" }));
+    expect(receipt.outputs).toEqual(test.outputs);
+  });
+
+  it("keeps polling when the npm descriptor appears before its producer job completes", () => {
+    const test = fixture();
+    const pending = { ...test.jobs[0], status: "in_progress", conclusion: null };
+    test.jobsApi(1, [pending]);
+    test.api(`actions/jobs/${pending.id}`, pending);
+    test.rawArtifact();
+
+    const raw = test.wait("raw", { FIXTURE_STOP_ON_WAIT: "true" });
+    expectRejected(raw, "Fixture reached another artifact poll");
+    expect(raw.stderr).not.toContain("unique exact completed producer job");
+  });
+
+  it("ignores a failed preparation descriptor when a later retry succeeds", () => {
+    const test = fixture();
+    const current = { run_attempt: 2, ...completed };
+    const failed = { ...test.jobs[0], conclusion: "failure" };
+    const succeeded = {
+      ...test.jobs[0],
+      id: 999,
+      run_attempt: 2,
+      status: "completed",
+      conclusion: "success",
+    };
+    const retried = {
+      ...test.raw,
+      producer: {
+        ...test.raw.producer,
+        jobId: "999",
+        runAttempt: "2",
+      },
+      artifact: {
+        ...test.raw.artifact,
+        id: "499",
+        name: "openclaw-npm-package-81-2",
+        runAttempt: "2",
+      },
+    };
+    test.runApi("81", current);
+    test.runApi("81/attempts/1", { ...completed, conclusion: "failure" });
+    test.runApi("81/attempts/2", current);
+    test.jobsApi(1, [failed]);
+    test.jobsApi(2, [succeeded]);
+    test.api("actions/jobs/901", failed);
+    test.api("actions/jobs/999", succeeded);
+    test.rawArtifact();
+    test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", retried);
+
+    const raw = expectSuccess(test.wait("raw", { ARTIFACT_RUN_ATTEMPT: "2" }));
+    expect(JSON.parse(raw.outputs.prepared_bundle_json!)).toEqual(retried);
+  });
+
+  it.each([
+    ["missing record", {}, true, "", DISPATCH_MISMATCH],
+    [
+      "changed request",
+      { request: { ...artifactRequest(), sourceSha: "c".repeat(40) } },
+      false,
+      "",
+      DISPATCH_MISMATCH,
+    ],
+    ["record names another producer", { runId: "83" }, false, "", DISPATCH_MISMATCH],
+    ["producer attempt regressed", { runAttempt: "2" }, false, "", "producer run identity changed"],
+    ["missing producer", {}, false, "HTTP 404: producer missing", "HTTP 404: producer missing"],
+  ] as const)("refuses retry reuse with %s", (_name, changes, missing, apiError, error) => {
+    const test = fixture();
+    const record = { ...dispatchRecord(), ...changes };
+    if (record.runId === "83") {
+      test.runApi("83", { id: 83 });
+    }
+    if (missing) {
+      test.list(`actions/artifacts?name=${DISPATCH_ID}-dispatch&per_page=100`, "artifacts", []);
     } else {
       test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
     }
-    if (failure === "producer attempt regressed") {
-      record.runAttempt = "2";
-      test.artifact(`${DISPATCH_ID}-dispatch`, "dispatch.json", record, true);
-      test.api("actions/runs/81", workflowRun({ run_attempt: 1 }));
-    }
-    if (failure === "missing producer") {
-      test.api("actions/runs/81", { fixtureError: "HTTP 404: producer missing" });
+    if (apiError) {
+      test.api("actions/runs/81", { fixtureError: apiError });
     }
     const result = test.run("resolve", { GITHUB_RUN_ATTEMPT: "2", ARTIFACT_RUN_ID: "99" });
-    const message =
-      failure === "producer attempt regressed"
-        ? "producer run identity changed"
-        : failure === "missing producer"
-          ? "HTTP 404: producer missing"
-          : "Original artifact dispatch is unavailable or changed";
-    expectRejected(result, message);
+    expectRejected(result, error);
   });
 
   it.each([
@@ -741,166 +982,137 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     ["receipt", "Prepare npm artifacts / Check npm dependencies"],
   ] as const)("reports a failed %s producer job before its siblings finish", (output, name) => {
     const test = fixture();
-    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 2,
-      jobs: [
-        { ...test.jobs[0], name, conclusion: "failure" },
-        { ...test.jobs[1], status: "in_progress", conclusion: null },
-      ],
-    });
-    test.api("actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100", {
-      total_count: 0,
-      artifacts: [],
-    });
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: output,
-      FIXTURE_STOP_ON_WAIT: "true",
-    });
+    test.jobsApi(1, [
+      { ...test.jobs[0], name, conclusion: "failure" },
+      { ...test.jobs[1], status: "in_progress", conclusion: null },
+    ]);
+    test.list(
+      "actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-1&per_page=100",
+      "artifacts",
+      [],
+    );
+    const result = test.wait(output, { FIXTURE_STOP_ON_WAIT: "true" });
     expectRejected(result, `${name} ended with failure`);
     expect(result.stderr).toContain(`https://github.com/${REPOSITORY}/actions/runs/81/job/901`);
     expect(result.stderr).toContain("Other producer jobs continue running");
   });
 
-  it("keeps waiting while a queued producer has no jobs", () => {
+  it.each([
+    ["valid response", {}, "Fixture reached another artifact poll", 1],
+    [
+      "one truncated CLI response",
+      { fixtureErrorOnce: "unexpected end of JSON input" },
+      "Fixture reached another artifact poll",
+      2,
+    ],
+    [
+      "persistent truncation",
+      { fixtureError: "unexpected end of JSON input" },
+      "unexpected end of JSON input",
+      2,
+    ],
+    ["authorization failure", { fixtureError: "gh: Forbidden (HTTP 403)" }, "HTTP 403", 1],
+    ["malformed successful response", { fixtureOutput: "{" }, "JSON", 1],
+  ] as const)("handles a queued producer's jobs read with %s", (_name, response, error, reads) => {
     const test = fixture();
-    test.api("actions/runs/81", workflowRun({ status: "queued" }));
-    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
-      total_count: 0,
-      jobs: [],
-    });
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: "receipt",
+    const dispatchId = "full-release-validation-51-1-artifacts-docker";
+    test.runApi("81", { status: "queued", display_title: `Full Release Artifacts ${dispatchId}` });
+    const path = "actions/runs/81/attempts/1/jobs?per_page=100&page=1";
+    test.api(path, { total_count: 0, jobs: [], ...response });
+    const result = test.wait("receipt", {
+      ARTIFACT_STAGE: "docker",
+      ARTIFACT_DISPATCH_ID: dispatchId,
       FIXTURE_STOP_ON_WAIT: "true",
     });
-    expectRejected(result, "Fixture reached another artifact poll");
+    expectRejected(result, error);
+    expect(result.apiCalls[`repos/${REPOSITORY}/${path}`]).toBe(reads);
+  });
+
+  it.each([false, true])(
+    "keeps incomplete live job pages pending without hiding identity changes: %s",
+    (changedIdentity) => {
+      const test = fixture();
+      test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+        total_count: 2,
+        jobs: [{ ...test.jobs[0], ...(changedIdentity ? { head_sha: "c".repeat(40) } : {}) }],
+      });
+      test.collect(
+        "receipt",
+        { FIXTURE_STOP_ON_WAIT: "true" },
+        changedIdentity
+          ? "Artifact producer job identity changed"
+          : "Fixture reached another artifact poll",
+      );
+    },
+  );
+
+  it("preserves jobs API diagnostics while authenticating the raw producer", () => {
+    const test = fixture();
+    test.rawArtifact();
+    // The first read authenticates the producer; fail the preservation lookup.
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: test.jobs.length,
+      jobs: test.jobs,
+      fixtureErrorOnRead: 2,
+      fixtureError: "gh: Forbidden (HTTP 403): fixture jobs permission denied",
+    });
+    const result = test.wait("raw");
+    expectRejected(result, "HTTP 403");
+    expect(result.stderr).toContain("fixture jobs permission denied");
   });
 
   it.each([
-    "successful raw job",
-    "failed unrelated qualifier",
-    "failed raw job",
-    "wrong raw attempt",
-    "rerun during download",
+    ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],
+    ["failed raw job", { conclusion: "failure" }, {}, false, JOB_MISMATCH],
+    ["wrong raw attempt", { run_attempt: 2 }, {}, false, JOB_MISMATCH],
+    ["rerun during download", {}, {}, true, RUN_MISMATCH],
+  ] as const)("requires an exact completed raw job: %s", (_name, raw, qualifier, rerun, error) => {
+    const test = fixture();
+    Object.assign(test.jobs[0]!, raw);
+    Object.assign(test.jobs[1]!, { status: "in_progress", conclusion: null }, qualifier);
+    test.rawArtifact();
+    const outputs = test.collect("raw", { FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun) }, error);
+    if (!error) {
+      expect(JSON.parse(outputs.prepared_bundle_json!)).toEqual(test.raw);
+      expect(outputs.qualified_preflight_bundle_json).toBeUndefined();
+    }
+  });
+
+  it.each([
+    ["valid", {}, false, false, ""],
+    ["source changed", { sourceSha: "c".repeat(40) }, false, false, RECEIPT_MISMATCH],
+    ["tooling changed", { toolingSha: "c".repeat(40) }, false, false, RECEIPT_MISMATCH],
+    ["attempt changed", { runAttempt: "2" }, false, false, RECEIPT_MISMATCH],
+    ["qualifier failed", {}, true, false, JOB_MISMATCH],
+    ["rerun during download", {}, false, true, RUN_MISMATCH],
   ] as const)(
-    "requires an exact completed raw job while qualification is still active: %s",
-    (outcome) => {
+    "authenticates the terminal qualification receipt: %s",
+    (_name, changes, failed, rerun, error) => {
       const test = fixture();
-      test.jobs[1]!.status = "in_progress";
-      test.jobs[1]!.conclusion = null;
-      if (outcome === "failed raw job") {
-        test.jobs[0]!.conclusion = "failure";
-      }
-      if (outcome === "failed unrelated qualifier") {
-        test.jobs[1]!.status = "completed";
+      test.runApi("81", completed);
+      test.runApi("81/attempts/1", completed);
+      const receipt = Object.assign(test.seal(), changes);
+      if (failed) {
         test.jobs[1]!.conclusion = "failure";
       }
-      if (outcome === "wrong raw attempt") {
-        test.jobs[0]!.run_attempt = 2;
-      }
-      test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
-      const result = test.run("wait", {
-        ARTIFACT_OUTPUT: "raw",
-        FIXTURE_RERUN_DURING_DOWNLOAD: String(outcome === "rerun during download"),
-      });
-      if (outcome === "successful raw job" || outcome === "failed unrelated qualifier") {
-        expect(result.status, result.stderr).toBe(0);
-        expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
-        expect(result.outputs.qualified_preflight_bundle_json).toBeUndefined();
-      } else {
-        expectRejected(
-          result,
-          outcome === "rerun during download"
-            ? "Artifact producer run identity changed"
-            : "unique exact completed producer job",
-        );
+      test.receiptArtifact(receipt);
+      const outputs = test.collect(
+        "receipt",
+        { FIXTURE_RERUN_DURING_DOWNLOAD: String(rerun) },
+        error,
+      );
+      if (!error) {
+        expect(outputs).toEqual(test.outputs);
       }
     },
   );
 
-  it.each([
-    "valid",
-    "source changed",
-    "tooling changed",
-    "attempt changed",
-    "qualifier failed",
-    "rerun during download",
-  ] as const)("authenticates the terminal qualification receipt: %s", (outcome) => {
+  it("never downloads raw artifacts after the producer failed", () => {
     const test = fixture();
-    test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "success" }));
-    test.api(
-      "actions/runs/81/attempts/1",
-      workflowRun({ status: "completed", conclusion: "success" }),
-    );
-    const sealed = test.run("receipt", {
-      GITHUB_RUN_ID: "81",
-      ARTIFACT_OUTPUTS_JSON: JSON.stringify(test.outputs),
-    });
-    expect(sealed.status, sealed.stderr).toBe(0);
-    const receipt = JSON.parse(
-      readFileSync(join(sealed.outputs.directory!, "artifact-receipt.json"), "utf8"),
-    );
-    if (outcome === "source changed") {
-      receipt.sourceSha = "c".repeat(40);
-    }
-    if (outcome === "tooling changed") {
-      receipt.toolingSha = "c".repeat(40);
-    }
-    if (outcome === "attempt changed") {
-      receipt.runAttempt = "2";
-    }
-    if (outcome === "qualifier failed") {
-      test.jobs[1]!.conclusion = "failure";
-    }
-    test.artifact("full-release-artifact-receipt-81-1", "artifact-receipt.json", receipt);
-    const result = test.run("wait", {
-      ARTIFACT_OUTPUT: "receipt",
-      FIXTURE_RERUN_DURING_DOWNLOAD: String(outcome === "rerun during download"),
-    });
-    if (outcome === "valid") {
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.outputs).toEqual(test.outputs);
-    } else {
-      expectRejected(
-        result,
-        outcome === "rerun during download"
-          ? "Artifact producer run identity changed"
-          : outcome === "qualifier failed"
-            ? "unique exact completed producer job"
-            : "receipt does not match its exact request and producer attempt",
-      );
-    }
+    test.rawArtifact();
+    test.runApi("81", { ...completed, conclusion: "failure" });
+    const result = test.wait("raw");
+    expectRejected(result, "Artifact npm producer failed");
+    expect(result.calls).toEqual([]);
   });
-
-  it.each(["digest changed", "malformed ZIP", "producer failed"] as const)(
-    "never exposes raw artifacts after %s",
-    (failure) => {
-      const test = fixture();
-      const archive = test.artifact(
-        "openclaw-npm-package-descriptor-81-1",
-        "prepared-npm-bundle.json",
-        test.raw,
-      );
-      if (failure === "producer failed") {
-        test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "failure" }));
-      } else {
-        const corrupted = Buffer.alloc(archive.bytes.length);
-        writeFileSync(archive.archivePath, corrupted);
-        if (failure === "malformed ZIP") {
-          archive.metadata.digest = `sha256:${sha256(corrupted)}`;
-        }
-      }
-      const result = test.run("wait", { ARTIFACT_OUTPUT: "raw" });
-      expectRejected(
-        result,
-        failure === "producer failed"
-          ? "Artifact npm producer failed"
-          : failure === "digest changed"
-            ? "GitHub Actions artifact download digest"
-            : "ZIP",
-      );
-      if (failure === "producer failed") {
-        expect(result.calls.some(([kind]) => kind === "fetch")).toBe(false);
-      }
-    },
-  );
 });

@@ -20,7 +20,10 @@ export function createMonitor(
   activityOrMonitorOptions?:
     | MonitorOptions["onActivityChange"]
     | (Partial<Omit<MonitorOptions, "queue" | "deliver" | "payload" | "drain">> &
-        Pick<NonNullable<MonitorOptions["drain"]>, "retryPolicy" | "deferredLaneOccupancy">),
+        Pick<
+          NonNullable<MonitorOptions["drain"]>,
+          "retryPolicy" | "deferredLaneOccupancy" | "deriveLaneKey"
+        >),
   onError?: (error: unknown) => void,
   abortSignal?: AbortSignal,
   pollIntervalMs = 10,
@@ -30,7 +33,8 @@ export function createMonitor(
     typeof activityOrMonitorOptions === "function" ? activityOrMonitorOptions : undefined;
   const monitorOptions =
     typeof activityOrMonitorOptions === "object" ? activityOrMonitorOptions : {};
-  const { inspect, retryPolicy, deferredLaneOccupancy, ...baseMonitorOptions } = monitorOptions;
+  const { inspect, retryPolicy, deferredLaneOccupancy, deriveLaneKey, ...baseMonitorOptions } =
+    monitorOptions;
   return createChannelIngressMonitor<RawEvent, string, StoredEvent>({
     queue,
     inspect: inspect ?? ((raw) => ({ eventId: raw.id, laneKey: `lane:${raw.lane}` })),
@@ -47,6 +51,7 @@ export function createMonitor(
     ...baseMonitorOptions,
     drain: {
       adoptionStallTimeoutMs: 5_000,
+      deriveLaneKey,
       retryPolicy: retryPolicy ?? { baseMs: retryBaseMs, maxMs: retryBaseMs },
       ...(deferredLaneOccupancy ? { deferredLaneOccupancy } : {}),
       resolveNonRetryableFailure: (error) =>
@@ -81,13 +86,4 @@ export function useIngressMonitorQueueFixture() {
       closeOpenClawStateDatabaseForTest();
     }
   };
-}
-
-export async function waitForAbort(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 }

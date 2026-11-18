@@ -11,11 +11,16 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
-import { getSessionActorStorageBinding } from "../../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import {
+  captureSessionActorStorageOwner,
+  getSessionActorStorageBinding,
+  runWithSessionActorStorage,
+} from "../../config/sessions/session-actor-storage-binding.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
-import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   SessionTranscriptWriterClaimReboundError,
@@ -27,12 +32,14 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import type { StopReason } from "../../llm/types.js";
+import { estimateTranscriptUsageCost } from "../../infra/session-cost-usage-pricing.js";
+import type { StopReason, Usage } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
+import { resolveCliTranscriptUsage, type CliTranscriptUsage } from "../cli-transcript-usage.js";
 import {
   awaitAgentEndSideEffects,
   runAgentEndSideEffectsAsync,
@@ -48,7 +55,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import { withSessionManagerWrite } from "../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "../stream-message-shared.js";
-import { cliAssistantItemId } from "./assistant-identity.js";
+import { cliAssistantItemId, cliInterimAssistantItemId } from "./assistant-identity.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -85,10 +92,6 @@ export function buildCliHookAssistantMessage(params: {
   };
 }
 
-function isAgentMessage(value: unknown): value is AgentMessage {
-  return Boolean(value && typeof value === "object" && "role" in value);
-}
-
 type CliAgentEndHookParams = Parameters<typeof runAgentEndSideEffectsAsync>[0];
 
 export async function runCliAgentEndHook(
@@ -120,27 +123,80 @@ export async function persistApprovedCliUserTurnTranscript(
     recorder.markBlocked();
   }
   if (persisted && !reusingPersistedTurn) {
-    try {
-      const notification = params.onUserMessagePersisted?.(persisted.message);
-      if (notification) {
-        void Promise.resolve(notification).catch((error: unknown) => {
-          log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
-        });
-      }
-    } catch (error) {
-      log.warn(`CLI user turn persistence notification failed: ${formatErrorMessage(error)}`);
-    }
+    void notifyCliUserMessagePersisted(params, persisted.message, "CLI user turn persistence");
   }
   return persisted !== undefined || recorder.hasPersisted() || recorder.isBlocked();
+}
+
+/**
+ * Only a backend that reports its turn total separately from the latest call gets a context
+ * marker. Other backends keep unmarked counters, which context readers do not treat as fresh.
+ * The counters carry the backend model's API-rate cost (via its `priceAs` provider), so a
+ * subscription turn records what the API would charge instead of a $0 placeholder.
+ */
+export async function buildCliAssistantTranscriptUsage(params: {
+  runParams: Pick<RunCliAgentParams, "provider" | "config">;
+  modelId: string;
+  agentDir?: string;
+  /** Latest model-call usage. */
+  usage?: CliUsage;
+  /** Terminal whole-turn usage, when the backend reports it separately from the latest call. */
+  turnUsage?: CliUsage;
+}): Promise<{ usage: Usage; costUsd?: number }> {
+  const counters = buildCliTranscriptCounters(params.usage, params.turnUsage);
+  // Text-output backends report no counters; their zero placeholders measure nothing.
+  const reported = params.turnUsage ?? params.usage;
+  if (
+    !reported ||
+    [reported.input, reported.output, reported.cacheRead, reported.cacheWrite].every(
+      (count) => count === undefined,
+    )
+  ) {
+    return { usage: counters };
+  }
+  const rates = await resolveModelCostConfig({
+    provider: params.runParams.provider,
+    model: params.modelId,
+    config: params.runParams.config,
+    agentDir: params.agentDir,
+  });
+  const cost = rates ? estimateTranscriptUsageCost(counters, rates) : undefined;
+  return cost ? { usage: { ...counters, cost }, costUsd: cost.total } : { usage: counters };
+}
+
+function buildCliTranscriptCounters(
+  lastCallUsage: CliUsage | undefined,
+  turnUsage: CliUsage | undefined,
+): Usage {
+  const usage: CliTranscriptUsage | undefined = turnUsage
+    ? resolveCliTranscriptUsage(lastCallUsage, turnUsage)
+    : lastCallUsage;
+  const counters = buildUsageWithNoCost({
+    input: usage?.input,
+    output: usage?.output,
+    cacheRead: usage?.cacheRead,
+    cacheWrite: usage?.cacheWrite,
+    totalTokens: usage?.total,
+  });
+  if (usage?.cacheWrite1h) {
+    counters.cacheWrite1h = usage.cacheWrite1h;
+  }
+  return usage?.contextUsage ? { ...counters, contextUsage: usage.contextUsage } : counters;
 }
 
 export async function persistCliAssistantTranscript(params: {
   runParams: RunCliAgentParams;
   text: string;
   modelId: string;
-  usage?: CliUsage;
+  /** Priced turn counters from `buildCliAssistantTranscriptUsage`. */
+  usage?: Usage;
   stopReason: StopReason;
   yielded?: true;
+  /** The native Claude row this message mirrors; the history merge joins them by it. */
+  nativeIdentity?: { cliSessionId: string; externalId: string };
+  /** Held answers commit before the final run-owned row and retain their own retry identity. */
+  interim?: true;
+  interimReplies?: CliOutput["interimNativeReplies"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -157,8 +213,30 @@ export async function persistCliAssistantTranscript(params: {
   if (!runParams.persistAssistantTranscript || !runParams.sessionKey) {
     return { owned: false };
   }
+  // Deduplicate the final answer by its transcript item key, not a session admission pin.
+  const finalNativeItem = params.nativeIdentity
+    ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+    : undefined;
+  // Completed held answers are separate native rows; narration remains native-only.
+  for (const reply of params.interimReplies ?? []) {
+    if (cliInterimAssistantItemId(runParams.runId, reply) === finalNativeItem) {
+      continue;
+    }
+    await persistCliAssistantTranscript({
+      runParams,
+      text: reply.text,
+      modelId: params.modelId,
+      nativeIdentity: { cliSessionId: reply.cliSessionId, externalId: reply.externalId },
+      interim: true,
+      stopReason: "stop",
+    });
+  }
+  const idempotencyKey =
+    params.interim && params.nativeIdentity
+      ? cliInterimAssistantItemId(runParams.runId, params.nativeIdentity)
+      : cliAssistantItemId(runParams.runId);
+  let committed = false;
   try {
-    const idempotencyKey = cliAssistantItemId(runParams.runId);
     const result = await appendExactAssistantMessageToSessionTranscript({
       sessionKey: runParams.sessionKey,
       agentId: runParams.agentId,
@@ -173,11 +251,15 @@ export async function persistCliAssistantTranscript(params: {
       idempotencyKey,
       runId: runParams.runId,
       config: runParams.config,
+      onMessageCommitted: () => {
+        committed = true;
+      },
       beforeMessageWrite: (write) => {
         const message = runAgentHarnessBeforeMessageWriteHook({
           ...write,
           message: projectAgentHarnessTranscriptMessageForDisplay({
-            hidden: false,
+            runId: runParams.runId,
+            hidden: runParams.privateCompletion === true,
             inputProvenance: runParams.inputProvenance,
             message: write.message,
           }),
@@ -185,13 +267,17 @@ export async function persistCliAssistantTranscript(params: {
         });
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
-              hidden: false,
+              runId: runParams.runId,
+              hidden: runParams.privateCompletion === true,
               inputProvenance: runParams.inputProvenance,
               message,
             })
           : null;
       },
       message: {
+        ...(params.nativeIdentity
+          ? { __openclaw: { importedFrom: "claude-cli", ...params.nativeIdentity } }
+          : {}),
         ...buildAssistantMessage({
           model: {
             api: "cli",
@@ -200,13 +286,7 @@ export async function persistCliAssistantTranscript(params: {
           },
           content: [{ type: "text", text: params.text }],
           stopReason: params.stopReason,
-          usage: buildUsageWithNoCost({
-            input: params.usage?.input,
-            output: params.usage?.output,
-            cacheRead: params.usage?.cacheRead,
-            cacheWrite: params.usage?.cacheWrite,
-            totalTokens: params.usage?.total,
-          }),
+          usage: params.usage ?? buildUsageWithNoCost({}),
         }),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.
@@ -232,7 +312,7 @@ export async function persistCliAssistantTranscript(params: {
     };
   } catch (error) {
     log.warn(`CLI assistant transcript persistence failed: ${formatErrorMessage(error)}`);
-    return { owned: false };
+    return committed ? { owned: true, idempotencyKey } : { owned: false };
   }
 }
 
@@ -255,7 +335,6 @@ async function prepareCliBlockFallbackWrite(
 ) {
   const identity = { ...target };
   const memory = getSessionActorStorageBinding(identity);
-  const incognito = memory ? undefined : captureIncognitoSessionBinding(identity);
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const readScope = { ...identity, env } satisfies SessionTranscriptReadScope;
@@ -284,34 +363,6 @@ async function prepareCliBlockFallbackWrite(
       }
     };
     return { readScope: { ...identity, storePath: memory.path }, assertCurrent, release() {} };
-  }
-  if (incognito) {
-    const { actor } = incognito;
-    const claim = actor.sessions.captureCurrent(identity.sessionKey);
-    const cliWriter = getCliHistoryWriter({ ...identity, storePath: actor.path });
-    const { lifecycleRevision, activeWriterRunId } = expectedEntry;
-    const assertCurrent = () => {
-      assertOwnedWrite();
-      cliWriter?.assertCurrent();
-      incognito.admissionSignal?.throwIfAborted();
-      actor.assertCurrent();
-      claim.assertCurrent();
-      const current = actor.sessions.readSteering(identity.sessionKey);
-      if (
-        !current ||
-        current.sessionId !== identity.sessionId ||
-        current.lifecycleRevision !== lifecycleRevision ||
-        current.activeWriterRunId !== activeWriterRunId ||
-        (fence?.expectedLifecycleRevision !== undefined &&
-          current.lifecycleRevision !== fence.expectedLifecycleRevision) ||
-        (fence?.expectedWriterRunId !== undefined &&
-          current.activeWriterRunId !== fence.expectedWriterRunId)
-      ) {
-        throw new SessionTranscriptWriterClaimReboundError();
-      }
-    };
-    assertCurrent();
-    return { readScope: { ...identity, storePath: actor.path }, assertCurrent, release() {} };
   }
   const retainWrite = (source: CapturedSessionEntryReadSource, captured: InternalSessionEntry) => {
     const { databaseIdentity } = source;
@@ -426,7 +477,14 @@ export async function persistCliRunBlock(
           config: params.config,
           sessionKey,
         });
-      const memory = getSessionActorStorageBinding({ sessionKey, agentId });
+      const assertCallerCurrent = () => {
+        params.abortSignal?.throwIfAborted();
+        params.assertCurrent?.();
+      };
+      const memorySource = captureSessionActorStorageOwner(
+        { sessionKey, agentId, storePath: targetStorePath ?? params.storePath },
+        { assertCurrent: assertCallerCurrent, authorize() {} },
+      );
       const sessionTarget = {
         ...(params.sessionTarget ?? {
           agentId,
@@ -434,52 +492,77 @@ export async function persistCliRunBlock(
           sessionKey,
           storePath:
             params.storePath ??
-            memory?.path ??
+            memorySource?.path ??
             resolveSessionStorePathCore(params.config?.session?.store, {
               agentId,
             }),
         }),
       };
-      let committedSource: CapturedSessionEntryReadSource | undefined;
-      const persistedEntry = await patchSessionEntryCore(
-        sessionTarget,
-        (entry, patchContext) => {
-          if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
-            return null;
-          }
-          return {
-            sessionId: sessionTarget.sessionId,
-            updatedAt: Date.now(),
-          };
-        },
-        {
-          fallbackEntry: params.sessionEntry
-            ? undefined
-            : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
-          skipMaintenance: true,
-          onCommittedSource: (source) => {
-            committedSource = source;
-          },
-        },
-      );
-      if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
-        // Skip only this stale blocked-message write; the outer runner still returns blocked.
+      const memory = memorySource
+        ? await acquireSessionActorStorage(sessionTarget, {
+            create: !params.sessionEntry,
+            lifetime: { assertCurrent: assertCallerCurrent, assertReadable: assertCallerCurrent },
+            authority: { assertCurrent: assertCallerCurrent, authorize() {} },
+          })
+        : undefined;
+      if (memorySource && !memory) {
         return;
       }
-      const write = await prepareCliBlockFallbackWrite(
-        sessionTarget,
-        persistedEntry,
-        committedSource,
-      );
-      using _ = { [Symbol.dispose]: write.release };
-      const { restoreSessionColdTranscript } =
-        await import("../../config/sessions/session-cold-storage.js");
-      await restoreSessionColdTranscript(write.readScope, write.assertCurrent);
-      await withSessionTranscriptWriteAssertion(write.readScope, write.assertCurrent, async () => {
-        const manager = await SessionManager.openAsync(write.readScope);
-        write.assertCurrent();
-        await manager.appendMessageAsync(redactedUserMessage);
-      });
+      const persist = async () => {
+        let committedSource: CapturedSessionEntryReadSource | undefined;
+        const persistedEntry = await patchSessionEntryCore(
+          sessionTarget,
+          (entry, patchContext) => {
+            if (patchContext.existingEntry && entry.sessionId !== sessionTarget.sessionId) {
+              return null;
+            }
+            return {
+              sessionId: sessionTarget.sessionId,
+              updatedAt: Date.now(),
+            };
+          },
+          {
+            fallbackEntry: params.sessionEntry
+              ? undefined
+              : { sessionId: sessionTarget.sessionId, updatedAt: Date.now() },
+            skipMaintenance: true,
+            onCommittedSource: (source) => {
+              committedSource = source;
+            },
+          },
+        );
+        if (persistedEntry?.sessionId !== sessionTarget.sessionId) {
+          // Skip only this stale blocked-message write; the outer runner still returns blocked.
+          return;
+        }
+        const write = await prepareCliBlockFallbackWrite(
+          sessionTarget,
+          persistedEntry,
+          committedSource,
+        );
+        using _ = { [Symbol.dispose]: write.release };
+        if (!memory) {
+          const { restoreSessionColdTranscript } =
+            await import("../../config/sessions/session-cold-storage.js");
+          await restoreSessionColdTranscript(write.readScope, write.assertCurrent);
+        }
+        await withSessionTranscriptWriteAssertion(
+          write.readScope,
+          write.assertCurrent,
+          async () => {
+            const manager = await withSessionTranscriptHydrationCaller("cli-context", () =>
+              SessionManager.openAsync(write.readScope),
+            );
+            write.assertCurrent();
+            await manager.appendMessageAsync(redactedUserMessage);
+          },
+        );
+      };
+      try {
+        await (memory ? runWithSessionActorStorage(memory, persist) : persist());
+      } finally {
+        await memory?.actor.release();
+      }
       return;
     }
     const target = sessionManager.getSessionTarget();
@@ -508,7 +591,7 @@ export async function persistCliRunBlock(
 
 export async function finalizeCliContextEngineTurn(params: {
   context: PreparedCliRunContext;
-  historyMessages: unknown[];
+  historyMessages: AgentMessage[];
   assistantText: string;
   terminalAnchor?: import("../../config/sessions/session-accessor.js").TranscriptEntryAnchor;
   output: CliOutput;
@@ -532,7 +615,6 @@ export async function finalizeCliContextEngineTurn(params: {
           params.output.terminalInterruption !== undefined ||
           runParams.abortSignal?.aborted === true,
         yieldAborted: false,
-        isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
         runtimeContext: {
           provider: runParams.modelProvider ?? runParams.provider,
           modelId: context.modelId,
@@ -542,7 +624,7 @@ export async function finalizeCliContextEngineTurn(params: {
       });
     }
   } else {
-    const prePromptMessages = params.historyMessages.filter(isAgentMessage);
+    const prePromptMessages = params.historyMessages;
     const turnMessages: AgentMessage[] = [];
     if (context.contextEngineTurnPrompt) {
       turnMessages.push(buildCliHookUserMessage(context.contextEngineTurnPrompt));
@@ -572,7 +654,6 @@ export async function finalizeCliContextEngineTurn(params: {
       sessionKey: runParams.sessionKey,
       sessionTarget: runParams.sessionTarget,
       sessionFile: runParams.sessionFile,
-      isHeartbeat: isHeartbeatLifecycleRunKind(runParams.bootstrapContextRunKind),
       messagesSnapshot: [...prePromptMessages, ...turnMessages],
       prePromptMessageCount: prePromptMessages.length,
       sessionManager: runParams.sessionManager,

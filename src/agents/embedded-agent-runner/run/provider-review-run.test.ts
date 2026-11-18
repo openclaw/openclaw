@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { enqueueCommandInLane } from "../../../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../../../process/command-queue.test-support.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import { testing } from "../../../sessions/session-controller.test-support.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { createProviderReviewRun } from "./provider-review-run.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -30,30 +30,31 @@ vi.mock("../../../auto-reply/thinking.js", async () => {
 vi.mock("../../../auto-reply/reply/queue/drain.js", () => ({
   clearFollowupDrainCallback: vi.fn(),
 }));
-vi.mock("../../../logging/diagnostic-runtime.js", () => ({
-  logLaneEnqueue: vi.fn(),
-  logLaneDequeue: vi.fn(),
-  diagnosticLogger: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
-}));
-
 afterEach(() => {
-  resetCommandQueueStateForTest();
+  testing.resetSessionControllerForTest();
 });
 
 it("settles a research precaution without clearing main's shared global queue", async () => {
   const sessionKey = "global";
   const sessionId = "research-session";
   const gate = createDeferred();
-  const blocker = enqueueCommandInLane("session:global", () => gate.promise);
+  const targets = {
+    main: { agentId: "main", sessionId: "main-session", sessionKey, storePath: "/synthetic/main" },
+    research: { agentId: "research", sessionId, sessionKey, storePath: "/synthetic/research" },
+  };
+  const entered = [createDeferred(), createDeferred()];
+  const blockers = Object.values(targets).map((target, index) =>
+    withSessionTurn(target, async () => {
+      entered[index]!.resolve();
+      await gate.promise;
+    }),
+  );
+  await Promise.all(entered.map((entry) => entry.promise));
   const executed: string[] = [];
   const commands = ["main", "research", undefined].map((agentId) =>
-    enqueueCommandInLane(
-      "session:global",
-      async () => {
-        executed.push(agentId ?? "untagged main");
-      },
-      agentId ? { sessionTarget: { agentId, sessionKey, sessionId: `${agentId}-session` } } : {},
-    ),
+    withSessionTurn(targets[agentId === "research" ? "research" : "main"], async () => {
+      executed.push(agentId ?? "untagged main");
+    }),
   );
   const settled = Promise.allSettled(commands);
   type Input = Parameters<typeof createProviderReviewRun>[0];
@@ -82,7 +83,7 @@ it("settles a research precaution without clearing main's shared global queue", 
     } as EmbeddedRunAttemptResult);
   } finally {
     gate.resolve();
-    await blocker;
+    await Promise.all(blockers);
     await settled;
   }
   expect(executed).toEqual(["main", "untagged main"]);

@@ -163,18 +163,29 @@ describe.skipIf(process.platform === "win32")("Crabbox dependency hydration", ()
     },
   );
 
-  it.each(["true", "false", "invalid"])(
-    "preserves frozen policy through pnpm bootstrap and workspace config (%s)",
-    (frozen) => {
+  it.each([
+    ["true", true],
+    ["false", true],
+    ["invalid", true],
+    ["true", false],
+  ] as const)(
+    "preserves prepared pnpm and frozen policy (%s, prepared: %s)",
+    (frozen, prepared) => {
       const root = tempDirs.make("openclaw-frozen-bootstrap-");
       const bin = path.join(root, "bin");
+      const nodeBin = path.join(root, "node-bin");
       mkdirSync(bin);
-      symlinkSync(resolveTestNodeExecPath(), path.join(bin, "node"));
+      write(bin, "which", '#!/bin/sh\ncommand -v "$1"\n', 0o755);
+      mkdirSync(nodeBin);
+      symlinkSync(resolveTestNodeExecPath(), path.join(nodeBin, "node"));
+      if (prepared) {
+        write(nodeBin, "pnpm", "#!/bin/sh\nexit 77\n", 0o755);
+      }
       const lock = path.join(root, "pnpm-lock.yaml");
       const calls = path.join(root, "pnpm-calls");
       writeFileSync(lock, "original\n");
       write(
-        bin,
+        prepared ? bin : nodeBin,
         "pnpm",
         `#!/bin/bash
 printf '%s\\n' "$*" >> "$PNPM_CALLS"
@@ -190,22 +201,87 @@ fi
 `,
         0o755,
       );
-      const result = spawnSync("bash", [".github/actions/setup-node-env/install-dependencies.sh"], {
-        encoding: "utf8",
-        env: {
-          PATH: process.env.PATH,
-          NODE_BIN: bin,
-          FROZEN_LOCKFILE: frozen,
-          DEPENDENCY_CACHE: "false",
-          DEPENDENCY_CACHE_HIT: "false",
-          PNPM_CALLS: calls,
-          PNPM_LOCK: lock,
+      const result = spawnSync(
+        "/bin/bash",
+        [".github/actions/setup-node-env/install-dependencies.sh"],
+        {
+          encoding: "utf8",
+          env: {
+            PATH: bin,
+            NODE_BIN: nodeBin,
+            FROZEN_LOCKFILE: frozen,
+            DEPENDENCY_CACHE: "false",
+            DEPENDENCY_CACHE_HIT: "false",
+            PNPM_CALLS: calls,
+            PNPM_LOCK: lock,
+          },
         },
-      });
+      );
       expect(result.status, result.stderr).toBe(frozen === "invalid" ? 2 : 0);
       expect(readFileSync(lock, "utf8")).toBe(frozen === "false" ? "rewritten\n" : "original\n");
       expect(existsSync(calls)).toBe(frozen !== "invalid");
     },
+  );
+
+  it.skipIf(process.platform !== "linux").each(["failed", "complete", "incomplete"] as const)(
+    "settles one pnpm attempt with %s install artifacts",
+    (outcome) => {
+      const root = tempDirs.make("openclaw-hydrate-install-result-");
+      const bin = path.join(root, "bin");
+      const calls = path.join(root, "calls");
+      mkdirSync(bin);
+      symlinkSync(resolveTestNodeExecPath(), path.join(bin, "node"));
+      write(root, "scripts/tsx.mjs", "");
+      if (outcome === "complete") {
+        write(root, "node_modules/.modules.yaml", "verified: true\n");
+        write(root, "node_modules/.bin/oxfmt", "#!/bin/sh\nexit 0\n", 0o755);
+        write(root, "node_modules/typescript/package.json", '{"name":"typescript"}\n');
+      }
+      write(
+        bin,
+        "pnpm",
+        [
+          "#!/bin/bash",
+          'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+          outcome === "failed"
+            ? "exit 42"
+            : "printf 'Done in 1ms using pnpm v12.0.0\\n'\nexec sleep 60",
+          "",
+        ].join("\n"),
+        0o755,
+      );
+      const setup = workflow.jobs.hydrate.steps.find(
+        (step) => step.name === "Setup pnpm and dependencies",
+      )?.run;
+      expect(setup).toBeDefined();
+      const start = setup!.indexOf("install_args=(");
+      expect(start).toBeGreaterThan(0);
+      const result = spawnSync("bash", ["-c", "set -euo pipefail\n" + setup!.slice(start)], {
+        cwd: root,
+        env: {
+          PATH: bin + ":/usr/bin:/bin",
+          PNPM_CALLS: calls,
+          PNPM_CONFIG_STORE_DIR: path.join(root, "store"),
+          RUNNER_TEMP: root,
+        },
+        encoding: "utf8",
+        timeout: 30_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stdout + result.stderr).toBe(
+        outcome === "complete" ? 0 : outcome === "failed" ? 42 : 1,
+      );
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toHaveLength(1);
+      if (outcome !== "failed") {
+        expect(result.stdout).toContain("pnpm printed its completion marker but did not exit");
+        expect(result.stdout).toContain(
+          outcome === "complete"
+            ? "pnpm install artifacts verified after exit-hang termination"
+            : "pnpm exit-hang termination left incomplete install artifacts",
+        );
+      }
+    },
+    45_000,
   );
 
   it.each([

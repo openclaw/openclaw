@@ -39,7 +39,7 @@ describe("voice capture state", () => {
       });
       state.set("u1", { stream: { destroy } as never });
 
-      expect(scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 })).toBe(true);
+      scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 });
       await vi.advanceTimersByTimeAsync(1_200);
 
       expect(destroy).toHaveBeenCalledTimes(1);
@@ -53,7 +53,7 @@ describe("voice capture state", () => {
     const capture: VoiceCaptureEntry = { stream: { destroy: vi.fn() } as never };
     state.set("u1", capture);
 
-    expect(scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 })).toBe(true);
+    scheduleVoiceCaptureFinalize({ state, userId: "u1", delayMs: 1_200 });
     expect(clearVoiceCaptureFinalizeTimer(capture)).toBe(true);
     expect(clearVoiceCaptureFinalizeTimer(capture)).toBe(false);
   });

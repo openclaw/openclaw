@@ -1,6 +1,7 @@
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
+import { resolveChannelMessageActionFacts } from "../../channels/plugins/message-action-names.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -18,32 +19,6 @@ export type CrossContextDecoration = {
   suffix: string;
   presentationBuilder?: (message: string) => MessagePresentation;
 };
-
-// All mutations are guarded, but markers only apply to outbound payloads that
-// create new visible content. Existing-message edits/pins/deletes should not
-// grow cross-context forwarding text.
-const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
-  "send",
-  "poll",
-  "reply",
-  "sendWithEffect",
-  "sendAttachment",
-  "upload-file",
-  "thread-reply",
-  "sticker",
-]);
-
-const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
-  ...CONTEXT_MARKER_ACTIONS,
-  "poll-vote",
-  "edit",
-  "delete",
-  "pin",
-  "unpin",
-  "thread-create",
-  "topic-create",
-  "topic-edit",
-]);
 
 function normalizeTarget(channel: ChannelId, raw: string): string | undefined {
   return normalizeTargetForProvider(channel, raw) ?? raw.trim();
@@ -158,14 +133,11 @@ export function enforceCrossContextPolicy(params: {
   cfg: OpenClawConfig;
   agentId?: string | null;
 }): void {
-  if (!CONTEXT_GUARDED_ACTIONS.has(params.action)) {
+  if (!resolveChannelMessageActionFacts(params.action)?.crossContext) {
     return;
   }
 
-  const messageConfig = resolveEffectiveMessageToolsConfig({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  });
+  const messageConfig = resolveEffectiveMessageToolsConfig(params);
   // Doctor moves the shipped allowCrossContextSend flag into this canonical policy.
   // Runtime must not keep a second legacy interpretation path here.
   const currentProvider = params.toolContext?.currentChannelProvider;
@@ -239,10 +211,7 @@ export async function buildCrossContextDecoration(params: {
     return null;
   }
 
-  const markerConfig = resolveEffectiveMessageToolsConfig({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  })?.crossContext?.marker;
+  const markerConfig = resolveEffectiveMessageToolsConfig(params)?.crossContext?.marker;
   if (markerConfig?.enabled === false) {
     return null;
   }
@@ -281,7 +250,7 @@ export async function buildCrossContextDecoration(params: {
 }
 
 export function shouldApplyCrossContextMarker(action: ChannelMessageActionName): boolean {
-  return CONTEXT_MARKER_ACTIONS.has(action);
+  return resolveChannelMessageActionFacts(action)?.crossContext === "marker";
 }
 
 export function applyCrossContextDecoration(params: {

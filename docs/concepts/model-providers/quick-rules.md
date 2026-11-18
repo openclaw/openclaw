@@ -27,17 +27,17 @@ title: "Quick rules"
   <Accordion title="OpenAI provider/runtime split">
     OpenAI model refs and agent runtimes are separate:
 
-    - `openai/<model>` selects the canonical OpenAI provider and model. The prefix alone never selects Codex.
+    - `openai/<model>` selects the standard OpenAI provider and model. The prefix alone never selects Codex.
     - With provider/model runtime policy unset or `auto`, OpenAI may select Codex implicitly only for an exact official HTTPS Platform Responses or ChatGPT Responses route with no authored provider request override. Valid model-scoped Fast-mode controls do not count as authored request params.
     - Authored Completions adapters, custom endpoints, and routes with authored request behavior stay on OpenClaw. Plaintext official HTTP endpoints are rejected.
     - legacy Codex model refs are legacy config that doctor rewrites to `openai/<model>`.
-    - Provider/model `agentRuntime.id: "openclaw"` explicitly keeps an otherwise eligible route on OpenClaw. `agentRuntime.id: "codex"` requires Codex and fails closed when the effective route is not Codex-compatible.
+    - Provider/model `agentRuntime.id: "openclaw"` explicitly keeps an otherwise eligible route on OpenClaw. `agentRuntime.id: "codex"` requires Codex and refuses execution when the effective route is not Codex-compatible.
 
     See [OpenAI implicit agent runtime](/providers/openai/runtimes#implicit-agent-runtime) and [Codex harness](/plugins/codex-harness). If the provider/runtime split is confusing, read [Agent runtimes](/concepts/agent-runtimes) first.
 
     Plugin auto-enable follows the same boundary: an implicitly Codex-compatible effective route can enable the Codex plugin, while explicit provider/model `agentRuntime.id: "codex"` or legacy `codex/<model>` refs require it. An `openai/*` prefix by itself does not.
 
-    Fresh OpenAI API-key and ChatGPT/Codex OAuth setup select the canonical
+    Fresh OpenAI API-key and ChatGPT/Codex OAuth setup select the standard
     `openai/gpt-6-astra` ref. The bare direct-API `openai/gpt-5.6` alias remains
     supported and resolves to Sol. Existing explicit primaries, including
     `openai/gpt-5.5`, are preserved when OpenAI auth is added or refreshed. GPT-5.5 remains available
@@ -46,9 +46,9 @@ title: "Quick rules"
 
   </Accordion>
   <Accordion title="CLI runtimes">
-    CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*` or `google/gemini-*`, then set provider/model runtime policy to `claude-cli` or `google-gemini-cli` when you want a local CLI backend.
+    CLI runtimes use the same split: choose standard model refs such as `anthropic/claude-*` or `google/gemini-*`, then set provider/model runtime policy to `claude-cli` or `google-gemini-cli` when you want a local CLI backend.
 
-    Legacy `claude-cli/*` and `google-gemini-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately. Legacy `codex-cli/*` refs migrate to `openai/*` and use the Codex app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
+    Legacy `claude-cli/*` and `google-gemini-cli/*` refs migrate back to standard provider refs with the runtime recorded separately. Legacy `codex-cli/*` refs migrate to `openai/*` and use the Codex app-server route; OpenClaw no longer keeps a bundled Codex CLI backend.
 
   </Accordion>
 </AccordionGroup>

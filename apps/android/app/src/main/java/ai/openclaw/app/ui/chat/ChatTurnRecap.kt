@@ -45,11 +45,9 @@ private data class TurnRecapWatch(
   var absorbedTerminal: Boolean,
   /** First idle render after the indicator cleared; canceled queued sends must expire promptly. */
   var settleStartedAt: Long?,
-  var pendingTerminal: TurnRecap?,
   var pendingTerminalEndedAt: Long?,
   val settled: TurnRecap?,
   val settledTranscriptItemId: String?,
-  val tracksTranscript: Boolean,
 )
 
 /**
@@ -79,7 +77,7 @@ internal class TurnRecapResolver(
     sessionKey: String,
     indicatorVisible: Boolean,
     row: ChatSessionEntry?,
-    transcript: TurnRecapTranscriptState? = null,
+    transcript: TurnRecapTranscriptState,
   ): TurnRecap? {
     val watch = watches[sessionKey]
     val rowEndedAt = row?.endedAt
@@ -92,11 +90,9 @@ internal class TurnRecapResolver(
             baselineEndedAt = rowEndedAt,
             absorbedTerminal = false,
             settleStartedAt = null,
-            pendingTerminal = null,
             pendingTerminalEndedAt = null,
             settled = null,
             settledTranscriptItemId = null,
-            tracksTranscript = transcript != null,
           )
       } else if (!watch.baselineKnown) {
         if (row != null) {
@@ -112,11 +108,7 @@ internal class TurnRecapResolver(
     if (watch == null) return null
     watch.watching = false
     watch.settled?.let { settled ->
-      if (
-        !watch.tracksTranscript ||
-        transcript?.sessionKey != sessionKey ||
-        watch.settledTranscriptItemId == transcript.newestItemId
-      ) {
+      if (transcript.sessionKey != sessionKey || watch.settledTranscriptItemId == transcript.newestItemId) {
         return settled
       }
       // A newer transcript turn has replaced the content this recap summarized. Session rows do
@@ -156,32 +148,24 @@ internal class TurnRecapResolver(
       watches.remove(sessionKey)
       return null
     }
-    if (
-      watch.tracksTranscript &&
-      (
-        transcript?.sessionKey != sessionKey ||
-          transcript.completedEndedAt != rowEndedAt
-      )
-    ) {
+    if (transcript.sessionKey != sessionKey || transcript.completedEndedAt != rowEndedAt) {
       // The terminal session row can arrive before the terminal-triggered chat.history snapshot.
       // Keep waiting so its final item becomes the recap anchor, not an intermediate tool row.
-      watch.pendingTerminal = terminal
       watch.pendingTerminalEndedAt = rowEndedAt
       return null
     }
-    if (watch.tracksTranscript && transcript?.newestItemId != transcript?.completedNewestItemId) {
+    if (transcript.newestItemId != transcript.completedNewestItemId) {
       // Newer transcript content already superseded the completed snapshot before this pane could
       // settle it, so there is no safe recap attribution left to display.
       watches.remove(sessionKey)
       return null
     }
-    val settled = watch.pendingTerminal ?: terminal
     watches[sessionKey] =
       watch.copy(
-        settled = settled,
-        settledTranscriptItemId = transcript?.completedNewestItemId,
+        settled = terminal,
+        settledTranscriptItemId = transcript.completedNewestItemId,
       )
-    return settled
+    return terminal
   }
 }
 

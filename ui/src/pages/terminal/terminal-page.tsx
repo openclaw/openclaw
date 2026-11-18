@@ -1,8 +1,10 @@
 import type { RouteLocation } from "@openclaw/uirouter";
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
-import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.ts";
+import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
+import { TerminalPanelHost } from "../../components/terminal/terminal-panel-registration.tsx";
+import { isGatewayConnectionAttemptPending } from "../../lib/gateway-status.ts";
 import {
   projectAgentSelection,
   projectApplicationConfig,
@@ -17,7 +19,7 @@ import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { resolveTerminalRouteLocation } from "./route-location.ts";
 import "./terminal-page.css";
 
-export function TerminalPageContent(props: { location: RouteLocation | null }) {
+export function TerminalPage(props: { location: RouteLocation | null }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
@@ -29,7 +31,7 @@ export function TerminalPageContent(props: { location: RouteLocation | null }) {
   const target = createMemo(() =>
     props.location ? resolveTerminalRouteLocation(props.location, context.basePath) : null,
   );
-  const route = createMemo(() => {
+  const route = () => {
     const current = target();
     const key = current
       ? "sessionId" in current
@@ -37,41 +39,51 @@ export function TerminalPageContent(props: { location: RouteLocation | null }) {
         : buildCatalogSessionKey(current.catalog)
       : "";
     return [{ target: current, key }];
-  });
+  };
   const themeMode = () => {
     theme.appliedPalette.read();
     return context.theme.resolvedMode;
   };
   return (
-    <For each={route()} keyed={(entry) => entry.key}>
-      {(entry) => (
-        <>
-          <TerminalPanelHost
-            hidden={!available()}
-            embedded
-            fullscreen
-            page={true}
-            routeTarget={entry().target}
-            client={snapshot().phase === "connected" ? snapshot().client : null}
-            available={available()}
-            agentId={owner() ? normalizeAgentId(owner()!) : null}
-            basePath={context.basePath}
-            themeMode={themeMode()}
-          />
-          {!available() && (
-            <PanelEmptyState
-              heading={t("terminal.title")}
-              description={t("terminal.unavailable")}
-              icon={<Icon name="terminal" />}
-              action={
-                <button class="btn" onClick={() => context.navigate("new-session")}>
-                  {t("newSession.title")}
-                </button>
-              }
+    <openclaw-terminal-page>
+      <For each={route()} keyed={(entry) => entry.key}>
+        {(entry) => (
+          <>
+            <TerminalPanelHost
+              hidden={!available()}
+              embedded
+              fullscreen
+              page={true}
+              routeTarget={entry().target}
+              client={snapshot().client}
+              gatewayConnected={snapshot().phase === "connected"}
+              available={available()}
+              agentId={owner() ? normalizeAgentId(owner()!) : null}
+              basePath={context.basePath}
+              themeMode={themeMode()}
             />
-          )}
-        </>
-      )}
-    </For>
+            {!available() && (
+              <Show
+                when={
+                  !isGatewayConnectionAttemptPending(snapshot()) || snapshot().lastError !== null
+                }
+                fallback={<PanelLoadingSkeleton variant="terminal" label={t("common.loading")} />}
+              >
+                <PanelEmptyState
+                  heading={t("terminal.title")}
+                  description={t("terminal.unavailable")}
+                  icon={<Icon name="terminal" />}
+                  action={
+                    <button class="btn" onClick={() => context.navigate("new-session")}>
+                      {t("newSession.title")}
+                    </button>
+                  }
+                />
+              </Show>
+            )}
+          </>
+        )}
+      </For>
+    </openclaw-terminal-page>
   );
 }

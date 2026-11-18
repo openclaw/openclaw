@@ -7,6 +7,7 @@ read_when:
   - Understanding locked desktops or keeping the computer awake
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
+  - Gateway commands cannot reach devices on the local network
 title: "macOS permissions"
 ---
 
@@ -27,12 +28,35 @@ and shows an inline **Grant** card in the Control UI conversation. Computer Cont
 reports its missing Accessibility, Event Posting, Screen Recording, and OpenClaw
 capability grants together. The agent waits for your confirmation before retrying.
 
-In the Mac app, use the card to request access or open the corresponding System
-Settings pane. Enabling a capability that is off in OpenClaw uses the same native
-confirmation as **Settings → This Mac**. A stale Accessibility grant needs to be
-removed and re-added; a **Restart required** card offers to relaunch the app. Once
-the app observes the required grants, **Try again** sends a short confirmation to
-the agent. Granting permission does not automatically repeat the command.
+In the Mac app, the card's primary action follows the current permission state:
+**Grant _permission_** requests access, **Open System Settings** handles denied or
+stale grants, **Relaunch OpenClaw** handles a required restart, and
+**Enable _capability_** turns on a capability that is off in OpenClaw using the
+same native confirmation as **Settings → This Mac**. A stale Accessibility grant
+needs to be removed and re-added. Once the app observes the required grants,
+**Try again** sends a short confirmation to the agent. Granting permission does
+not automatically repeat the command.
+
+For a request that needs both an OpenClaw capability and macOS permissions, the
+**Enable** button names only the disabled capability. The card lists the remaining
+permissions below the explanation, then updates its action after the capability
+is enabled. Each click dispatches only the current step's capabilities; later
+permission grants and relaunches require their own card actions.
+
+Location uses the same capability for its OpenClaw mode and macOS grant. If
+Location is off and macOS has already denied or restricted access, or system-wide
+Location Services is off, the card offers **Open System Settings** for Location
+Services first, without asking to enable Location. This also applies when the app
+still has a grant but Location Services is off. After access is restored,
+**Enable Location** turns on While Using access
+with the native confirmation.
+If macOS has not asked yet, enabling Location requests access once; the mode
+stays off if you deny it.
+
+The card refreshes permission status after every native grant attempt, including
+cancelled or failed requests. Denying a Screen Recording prompt changes the next
+action to **Open System Settings**; macOS does not show the prompt again. Returning
+to the app refreshes the card after you change access in System Settings.
 
 Accessibility is explicitly requested before a possibly stale grant is reported.
 If an Event Posting request remains denied, enable access in System Settings,
@@ -171,6 +195,36 @@ macOS may also gate Desktop, Documents, and Downloads for terminal/background pr
 Workaround: move files into the OpenClaw workspace (`~/.openclaw/workspace`) if you want to avoid per-folder grants.
 
 If you are testing permissions, always sign with a real certificate. Ad-hoc builds are only acceptable for quick local runs where permissions do not matter.
+
+## Local Network access for the Gateway
+
+On macOS 15 and later, a per-user LaunchAgent Gateway may need **Local Network**
+permission to reach LAN devices. A command can work in Terminal and fail from
+Gateway-hosted exec, plugins, or automations because the process contexts differ.
+macOS may deny a socket connection with `EHOSTUNREACH` ("No route to host") without
+showing a permission prompt.
+
+1. Run `openclaw gateway status --deep` to identify the service's Node executable.
+2. Open **System Settings → Privacy & Security → Local Network** and allow the
+   matching runtime entry, often **node**. Approve only the runtime you intend to
+   give LAN access.
+3. Retry the same LAN operation through the Gateway. A successful Terminal test
+   alone does not verify the service's access.
+
+If the entry is missing, retry the intended LAN operation and check System
+Settings again; macOS may not display an alert. Recheck permission after replacing
+or upgrading the Node executable because macOS tracks program identity through
+code signing. Doctor currently does not detect this service-specific permission;
+a healthy Doctor report does not establish LAN access.
+
+`EHOSTUNREACH` also has routing, firewall, and device causes. If granting access
+does not help, check those before changing more permissions. A connected node
+that already reaches the device can run the command with `exec`'s `host=node`
+and `node` parameters; see [Exec](/tools/exec).
+
+See Apple's [Local Network settings](https://support.apple.com/guide/mac-help/mchla4f49138/mac),
+[local network privacy technote](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy),
+and [LaunchAgent socket investigation](https://developer.apple.com/forums/thread/778457).
 
 ## Related
 

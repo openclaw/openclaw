@@ -7,11 +7,12 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as commandExec from "../../process/exec.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { git } from "./git-fixture.test-support.js";
 import { deleteRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import * as runLease from "./run-lease.js";
 import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
-import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -20,8 +21,6 @@ import {
 import type { ManagedWorktreeRecord } from "./types.js";
 
 const execFileAsync = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) =>
-  (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 
 describe("interrupted ordinary worktree removal recovery", () => {
   let env: NodeJS.ProcessEnv;
@@ -48,7 +47,20 @@ describe("interrupted ordinary worktree removal recovery", () => {
       cleanup();
     }),
   );
-  const initialize = useManagedWorktreeTestRepository();
+  let fixtureHead: string;
+  let fixtureSnapshot: string;
+  const initialize = useManagedWorktreeTestRepository(async (repo) => {
+    fixtureHead = await git(repo, "rev-parse", "HEAD");
+    fixtureSnapshot = await git(
+      repo,
+      "commit-tree",
+      `${fixtureHead}^{tree}`,
+      "-p",
+      fixtureHead,
+      "-m",
+      "original completed capture",
+    );
+  });
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
@@ -90,19 +102,11 @@ describe("interrupted ordinary worktree removal recovery", () => {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
     record = getRegistryWorktree(env, record.id)!;
-    head = await git(repo, "rev-parse", "HEAD");
+    head = fixtureHead;
     admin = (await fs.readFile(path.join(record.path, ".git"), "utf8"))
       .trim()
       .slice("gitdir: ".length);
-    snapshot = await git(
-      repo,
-      "commit-tree",
-      `${head}^{tree}`,
-      "-p",
-      head,
-      "-m",
-      "original completed capture",
-    );
+    snapshot = fixtureSnapshot;
     const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
     await pinSnapshot();
     await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });
@@ -129,33 +133,49 @@ describe("interrupted ordinary worktree removal recovery", () => {
     expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
   };
 
-  it("reconstructs missing files without force, retires only its registration and retains the original capture", async () => {
-    const sibling = path.join(root, "sibling");
-    await git(repo, "worktree", "add", "--detach", sibling);
-    await fs.rename(sibling, `${sibling}-parked`);
-    await fs.unlink(path.join(record.path, "README.md"));
-    const run = commandExec.runCommandWithTimeout;
-    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv.includes("worktree") && argv.includes("remove")) {
-        expect(argv).not.toContain("--force");
+  it.each(["capture", "head"])(
+    "reconstructs missing files without force and retains the original %s recovery point",
+    async (kind) => {
+      if (kind === "head") {
+        await git(repo, "update-ref", "-d", `refs/openclaw/snapshots/${record.id}`);
+        snapshot = head;
+        record = { ...record, snapshotRef: `refs/openclaw/snapshots/clean-v1/${record.id}` };
+        await git(repo, "update-ref", record.snapshotRef!, snapshot);
+        await git(repo, "update-ref", `refs/openclaw/removals/${record.id}`, snapshot);
+        await updateRegistryWorktree(env, record.id, { snapshotRef: record.snapshotRef });
       }
-      return await run(argv, options);
-    });
-    await expect(recover()).resolves.toMatchObject({
-      removed: true,
-      snapshotRef: record.snapshotRef ?? `refs/openclaw/snapshots/${record.id}`,
-    });
-    await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(fs.stat(admin)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(await git(repo, "branch", "--list", record.branch)).toBe("");
-    expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
-    expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
-    expect(
-      await git(repo, "for-each-ref", "--format=%(refname)", `refs/openclaw/removals/${record.id}`),
-    ).toBe("");
-    expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
-    await expect(recover()).resolves.toMatchObject({ removed: true });
-  });
+      const sibling = path.join(root, "sibling");
+      await git(repo, "worktree", "add", "--detach", sibling);
+      await fs.rename(sibling, `${sibling}-parked`);
+      await fs.unlink(path.join(record.path, "README.md"));
+      const run = commandExec.runCommandWithTimeout;
+      vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        if (argv.includes("worktree") && argv.includes("remove")) {
+          expect(argv).not.toContain("--force");
+        }
+        return await run(argv, options);
+      });
+      await expect(recover()).resolves.toMatchObject({
+        removed: true,
+        snapshotRef: record.snapshotRef ?? `refs/openclaw/snapshots/${record.id}`,
+      });
+      await expect(fs.stat(record.path)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(admin)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await git(repo, "branch", "--list", record.branch)).toBe("");
+      expect(await git(repo, "worktree", "list", "--porcelain")).toContain(sibling);
+      expect(await git(repo, "show", `${snapshot}:README.md`)).toBe("base");
+      expect(
+        await git(
+          repo,
+          "for-each-ref",
+          "--format=%(refname)",
+          `refs/openclaw/removals/${record.id}`,
+        ),
+      ).toBe("");
+      expect(getRegistryWorktree(env, record.id)?.removedAt).toEqual(expect.any(Number));
+      await expect(recover()).resolves.toMatchObject({ removed: true });
+    },
+  );
 
   it.each(["changed", "symlink", "directory"])(
     "preserves %s residual writes before any repair",

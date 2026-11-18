@@ -8,7 +8,7 @@ read_when:
   - Enabling browser alerts when another person mentions you
 ---
 
-OpenClaw can ping you when something needs your attention, including an exec or plugin approval request. The ping arrives in the browser that runs the Control UI. It can also arrive through native macOS notifications when you use the OpenClaw macOS app. Your first chat send may request permission automatically. **Settings → Notifications** remains the place to enable or repair the current device. Use the same page to check its status and send yourself a test.
+OpenClaw can ping you when something needs your attention, including an exec or plugin approval request. The ping arrives in the browser that runs the Control UI. It can also arrive through native macOS notifications when you use the OpenClaw macOS app. Your first chat send may request permission automatically. **Settings → Notifications** remains the place to enable or repair the current device. Use the same page to check its status and send a test.
 
 This page covers those two surfaces. It does not control channel reaction notifications, Android notification forwarding, or iOS background push. The mobile apps register for push through their own node paths. See [iOS](/platforms/ios) and [Nodes](/nodes).
 
@@ -26,13 +26,13 @@ The macOS app deliberately uses the native permission flow instead of browser pu
 
 ## Enable browser notifications
 
-The Control UI asks for notification permission automatically the first time you send a chat message. That includes sends from **New Session** or **Start in background**. The prompt appears once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
+The Control UI asks for notification permission automatically the first time you send a chat message when your current Gateway access permits browser notification setup. That includes sends from **New Session** or **Start in background**. The prompt appears once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
 
 1. Open the Control UI in a browser that supports service workers, `PushManager`, and notifications.
 2. Make sure the Control UI is connected to the Gateway.
 3. Open **Settings → Notifications** and select **Enable notifications**.
 4. Allow notifications when the browser asks.
-5. Select **Send test** — a test notification should arrive within a few seconds.
+5. Select **Test all browsers** — this sends a test to every registered browser on the Gateway, including other people’s browsers.
 
 Behind the scenes, enabling creates a push subscription in this browser and registers its endpoint and keys with the Gateway. The Gateway binds the subscription to the browser's paired device and, when operator roles are enabled, its authenticated user profile. The Gateway keeps browser subscriptions and its VAPID signing key in `state/openclaw.sqlite` — there is no `openclaw.json` key to edit. When the Control UI reconnects, existing subscriptions are reconciled with the Gateway automatically.
 
@@ -49,9 +49,11 @@ After subscribing, **Settings → Notifications** exposes two preference layers:
 
 Single-user Gateways use their durable owner profile for account defaults, so those preferences follow the owner across devices. Connections without a profile keep the controls but store preferences only with the current browser subscription. Preferences never grant access: every delivery still rechecks the paired device, current role and scopes, authenticated profile, and session visibility. Multi-user events without an authoritative session owner are suppressed instead of being broadcast to every operator.
 
+Browsers managed through OpenClaw ID use their current membership role for notifications, even when their linked local profile has a different role. Removing the device or turning off OpenClaw ID stops its notifications. Signing in locally again in that same browser does not remove its ID device binding; a separate locally paired browser keeps its local role. If the Gateway cannot establish the ID binding during registration, reconnect before enabling notifications again.
+
 By default, approval request and resolution notifications are enabled, and every other attention category is opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
 
-Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
+Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. The device currently showing that conversation does not receive its **Agent finished** push; other subscribed devices still do. Hiding the conversation or opening another one restores normal notification delivery for that device. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
 
 The detail levels are:
 
@@ -59,9 +61,17 @@ The detail levels are:
 - **Names only** — may include a sanitized person, session, device, agent, task, or automation label.
 - **Detailed** — currently uses the same bounded, sanitized producer-owned labels. Message excerpts, raw prompts, command arguments, output, environment values, and errors never enter the push payload.
 
+For browser **Agent finished** alerts, **Names only** and **Detailed** include the
+current explicit session label when the event has exactly one authoritative
+session target and the browser can read it. The label is sanitized and bounded
+by the existing notification-label policy. Unnamed sessions, multiple targets,
+and unavailable label metadata retain the agent-only fallback. Raw session keys,
+generated titles, and message text are never used as label fallbacks. **Private**
+remains generic. This does not change native macOS or mobile notifications.
+
 On iPhone and iPad, Web Push is available only after two steps. First, install the Control UI with **Share → Add to Home Screen**. Then open that installed app. A normal Safari tab remains usable for the Control UI. In that tab, the Notifications page reports the install requirement. It does not attempt to dereference an unavailable `PushManager`.
 
-**Send test** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally check transport only. Approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway only when its paired device and user profile still own the subscription. It then unsubscribes locally. Reconnecting under another profile can transfer the browser subscription only with its existing subscription keys. Knowing an endpoint alone cannot change its owner or remove it.
+**Test all browsers** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally check transport only. Approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway only when its paired device and user profile still own the subscription. It then unsubscribes locally. Reconnecting under another profile can transfer the browser subscription only with its existing subscription keys. Knowing an endpoint alone cannot change its owner or remove it.
 
 The Gateway sends Web Push directly to the browser vendor's push service. This works with a self-hosted Gateway and does not use the OpenClaw-hosted iOS relay.
 
@@ -73,7 +83,7 @@ Only browsers bound to the mentioned profile receive the alert. Each delivery re
 
 Your [mentions Inbox](/concepts/multi-user#temporary-mentions-inbox) does not depend on Web Push permission or this setting. Its entries and dismissals survive Gateway restarts within the seven-day retention window. Opening the Inbox, reconnecting, or restarting the Gateway does not resend old entries as browser notifications. The service worker shows browser alerts. The live Inbox update does not create a second OS notification. Human mention alerts are not implemented through the native macOS or iOS/Android push paths.
 
-To check targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Send test** only checks browser push transport and can reach every registered subscription. It does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
+To check targeting, have another eligible signed-in person select you from the chat `@` picker and send a normal message. Check **Inbox → Mentions**, then check the enabled browser alert. **Test all browsers** only checks browser push transport and can reach every registered subscription. It does not prove that a human mention was selected, committed, or addressed to your profile. Delivery is best-effort, not an exactly-once guarantee.
 
 ### Use more than one Gateway on one phone
 
@@ -81,7 +91,7 @@ The recommended self-hosted setup is one Control UI service-worker scope per Gat
 
 A single installed PWA can also switch among remote Gateways. Every Gateway behind that PWA must then use the same VAPID keypair. Each must also set `gateway.publicOrigin` to its browser-reachable HTTPS origin. Reconnect the PWA to each Gateway once so each one registers the shared browser subscription and current device/profile binding. Approval notification links stay inside the installed PWA's scope and carry the owning Gateway URL in their fragment. The Control UI removes the fragment before authentication and uses the normal remote-Gateway handoff.
 
-The browser Push API permits only one application-server key per service-worker registration. If a PWA subscription belongs to a different VAPID key, OpenClaw removes the unusable row from the current Gateway. OpenClaw also shows **Unavailable** and **Not subscribed**, with an error explaining the mismatch. To switch that PWA scope to the current Gateway, select **Unsubscribe**, then **Enable notifications** and **Send test**. Unsubscribing deactivates the shared browser subscription for every Gateway registered through that scope. After re-enabling, reconnect to each Gateway once.
+The browser Push API permits only one application-server key per service-worker registration. If a PWA subscription belongs to a different VAPID key, OpenClaw removes the unusable row from the current Gateway. OpenClaw also shows **Unavailable** and **Not subscribed**, with an error explaining the mismatch. To switch that PWA scope to the current Gateway, select **Unsubscribe**, then **Enable notifications** and **Test all browsers**. Unsubscribing deactivates the shared browser subscription for every Gateway registered through that scope. After re-enabling, reconnect to each Gateway once.
 
 Sharing a private VAPID key and browser endpoint makes those Gateways one push-signing trust domain. Use that layout only for Gateways you trust equally. Configure VAPID values through each Gateway process's secure environment or secret manager. Do not place private keys in URLs or command arguments.
 
@@ -108,7 +118,9 @@ This is the **New Session** background-start flow, not a native notification for
 
 ### Enable is unavailable
 
-Either the browser lacks the required Web Push APIs or the Control UI is not connected to the Gateway. Try a current browser, check the Gateway connection, and reload the page.
+Check **Browser support**, the Gateway connection, and **Gateway access** separately. Notification setup and preference changes require broad `operator.write` access; session-only guest scopes do not permit them. The page shows **Unavailable** and does not ask for browser permission when this access is missing.
+
+A connection with only `operator.read` can read preferences for an existing subscription, but cannot change them or enable notifications. **Unsubscribe** still removes an existing local browser subscription when remote removal is denied. Browser permission is independent and remains unchanged.
 
 ### Browser permission is blocked
 
@@ -125,6 +137,22 @@ The Control UI waits up to 10 seconds for its service worker. If that times out 
 ### Web Push asks for a Doctor migration
 
 Run `openclaw doctor --fix` with the Gateway stopped. Web Push refuses to use the retired JSON stores until Doctor imports them into SQLite.
+
+### An enabled notification does not arrive
+
+Check the Gateway's `gateway/web-push` logs. Preparation failures include the
+category, stage (`subscriptions`, `sender`, or `authority`), error class, cause,
+and stack. Push-service failures include the subscription ID, endpoint host,
+HTTP status, response body, and whether the subscription will be pruned or
+retained. These diagnostics are written raw to local logs; review them before
+sharing.
+
+HTTP 404 and 410 responses remove the dead subscription unless a newer
+registration has replaced it. Re-enable notifications in that browser to
+subscribe again. Other failures retain the subscription. Failed events are not
+automatically retried; `retry=false` records that decision. A cleanup warning
+means removal failed, so the stale subscription may be attempted on the next
+event. Correct the reported storage problem before testing again.
 
 ### Tests arrive but approval requests do not
 

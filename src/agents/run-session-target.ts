@@ -7,10 +7,14 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { resolveSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.transcript-target.js";
 import type { SessionTranscriptRuntimeScope } from "../config/sessions/session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntries,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -34,7 +38,6 @@ class AgentRunSessionTargetResolutionError extends Error {
   }
 }
 
-/** Resolves the active runtime target used by current run/session internals. */
 export async function resolveAgentRunSessionTarget(
   input: {
     agentId?: string;
@@ -43,6 +46,7 @@ export async function resolveAgentRunSessionTarget(
     sessionId: string;
     sessionFile?: string;
     sessionKey?: string;
+    sessionPersistence?: "durable" | "detached";
     sessionTarget?: AgentRunSessionTarget;
   },
   prepareTarget?: (scope: SessionTranscriptRuntimeScope) => Promise<{
@@ -55,6 +59,7 @@ export async function resolveAgentRunSessionTarget(
     sessionTarget: input.sessionTarget ? { ...input.sessionTarget } : undefined,
   };
   const config = params.config ?? getRuntimeConfig();
+  const detached = params.sessionPersistence === "detached";
   const sessionTarget = params.sessionTarget;
   const targetAgentId = normalizeOptionalString(sessionTarget?.agentId);
   const targetSessionId = normalizeOptionalString(sessionTarget?.sessionId);
@@ -104,15 +109,19 @@ export async function resolveAgentRunSessionTarget(
     recognizedCompatibilitySessionKey ??
     (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
   const activeMarker = hasCompleteTypedTarget ? undefined : legacyMarker;
-  const markerSource = activeMarker ? captureIncognitoSessionSource(activeMarker) : undefined;
-  const markerEntries = activeMarker
-    ? markerSource && "kind" in markerSource
-      ? []
-      : await readSessionEntrySummariesInWorker({
-          agentId: activeMarker.agentId,
-          storePath: activeMarker.storePath,
-        })
-    : [];
+  const markerSource =
+    activeMarker && !detached
+      ? captureSessionActorStorageOwner(activeMarker, { assertCurrent() {}, authorize() {} })
+      : undefined;
+  const markerEntries =
+    activeMarker && !detached
+      ? markerSource
+        ? readCapturedSessionActorEntries(markerSource)
+        : await readSessionEntrySummariesInWorker({
+            agentId: activeMarker.agentId,
+            storePath: activeMarker.storePath,
+          })
+      : [];
   const markerMatches = activeMarker
     ? markerEntries.filter(({ entry }) => entry.sessionId === activeMarker.sessionId)
     : [];
@@ -156,6 +165,7 @@ export async function resolveAgentRunSessionTarget(
     targetStoreOwner.kind === "none",
   );
   const shouldResolveConfiguredStoreRow =
+    !detached &&
     params.missingSessionKey === "resolve-existing" &&
     !preliminarySessionKey &&
     !targetStorePath &&
@@ -188,7 +198,8 @@ export async function resolveAgentRunSessionTarget(
     resolveSessionStorePathCore(config.session?.store, { agentId: lookupAgentId });
   const storedSessionKey =
     configuredStoreResolution?.sessionKey ??
-    (params.missingSessionKey === "resolve-existing" &&
+    (!detached &&
+    params.missingSessionKey === "resolve-existing" &&
     !preliminarySessionKey &&
     !shouldResolveConfiguredStoreRow
       ? await resolveSessionKeyBySessionIdAsync({
@@ -250,6 +261,14 @@ export async function resolveAgentRunSessionTarget(
     storePath,
     ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
   };
+  // Detached runs own their identity in memory; persisted rows cannot select it.
+  if (detached) {
+    return {
+      ...scope,
+      agentId: effectiveAgentId,
+      sessionKey: resolveSqliteSessionKey(sessionKey, effectiveAgentId),
+    };
+  }
   const prepared = prepareTarget ? await prepareTarget(scope) : undefined;
   const target = prepared?.target ?? (await resolveSessionTranscriptRuntimeTarget(scope));
   prepared?.assertCurrent();

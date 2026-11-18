@@ -1,0 +1,85 @@
+/* The console's one checkbox (components/solid/checkbox.tsx). Markdown task
+   lists render plain HTML, so they share the drawing through their own class;
+   text.css keeps only their placement. The doubled class outranks field and
+   surface input rules (`.field input`) wherever the box sits; only the margin
+   reset stays weak, so a surface can still nudge the box onto its text line. */
+:where(input.oc-checkbox) {
+  margin: 0;
+}
+
+input.oc-checkbox.oc-checkbox,
+:is(.chat-text, .chat-thinking) input.task-list-item-checkbox {
+  appearance: none;
+  display: inline-grid;
+  flex: none;
+  place-content: center;
+  box-sizing: border-box;
+  inline-size: 16px;
+  block-size: 16px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--text) 22%, var(--border-hover));
+  /* Keep this 16px control box-shaped without rounding off square themes. */
+  border-radius: min(3px, var(--radius-sm));
+  background: var(--field-bg);
+  box-shadow: none;
+  color: var(--accent-foreground);
+  vertical-align: middle;
+  transition:
+    background-color var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+input.oc-checkbox.oc-checkbox::before,
+:is(.chat-text, .chat-thinking) input.task-list-item-checkbox::before {
+  content: "";
+  inline-size: 12px;
+  block-size: 12px;
+  background: currentColor;
+  mask: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'><path d='m3 8 3 3 7-7'/></svg>")
+    center / contain no-repeat;
+  visibility: hidden;
+}
+
+input.oc-checkbox.oc-checkbox:indeterminate::before {
+  mask-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'><path d='M4 8h8'/></svg>");
+}
+
+input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate),
+:is(.chat-text, .chat-thinking) input.task-list-item-checkbox:checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate)::before,
+:is(.chat-text, .chat-thinking) input.task-list-item-checkbox:checked::before {
+  visibility: visible;
+}
+
+input.oc-checkbox.oc-checkbox:not(:checked, :indeterminate, :disabled):hover {
+  border-color: color-mix(in srgb, var(--text) 50%, var(--border-hover));
+}
+
+/* Focus keeps the console-wide :focus-visible ring (base.css). */
+input.oc-checkbox.oc-checkbox:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+input.oc-checkbox.oc-checkbox:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+@media (forced-colors: active) {
+  input.oc-checkbox.oc-checkbox,
+  :is(.chat-text, .chat-thinking) input.task-list-item-checkbox {
+    appearance: auto;
+    border: initial;
+    background: none;
+  }
+
+  input.oc-checkbox.oc-checkbox::before,
+  :is(.chat-text, .chat-thinking) input.task-list-item-checkbox::before {
+    content: none;
+  }
+}

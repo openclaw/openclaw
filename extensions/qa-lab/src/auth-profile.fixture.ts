@@ -34,8 +34,6 @@ export type QaCodexAuthProfileSelection =
   | {
       status: "ready";
       profileId: string;
-      provider: "openai";
-      mode: "oauth";
     }
   | {
       status: "blocked";
@@ -153,7 +151,5 @@ export function resolveCodexAuthProfile(
   return {
     status: "ready",
     profileId,
-    provider: "openai",
-    mode: "oauth",
   };
 }

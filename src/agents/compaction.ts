@@ -1,43 +1,43 @@
+import { runSummarizationCompletionFromSource } from "../../packages/agent-core/src/harness/compaction/summarization-completion.js";
+import { prepareCompactionSummaryRequest } from "../../packages/agent-core/src/harness/compaction/summary-checkpoint-prompt.js";
+import type { BoundedConversation } from "../../packages/agent-core/src/harness/compaction/utils.js";
 import {
   CompactionError,
   SummaryOutputBudgetError,
 } from "../../packages/agent-core/src/harness/types.js";
-import type { AgentCompactionIdentifierPolicy } from "../config/types.agent-defaults.js";
 import { isAbortError } from "../infra/abort-signal.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { retryAsync } from "../infra/retry.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { Model, ModelRequestHeaders } from "../llm/types.js";
 import { sanitizeCompactionMessages } from "./compaction-planning.js";
+import { isCompactionSummaryRefusal } from "./compaction-summary-refusal.js";
+import type { CompactionSummarizationInstructions } from "./compaction-summary.types.js";
+import { describeCompactionFailure } from "./embedded-agent-runner/compact-reasons.js";
 import { isTimeoutError } from "./failover-error.js";
+import { isRetryableProviderHttpStatus } from "./failover/retry-evidence.js";
 import type {
   AgentMessage,
   CompactionSummaryPrompt,
   StreamFn,
   ThinkingLevel,
 } from "./runtime/index.js";
+import { unwrapCoreResult } from "./sessions/agent-session-utils.js";
+import { generateSummary } from "./sessions/compaction/compaction.js";
+import { createCompactionRuntime } from "./sessions/compaction/runtime.js";
 import type { SessionModelUsageSink } from "./sessions/compaction/runtime.js";
-import type { ExtensionContext } from "./sessions/index.js";
-import { generateSummary } from "./sessions/index.js";
 export { estimateMessagesTokens } from "./compaction-planning.js";
-
-const log = createSubsystemLogger("compaction");
 
 const DEFAULT_SUMMARY_FALLBACK = "No prior history.";
 const IDENTIFIER_PRESERVATION_INSTRUCTIONS =
   "Preserve all opaque identifiers exactly as written (no shortening or reconstruction), " +
   "including UUIDs, hashes, IDs, hostnames, IPs, ports, URLs, and file names.";
 
-export type CompactionSummarizationInstructions = {
-  identifierPolicy?: AgentCompactionIdentifierPolicy | "custom";
-  identifierInstructions?: string;
-};
-
 type CompactionSummaryParams = {
   messages: AgentMessage[];
-  model: NonNullable<ExtensionContext["model"]>;
+  model: Model;
   apiKey: string;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal: AbortSignal;
   reserveTokens: number;
   customInstructions?: string;
@@ -75,7 +75,61 @@ function buildCompactionSummarizationInstructions(
 export async function summarizeCompactionHistory(params: CompactionSummaryParams): Promise<string> {
   // SECURITY: toolResult.details and runtime-context entries never reach the summarizer.
   const messages = sanitizeCompactionMessages(params.messages);
-  if (messages.length === 0) {
+  return await summarizeCompactionSource(params, messages.length, (instructions) =>
+    generateSummary(
+      messages,
+      params.model,
+      params.reserveTokens,
+      params.apiKey,
+      params.headers,
+      params.signal,
+      instructions,
+      params.previousSummary,
+      params.thinkingLevel,
+      params.streamFn,
+      params.usageSink,
+      params.summaryPrompt,
+    ),
+  );
+}
+
+/** @internal Prepared sources rerender the original captured rows at each requested budget. */
+export async function summarizePreparedCompactionHistory(
+  params: Omit<CompactionSummaryParams, "messages"> & { messageCount: number },
+  serialize: (maxChars: number) => Promise<BoundedConversation>,
+): Promise<string> {
+  return await summarizeCompactionSource(params, params.messageCount, async (instructions) =>
+    unwrapCoreResult(
+      await runSummarizationCompletionFromSource(
+        {
+          ...prepareCompactionSummaryRequest({
+            model: params.model,
+            reserveTokens: params.reserveTokens,
+            previousSummary: params.previousSummary,
+            summaryPrompt: params.summaryPrompt,
+          }),
+          model: params.model,
+          apiKey: params.apiKey,
+          headers: params.headers,
+          signal: params.signal,
+          customInstructions: instructions,
+          previousSummary: params.previousSummary,
+          thinkingLevel: params.thinkingLevel,
+          streamFn: params.streamFn,
+          runtime: createCompactionRuntime(params.usageSink),
+        },
+        serialize,
+      ),
+    ),
+  );
+}
+
+async function summarizeCompactionSource(
+  params: Omit<CompactionSummaryParams, "messages">,
+  messageCount: number,
+  generate: (instructions: string | undefined) => Promise<string>,
+): Promise<string> {
+  if (messageCount === 0) {
     return params.previousSummary ?? DEFAULT_SUMMARY_FALLBACK;
   }
   const instructions = buildCompactionSummarizationInstructions(
@@ -83,47 +137,36 @@ export async function summarizeCompactionHistory(params: CompactionSummaryParams
     params.summarizationInstructions,
   );
   try {
-    return await retryAsync(
-      () =>
-        generateSummary(
-          messages,
-          params.model,
-          params.reserveTokens,
-          params.apiKey,
-          params.headers,
-          params.signal,
-          instructions,
-          params.previousSummary,
-          params.thinkingLevel,
-          params.streamFn,
-          params.usageSink,
-          params.summaryPrompt,
-        ),
-      {
-        attempts: 3,
-        minDelayMs: 500,
-        maxDelayMs: 5000,
-        jitter: 0.2,
-        label: "compaction/generateSummary",
-        // Backoff must honor caller cancellation; otherwise an abort during
-        // the sleep would stall compaction until the full delay elapses.
-        sleep: (ms) => sleepWithAbort(ms, params.signal),
-        // Caller aborts and transport timeouts are terminal; provider-side
-        // AbortErrors without caller cancellation remain retryable.
-        shouldRetry: (err) =>
+    return await retryAsync(() => generate(instructions), {
+      attempts: 3,
+      minDelayMs: 500,
+      maxDelayMs: 5000,
+      jitter: 0.2,
+      label: "compaction/generateSummary",
+      // Backoff must honor caller cancellation; otherwise an abort during
+      // the sleep would stall compaction until the full delay elapses.
+      sleep: (ms) => sleepWithAbort(ms, params.signal),
+      // Caller aborts and transport timeouts are terminal; provider-side
+      // AbortErrors without caller cancellation remain retryable.
+      shouldRetry: (err) => {
+        const { status, reason } = describeCompactionFailure(err);
+        return (
           !params.signal.aborted &&
+          reason !== "format" &&
+          (status === undefined || isRetryableProviderHttpStatus(status)) &&
+          !isCompactionSummaryRefusal(err) &&
           !(err instanceof SummaryOutputBudgetError) &&
-          (isAbortError(err) || !isTimeoutError(err)),
+          (isAbortError(err) || !isTimeoutError(err))
+        );
       },
-    );
+    });
   } catch (err) {
     if (params.signal.aborted) {
       throw err;
     }
-    log.warn(`Summarization failed: ${formatErrorMessage(err)}`);
     throw new CompactionError(
       "summarization_failed",
-      `Summarization failed for ${messages.length} messages: ${formatErrorMessage(err)}`,
+      `Summarization failed for ${messageCount} messages: ${formatErrorMessage(err)}`,
       err instanceof Error ? err : undefined,
     );
   }

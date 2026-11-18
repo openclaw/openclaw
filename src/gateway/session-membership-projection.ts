@@ -1,14 +1,15 @@
 import {
   readPreparedSessionEntryChange,
+  readPreparedSessionEntryPublicationSource,
   type SessionEntryPublicationSource,
 } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import { captureCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
+import { prepareCanonicalSessionReaderContinuation } from "../config/sessions/session-canonical-key.js";
 import type {
   SessionMembershipFact,
   SessionParticipantProjection,
 } from "../config/sessions/session-membership-facts.types.js";
 import { withPreparedSessionParticipants } from "../config/sessions/session-participant-prepared-read.js";
-import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabases } from "../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionRowChange } from "../sessions/session-row-changes.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../state/openclaw-agent-db.js";
@@ -157,13 +158,13 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
       ) {
         return;
       }
-      for (const store of matching(change)) {
+      const publication = readPreparedSessionEntryPublicationSource(change);
+      for (const store of matching({ storePath: publication.canonicalPath ?? change.storePath })) {
         const source = prepared?.source;
         if (
           source &&
           (source.identity !== store.target.identity ||
             source.birthtime !== store.target.birthtime ||
-            (store.target.filename !== undefined && source.filename !== store.target.filename) ||
             (store.publishedSource?.incarnation === source.incarnation &&
               store.publishedSource.revision !== undefined &&
               source.revision !== undefined &&
@@ -268,11 +269,11 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
         env,
       );
       const continuations: NonNullable<
-        ReturnType<typeof captureCanonicalSessionReaderContinuation>
+        Awaited<ReturnType<typeof prepareCanonicalSessionReaderContinuation>>
       >[] = [];
       try {
         for (const database of nativeReaders.databases) {
-          const continuation = captureCanonicalSessionReaderContinuation(database);
+          const continuation = await prepareCanonicalSessionReaderContinuation(database);
           if (continuation) {
             continuations.push(continuation);
           }
@@ -297,6 +298,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
                 env,
                 continuation: continuation?.receipt,
               });
+              await continuation?.prepareCurrent();
               continuation?.assertCurrent();
               if (
                 disposed ||
@@ -328,7 +330,7 @@ export function createSessionMembershipProjection(options: { env?: NodeJS.Proces
               groups = undefined;
             }
           },
-          projectionLane,
+          sessionStoreLane,
         );
       } finally {
         for (const continuation of continuations.toReversed()) {

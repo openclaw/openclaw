@@ -48,7 +48,6 @@ function hasNativeExecApprovalCapability(channel?: string): boolean {
 export function resolveExecApprovalInitiatingSurfaceStateAsync(params: {
   channel?: string | null;
   accountId?: string | null;
-  cfg?: OpenClawConfig;
 }): Promise<ExecApprovalInitiatingSurfaceState> {
   return resolveApprovalInitiatingSurfaceStateAsync({ ...params, approvalKind: "exec" });
 }

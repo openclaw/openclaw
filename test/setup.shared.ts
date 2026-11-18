@@ -2,7 +2,14 @@
 import "./vitest/vitest.sqlite-preload.mts";
 import { vi } from "vitest";
 import { installProcessWarningFilter } from "../src/infra/warning-filter.js";
+import {
+  declarePostgresTestRoot,
+  installPostgresTestRootGuard,
+} from "./helpers/postgres-pool-roots.js";
 import { withIsolatedTestHome } from "./test-env.js";
+
+declarePostgresTestRoot();
+installPostgresTestRootGuard();
 
 const openAiCodexTokenRefreshTestHook = "__OPENCLAW_TEST_REFRESH_OPENAI_CODEX_TOKEN__";
 type GlobalWithOpenAiCodexTokenRefreshTestHook = typeof globalThis & {
@@ -43,6 +50,9 @@ vi.mock("@mariozechner/clipboard", () => ({
 
 // Ensure Vitest environment is properly set.
 process.env.VITEST = "true";
+// Every request in a session must extend the previous one byte for byte outside the allowed
+// rebuild points. Tests that exercise the production warning path set this to "0".
+process.env.OPENCLAW_PROMPT_CACHE_ASSERT ??= "1";
 // Tests frequently point bundled plugin discovery at temp fixture roots. Production still rejects
 // arbitrary OPENCLAW_BUNDLED_PLUGINS_DIR overrides unless this Vitest-only opt-in is present.
 process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR ??= "1";

@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as hostMemory from "../infra/host-memory.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -33,6 +35,81 @@ beforeEach(() => {
 afterEach(resetGatewayWorkAdmission);
 
 describe("post-ready maintenance scheduling", () => {
+  it("runs optional maintenance with an unbounded process memory limit", async () => {
+    const constrainedMemory = vi.spyOn(process, "constrainedMemory").mockReturnValue(2 ** 64);
+    const availableMemory = vi.spyOn(process, "availableMemory").mockReturnValue(128 * 1024 ** 2);
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
+    scheduleGatewayPostReadyMaintenance(createPostReadyMaintenanceScheduleParams({ scheduler }));
+    try {
+      await clock.advanceBy(1);
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+    } finally {
+      await scheduler.stop();
+      availableMemory.mockRestore();
+      constrainedMemory.mockRestore();
+    }
+  });
+
+  it.each(["recovery", "memory pressure"])("defers optional work during %s", async (cause) => {
+    const lowMemory = vi
+      .spyOn(hostMemory, "isConstrainedProcessLowOnMemory")
+      .mockReturnValue(cause === "memory pressure");
+    const clock = createGatewaySchedulerClock();
+    const scheduler = createTestGatewayScheduler(clock.clock);
+    const ready = createDeferredCore();
+    const finishRecovery = createDeferredCore();
+    let recovery: Promise<void> | undefined;
+    const startMaintenance = vi.fn(async () => null);
+    const cron = { start: vi.fn(async () => undefined) };
+    const { runGatewayPostReadyStartupMaintenance } = await import("./server-startup-plugins.js");
+    const facts = vi.fn();
+    vi.mocked(runGatewayPostReadyStartupMaintenance).mockClear();
+    scheduleGatewayPostReadyMaintenance(
+      createPostReadyMaintenanceScheduleParams({
+        scheduler,
+        waitForPostReadyWork: () => ready.promise,
+        scheduleSessionFactsBackfill: facts,
+        startMaintenance,
+        cronState: createTestCronState(cron),
+      }),
+    );
+    try {
+      const pending = clock.advanceBy(1);
+      await Promise.resolve();
+      if (cause === "recovery") {
+        recovery = enqueueCommandInLane("background", () => finishRecovery.promise);
+      }
+      ready.resolve();
+      await pending;
+      expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      expect(facts).toHaveBeenCalledOnce();
+      expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
+      expect(startMaintenance).toHaveBeenCalledOnce();
+      expect(cron.start).toHaveBeenCalledOnce();
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).not.toHaveBeenCalled();
+      finishRecovery.resolve();
+      await recovery;
+      lowMemory.mockReturnValue(false);
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
+      expect(runGatewayPostReadyStartupMaintenance).toHaveBeenCalledOnce();
+      expect(facts).toHaveBeenCalledOnce();
+      expect(cron.start).toHaveBeenCalledOnce();
+    } finally {
+      ready.resolve();
+      finishRecovery.resolve();
+      await recovery;
+      await scheduler.stop();
+      lowMemory.mockRestore();
+    }
+  });
+
   it.skipIf(process.platform !== "linux")(
     "warms after readiness, repeats, and cancels with its Gateway",
     async () => {
@@ -53,6 +130,8 @@ describe("post-ready maintenance scheduling", () => {
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).not.toHaveBeenCalled();
       ready.resolve();
       await pending;
+      await clock.advanceBy(1_000);
+      await clock.advanceBy(1_000);
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(1);
       await clock.advanceBy(15 * 60 * 1000);
       expect(runtimeServiceMocks.warmGatewayDatabasePageCache).toHaveBeenCalledTimes(2);

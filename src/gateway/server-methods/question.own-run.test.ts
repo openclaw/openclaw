@@ -6,7 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -24,13 +24,18 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import {
+  canReceivePreparedSessionEvent,
+  createProjectedSessionEventPredicate,
+} from "../session-sharing.test-utils.js";
 import {
   broadcast,
   callQuestionRpc,
@@ -77,6 +82,7 @@ function questionPeer(
       updatedAt: profile.updatedAt,
     },
   };
+  prepareGatewayRecipientProfile(client);
   return { client, socket };
 }
 
@@ -141,11 +147,12 @@ async function createOwnRunFixture() {
       },
     },
   };
+  const projection = await createSessionRowProjection({ cfg });
+  await projection.ensureMaterialized();
   const clients = new GatewayClientRegistry([browser.client]);
   const broadcaster = createGatewayBroadcaster({
     clients,
-    canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-      canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+    canReceiveSessionEvent: createProjectedSessionEventPredicate(cfg, projection),
   });
   broadcast.mockImplementation(broadcaster.broadcast);
   const call = (
@@ -207,10 +214,14 @@ async function createOwnRunFixture() {
     request,
     beginWait,
     close: async () => {
-      manager.reset();
-      await manager.drain();
-      releaseAgentRunDelegatedAuthority(authority);
-      source.release();
+      try {
+        manager.reset();
+        await manager.drain();
+        releaseAgentRunDelegatedAuthority(authority);
+        source.release();
+      } finally {
+        projection.dispose();
+      }
     },
   };
 }
@@ -370,7 +381,7 @@ describe("own-run question admission", () => {
       for (const peer of peers) {
         f.clients.add(peer.client);
         expect(
-          canReceiveSessionEvent({
+          await canReceivePreparedSessionEvent({
             cfg: f.cfg,
             client: peer.client,
             sessionKeys: [requestParams.sessionKey],
@@ -390,8 +401,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -557,14 +568,30 @@ describe("own-run question admission", () => {
           storePath: resolveOpenClawAgentSqlitePath(sessionScope),
           factsInvalidated: true,
         });
-        const run = projectionLane.pool.run.bind(projectionLane.pool);
-        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementationOnce(async (...args) => {
-          if (cause === "transient worker failure") {
-            throw failure;
+        // Background membership refresh shares this lane; fault only the question's row read.
+        const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+        let injected = false;
+        const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+          let selected = false;
+          const result = await run(async () => {
+            const input = typeof args[0] === "function" ? await args[0]() : args[0];
+            if (
+              !injected &&
+              input.kind === "session-exact-entries" &&
+              input.sessionKeys?.includes(sessionScope.sessionKey)
+            ) {
+              injected = true;
+              selected = true;
+              if (cause === "transient worker failure") {
+                throw failure;
+              }
+            }
+            return input;
+          }, args[1]);
+          if (selected) {
+            entered.resolve();
+            await release.promise;
           }
-          const result = await run(...args);
-          entered.resolve();
-          await release.promise;
           return result;
         });
         const request = f.call(
@@ -596,7 +623,6 @@ describe("own-run question admission", () => {
             await manager.drain();
             expect(getActiveGatewayRootWorkCount()).toBe(0);
           }
-          expect(spy).toHaveBeenCalledOnce();
         } finally {
           release.resolve();
           await result;

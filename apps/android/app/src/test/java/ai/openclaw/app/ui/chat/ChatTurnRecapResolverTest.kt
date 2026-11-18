@@ -290,6 +290,13 @@ class ChatTurnRecapResolverTest {
     assertEquals("١M", formatCompactTokenCount(999_999L, Locale.forLanguageTag("ar")))
   }
 
+  // Metadata-only updates keep the same visible transcript anchor in these fixtures.
+  private fun TurnRecapResolver.resolve(
+    sessionKey: String,
+    indicatorVisible: Boolean,
+    row: ChatSessionEntry?,
+  ): TurnRecap? = resolve(sessionKey, indicatorVisible, row, transcript("visible-item", completedEndedAt = row?.endedAt))
+
   private fun transcript(
     newestItemId: String?,
     completedEndedAt: Long? = null,

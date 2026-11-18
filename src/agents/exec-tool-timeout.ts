@@ -1,10 +1,42 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeExecTarget } from "../infra/exec-approvals-core.js";
+import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
 import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
+import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 
-export function resolveExecDefaultTimeoutSec(timeoutSec?: number): number {
+function resolveExecDefaultTimeoutSec(timeoutSec?: number): number {
   return timeoutSec && timeoutSec > 0 ? timeoutSec : 1800;
+}
+
+/**
+ * Default lifetimes for ordinary commands and for deliberate services. A service
+ * has no built-in lifetime; only a configured or explicit timeout applies. In a
+ * one-shot run (subagent or cron) that can await the command with sessions_yield,
+ * the default still bounds that wait.
+ */
+export function resolveExecTimeoutDefaults(
+  defaults?: Pick<
+    ExecToolDefaults,
+    | "timeoutSec"
+    | "sessionsYieldAvailabilityRef"
+    | "notifySessionKey"
+    | "runSessionKey"
+    | "sessionKey"
+  >,
+): [number, (hiddenSubagent: boolean) => number | null] {
+  const timeoutSec = defaults?.timeoutSec;
+  const defaultTimeoutSec = resolveExecDefaultTimeoutSec(timeoutSec);
+  const runKey = defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey;
+  const oneShotKey = isOneShotRunSessionKey(runKey);
+  return [
+    defaultTimeoutSec,
+    (hiddenSubagent) =>
+      (hiddenSubagent || oneShotKey) && defaults?.sessionsYieldAvailabilityRef?.value === true
+        ? defaultTimeoutSec
+        : timeoutSec && timeoutSec > 0
+          ? timeoutSec
+          : null,
+  ];
 }
 
 export function resolveNodeExecTimeouts(
@@ -38,9 +70,7 @@ export function createExecToolExecutionTimeoutResolver(
   const defaultHost = defaults?.host;
   return (args) => {
     const params = asNonArrayRecord(args);
-    const requestedHost = normalizeExecTarget(
-      typeof params.host === "string" ? params.host : undefined,
-    );
+    const requestedHost = resolveRequestedExecTarget(params);
     const host = requestedHost && requestedHost !== "auto" ? requestedHost : defaultHost;
     if (host !== "node") {
       return undefined;

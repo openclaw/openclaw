@@ -92,25 +92,22 @@ function migrateRecord(params: {
   canWriteGroupAllowFrom: boolean;
   channelName: string;
   changes: string[];
+  defaultGroupPolicy?: unknown;
   parent?: ChannelRecord;
   parentHadGroupAllowFrom?: boolean;
   prefix: string;
 }): void {
-  if (!params.canWriteGroupAllowFrom) {
-    return;
-  }
-  if (normalizeAllowFrom(params.account.groupAllowFrom).length > 0) {
-    return;
-  }
-  if (params.parent && params.parentHadGroupAllowFrom) {
+  if (
+    !params.canWriteGroupAllowFrom ||
+    Array.isArray(params.account.groupAllowFrom) ||
+    params.parentHadGroupAllowFrom ||
+    (params.account.groupPolicy ?? params.parent?.groupPolicy ?? params.defaultGroupPolicy) ===
+      "disabled"
+  ) {
     return;
   }
   const ownAllowFrom = readDmAllowFrom(params.channelName, params.account);
-  if (
-    params.parent &&
-    ownAllowFrom.length === 0 &&
-    normalizeAllowFrom(params.parent.groupAllowFrom).length > 0
-  ) {
+  if (Array.isArray(params.parent?.groupAllowFrom) && ownAllowFrom.length === 0) {
     return;
   }
   const allowFrom = readDmAllowFrom(params.channelName, params.account, params.parent);
@@ -153,13 +150,14 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       continue;
     }
 
-    const hadGroupAllowFrom = normalizeAllowFrom(channelConfig.groupAllowFrom).length > 0;
+    const hadGroupAllowFrom = Array.isArray(channelConfig.groupAllowFrom);
     const canWriteChannelGroupAllowFrom = generatedSchemaAllowsGroupAllowFrom(
       channelName,
       CHANNEL_GROUP_ALLOW_FROM_PATH,
     );
     migrateRecord({
       account: channelConfig,
+      defaultGroupPolicy: nextChannels.defaults?.groupPolicy,
       canWriteGroupAllowFrom: canWriteChannelGroupAllowFrom,
       channelName,
       changes,
@@ -181,6 +179,7 @@ export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
       }
       migrateRecord({
         account,
+        defaultGroupPolicy: nextChannels.defaults?.groupPolicy,
         canWriteGroupAllowFrom: canWriteAccountGroupAllowFrom,
         channelName,
         changes,

@@ -1,26 +1,27 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { readSessionTranscriptBoundedActiveContextCore } from "../../config/sessions/session-accessor.sqlite-active-context.js";
-import type { SessionTranscriptBoundedActiveContext } from "../../config/sessions/session-accessor.sqlite-contract.js";
-import {
-  inspectTranscriptEventsSync,
-  loadTranscriptReadSnapshotSync,
-  loadTranscriptEventsFromDatabase,
-} from "../../config/sessions/session-accessor.sqlite-read.js";
-import { resolveSqliteTranscriptReadScope } from "../../config/sessions/session-accessor.sqlite-scope.js";
-import { readTranscriptContextVersionInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
+import type {
+  SessionTranscriptBoundedActiveContext,
+  SessionTranscriptContextVersion,
+} from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import type { SessionPreparedCompactionValue } from "../../config/sessions/session-compaction-prepared.types.js";
 import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
-import { resolveSqliteSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "../../config/sessions/session-transcript-read-source.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
+import { captureSessionManagerIncognitoBinding } from "./session-manager-incognito-scope.js";
 import { prepareSessionManagerHydration } from "./session-manager-incognito.js";
+import { prepareSessionManagerMemoryRead } from "./session-manager-memory-read.js";
 import type {
   PreparedSessionTranscriptReload,
+  SessionManagerBoundedContext,
   SessionManagerBoundedContextLimits,
   SessionManagerPersistenceTarget,
   SessionManagerTranscriptCohort,
 } from "./session-manager-view-types.js";
+
+/** @internal Adopt a bounded prepared cut under the caller's existing writer. */
+export const adoptPreparedCompaction = Symbol("adoptPreparedCompaction");
 
 /** Both open paths capture, hydrate, and construct under the same source and truncation rules. */
 export async function openSessionManagerBoundedView<T extends object>(
@@ -121,71 +122,64 @@ export function consumeSessionManagerReload(
   }
 }
 
-export function readSessionManagerReload(
-  target: SessionTranscriptRuntimeTarget,
-  limits: SessionManagerBoundedContextLimits | undefined,
-  ignoreReadFence: boolean,
-  transaction?: OpenClawAgentDatabase,
-): PreparedSessionTranscriptReload {
-  if (transaction && !transaction.db.isTransaction) {
-    throw new Error("Session reload lost its borrowed transaction");
-  }
-  if (limits) {
-    return {
-      kind: "bounded",
-      snapshot: readSessionTranscriptBoundedActiveContextCore(target, {
-        ...limits,
-        ...(ignoreReadFence ? { ignoreReadFence: true } : {}),
-        transaction,
-      }),
-    };
-  }
-  if (transaction) {
-    const resolved = resolveSqliteTranscriptReadScope(target);
-    const fence = ignoreReadFence
-      ? undefined
-      : resolveSqliteSessionTranscriptReadFence({ database: transaction, ...resolved });
-    return {
-      kind: "full",
-      snapshot: {
-        events: loadTranscriptEventsFromDatabase(transaction, resolved.sessionId, {
-          beforeEventSeq: fence?.beforeRawSeq,
-        }),
-        version: readTranscriptContextVersionInTransaction(transaction, resolved.sessionId),
-      },
-    };
-  }
-  if (!ignoreReadFence) {
-    return { kind: "full", snapshot: loadTranscriptReadSnapshotSync(target) };
-  }
-  const { events, snapshot } = inspectTranscriptEventsSync(target);
-  return {
-    kind: "full",
-    snapshot: {
-      events,
-      version: {
-        generation: snapshot.generation,
-        rawSeq: snapshot.lastSeq,
-        updatedAt: snapshot.transcriptUpdatedAt,
-      },
-    },
-  };
-}
-
 /** A committed append may need rows after the current model-context admission. */
 export function readCommittedSessionManagerReload(
   target: SessionTranscriptRuntimeTarget,
   limits: SessionManagerBoundedContextLimits | undefined,
 ): Promise<PreparedSessionTranscriptReload> {
-  return withSessionTranscriptReadSource(
-    target,
-    () => readSessionManagerReload(target, limits, true),
-    ({ scope, resolved, owner, expectedIdentity }) =>
-      owner.readTranscript({
-        target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
-        resolvedScope: resolved,
-        limits,
-        expectedIdentity,
-      }),
+  const memory = captureSessionManagerIncognitoBinding(target);
+  if (memory) {
+    return prepareSessionManagerMemoryRead(memory).read("session.history.hydrate", {
+      sessionId: target.sessionId,
+      limits,
+    });
+  }
+  return withSessionTranscriptReadSource(target, ({ scope, resolved, owner, expectedIdentity }) =>
+    owner.readTranscript({
+      caller: "committed-reload",
+      target: { ...scope, sessionId: target.sessionId, sessionKey: target.sessionKey },
+      resolvedScope: resolved,
+      limits,
+      expectedIdentity,
+    }),
   );
+}
+
+/** Adopt only the private reader's retained cut, under existing writer authority. */
+export function createPreparedCompactionAdopter<T>(
+  create: (
+    cwd: string,
+    target: SessionManagerPersistenceTarget,
+    entries: readonly unknown[],
+    bounded: SessionManagerBoundedContext,
+    version: SessionTranscriptContextVersion,
+  ) => T,
+) {
+  return (
+    target: SessionTranscriptRuntimeTarget,
+    prepared: Extract<SessionPreparedCompactionValue, { status: "prepared" }>,
+    cwd: string,
+  ): T => {
+    const captured = captureSessionTranscriptTargetBinding(target);
+    captureOwnedTranscriptWriteAssertion(captured)();
+    const entries = prepared.plan.retained;
+    return create(
+      cwd,
+      captured,
+      [prepared.header, ...entries],
+      {
+        version: prepared.version,
+        activeLeafEntryId: prepared.leafEntryId,
+        parents: new Map(entries.map((entry, index) => [entry.id, entries[index - 1]?.id ?? null])),
+        opaqueParents: new Map(),
+        firstKeptRanges: new Map(),
+        cacheTtlProjectionPrefixes: prepared.cacheTtlProjectionPrefixes,
+        limits: { compaction: true },
+        boundaryCount: prepared.boundaryCount,
+        persistedSuffixStartSeq: prepared.persistedSuffixStartSeq,
+        transcriptMutationAt: prepared.transcriptMutationAt,
+      },
+      prepared.version,
+    );
+  };
 }

@@ -3,19 +3,23 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createPluginSourceCaptureRoot } from "../../plugins/plugin-source-capture-directory.js";
-import type { planOpenClawModelsJsonSource } from "../models-config.js";
+import type { planOpenClawModelsJsonSourceWithInput } from "../models-config.core.js";
 import type {
+  PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
 } from "../prepared-model-catalog-worker.types.js";
 
-export type CatalogInspectionTask = PreparedModelCatalogWorkerTask & {
+export type CatalogInspectionTask = Omit<PreparedModelCatalogWorkerTask, "value"> & {
+  value: PreparedModelCatalogWorkerInput;
   inspection?: {
     existingAgentIds?: string[];
     provider?: string;
     expectedCredential?: string;
     failCatalog?: boolean;
     copyProbePath?: string;
+    observeConfigSnapshots?: boolean;
+    collectConfigCaptures?: boolean;
   };
 };
 
@@ -30,7 +34,14 @@ export type CatalogInspection = {
   credentialMatches?: boolean;
   authoredRef?: ReturnType<typeof getAuthoredConfigSecretRef>;
   resolvedEnvRef?: ReturnType<typeof getAuthoredConfigSecretRef>;
-  plans: Array<Awaited<ReturnType<typeof planOpenClawModelsJsonSource>>>;
+  plans: Array<Awaited<ReturnType<typeof planOpenClawModelsJsonSourceWithInput>>>;
+  configSnapshots?: Array<{
+    id: number;
+    frozen: boolean;
+    valuesMatchRequest: boolean;
+    factsMatchRequest: boolean;
+  }>;
+  configCaptureCollection?: { live: number[]; controlCollected: boolean };
 };
 
 export function createCatalogInspectionPool(env: NodeJS.ProcessEnv) {

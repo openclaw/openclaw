@@ -10,14 +10,10 @@ import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import { CANVAS_PRESENT_COMMAND, resolveCanvasNodeFromList } from "./node-eligibility.js";
 import { canvasToolDefinition } from "./tool-schema.js";
 
-type CanvasToolOptions = {
-  agentSessionKey?: string;
-};
-
 const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
 const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
-export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
+export function createCanvasTool(options?: { agentSessionKey?: string }): AnyAgentTool {
   return {
     ...canvasToolDefinition,
     execute: async (_toolCallId, args) => {

@@ -23,39 +23,35 @@ type ModelPolicyWildcardRef = {
   provider: string;
 };
 
-/** Parse and canonicalize a segment-boundary model-policy prefix wildcard. */
+/**
+ * Parse and canonicalize a model-policy wildcard: a segment prefix ("provider/*",
+ * "provider/namespace/*") or a model-name prefix ("provider/family-*").
+ */
 export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef | null {
   const trimmed = raw.trim();
-  // Wildcard keys match on segment boundaries, so normalize boundary padding
-  // before building the canonical key used by policy matching.
-  const segments = trimmed.split("/").map((segment) => segment.trim());
-  if (segments.at(-1) !== "*" || !hasValidSegments(segments.slice(0, -1), 1)) {
+  if (!trimmed.endsWith("*")) {
+    return null;
+  }
+  // Segment padding is normalized; a model-name prefix keeps its exact characters.
+  const parts = trimmed.slice(0, -1).split("/");
+  const namePrefix = (parts.pop() ?? "").trimStart();
+  const segments = parts.map((segment) => segment.trim());
+  if (!hasValidSegments(segments, 1) || (namePrefix && !hasValidSegments([namePrefix], 1))) {
     return null;
   }
   const provider = normalizeProviderId(segments[0] ?? "");
   if (!provider) {
     return null;
   }
-  return {
-    key: [provider, ...segments.slice(1)].join("/"),
-    provider,
-  };
+  return { key: `${[provider, ...segments.slice(1), namePrefix].join("/")}*`, provider };
 }
 
-/** Role-only model prefixes do not widen the segment grammar used by agent/UI policies. */
-export function parseOperatorModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef | null {
-  const wildcard = parseModelPolicyWildcardRef(raw);
-  if (wildcard) {
-    return wildcard;
-  }
-  const trimmed = raw.trim();
-  const literal = trimmed.slice(0, -1);
-  if (!trimmed.endsWith("*") || !literal.includes("/") || /\s$/u.test(literal)) {
-    return null;
-  }
-  // Validate the literal prefix with the same segment owner, then remove its synthetic separator.
-  const prefix = parseModelPolicyWildcardRef(`${literal}/*`);
-  return prefix ? { ...prefix, key: `${prefix.key.slice(0, -2)}*` } : null;
+/**
+ * True when a canonical wildcard key from parseModelPolicyWildcardRef covers a provider/model key.
+ * `*` may match nothing, so `provider/family-v1*` also covers `provider/family-v1`.
+ */
+export function modelPolicyWildcardMatches(wildcardKey: string, key: string): boolean {
+  return key.startsWith(wildcardKey.slice(0, -1));
 }
 
 /** True for a syntactically valid exact provider/model policy reference. */

@@ -59,6 +59,14 @@ export function selectConversationRowsFromDatabase(
   if (channel) {
     query = query.where("c.channel", "=", channel);
   }
+  if (options.deliveryAddress) {
+    query = query
+      .where("c.account_id", "=", options.deliveryAddress.accountId)
+      .where("c.delivery_target", "=", options.deliveryAddress.target);
+    query = options.deliveryAddress.threadId
+      ? query.where("c.thread_id", "=", options.deliveryAddress.threadId)
+      : query.where("c.thread_id", "is", null);
+  }
   // A supplied reference must validate; an empty one fails instead of widening the lookup.
   if (options.conversationRef !== undefined) {
     query = query.where(
@@ -163,6 +171,12 @@ export function selectConversationRowsFromDatabase(
       },
     };
   };
+  if (options.deliveryAddress) {
+    return rows.flatMap((row) => {
+      const mapped = mapConversationRow(row);
+      return mapped?.associationIsCurrent ? [mapped.record] : [];
+    });
+  }
   return selectUniqueConversationRows(rows, {
     conversationRef: (row) => row.conversation_id,
     map: mapConversationRow,

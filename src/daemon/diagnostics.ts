@@ -2,7 +2,9 @@ import fs, { type FileHandle } from "node:fs/promises";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
+const GATEWAY_OWNERSHIP_REFUSAL = /cannot verify Gateway ownership/i;
 const GATEWAY_LOG_ERROR_PATTERNS = [
+  GATEWAY_OWNERSHIP_REFUSAL,
   /\bENOSPC\b/i,
   /no space left on device/i,
   /refusing to bind gateway/i,
@@ -25,7 +27,9 @@ async function readTailWindow(handle: FileHandle, size: number) {
 
 /** Reads complete lines from a bounded gateway log tail. */
 export async function readGatewayLogTailLines(filePath: string): Promise<string[]> {
-  const handle = await fs.open(filePath, "r");
+  // Reach descriptor admission even when a diagnostic path is a FIFO with no writer.
+  // Preserve intentional log symlinks; the existing fstat owns file-type admission.
+  const handle = await fs.open(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size <= 0) {
@@ -87,5 +91,8 @@ export async function readLastGatewayErrorLine(
   const match = lines.findLast((line) =>
     GATEWAY_LOG_ERROR_PATTERNS.some((pattern) => pattern.test(line)),
   );
+  if (match && GATEWAY_OWNERSHIP_REFUSAL.test(match)) {
+    return "Gateway ownership could not be verified. If the recorded holder has stopped, run `openclaw gateway recover-lock` to inspect it.";
+  }
   return match ?? null;
 }

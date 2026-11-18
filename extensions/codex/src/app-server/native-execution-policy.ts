@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   resolveSandboxContext,
@@ -11,6 +12,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/rout
 import { resolvePreparedSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
 import {
   captureSessionEntryCurrentCheckAsync,
+  composeSessionEntryCommitGuards,
   type PreparedSessionSourceAssertion,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
@@ -36,6 +38,7 @@ export type CodexNativeExecutionPolicy = {
 export type PreparedCodexNativeExecutionPolicy = {
   policy: CodexNativeExecutionPolicy;
   assertCurrent: () => Promise<void>;
+  admit: (write: () => void, withCurrent: (write: () => void) => Promise<void>) => Promise<void>;
   source?: PreparedSessionSourceAssertion;
   retain: () => () => void;
   release: () => void;
@@ -50,6 +53,7 @@ type RunPolicyOptions = {
 function resolveRunPolicyParams(params: EmbeddedRunAttemptParams, options: RunPolicyOptions) {
   return {
     config: params.config,
+    requesterFacts: params.preparedWebSearchPolicy?.requesterFacts,
     sessionKey:
       options.runtimeSessionKey?.trim() ||
       params.sandboxSessionKey?.trim() ||
@@ -76,6 +80,9 @@ export function prepareCodexNativeExecutionPolicyForRun(
 export async function prepareCodexNativeExecutionPolicy(
   params: Omit<Parameters<typeof resolveCodexNativeExecutionPolicy>[0], "sessionEntry"> & {
     sessionEntry?: SessionEntry | null;
+    requesterFacts?: NonNullable<
+      EmbeddedRunAttemptParams["preparedWebSearchPolicy"]
+    >["requesterFacts"];
   },
 ): Promise<PreparedCodexNativeExecutionPolicy> {
   const captured = {
@@ -85,25 +92,65 @@ export async function prepareCodexNativeExecutionPolicy(
   };
   const { sourceAgentId, sourceSessionKey, canReadSessionEntry } =
     resolveSessionSelection(captured);
-  if (!canReadSessionEntry || !sourceAgentId || !sourceSessionKey) {
-    return {
-      policy: resolveCodexNativeExecutionPolicy({
-        ...captured,
-        sessionEntry: captured.sessionEntry ?? null,
-      }),
-      async assertCurrent() {},
-      retain: () => () => {},
-      release() {},
-    };
-  }
-  const selected = await captureSessionEntryCurrentCheckAsync({
-    agentId: sourceAgentId,
-    sessionKey: sourceSessionKey,
-    storePath: captured.sessionTarget?.storePath ?? captured.storePath,
-    fields: ["sessionId", "lifecycleRevision", "execHost", "execNode", "sandbox", "sandboxMode"],
-    errorMessage: "Codex session execution policy changed; prepare the operation again.",
-  });
+  const sources: Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsync>>[] = [];
+  const changed = () => {
+    throw new Error("Codex requester policy changed; retry the turn to prepare current policy.");
+  };
   try {
+    const selected =
+      canReadSessionEntry && sourceAgentId && sourceSessionKey
+        ? await captureSessionEntryCurrentCheckAsync({
+            agentId: sourceAgentId,
+            sessionKey: sourceSessionKey,
+            storePath: captured.sessionTarget?.storePath ?? captured.storePath,
+            fields: [
+              "sessionId",
+              "lifecycleRevision",
+              "execHost",
+              "execNode",
+              "sandbox",
+              "sandboxMode",
+              "createdVia",
+              "spawnedBy",
+              "spawnDepth",
+              "completionOwnerSessionKey",
+              "subagentRole",
+              "subagentControlScope",
+              "inheritedToolPolicyVersion",
+              "inheritedToolPolicySource",
+              "inheritedToolAllow",
+              "inheritedToolDeny",
+              "delegatedToolPolicy",
+            ],
+            errorMessage: "Codex session execution policy changed; prepare the operation again.",
+          })
+        : undefined;
+    if (selected) {
+      sources.push(selected);
+    }
+    for (const snapshot of captured.requesterFacts ?? []) {
+      const { query, facts } = snapshot;
+      const matches = (entry: SessionEntry | undefined) =>
+        facts === undefined
+          ? entry === undefined
+          : entry !== undefined &&
+            facts.every(({ field, value }) => isDeepStrictEqual(entry[field], value));
+      const source = await captureSessionEntryCurrentCheckAsync({
+        ...query,
+        fields: facts?.map(({ field }) => field) ?? [],
+        errorMessage: "Codex requester policy changed; retry the turn to prepare current policy.",
+      });
+      sources.push(source);
+      if (!matches(source.entry)) {
+        changed();
+      }
+    }
+    const assertCurrent = async () => {
+      for (const source of sources) {
+        await source.assertCurrent();
+      }
+    };
+    await assertCurrent();
     let owners = 0;
     // Late relay callbacks and the attempt share the same prepared policy.
     const retain = () => {
@@ -115,23 +162,33 @@ export async function prepareCodexNativeExecutionPolicy(
         }
         released = true;
         if (--owners === 0) {
-          selected.release();
+          for (const source of sources) {
+            source.release();
+          }
         }
       };
     };
     return {
       policy: resolveCodexNativeExecutionPolicy({
         ...captured,
-        sessionEntry: selected.entry ?? null,
+        sessionEntry: selected?.entry ?? captured.sessionEntry ?? null,
         readRuntimeSessionEntry: false,
       }),
-      assertCurrent: selected.assertCurrent,
-      source: selected.source,
+      assertCurrent,
+      async admit(write, withCurrent) {
+        await assertCurrent();
+        await withCurrent(write);
+      },
+      source: sources.length
+        ? composeSessionEntryCommitGuards(sources.map(({ source }) => source))
+        : undefined,
       retain,
       release: retain(),
     };
   } catch (error) {
-    selected.release();
+    for (const source of sources) {
+      source.release();
+    }
     throw error;
   }
 }

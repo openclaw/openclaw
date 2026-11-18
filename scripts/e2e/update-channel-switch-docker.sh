@@ -9,6 +9,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
+source "$ROOT_DIR/scripts/lib/frozen-target-compat.sh"
+openclaw_resolve_frozen_update_channel_switch_contract "${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-update-channel-switch-e2e" OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_IMAGE)"
 SKIP_BUILD="${OPENCLAW_UPDATE_CHANNEL_SWITCH_E2E_SKIP_BUILD:-0}"
@@ -34,6 +36,7 @@ docker_e2e_run_with_harness \
   -e OPENCLAW_SKIP_PROVIDERS=1 \
   -e OPENCLAW_FS_SAFE_NATIVE_CONTRACT \
   -e OPENCLAW_E2E_GIT_CHANNEL_TIMEOUT \
+  -e "OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG=$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
   "$IMAGE_NAME" \
@@ -148,6 +151,14 @@ openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing
 
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
+
+echo "==> package refuses main target ($OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG)"
+if main_json="$(openclaw update --tag "$OPENCLAW_FROZEN_TARGET_UPDATE_MAIN_TAG" --yes --json --no-restart)"; then
+  echo "Unsupported package target unexpectedly succeeded." >&2
+  exit 1
+fi
+UPDATE_JSON="$main_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-main-refusal
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel stable
 
 echo "==> package stable -> package beta channel"
 set +e

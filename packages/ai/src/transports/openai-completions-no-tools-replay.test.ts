@@ -1,13 +1,13 @@
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions.js";
 import { describe, expect, it } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { Context } from "../types.js";
-import { createZeroUsage } from "../usage.test-support.js";
 import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
   buildOpenAICompletionsParams,
   buildOpenAICompletionsRequest,
 } from "./openai-completions-params.js";
-import { makeCompletionsModel } from "./openai-completions.test-support.js";
+import { createAssistantOutput, makeCompletionsModel } from "./openai-completions.test-support.js";
 
 const baseModel = makeCompletionsModel({
   provider: "custom",
@@ -21,36 +21,18 @@ const context: Context = {
   tools: [{ name: "read", description: "Read a file", parameters: { type: "object" } }],
   messages: [
     {
-      role: "assistant",
-      api: model.api,
-      provider: model.provider,
-      model: model.id,
+      ...createAssistantOutput(model),
       content: [
         { type: "thinking", thinking: "Check both files.", thinkingSignature: "reasoning_content" },
         { type: "text", text: "Reading the files." },
         { type: "toolCall", id: "call_notes", name: "read", arguments: { path: "notes.txt" } },
         { type: "toolCall", id: "call_readme", name: "read", arguments: { path: "readme.md" } },
       ],
-      usage: createZeroUsage(),
       stopReason: "toolUse",
       timestamp: 1,
     },
-    {
-      role: "toolResult",
-      toolCallId: "call_notes",
-      toolName: "read",
-      content: [{ type: "text", text: "  amber-17\n" }],
-      isError: false,
-      timestamp: 2,
-    },
-    {
-      role: "toolResult",
-      toolCallId: "call_readme",
-      toolName: "read",
-      content: [{ type: "text", text: "violet-29" }],
-      isError: false,
-      timestamp: 3,
-    },
+    makeTextToolResult("call_notes", "read", "  amber-17\n", false, 2),
+    makeTextToolResult("call_readme", "read", "violet-29", false, 3),
     { role: "user", content: "Continue.", timestamp: 4 },
   ],
 };

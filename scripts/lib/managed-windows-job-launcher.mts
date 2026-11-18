@@ -1,20 +1,23 @@
 import { spawn } from "node:child_process";
 import { WindowsJob } from "@openclaw/proc-safe/windows-job";
 import { isDirectRunUrl } from "./direct-run.mjs";
-import type { WindowsJobLaunch } from "./managed-windows-job.mts";
+import type { WindowsJobControlMessage, WindowsJobLaunch } from "./managed-windows-job.mts";
 
 const name = process.argv[2];
-const send = (message: object) => process.send?.({ job: name, ...message });
-const fail = (error: unknown, type = "error") => {
+const fail = (error: unknown, type: "error" | "job-error" = "error") => {
+  const failure: NodeJS.ErrnoException = error instanceof Error ? error : new Error(String(error));
   process.exitCode = 1;
   if (process.connected) {
     process.send?.(
       {
         job: name,
         type,
-        error: error instanceof Error ? error.message : String(error),
-        ...(error && typeof error === "object" && "code" in error ? { code: error.code } : {}),
-      },
+        error: failure.message,
+        code: failure.code,
+        errno: failure.errno,
+        syscall: failure.syscall,
+        path: failure.path,
+      } satisfies WindowsJobControlMessage,
       () => process.disconnect?.(),
     );
   }
@@ -44,13 +47,16 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         });
         child.once("error", fail);
         child.once("spawn", () => {
-          process.send?.({ job: name, type: "spawned", pid: child.pid }, (error) => {
-            if (error) {
-              fail(error);
-            } else if (!launch.stdio.includes("ipc")) {
-              process.disconnect?.();
-            }
-          });
+          process.send?.(
+            { job: name, type: "spawned", pid: child.pid } satisfies WindowsJobControlMessage,
+            (error) => {
+              if (error) {
+                fail(error);
+              } else if (!launch.stdio.includes("ipc")) {
+                process.disconnect?.();
+              }
+            },
+          );
         });
         child.once("exit", (code) => {
           process.exitCode = code ?? 1;
@@ -73,7 +79,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
         fail(error);
       }
     });
-    send({ type: "ready" });
+    process.send?.({ job: name, type: "ready" } satisfies WindowsJobControlMessage);
   } catch (error) {
     fail(error, "job-error");
   }

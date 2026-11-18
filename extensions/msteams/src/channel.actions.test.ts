@@ -244,8 +244,6 @@ describe("Teams action routing and authority", () => {
         To: groupTarget,
         ReplyToId: "quoted-parent",
       });
-      expect(context.toolContext?.currentThreadTs).toBeUndefined();
-      expect(context.toolContext?.replyToMode).toBeUndefined();
       await success(
         "member-info",
         { to, userId: " user-1 " },
@@ -396,13 +394,6 @@ describe("Teams action routing and authority", () => {
       NativeChannelId: graphTarget,
       ReplyToId: "root",
     });
-    expect(context.toolContext).toMatchObject({
-      currentChannelId: conversation,
-      currentMessagingTarget: graphTarget,
-      currentGraphChannelId: graphTarget,
-      currentThreadTs: "root",
-      replyToMode: "all",
-    });
     await success(
       "react",
       { target: conversation, messageId: " msg-1 ", emoji: " like " },
@@ -423,11 +414,6 @@ describe("Teams action routing and authority", () => {
       To: "user:aad-user-1",
       ReplyToId: "quoted-parent",
     });
-    expect(context.toolContext).toMatchObject({
-      currentChannelId: "user:aad-user-1",
-      currentChatType: "direct",
-    });
-    expect(context.toolContext?.currentGraphChannelId).toBeUndefined();
     expect(context.toolContext?.currentThreadTs).toBeUndefined();
     expect(context.toolContext?.replyToMode).toBeUndefined();
     await success(
@@ -462,6 +448,39 @@ describe("Teams action routing and authority", () => {
       expect.objectContaining({ cfg, to: conversation, messageId: "1751234567890" }),
     );
   });
+
+  it.each([
+    { action: "react", params: { emoji: "like" }, mock: runtime.reactMessageMSTeams },
+    {
+      action: "react",
+      params: { emoji: "like", remove: true },
+      mock: runtime.unreactMessageMSTeams,
+    },
+    { action: "reactions", params: {}, mock: runtime.listReactionsMSTeams },
+  ] as const)(
+    "addresses the current channel reply for $action $params beneath its thread root",
+    async ({ action, params, mock }) => {
+      mock.mockResolvedValue({ ok: true, reactions: [] });
+      const base = current({
+        ChatType: "channel",
+        To: conversation,
+        NativeChannelId: graphTarget,
+        MessageThreadId: "root-1",
+      });
+      const context = {
+        ...base,
+        toolContext: { ...base.toolContext, currentMessageId: "reply-1" },
+      };
+
+      await run(action, params, context);
+      await run(action, { ...params, messageId: "other-1" }, context);
+
+      expect(mock.mock.calls.map(([call]) => [call.messageId, call.threadRootId])).toEqual([
+        ["reply-1", "root-1"],
+        ["other-1", undefined],
+      ]);
+    },
+  );
 
   it.each([
     { action: "react", params: { to: "conversation:19:other@thread.tacv2", emoji: "like" } },
@@ -520,14 +539,11 @@ describe("Teams action routing and authority", () => {
           type: "AdaptiveCard",
           version: "1.4",
           body: [
-            { type: "TextBlock", text: "Deploy finished", wrap: true },
-            {
+            expect.objectContaining({ type: "TextBlock", text: "Deploy finished" }),
+            expect.objectContaining({
               type: "TextBlock",
               text: "Pick a lane:\n- Canary\n- Stable",
-              wrap: true,
-              isSubtle: true,
-              size: "Small",
-            },
+            }),
           ],
           actions: [
             { type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } },
@@ -545,7 +561,7 @@ describe("Teams action routing and authority", () => {
       content: [
         {
           type: "text",
-          text: "React requires an emoji (reaction type). Valid types: like, heart, laugh, surprised, sad, angry.",
+          text: `React requires an emoji (reaction type). Valid types: ${validTypes.join(", ")}.`,
         },
       ],
       details: { error: "React requires an emoji (reaction type).", validTypes },

@@ -6,6 +6,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
+import { isPluginBuiltCoreToolId } from "../agents/core-tool-facts.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -30,14 +31,13 @@ export function createSyntheticPluginRuntimeClient(
       | "agentToolCaller"
       | "agentRunTracking"
       | "operatorRoleActor"
+      | "openclawIdPrincipal"
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
-      | "cronRunContinuation"
-      | "internalDeliveryMediaUrls"
       | "runtimeContextFragments"
-      | "internalDeliverySuppressText"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
+      | "pluginApprovalRequestOwnerId"
       | "nodeInvokeApprovalSessionKey"
       | "pluginSubagentRequester"
       | "runtimePluginToolGrant"
@@ -66,6 +66,7 @@ export function createSyntheticPluginRuntimeClient(
     internal: {
       syntheticClient: true,
       ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+      ...(params?.openclawIdPrincipal ? { openclawIdPrincipal: params.openclawIdPrincipal } : {}),
       ...(params?.operatorRunAuthority
         ? { operatorRunAuthority: params.operatorRunAuthority }
         : {}),
@@ -76,21 +77,17 @@ export function createSyntheticPluginRuntimeClient(
       ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),
       allowModelOverride: params?.allowModelOverride === true,
       ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
-      ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
       ...(params?.runtimeContextFragments
         ? { runtimeContextFragments: params.runtimeContextFragments }
-        : {}),
-      ...(params?.internalDeliveryMediaUrls
-        ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
-        : {}),
-      ...(params?.internalDeliverySuppressText === true
-        ? { internalDeliverySuppressText: true }
         : {}),
       ...(params?.internalDeliverySuppressErrors === true
         ? { internalDeliverySuppressErrors: true }
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+      ...(params?.pluginApprovalRequestOwnerId
+        ? { pluginApprovalRequestOwnerId: params.pluginApprovalRequestOwnerId }
+        : {}),
       ...(params?.nodeInvokeApprovalSessionKey
         ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
         : {}),
@@ -199,8 +196,17 @@ export function resolvePluginSubagentToolsAlsoAllow(params: {
     throw new Error("toolsAlsoAllow requires plugin identity for subagent runs.");
   }
   const registry = getActivePluginRegistry();
+  // A catalog id is the plugin's own only when the catalog marks it plugin-built (as `browser` and
+  // `skill_workshop`) and its manifest declares it. Every other catalog id is a core tool a plugin
+  // may not hand a subagent run, since the grant widens the session's tool profile.
+  const declaredTools = new Set(
+    (registry?.plugins.find((plugin) => plugin.id === pluginId)?.contracts?.tools ?? []).map(
+      (name) => normalizeToolPolicyName(name),
+    ),
+  );
   for (const toolName of requested) {
-    if (isKnownCoreToolId(toolName)) {
+    const pluginOwned = declaredTools.has(toolName) && isPluginBuiltCoreToolId(toolName);
+    if (isKnownCoreToolId(toolName) && !pluginOwned) {
       throw new Error(`plugin "${pluginId}" may not add core tool "${toolName}" to subagent runs.`);
     }
     const owners = uniqueStrings(

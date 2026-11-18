@@ -17,8 +17,7 @@ import androidx.compose.ui.platform.LocalContext
  * Reactive read of the OS "remove animations" accessibility setting.
  *
  * Custom frame loops must stop explicitly at zero. Compose's process-shared MotionDurationScale can
- * retain its last value across a gap with no recomposer, so read the authoritative setting here and
- * register before rereading to close the mount-time notification race.
+ * retain its last value across a gap with no recomposer, so read the authoritative setting here.
  */
 @Composable
 internal fun rememberSystemAnimationsEnabled(): Boolean {
@@ -33,7 +32,6 @@ internal fun rememberSystemAnimationsEnabled(): Boolean {
         }
       }
     resolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, observer)
-    scale = readAnimatorDurationScale(resolver)
     onDispose { resolver.unregisterContentObserver(observer) }
   }
   return scale > 0f

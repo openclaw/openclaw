@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionReceiptV1 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -11,6 +13,13 @@ import {
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
+import {
+  getActiveGatewayRootWorkCount,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../../process/gateway-work-admission.js";
+import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import {
   assertMemoryAudienceCurrent,
   assertMemoryAudienceSession,
@@ -109,6 +118,95 @@ describe("plugin embedded-agent runtime admission", () => {
     mocks.runEmbeddedAgentCore.mockResolvedValue({ payloads: [] });
   });
 
+  it("runs deferred plugin work after its parent root and async scope end", async () => {
+    const parent = tryBeginGatewayRootWorkAdmission("command:new");
+    assert(parent);
+    const work = new AsyncWorkScope();
+    const resume = createDeferred();
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(() =>
+      enqueueCommandInLane("session:plugin-deferred", async () => {
+        expect(getAsyncWorkSignal()).not.toBe(work.signal);
+        expect(getAsyncWorkSignal()?.aborted).toBe(false);
+        return { payloads: [{ text: "deferred reply" }] };
+      }),
+    );
+    // The continuation inherits both owners before either is retired.
+    const run = parent.run(() =>
+      work.run(() =>
+        withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, async () => {
+          await resume.promise;
+          return runPluginEmbeddedAgent(params);
+        }),
+      ),
+    );
+    parent.release();
+    await work.drain();
+    resume.resolve();
+    await expect(run).resolves.toEqual({ payloads: [{ text: "deferred reply" }] });
+    await nextTurn();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("keeps a plugin continuation live when its parent ends during suspension", async () => {
+    const parent = tryBeginGatewayRootWorkAdmission("command:new");
+    assert(parent);
+    const work = new AsyncWorkScope();
+    const started = createDeferred();
+    const finish = createDeferred();
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      expect(getAsyncWorkSignal()).not.toBe(work.signal);
+      expect(getAsyncWorkSignal()?.aborted).toBe(false);
+      return { payloads: [] };
+    });
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    assert(suspension);
+    const run = parent.run(() =>
+      work.run(() =>
+        withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+          runPluginEmbeddedAgent(params),
+        ),
+      ),
+    );
+    try {
+      expect(getActiveGatewayRootWorkCount()).toBe(2);
+      await started.promise;
+      parent.release();
+      await work.drain();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+    } finally {
+      parent.release();
+      suspension.rollback();
+      finish.resolve();
+      await run;
+    }
+    await nextTurn();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
+  });
+
+  it("cancels a plugin run waiting for admission before suspension reopens", async () => {
+    const suspension = tryBeginGatewaySuspendAdmission(() => {});
+    assert(suspension);
+    const controller = new AbortController();
+    const rejected = vi.fn();
+    const run = withPluginRuntimePluginScope({ pluginId: "memory-plugin" }, () =>
+      runPluginEmbeddedAgent({ ...params, abortSignal: controller.signal }),
+    ).catch(rejected);
+    try {
+      controller.abort(new Error("plugin run cancelled"));
+      await nextTurn();
+      expect(rejected).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: "AbortError" }),
+      );
+      expect(mocks.runEmbeddedAgentCore).not.toHaveBeenCalled();
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      suspension.rollback();
+      await run;
+    }
+  });
+
   it.each(["explicit", "runtime"] as const)(
     "shares %s config between admission and execution and closes admission",
     async (configSource) => {
@@ -191,7 +289,7 @@ describe("plugin embedded-agent runtime admission", () => {
   });
 
   it.each(["legacy-send", "legacy-send-then-throw", "collector", "no-send"] as const)(
-    "keeps %s ownership across a required NO_REPLY after settled tools",
+    "keeps %s ownership across a result-required NO_REPLY after settled tools",
     async (owner) => {
       const delivered: string[] = [];
       const collected: string[] = [];
@@ -241,7 +339,6 @@ describe("plugin embedded-agent runtime admission", () => {
       const result = await withPluginRuntimePluginScope({ pluginId: "reply-plugin" }, () =>
         runPluginEmbeddedAgent({
           ...params,
-          terminalReplyExpectation: "required",
           ...(!callerOwnsDelivery ? { resolveReplyDelivery: async () => "missing" as const } : {}),
           onBlockReply: ({ text }) => {
             if (text && owner !== "no-send") {
@@ -530,6 +627,8 @@ describe("plugin embedded-agent runtime admission", () => {
       "onRetryWait",
       "compactionCountOwner",
       "onCompactionAccounting",
+      "beforeRecoveryCompaction",
+      "disableCompactionRecovery",
       "onContextAccountingEvent",
     ].map((field) => ({
       name: field,

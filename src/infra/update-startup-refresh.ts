@@ -49,8 +49,5 @@ export async function resolveDevGitUpdate(status: UpdateCheckResult, signal: Abo
 }
 
 export function canRunDevGitCampaign(git: NonNullable<UpdateCheckResult["git"]>): boolean {
-  const tracked =
-    (git.branch === DEV_BRANCH || git.branch === "HEAD") && git.upstreamSource === "tracking";
-  const receipt = git.branch === "HEAD" && git.upstreamSource === "receipt";
-  return (tracked || receipt) && git.ahead === 0;
+  return (git.branch === DEV_BRANCH || git.branch === "HEAD") && git.ahead === 0;
 }

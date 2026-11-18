@@ -1,14 +1,12 @@
-import { createComponent } from "solid-js";
+import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
+import { expectDefined } from "@openclaw/normalization-core";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { DesktopConnectionHandle } from "./desktop-client.ts";
-import { DesktopPanelController } from "./desktop-panel-controller.ts";
-import { DesktopPanelContent } from "./desktop-panel-solid.tsx";
+import "./desktop-panel-solid.tsx";
 
-type DesktopPanelElement = DesktopPanelController;
-const mountedPanels = new WeakMap<DesktopPanelController, ReturnType<typeof mountSolid>>();
+type Panel = HTMLElementTagNameMap["openclaw-desktop-panel"];
 
 export const desktopEnvironment = {
   id: "worker-desktop-1",
@@ -21,23 +19,18 @@ export const desktopEnvironment = {
     ageMs: 1_000,
     attachedSessionIds: ["main"],
     tunnelStatus: "connected",
-    desktopApps: [],
   },
-} as const;
+} satisfies EnvironmentSummary;
 
 export function createPanel() {
-  const panel = new DesktopPanelController(document.createElement("div"));
-  updatePanel(panel, {
-    sessions: {
-      describe: (params, options) => {
-        const client = options?.client ?? panel.client;
-        if (!client) {
-          throw new Error("Desktop fixture has no Gateway client");
-        }
-        return client.request("sessions.describe", params);
-      },
-    },
-  });
+  const panel = document.createElement("openclaw-desktop-panel");
+  panel.sessions = {
+    describe: (params, options) =>
+      expectDefined(options?.client ?? panel.client, "Desktop fixture Gateway client").request(
+        "sessions.describe",
+        params,
+      ),
+  };
   return panel;
 }
 
@@ -54,60 +47,36 @@ export function createConnectionHandle(overrides: Partial<DesktopConnectionHandl
   } satisfies DesktopConnectionHandle;
 }
 
-export function clickPanelButton(
-  panel: DesktopPanelElement,
-  selector = ".desktop-environment button",
-): void {
-  const button = panel.renderRoot.querySelector<HTMLButtonElement>(selector);
-  if (!button) {
-    throw new Error(`expected Desktop button: ${selector}`);
-  }
-  button.click();
+export function clickPanelButton(panel: Panel, selector = ".desktop-environment button") {
+  expectDefined(
+    panel.querySelector<HTMLButtonElement>(selector),
+    `Desktop element: ${selector}`,
+  ).click();
 }
 
-export function sizingMenu(panel: DesktopPanelElement): HTMLSelectElement {
-  const menu = panel.renderRoot.querySelector<HTMLSelectElement>(".desktop-sizing");
-  if (!menu) {
-    throw new Error("expected the desktop sizing menu");
-  }
-  return menu;
-}
+export const sizingMenu = (panel: Panel) =>
+  expectDefined(panel.querySelector<HTMLSelectElement>(".desktop-sizing"), "Desktop sizing menu");
 
-export function selectSizing(panel: DesktopPanelElement, mode: string): void {
+export function selectSizing(panel: Panel, mode: string): void {
   const menu = sizingMenu(panel);
   menu.value = mode;
   menu.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
-export function updatePanel(
-  panel: DesktopPanelController,
-  changes: Partial<DesktopPanelController>,
-): void {
-  for (const key of Object.keys(changes) as (keyof DesktopPanelController)[]) {
-    const previous = panel[key];
-    if (Object.is(previous, changes[key])) {
-      continue;
-    }
-    Object.assign(panel, { [key]: changes[key] });
-    panel.inputsChanged(key, previous);
-  }
+export function updatePanel(panel: Panel, changes: Partial<Panel>): void {
+  Object.assign(panel, changes);
 }
 
-export function mountPanel(panel: DesktopPanelController): void {
-  document.body.append(panel.element);
-  mountedPanels.set(
-    panel,
-    mountSolid(() => createComponent(DesktopPanelContent, { controller: panel }), {
-      container: panel.element,
-    }),
-  );
+export async function mountPanel(panel: Panel): Promise<void> {
+  document.body.append(panel);
+  await panel.updateComplete;
   flush();
 }
 
-export function unmountPanel(panel: DesktopPanelController): void {
-  mountedPanels.get(panel)?.unmount();
-  mountedPanels.delete(panel);
-  panel.element.remove();
+export async function unmountPanel(panel: Panel): Promise<void> {
+  panel.remove();
+  await Promise.resolve();
+  flush();
 }
 
 export function createGatewayClient(request: unknown) {

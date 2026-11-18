@@ -8,6 +8,7 @@ export type ControlUiDevGateway = {
 
 declare global {
   var OPENCLAW_UI_DEV_GATEWAY: ControlUiDevGateway | undefined;
+  var OPENCLAW_UI_DEV_SERVER: boolean | undefined;
 }
 
 export function configuredUiDevGateway(): ControlUiDevGateway | undefined {

@@ -1,6 +1,7 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { getOrCreateWeakOwnerMap } from "../shared/weak-owner-map.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { GatewayReadSharing } from "./methods/descriptor.js";
 import { SerializedJsonPayload } from "./serialized-json.js";
@@ -12,6 +13,7 @@ import type {
   GatewayRequestContext,
   RespondFn,
 } from "./server-methods/types.js";
+import { retainGatewayRpcResponseDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 
 type Response = Parameters<RespondFn>;
@@ -121,11 +123,7 @@ export async function dispatchSharedRead(
       return;
     }
     read.assertCurrent?.();
-    let entries = owners.get(owner);
-    if (!entries) {
-      entries = new Map();
-      owners.set(owner, entries);
-    }
+    const entries = getOrCreateWeakOwnerMap(owners, owner);
     const key = JSON.stringify([options.req.method, shareKey]);
     const existing = entries.get(key);
     const valid = (entry: Entry) =>
@@ -170,6 +168,7 @@ export async function dispatchSharedRead(
           // still belong to admission, and encoding may itself execute toJSON.
           entry.publishRows();
           const payload = new SerializedJsonPayload(response[1]);
+          retainGatewayRpcResponseDiagnostics(options.req.method, response[1], payload);
           response[1] = payload;
           if (valid(entry) && payload.bytes.byteLength <= MAX_PAYLOAD_BYTES) {
             entry.result = response;

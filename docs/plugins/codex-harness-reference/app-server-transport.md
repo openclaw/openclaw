@@ -14,7 +14,7 @@ How OpenClaw starts and reaches the Codex app-server, and every `appServer` fiel
 
 For ordinary harness turns, OpenClaw starts a managed Codex binary: a newer
 Codex you installed yourself, or the one shipped with the official plugin
-(currently `@openai/codex` `0.160.0`):
+(currently `@openai/codex` `0.169.0`):
 
 ```bash
 codex app-server --listen stdio://
@@ -27,6 +27,28 @@ entrypoint without requiring a `codex.cmd` shim. Set `appServer.command` only
 when you intentionally want a different executable.
 
 ### Newer installed Codex
+
+New OpenAI models can require a newer Codex version than your OpenClaw release
+bundles. For GPT-6.2, [the issue report](https://github.com/openclaw/openclaw/issues/200972)
+cites Codex `0.166.0` as the minimum. Its successful test used `0.169.1`,
+so it does not establish the exact minimum. The current `0.169.0` bundle
+exceeds the reported minimum.
+
+To get a newer compatible Codex between OpenClaw releases, install it on the
+Gateway host:
+
+```bash
+npm i -g @openai/codex
+```
+
+Make sure the installed `codex` is on the Gateway's `PATH`, then restart the
+Gateway so it repeats binary selection. This is the supported between-release
+upgrade path, subject to the selection checks below.
+
+With a ChatGPT/Codex login, select the **Codex** runtime for your session.
+Check that `/status` shows `Runtime: OpenAI Codex`, then use `/codex models`
+to inspect the live catalog for your account. Installing Codex alone does not
+fix automatic routing or grant account access to a model.
 
 ChatGPT gates new models on the Codex version that runs the turn, so OpenClaw
 uses a newer Codex from `PATH` (for example `npm i -g @openai/codex`, a Bun
@@ -60,8 +82,8 @@ on `PATH` and uses it only when all of these hold:
 
 Otherwise OpenClaw uses the shipped binary. The Gateway logs one line with the
 chosen binary, its version, and the reason, for example
-`Codex app-server: using installed /usr/local/bin/codex 0.162.1 (newer than bundled 0.160.0)`
-or `Codex app-server: using bundled 0.160.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
+`Codex app-server: using installed /usr/local/bin/codex 0.169.1 (newer than bundled 0.169.0)`
+or `Codex app-server: using bundled 0.169.0 (installed /usr/local/bin/codex 0.159.0 is not newer)`.
 
 If the selected Codex later fails to start, fails `initialize`, or reports
 another version (for example after an in-place upgrade), OpenClaw starts the
@@ -131,6 +153,16 @@ with native clients. A private supervised binding uses the supervision
 connection regardless of the ordinary harness default. Independent App Server
 processes retain separate live status and approval state.
 
+For managed local app-servers with an agent home, OpenClaw sets
+`thread_unload_delay_secs=0`, overriding native post-unsubscribe retention.
+OpenClaw keeps warm subscriptions and protects active child work itself. When a
+conversation needs new configuration, it waits up to two seconds for that
+thread's unload notification before resuming its history, so a failed thread can
+recover while a sibling continues. If unloading is not confirmed, the binding is
+preserved; failed-thread recovery can replace the client only when no sibling
+work would be interrupted. User homes, stdio proxies, and external socket
+connections keep their native retention settings.
+
 For non-production testing against an already-running app-server, WebSocket
 transport is available:
 
@@ -170,7 +202,6 @@ managed stdio or the local Unix control socket for production workloads.
 | `headers`                        | `{}`                                                   | Extra WebSocket headers. Header values accept literal strings or SecretInput values, for example `x-codex-client-session-token: "${CODEX_CLIENT_SESSION_TOKEN}"`.                                                                                                                                                                                                                                                                                                            |
 | `clearEnv`                       | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment.                                                                                                                                                                                                                                                                                                                                          |
 | `remoteWorkspaceRoot`            | unset                                                  | Remote Codex app-server workspace root. OpenClaw maps the local cwd into this root and transfers authoritative remote attachments over an output-capped, no-shell `command/exec` reader. Paths escaping either workspace, symbolic links, oversized files, and unbounded attachment batches are rejected; uploads retain the configured channel identity and app-server request timeout.                                                                                     |
-| `loopDetectionPreToolUseRelay`   | `true`                                                 | Enables the Codex `PreToolUse` relay for loop detection when OpenClaw loop detection is enabled. OpenClaw installs no `PreToolUse` relay when no before-tool plugin hook, trusted-tool policy, or enabled loop detector has local work. Set `false` to disable the loop-detection relay even when detection is enabled; before-tool plugin hooks and trusted-tool policy still install their required relay that blocks calls on error.                                      |
 | `requestTimeoutMs`               | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `mode`                           | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution.                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `approvalPolicy`                 | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -279,7 +310,7 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 permission profile instead. Codex-managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
 
-The plugin ships stable Codex app-server `0.160.0` and prefers a newer
+The plugin ships stable Codex app-server `0.169.0` and prefers a newer
 installed Codex only under the rules in
 [Newer installed Codex](#newer-installed-codex). Explicit custom
 executables, remote app-servers, and macOS desktop binaries must report a

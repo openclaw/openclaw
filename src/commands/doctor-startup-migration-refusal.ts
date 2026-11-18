@@ -1,4 +1,3 @@
-// Gateway startup-migration readiness refusals shared by doctor config preflight.
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";

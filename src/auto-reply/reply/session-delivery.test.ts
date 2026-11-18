@@ -1,6 +1,7 @@
-// Tests how session delivery preserves previous channel and target routing state.
 import { describe, expect, it } from "vitest";
 import { resolveSessionDeliveryRoute } from "./session-delivery.js";
+
+const mainRoute = { sessionKey: "agent:samantha:main", isInterSession: true };
 
 describe("inter-session lastRoute preservation (fixes #54441)", () => {
   it("inter-session message does NOT overwrite established Discord lastChannel", () => {
@@ -22,8 +23,7 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
         toRaw: "session:somekey",
         persistedLastTo: "channel:1234567890",
         persistedLastChannel: "discord",
-        sessionKey: "agent:samantha:main",
-        isInterSession: true,
+        ...mainRoute,
       }).to,
     ).toBe("channel:1234567890");
   });
@@ -40,15 +40,11 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
   });
 
   it("inter-session on a NEW session (no persisted external route) may set webchat", () => {
-    // When there is no established external route, inter-session should not
-    // forcefully block the update — the session has no external route to protect.
     const result = resolveSessionDeliveryRoute({
+      ...mainRoute,
       originatingChannelRaw: "webchat",
       persistedLastChannel: undefined,
-      sessionKey: "agent:samantha:main",
-      isInterSession: true,
     }).channel;
-    // No external route existed — falls through to normal resolution (webchat or undefined).
     expect(["webchat", undefined]).toContain(result);
   });
 

@@ -51,14 +51,17 @@ async function assertPrepublishRequests(
   const requests = await readRequests(baseUrl);
   const packagePath = `/api/v1/packages/${encodeURIComponent(requestedPackage)}`;
   const versionPath = `${packagePath}/versions/${encodeURIComponent(version)}`;
+  // Installation concludes with a best-effort package detail read. This fixture
+  // intentionally returns 404 for that endpoint but still fences the exact request.
   const expected = [
     `GET ${packagePath}`,
     `GET ${versionPath}/artifact`,
     ...(securityMode === "required" ? [`GET ${versionPath}/security`] : []),
     `GET ${versionPath}/artifact/download`,
+    `GET ${packagePath}/detail`,
   ];
   // Multi-command upgrade recovery can stage an artifact in several convergence
-  // phases. Every request must still belong to a complete authorized audit sequence.
+  // phases. Every request must still belong to a complete authorized install sequence.
   const count = attempts === "complete" ? requests.length / expected.length : Number(attempts);
   if (!Number.isInteger(count) || count < minimumCount || count > 16) {
     throw new Error(`expected ${minimumCount}-16 complete ClawHub artifact audit sequences`);
@@ -86,10 +89,14 @@ function json(response, value, status = 200) {
 }
 
 function listen(server) {
-  server.listen(0, "127.0.0.1", () => {
-    fs.writeFileSync(portFile, String(server.address().port));
-    process.send?.({ port: server.address().port });
-  });
+  server.listen(
+    profile === "prepublish-artifacts" ? Number(process.argv[5] ?? 0) : 0,
+    "127.0.0.1",
+    () => {
+      fs.writeFileSync(portFile, String(server.address().port));
+      process.send?.({ port: server.address().port });
+    },
+  );
 }
 
 /** @param {unknown} error */
@@ -200,7 +207,7 @@ function startPrepublishArtifactServer() {
           channel: "official",
           isOfficial: true,
           latestVersion: entry.version,
-          tags: { latest: entry.version, beta: entry.version },
+          tags: { latest: entry.version, beta: entry.version, alpha: entry.version },
         },
       });
     } else if (!match[3]) {
@@ -223,6 +230,7 @@ function startPrepublishArtifactServer() {
           createdAt: 0,
         },
         overview: "No security concerns found in the fixture release.",
+        verdict: "clean",
         securityAuditUrl: `http://${request.headers.host}${url.pathname}`,
         trust: {
           scanStatus: "clean",
@@ -737,6 +745,7 @@ async function main() {
     release: {
       version: fixture.version,
     },
+    verdict: "clean",
     trust: {
       scanStatus: "clean",
       moderationState: null,

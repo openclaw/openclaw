@@ -37,17 +37,8 @@ type DiscordReaction = {
 export type DiscordObservedMessage = {
   messageId: string;
   channelId: string;
-  guildId?: string;
   senderId: string;
-  senderIsBot: boolean;
-  senderUsername?: string;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  matchedScenario?: boolean;
   text: string;
-  triggerMessageId?: string;
-  triggerTimestamp?: string;
-  replyToMessageId?: string;
   timestamp?: string;
 };
 
@@ -57,7 +48,6 @@ export type DiscordReactionSnapshot = {
   reactions: Array<{
     count: number;
     emoji: string;
-    me: boolean;
   }>;
 };
 
@@ -80,12 +70,8 @@ export function normalizeDiscordObservedMessage(
   return {
     messageId: message.id,
     channelId: message.channel_id,
-    guildId: message.guild_id,
     senderId: message.author.id,
-    senderIsBot: message.author.bot === true,
-    senderUsername: message.author.username,
     text: message.content ?? "",
-    replyToMessageId: message.referenced_message?.id,
     timestamp: message.timestamp,
   };
 }
@@ -102,7 +88,6 @@ export function normalizeDiscordReactionSnapshot(params: {
       .map((reaction) => ({
         emoji: reaction.emoji?.name?.trim() || reaction.emoji?.id?.trim() || "",
         count: Math.max(0, Math.floor(reaction.count ?? 0)),
-        me: reaction.me === true,
       }))
       .filter((reaction) => reaction.emoji.length > 0)
       .toSorted((a, b) => a.emoji.localeCompare(b.emoji)),

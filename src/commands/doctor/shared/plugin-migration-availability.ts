@@ -13,7 +13,10 @@ import { resolvePluginDoctorContractArtifact } from "../../../plugins/doctor-con
 import { createInstalledPluginIndexScopeLookup } from "../../../plugins/installed-plugin-index-scope-lookup.js";
 import { resolveInstalledPluginIndexStateDatabaseOptions } from "../../../plugins/installed-plugin-index-store-path.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
-import { passesManifestOwnerBasePolicy } from "../../../plugins/manifest-owner-policy.js";
+import {
+  isActivatedManifestOwner,
+  passesManifestOwnerBasePolicy,
+} from "../../../plugins/manifest-owner-policy.js";
 import { isTrustedOfficialCatalogLookupDuplicate } from "../../../plugins/official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
@@ -21,6 +24,7 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import { createPluginCache, withPluginCache } from "../../../plugins/plugin-cache.js";
+import { normalizePluginPolicyId } from "../../../plugins/plugin-policy-id.js";
 import {
   isArtifactPreservingStateRead,
   withOpenClawStateDatabaseReadSnapshot,
@@ -43,6 +47,7 @@ export type PluginMigrationInspection = {
   runtimePluginAliases: readonly string[];
   unavailablePluginIds?: readonly string[];
   discoveryBlockedPluginIds?: readonly string[];
+  inactivePluginIds?: readonly string[];
   replacementPluginIds?: Readonly<Record<string, string>>;
 };
 
@@ -75,9 +80,19 @@ export async function inspectPluginMigrationAvailability(params: {
       return withPluginMetadataSnapshotScope(
         metadata,
         async () => {
-          const configuredPluginIds = collectConfiguredPluginIds(params.cfg, env);
+          // Config policy keys are canonical; manifest, install and migration identities are exact.
+          const manifestIdsByPolicyId = new Map(
+            metadata.plugins.map((plugin) => [normalizePluginPolicyId(plugin.id), plugin.id]),
+          );
+          const manifestId = (id: string) =>
+            manifestIdsByPolicyId.get(normalizePluginPolicyId(id)) ?? id;
+          const configuredPluginIds = new Set(
+            [...collectConfiguredPluginIds(params.cfg, env)].map(manifestId),
+          );
           const configuredChannelIds = collectConfiguredChannelIds(params.cfg, env);
-          const blockedPluginIds = collectBlockedPluginIds(params.cfg);
+          const blockedPluginIds = new Set(
+            [...collectBlockedPluginIds(params.cfg)].map(manifestId),
+          );
           const context = await resolveConfiguredPluginInstallContext({
             cfg: params.cfg,
             env,
@@ -99,7 +114,10 @@ export async function inspectPluginMigrationAvailability(params: {
             config: params.cfg,
             env,
           });
-          const inspectedIds = new Set([...selected, ...(params.retainedPluginIds ?? [])]);
+          const inspectedIds = new Set([
+            ...selected,
+            ...(params.retainedPluginIds ?? []).map(manifestId),
+          ]);
           const requiredPluginIds: string[] = [];
           const inspectionRequiredPluginIds: string[] = [];
           const statelessCandidates = new Set<string>();
@@ -242,6 +260,19 @@ export async function inspectPluginMigrationAvailability(params: {
             statelessPlugins,
             runtimePluginAliases,
             discoveryBlockedPluginIds,
+            inactivePluginIds: [...inspectedIds].filter((id) => {
+              const plugin = metadata.byPluginId.get(id);
+              return (
+                !selected.has(id) ||
+                (plugin
+                  ? !isActivatedManifestOwner({
+                      plugin,
+                      normalizedConfig,
+                      rootConfig: params.cfg,
+                    })
+                  : !passesManifestOwnerBasePolicy({ plugin: { id }, normalizedConfig }))
+              );
+            }),
             // The updating parent still owns package availability until convergence resumes.
             ...(!params.deferInstallation ? { unavailablePluginIds, replacementPluginIds } : {}),
           };

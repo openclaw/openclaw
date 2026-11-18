@@ -29,22 +29,17 @@ async function readBackground<Command extends UserBackgroundReadCommand>(
   command: Command,
   options: UserBackgroundOptions,
 ) {
-  for (;;) {
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    const isCurrent = await captureUserPreferenceRead(context.admission);
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      command,
-      { context, current: true, signal: options.signal },
-    );
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    // An upload/removal or profile merge cannot publish stale bytes after its commit.
-    if (isCurrent()) {
-      return { reply, isCurrent };
-    }
-  }
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const isCurrent = await captureUserPreferenceRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    command,
+    { context, current: true, signal: options.signal },
+  );
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  return { reply, isCurrent };
 }
 
 export async function getUserBackground(
@@ -93,8 +88,6 @@ async function mutateBackground(
   options: UserBackgroundOptions,
 ): Promise<UsersBackgroundResult> {
   const context = captureOpenClawStateWorkerContext(options);
-  // Capture caller-owned CAS inputs before the first worker/decoder yield.
-  const expected = structuredClone(input);
   const { reply } = await readBackground(
     context,
     { type: "userBackground.snapshot", profileId },
@@ -103,7 +96,7 @@ async function mutateBackground(
   if (!reply) {
     return { status: "no_durable_identity" };
   }
-  if (reply.result.status !== "ok" || !reply.profileId) {
+  if (reply.result.status !== "ok") {
     return reply.result;
   }
   const image =
@@ -115,7 +108,7 @@ async function mutateBackground(
   options.assertCurrent?.();
   const finishMutation = beginUserPreferenceMutation(context.admission);
   try {
-    const mutation: UserBackgroundWriteInput = { profileId, expected, image };
+    const mutation: UserBackgroundWriteInput = { profileId, expected: input, image };
     return await runOpenClawStateWorkerOperation(
       context,
       (scope) => scope.execute({ type: "userBackground.write", input: mutation }),

@@ -7,9 +7,28 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { hasErrnoCode } from "../../infra/errors.js";
 import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { statIfExists } from "../../infra/path-existence.js";
 import { isPathInside } from "../../security/scan-paths.js";
 import { escapeRegExp } from "../../shared/regexp.js";
-import { formatScanEvidence, LITERAL_SECRET_SKILL_CONTENT_RULE } from "./scan-evidence.js";
+
+const LITERAL_SECRET_PATTERN =
+  /\b(?:sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{35})(?![A-Za-z0-9_-])|-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----\r?\n(?=(?:[A-Za-z0-9+/=]\r?\n?){48,}-----END \1-----)(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----/;
+
+const LITERAL_SECRET_SKILL_CONTENT_RULE = {
+  ruleId: "literal-secret",
+  severity: "critical",
+  message: "Skill text contains a recognized literal credential",
+  pattern: LITERAL_SECRET_PATTERN,
+} as const;
+
+function formatScanEvidence(evidence: string): string {
+  const normalized = evidence.trim();
+  return LITERAL_SECRET_PATTERN.test(normalized)
+    ? "[REDACTED CREDENTIAL]"
+    : normalized.length > 120
+      ? `${truncateUtf16Safe(normalized, 120)}…`
+      : normalized;
+}
 
 type SkillScanSeverity = "info" | "warn" | "critical";
 
@@ -20,15 +39,6 @@ export type SkillScanFinding = {
   line: number;
   message: string;
   evidence: string;
-};
-
-type SkillScanSummary = {
-  scannedFiles: number;
-  critical: number;
-  warn: number;
-  info: number;
-  truncated: boolean;
-  findings: SkillScanFinding[];
 };
 
 export type SkillScanOptions = {
@@ -510,17 +520,6 @@ function scanSourceRules(
   return findings;
 }
 
-async function statIfPresent(filePath: string): Promise<Stats | null> {
-  try {
-    return await fs.stat(filePath);
-  } catch (err) {
-    if (hasErrnoCode(err, "ENOENT")) {
-      return null;
-    }
-    throw err;
-  }
-}
-
 async function resolveForcedFiles(params: {
   rootDir: string;
   includeFiles: string[];
@@ -537,7 +536,7 @@ async function resolveForcedFiles(params: {
       continue;
     }
 
-    const st = await statIfPresent(includePath);
+    const st = await statIfExists(includePath);
     if (!st?.isFile()) {
       continue;
     }
@@ -598,7 +597,7 @@ async function scanFileWithCache(
   filePath: string,
   maxFileBytes: number,
 ): Promise<{ scanned: boolean; findings: SkillScanFinding[] }> {
-  const st = await statIfPresent(filePath);
+  const st = await statIfExists(filePath);
   if (!st?.isFile()) {
     return { scanned: false, findings: [] };
   }
@@ -642,10 +641,7 @@ async function scanFileWithCache(
   }
 }
 
-export async function scanDirectoryWithSummary(
-  dirPath: string,
-  opts?: SkillScanOptions,
-): Promise<SkillScanSummary> {
+export async function scanDirectoryWithSummary(dirPath: string, opts?: SkillScanOptions) {
   const scanOptions = {
     includeFiles: opts?.includeFiles ?? [],
     maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),

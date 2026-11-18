@@ -241,7 +241,7 @@ enable or authenticate the provider. Use
 Fresh non-interactive setup validates the token before saving it. When setup
 must choose a default, it also checks the live Copilot model catalog. OpenClaw
 prefers the provider's current general-purpose model when that model is
-enabled for the account; otherwise it chooses a deterministic eligible fallback.
+enabled for the account; otherwise it chooses an eligible fallback using a fixed order.
 Setup fails without writing a new auth profile if the account has no
 picker-visible model that supports streaming and tool calls. An explicitly
 configured default model is never replaced.

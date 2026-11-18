@@ -5,30 +5,16 @@ import { wrapToolWithBeforeToolCallHook } from "../agents/agent-tools.before-too
 import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createExecTool } from "../agents/bash-tools.exec-run.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
-import {
   resetDiagnosticEventsForTest,
-  onDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { SpawnProcessAdapter } from "../process/supervisor/types.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import {
-  closeDiagnosticEmbeddedRunOwner,
-  createDiagnosticEmbeddedRunOwner,
-  getDiagnosticSessionActivitySnapshot,
-} from "./diagnostic-run-activity.js";
-import type {
-  StuckSessionRecoveryOutcome,
-  StuckSessionRecoveryRequest,
-} from "./diagnostic-session-recovery.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { testing as controllerTesting } from "../sessions/session-controller.test-support.js";
+import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
-import { logSessionStateChange, startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
 const mocks = vi.hoisted(() => ({
@@ -76,7 +62,7 @@ describe("heartbeat recovery after exec preparation", () => {
   afterEach(async () => {
     await supervisor.shutdown();
     resetProcessRegistryForTests();
-    embeddedRunTesting.resetActiveEmbeddedRuns();
+    controllerTesting.resetSessionControllerForTest();
     resetDiagnosticStateForTest();
     resetDiagnosticEventsForTest();
     vi.unstubAllEnvs();
@@ -90,39 +76,13 @@ describe("heartbeat recovery after exec preparation", () => {
       const sessionId = `exec-preparation-${deadlineState}`;
       const ref = { sessionId, sessionKey: `agent:main:${sessionId}`, runId: sessionId };
       const controller = new AbortController();
-      const classified = createDeferred<StuckSessionRecoveryRequest>();
-      const dispatch = createDeferred();
-      const recovered = createDeferred<StuckSessionRecoveryOutcome>();
-      startGatewayDiagnosticHeartbeat(
-        createTestGatewayScheduler("fake-timers"),
-        { diagnostics: { enabled: true } },
-        {
-          sampleLiveness: () => null,
-          recoverStuckSession: async (request) => {
-            classified.resolve(request);
-            await dispatch.promise;
-            const outcome = await recoverStuckDiagnosticSession(request);
-            recovered.resolve(outcome);
-            return outcome;
-          },
-        },
-      );
-      logSessionStateChange({ ...ref, state: "processing" });
-      const owner = createDiagnosticEmbeddedRunOwner(ref);
-      const abort = vi.fn(() => {
-        controller.abort();
-        clearActiveEmbeddedRun(sessionId, handle, ref.sessionKey);
+      const operation = createReplyOperation({ ...ref, resetTriggered: false });
+      operation.setPhase("running");
+      const watchdogAttempt = operation.watchdog.attachAttempt({
+        assertCurrent: () => controller.signal.throwIfAborted(),
       });
-      const handle = {
-        runId: sessionId,
-        diagnosticOwner: owner,
-        closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(owner),
-        queueMessage: async () => {},
-        isStreaming: () => true,
-        isCompacting: () => false,
-        abort,
-      };
-      setActiveEmbeddedRun(sessionId, handle, ref.sessionKey);
+      const abort = vi.fn(() => controller.abort());
+      operation.attachBackend({ kind: "embedded", runId: sessionId, cancel: abort });
       const preparing = createDeferred();
       const preparation = createDeferred<object>();
       mocks.approve.mockImplementationOnce(() => {
@@ -146,7 +106,7 @@ describe("heartbeat recovery after exec preparation", () => {
       const spawn = vi.spyOn(supervisor, "spawn");
       const tool = wrapToolWithBeforeToolCallHook(
         createExecTool({ host: "gateway", security: "full", ask: "off", allowBackground: false }),
-        ref,
+        { ...ref, watchdogAttempt },
       );
       const execution = tool
         .execute(
@@ -157,13 +117,14 @@ describe("heartbeat recovery after exec preparation", () => {
         .then(
           (result) => ({ result }),
           (error: unknown) => ({ error }),
-        );
+        )
+        .finally(() => operation.complete());
       try {
         await preparing.promise;
         await waitForDiagnosticEventsDrained();
-        await vi.advanceTimersByTimeAsync(930_000);
-        expect(await classified.promise).toMatchObject({ allowActiveAbort: true, sessionId });
-        expect(getDiagnosticSessionActivitySnapshot(ref).activeToolDeadlineAtMs).toBeUndefined();
+        // Recheck the exact owner after preparation publishes its enforced deadline.
+        vi.setSystemTime(Date.now() + 930_000);
+        expect(operation.watchdog.decide().action).toBe("stop");
 
         preparation.resolve({});
         await spawned.promise;
@@ -177,23 +138,7 @@ describe("heartbeat recovery after exec preparation", () => {
         if (deadlineState === "expired") {
           vi.setSystemTime(deadline! + 1);
         }
-        if (deadlineState === "future") {
-          const attention: string[] = [];
-          const unsubscribe = onDiagnosticEvent((event) => {
-            if (event.type === "session.stalled" || event.type === "session.long_running") {
-              attention.push(event.type);
-            }
-          });
-          try {
-            await vi.advanceTimersByTimeAsync(120_000);
-            await waitForDiagnosticEventsDrained();
-            expect(attention).toEqual(["session.long_running"]);
-          } finally {
-            unsubscribe();
-          }
-        }
-        dispatch.resolve();
-        const outcome = await recovered.promise;
+        const outcome = await recoverStuckDiagnosticSession({ ...ref, operation, ageMs: 930_000 });
         if (deadlineState === "future") {
           expect(outcome).toMatchObject({ status: "skipped", action: "observe_only" });
           expect(abort).not.toHaveBeenCalled();
@@ -202,14 +147,12 @@ describe("heartbeat recovery after exec preparation", () => {
             result: { details: { status: "completed" } },
           });
         } else {
-          expect(outcome).toMatchObject({ status: "aborted", action: "abort_embedded_run" });
+          expect(outcome).toMatchObject({ status: "failed", action: "none" });
           expect(abort).toHaveBeenCalledOnce();
         }
       } finally {
         preparation.resolve({});
-        dispatch.resolve();
         completed.resolve({ code: 0, signal: null });
-        clearActiveEmbeddedRun(sessionId, handle, ref.sessionKey);
         controller.abort();
         await execution;
       }

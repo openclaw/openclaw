@@ -43,71 +43,110 @@ async function redactConfigCommandInput(text: string): Promise<string> {
   if (!path.ok) {
     return `${name} set ${REDACTED_SENTINEL}`;
   }
-  const [{ redactConfigObject }, { loadGatewayRuntimeConfigSchema }] = await Promise.all([
+  const [{ redactConfigObject }, { loadGatewayConfigRedactionHints }] = await Promise.all([
     import("../redact-snapshot.js"),
     import("../runtime-schema.js"),
   ]);
   const preview: Record<string, unknown> = {};
   setConfigValueAtPath(preview, path.path, command.value);
-  const redacted = redactConfigObject(preview, loadGatewayRuntimeConfigSchema().uiHints);
+  const redacted = redactConfigObject(preview, loadGatewayConfigRedactionHints());
   return `${name} set ${command.path}=${JSON.stringify(getConfigValueAtPath(redacted, path.path))}`;
 }
 
-/** Records only settled command output; callers must first confirm delivery. */
-export async function recordDeliveredCommandExchange(
-  params: Pick<
-    Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
-    | "agentId"
-    | "sessionKey"
-    | "expectedSessionId"
-    | "expectedLifecycleRevision"
-    | "expectedWriterRunId"
-    | "storePath"
-    | "config"
-    | "assertCurrent"
-    | "beforeMessageWrite"
-  > & {
-    commandText: string;
-    replyText: string;
-    commandId: string;
-    replyId: string;
-  },
-) {
-  const commandText = normalizeCommandBody(params.commandText, {
+function redactCommandTranscriptText(commandText: string, text: string): string {
+  const withoutCodes = text.replace(
+    /\b((?:device|pairing|verification|login|setup)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
+    "$1: [login code redacted]",
+  );
+  const withoutPairingPayload = /^\/pair(?:@\S+)?(?:\s|$)/i.test(commandText)
+    ? withoutCodes.replace(/\beyJ[A-Za-z0-9_-]{32,}={0,2}\b/g, "[pairing code redacted]")
+    : withoutCodes;
+  return withoutPairingPayload.replace(/https?:\/\/[^\s<>]+/gi, (url) =>
+    /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText) ||
+    /[?&](?:[\w-]*token|state|code|user_code|device_code|secret|key)=/i.test(url)
+      ? "[login URL redacted]"
+      : url,
+  );
+}
+
+function normalizeCommandTranscriptText(commandText: string): string {
+  return normalizeCommandBody(commandText, {
     targetedCommandMode: "pre-identity",
     preserveArguments: true,
   }).trim();
-  if (/^\/(?:btw|side)(?:@\S+)?(?:\s|$)/i.test(commandText)) {
-    return { ok: false as const, reason: "ephemeral command" };
+}
+
+function isEphemeralCommandTranscript(commandText: string): boolean {
+  return /^\/(?:btw|side)(?:@\S+)?(?:\s|$)/i.test(commandText);
+}
+
+/** The stored, redacted form of a command input; undefined for ephemeral commands. */
+export async function prepareCommandTranscriptInput(
+  rawCommandText: string,
+): Promise<string | undefined> {
+  const commandText = normalizeCommandTranscriptText(rawCommandText);
+  if (!commandText || isEphemeralCommandTranscript(commandText)) {
+    return undefined;
   }
-  const redact = (text: string) => {
-    const withoutCodes = text.replace(
-      /\b((?:device|pairing|verification|login|setup)\s+code|code)\s*:\s*(?:<code>)?[^\s<]+(?:<\/code>)?/gi,
-      "$1: [login code redacted]",
-    );
-    const withoutPairingPayload = /^\/pair(?:@\S+)?(?:\s|$)/i.test(commandText)
-      ? withoutCodes.replace(/\beyJ[A-Za-z0-9_-]{32,}={0,2}\b/g, "[pairing code redacted]")
-      : withoutCodes;
-    return withoutPairingPayload.replace(/https?:\/\/[^\s<>]+/gi, (url) =>
-      /^\/login(?:@\S+)?(?:\s|$)/i.test(commandText) ||
-      /[?&](?:[\w-]*token|state|code|user_code|device_code|secret|key)=/i.test(url)
-        ? "[login URL redacted]"
-        : url,
-    );
-  };
+  return redactCommandTranscriptText(commandText, await redactConfigCommandInput(commandText));
+}
+
+type CommandExchangeParams = Pick<
+  Parameters<typeof appendAssistantMessageToSessionTranscript>[0],
+  | "agentId"
+  | "sessionKey"
+  | "expectedSessionId"
+  | "expectedLifecycleRevision"
+  | "expectedWriterRunId"
+  | "storePath"
+  | "config"
+  | "assertCurrent"
+  | "beforeMessageWrite"
+  | "contextFreeCommand"
+> & {
+  commandText: string;
+  replyText: string;
+  commandId: string;
+  replyId: string;
+  /** The command already committed its input as a user turn; record only the reply. */
+  commandInputCommitted?: boolean;
+};
+
+/** A local effect committed; this records its outcome, not delivery of the reply. */
+export function recordCommittedCommandExchange(params: CommandExchangeParams) {
+  return recordCommandExchange(params);
+}
+
+/** Records only settled command output; callers must first confirm delivery. */
+export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
   try {
-    return await appendAssistantMessageToSessionTranscript({
-      ...params,
-      text: redact(params.replyText),
-      command: {
-        text: redact(await redactConfigCommandInput(commandText)),
-        idempotencyKey: `command-input:${params.commandId}`,
-      },
-      idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
-    });
+    return await recordCommandExchange(params);
   } catch {
     // Delivery has already succeeded. A transcript failure must not trigger a resend.
     logVerbose("Command transcript recording failed after delivery");
     return { ok: false as const, reason: "transcript recording failed" };
   }
+}
+
+async function recordCommandExchange(params: CommandExchangeParams) {
+  const commandText = normalizeCommandTranscriptText(params.commandText);
+  if (isEphemeralCommandTranscript(commandText)) {
+    return { ok: false as const, reason: "ephemeral command" };
+  }
+  return appendAssistantMessageToSessionTranscript({
+    ...params,
+    text: redactCommandTranscriptText(commandText, params.replyText),
+    ...(params.commandInputCommitted
+      ? {}
+      : {
+          command: {
+            text: redactCommandTranscriptText(
+              commandText,
+              await redactConfigCommandInput(commandText),
+            ),
+            idempotencyKey: `command-input:${params.commandId}`,
+          },
+        }),
+    idempotencyKey: `command-reply:${params.commandId}:${params.replyId}`,
+  });
 }

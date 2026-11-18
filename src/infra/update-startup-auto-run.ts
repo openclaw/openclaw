@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome-classification.js";
 import { VERSION } from "../version.js";
 import { extractErrorCode, formatErrorMessage } from "./errors.js";
 import {
@@ -25,6 +25,7 @@ import {
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -103,23 +104,34 @@ export async function runAutoUpdateCommand(
   });
   const handoffFailure = async (error: unknown): Promise<AutoUpdateRunResult> => {
     log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
-    const reason = "managed-service-handoff-failed";
-    const fact = createUpdateErrorFact("managed-service", error);
+    const reason =
+      error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    const failureFacts =
+      error instanceof UpdatePreMutationError
+        ? error.failureFacts
+        : [createUpdateErrorFact("managed-service", error)];
+    const detail = failureFacts.map((fact) => fact.message ?? fact.code).join("; ");
     // Cancellation may finish the run; retain its cause before that ownership transition.
     try {
-      await recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
+      await recordUpdateRunStep(params.runId, {
+        step: "requested",
+        status: "failed",
+        reason,
+        detail: `${reason}: ${detail}`,
+        failureFacts,
+      });
     } catch {
       log.info("Update failure state could not be recorded; preserving the original error.");
     }
     await recordUpdateRunDiagnostics(
       params.runId,
-      { failure: { step: "managed-service", detail: fact.message, failureFacts: [fact] } },
+      { failure: { step: "managed-service", detail, failureFacts } },
       (message) => log.info(message),
     );
     const code = extractErrorCode(error);
     const outcome = failure(
       reason,
-      `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
+      `Automatic update handoff failed${code ? ` (${code})` : ""}: ${reason}: ${detail}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
     );
     outcome.result.steps = [
       {
@@ -128,7 +140,7 @@ export async function runAutoUpdateCommand(
         cwd: "",
         durationMs: 0,
         exitCode: 1,
-        failureFacts: [fact],
+        failureFacts,
       },
     ];
     outcome.result.rollbackOutcome = {
@@ -188,6 +200,9 @@ export async function runAutoUpdateCommand(
       }
     } else {
       // A joined helper owns another run; it cannot complete this campaign's admission.
+      await recordUpdateRunPhase(params.runId, "requested", {
+        origin: { nextAction: started.message },
+      });
       await finishUpdateRun(params.runId, {
         status: "skipped",
         reason: "managed-service-handoff-already-running",
@@ -205,23 +220,30 @@ export async function runAutoUpdateCommand(
 
 export type AutoUpdateRunner = (params: AutoUpdateRunParams) => Promise<AutoUpdateRunResult>;
 
-function candidateDoctorFailureSignature(run: UpdateRunRecord): string | undefined {
-  if (run.trigger !== "campaign" || run.status !== "failed" || !run.reason) {
+// A release that fails these checks rolls back; retrying the same release fails the same way.
+const ACTIVATION_CHECK_STEPS = new Set([
+  "openclaw doctor",
+  "post-update verification",
+  "activated-gateway-startup",
+]);
+
+function activationFailureSignature(run: UpdateRunRecord): string | undefined {
+  // A failed activation usually restores the previous release, which records `rolled-back`.
+  if (
+    run.trigger !== "campaign" ||
+    (run.status !== "failed" && run.status !== "rolled-back") ||
+    !run.reason
+  ) {
     return undefined;
   }
   const failed = run.steps.filter(
-    (step) =>
-      step.status === "failed" &&
-      (step.step === "candidate-doctor" || step.step === "candidate-doctor-lint"),
+    (step) => step.status === "failed" && ACTIVATION_CHECK_STEPS.has(step.step),
   );
   if (!failed.length) {
     return undefined;
   }
-  // Rehearsal directory identities and elapsed time change between identical failures.
-  const stable = (detail: string | undefined) =>
-    detail
-      ?.replace(/openclaw-update-canary-[A-Za-z0-9]+/gu, "openclaw-update-canary-[attempt]")
-      .replace(/\(\d+ms\)/gu, "(elapsed)");
+  // Elapsed time changes between identical failures.
+  const stable = (detail: string | undefined) => detail?.replace(/\(\d+ms\)/gu, "(elapsed)");
   return JSON.stringify([
     run.reason,
     failed
@@ -259,7 +281,7 @@ export async function runCampaignUpdate(params: {
   runAuto: AutoUpdateRunner;
   canApply: () => boolean;
   campaign: UpdateCampaignController;
-  onAttempt: (version: string) => void;
+  onAttempt: (version: string) => Promise<void> | void;
   onUpdateRunCreated?: () => void;
   signal?: AbortSignal;
 }): Promise<"handoff" | "applied" | "failed"> {
@@ -287,7 +309,7 @@ export async function runCampaignUpdate(params: {
   if (!isCurrent() || !params.canApply()) {
     return "failed";
   }
-  const signature = recent[0] && candidateDoctorFailureSignature(recent[0]);
+  const signature = recent[0] && activationFailureSignature(recent[0]);
   // The existing terminal rows are the durable backoff fact. A new candidate or
   // an intervening operator run breaks the pair without another state store.
   if (
@@ -297,13 +319,13 @@ export async function runCampaignUpdate(params: {
       (run) =>
         run.target.channel === params.channel &&
         (params.mode === "git" ? run.target.sha : run.target.version) === params.version &&
-        candidateDoctorFailureSignature(run) === signature,
+        activationFailureSignature(run) === signature,
     )
   ) {
     const nextAction =
       "Inspect `openclaw update status`, resolve the reported check, then run `openclaw update` to retry; a new candidate also resumes automatic updates.";
     params.log.info(
-      `Warning: Automatic updates paused after repeated candidate-doctor failure. ${nextAction}`,
+      `Warning: Automatic updates paused after repeated activation failure. ${nextAction}`,
       {
         version: params.version,
         reason: recent[0]?.reason,
@@ -343,7 +365,10 @@ export async function runCampaignUpdate(params: {
     if (!isCurrent()) {
       return "failed";
     }
-    params.onAttempt(params.version);
+    await params.onAttempt(params.version);
+    if (!isCurrent()) {
+      return "failed";
+    }
 
     const outcome = await params.runAuto({
       runId,

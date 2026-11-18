@@ -2,27 +2,16 @@ import { randomBytes } from "@noble/hashes/utils.js";
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-export interface UlidFactoryOptions {
-  clock?: () => number;
-  rng?: (length: number) => Uint8Array;
-}
-
-export function createMonotonicUlidFactory(options: UlidFactoryOptions = {}): () => string {
-  const clock = options.clock ?? Date.now;
-  const rng = options.rng ?? randomBytes;
+export function createMonotonicUlidFactory(): () => string {
   let lastTime = -1;
   let randomness = new Uint8Array(10);
   return () => {
-    const now = Math.floor(clock());
+    const now = Math.floor(Date.now());
     if (!Number.isSafeInteger(now) || now < 0 || now > 0xffffffffffff) {
       throw new Error("invalid ULID clock");
     }
     if (now > lastTime) {
-      const generated = rng(10);
-      if (generated.length !== 10) {
-        throw new Error("invalid ULID rng");
-      }
-      randomness = generated.slice();
+      randomness = randomBytes(10);
       lastTime = now;
     } else {
       increment(randomness);

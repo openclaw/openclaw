@@ -18,6 +18,7 @@ async function detectDevInstallGitBranch(packageRoot: string | null): Promise<st
   }
   const topRes = await runCommandWithTimeout(["git", "-C", root, "rev-parse", "--show-toplevel"], {
     timeoutMs: GIT_TIMEOUT_MS,
+    env: { GIT_NO_LAZY_FETCH: "1" },
   });
   if (topRes.code !== 0) {
     return null;
@@ -34,6 +35,7 @@ async function detectDevInstallGitBranch(packageRoot: string | null): Promise<st
     ["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"],
     {
       timeoutMs: GIT_TIMEOUT_MS,
+      env: { GIT_NO_LAZY_FETCH: "1" },
     },
   );
   if (branchRes.code !== 0) {

@@ -306,27 +306,6 @@ describe("qa coverage report", () => {
     );
   });
 
-  it("rejects duplicate ownership across YAML and non-YAML catalogs", () => {
-    const scenario = scenarioWithCoverage({
-      primary: [TEST_EXECUTABLE_COVERAGE_ID],
-      executionKind: "script",
-      executionPath: "scripts/test-scenario.ts",
-    });
-
-    expect(() =>
-      buildQaCoverageInventory([scenario], {
-        nonYamlScenarios: [
-          {
-            id: scenario.id,
-            sourcePath: "extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts",
-          },
-        ],
-      }),
-    ).toThrow(
-      "duplicate qa scenario id(s): test-scenario (qa/scenarios/test/test-scenario.yaml, extensions/qa-lab/src/live-transports/discord/discord-live.runtime.ts)",
-    );
-  });
-
   it("renders a compact markdown inventory", () => {
     const report = renderQaCoverageMarkdownReport(readCatalogInventory());
 

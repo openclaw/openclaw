@@ -5,20 +5,24 @@ import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 export type BlockSubagentCompletionRequest = {
   subagent: SubagentRunRecord;
   reason: string;
+  operatorAuthorityUnavailable?: true;
   enqueuedAt?: number;
   suspendedReason?: "expiry" | "permanent_failure";
-  storeReplaced?: true;
   lastDropReason?: NonNullable<SubagentRunRecord["delivery"]>["lastDropReason"];
   disposition?: NonNullable<SubagentRunRecord["delivery"]>["disposition"];
 };
 
 export type RequesterWakeMutation =
-  | { kind: "transition"; state: RequesterSettleWakeBatchState }
+  | {
+      kind: "requesterDelivery";
+      fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>;
+    }
+  | {
+      kind: "transition";
+      state: RequesterSettleWakeBatchState;
+      requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"];
+    }
   | { kind: "complete" };
-
-export type SubagentCompletionQueueReceipt =
-  | { id: string; status: "pending"; enqueuedAt: number; payloadJson: string }
-  | { id: string; status: "completed" | "failed" };
 
 export type RequesterWakeCommittedWrite = {
   entries: readonly { subagent: SubagentRunRecord }[];
@@ -45,7 +49,6 @@ export type SubagentCompletionMutation =
 
 export type SubagentCompletionRecord = {
   subagent: SubagentRunRecord;
-  version: string;
   cleanupHandled?: boolean;
 };
 
@@ -53,6 +56,4 @@ export type SubagentCompletionMutationResult = {
   applied: boolean | null;
   records: SubagentCompletionRecord[];
   retiredRunIds: string[];
-  queueIds: string[];
-  queueReceipts?: SubagentCompletionQueueReceipt[];
 };

@@ -1,10 +1,10 @@
 import { Show } from "solid-js";
-import type { DockLayoutController } from "./dock-layout-controller.ts";
+import type { DockLayout } from "./dock-layout.ts";
 import type { DockPanelPlacement } from "./dock-panel-layout.ts";
 import "./resizable-divider.ts";
 
 export function DockResizer<TDock extends DockPanelPlacement>(props: {
-  controller: DockLayoutController<TDock>;
+  controller: DockLayout<TDock>;
   classPrefix: string;
   label: string;
 }) {
@@ -12,7 +12,10 @@ export function DockResizer<TDock extends DockPanelPlacement>(props: {
     <Show when={props.controller.resizer}>
       {(resizer) => (
         <resizable-divider
-          class={`${props.classPrefix}-resizer ${props.classPrefix}-resizer--${props.controller.dock}`}
+          class={[
+            `${props.classPrefix}-resizer`,
+            `${props.classPrefix}-resizer--${props.controller.dock}`,
+          ]}
           prop:orientation={resizer().orientation}
           prop:label={props.label}
           prop:splitRatio={resizer().splitRatio}

@@ -15,12 +15,14 @@ export function withWorkerWriteAdmission<T>(
   databaseOptions: OpenClawAgentDatabaseOptions,
   operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   assertSourceCurrent?: () => void,
+  releaseAfterOperation = false,
 ): Promise<T> {
   let finalAdmission = false;
   const withAdmission: OpenClawAgentDatabaseWriteAdmission = async (run) => {
     const admission = await new Promise<{
       allowed: boolean;
       validation?: OpenClawAgentDatabaseValidation;
+      integrityRevoked?: boolean;
       databaseAdmissionPort?: MessagePort;
     }>((resolve, reject) => {
       const receive = (admissionMessage: {
@@ -28,6 +30,7 @@ export function withWorkerWriteAdmission<T>(
         operationId: number;
         allowed: boolean;
         validation?: OpenClawAgentDatabaseValidation;
+        integrityRevoked?: boolean;
         databaseAdmissionPort?: MessagePort;
       }) => {
         cleanup();
@@ -49,14 +52,18 @@ export function withWorkerWriteAdmission<T>(
       });
     });
     const invoke = () =>
-      run(() => {
-        if (!admission.allowed) {
-          throw new SqliteReclamationRequestRefusedError(
-            "SQLite reclamation database admission was revoked",
-          );
-        }
-        assertSourceCurrent?.();
-      }, admission.validation);
+      run(
+        () => {
+          if (!admission.allowed) {
+            throw new SqliteReclamationRequestRefusedError(
+              "SQLite reclamation database admission was revoked",
+            );
+          }
+          assertSourceCurrent?.();
+        },
+        admission.validation,
+        admission.integrityRevoked,
+      );
     const metadata = admission.databaseAdmissionPort;
     const value = await (async () => {
       try {
@@ -76,7 +83,7 @@ export function withWorkerWriteAdmission<T>(
     return value;
   };
   return withOpenClawAgentDatabaseAdmission(databaseOptions, withAdmission, (database) => {
-    finalAdmission = true;
+    finalAdmission = !releaseAfterOperation;
     return operation(database);
   });
 }

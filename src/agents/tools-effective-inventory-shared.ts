@@ -16,6 +16,13 @@ import type {
 } from "./tools-effective-inventory.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+export const CODEX_GITHUB_PREVIEW_UNAVAILABLE_NOTICE = {
+  id: "codex-github-preview-unavailable",
+  severity: "info",
+  message:
+    "Update the Codex plugin to preview GitHub tools. This does not change execution access.",
+} satisfies EffectiveToolInventoryNotice;
+
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
   const rawLabel = normalizeOptionalString(tool.label) ?? "";
   if (

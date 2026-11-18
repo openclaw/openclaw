@@ -1,54 +1,44 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
-import { renderLazyElementModal } from "../components/lazy-view-error.ts";
+import type { LazyElementState } from "../components/solid/lazy-view-error.tsx";
+import { t } from "../lib/reactive/i18n.ts";
 import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
-import {
-  renderCommandPaletteLoading,
-  type CommandPaletteLoadingState,
-} from "./app-shell-command-palette-loading.ts";
+import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
+import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
+import { ShellLoadState, ShellRequestedComponent } from "./app-shell-component-boundary.tsx";
+import type { ShellComponentHost, ShellOwnedElements } from "./app-shell-components.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
-import {
-  isOptionalElementDefined,
-  type LazyCustomElementRequestController,
-  type OptionalCustomElement,
-  DEBUG_OVERLAY_ELEMENT,
-  KEYBOARD_SHORTCUTS_ELEMENT,
-} from "./lazy-custom-element.ts";
-import type { LazyRenderer } from "./lazy-renderer.ts";
-import { LitRouteHost } from "./lit-route-host.tsx";
 import { normalizeChatSendShortcut } from "./settings.ts";
 
-/** Unported elements receive properties explicitly until their own lanes land. */
-export type ShellElementAttributes = SolidJSX.HTMLAttributes<HTMLElement> & {
-  [property: `prop:${string}`]: unknown;
-};
+const PendingDebugOverlay = lazy(() => import("../pages/debug/debug-overlay-frame.ts"), {
+  export: "renderPendingDebugOverlay",
+});
+const CommandPalette = lazy(() => import("../components/command-palette.tsx"), {
+  export: "CommandPalette",
+});
+const DebugOverlay = lazy(() => import("../pages/debug/debug-overlay.ts"), {
+  export: "DebugOverlay",
+});
+const KeyboardShortcuts = lazy(() => import("../components/keyboard-shortcuts-dialog.tsx"), {
+  export: "KeyboardShortcutsDialog",
+});
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-command-palette": ShellElementAttributes;
-      "openclaw-debug-overlay": ShellElementAttributes;
-      "openclaw-keyboard-shortcuts-dialog": ShellElementAttributes;
-    }
-  }
-}
+export type ShellElementAttributes<T extends HTMLElement = HTMLElement> =
+  SolidJSX.HTMLAttributes<T> & { [property: `prop:${string}`]: unknown };
 
-export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSessionHost {
-  readonly commandPaletteElement: OptionalCustomElement;
+export interface ShellLazyOverlayHost
+  extends DebugOverlayFrameHost, ShellNewSessionHost, ShellComponentHost {
+  readonly elements: ShellOwnedElements;
+  readonly shellNavigation: ShellNavigationCapability;
   readonly commandPaletteLoading: CommandPaletteLoadingState;
-  readonly debugOverlayFrame: LazyRenderer<
-    typeof import("../pages/debug/debug-overlay-frame.ts").renderPendingDebugOverlay
-  >;
   closePendingPalette(): void;
-  readonly lazyCustomElements: LazyCustomElementRequestController;
   handleCommandPaletteSlashCommand(command: string): void;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
 }
 
-/** Shell-level optional dialogs share lazy-load recovery, not route ownership. */
+/** Optional dialogs share shell intent; Solid owns each component import. */
 export function ShellLazyOverlays(props: {
   host: ShellLazyOverlayHost;
   revision: number;
@@ -56,74 +46,90 @@ export function ShellLazyOverlays(props: {
   custodianPanelAvailable: boolean;
   nativeEmbed: boolean;
 }): SolidJSX.Element {
-  const state = createMemo(() => {
-    return {
-      revision: props.revision,
-      lazy: props.host.lazyCustomElements.visibleState,
-      paletteLoading: props.host.commandPaletteLoading.active,
-      paletteDefined: isOptionalElementDefined(props.host.commandPaletteElement),
-      debugDefined: isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT),
-      debugRenderer: props.host.debugOverlayFrame.renderer,
-      debugFrameFailed: props.host.debugOverlayFrame.failed,
-      shortcutsDefined: isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT),
-      sendShortcut: normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut),
-    };
+  const sendShortcut = createMemo(() => {
+    void props.revision;
+    return normalizeChatSendShortcut(props.host.context?.theme.settings.chatSendShortcut);
   });
-  createEffect(
-    () => {
-      const current = state();
-      return (
-        current.lazy?.element === DEBUG_OVERLAY_ELEMENT &&
-        !current.debugRenderer &&
-        !current.debugFrameFailed
-      );
-    },
-    (shouldLoad) => {
-      if (shouldLoad) {
-        props.host.debugOverlayFrame.load();
-      }
-    },
+  const renderDebugState = (state: LazyElementState, retry: () => void, close: () => void) => (
+    <Errored fallback={<ShellLoadState state={state} onRetry={retry} onClose={close} />}>
+      <Loading>
+        <PendingDebugOverlay
+          host={props.host}
+          state={state}
+          mode={(props.revision, props.host.pendingDebugOverlayMode)}
+          onRetry={retry}
+          onClose={close}
+        />
+      </Loading>
+    </Errored>
   );
-  const onClose = () => props.host.closePendingPalette();
   return (
     <>
-      <LitRouteHost
-        renderValue={() => {
-          const current = state();
-          return current.paletteLoading &&
-            (!current.lazy ||
-              (current.lazy.status === "loading" &&
-                current.lazy.element === props.host.commandPaletteElement))
-            ? renderCommandPaletteLoading(props.host.commandPaletteLoading, onClose)
-            : current.lazy?.element === DEBUG_OVERLAY_ELEMENT
-              ? (current.debugRenderer?.(props.host, current.lazy) ??
-                (current.debugFrameFailed
-                  ? renderLazyElementModal(props.host.lazyCustomElements)
-                  : undefined))
-              : renderLazyElementModal(props.host.lazyCustomElements);
-        }}
-      />
-      <Show when={state().paletteDefined}>
-        <openclaw-command-palette
-          prop:desktopAvailable={props.desktopPanelAvailable}
-          prop:custodianAvailable={props.custodianPanelAvailable}
-          prop:onNavigate={(routeId: RouteId, options?: ApplicationNavigationOptions) =>
-            props.host.navigate(routeId, options)
-          }
-          prop:onSelectSession={(sessionKey: string) => props.host.selectChatSession(sessionKey)}
-          prop:onSlashCommand={(command: string) =>
-            props.host.handleCommandPaletteSlashCommand(command)
-          }
+      <ShellRequestedComponent
+        host={props.host}
+        component="palette"
+        revision={props.revision}
+        label="command palette"
+        showLoading={false}
+      >
+        <Loading>
+          <CommandPalette
+            ref={(element) => {
+              props.host.elements.commandPalette = element;
+              props.host.shellComponentMounted(element);
+            }}
+            desktopAvailable={props.desktopPanelAvailable}
+            custodianAvailable={props.custodianPanelAvailable}
+            onNavigate={(routeId: RouteId, options?: ApplicationNavigationOptions) =>
+              props.host.shellNavigation.navigate(routeId, options)
+            }
+            onSelectSession={(sessionKey: string) =>
+              props.host.shellNavigation.selectChatSession(sessionKey)
+            }
+            onSlashCommand={(command: string) =>
+              props.host.handleCommandPaletteSlashCommand(command)
+            }
+          />
+        </Loading>
+        {/* Keep the same input mounted while the component loads and composition settles. */}
+        <Show when={props.host.commandPaletteLoading.active()}>
+          <CommandPaletteLoading
+            state={props.host.commandPaletteLoading}
+            onClose={() => props.host.closePendingPalette()}
+            retryStale={(canReload) => props.host.retryPendingLazyAction(canReload)}
+          />
+        </Show>
+      </ShellRequestedComponent>
+      <ShellRequestedComponent
+        host={props.host}
+        component="debug"
+        revision={props.revision}
+        label={t("debug.overlay.title")}
+        renderLoadState={renderDebugState}
+      >
+        <DebugOverlay
+          ref={(element) => {
+            props.host.elements.debugOverlay = element;
+            props.host.shellComponentMounted(element);
+          }}
         />
-      </Show>
-      <Show when={state().debugDefined}>
-        <openclaw-debug-overlay />
-      </Show>
-      <Show when={!props.nativeEmbed && state().shortcutsDefined}>
-        <openclaw-keyboard-shortcuts-dialog
-          prop:sendShortcut={state().sendShortcut}
-          prop:newSessionHost={props.host}
-        />
+      </ShellRequestedComponent>
+      <Show when={!props.nativeEmbed}>
+        <ShellRequestedComponent
+          host={props.host}
+          component="shortcuts"
+          revision={props.revision}
+          label={t("shortcutsOverlay.title")}
+        >
+          <KeyboardShortcuts
+            ref={(element) => {
+              props.host.elements.keyboardShortcuts = element;
+              props.host.shellComponentMounted(element);
+            }}
+            sendShortcut={sendShortcut()}
+            newSessionHost={props.host}
+          />
+        </ShellRequestedComponent>
       </Show>
     </>
   );

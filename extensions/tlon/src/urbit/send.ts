@@ -107,11 +107,7 @@ export async function sendGroupMessageWithStory({
   // Format reply ID as @ud (with dots) - required for Tlon to recognize thread replies
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
-    try {
-      formattedReplyId = scot("ud", BigInt(replyToId));
-    } catch {
-      // Fall back to raw ID if formatting fails
-    }
+    formattedReplyId = scot("ud", BigInt(replyToId));
   }
 
   const memo = { content: story, author: fromShip, sent: sentAt };

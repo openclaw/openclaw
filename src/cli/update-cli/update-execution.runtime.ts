@@ -3,8 +3,9 @@
 // after a rebuild removes the old hashed chunk. Preload that closure before mutation.
 import "../../config/io.write.js";
 import { prepareDeferredPluginMigrationRuntime } from "../../infra/deferred-plugin-migrations.js";
+import { prepareUpdateDatabaseBackupRuntime } from "../../infra/update-database-backup.js";
 
-await prepareDeferredPluginMigrationRuntime();
+await Promise.all([prepareDeferredPluginMigrationRuntime(), prepareUpdateDatabaseBackupRuntime()]);
 
 export { executeMutableUpdate } from "./update-command-execution.js";
 export { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";

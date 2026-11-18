@@ -14,8 +14,6 @@ describe("parseYouTubeVideoUrl", () => {
     "https://www.youtube-nocookie.com/embed/AbC123_-xyz",
   ])("normalizes a supported video link without copying player parameters: %s", (url) => {
     expect(parseYouTubeVideoUrl(url)).toEqual({
-      videoId: "AbC123_-xyz",
-      startSeconds: 0,
       watchUrl: "https://www.youtube.com/watch?v=AbC123_-xyz",
       embedUrl: "https://www.youtube-nocookie.com/embed/AbC123_-xyz?playsinline=1",
       thumbnailUrl: "https://i.ytimg.com/vi/AbC123_-xyz/hqdefault.jpg",
@@ -33,7 +31,6 @@ describe("parseYouTubeVideoUrl", () => {
     ["?start=0&t=30", 0],
   ] as const)("preserves the requested playback position from %s", (suffix, seconds) => {
     const video = parseYouTubeVideoUrl(`https://youtu.be/AbC123_-xyz${suffix}`);
-    expect(video?.startSeconds).toBe(seconds);
     expect(video?.watchUrl).toBe(
       `https://www.youtube.com/watch?v=AbC123_-xyz${seconds > 0 ? `&t=${seconds}` : ""}`,
     );

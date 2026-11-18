@@ -4,18 +4,17 @@ import {
   setBackgroundPreferenceIdentity,
 } from "./settings-background.ts";
 
-type ProfileAppearancePrefs = {
-  profileId: string;
-  scope: string;
-  prefs: ServerUiPrefs;
-};
 export type ProfilePreferencesReadOptions = {
   isCurrent: () => boolean;
 };
 
 // The asynchronous reader borrows this same owner, never a copied publication state.
 export type ProfilePreferencesState = {
-  appearance: ProfileAppearancePrefs | null;
+  appearance: {
+    profileId: string;
+    scope: string;
+    prefs: ServerUiPrefs;
+  } | null;
   identity: { profileId: string; scope: string } | null;
   requestId: number;
   // Cached refreshes survive newer reads, but not write or identity invalidation.
@@ -93,4 +92,13 @@ export function resetProfileAppearancePrefs(): void {
   invalidateProfileAppearanceReads(true);
   state.identity = null;
   clearBackgroundPreferenceIdentity();
+}
+
+export function seedProfileAppearancePrefs(
+  scope: string,
+  profileId: string,
+  prefs: ServerUiPrefs,
+): void {
+  rememberProfileAppearanceIdentity(scope, profileId);
+  state.appearance = { scope, profileId, prefs };
 }

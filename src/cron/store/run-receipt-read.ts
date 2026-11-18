@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { hasCanonicalCronDeliveryMode } from "./delivery-codec.js";
@@ -15,7 +15,6 @@ import type {
   CronRunReceiptCurrentFacts,
   CronRunReceiptCurrentReadCommand,
   CronRunReceiptHandle,
-  CronRunReceiptOwnerObservation,
   CronRunReceiptRecoveryCandidate,
   CronRunReceiptStatus,
 } from "./run-receipt.types.js";
@@ -51,6 +50,7 @@ export function receiptFromRow(row: CronRunReceiptRow): CronRunReceipt {
     startedAtMs: row.started_at_ms,
     finishedAtMs: row.finished_at_ms,
     ...(row.error_text ? { error: row.error_text } : {}),
+    ...(row.delivery_attempt_state === "not-started" ? { deliveryNotStarted: true as const } : {}),
   };
 }
 
@@ -81,10 +81,10 @@ function matchesCronRunReceiptOwner(
 
 /** Current receipt, definition and deletion facts share one native read snapshot. */
 export function readCronRunReceiptCurrentFactsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   command: CronRunReceiptCurrentReadCommand,
 ): CronRunReceiptCurrentFacts {
-  return runSqliteDeferredTransactionSync(database, () => {
+  return runSqliteReadSnapshotSync(database, () => {
     const { handle } = command;
     const deletionBlocked =
       command.includeAvailability &&
@@ -118,7 +118,7 @@ export function readCronRunReceiptCurrentFactsInDatabase(
 
 /** Observe existing receipts without the writable owner's first-use initialization. */
 export function readActiveCronRunReceiptsInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   storeKey: string | undefined,
   jobIds: readonly string[],
 ): CronRunReceiptRecoveryCandidate[] {
@@ -135,32 +135,4 @@ export function readActiveCronRunReceiptsInDatabase(
   return rows
     .filter((row) => selected.has(row.job_id))
     .map((row) => receiptHandle(receiptFromRow(row)));
-}
-
-/** Drainage needs receipt ownership even after its scheduled job has been removed. */
-export function readActiveCronRunReceiptOwnersInDatabase(
-  database: DatabaseSync,
-  agentId: string,
-): CronRunReceiptOwnerObservation[] {
-  try {
-    return executeSqliteQuerySync(
-      database,
-      getNodeSqliteKysely<CronRunReceiptDatabase>(database)
-        .selectFrom("cron_run_receipts")
-        .select(["receipt_id", "owner_pid", "owner_start_time", "started_at_ms"])
-        .where("status", "=", "running")
-        .where("agent_id", "=", agentId),
-    ).rows.map((row) => ({
-      receiptId: row.receipt_id,
-      ownerPid: row.owner_pid,
-      ownerStartTime: row.owner_start_time,
-      startedAtMs: row.started_at_ms,
-    }));
-  } catch (error) {
-    // This additive table is initialized by the first receipt claim, never by a read.
-    if (error instanceof Error && error.message === "no such table: cron_run_receipts") {
-      return [];
-    }
-    throw error;
-  }
 }

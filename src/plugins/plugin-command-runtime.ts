@@ -14,12 +14,10 @@ import {
   pluginCommandSupportsChannel,
   projectPluginCommandNativeMetadata,
 } from "./plugin-command-metadata.js";
-import {
-  listRegisteredPluginCommands,
-  resolveSelectedPluginCommandRegistry,
-} from "./plugin-command-registry.js";
+import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 export { PLUGIN_COMMAND_DISPATCH };
@@ -55,6 +53,13 @@ export type PluginCommandDispatchContext = Readonly<{
   diagnosticsPreviewOnly?: PluginCommandContext["diagnosticsPreviewOnly"];
   diagnosticsPrivateRouted?: PluginCommandContext["diagnosticsPrivateRouted"];
   runtimeContext?: {
+    /** Host-only factory, bound to the command invocation before the reader is exposed. */
+    createModels?: (params: {
+      signal: AbortSignal;
+      assertCurrent: () => void;
+    }) => NonNullable<PluginCommandContext["runtimeContext"]>["models"];
+    /** Core-only factory; requester authority is captured by the dispatch owner. */
+    createSubagents?: import("./runtime/native-subagent-context.js").NativeSubagentCommandFactory;
     compactCurrent?: (
       signal?: AbortSignal,
       assertOwnerCurrent?: () => void,
@@ -109,6 +114,50 @@ type SelectedCommand = {
 };
 
 const dispatchSelections = new WeakMap<object, SelectedCommand>();
+// A channel that runs a dispatch itself hands a continuing result to the reply pipeline by passing
+// the same dispatch; the pipeline applies it once instead of running the command a second time.
+const continuedDispatches = new WeakMap<PluginCommandDispatch, PluginCommandResult>();
+
+/** True when a command result hands the turn to the agent (`true` or `{ prompt }`). */
+export function pluginCommandResultContinuesAgent(result: PluginCommandResult): boolean {
+  const continuation: unknown = result.continueAgent;
+  return continuation === true || (typeof continuation === "object" && continuation !== null);
+}
+
+/**
+ * Takes the continuing result a channel already produced for this dispatch, at most once. The
+ * handler ran under the channel's authorization; the reply turn re-applies requester
+ * authorization with its own current facts before the continuation reaches the agent.
+ */
+export async function takeContinuedPluginCommandResult(
+  dispatch: PluginCommandDispatch,
+  context: PluginCommandDispatchContext,
+): Promise<PluginCommandResult | undefined> {
+  const result = continuedDispatches.get(dispatch);
+  if (!result) {
+    return undefined;
+  }
+  continuedDispatches.delete(dispatch);
+  const selected = dispatchSelections.get(dispatch);
+  if (
+    !selected ||
+    selected.selection.availability !== "loaded" ||
+    selected.channel !== (normalizeOptionalLowercaseString(context.channel) ?? "")
+  ) {
+    return { ...INVALID_SELECTION_REPLY };
+  }
+  if (isPluginRegistryRetired(selected.registry)) {
+    return { ...RETIRED_SELECTION_REPLY };
+  }
+  const { resolvePluginCommandAuthorizationRefusal } =
+    await import("./plugin-command-execution.js");
+  const refusal = resolvePluginCommandAuthorizationRefusal({
+    ...context,
+    command: selected.selection.command,
+  });
+  return refusal ? { text: refusal } : result;
+}
+
 const runtimeStates = new WeakMap<PluginCommandRuntime, PluginCommandRuntimeState>();
 
 const INVALID_SELECTION_REPLY = {
@@ -129,7 +178,11 @@ function createSelectedPluginCommandDispatch(
       if (this !== dispatch) {
         return { ...INVALID_SELECTION_REPLY };
       }
-      return await executePluginCommandDispatch(dispatch, context);
+      const result = await executePluginCommandDispatch(dispatch, context);
+      if (pluginCommandResultContinuesAgent(result)) {
+        continuedDispatches.set(dispatch, result);
+      }
+      return result;
     },
   }) as PluginCommandDispatch;
   dispatchSelections.set(dispatch, {
@@ -185,16 +238,48 @@ export async function executePluginCommandDispatch(
   });
 }
 
+/** Core-only cron adapter: no ambient completion, agent fallback or chat-error conversion. */
+export async function executeScheduledPluginCommandDispatch(
+  dispatch: PluginCommandDispatch,
+  context: PluginCommandDispatchContext & { abortSignal: AbortSignal },
+): Promise<PluginCommandResult> {
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  const selected = dispatchSelections.get(dispatch);
+  if (
+    !selected ||
+    selected.selection.availability !== "loaded" ||
+    isPluginRegistryRetired(selected.registry) ||
+    selected.channel !== normalizeOptionalLowercaseString(context.channel) ||
+    selected.selection.command.requireAuth !== true ||
+    !selected.selection.command.runtimeCapabilities?.includes("subagents")
+  ) {
+    throw new Error("Scheduled command selection is no longer eligible.");
+  }
+  const { executeRegisteredPluginCommand } = await import("./plugin-command-execution.js");
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  return await executeRegisteredPluginCommand(
+    selected.registry,
+    {
+      ...context,
+      command: selected.selection.command,
+      args: selected.selection.args,
+    },
+    { abortSignal: context.abortSignal },
+  );
+}
+
 /** Creates one command runtime bound permanently to the current scoped registry generation. */
 export function createPluginCommandRuntime(): PluginCommandRuntime {
-  const registry = resolveSelectedPluginCommandRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry) {
     throw new Error("Plugin command runtime requires an active or request-scoped registry.");
   }
-  const state: PluginCommandRuntimeState = Object.freeze({
+  const state: PluginCommandRuntimeState = {
     registry,
-    commands: Object.freeze(listRegisteredPluginCommands(registry)),
-  });
+    commands: listRegisteredPluginCommands(registry),
+  };
 
   const assertCurrent = () => {
     if (isPluginRegistryRetired(state.registry)) {
@@ -271,7 +356,7 @@ export function matchPluginCommandInvocation(
     if (plugin?.status !== "error" || !plugin.enabled) {
       return null;
     }
-    return Object.freeze({
+    return {
       dispatch: createSelectedPluginCommandDispatch(
         state,
         { availability: "manifest-only", plugin },
@@ -279,10 +364,10 @@ export function matchPluginCommandInvocation(
       ),
       acceptsArgs: true,
       requireAuth: true,
-    });
+    };
   }
   const metadata = projectPluginCommandNativeMetadata(match.command, provider);
-  return Object.freeze({
+  return {
     dispatch: createSelectedPluginCommandDispatch(
       state,
       { availability: "loaded", command: match.command, args: match.args },
@@ -291,5 +376,5 @@ export function matchPluginCommandInvocation(
     acceptsArgs: metadata.acceptsArgs,
     requireAuth: metadata.requireAuth,
     ...(metadata.progressMessage ? { progressMessage: metadata.progressMessage } : {}),
-  });
+  };
 }

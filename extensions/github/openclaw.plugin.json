@@ -9,11 +9,20 @@
     "onStartup": true
   },
   "contracts": {
+    "tools": ["github_read", "github_search"],
     "gatewayMethodDispatch": ["authenticated-request"]
+  },
+  "toolMetadata": {
+    "github_read": { "profiles": ["coding"] },
+    "github_search": { "profiles": ["coding"] }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Summarize a public GitHub issue, pull request, commit, or completed Actions job without making changes.",
+    "Find relevant open issues or pull requests in a public GitHub repository."
+  ]
 }

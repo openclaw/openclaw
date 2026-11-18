@@ -20,11 +20,12 @@ describe("closed schema identity", () => {
     });
   });
 
-  it("retains identity through TypeBox's optional deep clone", () => {
+  it("retains identity through TypeBox's optional shallow copy", () => {
     const schema = closedObject({ sessionKey: Type.String() });
     const clone = Type.Optional(schema);
     expect(clone).not.toBe(schema);
-    expect(clone.properties).not.toBe(schema.properties);
+    // TypeBox 1.4.1's Memory.Update preserves descriptors and shares nested values.
+    expect(clone.properties).toBe(schema.properties);
     expect(identity(clone)).toBe(identity(schema));
     expect(identity(clone)).toBeTypeOf("symbol");
   });

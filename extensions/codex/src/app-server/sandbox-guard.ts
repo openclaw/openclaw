@@ -101,77 +101,57 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
     : sandboxBlock;
 }
 
+type PreparedCodexNativeBlock = { block: string | undefined } & Pick<
+  PreparedCodexNativeExecutionPolicy,
+  "assertCurrent" | "source" | "release"
+>;
+
+async function prepareCodexNativeBlock<
+  Params extends Parameters<typeof prepareCodexNativeExecutionPolicy>[0],
+>(
+  params: Params,
+  resolveBlock: (
+    params: Params & { executionPolicy: CodexNativeExecutionPolicy },
+  ) => string | undefined,
+): Promise<PreparedCodexNativeBlock> {
+  const selected = await prepareCodexNativeExecutionPolicy({
+    ...params,
+    readRuntimeSessionEntry: true,
+  });
+  return {
+    block: resolveBlock({ ...params, executionPolicy: selected.policy }),
+    assertCurrent: selected.assertCurrent,
+    source: selected.source,
+    release: selected.release,
+  };
+}
+
 /** Resolve policy before yielding to client acquisition and recheck it at each write. */
 export async function prepareCodexAppServerDirectSandboxBypassBlock(
   params: Omit<
     Parameters<typeof resolveCodexAppServerDirectSandboxBypassBlock>[0],
     "executionPolicy"
   >,
-): Promise<
-  { block: string | undefined } & Pick<
-    PreparedCodexNativeExecutionPolicy,
-    "assertCurrent" | "source" | "release"
-  >
-> {
+): Promise<PreparedCodexNativeBlock> {
   if (
     ALLOWED_CONTROL_PLANE_METHODS.has(params.method) &&
     params.method !== "config/mcpServer/reload"
   ) {
     return { block: undefined, async assertCurrent() {}, release() {} };
   }
-  const selected = await prepareCodexNativeExecutionPolicy({
-    ...params,
-    readRuntimeSessionEntry: true,
-  });
-  return {
-    block: resolveCodexAppServerDirectSandboxBypassBlock({
-      ...params,
-      executionPolicy: selected.policy,
-    }),
-    assertCurrent: selected.assertCurrent,
-    source: selected.source,
-    release: selected.release,
-  };
+  return prepareCodexNativeBlock(params, resolveCodexAppServerDirectSandboxBypassBlock);
 }
 
 export async function prepareCodexNativeExecutionBlock(
   params: Omit<Parameters<typeof resolveCodexNativeExecutionBlock>[0], "executionPolicy">,
-): Promise<
-  { block: string | undefined } & Pick<
-    PreparedCodexNativeExecutionPolicy,
-    "assertCurrent" | "source" | "release"
-  >
-> {
-  const selected = await prepareCodexNativeExecutionPolicy({
-    ...params,
-    readRuntimeSessionEntry: true,
-  });
-  return {
-    block: resolveCodexNativeExecutionBlock({ ...params, executionPolicy: selected.policy }),
-    assertCurrent: selected.assertCurrent,
-    source: selected.source,
-    release: selected.release,
-  };
+): Promise<PreparedCodexNativeBlock> {
+  return prepareCodexNativeBlock(params, resolveCodexNativeExecutionBlock);
 }
 
 export async function prepareCodexNativeSandboxBlock(
   params: Omit<Parameters<typeof resolveCodexNativeSandboxBlock>[0], "executionPolicy">,
-): Promise<
-  { block: string | undefined } & Pick<
-    PreparedCodexNativeExecutionPolicy,
-    "assertCurrent" | "source" | "release"
-  >
-> {
-  const selected = await prepareCodexNativeExecutionPolicy({
-    ...params,
-    readRuntimeSessionEntry: true,
-  });
-  return {
-    block: resolveCodexNativeSandboxBlock({ ...params, executionPolicy: selected.policy }),
-    assertCurrent: selected.assertCurrent,
-    source: selected.source,
-    release: selected.release,
-  };
+): Promise<PreparedCodexNativeBlock> {
+  return prepareCodexNativeBlock(params, resolveCodexNativeSandboxBlock);
 }
 
 /** Resolves the generic native-execution block for sandboxed or node-hosted sessions. */

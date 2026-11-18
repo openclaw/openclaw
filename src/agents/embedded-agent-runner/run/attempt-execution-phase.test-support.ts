@@ -75,6 +75,7 @@ export async function createFixture(
   };
   const timeoutResult = {
     getRunAbortDeadlineAtMs: vi.fn(() => 123),
+    onRunAbortDeadlineChanged: () => () => {},
     clearTimers: vi.fn(),
   };
   const setContextReplacementHook = vi.fn();
@@ -156,6 +157,7 @@ export async function createFixture(
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
       toolBase: {
+        bindRunAbortDeadline: vi.fn(),
         skillInstructionDeliveryCache,
         nestedToolActivityState: createAttemptNestedToolActivityState(),
       },

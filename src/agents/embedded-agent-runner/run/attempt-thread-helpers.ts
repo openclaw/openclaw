@@ -40,8 +40,7 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
 
 /**
  * Appends the cache-TTL transcript marker when context-pruning policy and model
- * eligibility both allow it. The boolean result tells callers whether the
- * session transcript changed.
+ * eligibility both allow it.
  */
 export async function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
@@ -55,9 +54,8 @@ export async function appendAttemptCacheTtlIfNeeded(params: {
   modelApi?: string;
   modelRoute?: Parameters<typeof isCacheTtlEligibleProvider>[3];
   isCacheTtlEligibleProvider: typeof isCacheTtlEligibleProvider;
-  now?: number;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
-}): Promise<boolean> {
+}): Promise<void> {
   // Compaction and timeout attempts already rewrite the transcript boundary.
   if (
     params.timedOutDuringCompaction ||
@@ -70,12 +68,11 @@ export async function appendAttemptCacheTtlIfNeeded(params: {
       params.modelRoute,
     )
   ) {
-    return false;
+    return;
   }
   await persistToolResultProjections(
     params.toolResultPromptProjectionState,
     (customType, data) => params.sessionManager.appendCustomEntryAsync(customType, data),
-    { timestamp: params.now ?? Date.now(), provider: params.provider, modelId: params.modelId },
+    { timestamp: Date.now(), provider: params.provider, modelId: params.modelId },
   );
-  return true;
 }

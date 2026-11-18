@@ -1,6 +1,6 @@
 import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { readProcessAncestry } from "@openclaw/proc-safe/identity";
 import {
   getFileLockProcessStartTime,
@@ -107,10 +107,7 @@ export function createManagedHandoffProcessIdentityReader(options: {
       // Node retains startup argv even after the CLI removes root profile options.
       const report = process.report.getReport();
       const argv = isRecord(report) && isRecord(report.header) ? report.header.commandLine : null;
-      selfLauncherIdentity =
-        Array.isArray(argv) && argv.every((arg: unknown): arg is string => typeof arg === "string")
-          ? windowsArgvIdentity(argv)
-          : null;
+      selfLauncherIdentity = isStringArray(argv) ? windowsArgvIdentity(argv) : null;
     }
     return selfLauncherIdentity;
   }

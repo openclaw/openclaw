@@ -1,17 +1,9 @@
 // Provider contract helpers expose reusable provider plugin contract test setup.
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { describe, expect, it } from "vitest";
-import {
-  providerContractLoadError,
-  resolveProviderContractProvidersForPluginIds,
-} from "../../plugins/contracts/registry.js";
-import { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../../plugins/provider-contract-public-artifacts.js";
+import { resolveProviderContractEntriesForPluginId } from "../../plugins/contracts/registry.js";
 import type { ProviderPlugin } from "../provider-model-shared.js";
 import { installProviderPluginContractSuite } from "./provider-contract-suites.js";
-
-type ProviderContractEntry = {
-  pluginId: string;
-  provider: ProviderPlugin;
-};
 
 function providerMatchesManifestId(provider: ProviderPlugin, providerId: string): boolean {
   return (
@@ -22,38 +14,30 @@ function providerMatchesManifestId(provider: ProviderPlugin, providerId: string)
 }
 
 export function describeProviderContracts(pluginId: string) {
-  let providerEntries: ProviderContractEntry[] | undefined;
-  const resolveProviderEntries = (): ProviderContractEntry[] =>
-    (providerEntries ??=
-      resolveBundledExplicitProviderContractsFromPublicArtifacts({ onlyPluginIds: [pluginId] }) ??
-      resolveProviderContractProvidersForPluginIds([pluginId]).map((provider) => ({
-        pluginId,
-        provider,
-      })));
+  let providers: ProviderPlugin[] = [];
+  let loadError: Error | undefined;
+  try {
+    providers = resolveProviderContractEntriesForPluginId(pluginId).map((entry) => entry.provider);
+  } catch (error) {
+    loadError = toErrorObject(error, `provider contract load failed for ${pluginId}`);
+  }
 
   describe(`${pluginId} provider contract registry load`, () => {
     it("loads bundled providers without import-time registry failure", () => {
-      const providers = resolveProviderEntries();
-      expect(providerContractLoadError).toBeUndefined();
+      expect(loadError).toBeUndefined();
       expect(providers.length).toBeGreaterThan(0);
     });
   });
 
-  for (const {
-    provider: { id: providerId },
-  } of resolveProviderEntries()) {
+  for (const { id: providerId } of providers) {
     describe(`${pluginId}:${providerId} provider contract`, () => {
-      // Resolve provider entries lazily so the non-isolated extension runner
-      // does not race provider contract collection against other file imports.
       installProviderPluginContractSuite({
         provider: () => {
-          const entry = resolveProviderEntries().find((entryLocal) =>
-            providerMatchesManifestId(entryLocal.provider, providerId),
-          );
-          if (!entry) {
+          const provider = providers.find((entry) => providerMatchesManifestId(entry, providerId));
+          if (!provider) {
             throw new Error(`provider contract entry missing for ${pluginId}:${providerId}`);
           }
-          return entry.provider;
+          return provider;
         },
       });
     });

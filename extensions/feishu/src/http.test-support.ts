@@ -18,45 +18,36 @@ export function stripDispatcher(init: RequestInit | undefined): RequestInit | un
   return rest;
 }
 
+/**
+ * Streams JSON one chunk past `capBytes`, then holds the response open without
+ * ending it. Resolves once the client closes the unfinished response, so a test
+ * awaiting it observes the reader's cancellation; eager runtime buffering (Bun
+ * fetch) cannot race a finite body to EOF first.
+ */
 export function writeOversizedJson(
   res: ServerResponse,
-  totalBytes: number,
+  capBytes: number,
   jsonPrefix: string,
-): { bytesPulled: () => number; canceled: () => boolean } {
-  const chunk = Buffer.alloc(1024 * 1024, 0x20);
-  let bytesPulled = 0;
-  let canceled = false;
-  let ended = false;
-  res.writeHead(200, { "content-type": "application/json" });
-  res.on("close", () => {
-    if (!ended && bytesPulled < totalBytes) {
-      canceled = true;
-    }
+): Promise<void> {
+  const clientClosed = new Promise<void>((resolve) => {
+    res.once("close", () => resolve());
   });
+  const chunk = Buffer.alloc(1024 * 1024, 0x20);
   const prefix = Buffer.from(jsonPrefix);
-  bytesPulled += prefix.byteLength;
+  let bytesWritten = prefix.byteLength;
+  res.writeHead(200, { "content-type": "application/json" });
   res.write(prefix);
   const sendChunk = () => {
-    if (bytesPulled >= totalBytes) {
-      if (!res.destroyed) {
-        ended = true;
-        res.end('"}');
-      }
+    if (res.destroyed || bytesWritten > capBytes) {
       return;
     }
-    const remaining = totalBytes - bytesPulled;
-    const size = Math.min(chunk.byteLength, remaining);
-    bytesPulled += size;
-    const ok = res.write(chunk.subarray(0, size));
-    if (ok) {
+    bytesWritten += chunk.byteLength;
+    if (res.write(chunk)) {
       setImmediate(sendChunk);
       return;
     }
     res.once("drain", sendChunk);
   };
   setImmediate(sendChunk);
-  return {
-    bytesPulled: () => bytesPulled,
-    canceled: () => canceled || (!ended && bytesPulled < totalBytes),
-  };
+  return clientClosed;
 }

@@ -11,8 +11,11 @@ import {
   resolveCliExecutionAuthProfileId,
 } from "../agents/cli-execution-auth.js";
 import { resolveConfiguredSetupModelForAgent } from "../agents/utility-model.js";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
+import { captureRuntimeConfigWithSource } from "../config/runtime-config-capture-state.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -38,17 +41,10 @@ export type SystemAgentConfiguredRoute = {
 );
 
 export type SystemAgentConfiguredRouteDeps = {
-  /** Explicit role selection for verifying a utility candidate alongside a working primary. */
-  modelTarget?: "utility";
-  readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  loadAuthProfileStoreForRuntime?: typeof import("../agents/auth-profiles/store-runtime.js").loadAuthProfileStoreForRuntime;
+  /** Explicit role selection; primary callers must not use setup-only utility inference. */
+  modelTarget?: "primary" | "utility";
   pluginMetadataPlugins?: PluginMetadataSnapshot["plugins"];
 };
-type SystemAgentRouteProjectionDeps = Pick<
-  SystemAgentConfiguredRouteDeps,
-  "loadAuthProfileStoreForRuntime" | "pluginMetadataPlugins" | "modelTarget"
->;
-
 /** The canonical source and default-materialized view from one authoritative read. */
 export type SystemAgentConfigSnapshot = Pick<
   ConfigFileSnapshot,
@@ -74,12 +70,18 @@ export type DefaultInferenceRouteProjection = {
 function projectSystemAgentExecutionConfig(
   config: OpenClawConfig,
   routeAgentId: string,
+  allowProspectiveAgent: boolean,
 ): OpenClawConfig {
   const agents = listAgentEntries(config);
   const routeAgent = agents.find((agent) => normalizeAgentId(agent.id) === routeAgentId);
   const retainedAgents = agents.filter((agent) => normalizeAgentId(agent.id) !== SYSTEM_AGENT_ID);
   const projectedAgents = [
     ...retainedAgents,
+    // Primary preflight runs before agent creation. Admit its empty candidate
+    // only in this isolated execution view; source config stays authoritative.
+    ...(allowProspectiveAgent && !routeAgent && routeAgentId !== SYSTEM_AGENT_ID
+      ? [{ id: routeAgentId }]
+      : []),
     {
       id: SYSTEM_AGENT_ID,
       ...(routeAgent?.params !== undefined ? { params: structuredClone(routeAgent.params) } : {}),
@@ -94,13 +96,13 @@ function projectSystemAgentExecutionConfig(
     },
   };
   copyConfigResolutionFacts(config, projected);
-  return projected;
+  return captureRuntimeConfigWithSource(projected, projectConfigOntoRuntimeSourceSnapshot(config));
 }
 
 export async function resolveSystemAgentConfiguredRouteFromConfig(
   runConfig: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   configSnapshot?: SystemAgentConfigSnapshot,
 ): Promise<SystemAgentConfiguredRoute | null> {
   // Match before adding the reserved execution agent changes the source shape.
@@ -116,7 +118,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
   const [modelSelection, modelRuntimeAliases, simpleCompletion, harnessPolicy] = await Promise.all([
     import("../agents/model-selection.js"),
     import("../agents/model-runtime-aliases.js"),
-    import("../agents/simple-completion-runtime.js"),
+    import("../agents/simple-completion-selection.js"),
     import("../agents/harness/policy.js"),
   ]);
   const modelOwnerAgentId = resolveAmbientOwnerAgentId(runConfig, requestedAgentId);
@@ -160,7 +162,7 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
       agentId: modelOwnerAgentId,
     });
   const cliAuthProfileId = allowCliAuthProfileForwarding
-    ? resolveCliExecutionAuthProfileId({
+    ? await resolveCliExecutionAuthProfileId({
         cliExecutionProvider: executionProvider,
         authProfileProvider: selection.provider,
         config: runConfig,
@@ -173,18 +175,24 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
               },
             }
           : {}),
-        ...(deps.loadAuthProfileStoreForRuntime
-          ? { loadAuthProfileStoreForRuntime: deps.loadAuthProfileStoreForRuntime }
-          : {}),
       })
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
-  const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
+  const executionConfig = projectSystemAgentExecutionConfig(
+    preparedConfig,
+    modelOwnerAgentId,
+    deps.modelTarget === "primary",
+  );
+  const modelLabel = modelSelection.resolveConfiguredRouteModelLabel({
+    configuredRef: configuredSelection.modelRef,
+    resolved: { provider: selection.provider, model: selection.modelId },
+    ...(selection.profileId ? { profileId: selection.profileId } : {}),
+  });
   const base = {
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel: `${selection.provider}/${selection.modelId}`,
+    modelLabel,
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,
@@ -235,7 +243,7 @@ function projectRelevantModelMap(params: {
 export async function projectInferenceRoute(
   config: OpenClawConfig,
   requestedAgentId?: string,
-  deps: SystemAgentRouteProjectionDeps = {},
+  deps: SystemAgentConfiguredRouteDeps = {},
   sourceConfig: OpenClawConfig = config,
 ): Promise<DefaultInferenceRouteProjection> {
   const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
@@ -283,7 +291,8 @@ export async function projectInferenceRoute(
   );
   const rawModel =
     route?.modelTarget === "utility"
-      ? (agent?.utilityModel ?? defaults?.utilityModel)
+      ? (resolveAgentModelPrimaryValue(agent?.utilityModel) ??
+        resolveAgentModelPrimaryValue(defaults?.utilityModel))
       : typeof agent?.model === "string"
         ? agent.model
         : agent?.model?.primary ||
@@ -399,38 +408,4 @@ export function sameSetupConfiguredRoute(
   const normalize = (route: DefaultInferenceRouteProjection["route"]) =>
     route ? { ...route, agentId: "<agent>", agentDir: "<agent-dir>" } : null;
   return isDeepStrictEqual(normalize(left), normalize(right));
-}
-
-export function assertSetupTarget(params: {
-  config: OpenClawConfig;
-  expectedAgentId?: string;
-  expectedAgentDir?: string;
-  expectedModelRef?: string;
-  resolveAgentDir: (config: OpenClawConfig, agentId: string) => string;
-  resolveDefaultAgentId: (config: OpenClawConfig) => string;
-  resolveDefaultModelForAgent: (params: { cfg: OpenClawConfig; agentId: string }) => {
-    provider: string;
-    model: string;
-  };
-}): void {
-  const agentId = params.resolveDefaultAgentId(params.config);
-  if (params.expectedAgentId && agentId !== params.expectedAgentId) {
-    throw new Error("The default agent changed while AI access was being tested. Try setup again.");
-  }
-  if (
-    params.expectedAgentDir &&
-    params.resolveAgentDir(params.config, agentId) !== params.expectedAgentDir
-  ) {
-    throw new Error(
-      "The agent credential location changed while AI access was being tested. Try setup again.",
-    );
-  }
-  if (params.expectedModelRef) {
-    const current = params.resolveDefaultModelForAgent({ cfg: params.config, agentId });
-    if (`${current.provider}/${current.model}` !== params.expectedModelRef) {
-      throw new Error(
-        "The default model changed while AI access was being tested. Try setup again.",
-      );
-    }
-  }
 }

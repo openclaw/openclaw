@@ -88,8 +88,32 @@ drive_typed_onboarding() {
   send $'\r' 0.4
   wait_for_first_agent_prompt onboarding_log_contains 60 0.4
   send $'\r' 0.4
+  skip_optional_memory_setup 60
   wait_for_log "to search" 60
   send $'ollama\r' 0.4
+}
+
+# Packages with optional memory embedding setup (#163693) ask before the web
+# search picker; older packages go straight to the picker. Accept the default No.
+skip_optional_memory_setup() {
+  local timeout_s="${1:-60}"
+  local start_s
+  start_s="$(date +%s)"
+  while true; do
+    if onboarding_log_contains "Set up memory embeddings?"; then
+      send $'\r' 0.4
+      return 0
+    fi
+    if onboarding_log_contains "to search"; then
+      return 0
+    fi
+    if [ $(($(date +%s) - start_s)) -ge "$timeout_s" ]; then
+      echo "Timeout waiting for memory setup or web search prompt" >&2
+      tail -n 120 "$ONBOARD_LOG" 2>/dev/null || true
+      return 1
+    fi
+    sleep 0.2
+  done
 }
 
 openclaw_e2e_install_package "$INSTALL_LOG"

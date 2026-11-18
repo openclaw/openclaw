@@ -1,9 +1,28 @@
-import { normalizeConfigMachineStateKey } from "./config-machine-state.js";
+import { normalizeConfigMachineStateKey } from "./config-machine-state-row.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
-import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withArtifactPreservingStateReads,
+} from "./openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
-import { runOpenClawStateWorkerOperation } from "./openclaw-state-worker-store.js";
 import { createAuthProfileCredentialWriteAdmission } from "./user-model-account-authority.js";
+
+export async function readConfigMachineStateAsync<T>(
+  key: string,
+  options: OpenClawStateDatabaseOptions = {},
+  behavior: { artifactPreservingReadOnly?: boolean } = {},
+): Promise<T | undefined> {
+  const read = () =>
+    executeExistingOpenClawStateRead(options, { type: "machineState.read", input: { key } });
+  const result = await (behavior.artifactPreservingReadOnly
+    ? withArtifactPreservingStateReads(read)
+    : read());
+  if (!result) {
+    return undefined;
+  }
+  // SAFETY: Each key's owner defines its persisted JSON shape.
+  return result.row ? (JSON.parse(result.row.value_json) as T) : undefined;
+}
 
 export async function readVoiceWakeMachineState(
   key: "voicewake.triggers" | "voicewake.routing",
@@ -23,6 +42,7 @@ export async function writeConfigMachineStateAsync(
   value: unknown,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<number> {
+  const { runOpenClawStateWorkerOperation } = await import("./openclaw-state-worker-store.js");
   const stateKey = normalizeConfigMachineStateKey(key);
   const context = captureOpenClawStateWorkerContext(options);
   return runOpenClawStateWorkerOperation(

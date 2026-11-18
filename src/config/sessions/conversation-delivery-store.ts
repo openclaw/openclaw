@@ -1,4 +1,5 @@
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
+import { err, ok } from "@openclaw/normalization-core/result";
+import { captureOpenClawAgentDatabaseExecutionAsync } from "../../state/openclaw-agent-execution.js";
 import {
   runOpenClawAgentWorkerWrite,
   runOpenClawAgentWriteAdmission,
@@ -16,8 +17,9 @@ import {
   pinConversationDatabaseScope,
   type ConversationRegistryScope,
 } from "./conversation-registry.js";
-import { getSessionActorStorageBinding } from "./session-actor-storage-binding.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
@@ -45,28 +47,42 @@ function readConversationDelivery(
   scope: ConversationDeliveryStoreScope,
   lookup: ConversationDeliveryLookup,
 ) {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.agentId,
-    storePath: scope.storePath,
-  });
+  const memory = captureSessionActorStorageOwner(
+    {
+      agentId: scope.databaseAgentId ?? scope.agentId,
+      storePath: scope.storePath,
+      env: scope.env,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
-    return deliveryResult(() =>
-      memory.actor.storage!.read(
-        { type: "session.conversation.delivery.read", input: lookup },
-        memory.authority,
-      ),
+    const binding =
+      memory.binding &&
+      memory.binding.agentId === memory.agentId &&
+      memory.binding.path === memory.path
+        ? memory.binding
+        : undefined;
+    return deliveryResult(async () =>
+      binding
+        ? binding.actor.storage!.read(
+            { type: "session.conversation.delivery.read", input: lookup },
+            memory.authority,
+          )
+        : memory.owner?.readConversationAfterWrites(
+            { type: "session.conversation.delivery.read", input: lookup },
+            memory.authority,
+          ),
     );
   }
   const { options, scope: preparedScope } = pinConversationDatabaseScope(scope);
-  const captured = structuredClone(lookup);
   // Reads share writer admission so they cannot overtake an accepted transition.
   return deliveryResult(() =>
     runOpenClawAgentWriteAdmission(options, () =>
       withSessionHistoryWorkerDatabase(
         options,
-        (reader) => reader.readConversationDelivery({ lookup: captured, env: preparedScope.env }),
+        (reader) => reader.readConversationDelivery({ lookup, env: preparedScope.env }),
         // Conflict cleanup retains this FIFO turn and must not drain independent readers.
-        targetDiscoveryLane,
+        sessionStoreLane,
       ),
     ),
   );
@@ -105,57 +121,88 @@ function writeConversationDelivery(
     | ["conversation.delivery.begin", ConversationDeliveryBegin, (() => void)?]
     | ["conversation.delivery.transition", ConversationDeliveryTransition, (() => void)?]
 ): Promise<ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }> {
-  const memory = getSessionActorStorageBinding({
-    agentId: scope.agentId,
-    storePath: scope.storePath,
-  });
+  const memory = captureSessionActorStorageOwner(
+    {
+      agentId: scope.databaseAgentId ?? scope.agentId,
+      storePath: scope.storePath,
+      env: scope.env,
+    },
+    { assertCurrent() {}, authorize() {} },
+  );
   if (memory) {
     return deliveryResult(async () => {
       const authority = {
-        assertCurrent: () => memory.authority.assertCurrent(),
-        authorize: (...args: Parameters<typeof memory.authority.authorize>) => {
+        ...memory.authority,
+        assertCurrent() {
+          memory.authority.assertCurrent();
           assertCurrent();
-          memory.authority.authorize(...args);
         },
       };
-      const outcome =
-        type === "conversation.delivery.begin"
-          ? await memory.actor.storage!.mutate(
+      const binding =
+        memory.binding &&
+        memory.binding.agentId === memory.agentId &&
+        memory.binding.path === memory.path
+          ? memory.binding
+          : undefined;
+      if (!binding) {
+        if (!memory.owner) {
+          throw new ConversationDeliveryMissingError("Conversation delivery owner is missing");
+        }
+        return type === "conversation.delivery.begin"
+          ? memory.owner.mutateConversation(
               { type: "session.conversation.delivery.begin", input },
               authority,
             )
-          : await memory.actor.storage!.mutate(
+          : memory.owner.mutateConversation(
               { type: "session.conversation.delivery.transition", input },
               authority,
             );
-      if (outcome.kind === "rolled-back") {
-        const error = new Error(outcome.error.message);
-        error.name = outcome.error.name;
-        throw error;
       }
-      return outcome.value;
+      const outcome =
+        type === "conversation.delivery.begin"
+          ? await binding.actor.storage!.mutate(
+              { type: "session.conversation.delivery.begin", input },
+              authority,
+            )
+          : await binding.actor.storage!.mutate(
+              { type: "session.conversation.delivery.transition", input },
+              authority,
+            );
+      return readSessionActorStorageResult<
+        ConversationDeliveryRecord | { created: boolean; record: ConversationDeliveryRecord }
+      >(outcome);
     });
   }
   const { options } = pinConversationDatabaseScope(scope);
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  const captured = structuredClone(input);
+  const captured = captureOpenClawAgentDatabaseExecutionAsync(options).then(
+    (execution) => ok(execution),
+    (error: unknown) => err<never, unknown>(error),
+  );
   return deliveryResult(async () => {
     try {
-      const result = await runOpenClawAgentWorkerWrite(options, () =>
-        execution.runExisting(
+      const result = await runOpenClawAgentWorkerWrite(options, async () => {
+        const acquired = await captured;
+        if (!acquired.ok) {
+          throw acquired.error;
+        }
+        const execution = acquired.value;
+        return execution.runExisting(
           createSessionWorkerExecutionSource(
             assertCurrent,
             "Conversation delivery authority expired",
           ),
-          (worker) => worker.execute({ type, input: captured }),
-        ),
-      );
+          (worker) => worker.execute({ type, input }),
+        );
+      });
       if (!result) {
         throw new ConversationDeliveryMissingError("Conversation delivery database is missing");
       }
       return result;
     } finally {
-      await execution.release();
+      const acquired = await captured;
+      if (acquired.ok) {
+        await acquired.value.release();
+      }
     }
   });
 }

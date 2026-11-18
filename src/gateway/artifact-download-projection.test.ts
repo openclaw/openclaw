@@ -3,7 +3,7 @@ import {
   prepareArtifactDownload,
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
-import type { ArtifactRecord } from "./server-methods/artifacts-content.js";
+import type { ArtifactRecord } from "./artifacts-content.js";
 
 const artifact: ArtifactRecord = {
   id: "artifact_fixture",

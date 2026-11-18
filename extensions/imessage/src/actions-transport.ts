@@ -12,17 +12,11 @@ export type IMessageActionTransportOptions = {
   timeoutMs?: number;
 };
 
-class IMessageRemoteUnsupportedError extends Error {
-  readonly code = "IMESSAGE_REMOTE_UNSUPPORTED";
-
-  constructor(message: string) {
-    super(message);
-    this.name = "IMessageRemoteUnsupportedError";
-  }
-}
-
 export function throwIMessageRemoteUnsupported(message: string): never {
-  throw new IMessageRemoteUnsupportedError(`iMessage Remote Mac limitation: ${message}`);
+  throw Object.assign(new Error(`iMessage Remote Mac limitation: ${message}`), {
+    code: "IMESSAGE_REMOTE_UNSUPPORTED",
+    name: "IMessageRemoteUnsupportedError",
+  });
 }
 
 export async function runIMessageAction(

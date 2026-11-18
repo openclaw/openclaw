@@ -160,9 +160,7 @@ export class QuestionPrompt implements Component, Focusable {
 
   private toggle(index: number): void {
     const selected = this.selections.get(this.step) ?? new Set<number>();
-    if (selected.has(index)) {
-      selected.delete(index);
-    } else {
+    if (!selected.delete(index)) {
       selected.add(index);
     }
     this.selections.set(this.step, selected);

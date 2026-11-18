@@ -13,6 +13,10 @@ handle, friend-request policy, and guard model authentication.
 Check the connection with `openclaw channels status`. Compare safety
 fingerprints with a friend before approving pairing.
 
+Stopping the account or Gateway closes the inbox connection without waiting for
+the relay to acknowledge closure. In-flight inbox handling and cursor writes
+finish before the account stops.
+
 A working guard model is required. Guard errors stop outgoing messages and hold
 incoming messages for later delivery; friendship alone does not bypass guards.
 
@@ -21,7 +25,7 @@ successful friend reconciliation (normally every 30 seconds), rather than owning
 separate retry timers. An interrupted dispatch or completion retries with
 stop-and-wait guidance, never another automatic resend grant.
 
-The deterministic secret scan recognizes full 40-character hexadecimal Git
+The rule-based secret scan recognizes full 40-character hexadecimal Git
 object IDs in HTTPS `github.com/<owner>/<repo>/{commit,blob,tree}/<id>` paths.
 Only that ID occurrence is excluded from the entropy heuristic; credentials,
 query/fragment values, other path segments, and the rest of the message remain

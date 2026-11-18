@@ -59,11 +59,6 @@ type TelegramIngressRuntimePort = {
   close(): void;
 };
 
-type TelegramIngressRuntimeDeps = {
-  fetch?: typeof fetch;
-  closeTransport?: () => Promise<void>;
-};
-
 type TelegramIngressWorkerRuntimeData = TelegramIngressWorkerOptions & {
   runtime: typeof TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER;
 };
@@ -113,7 +108,6 @@ function createTelegramGetUpdatesError(params: {
 export async function runTelegramIngressWorkerRuntime(params: {
   options: TelegramIngressWorkerOptions;
   port: TelegramIngressRuntimePort;
-  deps?: TelegramIngressRuntimeDeps;
 }): Promise<void> {
   const { options, port } = params;
   const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
@@ -122,13 +116,8 @@ export async function runTelegramIngressWorkerRuntime(params: {
   let nextSpoolRequestId = 0;
   let pendingSpoolRequest: PendingSpoolRequest | undefined;
   const proxyFetch = options.proxy ? makeProxyFetch(options.proxy) : undefined;
-  const transport =
-    params.deps?.fetch === undefined
-      ? resolveTelegramTransport(proxyFetch, { network: options.network })
-      : undefined;
-  const fetchImpl = params.deps?.fetch ?? transport?.fetch ?? globalThis.fetch;
-  const closeTransport =
-    params.deps?.closeTransport ?? (() => transport?.close() ?? Promise.resolve());
+  const transport = resolveTelegramTransport(proxyFetch, { network: options.network });
+  const fetchImpl = transport.fetch;
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
@@ -230,14 +219,16 @@ export async function runTelegramIngressWorkerRuntime(params: {
         if (!Array.isArray(result)) {
           throw new Error("Telegram getUpdates returned a non-array result.");
         }
-        for (const update of result) {
-          if (stopController.signal.aborted) {
-            break;
-          }
+        if (result.length > 0 && !stopController.signal.aborted) {
           const requestId = String(++nextSpoolRequestId);
           const updateId = await new Promise<number>((resolve, reject) => {
             pendingSpoolRequest = { requestId, resolve, reject };
-            port.postMessage({ type: "update", requestId, update, queued: result.length });
+            port.postMessage({
+              type: "updates",
+              requestId,
+              updates: result,
+              queued: result.length,
+            });
           });
           if (lastUpdateId === null || updateId > lastUpdateId) {
             lastUpdateId = updateId;
@@ -282,7 +273,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
         postPollError(port, err, retryAfterMs);
         // 409 must propagate to the parent: it owns duplicate-poller/webhook
         // conflict recovery. Transient Bot API errors stay local to this worker.
-        if (!isRetryableTelegramApiError(err, { context: "polling" })) {
+        if (!isRetryableTelegramApiError(err)) {
           throw err;
         }
         try {
@@ -299,7 +290,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
       }
     }
   } finally {
-    await closeTransport();
+    await transport.close();
   }
 }
 

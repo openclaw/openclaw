@@ -1,13 +1,29 @@
 ---
 name: openclaw-ci-limits
-description: Manage OpenClaw GitHub Actions and Blacksmith CI capacity, runner-registration budgets, fanout caps, main-push single-flight, shard sizing, hosted-runner offload, queue health, and safe ramp-down/ramp-up changes. Use when tuning `.github/workflows/*`, `docs/ci.md`, CI runner labels, matrix `max-parallel`, ClawSweeper/Blacksmith burst protection, CodeQL runner placement, or investigating slow/queued OpenClaw CI.
+description: Manage OpenClaw GitHub Actions, Boat and Blacksmith CI capacity, runner-registration budgets, fanout caps, main-push single-flight, shard sizing, hosted-runner offload, queue health, and safe ramp-down/ramp-up changes. Use when tuning `.github/workflows/*`, `docs/ci.md`, CI runner labels, matrix `max-parallel`, provider burst protection, CodeQL runner placement, or investigating slow/queued OpenClaw CI.
 ---
 
 # OpenClaw CI Limits
 
 Use this skill for CI capacity changes, not ordinary test failure triage. The
 goal is to keep OpenClaw fast while distinguishing runner registration, runner
-availability, Blacksmith control-plane health, and downstream queue drains.
+availability, provider control-plane health, and downstream queue drains.
+
+## Resolve the active backend
+
+Read the configured `OPENCLAW_CI_RUNNER_BACKEND` and the affected job's actual
+runner before applying provider-specific guidance. The
+[runner routing guide](../../../docs/ci/runners.md#boat-build-qualification)
+owns Boat's rollout, physical labels, and hosted fallbacks. Boat uses the hybrid
+logical plan; a logical Blacksmith label alone does not identify the actual VM.
+
+The [owner rollout](https://github.com/openclaw/openclaw/pull/198149) admits only
+the documented human source authors and starters on same-repository first
+attempts. Boat's public-user allowlist is a separate provider check; allowing a
+bot there does not admit bot-started ordinary CI through the workflow.
+[Fork PRs use GitHub-hosted runners](https://github.com/openclaw/openclaw/pull/198140),
+including first attempts without repository variables. Preserve their coverage.
+The Blacksmith measurements below apply when a job actually selects Blacksmith.
 
 ## Core Facts
 
@@ -40,18 +56,19 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 - Use the smallest runner that completes the required workload reliably. Keep
   short control jobs hosted and ordinary trusted development proof local.
-- Treat the 32-class as an exception, not a default or generic retry. Record the
+- Treat physical 8-vCPU and larger runners as exceptions, not a default or generic retry. Record the
   command and measured peak memory, a smaller-runner OOM, or a controlled
   comparison showing lower total billed cost. Low CPU use alone does not prove
   a memory-heavy job can move down. Preserve resource-based worker limits.
-- Routine OpenClaw Testboxes use the 16-class with a 60-minute total-job
+- Routine OpenClaw Testboxes use the 4-class with a 60-minute total-job
   default, including hydration. Keep the 15-minute idle ceiling. Shorter
   deadlines are welcome for known short commands; do not request four hours
   automatically or upsize only to obtain more time. Select
   `.github/workflows/ci-check-high-memory-testbox.yml` explicitly only for a
   named memory-heavy command; see `docs/reference/test/remote-proof.md`.
   That workflow has at most four concurrent leases inside the shared 32-slot
-  Testbox pool. All Testbox profiles cap idle time at 15 minutes.
+  Testbox pool. The high-memory profile uses 8 vCPUs; both profiles preserve
+  their pre-November 3 physical CPU and RAM. All Testbox profiles cap idle time at 15 minutes.
 - Allocate through the current OpenClaw wrapper with workflow ref `main`;
   the source capsule preserves the checkout being tested. Do not dispatch an
   old workflow ref to bypass spending limits. Queue age is checked before
@@ -63,9 +80,19 @@ availability, Blacksmith control-plane health, and downstream queue drains.
 
 ## Rejected Experiments
 
+- **UI blobless sparse checkout (2026-10-16):** Excluding native mobile/macOS
+  app trees removed 48.31 MiB of logical tracked content, but did not qualify as
+  a runner-cost improvement. In
+  [run 38866595993](https://github.com/openclaw/openclaw/actions/runs/38866595993),
+  the Blacksmith UI E2E checkout took 56s and the hosted browser checkout 58s;
+  same-run full UI checkouts took 22–38s. These are small, unpaired samples,
+  not a measured billing delta. Keep the full source checkout. Reconsider only
+  with lower complete checkout time and billed cost, including filtered fetch,
+  lazy materialization, and trusted-harness export; fewer logical bytes alone
+  do not establish savings.
 - **Declaration-fixture owner selection (2026-10-02):**
-  `test/scripts/tsdown-declaration-fixture.ts` copies 26 real runtime owners by
-  path, so product PRs that edit one do not select the four declaration suites
+  `test/scripts/tsdown-declaration-fixture.ts` derives real source copies from its runtime
+  entrypoint closures, so product PRs that edit one do not select the four declaration suites
   built on it. [PR #162614](https://github.com/openclaw/openclaw/pull/162614)
   broke `write-unified-entry-dts` that way; hourly scheduled CI
   ([run 36979748808](https://github.com/openclaw/openclaw/actions/runs/36979748808))
@@ -142,6 +169,13 @@ For a suspicious queued run, inspect its jobs. A run-level `queued` status does
 not reveal whether the job is waiting on dependencies or has no eligible
 runner. Compare `created_at`, `started_at`, `labels`, and `runner_name`. Recheck
 stale queued runs live before canceling them; cancel only runs proven obsolete.
+
+Testbox `warmup` confirms lease creation, not runner readiness. An initial
+`queued` snapshot without `providerMetadata.runURL` does not establish a capacity
+shortage. Use that URL to inspect the exact workflow once associated. An assigned
+`check` runner performing setup is hydration; a confirmed admission or capacity
+queue follows the existing stop-owned-allocation policy. Do not infer association
+from the newest workflow run or wait on a confirmed capacity queue.
 
 `scripts/ci-run-timings.mjs` start delay can include workflow dependency wait
 plus runner queue time. It is trend evidence, not runner-pressure proof alone.
@@ -220,7 +254,7 @@ Blacksmith burst load under 6,000 registrations per 5 minutes with headroom for
 ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 
 Native compact plans admit 90 rows and GitHub-hosted plans 96; final Node caps remain 70 push and 130 PR rows.
-The current automatic main/PR source has a conservative union of 71 potentially
+The historical automatic main/PR inventory had 71 potentially
 self-hosted non-Node rows, including five core-lint stripes for fork PRs,
 five type stripes, five Windows rows, and thirteen UI E2E rows. Retain an 84-row
 allowance with thirteen rows reserved: `4 × 154 + 21 × 214 = 5,110` for the
@@ -228,7 +262,8 @@ four-main/21-PR arrival envelope, leaving 890 below the 6,000 reference target.
 The six extension-lint rows remain hosted. Manual/frozen releases and other
 workflows are outside this envelope. This is conditional planning, not live
 organization-wide capacity proof; older 5,010/5,085/5,160 examples below describe
-historical inventories and do not replace this source-audited reserve.
+historical inventories and do not replace this reserve. Recount actual selected
+runners for a new tuning pass; fork rows now run hosted.
 
 ## Safe Levers
 
@@ -263,6 +298,13 @@ Do not:
 These are intentionally guarded by the `ci-workflow-guards`,
 `ci-workflow-planning`, and `ci-workflow-evidence` tests under `test/scripts/`:
 
+- Current-target Control UI locale checks share an already-selected public
+  artifact producer on real PR/push/schedule events. Keep verification before
+  generators, settle the existing strict/advisory outcomes after build diagnostics,
+  and route the logical locale gate to that explicit result. Dispatches, frozen
+  and compatibility targets, and standalone locale selections retain their job.
+  Hosted row accounting omits only the shared locale row; no build is newly selected.
+
 - `CI` concurrency key version, PR cancellation, and canonical `main`'s two
   non-canceling parity slots, each with one coalesced pending tip.
 - `preflight` starts immediately without a debounce or standalone admission job.
@@ -277,10 +319,14 @@ These are intentionally guarded by the `ci-workflow-guards`,
   include short-publisher turnover in burst estimates. Preflight and downstream Node jobs are
   restore-only consumers on eligible self-hosted runners. Exact misses and
   hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
-- Trusted canonical hybrid first attempts route `ci-gate` to the Blacksmith
-  4-class after hosted assignment added 416 seconds to main's critical chain.
+- Ordinary canonical same-repository hybrid first attempts keep `preflight`,
+  `pr-failure-report`, and `ci-gate` on hosted Ubuntu. October 15's 26-PR sample
+  found 148 minutes of Blacksmith preflight queueing, with a 12.9-minute p75.
+  RunsOn and admitted qualification/release dispatches
+  retain their existing routes. Count these mandatory hosted controls before
+  optional offload; keep the 45-row ceiling and all job/worker limits.
   Core lint uses the 16-class on canonical automatic first attempts with an
-  unset, `blacksmith`, or `hybrid` backend, including fork PRs. Admitted
+  unset, `blacksmith`, or `hybrid` backend, excluding fork PRs. Admitted
   qualifications retain their existing routes. The first packed lint row took
   621s on the 8-class; retain four
   actual CPUs for that row. The second packed row later exceeded its existing
@@ -288,20 +334,23 @@ These are intentionally guarded by the `ci-workflow-guards`,
   jobs or registrations and keeps the deadline and complete stripe inventory. The gate has no checkout or dependency setup; retries, ordinary
   manual dispatches, noncanonical contexts, and the GitHub override stay hosted.
   Core lint additionally retains hosted routing for frozen targets. Normal hybrid
-  main/same-repository PRs add three assignments; fork PRs can add six because
-  their logical GitHub check profile emits five lint rows. These fit the fresh
-  71-row union and reserved 84-row non-Node allowance described above.
-  Automatic hybrid first-attempt `preflight` requests the existing
-  16-class after hosted assignment stalled across three nearby runs while
-  Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
-  and 20-minute deadline stay unchanged. Default Blacksmith preflight keeps the
-  4-class; hybrid retries, manual dispatches, noncanonical contexts,
-  and the `github` override retain hosted routing. `security-fast` stays hosted
+  main/same-repository PRs add two lint assignments within the reserved
+  84-row non-Node allowance described above.
+  Automatic canonical RunsOn first-attempt `preflight` uses
+  the existing 4-class, matching default Blacksmith preflight. The former 16-class
+  placement addressed hosted queue stalls. October 13 observations found 610
+  4-class runs with no OOMs and 113s p95 duration; full and changed manifest plans
+  also fit two CPUs and 4 GiB without swap with unchanged outputs. Keep the
+  logical planner profile, cache trust, and 20-minute deadline. Hybrid/RunsOn
+  retries, manual dispatches, noncanonical contexts, and the `github` override
+  retain hosted routing. Monitor assignment latency before claiming rollout savings.
+  `security-fast` stays hosted
   outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget three control-job registrations per eligible
-  hybrid first attempt when optional hosted admission is closed, two when admitted,
-  and one per normal Blacksmith run. All occur in the reserved non-Node inventory.
+  outage override remains intact. Ordinary same-repository hybrid controls add
+  at most one Blacksmith security registration when optional hosted admission is
+  closed, none when admitted. Normal Blacksmith runs retain their existing
+  control registrations within the reserved non-Node inventory.
   Selected baseline ratchets and Node rows start independently after preflight.
   Keep the standalone ratchet owner and exact merge-parent/base checks; the final
   gate still requires every selected ratchet to pass. Same-repository
@@ -310,9 +359,11 @@ These are intentionally guarded by the `ci-workflow-guards`,
   Preserve the existing hosted fallbacks and deadline.
   The existing `check-plan` prerequisite uses the 16-class for shared compiler
   snapshot memory on canonical automatic first attempts with an unset,
-  `blacksmith`, or `hybrid` backend, including fork PRs. Fork core type stripes
-  with an unset or `blacksmith` backend also use the 16-class on those attempts;
-  hybrid health admission retains its existing placement rules. These routes
+  `blacksmith`, or `hybrid` backend, excluding fork PRs. Same-repository hybrid
+  PR first attempts instead use hosted planning with the existing serial
+  compiler discovery mode; reserve that mandatory row before optional offloads.
+  Never move the complete compiler snapshot onto the smaller hosted runner.
+  Hybrid health admission retains its existing placement rules. These routes
   add paid assignments, not jobs. Preserve logical GitHub stripe coverage,
   restore-only PR caches, and same-repository cache trust. The GitHub override,
   retries, ordinary manual and frozen targets, RunsOn planners, and noncanonical
@@ -337,9 +388,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   leaves thirteen inside the unchanged 84-row allowance and 5,110 bound.
 
 - Automatic canonical hybrid first attempts count every selected hosted row in
-  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most five optional
-  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security, three Control UI unit
-  rows, and only browser-extension E2E. Above 40 base rows, retain their
+  preflight. `HYBRID_HOSTED_BASE_ROW_LIMIT = 40` admits at most two optional
+  rows within `HYBRID_HOSTED_ROW_LIMIT = 45`: security and browser-extension
+  E2E. Control UI unit rows retain the 8-class on eligible first attempts.
+  Above 40 base rows, retain the optional rows' existing
   Blacksmith routes; an eligible base above 45 warns with counts and retains
   the complete base manifest. The budget limits optional admission, not coverage.
   Record base/total rows and compare the actual workflow expansion in guards.
@@ -356,10 +408,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   historical 16/32-class runs also differed in compiler optimization. See
   `docs/ci/routing-costs.md` for sizing evidence. No jobs, registrations,
   permissions, compiler checks, or hosted eligibility are added.
-  The package-boundary row has a 30-minute whole-job budget: three hosted
+  The package-boundary row has a 40-minute whole-job budget: three hosted
   four-CPU attempts hit the former 20-minute limit, with about 19 minutes in
   SDK preparation and 126 compiles before final validation/canary/cleanup.
   One completed both compile and canary but still exceeded the job deadline.
+  Two hosted release validations then passed both checks (128 plugins) and
+  were cancelled at the former 30-minute limit.
   Compiler concurrency, complete inventory, receipt guards, canary, and routing
   remain unchanged.
 - The Plugin SDK API diff row also has a 30-minute whole-job budget. Two hosted
@@ -373,8 +427,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
 - CI matrix caps: fast/check lanes at 12, Node test shards at 130 only for
-  PR first attempts, including forks, on a non-frozen Blacksmith or hybrid Node plan, and otherwise 96. When selected outside ordinary PRs, Windows stays at 5.
-  Android uses 4 for canonical Blacksmith push/PR first attempts, including forks, otherwise 2.
+  same-repository PR first attempts on a non-frozen Blacksmith or hybrid Node plan, and otherwise 96. When selected outside ordinary PRs, Windows stays at 5.
+  Android uses 4 for canonical Blacksmith push/same-repository PR first attempts, otherwise 2.
   Hosted plans, RunsOn, retries, main, and all manual/qualification dispatches
   retain 96. This removes a second admission wave for 97–130-row PRs without
   adding jobs or planned vCPU-minutes. Keep the 130/70 final PR/main row caps and 90 native/96 hosted compact
@@ -426,7 +480,7 @@ These are intentionally guarded by the `ci-workflow-guards`,
   in the Kotlin-lint row when benchmark/build/dependency inputs change or the
   changed-path manifest is unusable. Full manual validation retains all six
   rows and memory-bounded phone/Wear/benchmark builds without duplicate lint.
-  Canonical Blacksmith push/PR first attempts, including forks, overlap four rows.
+  Canonical Blacksmith push/same-repository PR first attempts overlap four rows.
   The GitHub override, retries, manual dispatches, schedules, and noncanonical
   repositories retain two; frozen task contracts and npm native deferral are unchanged.
 - iOS admitted main pushes and PR `release_gate` CI run one required Debug build
@@ -520,8 +574,10 @@ These are intentionally guarded by the `ci-workflow-guards`,
   it does not promote serial jobs or change worker limits. Preserve the separate
   300s ordered two-slot queue bound and runtime preparation charge.
   Gateway-exclusive serial bins and native numbered tooling bins use a 300s test
-  budget. Native tooling rows containing the partitioned changed-Node planner proof
-  retain a 150s test budget through initial and measured packing. The partition keeps
+  budget; hourly hybrid main validation packs its tooling rows within 420s plus
+  60s setup to keep headroom under its 77-row cap. Native tooling rows containing
+  the partitioned changed-Node planner proof retain a 150s test budget through
+  initial and measured packing. The partition keeps
   two workers and serial outer admission. Ordinary self-hosted bins share promoted capacity across logical
   classes; the existing group exchange fills stranded slots without raising caps.
   Parallel admission also bounds the ordered two-slot queue at 300 test seconds;
@@ -588,12 +644,33 @@ These are intentionally guarded by the `ci-workflow-guards`,
   elapsed-time, actual memory and cleanup proof; requested labels are not capacity.
 - The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
   Its file inventory and resource-derived worker policy remain unchanged.
-- Precisely selected serial CLI-only jobs use the 16-class when every group has
-  one or two explicit files and the existing two-worker fallback, without build,
-  dist, memory, or large-runner anchors. Apply capacity after packing; preserve
-  inventories, runtime selection, timing identities, and process boundaries.
-  Full CLI families retain their planned capacity. RunsOn inherits the hybrid
-  choice for retained Blacksmith CLI jobs.
+- Precisely selected serial CLI, Gateway client/server, and embedded-agent jobs
+  use the 16-class when every group has one qualified config, one or two explicit
+  files, and a two-worker pin or fallback. An explicit wider pin disqualifies the
+  group. Keep build, dist, memory, large-runner anchors, and unqualified configs
+  at planned capacity; resource-gated tooling tests are not qualified by this rule.
+  Apply capacity after packing; preserve inventories, runtime selection, timing
+  identities, and process boundaries. Full families retain their planned capacity.
+  RunsOn inherits the hybrid choice for these retained Blacksmith jobs.
+  The exact singleton `gateway-core` selection of
+  `src/gateway/mcp-app-extension-runtime.test.ts` and `agents-core` selection of
+  `src/agents/cli-runner.helpers.test.ts` also qualify under these guards.
+  Their five-file serial replay at `137e7b2abc87` passed 56 tests on each of Bun
+  and Node, using four CPUs and 15.42 GiB RAM. Whole-machine peaks were 5.00 and
+  5.22 GiB, with zero OOM kills and at most 268 KiB swap use. Other files in those
+  configs and unbounded or parallel infra selections retain planned capacity.
+  Native billed savings remain unverified.
+  The isolated LLM-boundary cache-stability file also qualifies when it is the
+  group's only file, under the same serial, worker, and preparation guards.
+  Its complete current-source replay passed all 19 tests with four CPUs,
+  12 GiB RAM, no swap, 4.23 GiB peak, and zero OOMs. Other isolated files,
+  including siblings in the same job, retain their planned capacity.
+  The singleton `src/gateway/board-store.test.ts` selection also qualifies as the
+  job's only group, with an explicit two-worker pin, two-worker fallback, and
+  unchanged 28-GiB worker-admission threshold. Its five-test replay passed through
+  the CI shard executor in 40.78 seconds on four CPUs and 15.42 GiB RAM. Maximum
+  process RSS was 3.17 GiB, not an aggregate VM peak. Keep all other database-worker
+  selections and mixed jobs at planned capacity; native billed savings are unverified.
 - Source-only serial Blacksmith tooling bins use the 16-class after packing,
   retaining logical classes, names, file inventories, and two-worker pins.
   Keep the 32-class for compiler/artifact capacity files, explicit runner or
@@ -609,7 +686,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   exceeded the existing memory reserve before the three resource-gated cases ran.
 - Numbered tooling measurements in `toolingFileSeconds` drive file packing with
   native profile costs; a hosted fallback scales measured Blacksmith costs.
-  The daily refit samples the newest five contributing successful PR CI runs.
+  The daily refit samples successful jobs from the newest five contributing
+  completed PR CI runs, including workflows where other jobs failed.
   Those measurements describe the PR merge-ref and update exact compact and tooling identities;
   main compact and release sampling retain their existing provenance. Preserve
   independent-run medians, runner profiles and partial-plan history. An explicit
@@ -633,12 +711,16 @@ These are intentionally guarded by the `ci-workflow-guards`,
   ownership. Test-only files and unrelated runtime changes omit this lane;
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
+- Partial PR UI unit selections target three files per job within the existing
+  three-row cap and three-worker limit. Full UI owners and manual validation
+  retain their established shards, runtime policy and first-row WebKit checks.
 - Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
-  backend/event routing and project worker limits. Current canonical ordinary
-  plans with known changed paths, including fork PRs targeting OpenClaw, use
-  eight Control UI shards plus one browser-extension row. Hourly main also uses
-  eight without a changed-path inventory. Non-main full manual, noncanonical,
-  compatibility, and other unknown-path inventories retain twelve Control UI
+  backend/event routing. Compact plans use nine mocked Control UI shards with four
+  workers each, matching four observed CPUs per runner and fitting the 20-minute
+  test step on slow hosted CPUs. Private source-server projects remain serial. The conditional
+  browser-extension row keeps its existing reuse and routing rules. Hourly main
+  uses the same compact plan without a changed-path inventory. Non-main full
+  manual, noncanonical, compatibility, and other unknown-path inventories retain twelve Control UI
   shards plus one browser-extension row. Historical targets without the named-project contract retain four total rows on
   Blacksmith or fourteen on GitHub/hybrid. Failed-job-only retries retain their
   previously emitted matrix, including older six-shard Control UI plans; PR and
@@ -663,6 +745,12 @@ These are intentionally guarded by the `ci-workflow-guards`,
   queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
   plan, removing two repeated checkouts, setups and private runtime builds.
+  Canonical `main` push/schedule first attempts on that plan use the 8-class
+  only with explicit non-frozen, non-compatibility classification. A cold private
+  runtime build and all 24 scenarios passed on two usable CPUs under a 7-GiB
+  no-swap cap (5.96-GiB peak, no OOMs). This does not qualify older backport
+  source: those targets may build with higher compiler concurrency. Other
+  contexts retain the shared 16-class/hosted/release-group routing.
   Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
   retry/manual plans retain six. Failed-job-only retries retain their original
   matrix. Keep the complete scenario inventory, separate Matrix run, worker
@@ -690,6 +778,8 @@ These are intentionally guarded by the `ci-workflow-guards`,
   same rows: each validates the complete graph boundary and intersects selected
   consumers with its original stripe. Empty intersections stay empty; ambiguous
   selection falls back to every canonical graph across those same stripes.
+  Check existence only for compiler inputs: deleted Markdown and UI CSS paths
+  do not widen accompanying code changes; deleted compiler inputs retain full coverage.
   Frozen targets retain two paired rows for stripes 1+2 and 3+4 sequentially,
   with stripe 5 in the central row. Keep at most two compiler children per
   stripe and one builder per child. A failing stripe stops its row; other
@@ -710,22 +800,28 @@ These are intentionally guarded by the `ci-workflow-guards`,
 - Where repository variables are available, `OPENCLAW_CI_RUNNER_BACKEND=github`
   routes configurable `ci.yml` jobs to their existing GitHub-hosted fallback
   labels. Unset or `blacksmith` preserves the normal Blacksmith-first route.
-  Fork first attempts cannot honor an unavailable override; they use Blacksmith
-  Node runners, check planning, core type stripes, and core lint stripes where
-  the current routing permits. Their logical GitHub profile and cache trust stay
-  unchanged. Fork retries use hosted runners.
+  Canonical fork PRs use the GitHub profile and hosted runners on every attempt,
+  even when repository variables are unavailable. Their cache trust stays
+  unchanged.
 - Vitest transform and Node compile caches are restore-only in CI and use
   immutable Actions caches; the main-push/daily/dispatch warmer is their sole
   writer. Build, QA and test orchestration consume its shared Node compile seed.
   PRs create no runtime-cache archives.
+- Full compiled-worker seeds retain separate prebuild and postbuild archives.
+  The existing protected warmer publishes its already-prepared postbuild full
+  generation; only selected artifact-producer source verifiers restore it.
+  Runtime workers use separate live/cache slots so they cannot replace that
+  full seed. Keep byte, topology, runtime and exact output-path validation, the
+  uncached path when no archive arrives, and existing job/worker limits.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
 
-## Blacksmith Outage Circuit Breaker
+## Provider Outage Circuit Breaker
 
-Use the repository variable only after confirming a Blacksmith outage or
-unavailable runner capacity. Do not set it merely for a failing test that has
-already started.
+Use the repository variable only after confirming a provider outage or
+unavailable runner capacity. Record the previous repository override and any
+inherited organization setting before changing it. Do not set it merely for a
+failing test that has already started.
 
 ```bash
 gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
@@ -737,14 +833,25 @@ Blacksmith-only Docker and sticky steps stay off, dependency setup uses the
 ordinary Actions pnpm-store cache, and Android's large build uses separate
 low-memory Gradle processes. Standard 4-core hosted runners make builds and
 test lanes slower. Those jobs consume GitHub-hosted concurrency instead of
-Blacksmith registrations. Fork first attempts with unavailable repository
-variables still use Blacksmith and must remain in the registration budget.
+provider registrations. Fork PRs already use hosted runners.
 
-Flip back after the outage by deleting the variable:
+After recovery, restore the recorded setting at its original scope. For a
+previous repository override of `boat`:
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body boat
+```
+
+Delete the temporary repository override only if it was previously unset:
 
 ```bash
 gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
 ```
+
+Deletion exposes any inherited organization setting; with neither setting,
+`ci.yml` defaults to Blacksmith. See the
+[recovery procedure](../../../docs/ci/runners.md#runner-backend-modes) for the full routing
+contract.
 
 Scheduled health detection and automatic flipping are a follow-up, not part of
 the current circuit breaker.

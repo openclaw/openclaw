@@ -1,140 +1,165 @@
-import { createEffect, createSignal, For, onCleanup, Show, untrack, useContext } from "solid-js";
-import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { createMemo, createSignal, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
-import { LitContent, SolidContentPresentation } from "../../../lit/solid-content.tsx";
+import { t } from "../../../lib/reactive/i18n.ts";
+import { createInterval } from "../../../lib/reactive/timers.ts";
+import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { renderToolIcon } from "./chat-tool-cards.ts";
+import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 
 export type ChatActivityHeadlineProps = {
-  scope: string;
+  bubbleMode?: boolean;
+  contentRef?: (element: HTMLSpanElement) => void;
   activity: ActivityHeadline | undefined;
   summary: string;
-  currentActivity?: readonly AgentActivityItem[];
   pluginToolIcons?: PluginToolIcons;
   outcomes?: readonly string[];
 };
 
-/** One disclosure owns its readable cadence; fast calls replace pending copy, not a queue. */
-export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
-  // Retained Lit ranges can initialize this presentation state during their parent's commit.
-  const [shown, setShown] = createSignal<ActivityHeadline | undefined>(undefined, {
-    ownedWrite: true,
+/** One cadence owner for both the group's arrival and its changing headline. */
+export function createActivityHeadlinePresentation(props: {
+  scope: string;
+  activity: ActivityHeadline | undefined;
+  resolveActivity?: (key: string) => ActivityHeadline | undefined;
+  /** Eligible live disclosure; history and expanded content bypass the hold. */
+  active: boolean;
+}) {
+  const presented = useContext(ContentPresentation);
+  const [tick, advance] = createSignal(0);
+  const resolve = (key: string) =>
+    props.activity?.key === key ? props.activity : props.resolveActivity?.(key);
+  const selection = createMemo<{
+    scope: string;
+    key: string | undefined;
+    shownAt: number;
+    candidate: string | undefined;
+    candidateAt: number;
+    pendingAt: number | undefined;
+    nextAt: number | undefined;
+    active: boolean;
+    revealed: boolean;
+    pending: boolean;
+  }>((previous) => {
+    tick();
+    const active = presented();
+    const scope = props.scope;
+    const current = props.activity;
+    const now = Date.now();
+    const held = previous?.key ? resolve(previous.key) : undefined;
+    const candidateAt =
+      previous?.scope === scope && previous.candidate === current?.key ? previous.candidateAt : now;
+    const pendingAt = previous?.scope === scope ? (previous.pendingAt ?? now) : now;
+    const urgent = current?.status === "failed" || current?.status === "blocked";
+    const initialDeadline = Math.min(candidateAt + 200, pendingAt + 1_000);
+    const pending =
+      active &&
+      props.active &&
+      !urgent &&
+      !(previous?.scope === scope && previous.revealed) &&
+      now < initialDeadline;
+    // Give transient replacements time to settle, but keep advancing during a
+    // continuous burst. The displayed operation's outcome always refreshes immediately.
+    const nextAt = Math.max(
+      (previous?.shownAt ?? now) + 1_000,
+      Math.min(candidateAt + 200, pendingAt + 1_000),
+    );
+    const keep = Boolean(
+      !pending &&
+      active &&
+      props.active &&
+      previous?.active &&
+      previous.scope === scope &&
+      held !== undefined &&
+      current !== undefined &&
+      !urgent &&
+      held.key !== current.key &&
+      now < nextAt,
+    );
+    return {
+      scope,
+      key: pending ? undefined : keep ? previous?.key : current?.key,
+      shownAt:
+        keep || (previous?.scope === scope && previous.key === current?.key)
+          ? (previous?.shownAt ?? now)
+          : now,
+      candidate: current?.key,
+      candidateAt,
+      pendingAt: pending || keep ? pendingAt : undefined,
+      nextAt: pending ? initialDeadline : keep ? nextAt : undefined,
+      active,
+      revealed: (previous?.scope === scope && previous.revealed) || (active && !pending),
+      pending,
+    };
   });
-  const presented = useContext(SolidContentPresentation);
-  let scope: string | undefined;
-  let wasPresented = true;
-  let shownAt = 0;
-  let pending: ActivityHeadline | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const clearTimer = () => {
-    if (timer !== undefined) {
-      clearTimeout(timer);
-    }
-    timer = undefined;
-  };
-  const show = (activity: ActivityHeadline) => {
-    const previous = untrack(shown);
-    if (previous?.key !== activity.key || previous.title !== activity.title) {
-      shownAt = Date.now();
-    }
-    setShown(activity);
-  };
-  createEffect(
-    () => ({
-      scope: props.scope,
-      activity: props.activity,
-      current: props.currentActivity,
-      active: presented(),
-    }),
-    (input) => {
-      clearTimer();
-      if (!input.active) {
-        wasPresented = false;
-        return;
-      }
-      const reset = scope !== input.scope;
-      scope = input.scope;
-      const previous = reset ? undefined : untrack(shown);
-      const activity = input.activity;
-      const resume = !wasPresented;
-      wasPresented = true;
-      pending = undefined;
-      if (!activity) {
-        setShown(undefined);
-        return;
-      }
-      const remaining = 3_000 - (Date.now() - shownAt);
-      if (
-        reset ||
-        !previous ||
-        resume ||
-        activity.status === "failed" ||
-        activity.status === "blocked" ||
-        previous.key === activity.key ||
-        remaining <= 0
-      ) {
-        if (reset) {
-          shownAt = Date.now();
-        }
-        show(activity);
-      } else {
-        // Held copy follows the original operation's current outcome, not its obsolete running state.
-        const current = input.current?.find(
-          (item) => (item.toolCallId ?? item.itemId) === previous.key,
-        );
-        if (input.current) {
-          setShown({ ...previous, status: current?.status });
-        }
-        pending = activity;
-        timer = setTimeout(() => {
-          timer = undefined;
-          if (pending) {
-            show(pending);
-            pending = undefined;
-          }
-        }, remaining);
-      }
+  createInterval(
+    () => advance((value) => value + 1),
+    () => {
+      const nextAt = selection().nextAt;
+      return nextAt === undefined ? undefined : Math.max(1, nextAt - Date.now());
     },
   );
-  onCleanup(clearTimer);
+  const shown = createMemo<ActivityHeadline | undefined>((previous) => {
+    if (!presented()) {
+      return previous;
+    }
+    const key = selection().key;
+    return key ? resolve(key) : undefined;
+  });
+  return { selected: shown, pending: () => selection().pending };
+}
+
+export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
+  const shown = () => props.activity;
   const name = () => shown()?.name;
   return (
     <>
-      <span
-        class="chat-activity-group__icon"
-        role={name() ? "img" : undefined}
-        aria-label={name()}
-        aria-hidden={name() ? undefined : "true"}
-        title={name()}
-      >
-        <Show when={name()} fallback={<Icon name="listTree" />}>
-          {(tool) => (
-            <LitContent
-              value={renderToolIcon(
-                shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool()),
-                { toolName: tool(), pluginToolIcons: props.pluginToolIcons },
+      <Show
+        when={props.bubbleMode}
+        fallback={
+          <span
+            class="chat-activity-group__icon"
+            role={name() ? "img" : undefined}
+            aria-label={name()}
+            aria-hidden={name() ? undefined : "true"}
+          >
+            <Show when={name()} fallback={<Icon name="listTree" />}>
+              {(tool) => (
+                <ChatToolIcon
+                  style={{ display: "contents" }}
+                  name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
+                  tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
+                />
               )}
-            />
-          )}
-        </Show>
-      </span>
-      <span class="chat-tool-disclosure__content">
-        <Show
-          when={shown()?.title}
-          keyed
-          fallback={<span class="chat-activity-group__label">{props.summary}</span>}
-        >
-          {(title) => (
-            <span class="chat-activity-group__label chat-activity-group__label--live">
-              {title}
-              {shown()?.status === "running" ? "…" : ""}
-            </span>
-          )}
+            </Show>
+          </span>
+        }
+      >
+        <span class="chat-bubble-dots chat-bubble-dots--working" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      </Show>
+      <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
+        <Show when={Boolean(shown()?.title) || !props.bubbleMode}>
+          <span
+            class={[
+              "chat-activity-group__label",
+              shown()?.title && "chat-activity-group__label--live",
+              shown()?.status === "running" && "chat-activity-group__label--running text-shimmer",
+            ]}
+          >
+            {shown()?.title || props.summary}
+          </span>
         </Show>
       </span>
       <Show when={shown()?.title}>
+        <Show when={shown()?.status === "failed" || shown()?.status === "skipped"}>
+          <span class="chat-activity-group__outcome muted">
+            {t(shown()?.status === "failed" ? "chat.toolCards.failed" : "chat.toolCards.skipped")}
+          </span>
+        </Show>
         <For each={props.outcomes}>
           {(label) => <span class="chat-activity-group__outcome muted">{label}</span>}
         </For>

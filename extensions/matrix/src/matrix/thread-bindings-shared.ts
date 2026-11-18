@@ -6,16 +6,17 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 
-type MatrixThreadBindingTargetKind = "subagent" | "acp";
+type MatrixThreadBindingTargetKind = "subagent" | "acp" | "session";
 
 export type MatrixThreadBindingRecord =
   AccountScopedConversationBindingRecord<MatrixThreadBindingTargetKind> & {
     parentConversationId?: string;
     idleTimeoutMs?: number;
     maxAgeMs?: number;
+    metadata?: Record<string, unknown>;
   };
 
-export type MatrixThreadBindingManager = {
+type MatrixThreadBindingManager = {
   accountId: string;
   getIdleTimeoutMs: () => number;
   getMaxAgeMs: () => number;
@@ -25,14 +26,14 @@ export type MatrixThreadBindingManager = {
   }) => MatrixThreadBindingRecord | undefined;
   listBySessionKey: (targetSessionKey: string) => MatrixThreadBindingRecord[];
   listBindings: () => MatrixThreadBindingRecord[];
-  /** @deprecated Use touchBindingAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use touchBindingAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   touchBinding: (bindingId: string, at?: number) => MatrixThreadBindingRecord | null;
-  /** @deprecated Use setIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use setIdleTimeoutBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   setIdleTimeoutBySessionKey: (params: {
     targetSessionKey: string;
     idleTimeoutMs: number;
   }) => MatrixThreadBindingRecord[];
-  /** @deprecated Use setMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use setMaxAgeBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   setMaxAgeBySessionKey: (params: {
     targetSessionKey: string;
     maxAgeMs: number;
@@ -93,6 +94,7 @@ export function toSessionBindingRecord(
     bindingId: resolveBindingKey(record),
     targetKind: record.targetKind === "subagent" ? "subagent" : "session",
     lifecycle: { ...lifecycle, idleTimeoutMs, maxAgeMs },
+    metadata: (lifecycleMetadata) => ({ ...lifecycleMetadata, ...record.metadata }),
   });
 }
 
@@ -173,14 +175,14 @@ function createMatrixThreadBindingTimeoutSetter<
   };
 }
 
-/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setMatrixThreadBindingIdleTimeoutBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export const setMatrixThreadBindingIdleTimeoutBySessionKey = createMatrixThreadBindingTimeoutSetter(
   "setMatrixThreadBindingIdleTimeoutBySessionKey",
   (manager, params: { accountId: string; targetSessionKey: string; idleTimeoutMs: number }) =>
     manager.setIdleTimeoutBySessionKey(params),
 );
 
-/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync; removed in the next Plugin SDK major. */
+/** @deprecated Use setMatrixThreadBindingMaxAgeBySessionKeyAsync. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export const setMatrixThreadBindingMaxAgeBySessionKey = createMatrixThreadBindingTimeoutSetter(
   "setMatrixThreadBindingMaxAgeBySessionKey",
   (manager, params: { accountId: string; targetSessionKey: string; maxAgeMs: number }) =>

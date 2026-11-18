@@ -1,31 +1,48 @@
-import { createMemo } from "solid-js";
-import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
+import { createMemo, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
+import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { formatCronSchedule } from "../../lib/presenter.ts";
+import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
+import { SettingsPage } from "../../components/solid/settings-ui.tsx";
+import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
+import { jobToForm } from "../../lib/cron/form.ts";
+import { formatCronCadence } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
-import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
-import { Editor } from "./view-editor.tsx";
-import { TriggerIndicator } from "./view-job-status.tsx";
-import { RunsSection } from "./view-runs.tsx";
+import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { failedRunId } from "./route-model.ts";
+import { FailureDetails } from "./view-attention.tsx";
+import {
+  AdminRequired,
+  BackRow,
+  ErrorBanner,
+  EnabledSwitch,
+  JobMenu,
+  NoticeBanner,
+} from "./view-controls.tsx";
+import { Editor, EditorActions } from "./view-editor.tsx";
+import { describeJobNextRun, describeJobSchedule, TriggerIndicator } from "./view-job-status.tsx";
+import { RunHistory } from "./view-runs.tsx";
+import { CronSuggestionLists } from "./view-suggestions.tsx";
 import type { CronProps, CronPanelMode } from "./view-types.ts";
 export function DetailView(
   props: CronProps & {
     mode: CronPanelMode;
   },
 ) {
+  // Keep control placement on the same breakpoint as cron.css.
+  const phoneLayout = createMediaQuery("(max-width: 640px)");
   // Status refresh updates the selected job's runtime facts in place.
   const selectedJob = createMemo(
     () => (props.mode === "job" ? (props.editingJob ?? undefined) : undefined),
     { equals: false },
   );
-  const hasDetailTabs = () => props.mode === "job" && Boolean(selectedJob());
-  const showHistory = () => props.mode === "job" && props.detailTab === "history";
-  const conditionActivity = createMemo(() => {
+  // A saved automation opens on its prompt and history; Edit (the settings tab) swaps in the form.
+  const editing = () => props.mode !== "job" || props.detailTab !== "history";
+  const failedJob = () => {
+    const job = selectedJob();
+    return job && isCronJobActiveFailure(job) ? job : undefined;
+  };
+  const conditionActivity = () => {
     const job = selectedJob();
     return job?.trigger
       ? {
@@ -34,39 +51,56 @@ export function DetailView(
           lastFiredAtMs: job.state?.lastTriggerFireAtMs,
         }
       : undefined;
-  });
+  };
   return (
-    <section class="cron-page cron-page--detail" data-panel-mode={props.mode}>
-      <SettingsPage wide>
-        <div class="cron-back-row">
-          <button
-            type="button"
-            class="cron-back"
-            data-test-id="cron-back"
-            disabled={props.busy}
-            onClick={() => props.onClosePanel()}
-          >
-            <Icon name="arrowLeft" /> {t("cron.detail.back")}
-          </button>
-        </div>
-        <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
+    <section
+      class={["cron-page cron-page--detail", { "cron-page--create": props.mode === "create" }]}
+      data-panel-mode={props.mode}
+      data-view={editing() ? "edit" : "detail"}
+    >
+      <SettingsPage>
+        <BackRow {...props} />
+        <DetailHeader
+          {...props}
+          mode={props.mode}
+          editing={editing()}
+          phoneLayout={phoneLayout()}
+          selectedJob={selectedJob()}
+        />
         <AdminRequired {...props} />
-        {hasDetailTabs() ? <DetailTabs {...props} /> : undefined}
-        <ErrorBanner error={props.error} />
-        <div
-          id="cron-detail-panel"
-          class="cron-tab-panel"
-          role={hasDetailTabs() ? "tabpanel" : undefined}
-          aria-labelledby={hasDetailTabs() ? `cron-detail-tab-${props.detailTab}` : undefined}
-        >
-          {showHistory() ? (
-            <SettingsSection title={t("cron.detail.historyTitle")}>
-              <div class="cron-history">
-                <RunsSection {...{ ...props, conditionActivity: conditionActivity() }} />
-              </div>
-            </SettingsSection>
+        <ErrorBanner error={props.error} reads={editing() ? props.reads : undefined} />
+        <NoticeBanner notice={props.notice} />
+        <div id="cron-detail-panel" class="cron-tab-panel">
+          {editing() ? (
+            <>
+              <Editor {...props} mode={props.mode} phoneLayout={phoneLayout()} />
+              <CronSuggestionLists {...props} />
+            </>
           ) : (
-            <Editor {...props} mode={props.mode} />
+            <Show when={selectedJob()} keyed>
+              {(job) => (
+                <>
+                  <SavedPrompt {...props} job={job} />
+                  <Show when={failedJob()}>
+                    {(failed) => (
+                      <FailureDetails
+                        job={failed()}
+                        onReviewRun={(() => {
+                          // Review opens the failed run in the history below; without one there is none.
+                          const runId = failedRunId(failed());
+                          return runId ? () => props.onSelectJob(failed(), runId) : undefined;
+                        })()}
+                      />
+                    )}
+                  </Show>
+                  <RunHistory
+                    {...props}
+                    title={t("cron.detail.historyTitle")}
+                    conditionActivity={conditionActivity()}
+                  />
+                </>
+              )}
+            </Show>
           )}
         </div>
       </SettingsPage>
@@ -76,6 +110,8 @@ export function DetailView(
 function DetailHeader(
   props: CronProps & {
     mode: CronPanelMode;
+    editing: boolean;
+    phoneLayout: boolean;
     selectedJob?: CronJob;
   },
 ) {
@@ -83,88 +119,131 @@ function DetailHeader(
     props.mode === "job"
       ? (props.selectedJob?.displayName ?? props.selectedJob?.name ?? props.form.name)
       : t("cron.detail.newTitle");
-  const description = () =>
-    props.mode === "job" ? props.selectedJob?.description?.trim() : undefined;
-  const systemOwned = () => isSystemMonitorDeclaration(props.selectedJob?.declarationKey);
+  const reading = () => props.mode === "job" && !props.editing;
+  const description = () => (reading() ? props.selectedJob?.description?.trim() : undefined);
   // Header describes the SAVED job (schedule + next run); the form's live
   // summary describes unsaved edits, so the two never contradict each other.
-  const nextRunAtMs = () => props.selectedJob?.state?.nextRunAtMs;
-  const nextRunSuffix = () =>
-    typeof nextRunAtMs() === "number" && Number.isFinite(nextRunAtMs())
-      ? ` · ${t("cron.jobState.next")} ${formatRelativeTimestamp(nextRunAtMs())}`
-      : "";
-  const subtitle = () =>
-    props.mode === "job" && props.selectedJob
-      ? `${formatCronSchedule(props.selectedJob)}${nextRunSuffix()}`
-      : t("cron.detail.newSubtitle");
+  // The cadence reads as the Automations sidebar does ("Daily"); event triggers keep their source.
+  const subtitle = () => {
+    const job = props.selectedJob;
+    return reading() && job
+      ? `${
+          job.schedule.kind === "event" ? describeJobSchedule(job) : formatCronCadence(job)
+        } · ${describeJobNextRun(job)}`
+      : undefined;
+  };
   return (
     <div class="cron-detail-header">
       <div class="cron-detail-header__copy">
-        <div class="cron-detail-title">{title()}</div>
+        <h1 class="cron-detail-title">{title()}</h1>
+        {subtitle() ? (
+          <div class="cron-detail-meta">
+            <span class="cron-detail-sub">{subtitle()}</span>
+            {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
+          </div>
+        ) : undefined}
         {description() ? (
           <div class="cron-detail-description" data-test-id="cron-detail-description">
-            <span class="cron-detail-description__label">{t("cron.form.description")}:</span>{" "}
             {description()}
           </div>
         ) : undefined}
-        <div class="cron-detail-meta">
-          {props.mode === "job" && props.selectedJob && props.canManage && !systemOwned() ? (
-            <EnabledSwitch {...props} job={props.selectedJob} />
-          ) : undefined}
-          <span class="cron-detail-sub">{subtitle()}</span>
-          {props.selectedJob?.trigger ? <TriggerIndicator /> : undefined}
-        </div>
       </div>
-      <div class="cron-detail-actions">
-        {props.mode === "job" && props.selectedJob && props.canManage ? (
-          <>
-            <button
-              type="button"
-              class="btn btn--sm"
-              data-test-id="cron-run-now"
-              disabled={props.busy}
-              onClick={() => {
-                const job = props.selectedJob;
-                if (job) {
-                  props.onRun(job, "force");
-                }
-              }}
-            >
-              <Icon name="play" /> {t("cron.actions.runNow")}
-            </button>
-            <JobMenu {...props} job={props.selectedJob} />
-          </>
-        ) : undefined}
-      </div>
+      <Show
+        when={
+          props.mode === "job" && !(props.editing && props.phoneLayout)
+            ? props.selectedJob
+            : undefined
+        }
+        keyed
+      >
+        {(job) => (
+          <div class="cron-detail-actions">
+            {props.canManage ? <EnabledSwitch {...props} job={job} /> : undefined}
+            {props.editing ? (
+              <EditorActions {...props} mode="job" onCancel={() => props.onCancelEdit()} />
+            ) : props.canManage ? (
+              <>
+                <button
+                  type="button"
+                  class="btn btn--sm cron-run-now"
+                  data-test-id="cron-run-now"
+                  disabled={props.busy || !props.connected}
+                  onClick={() => props.onRun(job)}
+                >
+                  <Icon name="play" /> {t("cron.actions.runNow")}
+                </button>
+                <JobMenu {...props} job={job} />
+              </>
+            ) : undefined}
+          </div>
+        )}
+      </Show>
     </div>
   );
 }
-function DetailTabs(props: CronProps) {
+/** The saved prompt, read-only, on the composer's sheet; the tray says when and how it runs. */
+function SavedPrompt(props: CronProps & { job: CronJob }) {
+  const saved = createMemo(() => jobToForm(props.job, props.form));
+  const delivery = () => {
+    const mode = saved().deliveryMode;
+    return mode === "announce"
+      ? t("cron.form.announceDefault")
+      : mode === "webhook"
+        ? t("cron.form.webhookPost")
+        : mode === "none"
+          ? t("cron.form.noneInternal")
+          : undefined;
+  };
+  const facts = () =>
+    [
+      describeJobSchedule(props.job),
+      saved().payloadKind === "agentTurn"
+        ? saved().payloadModel || t("quickSettings.model.default")
+        : undefined,
+      delivery(),
+    ].filter(Boolean);
   return (
-    <LitContent
-      render={() =>
-        renderHubTabs({
-          id: "cron-detail",
-          panelId: "cron-detail-panel",
-          className: "cron-tabs",
-          variant: "sub",
-          active: props.detailTab,
-          tabs: [
-            {
-              value: "settings",
-              label: t("cron.detail.settingsTab"),
-              testId: "cron-detail-tab-settings",
-            },
-            {
-              value: "history",
-              label: t("cron.detail.historyTitle"),
-              testId: "cron-detail-tab-history",
-            },
-          ],
-          ariaLabel: t("cron.detail.tabsLabel"),
-          onSelect: props.onDetailTabChange,
-        })
-      }
-    />
+    <div class="cron-prompt" data-test-id="cron-saved-prompt">
+      <div class="cron-prompt__sheet">
+        {saved().payloadLocked ? (
+          <pre class="code-block cron-payload-code cron-payload-code--saved" tabindex="0">
+            <SanitizedHtml
+              tag="code"
+              class="hljs"
+              html={highlightCodeHtml(
+                saved().payloadText,
+                saved().payloadKind === "script" ? "javascript" : "bash",
+              )}
+            />
+          </pre>
+        ) : (
+          <div
+            class="cron-prompt__saved-text"
+            tabindex="0"
+            role="region"
+            aria-label={t("cron.form.promptPreview")}
+          >
+            {saved().payloadText}
+          </div>
+        )}
+      </div>
+      <div class="cron-prompt__tray">
+        <div class="cron-prompt__controls">
+          <span class="cron-prompt__clock" aria-hidden="true">
+            <Icon name="clock" />
+          </span>
+          <span class="cron-prompt__facts">{facts().join(" · ")}</span>
+          <button
+            type="button"
+            class="btn btn--sm cron-prompt__edit"
+            data-test-id="cron-edit"
+            onClick={() => props.onDetailTabChange("settings")}
+          >
+            <Icon name={props.canManage ? "pencil" : "settings"} />{" "}
+            {t(props.canManage ? "cron.detail.edit" : "cron.detail.settingsTab")}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

@@ -11,6 +11,8 @@ import { SessionEntryNavigation } from "../../config/sessions/session-entry-navi
 import type { SessionTranscriptReadSnapshot } from "../../config/sessions/session-history-read.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { MIN_READABLE_SESSION_VERSION } from "../../config/sessions/version.js";
+import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { readTranscriptMessageIdempotencyKey } from "../session-transcript-entry-message.js";
 import type {
   AppliedTranscriptMessage,
@@ -75,10 +77,25 @@ export function isCommittedAgentMessage(message: unknown): message is CommittedA
   );
 }
 
+function isSameRunDeliveryMirror(
+  entry: TranscriptEntry,
+  runId: string | null | undefined,
+  baseRunId: string | undefined,
+): boolean {
+  return Boolean(
+    runId &&
+    baseRunId === runId &&
+    entry.type === "message" &&
+    isOpenClawDeliveryMirrorAssistantMessage(entry.message) &&
+    readSessionTranscriptRunId(entry.message) === runId,
+  );
+}
+
 function resolveActiveCommitPrefix(params: {
   baseLeafId: string | null;
   activeBranch: TranscriptEntry[];
   activeLeafId: string | null;
+  runId: string | null | undefined;
   messages: readonly AgentMessage[];
 }):
   | {
@@ -99,9 +116,20 @@ function resolveActiveCommitPrefix(params: {
     return { ok: false };
   }
 
-  const activeSuffix = activeBranch.slice(baseIndex + 1);
-  if (activeSuffix.length === 0) {
+  const baseEntry = activeBranch[baseIndex];
+  const baseRunId =
+    baseEntry?.type === "message" ? readSessionTranscriptRunId(baseEntry.message) : undefined;
+  const suffix = activeBranch.slice(baseIndex + 1);
+  if (suffix.length === 0) {
     return { ok: false };
+  }
+  // A message tool persists its delivered reply before returning to the worker.
+  // Its same-run mirror is bookkeeping, not a change to the worker's model context.
+  const activeSuffix = suffix.filter(
+    (entry) => !isSameRunDeliveryMirror(entry, params.runId, baseRunId),
+  );
+  if (activeSuffix.length === 0) {
+    return { ok: true, recoveredMessages: [] };
   }
 
   const recoveredMessages: AppliedTranscriptMessage[] = [];
@@ -127,8 +155,12 @@ function resolveActiveCommitPrefix(params: {
 function resolvePersistedCommitAcrossDag(params: {
   baseLeafId: string | null;
   entries: TranscriptEntry[];
+  runId: string | null | undefined;
   messages: readonly AgentMessage[];
 }): PersistedCommitResolution {
+  const baseEntry = params.entries.find((entry) => entry.id === params.baseLeafId);
+  const baseRunId =
+    baseEntry?.type === "message" ? readSessionTranscriptRunId(baseEntry.message) : undefined;
   const childrenByParent = new Map<string | null, TranscriptEntry[]>();
   for (const entry of params.entries) {
     const children = childrenByParent.get(entry.parentId) ?? [];
@@ -154,6 +186,11 @@ function resolvePersistedCommitAcrossDag(params: {
       return;
     }
     for (const entry of childrenByParent.get(parentId) ?? []) {
+      // Recover the original worker rows through the same bookkeeping allowed on the active branch.
+      if (isSameRunDeliveryMirror(entry, params.runId, baseRunId)) {
+        visit(entry.id, messageIndex, path);
+        continue;
+      }
       if (
         entry.type !== "message" ||
         !isCommittedAgentMessage(entry.message) ||
@@ -233,6 +270,7 @@ export function prepareTranscriptCommitFromSnapshot(
     const recovered = resolvePersistedCommitAcrossDag({
       baseLeafId: input.requestedBaseLeafId,
       entries: navigation.entries,
+      runId: input.runId,
       messages: input.messages,
     });
     if (recovered.kind === "found") {
@@ -250,6 +288,7 @@ export function prepareTranscriptCommitFromSnapshot(
     baseLeafId: input.requestedBaseLeafId,
     activeBranch,
     activeLeafId: navigation.leafId,
+    runId: input.runId,
     messages: input.messages,
   });
   return prefix.ok

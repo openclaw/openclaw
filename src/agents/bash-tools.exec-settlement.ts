@@ -4,7 +4,7 @@ import {
   settleExecSessionFinalization,
   type ProcessSession,
 } from "./bash-process-registry.js";
-import type { ExecProcessOutcome } from "./bash-tools.exec-types.js";
+import type { ExecProcessOutcome } from "./bash-tools.exec-output.js";
 
 /** Settle the process owner's ledger and notifications before releasing scope joins. */
 export async function settleExecProcessExit({
@@ -17,7 +17,7 @@ export async function settleExecProcessExit({
   session: ProcessSession;
   outcome: ExecProcessOutcome;
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
-  notifyOnExit: (session: ProcessSession, status: "completed" | "failed") => void;
+  notifyOnExit: (session: ProcessSession, status: "completed" | "failed") => void | Promise<void>;
   failureOutcome: (error: unknown) => ExecProcessOutcome;
 }): Promise<ExecProcessOutcome> {
   let finalOutcome = outcome;
@@ -31,6 +31,17 @@ export async function settleExecProcessExit({
   } = finalOutcome;
   const markProcessExited = () =>
     markExited(session, exitCode, exitSignal, processStatus, exitReason, noOutputTimedOut);
+  // Keep the output file only when it holds output the wake or result omits.
+  const file = session.outputFile;
+  if (file) {
+    // An exit wake shows only the tail; a foreground result or process log shows the window.
+    const visibleChars =
+      session.backgrounded && session.notifyOnExit ? session.tail.length : session.output.length;
+    if (!(await file.close()) || session.totalOutputChars <= visibleChars) {
+      session.outputFile = undefined;
+      await file.remove();
+    }
+  }
   try {
     const shouldNotify = !session.exited;
     const settlement = onSettledBeforeNotify?.(finalOutcome);
@@ -39,7 +50,7 @@ export async function settleExecProcessExit({
     }
     if (shouldNotify) {
       markProcessExited();
-      notifyOnExit(session, finalOutcome.status);
+      await notifyOnExit(session, finalOutcome.status);
     }
   } catch (error) {
     session.finalizationFailed = true;
@@ -52,6 +63,11 @@ export async function settleExecProcessExit({
     }
   } finally {
     try {
+      await session.durable?.finalize();
+    } catch {
+      session.finalizationFailed = true;
+    }
+    try {
       if (!session.exited) {
         markProcessExited();
       }
@@ -62,7 +78,6 @@ export async function settleExecProcessExit({
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
       delete session.notifySessionTarget;
-      delete session.notifyFromConversationTurn;
       delete session.notifyOnExit;
       delete session.notifyOnExitEmptySuccess;
       if (session.finalizationFailed || session.cleanupUncertain) {

@@ -8,15 +8,15 @@ import {
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
-import {
-  getRemoteControlUiIngressContext,
-  hasCurrentRemoteControlUiIngress,
-} from "../ingress-attribution.js";
+import { getRemoteControlUiIngressContext } from "../ingress-attribution.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
 import { mintDesktopAudioObserver } from "./audio-bridge.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
-import type { DesktopObserveRequester } from "./observe-requester.js";
+import {
+  hasCurrentDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "./observe-requester.js";
 import {
   preauthenticateRfb,
   RfbAuthenticationRejectedError,
@@ -178,7 +178,6 @@ export function handleDesktopObserveUpgrade(
   head: Buffer,
   deps: {
     registry: Pick<DesktopSessionRegistry, "attachObserver" | "claimStream">;
-    getBufferedAmount?: (ws: WebSocket) => number;
   },
 ): boolean {
   const resource = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -188,12 +187,7 @@ export function handleDesktopObserveUpgrade(
   const token = resource.searchParams.get("token") ?? "";
   const ingress = getRemoteControlUiIngressContext(req);
   const entry = observerTokens.consume(token);
-  const isCurrent = () =>
-    hasCurrentRemoteControlUiIngress(ingress) &&
-    (!ingress ||
-      entry?.requester?.remoteIngressPrincipal?.assertCurrent ===
-        ingress.resolvePrincipal().assertCurrent) &&
-    entry?.requester?.isCurrent() !== false;
+  const isCurrent = () => hasCurrentDesktopObserveRequester(entry?.requester, req);
   if (!entry || !isCurrent()) {
     entry?.audio?.close();
     rejectWebSocketUpgrade(socket, { status: 401 });
@@ -303,19 +297,17 @@ export function handleDesktopObserveUpgrade(
           return;
         }
         ws.send(chunk, { binary: true });
-        const bufferedAmount = () => deps.getBufferedAmount?.(ws) ?? ws.bufferedAmount;
-        if (bufferedAmount() <= PAUSE_BUFFERED_BYTES || resumeTimer) {
+        if (ws.bufferedAmount <= PAUSE_BUFFERED_BYTES || resumeTimer) {
           return;
         }
         desktopSocket.pause();
         resumeTimer = setInterval(() => {
-          if (bufferedAmount() <= PAUSE_BUFFERED_BYTES) {
+          if (ws.bufferedAmount <= PAUSE_BUFFERED_BYTES) {
             clearInterval(resumeTimer);
             resumeTimer = undefined;
             desktopSocket.resume();
           }
-        }, RESUME_CHECK_MS);
-        resumeTimer.unref?.();
+        }, RESUME_CHECK_MS).unref();
       });
       if (browserRemainder.length > 0) {
         forwardClientChunk(browserRemainder);

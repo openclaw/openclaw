@@ -1,6 +1,7 @@
 // Run with pnpm test:gateway:worker-commit.
 // Measures the real committer owner with synthetic admission, not worker transport or UI delivery.
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { Session as InspectorSession } from "node:inspector/promises";
@@ -8,7 +9,8 @@ import os from "node:os";
 import path from "node:path";
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { parseArgs } from "node:util";
+import { fileURLToPath } from "node:url";
+import { parseArgs, promisify } from "node:util";
 import type {
   WorkerTranscriptCommitParams,
   WorkerTranscriptMessage,
@@ -43,6 +45,7 @@ const { values } = parseArgs({
     runs: { type: "string", default: "3" },
     output: { type: "string" },
     "cpu-profile": { type: "string" },
+    "native-profile": { type: "boolean" },
   },
 });
 
@@ -66,6 +69,9 @@ if (values["cpu-profile"] && runs !== 1) {
   throw new Error(
     "cpu-profile requires runs=1; keep diagnostic profiles separate from timing runs",
   );
+}
+if (values["native-profile"] && (runs !== 1 || values["cpu-profile"])) {
+  throw new Error("native-profile requires runs=1 and a separate pass from cpu-profile");
 }
 const sessionId = "worker-commit-benchmark";
 const sessionKey = `agent:main:${sessionId}`;
@@ -171,7 +177,7 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   );
   await persistSessionTranscriptTurn(target, { messages: seed, touchSessionEntry: false });
   // branch() is an in-memory cursor move. Appending an anchor persists the selected branch.
-  const seeded = SessionManager.open(target);
+  const seeded = await SessionManager.openAsync(target);
   seeded.branch(`seed-${shape.activeEvents - 2}`);
   const baseLeafId = seeded.appendMessage({
     role: "user",
@@ -179,7 +185,7 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
     timestamp: 1,
   });
   await waitForSessionTranscriptIndexReconcilesInStateDir(state.stateDir);
-  const verifiedSeed = SessionManager.open(target);
+  const verifiedSeed = await SessionManager.openAsync(target);
   assert.equal(verifiedSeed.getLeafId(), baseLeafId);
   assert.equal(
     verifiedSeed.getBranch().filter((entry) => entry.type === "message").length,
@@ -196,7 +202,29 @@ async function seedFixture(state: OpenClawTestState, shape: typeof fixture) {
   return { target, config, baseLeafId, initialDagEvents, sessionRows, seedSha256 };
 }
 
-async function runSample(shape: typeof fixture, profilePath?: string) {
+async function captureNativeProfile(label: string) {
+  const output = process.env.OPENCLAW_NATIVE_PROFILE_DIR;
+  assert(
+    output && path.isAbsolute(output),
+    "native-profile requires the allocation profiler preload",
+  );
+  // The controller runs outside measured commits while the observed process stays responsive.
+  // Its census checks reject worker turnover instead of silently summing incomplete heaps.
+  const { stdout } = await promisify(execFile)(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./perf/native-allocation-profile.mjs", import.meta.url)),
+      "snapshot",
+      output,
+      String(process.pid),
+      label,
+    ],
+    { timeout: 60_000 },
+  );
+  process.stderr.write(`[native-profile] ${stdout}`);
+}
+
+async function runSample(shape: typeof fixture, profilePath?: string, nativeProfile = false) {
   const sampleStart = performance.now();
   const result = await withOpenClawTestState(
     { label: "worker-commit-benchmark" },
@@ -217,6 +245,9 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
       const inspector = profilePath ? new InspectorSession() : undefined;
       const loopDelay = monitorEventLoopDelay({ resolution: 1 });
       try {
+        if (nativeProfile) {
+          await captureNativeProfile("before-commits");
+        }
         inspector?.connect();
         if (inspector) {
           await inspector.post("Profiler.enable");
@@ -286,7 +317,7 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
           lastOutcome,
         );
         assert.equal(updates.length, publicationCount, "ledger replay must not publish again");
-        const final = SessionManager.open(target);
+        const final = await SessionManager.openAsync(target);
         assert.equal(final.getLeafId(), leaf);
         assert.equal(loadSessionEntry(target)?.skillsSnapshot?.prompt, skillsPrompt);
         assert.deepEqual(
@@ -307,6 +338,9 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
         const drainStart = performance.now();
         await waitForSessionTranscriptIndexReconcilesInStateDir(state.stateDir);
         const reconcileDrainMs = performance.now() - drainStart;
+        if (nativeProfile) {
+          await captureNativeProfile("after-drain");
+        }
         return {
           requestedCommits: shape.commits,
           completedCommits: durationsMs.length,
@@ -345,15 +379,21 @@ async function runSample(shape: typeof fixture, profilePath?: string) {
       }
     },
   );
+  if (nativeProfile) {
+    await captureNativeProfile("after-cleanup");
+  }
   return { ...result, fixtureAndCleanupMs: performance.now() - sampleStart - result.elapsedMs };
 }
 
 async function main(): Promise<void> {
   // Load the lazy committer runtime through its real entrypoint, using a separate state and ledger.
   await runSample({ ...fixture, activeEvents: 2, abandonedEvents: 0, sessionCount: 1, commits: 1 });
+  if (values["native-profile"]) {
+    await captureNativeProfile("after-warmup-cleanup");
+  }
   const samples = [];
   for (let run = 0; run < runs; run += 1) {
-    samples.push(await runSample(fixture, values["cpu-profile"]));
+    samples.push(await runSample(fixture, values["cpu-profile"], values["native-profile"]));
   }
   const output = {
     scope:
@@ -369,7 +409,7 @@ async function main(): Promise<void> {
       availableParallelism: os.availableParallelism(),
       logicalCpus: os.cpus().length,
     },
-    profiled: Boolean(values["cpu-profile"]),
+    profiled: Boolean(values["cpu-profile"] || values["native-profile"]),
     samples,
   };
   const json = `${JSON.stringify(output, null, 2)}\n`;

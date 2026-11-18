@@ -32,7 +32,7 @@ import { isLoopbackHost } from "../net.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { defineValidatedGatewayHandler } from "./validation.js";
 
 // Keep the rendered QR within the result schema's qrDataUrl bound. A pathological
 // publicUrl can produce a setup code whose QR PNG data URL exceeds the limit; in
@@ -85,162 +85,151 @@ async function resolveJoinPackage(): Promise<{ packageSpec: string; versionNote?
 }
 
 export const devicePairSetupHandlers: GatewayRequestHandlers = {
-  "device.pair.setupCode": async (options) => {
-    const { params, respond, context } = options;
-    if (
-      !assertValidParams(
-        params,
-        validateDevicePairSetupCodeParams,
-        "device.pair.setupCode",
-        respond,
-      )
-    ) {
-      return;
-    }
-    await respondUnavailableOnThrow(respond, async () => {
-      if (
-        params.joinUrl === true &&
-        params.bootstrapProfile !== undefined &&
-        params.bootstrapProfile !== "node"
-      ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "Join URLs require bootstrapProfile=node."),
-        );
-        return;
-      }
-      const config = context.getRuntimeConfig();
-      const joinContext = params.joinUrl === true ? captureOpenClawStateWorkerContext() : undefined;
-      const authority = readGatewayRequestMutationAuthority(options);
-      const assertJoinCurrent = joinContext
-        ? () => {
-            joinContext.admission.assertCurrent();
-            authority.assertCurrent();
-            if (context.getRuntimeConfig() !== config) {
-              throw new Error("Device pairing setup configuration changed.");
+  "device.pair.setupCode": defineValidatedGatewayHandler(
+    "device.pair.setupCode",
+    validateDevicePairSetupCodeParams,
+    async (options) => {
+      const { params, respond, context } = options;
+      await respondUnavailableOnThrow(respond, async () => {
+        if (
+          params.joinUrl === true &&
+          params.bootstrapProfile !== undefined &&
+          params.bootstrapProfile !== "node"
+        ) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "Join URLs require bootstrapProfile=node."),
+          );
+          return;
+        }
+        const config = context.getRuntimeConfig();
+        const joinContext =
+          params.joinUrl === true ? captureOpenClawStateWorkerContext() : undefined;
+        const authority = readGatewayRequestMutationAuthority(options);
+        const assertJoinCurrent = joinContext
+          ? () => {
+              joinContext.admission.assertCurrent();
+              authority.assertCurrent();
+              if (context.getRuntimeConfig() !== config) {
+                throw new Error("Device pairing setup configuration changed.");
+              }
             }
-          }
-        : undefined;
-      assertJoinCurrent?.();
-      const requestPublicUrl = params.publicUrl;
-      const resolved = await resolvePairingSetupFromConfig(config, {
-        env: process.env,
-        publicUrl: requestPublicUrl,
-        preferRemoteUrl: params.preferRemoteUrl === true,
-        useLocalGateway: config.gateway?.mode === "remote" && params.preferRemoteUrl !== true,
-        localTlsFingerprint: context.gatewayTlsFingerprint,
-        ...(params.joinUrl === true || params.bootstrapProfile
-          ? {
-              bootstrapProfile:
-                params.joinUrl === true || params.bootstrapProfile === "node"
-                  ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-                  : params.bootstrapProfile === "voice-node"
-                    ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
-                    : PAIRING_SETUP_BOOTSTRAP_PROFILE,
-            }
-          : {}),
-        // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.
-        runCommandWithTimeout: async (argv, runOpts) =>
-          await runCommandWithTimeout(argv, { timeoutMs: runOpts.timeoutMs }),
-      });
-      assertJoinCurrent?.();
-      if (!resolved.ok) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
-        return;
-      }
-      const setupCode = encodePairingSetupCode(resolved.payload);
-      let joinUrl: string | undefined;
-      let joinCommands:
-        | Pick<
-            DevicePairSetupCodeResult,
-            "command" | "serviceCommand" | "installedCommand" | "versionNote"
-          >
-        | undefined;
-      if (params.joinUrl === true) {
-        const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(resolved.payload);
-        const { packageSpec, versionNote } = await resolveJoinPackage();
+          : undefined;
         assertJoinCurrent?.();
-        const shortcode = await registerDevicePairingJoinCode({
-          payload: resolved.payload,
-          expiresAtMs: resolved.expiresAtMs,
-          context: joinContext,
-          assertCurrent: assertJoinCurrent,
+        const requestPublicUrl = params.publicUrl;
+        const resolved = await resolvePairingSetupFromConfig(config, {
+          env: process.env,
+          publicUrl: requestPublicUrl,
+          preferRemoteUrl: params.preferRemoteUrl === true,
+          useLocalGateway: config.gateway?.mode === "remote" && params.preferRemoteUrl !== true,
+          localTlsFingerprint: context.gatewayTlsFingerprint,
+          ...(params.joinUrl === true || params.bootstrapProfile
+            ? {
+                bootstrapProfile:
+                  params.joinUrl === true || params.bootstrapProfile === "node"
+                    ? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+                    : params.bootstrapProfile === "voice-node"
+                      ? VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE
+                      : PAIRING_SETUP_BOOTSTRAP_PROFILE,
+              }
+            : {}),
+          // Lets Tailscale serve/funnel URLs resolve, mirroring the `openclaw qr` CLI.
+          runCommandWithTimeout: async (argv, runOpts) =>
+            await runCommandWithTimeout(argv, { timeoutMs: runOpts.timeoutMs }),
         });
-        const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
-        parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
-        parsedJoinUrl.search = "";
-        parsedJoinUrl.hash = "";
-        joinUrl = parsedJoinUrl.toString();
-        const target = quoteCliArg(joinUrl);
-        const serviceCommand = `npx -y ${packageSpec} connect ${target} --service`;
-        joinCommands = {
-          command: `${serviceCommand} --session-host`,
-          serviceCommand,
-          installedCommand: `openclaw connect ${target} --service --session-host`,
-          ...(versionNote ? { versionNote } : {}),
-        };
-      }
-      const includeQr = params.includeQr !== false;
-      // QR rendering is optional output; keep the usable setup code if encoding fails.
-      const renderedQr = includeQr
-        ? await renderQrPngDataUrl(setupCode).catch(() => undefined)
-        : undefined;
-      const qrDataUrl =
-        renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
-      assertJoinCurrent?.();
-      respond(
-        true,
-        {
-          setupId: resolved.setupId,
-          expiresAtMs: resolved.expiresAtMs,
-          setupCode,
-          ...(joinUrl ? { joinUrl, ...joinCommands } : {}),
-          ...(qrDataUrl ? { qrDataUrl } : {}),
-          gatewayUrl: resolved.payload.url,
-          ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
-          // Label only — never the raw gateway token/password.
-          auth: resolved.authLabel,
-          urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
-          access: resolved.access,
-          ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
-        },
-        undefined,
-      );
-    });
-  },
+        assertJoinCurrent?.();
+        if (!resolved.ok) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, resolved.error));
+          return;
+        }
+        const setupCode = encodePairingSetupCode(resolved.payload);
+        let joinUrl: string | undefined;
+        let joinCommands:
+          | Pick<
+              DevicePairSetupCodeResult,
+              "command" | "serviceCommand" | "installedCommand" | "versionNote"
+            >
+          | undefined;
+        if (params.joinUrl === true) {
+          const parsedJoinUrl = resolveDevicePairingJoinBaseUrl(resolved.payload);
+          const { packageSpec, versionNote } = await resolveJoinPackage();
+          assertJoinCurrent?.();
+          const shortcode = await registerDevicePairingJoinCode({
+            payload: resolved.payload,
+            expiresAtMs: resolved.expiresAtMs,
+            context: joinContext,
+            assertCurrent: assertJoinCurrent,
+          });
+          const basePath = parsedJoinUrl.pathname.replace(/\/+$/u, "");
+          parsedJoinUrl.pathname = `${basePath}/j/${shortcode}`;
+          parsedJoinUrl.search = "";
+          parsedJoinUrl.hash = "";
+          joinUrl = parsedJoinUrl.toString();
+          const target = quoteCliArg(joinUrl);
+          const serviceCommand = `npx -y ${packageSpec} connect ${target} --service`;
+          joinCommands = {
+            command: `${serviceCommand} --session-host`,
+            serviceCommand,
+            installedCommand: `openclaw connect ${target} --service --session-host`,
+            ...(versionNote ? { versionNote } : {}),
+          };
+        }
+        const includeQr = params.includeQr !== false;
+        // QR rendering is optional output; keep the usable setup code if encoding fails.
+        const renderedQr = includeQr
+          ? await renderQrPngDataUrl(setupCode).catch(() => undefined)
+          : undefined;
+        const qrDataUrl =
+          renderedQr && renderedQr.length <= MAX_QR_DATA_URL_LENGTH ? renderedQr : undefined;
+        assertJoinCurrent?.();
+        respond(
+          true,
+          {
+            setupId: resolved.setupId,
+            expiresAtMs: resolved.expiresAtMs,
+            setupCode,
+            ...(joinUrl ? { joinUrl, ...joinCommands } : {}),
+            ...(qrDataUrl ? { qrDataUrl } : {}),
+            gatewayUrl: resolved.payload.url,
+            ...(resolved.payload.urls ? { gatewayUrls: resolved.payload.urls } : {}),
+            // Label only — never the raw gateway token/password.
+            auth: resolved.authLabel,
+            urlSource: requestPublicUrl ? "request.publicUrl" : resolved.urlSource,
+            access: resolved.access,
+            ...(resolved.accessDowngraded ? { accessDowngraded: true } : {}),
+          },
+          undefined,
+        );
+      });
+    },
+  ),
   // Recovery path for the best-effort device.pair.setup.completed broadcast: a
   // client that missed the frame must not present a redeemed setup as expired.
-  "device.pair.setupStatus": async ({ params, respond }) => {
-    if (
-      !assertValidParams(
-        params,
-        validateDevicePairSetupStatusParams,
-        "device.pair.setupStatus",
-        respond,
-      )
-    ) {
-      return;
-    }
-    await respondUnavailableOnThrow(respond, async () => {
-      const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
-      // Retention bookkeeping stays server-side; the wire shape matches the
-      // corresponding success or delivery-uncertain broadcast.
-      let result: DevicePairSetupStatusResult = {};
-      if (completion) {
-        const payload = {
-          setupId: completion.setupId,
-          deviceId: completion.deviceId,
-          ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
-          access: completion.access,
-          ts: completion.completedAtMs,
-        };
-        result =
-          completion.deliveryState === "confirmed"
-            ? { completion: payload }
-            : { deliveryUncertain: payload };
-      }
-      respond(true, result, undefined);
-    });
-  },
+  "device.pair.setupStatus": defineValidatedGatewayHandler(
+    "device.pair.setupStatus",
+    validateDevicePairSetupStatusParams,
+    async ({ params, respond }) => {
+      await respondUnavailableOnThrow(respond, async () => {
+        const completion = await readDevicePairSetupCompletion({ setupId: params.setupId });
+        // Retention bookkeeping stays server-side; the wire shape matches the
+        // corresponding success or delivery-uncertain broadcast.
+        let result: DevicePairSetupStatusResult = {};
+        if (completion) {
+          const payload = {
+            setupId: completion.setupId,
+            deviceId: completion.deviceId,
+            ...(completion.deviceName ? { deviceName: completion.deviceName } : {}),
+            access: completion.access,
+            ts: completion.completedAtMs,
+          };
+          result =
+            completion.deliveryState === "confirmed"
+              ? { completion: payload }
+              : { deliveryUncertain: payload };
+        }
+        respond(true, result, undefined);
+      });
+    },
+  ),
 };

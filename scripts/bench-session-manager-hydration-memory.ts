@@ -101,8 +101,11 @@ async function runReader(): Promise<void> {
   await inspector.post("HeapProfiler.startSampling", { samplingInterval: 32 * 1024 });
   const manager =
     mode === "bounded"
-      ? SessionManager.openBounded(target, { maxBytes: 4 * 1024 * 1024, maxEvents: 10_000 })
-      : SessionManager.open(target);
+      ? await SessionManager.openBoundedAsync(target, {
+          maxBytes: 4 * 1024 * 1024,
+          maxEvents: 10_000,
+        })
+      : await SessionManager.openAsync(target);
   forceGc();
   const after = process.memoryUsage();
   const { profile } = await inspector.post("HeapProfiler.stopSampling");

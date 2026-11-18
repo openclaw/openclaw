@@ -1,3 +1,4 @@
+import { registryFor } from "../components/overlay-registry.ts";
 import { resolveTransientContainer } from "../components/transient-container.ts";
 
 // The async Clipboard API is only exposed in secure contexts (HTTPS or
@@ -19,6 +20,13 @@ export async function copyToClipboard(
   if (!text) {
     return false;
   }
+  // Copy controls can lose focus when disabled while the async transport settles.
+  const overlay =
+    typeof document === "undefined"
+      ? undefined
+      : registryFor(document).stack.findLast(
+          (entry) => entry.open && entry.contains(document.activeElement),
+        );
   if (navigator.clipboard?.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -33,10 +41,13 @@ export async function copyToClipboard(
   if (attempt !== clipboardWriteAttempt || (shouldFallback && !shouldFallback())) {
     return false;
   }
-  return copyWithExecCommand(text);
+  return copyWithExecCommand(
+    text,
+    overlay?.open && overlay.surface.isConnected ? overlay.surface : undefined,
+  );
 }
 
-function copyWithExecCommand(text: string): boolean {
+function copyWithExecCommand(text: string, overlaySurface?: HTMLElement): boolean {
   const textarea = document.createElement("textarea");
   const previouslyFocused =
     document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
@@ -44,9 +55,10 @@ function copyWithExecCommand(text: string): boolean {
   // Keep the scratch node off-screen so the selection does not scroll or flash.
   textarea.style.position = "fixed";
   textarea.style.opacity = "0";
+  // Keep temporary selection inside the initiating overlay so it does not dismiss.
   // Outside an active modal the document is inert, so its selection cannot be copied.
   const layers = [...(document.openClawModalLayers ?? [])].filter((modal) => modal.isConnected);
-  const container = resolveTransientContainer(layers.toReversed(), document);
+  const container = overlaySurface ?? resolveTransientContainer(layers.toReversed(), document);
   if (!container) {
     return false;
   }

@@ -5,9 +5,6 @@ export function toQaError(value: unknown): Error {
 }
 
 type QaSuiteArtifactErrorCode =
-  | "evidence_missing"
-  | "report_missing"
-  | "summary_missing"
   | "summary_read_failed"
   | "summary_parse_failed"
   | "summary_not_completed"

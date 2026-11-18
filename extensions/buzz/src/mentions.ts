@@ -138,21 +138,6 @@ function hasAtMentionCandidate(content: string): boolean {
   return /(?:^|[\t-\r ])@[^\t-\r ]/u.test(content);
 }
 
-function normalizeMembers(members: readonly BuzzMentionMember[]): Map<string, BuzzMentionMember> {
-  const normalized = new Map<string, BuzzMentionMember>();
-  for (const member of members) {
-    const publicKey = member.publicKey.trim().toLowerCase();
-    if (!HEX_PUBLIC_KEY_PATTERN.test(publicKey)) {
-      continue;
-    }
-    normalized.set(publicKey, {
-      publicKey,
-      displayName: member.displayName?.trim() || undefined,
-    });
-  }
-  return normalized;
-}
-
 export function inspectBuzzMentionSyntax(text: string): {
   hasAtMention: boolean;
   hasExplicitIdentity: boolean;
@@ -179,9 +164,8 @@ export function resolveBuzzMessageMentions(params: {
     throw new Error("Buzz room membership is unavailable; retry after the room directory loads");
   }
 
-  const members = normalizeMembers(params.members);
-  const senderPublicKey = params.senderPublicKey.trim().toLowerCase();
-  const mentions = explicitPublicKeys.filter((publicKey) => publicKey !== senderPublicKey);
+  const members = new Map(params.members.map((member) => [member.publicKey, member]));
+  const mentions = explicitPublicKeys.filter((publicKey) => publicKey !== params.senderPublicKey);
   if (mentions.length > BUZZ_MENTION_MAX_COUNT) {
     throw new Error(`Buzz messages support at most ${BUZZ_MENTION_MAX_COUNT} mentions`);
   }
@@ -194,10 +178,11 @@ export function resolveBuzzMessageMentions(params: {
 
   const namesToPublicKeys = new Map<string, string[]>();
   for (const member of members.values()) {
-    if (!member.displayName) {
+    const displayName = member.displayName?.trim();
+    if (!displayName) {
       continue;
     }
-    const name = asciiLowercase(member.displayName);
+    const name = asciiLowercase(displayName);
     const matches = namesToPublicKeys.get(name) ?? [];
     matches.push(member.publicKey);
     namesToPublicKeys.set(name, matches);
@@ -233,7 +218,7 @@ export function resolveBuzzMessageMentions(params: {
       );
     }
     for (const publicKey of matches) {
-      if (publicKey !== senderPublicKey && !mentions.includes(publicKey)) {
+      if (publicKey !== params.senderPublicKey && !mentions.includes(publicKey)) {
         if (mentions.length >= BUZZ_MENTION_MAX_COUNT) {
           throw new Error(`Buzz messages support at most ${BUZZ_MENTION_MAX_COUNT} mentions`);
         }

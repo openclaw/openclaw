@@ -14,6 +14,8 @@ import { normalizeSlotValue, resolveSlotSelection } from "./slots.js";
 
 /** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
+  /** Prepared metadata owner; null means the engine has no unambiguous permitted owner. */
+  contextEngineOwnerId?: string | null;
   enabled: boolean;
   allow: string[];
   deny: string[];
@@ -26,6 +28,7 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
+      allowMetrics?: boolean;
       hooks?: SchemaContract<NonNullable<PluginEntryConfig["hooks"]>>;
       subagent?: SchemaContract<NonNullable<PluginEntryConfig["subagent"]>> & {
         hasAllowedModelsConfig?: boolean;
@@ -79,7 +82,11 @@ function normalizePluginHooks(value: unknown): NormalizedPluginEntry["hooks"] {
     return undefined;
   }
   const hooks: NonNullable<NormalizedPluginEntry["hooks"]> = {};
-  for (const key of ["allowPromptInjection", "allowConversationAccess"] as const) {
+  for (const key of [
+    "allowPromptModification",
+    "allowConversationAccess",
+    "allowModelRequest",
+  ] as const) {
     if (typeof value[key] === "boolean") {
       hooks[key] = value[key];
     }
@@ -153,6 +160,10 @@ function normalizePluginEntries(
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      allowMetrics:
+        typeof entry.allowMetrics === "boolean"
+          ? entry.allowMetrics
+          : normalized[normalizedKey]?.allowMetrics,
       hooks: normalizePluginHooks(entry.hooks) ?? normalized[normalizedKey]?.hooks,
       subagent:
         normalizePluginModelConfig(entry.subagent, "subagent") ??
@@ -191,14 +202,14 @@ export function normalizePluginsConfigWithResolverCore(
 export function resolveChannelConfigEnablement(
   cfg: OpenClawConfig | undefined,
   pluginId: string,
-  channelIds: readonly string[] = [],
+  channelIds?: readonly string[],
 ): boolean | undefined {
   const channels = cfg?.channels as Record<string, unknown> | undefined;
-  if (!channels) {
+  if (!channels || channelIds?.length === 0) {
     return undefined;
   }
   // Declared ownership is authoritative; infer from the plugin id only when absent.
-  const candidateIds = channelIds.length
+  const candidateIds = channelIds?.length
     ? channelIds.map((channelId) => normalizeChatChannelId(channelId) ?? channelId)
     : [normalizeChatChannelId(pluginId)];
   const enablement = candidateIds.map((channelId) => {

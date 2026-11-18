@@ -18,7 +18,12 @@ import {
   type ContextEngineLogicalTurnLease,
 } from "./harness/context-engine-logical-turn.js";
 import { shellQuoteArgs } from "./harness/native-hook-relay-utils.js";
-import { isLiveTestEnabled, logLiveProgress } from "./live-test-helpers.js";
+import {
+  createLiveResponsesConfig,
+  isLiveTestEnabled,
+  logLiveProgress,
+  useLiveTestRuntimeConfig,
+} from "./live-test-helpers.js";
 import { SessionManager } from "./sessions/session-manager.js";
 
 const describeLive =
@@ -84,38 +89,12 @@ describeLive("embedded Responses output-limit recovery live", () => {
       );
       const command = shellQuoteArgs([process.execPath, scriptPath]);
       const config = {
-        models: {
-          providers: {
-            openai: {
-              api: "openai-responses",
-              auth: "api-key",
-              baseUrl: "https://api.openai.com/v1",
-              timeoutSeconds: 90,
-              models: [
-                {
-                  id: modelId,
-                  name: modelId,
-                  reasoning: true,
-                  input: ["text"],
-                  contextWindow: 200_000,
-                  maxTokens: 1024,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
-            },
-          },
-        },
-        agents: {
-          entries: { main: { workspace: state.workspaceDir } },
-          defaults: {
-            skipBootstrap: true,
-            models: { [`openai/${modelId}`]: { params: { transport: "sse" } } },
-          },
-        },
+        ...createLiveResponsesConfig(modelId, state.workspaceDir, 1024),
         tools: { exec: { host: "gateway", mode: "full" } },
         plugins: { allow: ["openai"], slots: { memory: "none" } },
       } satisfies OpenClawConfig;
       await state.writeConfig(config);
+      using _ = useLiveTestRuntimeConfig(config);
       const sessionManager = SessionManager.inMemory(state.workspaceDir);
       const events: EmbeddedAgentEvent[] = [];
       const requests: ResponseCreateParamsStreaming[] = [];
@@ -155,11 +134,47 @@ describeLive("embedded Responses output-limit recovery live", () => {
             if (requestNumber === 2) {
               // Spend the small cap on function arguments, not a reasoning-only turn.
               request.reasoning = { effort: "none" };
+              // The prompt does not enforce argument length; CI wrote only 40 bytes.
+              // Constrain generation, not the stream: the real provider must exhaust its cap.
+              request.tools = request.tools?.map((tool) =>
+                tool.type === "function" && tool.name === "write"
+                  ? {
+                      ...tool,
+                      strict: true,
+                      parameters: {
+                        type: "object",
+                        properties: {
+                          path: { type: "string", enum: [unfinishedPath] },
+                          content: { type: "string", enum: ["0123456789".repeat(4000)] },
+                        },
+                        required: ["path", "content"],
+                        additionalProperties: false,
+                      },
+                    }
+                  : tool,
+              );
             }
             // Only request policy changes: the provider's stream and terminal facts stay intact.
             requests.push(request);
             const response = await fetchModel(input, { ...init, body: JSON.stringify(request) });
-            return observeTerminalResponse(response, (terminal) => responses.push(terminal));
+            return observeTerminalResponse(response, (terminal) => {
+              responses.push(terminal);
+              // Log metadata before any assertion can hide the provider outcome.
+              logLiveProgress(
+                `Responses terminal facts: ${JSON.stringify({
+                  requestNumber,
+                  status: terminal.status,
+                  incompleteReason: terminal.incomplete_details?.reason,
+                  outputTokens: terminal.usage?.output_tokens,
+                  outputItems: terminal.output.map((item) => ({
+                    type: item.type,
+                    status: "status" in item ? item.status : undefined,
+                    argumentLength:
+                      item.type === "function_call" ? item.arguments.length : undefined,
+                  })),
+                })}`,
+              );
+            });
           };
         },
       });
@@ -210,32 +225,45 @@ describeLive("embedded Responses output-limit recovery live", () => {
           },
         });
 
+        const messages = sessionManager
+          .getBranch()
+          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
+        // Distinguish a bad prerequisite call from truncation/recovery failures.
+        expect(
+          events.find(
+            (event) =>
+              event.stream === "tool" && event.data.name === "exec" && event.data.phase === "start",
+          )?.data.args,
+        ).toMatchObject({ command, workdir: state.workspaceDir });
+        expect(
+          messages.filter(
+            (message) => message.role === "toolResult" && message.toolName === "exec",
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            isError: false,
+            details: expect.objectContaining({ status: "completed", exitCode: 0 }),
+          }),
+        ]);
         const receipts = (await fs.readFile(receiptPath, "utf8")).trim().split("\n");
         expect(receipts).toHaveLength(1);
         const receipt = receipts[0];
         expect(receipt).toMatch(/^RECEIPT_[0-9a-f-]{36}$/);
         await expect(fs.stat(unfinishedPath)).rejects.toMatchObject({ code: "ENOENT" });
         expect(requests).toHaveLength(3);
-        const terminalFacts = responses.map((response) => ({
-          status: response.status,
-          incompleteReason: response.incomplete_details?.reason,
-          outputItems: response.output.map((item) => ({
-            type: item.type,
-            status: "status" in item ? item.status : undefined,
-          })),
-        }));
-        logLiveProgress(`Responses terminal facts: ${JSON.stringify(terminalFacts)}`);
-        expect(terminalFacts).toHaveLength(3);
-        expect(terminalFacts[1]).toMatchObject({
+        expect(responses).toHaveLength(3);
+        expect(responses[1]).toMatchObject({
           status: "incomplete",
-          incompleteReason: "max_output_tokens",
-          outputItems: expect.arrayContaining([{ type: "function_call", status: "incomplete" }]),
+          incomplete_details: { reason: "max_output_tokens" },
+          output: expect.arrayContaining([
+            expect.objectContaining({ type: "function_call", status: "incomplete" }),
+          ]),
         });
         // Recovery may continue from provider state or replay the committed durable transcript.
         // The latter deliberately omits previous_response_id, so prove the receipt survived instead.
         expect(JSON.stringify(requests[2]?.input)).toContain(receipt);
         expect(JSON.stringify(requests[2]?.input)).toContain(
-          "Split the remaining work into smaller tool calls",
+          "Split the remaining work into smaller tool calls with shorter arguments only if the original request allows continuing that work. Use recorded tool results to determine what completed",
         );
         expect(JSON.stringify(requests[2]?.input)).toContain("max_output_tokens");
         expect(result.payloads?.map((payload) => payload.text ?? "").join("\n")).toContain(receipt);
@@ -245,9 +273,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
             (event) => event.stream === "run_status" && event.data.reason === "output_limit",
           ),
         ).toHaveLength(1);
-        const messages = sessionManager
-          .getBranch()
-          .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
         const failures = messages.filter(
           (message) => message.role === "assistant" && message.errorCode === "incomplete_tool_call",
         );
@@ -257,7 +282,6 @@ describeLive("embedded Responses output-limit recovery live", () => {
         expect(failures).toEqual([
           expect.objectContaining({
             stopReason: "error",
-            usage: expect.objectContaining({ output: 256 }),
             diagnostics: expect.arrayContaining([
               expect.objectContaining({
                 type: "openai_responses_terminal",
@@ -269,11 +293,13 @@ describeLive("embedded Responses output-limit recovery live", () => {
             ]),
           }),
         ]);
-        expect(
-          messages.filter(
-            (message) => message.role === "toolResult" && message.toolName === "exec",
-          ),
-        ).toHaveLength(1);
+        // OpenAI can report a few tokens past max_output_tokens on a truncated response (260 for 256).
+        const [failure] = failures;
+        if (failure?.role !== "assistant") {
+          throw new Error("Expected one incomplete assistant tool-call failure");
+        }
+        expect(failure.usage.output).toBeGreaterThanOrEqual(256);
+        expect(failure.usage.output).toBeLessThanOrEqual(256 + 32);
         expect(
           messages.filter(
             (message) => message.role === "toolResult" && message.toolName === "write",

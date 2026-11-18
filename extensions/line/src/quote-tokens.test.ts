@@ -1,4 +1,3 @@
-// Line tests cover quote token plugin behavior.
 import type { messagingApi, webhook } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +14,10 @@ const logVerboseMock = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({ logVerbose: logVerboseMock }));
 
 const cfg = {} as OpenClawConfig;
+const record = (accountId: string, chatId: string, messageId: string, quoteToken?: string) =>
+  recordLineQuoteToken({ accountId, chatId, messageId, quoteToken });
+const resolve = (accountId: string | undefined, chatId: string, messageId: string) =>
+  resolveLineQuoteToken({ cfg, accountId, chatId, messageId });
 
 describe("readLineQuoteToken", () => {
   it("reads the token from every message kind LINE lets a person quote", () => {
@@ -66,118 +69,42 @@ describe("readLineQuoteToken", () => {
 
 describe("the quote token store", () => {
   it("keeps accounts apart, because a token belongs to the channel that issued it", () => {
-    recordLineQuoteToken({
-      accountId: "work",
-      chatId: "Cshared",
-      messageId: "m-both",
-      quoteToken: "work-token",
-    });
-    recordLineQuoteToken({
-      accountId: "personal",
-      chatId: "Cshared",
-      messageId: "m-both",
-      quoteToken: "personal-token",
-    });
-
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "work", chatId: "Cshared", messageId: "m-both" }),
-    ).toBe("work-token");
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "personal", chatId: "Cshared", messageId: "m-both" }),
-    ).toBe("personal-token");
+    record("work", "Cshared", "m-both", "work-token");
+    record("personal", "Cshared", "m-both", "personal-token");
+    expect(resolve("work", "Cshared", "m-both")).toBe("work-token");
+    expect(resolve("personal", "Cshared", "m-both")).toBe("personal-token");
   });
 
   it("reads the account the send itself resolves to when none is named", () => {
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Cdefault",
-      messageId: "m-default",
-      quoteToken: "default-token",
-    });
-
-    expect(
-      resolveLineQuoteToken({
-        cfg,
-        accountId: undefined,
-        chatId: "Cdefault",
-        messageId: "m-default",
-      }),
-    ).toBe("default-token");
+    record("default", "Cdefault", "m-default", "default-token");
+    expect(resolve(undefined, "Cdefault", "m-default")).toBe("default-token");
   });
 
   it("records nothing for a message kind that carries no token", () => {
-    recordLineQuoteToken({
-      accountId: "default",
-      chatId: "Cnone",
-      messageId: "m-none",
-      quoteToken: undefined,
-    });
-
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "default", chatId: "Cnone", messageId: "m-none" }),
-    ).toBeUndefined();
+    record("default", "Cnone", "m-none");
+    expect(resolve("default", "Cnone", "m-none")).toBeUndefined();
   });
 
   it("keeps a quiet account's tokens while a busy account fills its own bound", () => {
-    recordLineQuoteToken({
-      accountId: "quiet",
-      chatId: "Cquiet",
-      messageId: "quiet-1",
-      quoteToken: "quiet-token",
-    });
+    record("quiet", "Cquiet", "quiet-1", "quiet-token");
     for (let index = 0; index < 2000; index += 1) {
-      recordLineQuoteToken({
-        accountId: "busy",
-        chatId: "Cbusy",
-        messageId: `busy-${index}`,
-        quoteToken: `busy-token-${index}`,
-      });
+      record("busy", "Cbusy", `busy-${index}`, `busy-token-${index}`);
     }
-
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "quiet", chatId: "Cquiet", messageId: "quiet-1" }),
-    ).toBe("quiet-token");
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "busy", chatId: "Cbusy", messageId: "busy-0" }),
-    ).toBeUndefined();
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "busy", chatId: "Cbusy", messageId: "busy-1999" }),
-    ).toBe("busy-token-1999");
+    expect(resolve("quiet", "Cquiet", "quiet-1")).toBe("quiet-token");
+    expect(resolve("busy", "Cbusy", "busy-0")).toBeUndefined();
+    expect(resolve("busy", "Cbusy", "busy-1999")).toBe("busy-token-1999");
   });
 
   it("re-quoting a message replaces its token and moves it out of eviction range", () => {
-    recordLineQuoteToken({
-      accountId: "refresh",
-      chatId: "Crefresh",
-      messageId: "kept",
-      quoteToken: "old-token",
-    });
+    record("refresh", "Crefresh", "kept", "old-token");
     for (let index = 0; index < 499; index += 1) {
-      recordLineQuoteToken({
-        accountId: "refresh",
-        chatId: "Crefresh",
-        messageId: `filler-${index}`,
-        quoteToken: `filler-token-${index}`,
-      });
+      record("refresh", "Crefresh", `filler-${index}`, `filler-token-${index}`);
     }
-    recordLineQuoteToken({
-      accountId: "refresh",
-      chatId: "Crefresh",
-      messageId: "kept",
-      quoteToken: "new-token",
-    });
+    record("refresh", "Crefresh", "kept", "new-token");
     for (let index = 0; index < 400; index += 1) {
-      recordLineQuoteToken({
-        accountId: "refresh",
-        chatId: "Crefresh",
-        messageId: `later-${index}`,
-        quoteToken: `later-token-${index}`,
-      });
+      record("refresh", "Crefresh", `later-${index}`, `later-token-${index}`);
     }
-
-    expect(
-      resolveLineQuoteToken({ cfg, accountId: "refresh", chatId: "Crefresh", messageId: "kept" }),
-    ).toBe("new-token");
+    expect(resolve("refresh", "Crefresh", "kept")).toBe("new-token");
   });
 });
 

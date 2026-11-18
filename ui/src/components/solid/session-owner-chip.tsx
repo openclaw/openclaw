@@ -7,8 +7,7 @@ import {
   type SessionCreatedActor,
   type SessionOwnerOption,
 } from "../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
-import { AgentViewerAvatar, ViewerAvatar } from "./viewer-facepile.tsx";
+import { ParticipantAvatar } from "./viewer-facepile.tsx";
 
 export type SessionOwnerChipProps = {
   owner?: SessionCreatedActor | null;
@@ -30,40 +29,23 @@ function ownerHue(id: string): number {
 export function SessionOwnerAvatar(props: {
   owner: Pick<SessionOwnerOption, "id" | "label" | "avatarUrl" | "identity">;
 }) {
-  const identity = () => {
-    const value = props.owner.identity;
-    return value?.type === "agent" ? value : undefined;
-  };
   return (
-    <Show
-      when={identity()}
-      fallback={
-        <ViewerAvatar
-          identity={props.owner.identity}
-          user={{
-            id: props.owner.id,
-            name: props.owner.label,
-            avatarUrl: props.owner.avatarUrl,
-            watchedSessions: [],
-          }}
-          markAsViewer={false}
-          variant="session"
-          aria-hidden="true"
-        />
-      }
-    >
-      {(agent) => (
-        <AgentViewerAvatar
-          user={{ id: props.owner.id, name: props.owner.label, avatarUrl: props.owner.avatarUrl }}
-          identity={agent()}
-          label={props.owner.label || props.owner.id}
-        />
-      )}
-    </Show>
+    <ParticipantAvatar
+      user={{
+        id: props.owner.id,
+        name: props.owner.label,
+        avatarUrl: props.owner.avatarUrl,
+        identity: props.owner.identity,
+        watchedSessions: [],
+      }}
+      markAsViewer={false}
+      label={props.owner.label || props.owner.id}
+      aria-hidden="true"
+    />
   );
 }
 
-export function SessionOwnerChipContent(props: SessionOwnerChipProps) {
+export function SessionOwnerChip(props: SessionOwnerChipProps) {
   const owner = () => props.owner;
   const initials = () => (owner() ? sessionOwnerInitials(owner()!) : "");
   const label = () => {
@@ -121,53 +103,35 @@ export function SessionOwnerChipContent(props: SessionOwnerChipProps) {
     </span>
   );
   return (
-    <Show when={owner()?.id && initials()}>
-      <Show when={stacked()} fallback={chip()}>
-        <span
-          class={[
-            "session-owner-stack",
-            { "session-owner-stack--overflow": (props.participantCount ?? 0) > 1 },
-          ]}
-          role="group"
-          aria-label={combinedLabel()}
-        >
-          <span class="session-owner-stack__back" aria-hidden="true">
-            <Show
-              when={props.participantCount === 1 && participant()}
-              fallback={
-                <span class="session-owner-stack__overflow">
-                  <span class="session-owner-stack__count">+{props.participantCount}</span>
-                </span>
-              }
-            >
-              {(person) => <SessionOwnerAvatar owner={{ ...person(), id: person().identity.id }} />}
-            </Show>
+    <openclaw-session-owner-chip size={props.size} attribution={props.attribution}>
+      <Show when={owner()?.id && initials()}>
+        <Show when={stacked()} fallback={chip()}>
+          <span
+            class={[
+              "session-owner-stack",
+              { "session-owner-stack--overflow": (props.participantCount ?? 0) > 1 },
+            ]}
+            role="group"
+            aria-label={combinedLabel()}
+          >
+            <span class="session-owner-stack__back" aria-hidden="true">
+              <Show
+                when={props.participantCount === 1 && participant()}
+                fallback={
+                  <span class="session-owner-stack__overflow">
+                    <span class="session-owner-stack__count">+{props.participantCount}</span>
+                  </span>
+                }
+              >
+                {(person) => (
+                  <SessionOwnerAvatar owner={{ ...person(), id: person().identity.id }} />
+                )}
+              </Show>
+            </span>
+            {chip()}
           </span>
-          {chip()}
-        </span>
+        </Show>
       </Show>
-    </Show>
+    </openclaw-session-owner-chip>
   );
-}
-
-export type SessionOwnerChipElement = SolidBridgeElement<SessionOwnerChipProps>;
-defineSolidBridge<SessionOwnerChipProps>(
-  "openclaw-session-owner-chip",
-  (props) => <SessionOwnerChipContent {...props} />,
-  {
-    properties: {
-      owner: { default: null, attribute: false },
-      size: { default: "row" },
-      attribution: { default: "created" },
-      viewingNow: { default: undefined, attribute: false },
-      participants: { default: [], attribute: false },
-      participantCount: { default: 0, type: Number },
-    },
-  },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-session-owner-chip": SessionOwnerChipElement;
-  }
 }

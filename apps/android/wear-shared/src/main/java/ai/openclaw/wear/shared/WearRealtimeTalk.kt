@@ -67,7 +67,7 @@ object WearRealtimeAudioFraming {
     type: WearRealtimeAudioFrameType,
     payload: ByteArray,
   ) {
-    requireValid(type, payload)
+    requireValid(type, payload.size)
     DataOutputStream(output).apply {
       writeByte(type.wireValue)
       writeInt(payload.size)
@@ -89,30 +89,27 @@ object WearRealtimeAudioFraming {
       } catch (err: EOFException) {
         throw IllegalArgumentException("Truncated Wear realtime audio frame", err)
       }
-    if (size < 0 || size > WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES) {
-      throw IllegalArgumentException("Invalid Wear realtime audio frame size")
-    }
+    requireValid(type, size)
     val payload = ByteArray(size)
     try {
       stream.readFully(payload)
     } catch (err: EOFException) {
       throw IllegalArgumentException("Truncated Wear realtime audio payload", err)
     }
-    requireValid(type, payload)
     return WearRealtimeAudioFrame(type, payload)
   }
 
   private fun requireValid(
     type: WearRealtimeAudioFrameType,
-    payload: ByteArray,
+    size: Int,
   ) {
-    require(payload.size <= WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES)
+    require(size in 0..WearProtocol.MAX_REALTIME_AUDIO_FRAME_BYTES) { "Invalid Wear realtime audio frame size" }
     when (type) {
       WearRealtimeAudioFrameType.INPUT_PCM,
       WearRealtimeAudioFrameType.OUTPUT_PCM,
-      -> require(payload.isNotEmpty() && payload.size % 2 == 0)
+      -> require(size > 0 && size % 2 == 0)
 
-      WearRealtimeAudioFrameType.CLEAR_OUTPUT -> require(payload.isEmpty())
+      WearRealtimeAudioFrameType.CLEAR_OUTPUT -> require(size == 0)
     }
   }
 }

@@ -1,6 +1,11 @@
 import { createConfigIO } from "../config/io.factory.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { purgeExpiredSecretStoreEntries } from "../secrets/store/secret-store.js";
+import {
+  getSecretStoreExpiryDeadline,
+  purgeExpiredSecretStoreEntries,
+  subscribeSecretStoreChanges,
+} from "../secrets/store/secret-store.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -57,6 +62,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
   });
   params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;
   params.publishSidecars({
+    name: "model-account-connect",
     stop: async () => {
       await modelAccountConnect.stop();
       if (params.gatewayRequestContext.modelAccountConnectService === modelAccountConnect) {
@@ -82,6 +88,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     githubOAuth.start();
   }
   params.publishSidecars({
+    name: "github-oauth",
     stop: async () => {
       uninstallGitHubOAuth();
       await githubOAuth.stop();
@@ -91,30 +98,63 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     },
   });
   if (!params.minimalTestGateway) {
+    const expiryScheduler = params.scheduler.scope();
     let warned = false;
-    params.publishSidecars(
-      params.scheduler.schedule({
-        id: "maintenance:secret-expiry",
-        atMs: params.scheduler.now(),
-        everyMs: 60_000,
-        run: () =>
-          purgeExpiredSecretStoreEntries()
-            .then(() => {
-              warned = false;
-            })
-            .catch(() => {
-              if (!warned) {
-                params.logWarning("Secret store expiry cleanup failed; will retry.");
-                warned = true;
-              }
-            }),
-      }),
+    let running = false;
+    const scheduleExpiry = (atMs: number) => {
+      if (!expiryScheduler.signal.aborted) {
+        expiryScheduler.schedule({
+          id: "maintenance:secret-expiry",
+          atMs,
+          mode: "earliest",
+          run: sweep,
+        });
+      }
+    };
+    const sweep = async () => {
+      if (running) {
+        return;
+      }
+      running = true;
+      try {
+        await purgeExpiredSecretStoreEntries();
+        warned = false;
+        const next = getSecretStoreExpiryDeadline();
+        if (next !== null) {
+          scheduleExpiry(next ?? expiryScheduler.now());
+        }
+      } catch {
+        if (!warned) {
+          params.logWarning("Secret store expiry cleanup failed; will retry.");
+          warned = true;
+        }
+        scheduleExpiry(expiryScheduler.now() + 60_000);
+      } finally {
+        running = false;
+      }
+    };
+    const unsubscribe = subscribeSecretStoreChanges(() => scheduleExpiry(expiryScheduler.now()));
+    const unsubscribeLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
+      if (event.kind !== "opened") {
+        scheduleExpiry(expiryScheduler.now());
+      }
+    });
+    expiryScheduler.signal.addEventListener(
+      "abort",
+      () => {
+        unsubscribe();
+        unsubscribeLifecycle();
+      },
+      { once: true },
     );
+    params.publishSidecars({ name: "secret-expiry", stop: expiryScheduler.stop });
+    scheduleExpiry(expiryScheduler.now());
   }
   const reconcileGitHubPublications = params.reconcileGitHubPublications;
   if (reconcileGitHubPublications) {
-    params.publishSidecars(
-      params.scheduler.schedule({
+    params.publishSidecars({
+      name: "github-publication-recovery",
+      ...params.scheduler.schedule({
         id: "maintenance:github-publication",
         atMs: params.scheduler.now(),
         everyMs: 60_000,
@@ -123,10 +163,11 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
             params.logWarning("GitHub publication recovery failed; will retry."),
           ),
       }),
-    );
+    });
   }
   attachSessionChangeEventLifetime(params.gatewayRequestContext, () =>
     params.publishSidecars({
+      name: "session-change-events",
       stop: async () => {
         await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
       },

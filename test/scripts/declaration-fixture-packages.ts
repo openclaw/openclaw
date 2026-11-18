@@ -67,14 +67,11 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
     fs.readFileSync(path.join(normalizationSource, "package.json"), "utf8"),
   );
   fs.mkdirSync(normalizationCore, { recursive: true });
-  const normalizationEntries = ["error-coercion", "record-coerce"];
+  const normalizationEntries = ["error-coercion", "record-coerce", "stringified-error"];
   for (const entry of normalizationEntries) {
     const source = fs.readFileSync(path.join(normalizationSource, `src/${entry}.ts`), "utf8");
     fs.writeFileSync(path.join(normalizationCore, `${entry}.ts`), source);
-    fs.writeFileSync(
-      path.join(normalizationCore, `${entry}.mjs`),
-      stripNodeTypeScriptTypes(source),
-    );
+    fs.writeFileSync(path.join(normalizationCore, `${entry}.js`), stripNodeTypeScriptTypes(source));
   }
   fs.writeFileSync(
     path.join(normalizationCore, "package.json"),
@@ -85,13 +82,14 @@ export function materializeDeclarationPackages(root: string, unified: boolean) {
       exports: Object.fromEntries(
         normalizationEntries.map((entry) => [
           `./${entry}`,
-          { types: `./${entry}.ts`, default: `./${entry}.mjs` },
+          { types: `./${entry}.ts`, default: `./${entry}.js` },
         ]),
       ),
     }),
   );
   for (const name of [
     "typescript",
+    "tsrs",
     "tsdown",
     ...(unified ? ["@types/node", "apache-arrow"] : []),
   ]) {

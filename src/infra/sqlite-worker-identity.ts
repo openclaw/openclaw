@@ -11,15 +11,15 @@ export type DatabaseFileIdentity = Readonly<{
 export type DatabasePathIdentity = DatabaseFileIdentity & Readonly<{ canonicalPath: string }>;
 
 // The physical host policy stays fixed across every admission in this process.
-const useDatabaseBirthtime = process.platform !== "linux";
+const useDatabaseBirthtime = process.platform !== "linux" && process.platform !== "android";
 
 export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">): string {
   return `${file.dev}:${file.ino}`;
 }
 
 export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
-  // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
-  // Keep the unknown creation-time value stable across ordinary database writes.
+  // Node does not expose STATX_BTIME availability on Linux or Android (Termux) and can
+  // substitute ctime. Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
 }
 
@@ -161,6 +161,17 @@ export function findChangedDatabasePaths(
 export async function readDatabasePathIdentity(
   databasePath: string,
 ): Promise<DatabasePathIdentity> {
+  const identity = await inspectDatabasePathIdentity(databasePath);
+  if (!identity) {
+    throw new Error("SQLite worker database path must identify a regular file");
+  }
+  return identity;
+}
+
+/** Async counterpart of native-owner inspection; the eventual opener owns non-file diagnostics. */
+export async function inspectDatabasePathIdentity(
+  databasePath: string,
+): Promise<DatabasePathIdentity | undefined> {
   const file = await stat(databasePath, { bigint: true }).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
       return undefined;
@@ -168,6 +179,9 @@ export async function readDatabasePathIdentity(
     throw error;
   });
   if (file) {
+    if (!file.isFile()) {
+      return undefined;
+    }
     try {
       const canonicalPath = await realpath(databasePath);
       const canonicalFile = await stat(canonicalPath, { bigint: true });
@@ -180,12 +194,16 @@ export async function readDatabasePathIdentity(
     }
   }
   // Resolve the existing ancestor before a first open so directory aliases share admission.
+  const canonicalPath = await resolveDatabasePathKeyAsync(databasePath);
+  return { key: `path:${canonicalPath}`, canonicalPath };
+}
+
+export async function resolveDatabasePathKeyAsync(databasePath: string): Promise<string> {
   const missing: string[] = [];
-  let ancestor = databasePath;
+  let ancestor = path.resolve(databasePath);
   while (true) {
     try {
-      const canonicalPath = normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
-      return { key: `path:${canonicalPath}`, canonicalPath };
+      return normalizeDatabasePath(path.join(await realpath(ancestor), ...missing));
     } catch (error) {
       ancestor = missingAncestorParent(ancestor, missing, error);
     }
@@ -200,6 +218,18 @@ export function assertDatabasePathIdentity(
   if (expected.key.startsWith("file:")) {
     assertExistingDatabaseIdentity(databasePath, expected.key, expected.birthtime);
   } else if (readDatabasePathIdentitySync(databasePath).key !== expected.key) {
+    throw new Error(`SQLite database path identity changed: ${databasePath}`);
+  }
+}
+
+/** Async admission preserves the same existing-file and observed-absence checks. */
+export async function assertDatabasePathIdentityAsync(
+  databasePath: string,
+  expected: DatabasePathIdentity,
+): Promise<void> {
+  if (expected.key.startsWith("file:")) {
+    assertDatabaseFileIdentity(await stat(databasePath, { bigint: true }), expected);
+  } else if ((await readDatabasePathIdentity(databasePath)).key !== expected.key) {
     throw new Error(`SQLite database path identity changed: ${databasePath}`);
   }
 }

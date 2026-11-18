@@ -46,7 +46,7 @@ For the full key index and the other top-level config domains, see [Configuratio
       },
       remote: { cdpUrl: "http://10.0.0.42:9222" },
     },
-    // headless: false,
+    // headless: true, // default; set false for a visible managed browser
     // noSandbox: false,
     // extraArgs: [],
     // executablePath: "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
@@ -113,7 +113,13 @@ For the full key index and the other top-level config domains, see [Configuratio
 - Local managed profiles can set `executablePath` to override the global
   `browser.executablePath` for that profile. Use this to run one profile in
   Chrome and another in Brave.
-- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary.
+- Managed browsers are headless by default. Explicit global or per-profile
+  `headless: false` keeps headed mode; externally owned browsers are unchanged.
+- Auto-detect order: default browser if Chromium-based → Chrome → Brave → Edge → Chromium → Chrome Canary → installed Playwright browser cache.
+  Cache discovery selects full Chromium only. On Linux and macOS, use an explicit
+  per-profile `executablePath` for headless shell and keep it in a separate profile;
+  switching an existing full-Chromium profile to shell can discard localStorage.
+  Managed shell launches are unsupported on Windows.
 - `browser.executablePath` and `browser.profiles.<name>.executablePath` both
   accept `~` and `~/...` for your OS home directory before Chromium launch.
   Per-profile `userDataDir` on `existing-session` profiles is also tilde-expanded.
@@ -139,7 +145,7 @@ For the full key index and the other top-level config domains, see [Configuratio
     prefs: {
       theme: "claw", // claw | knot | dash | absolutely | tide | beacon | phosphor | crt | manuscript | rose | miami | custom
       themeMode: "system", // light | dark | system
-      locale: "en",
+      locale: "en", // Control UI language; omit to follow the browser language
       chatShowThinking: true,
       chatShowToolCalls: true,
       chatPersistCommentary: true, // Keep commentary after runs in Control UI; does not deliver it to channels
@@ -158,12 +164,15 @@ Agent display names, emoji, and avatars belong to each agent's `identity` block 
   the theme default applies. `prefs.accent` also accepts `"theme"` to explicitly
   select the Control UI theme palette without inheriting `seamColor`; `talk.config`
   omits its hex-only accent in that case.
-- `prefs`: cross-device operator preferences. This is the canonical home so agents can
+- `prefs`: cross-device operator preferences. This is the shared home so agents can
   change them through the approval gate and every Control UI client stays in
   sync; browsers mirror the values into local storage for instant boot. An
   explicitly read-only connection keeps edits in that browser without attempting
   a config write. Offline edits remain queued for a later writable connection and
   continue as browser-local preferences while reconnected read-only.
+  `locale` is the Control UI language, edited in Settings → Appearance → Language;
+  leave it unset to follow the browser or system language. It does not set the
+  assistant's timezone (`agents.defaults.userTimezone`).
   `chatPersistCommentary` defaults to `true`. Setting it to `false` keeps live
   commentary visible during a run but removes it at completion and prevents new
   Codex commentary from entering the durable transcript mirror. Messaging-channel
@@ -190,7 +199,10 @@ Desktop without restarting the Gateway; the desktop becomes available on the
 same connection. Gateway administrator access is required. Detection does not
 expose the desktop or change system permissions. Existing managed Linux desktops
 can be enabled from the same view. **Settings → Labs → Host Desktop** remains
-available to turn access off or manage it separately.
+available to turn access off or manage it separately. When a chat session's
+Desktop panel targets the Gateway host and Host Desktop is off, the panel shows
+the same check, setup steps, and enable action, then re-checks and connects once
+Host Desktop is available.
 
 Enabling macOS Screen Sharing, a paired node's Desktop sharing, or screenshot
 capture alone does not enable the Gateway's desktop. On macOS, Remote Management

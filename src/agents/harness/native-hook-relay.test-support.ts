@@ -1,5 +1,32 @@
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { testing, type invokeNativeHookRelay } from "./native-hook-relay.js";
+import {
+  registerNativeHookRelay,
+  registerOwnedNativeHookRelay,
+  testing,
+  type invokeNativeHookRelay,
+} from "./native-hook-relay.js";
+
+export function registerTestNativeHookRelay(
+  overrides: Partial<Parameters<typeof registerNativeHookRelay>[0]> = {},
+) {
+  return registerNativeHookRelay({
+    provider: "codex",
+    sessionId: "session-1",
+    runId: "run-1",
+    ...overrides,
+  });
+}
+
+export function registerOwnedTestNativeHookRelay(
+  overrides: Partial<Parameters<typeof registerOwnedNativeHookRelay>[0]> = {},
+) {
+  return registerOwnedNativeHookRelay({
+    provider: "codex",
+    sessionId: "session-1",
+    runId: "run-1",
+    ...overrides,
+  });
+}
 
 export function createNativeHookRelayPermissionRequestFixture(
   relayId: string,
@@ -20,7 +47,7 @@ export function createNativeHookRelayPermissionRequestFixture(
   };
 }
 
-export function clearNativeHookRelayBridgeRecordsForTests(): void {
+function clearNativeHookRelayBridgeRecordsForTests(): void {
   runOpenClawStateWriteTransaction(({ db }) => {
     db.prepare("DELETE FROM native_hook_relay_bridges").run();
   });

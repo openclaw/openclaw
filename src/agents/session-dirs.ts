@@ -1,16 +1,20 @@
 import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { ignoreMissingPath } from "../infra/errno.js";
 
 function mapAgentSessionDirs(
   agentsDir: string,
   entries: Dirent[],
   includeDirName?: (dirName: string) => boolean,
 ): string[] {
-  return entries
-    .filter((entry) => entry.isDirectory() && (includeDirName?.(entry.name) ?? true))
-    .map((entry) => path.join(agentsDir, entry.name, "sessions"))
-    .toSorted((a, b) => a.localeCompare(b));
+  return (
+    entries
+      .filter((entry) => entry.isDirectory() && (includeDirName?.(entry.name) ?? true))
+      .map((entry) => path.join(agentsDir, entry.name, "sessions"))
+      // oxlint-disable-next-line unicorn/no-array-sort -- map creates a private array of session paths.
+      .sort((a, b) => a.localeCompare(b))
+  );
 }
 
 export function resolveAgentSessionDirsFromAgentsDirSync(
@@ -21,11 +25,7 @@ export function resolveAgentSessionDirsFromAgentsDirSync(
   try {
     entries = fsSync.readdirSync(agentsDir, { withFileTypes: true });
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
+    return ignoreMissingPath(err) ?? [];
   }
 
   return mapAgentSessionDirs(agentsDir, entries, includeDirName);
@@ -33,16 +33,6 @@ export function resolveAgentSessionDirsFromAgentsDirSync(
 
 export async function resolveAgentSessionDirs(stateDir: string): Promise<string[]> {
   const agentsDir = path.join(stateDir, "agents");
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") {
-      return [];
-    }
-    throw err;
-  }
-
-  return mapAgentSessionDirs(agentsDir, entries);
+  const entries = await fs.readdir(agentsDir, { withFileTypes: true }).catch(ignoreMissingPath);
+  return mapAgentSessionDirs(agentsDir, entries ?? []);
 }

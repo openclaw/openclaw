@@ -1,3 +1,5 @@
+import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import { normalizeCloudRepo } from "../../config/cloud-worker-project-profiles.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
@@ -13,7 +15,7 @@ import { workerEnvironmentServiceError as serviceError } from "./environment-err
 import { workerInferenceMetadata } from "./inference-placement.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
-import { readWorkerProjectPreparation } from "./preparation-identity.js";
+import { readWorkerProjectPreparation } from "./preparation-identity.schema.js";
 import { readWorkerProjectSnapshot } from "./project-preparation.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
@@ -29,20 +31,24 @@ import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
+// Allow one normal 30-second node command to settle, then one native close command.
+const COMPUTER_CLEANUP_TIMEOUT_MS = 2 * 30_000;
 
 export type WorkerEnvironmentNodeTunnel = Pick<
   NodeWorkerTunnelManager,
-  "status" | "start" | "stop" | "stopAll" | "observeProcesses"
+  "status" | "start" | "stop" | "stopAll" | "beginClose" | "observeProcesses"
 >;
 
 /** Lease teardown joins every transport sharing that environment owner. */
 export function createWorkerEnvironmentTransportLifecycle(options: {
+  store: Pick<WorkerEnvironmentStore, "get">;
   tunnelManager?: WorkerTunnelManager;
   nodeTunnelManager?: Pick<NodeWorkerTunnelManager, "stop">;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   nodePortalCarrier?: import("./portal-node-carrier.js").WorkerNodePortalCarrier;
   closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
   closeEnvironmentComputers?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+  logger?: { warn: (message: string) => void };
 }) {
   if (
     !options.tunnelManager &&
@@ -52,6 +58,33 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
   ) {
     return undefined;
   }
+  const closeComputers = async (
+    environmentId: string,
+    ownerEpoch?: number,
+    reason?: WorkerTunnelStopReason,
+  ) => {
+    if (!options.closeEnvironmentComputers) {
+      return;
+    }
+    try {
+      await withTimeout(
+        options.closeEnvironmentComputers(environmentId, ownerEpoch),
+        COMPUTER_CLEANUP_TIMEOUT_MS,
+        "Worker computer cleanup",
+      );
+    } catch (error) {
+      const record = options.store.get(environmentId);
+      const providerOwnsMachine = record?.sharedHost === false && record.nodeDeviceId !== null;
+      // A teardown reason does not establish host isolation. Shared or unknown
+      // hosts still need cleanup acknowledgement before their worker can retire.
+      if (reason === undefined || !providerOwnsMachine) {
+        throw error;
+      }
+      options.logger?.warn(
+        `Worker computer cleanup failed (${environmentId}): ${boundedError(error)}; continuing provider teardown. Check the provider lease status and retry Stop if it is still running.`,
+      );
+    }
+  };
   return {
     stop: async (environmentId: string, ownerEpoch?: number, reason?: WorkerTunnelStopReason) => {
       await joinWorkerTunnelStops([
@@ -60,15 +93,15 @@ export function createWorkerEnvironmentTransportLifecycle(options: {
         options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
         options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
         options.closeWorkerPortals?.(environmentId, ownerEpoch),
-        options.closeEnvironmentComputers?.(environmentId, ownerEpoch),
+        closeComputers(environmentId, ownerEpoch, reason),
       ]);
     },
   };
 }
 
 type WorkerEnvironmentAccessOptions = {
+  readStartStatus: (record: WorkerEnvironmentRecord) => WorkerEnvironmentStartStatus | undefined;
   store: WorkerEnvironmentStore;
-  getCleanupError: (record: WorkerEnvironmentRecord) => string | undefined;
   getConfig: () => OpenClawConfig;
   projectNamespace?: string;
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
@@ -100,7 +133,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     if (options.getConfig().cloudWorkers?.desktop !== true) {
       throw serviceError(
         "invalid_state",
-        `worker desktop ${operation} is disabled; enable the Desktop lab in Control UI Settings -> Labs (config: cloudWorkers.desktop)`,
+        `worker desktop ${operation} is disabled; enable the Desktop lab under Settings -> Labs in the OpenClaw app (config: cloudWorkers.desktop)`,
       );
     }
     if (policy.signal.aborted) {
@@ -161,7 +194,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const project = (record: WorkerEnvironmentRecord) => {
-    const cleanupError = options.getCleanupError(record);
     const desktopAvailable =
       options.getConfig().cloudWorkers?.desktop === true &&
       ["ready", "idle", "attached"].includes(record.state) &&
@@ -175,8 +207,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         ? normalizeCloudRepo(preparedProject.source.url)
         : preparedProject.label
       : undefined;
+    const startStatus = options.readStartStatus(record);
     return {
       ...record,
+      ...(startStatus ? { startStatus } : {}),
       ...workerInferenceMetadata(record),
       ...(record.preparation && preparedProject
         ? {
@@ -195,7 +229,6 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       record.lastError
         ? { error: boundedError(record.lastError) }
         : {}),
-      ...(cleanupError ? { error: cleanupError } : {}),
       desktopAvailable,
       desktopApps: desktopAvailable
         ? (record.desktop?.apps?.map((app) => app.id).toSorted() ?? [])
@@ -234,8 +267,13 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
   };
 
   const bindPreparedWorkspace = async (
-    request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0],
+    request: Parameters<NonNullable<WorkerEnvironmentAccessOptions["bindPreparedWorkspace"]>>[0] & {
+      readNativeCredential?: GitHubCredentialReader;
+      retainCredentialCleanup?: (revoke: () => Promise<void>) => void;
+    },
   ) => {
+    // Repository admission belongs to this host owner, not the node transport payload.
+    const { readNativeCredential, retainCredentialCleanup, ...binding } = request;
     const bind = options.bindPreparedWorkspace;
     const assertCurrent = () => {
       request.signal?.throwIfAborted();
@@ -270,11 +308,16 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       // a snapshot is reusable content, never a substitute for repository authority.
       repository = await prepareRepositoryWorkerProjectSource({
         expected: projectSnapshot,
+        readNativeCredential,
+        retainCredentialCleanup,
         namespace: options.projectNamespace,
         getConfig: options.getConfig,
         assertCurrent,
         signal: request.signal,
-        knownRecipe: () => ({ project: projectSnapshot, setupRecipe: preparation.setupRecipe }),
+        knownRecipe: () => ({
+          setupRecipe: preparation.setupRecipe,
+          recipe: preparation.recipe,
+        }),
       });
     }
     const assertBindingCurrent = () => {
@@ -282,11 +325,11 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       repository?.assertCurrent();
     };
     assertBindingCurrent();
-    const prepared = await bind({ ...request, assertCurrent: assertBindingCurrent });
+    const prepared = await bind({ ...binding, assertCurrent: assertBindingCurrent });
     assertBindingCurrent();
     await repository?.revalidate(request.signal);
-    assertCurrent();
-    return prepared;
+    assertBindingCurrent();
+    return { ...prepared, assertCurrent: assertBindingCurrent };
   };
 
   const startTunnel = async (request: WorkerTunnelRequest): Promise<WorkerTunnelHandle> => {
@@ -483,10 +526,10 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     };
   };
 
-  const launchDesktopApp = async (request: {
-    environmentId: string;
-    app: "browser" | "terminal";
-  }): Promise<WorkerDesktopLaunchResult> => {
+  const launchDesktopApp = async (
+    request: { environmentId: string; app: "browser" | "terminal" },
+    authorize?: () => void,
+  ): Promise<WorkerDesktopLaunchResult> => {
     const stopping = options.isStopping();
     const policy = desktopPolicy;
     const assertPolicy = () => requireDesktopPolicy("launch", policy);
@@ -510,6 +553,8 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
     const { startup, launchEpoch } = await withLock(request.environmentId, async () => {
       const { app, record, leaseId } = requireLaunchable();
       const transport = desktopTransport(record, leaseId);
+      // Queued launches need current request authority; admitted launches may finish.
+      authorize?.();
       return {
         launchEpoch: record.ownerEpoch,
         startup:

@@ -102,7 +102,7 @@ Notes:
 - Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
-- Runtime accepts canonical config only. Doctor retains migrations for `provider: "log"`, `twilio.from`, legacy `streaming.*` OpenAI keys, and `realtime.agentContext.includeSystemPrompt` because supported releases can still preserve these settings. Run `openclaw doctor --fix` to normalize them; existing canonical values are preserved.
+- Runtime accepts only the current config format. Doctor retains migrations for `provider: "log"`, `twilio.from`, legacy `streaming.*` OpenAI keys, and `realtime.agentContext.includeSystemPrompt` because supported releases can still preserve these settings. Run `openclaw doctor --fix` to normalize them; existing values in the current format are preserved.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
 - `sessionScope` defaults to `per-phone`, preserving caller memory across calls. Use `per-call` for reception, booking, IVR, and bridge flows where each carrier call should start fresh. Use `main` to share the configured agent's main session (`agent:<agentId>:main`, or `global` when core `session.scope` is `"global"`). Custom core `session.mainKey` values are ignored.
@@ -192,9 +192,11 @@ These features are disabled by default. Configure them under
   as failed. OpenClaw does not resend it because the earlier process may already
   have reached the channel.
 - Live transcript sends both sides' final lines to the requester in batches,
-  at most once per `live.minIntervalMs` (default 5000).
-  Each batch's position is saved before it is sent, so a call that survives a
-  restart continues with new lines only and never repeats an earlier batch.
+  at most once per `live.minIntervalMs` (default 5000). Within a running call,
+  each final entry is batched once, including caller lines finalized after a reply.
+  Queued lines follow transcript timestamp order. Each batch's position is saved
+  before sending. Restart recovery still uses that position: a late line inserted
+  before it across a restart may be skipped, or an earlier reply repeated.
 - With realtime voice enabled and `inboundPolicy: "allowlist"`, callbacks from a
   number called within `callbacks.windowMinutes` (default 60) are also accepted.
   They are linked to the original outbound call and take a message for the owner

@@ -27,7 +27,13 @@ OpenClaw waits for any idle shutdown already in progress when it closes local se
 
 Shutdown completion requires the child and its output streams to close and pending tree-termination operations to finish. A missing PID alone does not release the service for replacement.
 
-If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include bounded, redacted child-output tails plus timing and exit details; configured environment values are never emitted.
+Final exit observation starts after bounded tree-termination helpers finish. On Windows, this lets `taskkill` complete without reporting an already-closed service as a shutdown failure.
+
+If another OpenClaw process already has a healthy server at the same `healthUrl`, this process reuses it without adopting it (each process only manages the child it personally started). Startup and exit logs include timing and exit details.
+
+For a child it started, OpenClaw retains the most recent 8 KiB of raw stderr in memory and exposes up to 64 recent lines with the owning request's failure. Diagnostic output is redacted before it leaves the owner, including configured environment and request credential values. This captures lazy model-load failures that occur after readiness. The output pipes remain unreferenced so they do not keep a one-shot CLI host alive.
+
+Embedding failures also reach the existing Gateway memory diagnostics and `memory status --deep`. A separate process reusing a healthy server cannot read its owner's in-memory tail. Chat HTTP failures include the tail for bounded OpenAI-compatible JSON errors; existing SDK message limits still apply. Successful responses and service exit logs do not emit the tail.
 
 For its pinned managed installation, llama.cpp checks for orphaned servers before
 the first local-service request in a new host process. On native Apple silicon
@@ -116,7 +122,7 @@ During `memory_search`, managed embedding startup uses `readyTimeoutMs` instead 
 
 ## llmman example
 
-llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Its API has no authentication, so keep the default loopback bind unless a trusted network boundary restricts access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
+llmman is a custom OpenAI-compatible `/v1` backend, so the same `localService` API works with an `llmman` provider entry. It listens on `127.0.0.1:17434` by default; `LLMMAN_HOST` overrides the bind address, while `LLMMAN_LLM_LIBRARY` overrides GPU auto-detection. Off loopback it refuses to start without `LLMMAN_API_KEYS`, so keep the default loopback bind unless you need remote access. llmman has no `/health` route; use `/v1/models` or `/api/version` as `healthUrl`.
 
 ```json5
 {

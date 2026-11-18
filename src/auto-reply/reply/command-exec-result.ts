@@ -1,4 +1,4 @@
-import type { ExecToolDetails } from "../../agents/bash-tools.js";
+import type { ExecToolDetails } from "../../agents/bash-tools.exec-result.types.js";
 
 export function formatCommandExecText(text: string): string {
   return text.trim() || "(no exec output)";
@@ -12,7 +12,7 @@ export function formatCommandExecResult(
   runningLabel: string,
 ): string {
   const text = result.content
-    ?.map((chunk) => (chunk.type === "text" && typeof chunk.text === "string" ? chunk.text : ""))
+    ?.map((chunk) => (chunk.type === "text" ? (chunk.text ?? "") : ""))
     .filter(Boolean)
     .join("\n")
     .trim();

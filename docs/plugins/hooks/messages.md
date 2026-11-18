@@ -29,6 +29,15 @@ helper forwards all three automatically. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
 
+The optional `ctx.turnAdoption` handle transfers custody of the input to a
+runtime takeover. Await `adopt()` immediately before backend submission; the host
+acknowledges adoption once and stops the ingress startup watchdog. Its
+`assertCurrent()` throws after dispatch cleanup or a failed adoption. Propagate
+adoption failures instead of returning a handled result so the input remains
+retryable. Forward the same handle through adapters, including when rebuilding
+the message context. The ACP helper does this automatically. Older callers may
+omit the handle; no SDK migration is required.
+
 The host-provided preparer records display ownership before the stored
 assistant append, using original runtime text captured before transcript-only
 hooks. It preserves raw content and IDs and grants no file access or write
@@ -62,6 +71,11 @@ whether a hook prevents durable chat admission. An ACP-only hook therefore
 does not block ordinary agent sessions. Omitted, empty, malformed, or partly
 unknown eligibility lists remain unrestricted. Missing or unknown dispatch
 context also keeps the hook eligible.
+
+For ACP dispatch, a thrown `reply_dispatch` error or timeout ends the turn as a
+task error. The host does not try another handler or the ordinary agent runtime:
+the invoked handler may already have started work. Missing handlers and explicit
+declines retain their fallback behavior.
 
 Use message hooks for channel-level routing and delivery policy:
 

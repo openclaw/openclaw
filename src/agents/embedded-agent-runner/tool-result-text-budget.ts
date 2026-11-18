@@ -3,37 +3,59 @@ import {
   type StringCharBudgetOptions,
 } from "@openclaw/normalization-core/cjk-chars";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { memoizeFrozenPlainDataProjection } from "../../shared/immutable-data.js";
+import type { AgentMessage } from "../runtime/index.js";
 
 export { estimateToolResultTextChars };
 
-// Reuse scans across guard passes; the block owns the lifetime and text is its revision.
-const toolResultTextEstimates = new WeakMap<
-  object,
-  { text: string; minimumRawWeight: number; chars: number }
->();
+const getToolResultContentBudget = memoizeFrozenPlainDataProjection((content: unknown[]) => {
+  let chars = 0;
+  for (const block of content) {
+    if (isToolResultTextBlock(block)) {
+      chars += prepareToolResultTextChars(block, block.text, 1);
+    }
+  }
+  return chars;
+});
 
-export function readPreparedToolResultTextChars(
-  block: object,
-  text: string,
-  minimumRawWeight: number,
-): number | undefined {
-  const cached = toolResultTextEstimates.get(block);
-  return cached?.text === text && cached.minimumRawWeight === minimumRawWeight
-    ? cached.chars
-    : undefined;
+export function getToolResultTextBudget(msg: AgentMessage): number {
+  if (!msg || msg.role !== "toolResult") {
+    return 0;
+  }
+  const content = msg.content;
+  return Array.isArray(content) ? getToolResultContentBudget(content) : 0;
 }
+
+export function getToolResultHistoryTextBudget(messages: AgentMessage[]) {
+  let totalChars = 0;
+  let largestChars = 0;
+  const textLengths = messages.map((message) => {
+    const chars = getToolResultTextBudget(message);
+    totalChars += chars;
+    largestChars = Math.max(largestChars, chars);
+    return chars;
+  });
+  return { textLengths, totalChars, largestChars };
+}
+
+type ToolResultTextEstimate = { text: string; minimumRawWeight: number; chars: number };
+// Initial model history is writable. Text is the revision; weak block keys own its lifetime.
+// Keep history's default weight separate from the guard's floor without retaining every floor.
+const defaultTextEstimates = new WeakMap<object, ToolResultTextEstimate>();
+const weightedTextEstimates = new WeakMap<object, ToolResultTextEstimate>();
 
 export function prepareToolResultTextChars(
   block: object,
   text: string,
   minimumRawWeight: number,
 ): number {
-  const cached = readPreparedToolResultTextChars(block, text, minimumRawWeight);
-  if (cached !== undefined) {
-    return cached;
+  const estimates = minimumRawWeight === 1 ? defaultTextEstimates : weightedTextEstimates;
+  const cached = estimates.get(block);
+  if (cached?.text === text && cached.minimumRawWeight === minimumRawWeight) {
+    return cached.chars;
   }
   const chars = estimateToolResultTextChars(text, { minimumRawWeight });
-  toolResultTextEstimates.set(block, { text, minimumRawWeight, chars });
+  estimates.set(block, { text, minimumRawWeight, chars });
   return chars;
 }
 

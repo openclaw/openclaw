@@ -8,6 +8,7 @@ import {
   createPluginDependencyResolver,
   resolvePluginModulePackageRoot,
 } from "./plugin-package-metadata-capture.js";
+import { openClawHostRootsMatch } from "./plugin-peer-link.js";
 import { collectPluginSafetyInspectedFiles } from "./plugin-safety-inspected-files.js";
 import type { PluginNativeNamespaceFact } from "./plugin-source-admission.types.js";
 import {
@@ -26,6 +27,29 @@ type NamespaceMember = {
   boundary: string;
   linkTo?: string;
 };
+// Membership and source paths stay fixed; admission only updates identities and digests.
+const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
+
+export function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
+  const relative = path.relative(namespace.sourceDirectory, source);
+  // A file alias can be visited before its real pathname. The binary's real parent owns
+  // its companions; choosing the first alias would change native relative lookup again.
+  if (namespace.members[relative]?.source === source) {
+    return relative;
+  }
+  let members = nativeSourceMembers.get(namespace);
+  if (!members) {
+    members = new Map<string, string>();
+    for (const [key, { source: memberSource }] of Object.entries(namespace.members)) {
+      if (!members.has(memberSource)) {
+        members.set(memberSource, key);
+      }
+    }
+    nativeSourceMembers.set(namespace, members);
+  }
+  return members.get(source);
+}
+
 export const pluginNativeNamespaceDirectory = (fact: PluginNativeNamespaceFact) =>
   fact.referenceRoot ? fact.sourceDirectory : path.join(fact.capturedRoot, "content");
 export const pluginNativeNamespaceBoundary = (fact: PluginNativeNamespaceFact) =>
@@ -51,15 +75,11 @@ export function capturePluginNativeDirectoryAliases(
   packageRoots: Readonly<Record<string, string>>,
 ): Map<string, string> {
   const directories = new Map<string, string>();
-  for (const [alias, namespace] of selected) {
-    const root = Object.keys(packageRoots)
-      .filter((candidate) => isPathInside(candidate, alias))
-      .toSorted((left, right) => right.length - left.length)[0];
+  const roots = Object.keys(packageRoots).toSorted((left, right) => right.length - left.length);
+  for (const [alias, { capturedRoot }] of selected) {
+    const root = roots.find((candidate) => isPathInside(candidate, alias));
     if (root) {
-      directories.set(
-        path.join(packageRoots[root]!, path.relative(root, alias)),
-        namespace.capturedRoot,
-      );
+      directories.set(path.join(packageRoots[root]!, path.relative(root, alias)), capturedRoot);
     }
   }
   return directories;
@@ -83,7 +103,10 @@ export function assertPluginNativeNamespaceHost(
       ?.map((modules) => path.join(modules, "openclaw"))
       .find((filename) => fs.existsSync(filename));
     const resolvedHost = candidate ? fs.realpathSync(candidate) : undefined;
-    if (resolvedHost === hostRoot || (!candidate && directory !== pluginDirectory)) {
+    if (
+      (resolvedHost && openClawHostRootsMatch(resolvedHost, hostRoot)) ||
+      (!candidate && directory !== pluginDirectory)
+    ) {
       continue;
     }
     throw new Error(
@@ -230,6 +253,7 @@ export function capturePluginNativeNamespace(params: {
   boundary: string;
   capturedRoot: string;
   managed: boolean;
+  copyOnly: boolean;
   outputRoot?: string;
   previous?: PluginNativeNamespaceFact;
   inspectionRoots?: readonly string[];
@@ -269,6 +293,7 @@ export function capturePluginNativeNamespace(params: {
   }
   const directory = path.join(capturedRoot, "content");
   const linkedSources = new Set<string>();
+  const captureDevice = fs.statSync(capturedRoot, { bigint: true }).dev;
   let referenceRoot: string | undefined;
   try {
     for (const [relative, member] of before) {
@@ -283,6 +308,8 @@ export function capturePluginNativeNamespace(params: {
       } else if (member.stat.isDirectory()) {
         fs.mkdirSync(target, { recursive: true, mode: 0o700 });
       } else if (
+        !params.copyOnly &&
+        member.stat.dev === captureDevice &&
         (previous ||
           (managed &&
             (params.managedRoots ?? [boundary]).some((root) =>
@@ -290,15 +317,16 @@ export function capturePluginNativeNamespace(params: {
             ))) &&
         !(previous?.members[relative]?.boundaryChecked ?? boundaryFiles.has(member.source))
       ) {
-        linkPluginSourceFile(member.source, member.boundary, target);
-        linkedSources.add(member.source);
+        if (linkPluginSourceFile(member.source, member.boundary, target)) {
+          linkedSources.add(member.source);
+        }
       } else {
         copyPluginSourceFile(member.source, member.boundary, target);
-        fs.chmodSync(target, 0o600 | Number(member.stat.mode & 0o100n));
       }
     }
   } catch (error) {
     if (
+      params.copyOnly ||
       !managed ||
       previous ||
       !params.retainedRoot ||
@@ -328,7 +356,10 @@ export function capturePluginNativeNamespace(params: {
     const digest = hashPluginSourceFile(filename, capturedRoot);
     const prior = previous?.members[relative];
     if (
-      stat !== pluginSourceStatIdentity(fs.statSync(filename, { bigint: true })) ||
+      !pluginSourceIdentityChangedOnlyByCtime(
+        stat,
+        pluginSourceStatIdentity(fs.statSync(filename, { bigint: true })),
+      ) ||
       (prior && (digest.contentHash !== prior.contentHash || digest.sizeBytes !== prior.sizeBytes))
     ) {
       throw new Error("Native plugin companion changed during admission");
@@ -352,13 +383,41 @@ export function capturePluginNativeNamespace(params: {
     captured.size !== before.size ||
     [...before].some(([relative, member]) => {
       const current = after.get(relative);
-      return (
+      if (
         !current ||
         current.source !== member.source ||
-        (current.identity !== member.identity &&
-          (!(managed || previous) ||
-            !pluginSourceIdentityChangedOnlyByCtime(member.identity, current.identity)))
-      );
+        !pluginSourceIdentityChangedOnlyByCtime(member.identity, current.identity)
+      ) {
+        return true;
+      }
+      if (!managed && !previous && member.stat.isFile() && current.identity !== member.identity) {
+        // A mutable source can preserve size and mtime across an edit. Reconcile
+        // ctime-only drift with the copied bytes, not just the newer source stat.
+        const copy = captured.get(relative);
+        if (!copy) {
+          return true;
+        }
+        const digest = hashPluginSourceFile(copy.source, capturedRoot);
+        const sourceDigest = hashPluginSourceFile(member.source, member.boundary);
+        const sourceIdentity = pluginSourceStatIdentity(
+          fs.statSync(member.source, { bigint: true }),
+        );
+        const capturedIdentity = pluginSourceStatIdentity(
+          fs.statSync(copy.source, { bigint: true }),
+        );
+        if (
+          digest.contentHash !== sourceDigest.contentHash ||
+          digest.sizeBytes !== sourceDigest.sizeBytes ||
+          !pluginSourceIdentityChangedOnlyByCtime(current.identity, sourceIdentity) ||
+          !pluginSourceIdentityChangedOnlyByCtime(copy.identity, capturedIdentity)
+        ) {
+          return true;
+        }
+        current.identity = sourceIdentity;
+        copy.identity = capturedIdentity;
+        content.set(relative, digest);
+      }
+      return false;
     })
   ) {
     throw new Error("Native plugin directory changed during admission");
@@ -423,12 +482,19 @@ export function finishPluginNativeNamespace(fact: PluginNativeNamespaceFact): vo
     }
     const filename = pluginNativeNamespaceMemberPath(fact, relative);
     const content = hashPluginSourceFile(filename, pluginNativeNamespaceBoundary(fact));
+    const identity = pluginSourceStatIdentity(fs.statSync(filename, { bigint: true }));
+    // The first read can stamp a security-software extended attribute. Retain
+    // the observed identity with the digest so later reuse sees the admitted file.
     if (
       content.sizeBytes !== member.sizeBytes ||
-      pluginSourceStatIdentity(fs.statSync(filename, { bigint: true })) !== member.capturedIdentity
+      !pluginSourceIdentityChangedOnlyByCtime(member.capturedIdentity, identity)
     ) {
       throw new Error("Native plugin companion changed before admission completed");
     }
+    if (member.sourceIdentity === member.capturedIdentity) {
+      member.sourceIdentity = identity;
+    }
+    member.capturedIdentity = identity;
     member.contentHash = content.contentHash;
   }
 }

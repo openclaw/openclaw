@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { threadId, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { serveWorkerTasks } from "./worker-task-server.js";
+import { getDatabaseEngineSelection } from "./database-engine/context.js";
+import { serveWorkerTasks, type WorkerTaskChannel } from "./worker-task-server.js";
 
 export type PoolFixtureInput = {
   label: string;
   readStartupOptions?: boolean;
+  readEngineSelection?: boolean;
   exchanges?: number;
   opaqueRequest?: boolean;
   consumeInput?: boolean;
@@ -14,78 +16,59 @@ export type PoolFixtureInput = {
   wait?: boolean;
   exitCode?: number;
   buffer?: ArrayBuffer;
-  relayBuffer?: boolean;
 };
-export type PoolFixtureResult = {
-  label: string;
-  threadId: number;
-  buffer?: ArrayBuffer;
-  previousBufferBytes?: number;
-  relayedBufferBytes?: number;
-  startupOptions?: { data: unknown; argv: string[] };
-};
+export type PoolFixtureResult = Awaited<ReturnType<typeof runFixture>>;
 
 let previousBuffer: ArrayBuffer | undefined;
-serveWorkerTasks<PoolFixtureResult>(
-  async (input, channel) => {
-    assert.ok(isRecord(input));
-    assert.ok(typeof input.label === "string");
-    if (input.exitCode !== undefined) {
-      assert.ok(typeof input.exitCode === "number");
-      process.exit(input.exitCode);
-    }
-    for (let index = 0; index < Number(input.notifications ?? 0); index++) {
-      channel?.notify({ label: input.label, index });
-    }
-    if (input.counters) {
-      assert.ok(input.counters instanceof SharedArrayBuffer);
-      const counters = new Int32Array(input.counters);
-      Atomics.add(counters, 0, 1);
-      if (input.wait) {
-        Atomics.wait(counters, 1, 0);
+async function runFixture(input: unknown, channel?: WorkerTaskChannel) {
+  assert.ok(isRecord(input));
+  assert.ok(typeof input.label === "string");
+  if (input.exitCode !== undefined) {
+    assert.ok(typeof input.exitCode === "number");
+    process.exit(input.exitCode);
+  }
+  let counters: Int32Array | undefined;
+  if (input.counters) {
+    assert.ok(input.counters instanceof SharedArrayBuffer);
+    counters = new Int32Array(input.counters);
+    Atomics.add(counters, 0, 1);
+  }
+  // Publish dispatch before a notification can trigger host-side cancellation.
+  for (let index = 0; index < Number(input.notifications ?? 0); index++) {
+    channel?.notify({ label: input.label, index });
+  }
+  if (input.wait && counters) {
+    Atomics.wait(counters, 1, 0);
+  }
+  if (input.consumeInput) {
+    assert.ok(channel);
+    channel.consumeInput();
+  }
+  if (input.exchanges && channel) {
+    channel.consumeInput();
+    for (let index = 0; index < Number(input.exchanges); index++) {
+      const response = await channel.request({
+        kind: input.opaqueRequest ? undefined : "fixture-exchange",
+        label: input.label,
+      });
+      if (response.input instanceof ArrayBuffer) {
+        input.buffer = response.input;
       }
+      response.consumed();
     }
-    let relayedBufferBytes: number | undefined;
-    if (input.consumeInput) {
-      assert.ok(channel);
-      channel.consumeInput();
-    }
-    if (input.exchanges && channel) {
-      channel.consumeInput();
-      for (let index = 0; index < Number(input.exchanges); index++) {
-        const buffer =
-          input.relayBuffer && input.buffer instanceof ArrayBuffer ? input.buffer : undefined;
-        const response = await channel.request(
-          {
-            kind: input.opaqueRequest ? undefined : "fixture-exchange",
-            label: input.label,
-            buffer,
-          },
-          buffer ? [buffer] : undefined,
-        );
-        if (buffer) {
-          relayedBufferBytes = buffer.byteLength;
-          input.buffer = undefined;
-        }
-        if (response.input instanceof ArrayBuffer) {
-          input.buffer = response.input;
-        }
-        response.consumed();
-      }
-    }
-    const previousBufferBytes = previousBuffer?.byteLength;
-    assert.ok(input.buffer === undefined || input.buffer instanceof ArrayBuffer);
-    previousBuffer = input.buffer;
-    return {
-      label: input.label,
-      threadId,
-      buffer: input.buffer,
-      previousBufferBytes,
-      relayedBufferBytes,
-      ...(input.readStartupOptions
-        ? { startupOptions: { data: workerData, argv: process.argv.slice(2) } }
-        : {}),
-    };
-  },
-  { transferList: (value) => (value.buffer ? [value.buffer] : []) },
-);
+  }
+  const previousBufferBytes = previousBuffer?.byteLength;
+  assert.ok(input.buffer === undefined || input.buffer instanceof ArrayBuffer);
+  previousBuffer = input.buffer;
+  return {
+    label: input.label,
+    threadId,
+    ...(input.readEngineSelection ? { engineSelection: getDatabaseEngineSelection() } : {}),
+    buffer: input.buffer,
+    previousBufferBytes,
+    ...(input.readStartupOptions
+      ? { startupOptions: { data: workerData, argv: process.argv.slice(2) } }
+      : {}),
+  };
+}
+serveWorkerTasks(runFixture, { transferList: (value) => (value.buffer ? [value.buffer] : []) });

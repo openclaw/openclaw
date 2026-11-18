@@ -135,6 +135,20 @@ export function mutableCompensationFixtureSource(): string {
       const lateRollback = mode === 'rollback-compensation';
       const publishing = mode === 'publishing-compensation' || lateRollback;
       let packageFixture;
+      let restoreExchangeTools = () => {};
+      if(mode === 'publishing-compensation') {
+        // No exchange tool starts, so publication takes its two moves. The signal lands
+        // between them, the only instant that leaves the package path empty.
+        const childProcess = (await import('node:child_process')).default;
+        const execFile = childProcess.execFile;
+        const exchangeTool = (file, args) => ['/usr/bin/osascript','/usr/bin/perl'].includes(file) || args?.[0] === '--experimental-ffi';
+        childProcess.execFile = Object.defineProperties((file, args, ...rest) => {
+          if(!exchangeTool(file, args)) return execFile(file, args, ...rest);
+          queueMicrotask(() => rest.at(-1)(Object.assign(new Error('spawn ' + file + ' ENOENT'),{code:'ENOENT'}),'',''));
+        }, Object.getOwnPropertyDescriptors(execFile));
+        syncBuiltinESMExports();
+        restoreExchangeTools = () => {childProcess.execFile = execFile; syncBuiltinESMExports();};
+      }
       if(publishing) {
         const {createPackageSwapFixture} = await import(${url("packageSwapFixture")});
         packageFixture = await createPackageSwapFixture(root + '/pair');
@@ -206,7 +220,7 @@ export function mutableCompensationFixtureSource(): string {
       const membershipUrl = ${url("serviceMembership")};
       mock.module(membershipUrl,{namedExports:{...(await import(membershipUrl)),inspectServiceProcessMembershipSync:()=> 'outside'}});
       const maintenanceUrl = ${url("systemdMaintenance")};
-      mock.module(maintenanceUrl,{namedExports:{...(await import(maintenanceUrl)),prepareSystemdGatewayMaintenance:async()=>false}});
+      mock.module(maintenanceUrl,{namedExports:{...(await import(maintenanceUrl)),prepareSystemdGatewayMaintenance:async()=>({kind:"unchanged"})}});
       const drainUrl = ${url("serviceDrain")};
       mock.module(drainUrl,{namedExports:{...(await import(drainUrl)),withGatewayMaintenanceDrain:async(_params,stop)=>await stop()}});
       return async ({run,currentOptions,ready}) => {
@@ -232,7 +246,9 @@ export function mutableCompensationFixtureSource(): string {
         }));
         if(publishing) {
           const {swapStagedPackageInstall} = await import(${url("packageSwap")});
+          const {createUpdateRunProgress} = await import(${url("commandRun")});
           const guards=createUpdateCommandExecutionGuards(currentOptions,installRoot);
+          const progress=createUpdateRunProgress(run,{},guards.recordStep);
           let transaction;
           let stopped;
           const nativeFs=await import('node:fs/promises');
@@ -256,12 +272,13 @@ export function mutableCompensationFixtureSource(): string {
               assertCurrent:()=>run.executorFence.assertCurrent(),
               beforeActivate:async()=>{
                 await guards.recordPhase('activating');
+                progress.deferLedgerWrites();
                 stopped=await maybeStopManagedServiceBeforeMutableUpdate({root:installRoot,updateInstallKind:'package',shouldRestart:true,jsonMode:true,expectedService:before,updateRun:run,recordPhase:guards.recordPhase,assertCurrent:guards.assertCurrent,timeoutMs:1000});
                 assert.equal(stopped.stopped,true,JSON.stringify(stopped));
               },
               onTransaction:retained=>{transaction=retained;},
             });
-          } finally {nativeFs.default.rename=rename;}
+          } finally {nativeFs.default.rename=rename;restoreExchangeTools();}
           assert.equal(swapped.status,'committed',JSON.stringify(swapped));
           assert.equal(stopped.stopped,true);
           const verificationFailure={name:'candidate verification',command:'openclaw update',cwd:installRoot,durationMs:0,exitCode:1,stderrTail:'Synthetic candidate verification failed.'};
@@ -291,8 +308,10 @@ export function mutableCompensationFixtureSource(): string {
         let receiptWorker;
         const post = Worker.prototype.postMessage;
         Worker.prototype.postMessage = function(request,...args) {
+          // postMessage transfers and detaches the serialized input.
+          const commandType = request.type==='execute' ? deserialize(request.input).type : undefined;
           const result = Reflect.apply(post,this,[request,...args]);
-          if(request.type==='execute' && deserialize(request.input).type==='updateRuns.recordPhase') {
+          if(commandType==='updateRuns.recordPhase') {
             Worker.prototype.postMessage=post;
             receiptWorker=this;
             assert.equal(fs.existsSync(root+'/compensation-signal-snapshot'),true);

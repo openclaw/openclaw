@@ -8,18 +8,16 @@ import type {
   PairedDeviceMetadataPatch,
   PrunedSupersededPairedDevice,
 } from "./device-pairing-core.types.js";
-// Manages device pairing requests, records, metadata, and node pairing state.
 import {
   listApprovedPairedDeviceRoles,
   resolveNodePairingGeneration,
   type NodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import { mergeDevicePairingRoles, normalizeDevicePairingRole } from "./device-pairing-roles.js";
 import {
   loadDevicePairingStateForMutation,
-  mergeDevicePairingRoles,
   mergeDevicePairingScopes,
-  normalizeDevicePairingRole,
   preserveDeviceRoleScopes,
   resolvePairingRequestExpiry,
   resolveRequestedDeviceRoles,
@@ -398,9 +396,15 @@ export function removePairedDeviceRoleInWorker(params: {
 export function updatePairedDeviceMetadataInWorker(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
+  accessIdentity?: import("./device-pairing-access.js").DevicePairingAccessIdentity,
 ): boolean {
   return updatePairedDeviceInTransaction(deviceId, (device) => {
-    if (!device) {
+    if (
+      !device ||
+      (accessIdentity &&
+        (device.publicKey !== accessIdentity.publicKey ||
+          device.approvedAtMs !== accessIdentity.approvedAtMs))
+    ) {
       return { value: false };
     }
     const next: Partial<PairedDeviceMetadataPatch> = {};

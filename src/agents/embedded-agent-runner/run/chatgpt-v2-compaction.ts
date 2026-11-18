@@ -7,10 +7,13 @@ import {
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { decideContextPressure } from "../../context-pressure.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
 import { agentSessionRunProviderCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
 import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";
 import { recordSessionModelUsage } from "../../sessions/session-model-usage.js";
@@ -57,6 +60,9 @@ export function createChatGPTV2CompactionBoundary(params: {
   config?: OpenClawConfig;
   contextTokenBudget: number;
   reserveTokens: number;
+  runId?: string;
+  /** Soft V2 fallbacks may stop only where the tool batch can continue. */
+  isToolBoundarySafe?: () => boolean;
   timeoutMs: number;
   authProfileId?: string;
   assertActive: () => void;
@@ -79,10 +85,10 @@ export function createChatGPTV2CompactionBoundary(params: {
   context: Context,
   options: Parameters<StreamFn>[2],
   requestAnchor?: MeasuredRequestContext,
+  fixedTokenPressure?: FixedRequestTokenPressure,
 ) => Promise<AssistantMessage | undefined> {
   let failed = false;
-  let softSkipLogged = false;
-  return async (streamFn, model, context, options, requestAnchor) => {
+  return async (streamFn, model, context, options, requestAnchor, fixedTokenPressure) => {
     if (!usesNativeOpenAICodexResponsesBackend(model) || params.session.isCompacting) {
       return undefined;
     }
@@ -93,12 +99,12 @@ export function createChatGPTV2CompactionBoundary(params: {
     };
     assertActive();
     const budget = {
+      fixedTokenPressure,
       contextTokenBudget: params.contextTokenBudget,
       reserveTokens: params.reserveTokens,
       replay: {
         model,
         sessionId: requestOptions.sessionId,
-        authProfileId: requestOptions.authProfileId,
       },
     };
     // A matching measured predecessor prices the unchanged prefix once, as the
@@ -111,7 +117,9 @@ export function createChatGPTV2CompactionBoundary(params: {
           messages: context.messages,
           systemPrompt: context.systemPrompt,
           prompt: "",
-          toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+          toolSchemaTokens: fixedTokenPressure
+            ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+            : estimateToolSchemaTokenPressure(context.tools),
         });
     const outgoing = preflight
       ? (preflight.compactionReplay ?? preflight)
@@ -129,18 +137,23 @@ export function createChatGPTV2CompactionBoundary(params: {
     if (outgoing.estimatedPromptTokens < softTriggerTokens) {
       return undefined;
     }
-    const fallback = (reason: string, hardLimit = false) => {
-      // The early V2 trigger must not move the client's compaction threshold.
-      if (!hardLimit && outgoing.route === "fits") {
-        if (!softSkipLogged) {
-          log.debug(`ChatGPT V2 compaction skipped while the request still fits: ${reason}`);
-          softSkipLogged = true;
-        }
+    const fallback = (reason: string) => {
+      // The early V2 trigger must not move the client's compaction threshold, and a
+      // soft fallback waits for a boundary where the tool batch can continue.
+      const pressure = decideContextPressure({
+        estimatedPromptTokens: outgoing.estimatedPromptTokens,
+        windowTokens: model.contextWindow ?? params.contextTokenBudget,
+        maintenanceDue: outgoing.route !== "fits",
+        boundarySafe: outgoing.route !== "fits" && (params.isToolBoundarySafe?.() ?? false),
+        runId: params.runId,
+      });
+      if (!pressure) {
         return undefined;
       }
       log.warn(`ChatGPT V2 compaction unavailable; falling back to client compaction: ${reason}`);
       const request: MidTurnPrecheckRequest = {
         ...outgoing,
+        pressure,
         // V2 exhausted this boundary. Route to the existing durable client compactor.
         route: "compact_only",
       };
@@ -148,7 +161,7 @@ export function createChatGPTV2CompactionBoundary(params: {
       throw new MidTurnPrecheckSignal(request);
     };
     if (outgoing.estimatedPromptTokens > (model.contextWindow ?? params.contextTokenBudget)) {
-      return fallback("the outgoing request exceeds the model context window", true);
+      return fallback("the outgoing request exceeds the model context window");
     }
     if (failed) {
       return fallback("an earlier V2 attempt in this run failed");
@@ -248,7 +261,9 @@ export function createChatGPTV2CompactionBoundary(params: {
                       messages: [checkpoint],
                       systemPrompt: context.systemPrompt,
                       prompt: "",
-                      toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+                      toolSchemaTokens: fixedTokenPressure
+                        ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+                        : estimateToolSchemaTokenPressure(context.tools),
                       replay: { model },
                     });
                   },
@@ -301,11 +316,12 @@ export function createChatGPTV2CompactionBoundary(params: {
             messages: [checkpoint],
             systemPrompt: context.systemPrompt,
             prompt: "",
-            toolSchemaTokens: estimateToolSchemaTokenPressure(context.tools),
+            toolSchemaTokens: fixedTokenPressure
+              ? Math.ceil(fixedTokenPressure.toolTokens * SAFETY_MARGIN)
+              : estimateToolSchemaTokenPressure(context.tools),
             replay: {
               model,
               sessionId: requestOptions.sessionId,
-              authProfileId: requestOptions.authProfileId,
             },
           });
           if (tokensAfter > outgoing.promptBudgetBeforeReserve) {

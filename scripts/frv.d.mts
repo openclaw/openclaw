@@ -69,13 +69,7 @@ export type FrvConcreteClient = FrvClient & {
 } & Required<
     Pick<
       FrvClient,
-      | "cancelRun"
-      | "rerunFailed"
-      | "rerunJob"
-      | "rerunParent"
-      | "listRuns"
-      | "verify"
-      | "verifySeal"
+      "cancelRun" | "rerunJob" | "rerunParent" | "rerunRun" | "listRuns" | "verify" | "verifySeal"
     >
   >;
 
@@ -140,6 +134,24 @@ export function loadPlan(
   options: Record<string, unknown>,
   loadExecutionPlan?: (...args: unknown[]) => Promise<unknown>,
 ): Promise<Record<string, unknown>>;
+export function inspectUnsealedPlan(
+  options: { repository: string; runId: string },
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun">,
+): Promise<Record<string, unknown>>;
+export function loadPlanForCommand(
+  options: {
+    command: string;
+    operationDeadline?: number;
+    repository: string;
+    runId: string;
+    waitForSeal?: boolean;
+  },
+  client: Pick<FrvClient, "getAttemptJobs" | "getRun">,
+  loadExecutionPlan?: (...args: unknown[]) => Promise<unknown>,
+): Promise<
+  | { plan: Record<string, unknown>; pending?: never }
+  | { plan?: never; pending: Record<string, unknown> }
+>;
 export function continueFailed(
   plan: Record<string, unknown>,
   rootRunId: string,
@@ -147,7 +159,19 @@ export function continueFailed(
   options?: Record<string, unknown>,
 ): Promise<{
   action: string;
+  continueCommand?: string;
   finalRunId?: string;
+  nextCommand?: string;
+  receipt?: {
+    acceptedRunAttempt: number;
+    child: string;
+    jobId: number;
+    jobName: string;
+    parentRunId: string;
+    runAttempt: number;
+    runId: string;
+    sourceRunAttempt: number;
+  };
   reruns?: Record<string, unknown>[];
   status: FrvContinuationStatus;
 }>;

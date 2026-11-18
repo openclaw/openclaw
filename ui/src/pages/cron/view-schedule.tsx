@@ -1,21 +1,22 @@
-import { createMemo } from "solid-js";
-import { Icon } from "../../components/solid/icon.tsx";
-import {
-  SettingsSection,
-  SettingsRow,
-  SettingsSegmented,
-} from "../../components/solid/settings-ui.tsx";
+import { createMemo, createSignal, For } from "solid-js";
+import { SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
-import type { CronFormState } from "../../lib/cron/types.ts";
+import { hasUnchangedCronSchedule, parseCronScheduleAt } from "../../lib/cron/form-schedule.ts";
+import type { CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { formSentenceFrequency, scheduleKindPatch } from "./schedule-sentence.ts";
+import { EventSourceFields } from "./view-event-source.tsx";
 import {
   FieldRow,
   inputIdForField,
   errorIdForField,
   CronInput,
   CronSelect,
+  TrayInput,
 } from "./view-fields.tsx";
+import { describeJobNextRun } from "./view-job-status.tsx";
+import { ScheduleSentence } from "./view-schedule-sentence.tsx";
 import type { CronProps } from "./view-types.ts";
 const EVERY_SUMMARY_KEYS = {
   seconds: ["cron.form.summaryEverySecondOne", "cron.form.summaryEverySeconds"],
@@ -34,8 +35,8 @@ function describeFormSchedule(form: CronFormState): string | null {
     return Number(amount) === 1 ? t(singular) : t(plural, { amount });
   }
   if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    return Number.isFinite(ms) ? t("cron.form.summaryOnce", { at: formatMs(ms) }) : null;
+    const at = parseCronScheduleAt(form.scheduleAt);
+    return at ? t("cron.form.summaryOnce", { at: formatMs(Date.parse(at)) }) : null;
   }
   if (form.scheduleKind === "cron") {
     const expr = form.cronExpr.trim();
@@ -44,6 +45,12 @@ function describeFormSchedule(form: CronFormState): string | null {
     }
     const tz = form.cronTz.trim();
     return tz ? t("cron.form.summaryCronTz", { expr, tz }) : t("cron.form.summaryCron", { expr });
+  }
+  if (form.scheduleKind === "event") {
+    return t("cron.events.summary", {
+      server: form.eventServer,
+      name: form.eventName || form.eventSource,
+    });
   }
   if (form.scheduleKind === "on-exit") {
     return t("cron.form.repeatOnExit");
@@ -97,98 +104,245 @@ export function DurationRow(
     />
   );
 }
-export function ScheduleSection(props: CronProps) {
+/** Schedule fields whose validation messages the tray lists under its controls. */
+export const TRAY_SCHEDULE_FIELDS = ["scheduleAt", "everyAmount", "cronExpr"] as const;
+/** The Repeat choice and its per-kind fields, compact enough to share the prompt's tray. */
+export function ScheduleControls(props: CronProps & { phoneLayout: boolean }) {
   const form = () => props.form;
+  // Weekly and single-day Daily have the same expression. Keep the editor's
+  // explicit mode for this draft, without adding a field to the saved schedule.
+  const [preference, setPreference] = createSignal<{
+    jobId: string | undefined;
+    mode: "custom" | "daily";
+  }>();
+  const preferFrequency = (mode: "custom" | "daily" | null) => {
+    const jobId = props.editingJob?.id;
+    setPreference((current) =>
+      mode
+        ? current?.jobId === jobId && current?.mode === mode
+          ? current
+          : { jobId, mode }
+        : undefined,
+    );
+  };
+  const frequency = createMemo(() => {
+    const draft = form();
+    const current = preference();
+    const preferredMode =
+      draft.scheduleKind === "cron" && current?.jobId === props.editingJob?.id
+        ? current?.mode
+        : undefined;
+    if (preferredMode === "custom") {
+      return "custom";
+    }
+    const read = formSentenceFrequency(draft);
+    return preferredMode === "daily" && read === "weekly" ? "daily" : read;
+  });
   const isOnExit = () => form().scheduleKind === "on-exit";
   const isStream = () => form().scheduleKind === "stream";
   // Process-backed schedules stay selectable only while current: jobs can
   // convert to an editable schedule, but never synthesize a command in the UI.
-  const processSchedule = createMemo(() =>
+  const processSchedule = () =>
     isOnExit()
       ? { value: "on-exit" as const, label: t("cron.form.repeatOnExit") }
       : isStream()
         ? { value: "stream" as const, label: t("cron.form.repeatStream") }
-        : null,
-  );
-  const kinds = createMemo<
-    Array<{
-      value: CronFormState["scheduleKind"];
-      label: string;
-      testId: string;
-    }>
-  >(() => {
+        : null;
+  const kinds = (): Array<{
+    value: CronFormState["scheduleKind"];
+    label: string;
+    testId: string;
+  }> => {
     const process = processSchedule();
     return [
       ...(process ? [{ ...process, testId: `cron-schedule-kind-${process.value}` }] : []),
       { value: "every", label: t("cron.form.repeatInterval"), testId: "cron-schedule-kind-every" },
       { value: "at", label: t("cron.form.repeatOnce"), testId: "cron-schedule-kind-at" },
       { value: "cron", label: t("cron.form.cronOption"), testId: "cron-schedule-kind-cron" },
+      ...((props.eventSource?.available && props.status?.triggersEnabled !== false) ||
+      form().scheduleKind === "event"
+        ? [
+            {
+              value: "event" as const,
+              label: t("cron.events.label"),
+              testId: "cron-schedule-kind-event",
+            },
+          ]
+        : []),
     ];
-  });
-  const summary = createMemo(() => describeFormSchedule(form()));
+  };
   return (
-    <SettingsSection title={t("cron.detail.scheduleSection")}>
-      <SettingsRow
-        title={t("cron.form.repeat")}
-        description={isOnExit() ? t("cron.form.onExitHelp") : undefined}
-        stacked
-        control={
+    <>
+      {frequency() ? (
+        <ScheduleSentence
+          {...props}
+          frequency={frequency()!}
+          kinds={kinds()}
+          onFrequencyPreference={preferFrequency}
+          phoneLayout={props.phoneLayout}
+        />
+      ) : (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.repeat")}
+          </span>
           <SettingsSegmented<CronFormState["scheduleKind"]>
+            class="settings-segmented--compact cron-tray-segmented"
             value={form().scheduleKind}
             options={kinds()}
             ariaLabel={t("cron.form.repeat")}
-            onChange={(value) =>
-              props.onFormChange({
-                scheduleKind: value,
-                ...(value === "at" &&
-                (form().scheduleKind === "every" || form().scheduleKind === "cron")
-                  ? { deleteAfterRun: true }
-                  : value === "every" || value === "cron"
-                    ? { deleteAfterRun: false }
-                    : {}),
-              })
-            }
+            onChange={(value) => props.onFormChange(scheduleKindPatch(form(), value))}
           />
-        }
-      />
+        </span>
+      )}
       {form().scheduleKind === "at" ? (
-        <CronInput
-          {...props}
-          field="scheduleAt"
-          label={t("cron.form.runAt")}
-          required
-          errorKey="scheduleAt"
-          type="datetime-local"
-        />
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.at")}
+          </span>
+          <TrayInput
+            {...props}
+            field="scheduleAt"
+            label={t(
+              props.editingJob?.schedule.kind === "at"
+                ? "cron.form.configuredTime"
+                : "cron.form.runAt",
+            )}
+            required
+            errorKey="scheduleAt"
+            type="datetime-local"
+          />
+        </span>
       ) : undefined}
-      {form().scheduleKind === "every" ? <DurationRow {...props} kind="every" /> : undefined}
-      {form().scheduleKind === "cron" ? (
-        <>
-          <CronInput
+      {form().scheduleKind === "every" ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.every")}
+          </span>
+          <span class="cron-tray-pair">
+            <TrayInput
+              {...props}
+              field="everyAmount"
+              label={t("cron.form.every")}
+              required
+              errorKey="everyAmount"
+              size="narrow"
+              placeholder={t("cron.form.everyAmountPlaceholder")}
+            />
+            <span class="cron-tray-picker">
+              <CronSelect
+                {...props}
+                field="everyUnit"
+                label={t("cron.form.unit")}
+                inline
+                options={["seconds", "minutes", "hours", "days"].map((value) => ({
+                  value,
+                  label: t(`cron.form.${value}`),
+                }))}
+              />
+            </span>
+          </span>
+        </span>
+      ) : undefined}
+      {form().scheduleKind === "cron" && frequency() === "custom" ? (
+        <span class="cron-sentence__row">
+          <span class="cron-sentence__label" aria-hidden="true">
+            {t("cron.form.expression")}
+          </span>
+          <TrayInput
             {...props}
             field="cronExpr"
+            onFormChange={(patch) => {
+              // An inferred Custom mode becomes explicit as soon as the expression is edited.
+              preferFrequency("custom");
+              props.onFormChange(patch);
+            }}
             label={t("cron.form.expression")}
             required
             errorKey="cronExpr"
             mono
             placeholder={t("cron.form.expressionPlaceholder")}
           />
-          <CronInput
-            {...props}
-            field="cronTz"
-            label={t("cron.form.timezoneOptional")}
-            help={t("cron.form.timezoneHelp")}
-            list="cron-tz-suggestions"
-            placeholder={t("cron.form.timezonePlaceholder")}
-          />
-        </>
+        </span>
       ) : undefined}
+    </>
+  );
+}
+/** Validation messages for the tray's own fields, listed under its controls. */
+export function TrayErrors(props: Pick<CronProps, "fieldErrors"> & { fields: CronFieldKey[] }) {
+  const errors = createMemo(() =>
+    props.fields.flatMap((field) => {
+      const message = props.fieldErrors[field];
+      return message ? [{ field, message }] : [];
+    }),
+  );
+  return (
+    <For each={errors()} keyed={(error) => error.field}>
+      {(error) => (
+        <div id={errorIdForField(error().field)} class="cron-help cron-error" role="alert">
+          {t(error().message)}
+        </div>
+      )}
+    </For>
+  );
+}
+/** The form's live schedule in words, with the saved one-shot's runtime facts. */
+export function ScheduleSummary(props: CronProps) {
+  const form = () => props.form;
+  // The form owns the authored occurrence; runtime deadlines may move after
+  // a continuation or retry. Never copy that deadline into the editable time.
+  const savedOneShot = createMemo(
+    () => {
+      const job = props.editingJob;
+      return job?.schedule.kind === "at" && hasUnchangedCronSchedule(form(), job) ? job : undefined;
+    },
+    { equals: false },
+  );
+  const summary = createMemo(() => {
+    const job = savedOneShot();
+    return job?.schedule.kind === "at"
+      ? t("cron.form.summaryConfiguredAt", { at: formatMs(Date.parse(job.schedule.at)) })
+      : describeFormSchedule(form());
+  });
+  const runtimeSummary = () => {
+    const job = savedOneShot();
+    return job ? describeJobNextRun(job, true) : null;
+  };
+  return (
+    <>
       {summary() ? (
-        <div class="cron-schedule-summary">
-          <Icon name="clock" />
-          <span>{summary()}</span>
+        <div
+          class={[
+            "cron-schedule-summary",
+            { "cron-schedule-summary--expression": form().scheduleKind === "cron" },
+          ]}
+        >
+          <span>
+            {summary()}
+            {runtimeSummary() ? (
+              <>
+                {" · "}
+                <strong>{runtimeSummary()}</strong>
+              </>
+            ) : undefined}
+          </span>
         </div>
       ) : undefined}
-    </SettingsSection>
+    </>
+  );
+}
+/** Schedule settings too large for the tray: the event source and process-backed notes. */
+export function ScheduleDetails(props: CronProps) {
+  return (
+    <>
+      {props.form.scheduleKind === "on-exit" ? (
+        <p class="cron-help cron-schedule-note">{t("cron.form.onExitHelp")}</p>
+      ) : undefined}
+      {props.form.scheduleKind === "event" ? (
+        <div class="settings-group cron-editor-card" data-test-id="cron-event-source">
+          <EventSourceFields {...props} />
+        </div>
+      ) : undefined}
+    </>
   );
 }

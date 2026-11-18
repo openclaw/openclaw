@@ -1,9 +1,9 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import {
   bindCronManagementGrant,
   createCronCreatorAuthorityCapability,
@@ -14,7 +14,16 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import { getCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
+import { resolveReplyCronChannelRequester } from "../../auto-reply/reply/get-reply-run.cron-requester.js";
+import { buildSessionEventContext } from "../../auto-reply/reply/session-event-context.js";
+import {
+  createHostIngressFixture,
+  ingressInput,
+  ingressMessage,
+} from "../../channels/message-access/host-ingress.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfig,
@@ -22,39 +31,44 @@ import {
 } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
+import { admitScheduledOccurrence } from "../../cron/execution-context-admission.js";
+import { resolveScheduledRequester } from "../../cron/execution-context.js";
+import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
+import type { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
-import type { CronJobPatch } from "../../cron/types.js";
+import { createCronScriptRuntime } from "../../cron/trigger-script.js";
+import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   clearAgentRunContext,
   registerAgentRunContext,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import * as plugins from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { mintCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
+import type { CronAuthenticatedChannelRequester } from "../cron-creator-authority-grant.types.js";
+import { captureCronJobTurnTarget } from "../cron-job-turn-target.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
-import { cronHandlers } from "./cron.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import { callCron, createHistoryJob, createReadService } from "./cron-read.test-support.js";
+import { cronAccountPolicy, requireRecord } from "./cron.validation.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 const sessionKey = "agent:main:discord:group:policy-adoption";
 const sessionId = "scheduled-policy-session";
 const accountId = "work";
 const cfg: OpenClawConfig = {
   agents: { entries: { main: {} } },
-  commands: { ownerAllowFrom: ["discord:owner-1"] },
+  commands: { ownerAllowFrom: ["discord:owner-1", "telegram:owner-1"] },
 };
-const accountPolicy = {
-  version: 1,
-  mode: "account",
-  ownerSessionKey: sessionKey,
-  ownerAccountId: accountId,
-} as const;
+const accountPolicy = cronAccountPolicy(sessionKey, accountId);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string | undefined;
 let cron: CronService | undefined;
@@ -87,36 +101,59 @@ async function withAgentManagement<T>(
     management: NonNullable<ReturnType<typeof bindCronManagementGrant>>,
     capability: NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>,
   ) => Promise<T>,
-  fresh = false,
+  options: {
+    origin?: CronScheduledToolCallerOrigin;
+    channel?: string;
+    sessionKey?: string;
+    channelRequester?: CronAuthenticatedChannelRequester;
+    ownerAuthority?: ReturnType<typeof getCommandOwnerAuthority>;
+  } = {},
 ): Promise<T> {
+  const callerSessionKey = options.sessionKey ?? sessionKey;
+  const channel = options.channel ?? "discord";
   const runId = "scheduled-policy-management";
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-  registerAgentRunContext(runId, { agentId: "main", sessionKey, sessionId });
+  registerAgentRunContext(runId, { agentId: "main", sessionKey: callerSessionKey, sessionId });
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: "main",
-    sessionKey,
-    turnSourceChannel: "discord",
+    sessionKey: callerSessionKey,
+    turnSourceChannel: channel,
     turnSourceAccountId: accountId,
     operationalRunInstance,
     delegatedAuthority: { kind: "local", ...authority },
   };
   try {
     const capability = expectDefined(
-      createCronCreatorAuthorityCapability(runId, fresh ? { kind: "local" } : { kind: "unknown" }, {
-        source: "channel-owner",
-        isCurrent: () =>
-          isConfiguredCommandOwner(getRuntimeConfig(), {
-            channel: "discord",
-            senderId: "owner-1",
-          }),
-      }),
+      createCronCreatorAuthorityCapability(
+        runId,
+        options.origin ?? { kind: "unknown" },
+        {
+          source: "channel-owner",
+          isCurrent:
+            options.ownerAuthority?.isCurrent ??
+            (() =>
+              isConfiguredCommandOwner(getRuntimeConfig(), {
+                channel,
+                senderId: "owner-1",
+              })),
+        },
+        undefined,
+        options.channelRequester,
+      ),
       "current management capability",
     );
     return await runWithCronCreatorAuthorityCapability(capability, () =>
       withGatewayToolCallerIdentity(
-        { agentId: "main", sessionKey, operationalRunInstance, approvalAuthority: authority },
+        {
+          agentId: "main",
+          sessionKey: callerSessionKey,
+          turnSourceChannel: channel,
+          turnSourceAccountId: accountId,
+          operationalRunInstance,
+          approvalAuthority: authority,
+        },
         () =>
           run(
             identity,
@@ -131,291 +168,490 @@ async function withAgentManagement<T>(
   }
 }
 
-describe("cron.update scheduled policy adoption", () => {
-  it.each([
-    "owner",
-    "known tool",
-    "other session",
-    "other account",
-    "borrowed capture",
-    "no capture",
-  ] as const)("captures owner authority and preserves manager cap edits: %s", async (caller) => {
-    const storePath = path.join(expectDefined(stateDir, "test state"), "cron", "jobs.json");
-    const service = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: false,
-      defaultAgentId: "main",
-      log: createNoopLogger(),
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-    });
-    cron = service;
-    const owner = {
-      agentId: "main",
-      sessionKey:
-        caller === "other session" || caller === "borrowed capture"
-          ? "agent:main:other"
-          : sessionKey,
-      accountId: caller === "other account" ? "personal" : accountId,
-    };
-    const runtimeAuthority = {
-      version: 1 as const,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { apps: [{ id: "calendar" }] },
-    };
-    const created = await service.add(
-      {
-        name: "App automation",
-        enabled: true,
-        schedule: { kind: "every", everyMs: 3_600_000 },
-        agentId: "main",
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: {
-          kind: "agentTurn",
-          message: "Check calendar",
-          toolsAllow: ["read", "calendar_search"],
-        },
-        delivery: { mode: "none" },
-        owner,
+function createFixture() {
+  const storePath = path.join(expectDefined(stateDir, "test state"), "cron", "jobs.json");
+  const service = createReadService({
+    storePath,
+    cronEnabled: false,
+    enqueueSystemEvent: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+  });
+  cron = service;
+  const context = createDirectChatContext({
+    cron: service,
+    cronStorePath: storePath,
+    getRuntimeConfig: () => cfg,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+  });
+  const makeJob = (overrides: Partial<CronJobCreate>): CronJobCreate => ({
+    ...createHistoryJob("main", sessionKey, "Scheduled account policy"),
+    enabled: true,
+    schedule: { kind: "every", everyMs: 3_600_000 },
+    payload: { kind: "agentTurn", message: "Check status", toolsAllow: ["message"] },
+    ...overrides,
+  });
+  return { storePath, service, context, makeJob };
+}
+
+it.each([
+  "owner",
+  "known tool",
+  "other session",
+  "other account",
+  "borrowed capture",
+  "no capture",
+  "native owner",
+] as const)("captures owner authority and preserves manager cap edits: %s", async (caller) => {
+  const { storePath, service, context, makeJob } = createFixture();
+  const native = caller === "native owner";
+  const toolsAllow = native ? ["read", "dispatch_action"] : ["calendar_search"];
+  const owner = {
+    agentId: "main",
+    sessionKey:
+      caller === "other session" || caller === "borrowed capture" ? "agent:main:other" : sessionKey,
+    accountId: caller === "other account" ? "personal" : accountId,
+  };
+  const runtimeAuthority = {
+    version: 1 as const,
+    runtimeId: "codex",
+    namespace: "codex.apps",
+    payload: { apps: [{ id: "calendar" }] },
+  };
+  const created = await service.add(
+    makeJob({
+      payload: {
+        kind: "agentTurn",
+        message: "Check calendar",
+        toolsAllow: native ? ["read", "tool_call"] : ["read", "calendar_search"],
       },
-      {
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: owner.sessionKey,
-          ownerAccountId: owner.accountId,
-        },
-        captureRuntimeAuthority: () => runtimeAuthority,
+      owner,
+    }),
+    {
+      scheduledToolPolicy: {
+        ...accountPolicy,
+        ownerSessionKey: owner.sessionKey,
+        ownerAccountId: owner.accountId,
       },
-    );
-    const before = (await loadCronStore(storePath)).jobs;
-    const context = createDirectChatContext({
-      cron: service,
-      cronStorePath: storePath,
-      getRuntimeConfig: () => cfg,
-      validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-    });
-    await withAgentManagement(async (identity, _management, capability) => {
-      const tool = createCronTool(
-        {
-          runId: identity.operationalRunInstance.runId,
-          agentSessionKey: sessionKey,
-          agentAccountId: accountId,
-          creatorToolAllowlist: caller === "known tool" ? ["calendar_search"] : ["read"],
-          ...(caller === "no capture"
-            ? {}
-            : {
-                resolveCreatorToolAuthority: async () => ({
-                  tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
-                  provenance: { version: 1, source: "final-executable-surface" },
-                  grant: mintCronCreatorAuthorityGrant(capability, undefined, runtimeAuthority),
-                  holdsRuntimeAuthority: true,
-                }),
-              }),
-        },
-        {
-          callGatewayTool: async <T>(method: string, _options: unknown, params: unknown) => {
-            if (!isRecord(params)) {
-              throw new Error("Cron tool transport requires object parameters");
-            }
-            const callerIdentity = getGatewayToolCallerIdentity();
-            const client = createSyntheticPluginRuntimeClient();
-            client.internal = {
-              ...client.internal,
-              agentRuntimeIdentity: {
-                ...identity,
-                ...callerIdentity,
-                ...(caller === "borrowed capture" && method === "cron.update"
-                  ? {
-                      cronToolsAllowCapture: "final-executable-surface",
-                      cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
-                        capability,
-                        undefined,
-                        runtimeAuthority,
-                      ),
-                    }
-                  : {}),
-              },
-            };
-            const respond = vi.fn<RespondFn>();
-            await expectDefined(
-              cronHandlers[method],
-              method,
-            )({
-              req: { type: "req", id: "app-authority", method, params },
-              params,
-              client,
-              context,
-              respond,
-              isWebchatConnect: () => false,
-            });
-            const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
-            if (!ok) {
-              throw new Error(error?.message);
-            }
-            return result as T;
-          },
+      ...(native ? {} : { captureRuntimeAuthority: () => runtimeAuthority }),
+    },
+  );
+  const before = (await loadCronStore(storePath)).jobs;
+  await withAgentManagement(
+    async (identity, _management, capability) => {
+      const mint = () => mintCronCreatorAuthorityGrant(capability, undefined, runtimeAuthority);
+      vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+        async <T>(method: string, _options: unknown, params: unknown) => {
+          const request = requireRecord(params, "Cron tool request");
+          const client = createSyntheticPluginRuntimeClient();
+          const agentRuntimeIdentity = { ...identity, ...getGatewayToolCallerIdentity() };
+          if (caller === "borrowed capture" && method === "cron.update") {
+            agentRuntimeIdentity.cronToolsAllowCapture = "final-executable-surface";
+            agentRuntimeIdentity.cronCreatorAuthorityGrant = mint();
+          }
+          client.internal = { ...client.internal, agentRuntimeIdentity };
+          const respond = await callCron(context, method, request, { client });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+          if (!ok) {
+            throw new Error(error?.message);
+          }
+          return result as T;
         },
       );
+      const tool = createCronTool({
+        runId: identity.operationalRunInstance.runId,
+        agentSessionKey: sessionKey,
+        agentAccountId: accountId,
+        creatorToolAllowlist: native
+          ? toolsAllow
+          : caller === "known tool"
+            ? ["calendar_search"]
+            : ["read"],
+        resolveCreatorToolAuthority:
+          caller === "no capture" || native
+            ? undefined
+            : async () => ({
+                tools: caller === "owner" || caller === "known tool" ? ["calendar_search"] : [],
+                provenance: { version: 1, source: "final-executable-surface" },
+                grant: mint(),
+                holdsRuntimeAuthority: true,
+              }),
+      });
       const update = tool.execute("app-update", {
         action: "update",
         jobId: created.id,
-        job: { payload: { toolsAllow: ["calendar_search"] } },
+        job: { payload: { toolsAllow } },
       });
       if (caller === "no capture") {
         await expect(update).rejects.toThrow(/calendar_search.*[Rr]ecreate/);
       } else {
         await expect(update).resolves.toMatchObject({ details: { id: created.id } });
       }
-    }, true);
-    const stored = (await loadCronStore(storePath)).jobs;
-    if (caller === "owner" || caller === "known tool") {
-      expect(stored[0]).toMatchObject({
-        owner,
-        runtimeAuthority,
-        payload: { toolsAllow: ["calendar_search"] },
-      });
-      expect(stored[0]?.runtimeAuthorityRecoveryRequired).toBeUndefined();
-    } else if (caller === "no capture") {
-      expect(stored).toEqual(before);
-    } else {
-      expect(stored[0]).toMatchObject({
-        owner,
-        payload: { toolsAllow: ["calendar_search"] },
-        runtimeAuthorityRecoveryRequired: true,
-      });
-      expect(stored[0]?.runtimeAuthority).toBeUndefined();
-    }
-  });
+    },
+    { origin: { kind: "local" } },
+  );
+  const stored = (await loadCronStore(storePath)).jobs;
+  if (caller === "no capture") {
+    expect(stored).toEqual(before);
+  } else if (native) {
+    expect(stored[0]).toMatchObject({
+      owner,
+      payload: { toolsAllow },
+      scheduledToolPolicy: accountPolicy,
+    });
+  } else {
+    const owned = caller === "owner" || caller === "known tool";
+    expect(stored[0]).toMatchObject({ owner, payload: { toolsAllow: ["calendar_search"] } });
+    expect([stored[0]?.runtimeAuthority, stored[0]?.runtimeAuthorityRecoveryRequired]).toEqual(
+      owned ? [runtimeAuthority, undefined] : [undefined, true],
+    );
+  }
+});
 
-  it.each([
-    { caller: "agent management", definition: "known account", expected: accountPolicy },
-    { caller: "operator", definition: "known account", expected: accountPolicy },
-    { caller: "agent management", definition: "erased policy", expected: undefined },
-    { caller: "operator", definition: "erased policy", expected: { version: 1, mode: "trusted" } },
-  ] as const)(
-    "applies the authorized policy when $caller restores $definition",
-    async ({ caller, definition, expected }) => {
-      const storePath = path.join(
-        expectDefined(stateDir, "test state directory"),
-        "cron",
-        "jobs.json",
-      );
-      const service = new CronService({
-        scheduler: createTestGatewayScheduler(),
-        nowMs: () => Date.now(),
-        storePath,
-        cronEnabled: false,
-        defaultAgentId: "main",
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
-      });
-      cron = service;
-      const owner = { agentId: "main", sessionKey, accountId };
-      const created = await service.add(
-        {
-          name: "Scheduled account policy",
-          enabled: true,
-          schedule: { kind: "every", everyMs: 3_600_000 },
-          agentId: "main",
-          sessionKey,
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "Check status", toolsAllow: ["message"] },
-          delivery: { mode: "none" },
-          owner,
+it("records a Telegram owner's origin when creating a job within the visible tool cap", async () => {
+  await persistAuthProfileBatch({
+    stateDir: expectDefined(stateDir, "test state"),
+    profiles: [
+      {
+        profileId: "openai:automation-test",
+        credential: { type: "api_key", provider: "openai", key: "synthetic-automation-test-key" },
+      },
+    ],
+  });
+  const parentSessionKey = "agent:main:main:thread:creator-origin";
+  replaceSessionEntrySync(
+    { sessionKey: parentSessionKey },
+    { sessionId, updatedAt: 1, lifecycleRevision: "creator-origin" },
+  );
+  const { storePath, context } = createFixture();
+  context.getRuntimeConfig = getRuntimeConfig;
+  const host = createHostIngressFixture("telegram", cfg);
+  const message = ingressMessage("telegram", parentSessionKey, "owner-1", { accountId });
+  const channelIngress = await host.ingress.resolveStable(
+    ingressInput(message, { identity: { authentication: "verified" } }),
+  );
+  const ingressContext = host.buildContext({ ...message, channelIngress });
+  const ownerAuthority = expectDefined(getCommandOwnerAuthority(ingressContext), "host owner");
+  const channelRequester = expectDefined(
+    resolveReplyCronChannelRequester(ingressContext, {
+      channel: "telegram",
+      senderId: "owner-1",
+      accountId,
+    }),
+    "host-bound requester",
+  );
+  await withAgentManagement(
+    async (identity) => {
+      vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+        async <T>(method: string, _options: unknown, params: unknown) => {
+          const client = createSyntheticPluginRuntimeClient();
+          client.internal = {
+            ...client.internal,
+            agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
+          };
+          const respond = await callCron(context, method, requireRecord(params, "Cron request"), {
+            client,
+          });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+          if (!ok) {
+            throw new Error(error?.message);
+          }
+          return result as T;
         },
-        { scheduledToolPolicy: accountPolicy },
       );
-      const context = createDirectChatContext({
-        cron: service,
-        cronStorePath: storePath,
-        getRuntimeConfig: () => cfg,
-        validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
+      const tool = createCronTool({
+        runId: identity.operationalRunInstance.runId,
+        agentSessionKey: parentSessionKey,
+        agentAccountId: accountId,
+        creatorToolAllowlist: ["read"],
       });
-      const update = async (client: GatewayClient, patch: CronJobPatch) => {
-        const params = { id: created.id, patch };
-        const respond = vi.fn<RespondFn>();
-        await expectDefined(
-          cronHandlers["cron.update"],
-          "cron.update",
-        )({
-          req: { type: "req", id: "policy-update", method: "cron.update", params },
-          params,
-          client,
-          context,
-          respond,
-          isWebchatConnect: () => false,
-        });
-        expect(respond).toHaveBeenCalledOnce();
-        const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron update response");
-        expect({ ok, error }).toEqual({ ok: true, error: undefined });
-        expect(result).toMatchObject({ id: created.id });
-      };
-      const exercise = async (callUpdate: (patch: CronJobPatch) => Promise<void>) => {
-        await callUpdate({
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "Check status" },
-        });
-        const store = await loadCronStore(storePath);
-        const dormant = expectDefined(
-          store.jobs.find((job) => job.id === created.id),
-          "dormant job",
-        );
-        expect(dormant).toMatchObject({
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", toolsAllow: ["message"] },
-          scheduledToolPolicy: accountPolicy,
-        });
-        if (definition === "erased policy") {
-          // Canonical legacy state retained the tool cap without a scheduled policy.
-          delete dormant.scheduledToolPolicy;
-          await saveCronStore(storePath, store);
-          expect(
-            (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id)
-              ?.scheduledToolPolicy,
-          ).toBeUndefined();
-        }
-        await callUpdate({
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", message: "Check status" },
-        });
-        const restored = expectDefined(
-          (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
-          "restored job",
-        );
-        expect(restored).toMatchObject({
-          sessionTarget: "isolated",
-          payload: { kind: "agentTurn", toolsAllow: ["message"] },
-          owner,
-        });
-        expect(restored.scheduledToolPolicy).toEqual(expected);
-      };
-      if (caller === "agent management") {
-        await withAgentManagement((identity, management) =>
-          exercise((patch) => {
-            const client = createSyntheticPluginRuntimeClient();
-            client.internal = {
-              ...client.internal,
-              agentRuntimeIdentity: {
-                ...identity,
-                cronManagementGrant: management.mint("cron.update"),
-              },
-            };
-            return update(client, patch);
-          }),
-        );
-      } else {
-        await exercise((patch) =>
-          update(createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }), patch),
-        );
-      }
+      await tool.execute("create", {
+        action: "add",
+        job: {
+          name: "Creator origin",
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          sessionKey: parentSessionKey,
+          sessionTarget: `session:${parentSessionKey}`,
+          payload: { kind: "agentTurn", message: "Read checkpoint", toolsAllow: ["read"] },
+        },
+      });
+    },
+    {
+      origin: { kind: "external", channel: "telegram" },
+      channel: "telegram",
+      sessionKey: parentSessionKey,
+      channelRequester,
+      ownerAuthority,
     },
   );
+  host.retire();
+  const stored = expectDefined((await loadCronStore(storePath)).jobs[0], "created job");
+  expect(stored).toMatchObject({
+    owner: { agentId: "main", sessionKey: parentSessionKey, accountId },
+    scheduledToolPolicy: cronAccountPolicy(parentSessionKey, accountId),
+    payload: { toolsAllow: ["read"] },
+    toolsAllowProvenance: {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "external", channel: "telegram" },
+      channelRequester: { version: 1, channel: "telegram", accountId, senderId: "owner-1" },
+    },
+  });
+  const requester = resolveScheduledRequester(stored);
+  expect(requester).toEqual({ kind: "channel", requester: channelRequester });
+  const captureRepair = async (job = stored) => {
+    const repair = await captureCronJobTurnTarget({
+      job,
+      agentId: "main",
+      sessionKey: parentSessionKey,
+      context,
+    });
+    const event = buildSessionEventContext({
+      cfg: getRuntimeConfig(),
+      agentId: "main",
+      sessionKey: parentSessionKey,
+      text: "Repair the scheduled automation.",
+      options: { source: "cron_failure_repair" },
+      occurrenceId: "channel-owner-repair",
+      target: repair.target,
+      assertCurrent: () => {},
+    });
+    return { owner: getCommandOwnerAuthority(event), release: repair.release };
+  };
+  const repair = await captureRepair();
+  try {
+    expect(repair.owner?.isCurrent()).toBe(true);
+    const revoked = { ...cfg, commands: { ownerAllowFrom: ["telegram:other-owner"] } };
+    setRuntimeConfigSnapshot(revoked);
+    expect(() => repair.owner?.isCurrent()).toThrow("no longer an owner");
+    const denied = await captureRepair();
+    try {
+      expect(denied.owner).toBeUndefined();
+    } finally {
+      denied.release();
+    }
+  } finally {
+    repair.release();
+    setRuntimeConfigSnapshot(cfg);
+  }
+  const nonOwner = structuredClone(stored);
+  expectDefined(nonOwner.toolsAllowProvenance, "persisted provenance").channelRequester = {
+    ...channelRequester,
+    senderId: "not-owner",
+  };
+  const denied = await captureRepair(nonOwner);
+  try {
+    expect(denied.owner).toBeUndefined();
+  } finally {
+    denied.release();
+  }
+
+  const config: OpenClawConfig = {
+    ...cfg,
+    agents: { ...cfg.agents, defaults: { workspace: stateDir, skipBootstrap: true } },
+    channels: { telegram: { accounts: { [accountId]: { botToken: "synthetic-token" } } } },
+  };
+  const registry = createTestRegistry([
+    {
+      pluginId: "telegram",
+      source: "test",
+      plugin: createChannelTestPluginBase({
+        id: "telegram",
+        config: {
+          listAccountIds: (current) => Object.keys(current.channels?.telegram?.accounts ?? {}),
+          resolveAccount: (current, id) =>
+            current.channels?.telegram?.accounts?.[id ?? "default"] ?? {},
+        },
+      }),
+    },
+  ]);
+  const previousRegistry = plugins.captureActivePluginRegistrySnapshot();
+  try {
+    plugins.setActivePluginRegistry(registry);
+    setRuntimeConfigSnapshot(config);
+    const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
+    const occurrence = await admitScheduledOccurrence({
+      cfg: config,
+      job: stored,
+      agentId: "main",
+      trigger: "cron",
+    });
+    const evaluate = () =>
+      runtime.evaluateTrigger({
+        occurrence,
+        job: stored,
+        script: "return { fire: false };",
+        state: null,
+        abortSignal: new AbortController().signal,
+        deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
+      });
+    // Execute from the reloaded job, with no manual provenance reconstruction.
+    try {
+      const result = await evaluate();
+      expect(result, JSON.stringify(result)).toMatchObject({ kind: "evaluated", fire: false });
+      expect(stored.payload.toolsAllow).toEqual(["read"]);
+      expect(stored.scheduledToolPolicy).toEqual(cronAccountPolicy(parentSessionKey, accountId));
+      setRuntimeConfigSnapshot({ ...config, channels: { telegram: { accounts: {} } } }, config);
+      const missing = await evaluate();
+      expect(missing, JSON.stringify(missing)).toMatchObject({
+        kind: "error",
+        error: expect.stringContaining(`Scheduled account "${accountId}" is unavailable`),
+      });
+    } finally {
+      occurrence.release();
+    }
+  } finally {
+    plugins.restoreActivePluginRegistrySnapshot(previousRegistry);
+    setRuntimeConfigSnapshot(cfg);
+  }
 });
+
+it("reauthorizes a Telegram owner's unchanged tool cap without widening its account policy", async () => {
+  const parentSessionKey = "agent:main:main:thread:policy-recovery";
+  replaceSessionEntrySync(
+    { sessionKey: parentSessionKey },
+    { sessionId, updatedAt: 1, lifecycleRevision: "policy-recovery" },
+  );
+  const { storePath, service, context, makeJob } = createFixture();
+  const owner = { agentId: "main", sessionKey: parentSessionKey, accountId };
+  const policy = cronAccountPolicy(parentSessionKey, accountId);
+  const toolsAllow = ["read"];
+  const created = await service.add(
+    makeJob({
+      owner,
+      sessionKey: parentSessionKey,
+      sessionTarget: `session:${parentSessionKey}`,
+      payload: { kind: "agentTurn", message: "Read the saved checkpoint", toolsAllow },
+    }),
+    { scheduledToolPolicy: policy },
+  );
+  expect((await loadCronStore(storePath)).jobs[0]?.toolsAllowProvenance).toBeUndefined();
+
+  await withAgentManagement(
+    async (identity) => {
+      vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(
+        async <T>(method: string, _options: unknown, params: unknown) => {
+          const client = createSyntheticPluginRuntimeClient();
+          client.internal = {
+            ...client.internal,
+            agentRuntimeIdentity: { ...identity, ...getGatewayToolCallerIdentity() },
+          };
+          const respond = await callCron(context, method, requireRecord(params, "Cron request"), {
+            client,
+          });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "response");
+          if (!ok) {
+            throw new Error(error?.message);
+          }
+          return result as T;
+        },
+      );
+      const tool = createCronTool({
+        runId: identity.operationalRunInstance.runId,
+        agentSessionKey: parentSessionKey,
+        agentAccountId: accountId,
+        creatorToolAllowlist: toolsAllow,
+      });
+      await expect(
+        tool.execute("reauthorize", {
+          action: "update",
+          jobId: created.id,
+          job: { payload: { toolsAllow } },
+        }),
+      ).resolves.toMatchObject({ details: { id: created.id } });
+    },
+    {
+      origin: { kind: "external", channel: "telegram" },
+      channel: "telegram",
+      sessionKey: parentSessionKey,
+    },
+  );
+
+  expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+    owner,
+    scheduledToolPolicy: policy,
+    payload: { toolsAllow },
+    toolsAllowProvenance: {
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "external", channel: "telegram" },
+    },
+  });
+});
+it.each([
+  { caller: "agent management", definition: "known account", expected: accountPolicy },
+  { caller: "operator", definition: "known account", expected: accountPolicy },
+  { caller: "agent management", definition: "erased policy", expected: undefined },
+  { caller: "operator", definition: "erased policy", expected: { version: 1, mode: "trusted" } },
+] as const)(
+  "applies the authorized policy when $caller restores $definition",
+  async ({ caller, definition, expected }) => {
+    const { storePath, service, context, makeJob } = createFixture();
+    const owner = { agentId: "main", sessionKey, accountId };
+    const created = await service.add(makeJob({ sessionKey, owner }), {
+      scheduledToolPolicy: accountPolicy,
+    });
+    const readJob = async () =>
+      expectDefined(
+        (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
+        "stored job",
+      );
+    const update = async (client: GatewayClient, patch: CronJobPatch) => {
+      const respond = await callCron(context, "cron.update", { id: created.id, patch }, { client });
+      expect(respond.mock.calls).toEqual([
+        [true, expect.objectContaining({ id: created.id }), undefined],
+      ]);
+    };
+    const exercise = async (callUpdate: (patch: CronJobPatch) => Promise<void>) => {
+      await callUpdate({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", text: "Check status" },
+      });
+      const store = await loadCronStore(storePath);
+      const dormant = expectDefined(
+        store.jobs.find((job) => job.id === created.id),
+        "dormant job",
+      );
+      expect(dormant).toMatchObject({
+        sessionTarget: "main",
+        payload: { kind: "systemEvent", toolsAllow: ["message"] },
+        scheduledToolPolicy: accountPolicy,
+      });
+      if (definition === "erased policy") {
+        // Canonical legacy state retained the tool cap without a scheduled policy.
+        delete dormant.scheduledToolPolicy;
+        await saveCronStore(storePath, store);
+        expect((await readJob()).scheduledToolPolicy).toBeUndefined();
+      }
+      await callUpdate({
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "Check status" },
+      });
+      const restored = await readJob();
+      expect(restored).toMatchObject({
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", toolsAllow: ["message"] },
+        owner,
+      });
+      expect(restored.scheduledToolPolicy).toEqual(expected);
+    };
+    if (caller === "agent management") {
+      await withAgentManagement((identity, management) =>
+        exercise((patch) => {
+          const client = createSyntheticPluginRuntimeClient();
+          client.internal = {
+            ...client.internal,
+            agentRuntimeIdentity: {
+              ...identity,
+              cronManagementGrant: management.mint("cron.update"),
+            },
+          };
+          return update(client, patch);
+        }),
+      );
+    } else {
+      await exercise((patch) =>
+        update(createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }), patch),
+      );
+    }
+  },
+);

@@ -1,6 +1,5 @@
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
@@ -18,6 +17,7 @@ import {
   selectTelegramGroupPromptContext,
   telegramPromptContextHistory,
 } from "./group-history-window.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -120,7 +120,7 @@ export async function resolveDispatchTelegramContext(params: {
     params.context.turn.record.updateLastRoute && threadSpec.id != null
       ? {
           ...params.context.turn.record.updateLastRoute,
-          to: `telegram:${params.context.chatId}:topic:${threadSpec.id}`,
+          to: `telegram:${buildTelegramConversationId({ chatId: params.context.chatId, thread: threadSpec })}`,
           threadId: String(threadSpec.id),
         }
       : params.context.turn.record.updateLastRoute;
@@ -150,7 +150,6 @@ export async function resolveDispatchTelegramContext(params: {
       }),
       telegramCfg,
       opts: { botInfo: params.context.primaryCtx.me },
-      telegramDeps: { resolveStorePath },
     });
     const ambientWatermark = params.context.ctxPayload.AmbientTranscriptPreviousMessageId
       ? {

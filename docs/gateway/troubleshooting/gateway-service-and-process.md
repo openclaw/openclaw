@@ -46,6 +46,28 @@ Related:
 - [Configuration](/gateway/configuration)
 - [Doctor](/gateway/doctor)
 
+## Unexpected Gateway exits
+
+A supervisor can restart a crashed Gateway so quickly that current health looks
+normal. Run `openclaw gateway status` to inspect its last ten recorded crashes,
+or `openclaw doctor` for recent and repeated-crash findings. The next startup
+also logs `previous Gateway run ended unexpectedly`, with any known signal or
+exit status, last-known uptime, and previous version.
+
+Compare the recorded start/detection interval with the supervisor journal and
+Gateway logs. `cause unknown` means no matching exit evidence was available; it
+does not identify an out-of-memory event, a signal, or a runtime defect. A clean
+deployment or update handoff does not create a crash record.
+
+Systemd and launchd installations already restart unexpected process exits.
+Their restart throttles and crash-loop limits still apply; the macOS app stops
+after repeated fast failures. The Windows child supervisor retries a crash up
+to three times after one, two, and four seconds, resetting that budget after a
+run survives for a minute. Scheduled Tasks also retain their own bounded restart
+policy. Unsupervised foreground runs
+remain under the operator's control. See [unexpected exit records](/gateway/restart-recovery#unexpected-exits)
+for retention and readiness behavior.
+
 ## macOS gateway silently stops responding, then resumes when you touch the dashboard
 
 Use when channels (Telegram, WhatsApp, etc.) on a macOS host go quiet for minutes to hours at a time, and the gateway appears to come back the moment you open the Control UI, SSH in, or otherwise interact with the host. There is usually no obvious symptom in `openclaw status` because by the time you look the gateway is alive again.
@@ -97,6 +119,16 @@ Related:
 - [macOS platform notes](/platforms/macos)
 - [Logging](/logging)
 - [Doctor](/gateway/doctor)
+
+## macOS LAN commands fail with No route to host
+
+When the Gateway runs but LAN commands fail with `EHOSTUNREACH` while the same
+operation works in Terminal, check the service runtime's **Local Network**
+permission. A LaunchAgent can have different access from Terminal, and Doctor
+does not currently diagnose that permission. Follow [Local Network access for
+the Gateway](/platforms/mac/permissions#local-network-access-for-the-gateway),
+then retry through the Gateway. Routing, firewall, and device failures can produce
+the same error.
 
 ## macOS launchd supervisor loop with duplicate gateway/node LaunchAgents
 
@@ -252,7 +284,7 @@ Choose the capture backend indicated by `kernel.core_pattern`:
   ```
 
   `core_pattern` is host-wide: this replaces capture for other processes too.
-  Ensure the directory is writable by the Gateway service user and accessible
+  Check that the directory is writable by the Gateway service user and accessible
   inside any service filesystem sandbox. Restore the previous pattern after
   capture. This temporary `sysctl` setting does not survive reboot.
 

@@ -1,4 +1,3 @@
-// Plugin-provided node.invoke policy adapter.
 // Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";

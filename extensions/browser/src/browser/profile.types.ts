@@ -1,12 +1,6 @@
 import type { BrowserProfileConfig } from "openclaw/plugin-sdk/config-contracts";
 
-export type ManagedBrowserHeadlessSource =
-  | "request"
-  | "env"
-  | "profile"
-  | "config"
-  | "linux-display-fallback"
-  | "default";
+export type ManagedBrowserHeadlessSource = "request" | "env" | "profile" | "config" | "default";
 
 export type ResolvedBrowserProfile = {
   name: string;

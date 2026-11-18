@@ -5,7 +5,7 @@ import {
   MAX_WORKSPACE_GIT_CANDIDATES,
   MAX_WORKSPACE_INVENTORY_TOTAL_BYTES,
 } from "../gateway/worker-environments/workspace-inventory-limits.js";
-import { hasNodeErrorCode } from "../infra/path-guards.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { tightenPrivateDirChain } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type { NodeWorkerWorkspaceSeedInput } from "../worker/node-workspace-protocol.js";
@@ -23,12 +23,7 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
   workspaceDir: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
-  const root = await fsp.realpath(params.seedsRoot).catch((error: unknown) => {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  });
+  const root = await fsp.realpath(params.seedsRoot).catch(ignoreMissingPath);
   if (!root) {
     return false;
   }
@@ -80,14 +75,9 @@ export async function copyNodeWorkerProjectSeedObjects(params: {
 }
 
 async function readSeedDirectory(parent: string, target: string): Promise<fs.Stats | undefined> {
-  let stats: fs.Stats;
-  try {
-    stats = await fsp.lstat(target);
-  } catch (error) {
-    if (hasNodeErrorCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
+  const stats = await fsp.lstat(target).catch(ignoreMissingPath);
+  if (!stats) {
+    return undefined;
   }
   if (!stats.isDirectory() || path.dirname(await fsp.realpath(target)) !== parent) {
     throw new Error("INVALID_REQUEST: workspace seed path escaped its owner root");

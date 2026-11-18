@@ -29,8 +29,8 @@ let hostsPath: string;
 const safeMessage =
   "GitHub Identity credential is unavailable or insecure. Reconnect or change GitHub Identity, then retry.";
 
-async function writeToken(token = "synthetic-launch-token") {
-  await fs.writeFile(hostsPath, `github.com:\n  oauth_token: ${token}\n`, { mode: 0o600 });
+async function writeToken(token = "synthetic-launch-token", host = "github.com") {
+  await fs.writeFile(hostsPath, `${host}:\n  oauth_token: ${token}\n`, { mode: 0o600 });
 }
 
 let supervisor: ReturnType<typeof createProcessSupervisor>;
@@ -93,53 +93,90 @@ afterEach(async () => {
 });
 
 describe.skipIf(process.platform === "win32")("local GitHub credential launch boundary", () => {
-  it.each([true])(
-    "keeps prepared, requested and snapshot environments secretless (pty=%s)",
-    async (usePty) => {
-      const prepared = prepareGitHubToolEnvironment({
-        config: { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } },
-        agentId: "main",
-        env: { OPENCLAW_STATE_DIR: root },
-      });
-      profileDir = expectDefined(prepared.localIdentityEnv.GH_CONFIG_DIR, "managed GitHub profile");
-      hostsPath = path.join(profileDir, "hosts.yml");
-      await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-      await writeToken();
-      const resolved = resolvePreparedExecEnvironment({
-        execParams: { command: "echo synthetic" },
-        host: "gateway",
-        defaultPathPrepend: [],
-        ...prepared,
-        warnings: [],
-      });
-      const original = JSON.stringify({ prepared, resolved });
-      Object.freeze(resolved.env);
-      Object.freeze(resolved.requestedEnv);
-      boundary.prepare.mockImplementation(async ({ env }) => {
-        expect(env.GH_TOKEN).toBe("");
-        // Rotation during async shell preparation must precede the private snapshot.
-        await writeToken("synthetic-rotated-token");
-      });
-      const beforeSpawn = vi.fn(async () => {
-        expect(JSON.stringify({ prepared, resolved })).toBe(original);
-        await writeToken("synthetic-rotated-token");
-        return undefined;
-      });
-      boundary.spawn.mockImplementationOnce((input: SpawnInput) => {
-        expect(input.env?.GH_TOKEN).toBe("");
-        expect(input.env?.GITHUB_TOKEN).toBe("");
-        expect(input.env?.PATH).toBe(resolved.env.PATH);
-        return supervisor.spawn(input);
-      });
-      const run = await launch({ env: resolved.env, usePty, beforeSpawn });
-      expect((await run.promise).aggregated).toBe("rotated");
-      expect(beforeSpawn).toHaveBeenCalledOnce();
-      expect(JSON.stringify({ prepared, resolved })).toBe(original);
-      expect(JSON.stringify({ run, calls: boundary.spawn.mock.calls })).not.toContain(
-        "synthetic-rotated-token",
+  it.each(["github.com", "ghe.example.test", "tenant.ghe.com"])(
+    "uses only the selected %s profile at the actual child boundary",
+    async (host) => {
+      await writeToken("synthetic-launch-token", host);
+      const probe = path.join(root, "host-credential-outcome.cjs");
+      await fs.writeFile(
+        probe,
+        `process.stdout.write(JSON.stringify({
+          host: process.env.GH_HOST,
+          selected: process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_ENTERPRISE_TOKEN" : "GH_TOKEN")}] === "synthetic-launch-token",
+          cleared: !process.env.GITHUB_TOKEN && !process.env.GITHUB_ENTERPRISE_TOKEN && !process.env[${JSON.stringify(host === "ghe.example.test" ? "GH_TOKEN" : "GH_ENTERPRISE_TOKEN")}],
+        }));`,
       );
+      const options = {
+        command: [process.execPath, probe].map(quoteCliArg).join(" "),
+        env: {
+          HOME: root,
+          ZDOTDIR: root,
+          PATH: process.env.PATH ?? "/usr/bin:/bin",
+          GH_CONFIG_DIR: profileDir,
+          GH_HOST: host,
+          GH_TOKEN: "",
+          GH_ENTERPRISE_TOKEN: "",
+          GITHUB_TOKEN: "synthetic-ambient-fallback",
+          GITHUB_ENTERPRISE_TOKEN: "synthetic-ambient-enterprise",
+        },
+      };
+      const outcome = await (await launch(options)).promise;
+      expect(outcome.exitCode).toBe(0);
+      expect(JSON.parse(outcome.aggregated)).toEqual({ host, selected: true, cleared: true });
+      if (host !== "github.com") {
+        await writeToken();
+        const refused = await (await launch(options)).promise;
+        expect(refused.exitCode).toBe(1);
+        expect(refused.aggregated).toContain(safeMessage);
+      }
+      expect(JSON.stringify(boundary.spawn.mock.calls)).not.toContain("synthetic-launch-token");
     },
   );
+
+  it("keeps prepared, requested and PTY snapshot environments secretless", async () => {
+    const prepared = prepareGitHubToolEnvironment({
+      config: { tools: { github: { profileId: "ghp_11111111111111111111111111111111" } } },
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: root },
+    });
+    profileDir = expectDefined(prepared.localIdentityEnv.GH_CONFIG_DIR, "managed GitHub profile");
+    hostsPath = path.join(profileDir, "hosts.yml");
+    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
+    await writeToken();
+    const resolved = resolvePreparedExecEnvironment({
+      execParams: { command: "echo synthetic" },
+      host: "gateway",
+      defaultPathPrepend: [],
+      ...prepared,
+      warnings: [],
+    });
+    const original = JSON.stringify({ prepared, resolved });
+    Object.freeze(resolved.env);
+    Object.freeze(resolved.requestedEnv);
+    boundary.prepare.mockImplementation(async ({ env }) => {
+      expect(env.GH_TOKEN).toBe("");
+      // Rotation during async shell preparation must precede the private snapshot.
+      await writeToken("synthetic-rotated-token");
+    });
+    const beforeSpawn = vi.fn(async () => {
+      expect(JSON.stringify({ prepared, resolved })).toBe(original);
+      await writeToken("synthetic-rotated-token");
+      return undefined;
+    });
+    boundary.spawn.mockImplementationOnce((input: SpawnInput) => {
+      expect(input.env?.GH_TOKEN).toBe("");
+      expect(input.env?.GITHUB_TOKEN).toBe("");
+      expect(input.env?.PATH).toBe(resolved.env.PATH);
+      return supervisor.spawn(input);
+    });
+    const run = await launch({ env: resolved.env, usePty: true, beforeSpawn });
+    expect((await run.promise).aggregated).toBe("rotated");
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(JSON.stringify({ prepared, resolved })).toBe(original);
+    expect(JSON.stringify({ run, calls: boundary.spawn.mock.calls })).not.toContain(
+      "synthetic-rotated-token",
+    );
+  });
 
   it.each(["rotate", "remove"])("rereads credentials on PTY fallback after %s", async (change) => {
     boundary.spawn

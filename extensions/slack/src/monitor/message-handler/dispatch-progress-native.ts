@@ -52,18 +52,17 @@ export function createSlackNativeProgressTransport(params: {
     const startPromise = delivery.startStream({
       threadTs: streamThreadTs,
       ...(update.text ? { text: update.text } : {}),
-      ...(update.chunks?.length ? { chunks: update.chunks } : {}),
+      // Explicit empty chunks (a text-only continuation) flush the SDK buffer.
+      ...(update.chunks ? { chunks: update.chunks } : {}),
       taskDisplayMode: "plan",
     });
     delivery.nativeProgressStreamStartPromise = startPromise;
     try {
       await startPromise;
       const delivered = markDelivered(streamThreadTs);
-      return update.chunks?.length ? delivered : true;
+      return update.chunks ? delivered : true;
     } finally {
-      if (delivery.nativeProgressStreamStartPromise === startPromise) {
-        delivery.nativeProgressStreamStartPromise = null;
-      }
+      delivery.nativeProgressStreamStartPromise = null;
     }
   };
 
@@ -79,6 +78,8 @@ export function createSlackNativeProgressTransport(params: {
     if (!session) {
       return false;
     }
+    // Account before the call: Slack may hold the content even when the response is lost.
+    delivery.streamLedger.record(update);
     await appendSlackStream({
       session,
       ...(update.text ? { text: update.text } : {}),

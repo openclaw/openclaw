@@ -8,8 +8,27 @@
   "uiHints": {
     "share.groups": {
       "label": "Shared Session Groups",
-      "help": "Only sessions in these exact group names are published. Subagent, incognito, draft, and adopted catalog sessions are never shared."
+      "help": "Required source publication boundary: publish only sessions in these exact groups. The optional person filter narrows them further. Missing or empty groups publish nothing."
     },
+    "share.involvingProfileId": {
+      "label": "Involving Person",
+      "help": "Optional exact source-local profile ID (including merge aliases). Narrows the required shared groups to canonical owners or profile participants. Mentions alone, names, and logins do not match."
+    },
+    "share.gateway": {
+      "label": "Serve Gateway Session Reads",
+      "help": "Allow explicitly granted paired devices to read selected groups AND the canonical person with the closed publication-read scope."
+    },
+    "gateways": {
+      "label": "Outbound Gateway Sources",
+      "help": "Read-only outbound WSS connections with a preprovisioned named identity and singleton publication-read token; Cloudflare Access grants no session authority."
+    },
+    "share.gatewayDeviceIds": {
+      "label": "Publication Reader Devices",
+      "help": "Exact source-approved paired device IDs. Missing or empty grants no Gateway reads. Devices do not impersonate the selected person."
+    },
+    "gateways.*.deviceToken": { "sensitive": true },
+    "gateways.*.cloudflareAccess.clientId": { "sensitive": true },
+    "gateways.*.cloudflareAccess.clientSecret": { "sensitive": true },
     "nodes": {
       "label": "Paired Node Attribution",
       "help": "Optional display attribution keyed by paired node id. Attribution never grants session access."
@@ -31,6 +50,12 @@
       "properties": ["share"]
     },
     {
+      "id": "gateway-sources",
+      "title": "Outbound Gateway sources",
+      "order": 15,
+      "properties": ["gateways"]
+    },
+    {
       "id": "node-attribution",
       "title": "Node attribution",
       "order": 20,
@@ -50,6 +75,72 @@
             "type": "array",
             "uniqueItems": true,
             "items": { "type": "string", "minLength": 1, "maxLength": 200 }
+          },
+          "gateway": { "type": "boolean", "default": false },
+          "gatewayDeviceIds": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^\\S+$" }
+          },
+          "involvingProfileId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^\\S+$"
+          }
+        }
+      },
+      "gateways": {
+        "type": "object",
+        "maxProperties": 32,
+        "propertyNames": { "pattern": "^[a-zA-Z0-9_-]{1,80}$" },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "deviceToken", "deviceIdentityKey"],
+          "properties": {
+            "url": { "type": "string", "pattern": "^wss://", "maxLength": 2048 },
+            "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+            "deviceIdentityKey": {
+              "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^(?!primary$)\\S+$"
+            },
+            "deviceToken": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["source", "provider", "id"],
+              "properties": {
+                "source": { "enum": ["env", "file", "exec", "store"] },
+                "provider": { "type": "string", "minLength": 1 },
+                "id": { "type": "string", "minLength": 1 }
+              }
+            },
+            "cloudflareAccess": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["clientId", "clientSecret"],
+              "properties": {
+                "clientId": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "provider", "id"],
+                  "properties": {
+                    "source": { "enum": ["env", "file", "exec", "store"] },
+                    "provider": { "type": "string", "minLength": 1 },
+                    "id": { "type": "string", "minLength": 1 }
+                  }
+                },
+                "clientSecret": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "provider", "id"],
+                  "properties": {
+                    "source": { "enum": ["env", "file", "exec", "store"] },
+                    "provider": { "type": "string", "minLength": 1 },
+                    "id": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
+            }
           }
         }
       },
@@ -65,5 +156,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan read-only Session Share access between my source and team Gateways.",
+    "Review Session Share settings for unintended exposure without opening chats."
+  ]
 }

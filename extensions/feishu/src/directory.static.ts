@@ -66,11 +66,8 @@ export async function listAuthorizedFeishuDirectoryGroups(
   params: DirectoryConfigParams,
 ): Promise<FeishuDirectoryGroup[]> {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const enabledGroups = Object.fromEntries(
-    Object.entries(account.config.groups ?? {}).filter(([, group]) => group?.enabled !== false),
-  );
   const entries = listDirectoryGroupEntriesFromMapKeysAndAllowFrom({
-    groups: enabledGroups,
+    groups: account.config.groups,
     allowFrom: account.config.groupAllowFrom,
   });
   const authorizedEntries = entries.filter((entry) =>

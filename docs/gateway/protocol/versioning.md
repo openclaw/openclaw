@@ -31,6 +31,12 @@ Which protocol versions a client may negotiate, and the constants a reference cl
   - `pnpm protocol:gen:swift`
   - `pnpm protocol:check`
 
+Retiring a widget format does not change the connection protocol. Protocol-v4
+clients remain supported after A2UI retirement: surviving widgets keep their wire
+shape, and `board.widget.put` recognizes the retired `registered` request shape
+but rejects it with guidance to use HTML. This compatibility declaration does
+not restore the retired renderer or plugin registration API.
+
 ### Client constants
 
 The reference client implementation lives in `packages/gateway-client/src/`

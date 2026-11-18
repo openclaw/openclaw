@@ -163,7 +163,7 @@ available approval surfaces, and waits for a decision.
 
 Only the exact `allow-once` and `allow-always` decisions permitted by the
 request allow execution. Unknown, malformed, mismatched, missing, and timed-out
-decisions fail closed.
+decisions block execution.
 
 `allow-always` is only durable when the requesting plugin or runtime implements
 that persistence. For ordinary `before_tool_call.requireApproval` hooks,

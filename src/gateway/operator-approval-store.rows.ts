@@ -4,10 +4,7 @@ import { normalizeNullableString } from "@openclaw/normalization-core/string-coe
 import { validateApprovalPresentation } from "../../packages/gateway-protocol/src/approval-result-validators.js";
 import { isWellFormedApprovalId } from "../../packages/gateway-protocol/src/schema/approval-id.js";
 import type { ApprovalPresentation } from "../../packages/gateway-protocol/src/schema/approvals.js";
-import {
-  buildApprovalResolutionRef,
-  isApprovalResolutionRef,
-} from "../infra/approval-resolution-ref.js";
+import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import type {
   NewOperatorApproval,
@@ -24,7 +21,6 @@ export const OPERATOR_APPROVAL_TERMINAL_RETENTION_MS = 30 * 24 * 60 * 60_000;
 export const OPERATOR_APPROVAL_RECEIPT_SUMMARY_MAX_ROWS = 128;
 export const OPERATOR_APPROVAL_RECEIPT_MAX_PAYLOAD_BYTES = 64 * 1024;
 export const OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS = 64;
-export const OPERATOR_APPROVAL_PENDING_SCAN_PAGE_SIZE = 256;
 export const OPERATOR_APPROVAL_MAX_LIST_LIMIT = 1_001;
 export const OPERATOR_APPROVAL_HISTORY_DEFAULT_LIMIT = 50;
 export const OPERATOR_APPROVAL_HISTORY_MAX_LIMIT = 100;
@@ -229,10 +225,25 @@ function hasValidLifecycleTuple(params: {
   );
 }
 
-export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
-  const presentation = parseApprovalPresentation(row.presentation_json);
+/** Validate bounded audience and reviewer metadata before hydrating retained payloads. */
+export function decodeOperatorApprovalBindings(
+  row: Pick<OperatorApprovalRow, "reviewer_device_ids_json" | "audience_session_keys_json">,
+): Pick<OperatorApprovalRecord, "reviewerDeviceIds" | "audienceSessionKeys"> | null {
   const reviewerDeviceIds = parseStringArray(row.reviewer_device_ids_json);
   const audienceSessionKeys = parseStringArray(row.audience_session_keys_json);
+  if (
+    !reviewerDeviceIds ||
+    !audienceSessionKeys ||
+    audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS
+  ) {
+    return null;
+  }
+  return { reviewerDeviceIds, audienceSessionKeys };
+}
+
+export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApprovalRecord | null {
+  const presentation = parseApprovalPresentation(row.presentation_json);
+  const bindings = decodeOperatorApprovalBindings(row);
   const kind = parseOperatorApprovalKind(row.kind);
   const status = row.status;
   const decision = row.decision;
@@ -241,10 +252,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
   if (
     !presentation ||
     !isWellFormedApprovalId(row.approval_id) ||
-    !isApprovalResolutionRef(row.resolution_ref) ||
-    !reviewerDeviceIds ||
-    !audienceSessionKeys ||
-    audienceSessionKeys.length > OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS ||
+    !bindings ||
     !kind ||
     (status !== "pending" &&
       status !== "allowed" &&
@@ -308,7 +316,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
       clientId: row.requested_by_client_id,
       deviceTokenAuth: row.requested_by_device_token_auth === 1,
     },
-    reviewerDeviceIds,
+    reviewerDeviceIds: bindings.reviewerDeviceIds,
     source: {
       agentId: row.source_agent_id,
       sessionKey: row.source_session_key,
@@ -317,7 +325,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
       toolCallId: row.source_tool_call_id,
       toolName: row.source_tool_name,
     },
-    audienceSessionKeys,
+    audienceSessionKeys: bindings.audienceSessionKeys,
     runtimeEpoch: row.runtime_epoch,
     createdAtMs: row.created_at_ms,
     expiresAtMs: row.expires_at_ms,

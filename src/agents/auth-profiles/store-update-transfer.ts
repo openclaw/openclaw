@@ -1,10 +1,12 @@
 import { receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { createJsonFieldReceiver, jsonFieldBatches } from "../../infra/json-field-transfer.js";
+import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { cloneAuthProfileJsonValue } from "./clone-value.js";
 
 export function sendAuthProfileUpdateValue(port: MessagePort, value: unknown): void {
   for (const batch of jsonFieldBatches(cloneAuthProfileJsonValue(value))) {
     port.postMessage(batch);
+    recordWorkerMessage("authority", "to_worker");
   }
 }
 
@@ -12,6 +14,7 @@ export function sendAuthProfileUpdateValue(port: MessagePort, value: unknown): v
 export function receiveAuthProfileUpdateValue(port: MessagePort): unknown {
   const receiver = createJsonFieldReceiver();
   for (let message = receiveMessageOnPort(port); message; message = receiveMessageOnPort(port)) {
+    recordWorkerMessage("authority", "from_worker");
     if (!Array.isArray(message.message)) {
       throw new Error("Invalid auth profile field batch");
     }

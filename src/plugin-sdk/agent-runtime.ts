@@ -11,13 +11,12 @@ import {
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 
 export {
-  listAgentIds,
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentDir,
   setAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
-export { resolveSessionAgentIds } from "./agent-scope-runtime.js";
+export { listAgentIds, resolveSessionAgentIds } from "./agent-scope-runtime.js";
 
 export { DEFAULT_PROVIDER } from "../agents/defaults.js";
 // Consumed by the codex plugin's app-server usage surface.
@@ -32,8 +31,8 @@ export {
 } from "../agents/identity.js";
 
 export { resolveApiKeyForProviderCore as resolveApiKeyForProvider } from "../agents/model-auth.js";
-export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog.js";
-export type { ModelCatalogEntry } from "../agents/model-catalog.js";
+export { findModelInCatalog, modelSupportsVision } from "../agents/model-catalog-lookup.js";
+export type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 /** Preserve the shipped SDK getter's background renewal; internal observations stay passive. */
 export { refreshExpiredPreparedModelCatalog as getPreparedModelCatalogSnapshot };
 
@@ -143,6 +142,7 @@ export {
   loadAuthProfileStoreForRuntime,
   loadAuthProfileStoreForRuntimeAsync,
   replaceRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshotsAsync,
   saveAuthProfileStore,
   findPersistedAuthProfileCredential,
   findPersistedAuthProfileCredentialAsync,

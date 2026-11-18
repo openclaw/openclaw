@@ -39,6 +39,11 @@ capacity and configured limits. If neither current metadata nor a matching
 verified budget is available, the denominator is `?` (`null` in session-list
 JSON); reports do not substitute a generic window or another model's capacity.
 
+For models with selectable windows, `/status` and `session_status` use the selected
+window or the catalog's default window, rather than the model's larger scalar
+capacity. This also applies to the active fallback model; a smaller configured
+runtime cap still takes precedence.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:
@@ -48,6 +53,19 @@ new run supplies a matching estimate. If the selected model's capacity is unknow
 the meter omits context usage instead of borrowing the agent's default model
 capacity; available provider plan usage remains visible. Stale token totals remain
 approximate and do not trigger the context warning.
+
+In the Control UI, open the context ring beside the composer's model picker for a
+compact usage breakdown, latest-run tokens, and provider plan limits when available.
+Select **View context** to open the complete report in one side panel. **Workspace files** groups files by their recorded source: agent workspace,
+execution project, or personal instructions. File paths distinguish matching names
+such as two `AGENTS.md` files. Reports without source metadata show neutral file
+groups rather than guessing their role.
+
+**Tool schemas** groups tools in the direct tool surface by source and MCP server.
+The secondary **Tools loaded on use** section lists catalog entries outside that
+surface; their potential schema sizes are not added to current usage. Discovery descriptions and schemas retrieved into
+the conversation still consume context. Native-harness reports may cover only
+OpenClaw-provided tools, and unmeasured sizes remain unverified rather than zero.
 
 ## Example output
 
@@ -137,7 +155,7 @@ OpenClaw pins the complete system prompt for the session. Changed sections,
 including skills, workspace memory, and temporal context, arrive as instruction
 messages after the current user turn. Existing skill and memory refresh rules
 still apply. Changing the route or selected personal profile, resetting, or
-compacting history starts a new series; ordinary turn teardown and Gateway restarts restore the saved series.
+compacting history starts a new series; internal turns continuing the same session keep the series, and ordinary turn teardown and Gateway restarts restore the saved series.
 
 ## Injected workspace files (Project Context)
 
@@ -151,13 +169,17 @@ By default, OpenClaw injects a fixed set of workspace files (if present):
 
 Large files are truncated per-file using `agents.defaults.bootstrapMaxChars` (default `20000` chars). OpenClaw also enforces a total bootstrap injection cap across files with `agents.defaults.bootstrapTotalMaxChars` (default `60000` chars). `/context` shows **raw vs injected** sizes and whether truncation happened.
 
-When truncation occurs, the runtime injects a concise in-prompt notice under Project Context saying some bootstrap files were truncated; per-file names and sizes stay in `/context` and other diagnostics. This notice is built in and not configurable.
+When truncation occurs, the runtime injects a concise in-prompt notice under Project Context saying some bootstrap files were truncated; per-file names and sizes stay in `/context` and other diagnostics. This notice is built in and not configurable. Runtime logs warn once per file path, content revision, and effective limit per process; `/context` continues to show truncation on every report.
 
 ## Skills: injected vs loaded on-demand
 
 The system prompt includes a compact **skills list** (name + description + location). This list has real overhead.
 
 `/context` counts the catalog included in the rendered system prompt, not every installed skill. In the embedded runtime without Code Mode, denying both `read` and `skills_read` omits the catalog and reports zero skills.
+
+Code Mode also omits the catalog when installed skill search and reading are
+available. Its report then shows zero listed skills, while the agent can still
+search eligible skills and read their complete instructions on demand.
 
 Skill instructions are _not_ included by default. The model is expected to `read` the skill's `SKILL.md` **only when needed**.
 
@@ -172,13 +194,15 @@ Tools affect context in two ways:
 
 ## Commands, directives, and "inline shortcuts"
 
-Slash commands are handled by the Gateway. There are a few different behaviors:
+Slash commands are handled by the Gateway. Text commands, directives, and shortcuts
+require sender text starting with `/` (leading whitespace and channel-owned bot
+addressing are allowed). There are a few different behaviors:
 
 - **Standalone commands**: a message that is only `/...` runs as a command.
 - **Directives**: `/think`, `/fast`, `/verbose`, `/trace`, `/reasoning`, `/elevated`, `/exec`, `/model`, `/queue` are stripped before the model sees the message.
   - Directive-only messages persist session settings.
-  - Inline directives in a normal message act as per-message hints.
-- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens inside a normal message can run immediately (example: "hey /status"), and are stripped before the model sees the remaining text.
+  - In slash-starting messages with task text, most directives act as per-message hints; model selections can still persist to the session.
+- **Inline shortcuts** (allowlisted senders only): certain `/...` tokens can accompany task text in slash-starting messages (example: `/status check this`), run immediately, and are stripped before the model sees the remaining text.
 
 Details: [Slash commands](/tools/slash-commands).
 
@@ -189,6 +213,10 @@ What persists across messages depends on the mechanism:
 - **Normal history** persists in the session transcript until compacted/pruned by policy.
 - **Compaction** persists a summary into the transcript and keeps recent messages intact.
 - **Pruning** drops old tool results from the _in-memory_ prompt to free context-window space, but does not rewrite the session transcript - the full history is still inspectable on disk.
+
+Reduced tool results preserve previously disclosed paths to saved output. Context
+assembly does not check whether those files still exist; if temporary-file cleanup
+has removed one, a later read reports that it is unavailable.
 
 ### Runtime context and provider roles
 
@@ -219,6 +247,12 @@ your agent instructions: use it to answer the active request, keep internal
 details private, and do not treat the carrier as a new user request or wait for
 another message.
 
+Google generate-content requests keep the carrier separate and add explicit
+context-only framing: do not acknowledge the context; continue answering the
+user's request. This prevents the trailing user-role carrier from becoming the
+request to answer. The framing is deterministic for retained replay and does not
+rewrite user messages when turn-scoped context expires.
+
 For embedded Responses requests, current request metadata stays after the user
 message or compaction checkpoint and before its tool calls. This lets supported transports reuse the
 previous response across tool rounds without dropping live context, so OpenClaw
@@ -227,8 +261,9 @@ turn in an OpenAI Responses-family session preserves hidden runtime-context
 carriers append-only, so the previous turn, including tool calls and results,
 remains an unchanged cached prefix. Retained carriers count toward the context
 window until compaction, which does not split a user message from its carrier.
-User-role carriers contain the labeled context body; interpretation guidance lives
-once in the stable system prompt. OpenAI-compatible Chat Completions and native
+User-role carriers contain the labeled context body; except for Google's
+generate-content framing, interpretation guidance lives once in the stable system
+prompt. OpenAI-compatible Chat Completions and native
 Ollama also retain earlier carriers without rewriting the system prompt or prior
 conversation bytes.
 

@@ -6,13 +6,16 @@ import { resolveMergedModelProviderConfig } from "../config/model-provider-confi
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
 import {
   buildProviderMissingAuthMessageWithPlugin,
+  resolvePluginOwnedProviderAuth,
   resolveProviderDeprecatedAuthProfileIds,
   shouldDeferProviderSyntheticProfileAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
 import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveDefaultAgentDir } from "./agent-scope-config.js";
 import {
@@ -24,19 +27,21 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import { assertAuthProfileMigrationReady } from "./auth-profiles/legacy-source-diagnostic.js";
-import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import {
+  buildOAuthRefreshFailureLoginCommand,
+  OAuthRefreshFailureError,
+} from "./auth-profiles/oauth-refresh-failure.js";
+import { isFailedOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { resolveAuthStorePathForDisplayAsync } from "./auth-profiles/paths.js";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { isNonSecretApiKeyMarker, resolveExplicitProviderNoAuth } from "./model-auth-markers.js";
 import { assertAuthModeAllowedForModel, isAuthModeAllowedForModel } from "./model-auth-policy.js";
+import { assertProviderAuthReady } from "./model-auth-provider-admission.js";
 import * as authConfig from "./model-auth-provider-config.js";
 import { resolveModelProviderAuthConfig } from "./model-auth-provider-route.js";
+import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import {
-  assertRuntimeProviderSecretOwnerAvailable,
-  resolveManagedSecretRefRuntimeProviderAuth,
-} from "./model-auth-runtime-config.js";
-import {
+  assertProviderAuthSupportsHttp,
   ProviderAuthError,
   resolveDirectProviderCredentialMode,
   type ResolvedProviderAuth,
@@ -83,16 +88,12 @@ function shouldDeferSyntheticProfileAuth(params: {
 
 /** @deprecated Use resolveScopedAuthProfileStoreAsync to read through the auth owner worker. */
 export function resolveScopedAuthProfileStore(params: {
-  agentDir?: string;
   cfg?: OpenClawConfig;
   provider: string;
-  profileId?: string;
-  preferredProfile?: string;
 }): AuthProfileStore {
-  return ensureAuthProfileStore(params.agentDir, {
+  return ensureAuthProfileStore(undefined, {
     migrationProvider: params.provider,
     config: params.cfg,
-    profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }
@@ -112,19 +113,6 @@ export async function resolveScopedAuthProfileStoreAsync(params: {
   });
 }
 
-function assertProviderAuthReady(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-}): void {
-  // Pending credential files own their providers' auth routes until Doctor commits
-  // and archives them; do not fall through to env/config credentials.
-  assertAuthProfileMigrationReady(params.agentDir, undefined, params.provider, params.cfg);
-  // A failed explicit ref owns the provider. Stop before profile/env discovery so requests cannot
-  // silently switch credentials while this configured owner is cold.
-  assertRuntimeProviderSecretOwnerAvailable({ cfg: params.cfg, provider: params.provider });
-}
-
 /** Resolves a stored provider-entry binding without general credential discovery. */
 export async function resolveProviderEntryApiKeyAuth(params: {
   provider: string;
@@ -139,7 +127,7 @@ export async function resolveProviderEntryApiKeyAuth(params: {
 }): Promise<ResolvedProviderAuth | undefined> {
   params.signal?.throwIfAborted();
   const { provider, cfg } = params;
-  assertProviderAuthReady(params);
+  await assertProviderAuthReady(params);
   const reference = authConfig.resolveProviderEntryApiKeyProfileReference(params);
   if (!("profileId" in reference)) {
     return undefined;
@@ -205,6 +193,11 @@ export async function resolveApiKeyForProviderCore(input: {
    *  silently replaced by another profile or env/config credentials. */
   lockedProfile?: boolean;
   forceRefresh?: boolean;
+  /** Gates a new native refresh claim, not independently owned settlement. */
+  assertRefreshAdmission?: () => void;
+  validateOAuthCredential?: Parameters<
+    typeof resolveApiKeyForProfile
+  >[0]["validateOAuthCredential"];
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
@@ -217,16 +210,58 @@ export async function resolveApiKeyForProviderCore(input: {
   /** Keep SecretRef-backed model credentials opaque until a sentinel-aware transport boundary. */
   secretSentinels?: boolean;
 }): Promise<ResolvedProviderAuth> {
+  if (resolveMergedModelProviderConfig(input.cfg, input.provider)?.auth === "native-command") {
+    throw new Error(
+      "Native command auth requires the Codex runtime; host credentials cannot be used.",
+    );
+  }
   input.signal?.throwIfAborted();
+  const ownership = {
+    provider: input.provider,
+    config: input.cfg,
+    workspaceDir: input.workspaceDir,
+  };
+  if (resolveProviderAuthScope(ownership) === "plugin") {
+    const auth = resolvePluginOwnedProviderAuth({
+      ...ownership,
+      profileId: input.profileId,
+      preferredProfile: input.preferredProfile,
+    });
+    input.signal?.throwIfAborted();
+    assertProviderAuthSupportsHttp(auth, input.provider);
+    assertAuthModeAllowedForModel({
+      provider: input.provider,
+      modelApi: input.modelApi,
+      modelBaseUrl: input.modelBaseUrl,
+      capability: input.capability,
+      mode: auth.mode,
+      profileId: auth.source,
+    });
+    return input.secretSentinels &&
+      !isNonSecretApiKeyMarker(auth.apiKey) &&
+      !looksLikeSecretSentinel(auth.apiKey)
+      ? {
+          ...auth,
+          apiKey: mintSecretSentinel(auth.apiKey, { label: `model-auth:${input.provider}` }),
+        }
+      : auth;
+  }
   const modelAuthConfig = resolveModelProviderAuthConfig({
     provider: input.provider,
     config: input.cfg,
     workspaceDir: input.workspaceDir,
     modelBaseUrl: input.modelBaseUrl,
   });
-  const changedAuthProvider = modelAuthConfig !== input.cfg;
   const params = { ...input, cfg: modelAuthConfig };
   const { provider, cfg, profileId, preferredProfile } = params;
+  const noAuth = resolveExplicitProviderNoAuth({
+    provider,
+    providerConfig: resolveMergedModelProviderConfig(cfg, provider),
+    modelApi: params.modelApi,
+  });
+  if (noAuth) {
+    return noAuth;
+  }
   const modelPolicy = {
     provider,
     modelApi: params.modelApi,
@@ -239,7 +274,7 @@ export async function resolveApiKeyForProviderCore(input: {
       resolveProviderDeprecatedAuthProfileIds({ provider, config: cfg }),
     ));
   const agentDir = params.agentDir?.trim() || (cfg ? resolveDefaultAgentDir(cfg) : undefined);
-  assertProviderAuthReady({ cfg, provider, agentDir });
+  await assertProviderAuthReady({ cfg, provider, agentDir });
   let scopedStore: AuthProfileStore | undefined = params.store;
   const getScopedStore = async (requestedProfileId?: string) =>
     (scopedStore ??= await resolveScopedAuthProfileStoreAsync({
@@ -282,6 +317,24 @@ export async function resolveApiKeyForProviderCore(input: {
       deprecatedProfileIds: getDeprecatedProfileIds(),
     });
     const configuredCredential = store.profiles[profileId];
+    const assertCompatibleProfile = (credentialProvider: string, selectedProfileId = profileId) => {
+      if (
+        !isStoredCredentialCompatibleWithAuthProvider({
+          cfg,
+          provider,
+          credential: { provider: credentialProvider },
+        })
+      ) {
+        throw new Error(
+          `Auth profile "${selectedProfileId}" is not compatible with the resolved model endpoint for "${provider}". Select a compatible provider profile.`,
+        );
+      }
+    };
+    // Pins cannot cross credential realms even when the endpoint did not change.
+    // Reject stored mismatches before SecretRef materialization or OAuth refresh.
+    if (configuredCredential) {
+      assertCompatibleProfile(configuredCredential.provider);
+    }
     const configuredProfileType = configuredCredential?.type;
     if (configuredProfileType) {
       assertAuthModeAllowedForModel({
@@ -300,6 +353,8 @@ export async function resolveApiKeyForProviderCore(input: {
       signal: params.signal,
       forceRefresh: params.forceRefresh,
       allowProfileFallback: !params.lockedProfile,
+      validateOAuthCredential: params.validateOAuthCredential,
+      assertRefreshAdmission: params.assertRefreshAdmission,
     });
     params.signal?.throwIfAborted();
     if (!resolved) {
@@ -310,14 +365,9 @@ export async function resolveApiKeyForProviderCore(input: {
       throw new Error("Locked auth profile resolution returned a different profile.");
     }
     const credential = resolved.credential ?? store.profiles[resolvedProfileId];
-    if (
-      changedAuthProvider &&
-      (!credential || !isStoredCredentialCompatibleWithAuthProvider({ cfg, provider, credential }))
-    ) {
-      throw new Error(
-        `Auth profile "${resolvedProfileId}" is not compatible with the resolved model endpoint for "${provider}".`,
-      );
-    }
+    // Personal stores need not appear in the shared snapshot; the resolver owns
+    // the returned credential's provider identity, including refreshed profiles.
+    assertCompatibleProfile(resolved.provider, resolvedProfileId);
     const result = projectProfileAuth(resolved, resolvedProfileId, credential, store);
     assertAuthModeAllowedForModel({
       ...modelPolicy,
@@ -344,11 +394,16 @@ export async function resolveApiKeyForProviderCore(input: {
         store,
         profileId: undefined,
         lockedProfile: true,
-      }) //
-        .catch(() => {
-          params.signal?.throwIfAborted();
-          return result;
-        });
+      }).catch((error: unknown) => {
+        params.signal?.throwIfAborted();
+        if (
+          error instanceof OAuthRefreshFailureError ||
+          error instanceof SecretSurfaceUnavailableError
+        ) {
+          throw error;
+        }
+        return result;
+      });
     }
     return result;
   }
@@ -610,11 +665,11 @@ export async function resolveApiKeyForProviderCore(input: {
   });
   params.signal?.throwIfAborted();
   if (syntheticLocalAuth) {
+    assertProviderAuthSupportsHttp(syntheticLocalAuth, provider);
     return syntheticLocalAuth;
   }
 
-  const hasInlineConfiguredModels =
-    Array.isArray(providerConfig?.models) && providerConfig.models.length > 0;
+  const hasInlineConfiguredModels = (providerConfig?.models?.length ?? 0) > 0;
   const owningPluginIds =
     params.allowAuthProfileFallback !== false && !hasInlineConfiguredModels
       ? resolveOwningPluginIdsForProviderRef({
@@ -639,6 +694,21 @@ export async function resolveApiKeyForProviderCore(input: {
         providerGuidance: true,
       });
     }
+  }
+
+  // A sign-in whose refresh failed is kept as a failed refresh fence. It needs a new sign-in,
+  // not an API key, even when the run planned no profile fallback after skipping it.
+  const endedProfileId = listProfilesForProvider(store, provider).find((candidate) => {
+    const credential = store.profiles[candidate];
+    return credential?.type === "oauth" && isFailedOAuthRefreshFence(credential);
+  });
+  if (endedProfileId) {
+    throw new ProviderAuthError(
+      "missing-provider-auth",
+      provider,
+      `The ${provider} sign-in ${JSON.stringify(endedProfileId)} has ended or was rejected. Sign in again with ${buildOAuthRefreshFailureLoginCommand(provider, { profileId: endedProfileId })}.`,
+      { providerGuidance: true },
+    );
   }
 
   const authStorePath = await resolveAuthStorePathForDisplayAsync(agentDir);

@@ -279,14 +279,40 @@ export function createWorkerPlacementMoveService(options: {
         return;
       } else if (placement.state === "draining") {
         assertDestination();
-        const local = await options.reclaimSource(identity, intent, assertDestination);
-        if (local.state === "reclaimed") {
-          return;
+        const environment = options.environments.get(placement.environmentId);
+        if (!placement.turnClaim && environment && environment.destroyRequestedAtMs !== null) {
+          // Cleanup acceptance can precede result release and reconciliation in separate
+          // transactions. Do not try to recapture a source already handed off and stopped.
+          if (intent.target.kind === "gateway") {
+            await options.prepareGatewayMove?.({ ...identity, assertCurrent: assertDestination });
+          }
+          assertDestination();
+          const reconciling = await options.placements.startReconcile({
+            sessionId: placement.sessionId,
+            environmentId: placement.environmentId,
+            ownerEpoch: placement.activeOwnerEpoch,
+            expectedGeneration: placement.generation,
+          });
+          placement = await options.placements.completePlacementMoveSourceToLocal(
+            {
+              operationId: intent.operationId,
+              sessionId: intent.sessionId,
+              expectedGeneration: reconciling.generation,
+            },
+            { assertCurrent: assertDestination },
+          );
+        } else {
+          const local = await options.reclaimSource(identity, intent, assertDestination);
+          if (local.state === "reclaimed") {
+            return;
+          }
+          if (local.state !== "local") {
+            throw new Error(
+              "Session " + identity.sessionKey + " move recovery did not return local",
+            );
+          }
+          placement = local;
         }
-        if (local.state !== "local") {
-          throw new Error(`Session ${identity.sessionKey} move recovery did not return local`);
-        }
-        placement = local;
       } else if (placement.state === "reconciling") {
         const environment = options.environments.get(placement.environmentId);
         if (environment && !isTerminalWorkerEnvironmentState(environment.state)) {

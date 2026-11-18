@@ -312,15 +312,14 @@ struct OnboardingAISetupView: View {
     private func candidateRow(_ candidate: OnboardingAISetupModel.Candidate) -> some View {
         let status = self.model.statuses[candidate.kind] ?? .untried
         let selected = self.model.selectedKind == candidate.kind
-        let presentation = self.model.candidates.first { $0.kind == candidate.kind }
         return VStack(alignment: .leading, spacing: 0) {
             Button {
                 self.model.userSelect(kind: candidate.kind)
             } label: {
                 HStack(alignment: .center, spacing: 12) {
                     OnboardingProviderArtwork(
-                        icon: presentation?.icon,
-                        brandCandidates: [presentation?.brandId, candidate.kind],
+                        icon: candidate.icon,
+                        brandCandidates: [candidate.brandId, candidate.kind],
                         fallbackSymbol: Self.symbol(for: candidate.kind))
                     VStack(alignment: .leading, spacing: 2) {
                         Text(candidate.label)

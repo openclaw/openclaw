@@ -3,6 +3,10 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { LruCache } from "../../infra/lru-cache.js";
+import {
+  classifyMediaReferenceSource,
+  normalizeMediaReferenceSource,
+} from "../../media/media-reference.js";
 import { sqliteMessageEventWithSeq } from "../session-transcript-entry-message.js";
 import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
 import type { TouchedFile } from "./workspace-files.js";
@@ -37,7 +41,11 @@ function addTouchedFile(
   filePath: string | undefined,
   kind: TouchedFile["kind"],
 ) {
-  if (!filePath) {
+  // The read tool opens media-store references from the attachment store, never the workspace.
+  if (
+    !filePath ||
+    classifyMediaReferenceSource(normalizeMediaReferenceSource(filePath)).isMediaStoreUrl
+  ) {
     return;
   }
   const existing = files.get(filePath);

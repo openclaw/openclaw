@@ -12,7 +12,6 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { convertMarkdownTables, stripMarkdown } from "openclaw/plugin-sdk/text-chunking";
 import { resolveIrcAccount } from "./accounts.js";
-import type { IrcClient } from "./client.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";
 import { normalizeIrcMessagingTarget } from "./normalize.js";
@@ -23,14 +22,8 @@ type SendIrcOptions = {
   cfg: CoreConfig;
   accountId?: string;
   replyTo?: string;
-  client?: IrcClient;
   abortSignal?: AbortSignal;
   onPlatformSendDispatch?: () => Promise<void>;
-};
-
-type SendIrcMessage = {
-  text: string;
-  replyTo?: string;
 };
 
 export type SendIrcResult = {
@@ -43,9 +36,10 @@ export async function sendIrcMessages(
   to: string,
   text: string,
   opts: SendIrcOptions,
-  planMessages: (preparedText: string) => readonly SendIrcMessage[] = (preparedText) => [
-    { text: preparedText, replyTo: opts.replyTo },
-  ],
+  planMessages: (preparedText: string) => readonly {
+    text: string;
+    replyTo?: string;
+  }[] = (preparedText) => [{ text: preparedText, replyTo: opts.replyTo }],
   onDeliveryResult?: (result: SendIrcResult) => Promise<void> | void,
 ): Promise<SendIrcResult[]> {
   const effect = captureEffectAuthority();
@@ -82,20 +76,17 @@ export async function sendIrcMessages(
   const messages = planMessages(prepared);
   opts.abortSignal?.throwIfAborted();
 
-  let transient: IrcClient | undefined;
-  const client = opts.client?.isReady()
-    ? opts.client
-    : (transient = await connectIrcClient(
-        buildIrcConnectOptions(account, {
-          connectTimeoutMs: 12000,
-          abortSignal: opts.abortSignal,
-        }),
-      ));
+  const client = await connectIrcClient(
+    buildIrcConnectOptions(account, {
+      connectTimeoutMs: 12000,
+      abortSignal: opts.abortSignal,
+    }),
+  );
 
   const results: SendIrcResult[] = [];
   try {
     opts.abortSignal?.throwIfAborted();
-    if (transient && (target.startsWith("#") || target.startsWith("&"))) {
+    if (target.startsWith("#") || target.startsWith("&")) {
       await effect.initiate(() => {
         opts.abortSignal?.throwIfAborted();
         if (!client.isReady()) {
@@ -162,7 +153,7 @@ export async function sendIrcMessages(
       visibleReplySent: true,
     });
   } finally {
-    transient?.quit("sent");
+    client.quit("sent");
   }
 }
 

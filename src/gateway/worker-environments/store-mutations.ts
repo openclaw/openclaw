@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Updateable } from "kysely";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type {
   WorkerEnvironmentCredentials,
   WorkerEnvironmentSshFallbackPorts,
@@ -27,7 +27,7 @@ type RowUpdate = Updateable<WorkerEnvironments>;
 type SshFallbackPortInsert = Insertable<WorkerEnvironmentSshFallbackPorts>;
 type CredentialInsert = Insertable<WorkerEnvironmentCredentials>;
 
-export function nextGlobalOwnerEpoch(db: DatabaseSync): number {
+export function nextGlobalOwnerEpoch(db: EngineConnection): number {
   // Transcript commit identity is (session, epoch, seq), so an ownership
   // generation may never be reused when a session moves between environments.
   const latestEnvironment = executeSqliteQueryTakeFirstSync(
@@ -50,7 +50,7 @@ export function nextGlobalOwnerEpoch(db: DatabaseSync): number {
   return next;
 }
 export function updateRow(
-  db: DatabaseSync,
+  db: EngineConnection,
   id: string,
   state: WorkerEnvironmentState,
   values: RowUpdate,
@@ -68,7 +68,7 @@ export function updateRow(
   }
 }
 export function updateWorkerEnvironmentRecord(
-  db: DatabaseSync,
+  db: EngineConnection,
   id: string,
   state: WorkerEnvironmentState,
   values: RowUpdate,
@@ -77,7 +77,7 @@ export function updateWorkerEnvironmentRecord(
   return getRequiredWorkerEnvironment(db, id);
 }
 export function replaceSshFallbackPorts(
-  db: DatabaseSync,
+  db: EngineConnection,
   environmentId: string,
   ports: readonly number[],
 ): void {
@@ -102,7 +102,7 @@ export function replaceSshFallbackPorts(
       .values(rows),
   );
 }
-export function revokeCredential(db: DatabaseSync, environmentId: string): void {
+export function revokeCredential(db: EngineConnection, environmentId: string): void {
   executeWorkerEnvironmentWrite(
     db,
     queryWorkerEnvironmentStore(db)
@@ -110,7 +110,7 @@ export function revokeCredential(db: DatabaseSync, environmentId: string): void 
       .where("environment_id", "=", environmentId),
   );
 }
-export function upsertCredential(db: DatabaseSync, credential: CredentialInsert): void {
+export function upsertCredential(db: EngineConnection, credential: CredentialInsert): void {
   const { environment_id: environmentId, ...values } = credential;
   executeWorkerEnvironmentWrite(
     db,
@@ -161,7 +161,7 @@ function compareAttachmentAuthority(
   return left.environmentId < right.environmentId ? -1 : 1;
 }
 
-export function reconcileAttachedSessionOwners(db: DatabaseSync, nowMs: number): string[] {
+export function reconcileAttachedSessionOwners(db: EngineConnection, nowMs: number): string[] {
   const ownersBySession = new Map<string, WorkerEnvironmentRecord[]>();
   const changed: string[] = [];
   for (const record of listRows(db)) {

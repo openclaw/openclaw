@@ -1,0 +1,277 @@
+diff --git a/builder/valid.d.ts b/builder/valid.d.ts
+index 1ac732b937de198bf895bf676c3a5ada1b9839fe..377c790b003c459bff5d6c464e0e81fc3afdc2b3 100644
+--- a/builder/valid.d.ts	
++++ b/builder/valid.d.ts
+@@ -1,22 +1,9 @@
+ import { DataType } from '../type.js';
+ /**
+- * Dynamically compile the null values into an `isValid()` function whose
+- * implementation is a switch statement. Microbenchmarks in v8 indicate
+- * this approach is 25% faster than using an ES6 Map.
+- *
+- * @example
+- * console.log(createIsValidFunction([null, 'N/A', NaN]));
+- * `function (x) {
+- *     if (x !== x) return false;
+- *     switch (x) {
+- *         case null:
+- *         case "N/A":
+- *             return false;
+- *     }
+- *     return true;
+- * }`
+- *
++ * Snapshot the null sentinels without compiling JavaScript from their values.
++ * Set equality includes NaN and treats signed zeroes alike, just as the
++ * previous NaN guard and switch cases did.
+  * @ignore
+- * @param nullValues
+  */
+ export declare function createIsValidFunction<T extends DataType = any, TNull = any>(nullValues?: ReadonlyArray<TNull>): (value: T['TValue'] | TNull) => boolean;
++//# sourceMappingURL=valid.d.ts.map
+\ No newline at end of file
+diff --git a/builder/valid.d.ts.map b/builder/valid.d.ts.map
+index ec320d069b7213828696bc48c755ee0e8d04301e..73588325e67569ad416aab3f745c495d38f4ed5f 100644
+--- a/builder/valid.d.ts.map	
++++ b/builder/valid.d.ts.map
+@@ -1 +1 @@
+-{"version":3,"sources":["builder/valid.ts"],"names":[],"mappings":"AAiBA,OAAO,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAGtC;;;;;;;;;;;;;;;;;;;GAmBG;AACH,wBAAgB,qBAAqB,CAAC,CAAC,SAAS,QAAQ,GAAG,GAAG,EAAE,KAAK,GAAG,GAAG,EAAE,UAAU,CAAC,EAAE,aAAa,CAAC,KAAK,CAAC,WAwB3C,CAAC,CAAC,QAAQ,CAAC,GAAG,KAAK,KAAK,OAAO,CACjG","file":"valid.d.ts","sourceRoot":"../src"}
+\ No newline at end of file
++{"version":3,"file":"valid.d.ts","sourceRoot":"../src/","sources":["builder/valid.ts"],"names":[],"mappings":"AAiBA,OAAO,EAAE,QAAQ,EAAE,MAAM,YAAY,CAAC;AAEtC;;;;;GAKG;AACH,wBAAgB,qBAAqB,CAAC,CAAC,SAAS,QAAQ,GAAG,GAAG,EAAE,KAAK,GAAG,GAAG,EAAE,UAAU,CAAC,EAAE,aAAa,CAAC,KAAK,CAAC,GAAG,CAAC,KAAK,EAAE,CAAC,CAAC,QAAQ,CAAC,GAAG,KAAK,KAAK,OAAO,CAUvJ"}
+\ No newline at end of file
+diff --git a/builder/valid.js b/builder/valid.js
+index b35a5f5e1f399c483e5852481970245893a8d1d8..127e4de6269693d684108415f7e24bedcc0a9a8c 100644
+--- a/builder/valid.js	
++++ b/builder/valid.js
+@@ -16,56 +16,22 @@
+ // specific language governing permissions and limitations
+ // under the License.
+ Object.defineProperty(exports, "__esModule", { value: true });
+-exports.createIsValidFunction = void 0;
+-const pretty_js_1 = require("../util/pretty.js");
++exports.createIsValidFunction = createIsValidFunction;
+ /**
+- * Dynamically compile the null values into an `isValid()` function whose
+- * implementation is a switch statement. Microbenchmarks in v8 indicate
+- * this approach is 25% faster than using an ES6 Map.
+- *
+- * @example
+- * console.log(createIsValidFunction([null, 'N/A', NaN]));
+- * `function (x) {
+- *     if (x !== x) return false;
+- *     switch (x) {
+- *         case null:
+- *         case "N/A":
+- *             return false;
+- *     }
+- *     return true;
+- * }`
+- *
++ * Snapshot the null sentinels without compiling JavaScript from their values.
++ * Set equality includes NaN and treats signed zeroes alike, just as the
++ * previous NaN guard and switch cases did.
+  * @ignore
+- * @param nullValues
+  */
+ function createIsValidFunction(nullValues) {
+-    if (!nullValues || nullValues.length <= 0) {
+-        // @ts-ignore
+-        return function isValid(value) { return true; };
+-    }
+-    let fnBody = '';
+-    const noNaNs = nullValues.filter((x) => x === x);
+-    if (noNaNs.length > 0) {
+-        fnBody = `
+-    switch (x) {${noNaNs.map((x) => `
+-        case ${valueToCase(x)}:`).join('')}
+-            return false;
+-    }`;
+-    }
+-    // NaN doesn't equal anything including itself, so it doesn't work as a
+-    // switch case. Instead we must explicitly check for NaN before the switch.
+-    if (nullValues.length !== noNaNs.length) {
+-        fnBody = `if (x !== x) return false;\n${fnBody}`;
++    if (!nullValues || nullValues.length === 0) {
++        return function isValid() { return true; };
+     }
+-    return new Function(`x`, `${fnBody}\nreturn true;`);
+-}
+-exports.createIsValidFunction = createIsValidFunction;
+-/** @ignore */
+-function valueToCase(x) {
+-    if (typeof x !== 'bigint') {
+-        return (0, pretty_js_1.valueToString)(x);
++    // This is the common vectorFromArray/LanceDB path; avoid a Set per column.
++    if (nullValues.length === 1 && nullValues[0] === null) {
++        return function isValid(value) { return value !== null; };
+     }
+-    return `${(0, pretty_js_1.valueToString)(x)}n`;
++    const nulls = new Set(nullValues);
++    return function isValid(value) { return !nulls.has(value); };
+ }
+-
+ //# sourceMappingURL=valid.js.map
+\ No newline at end of file
+diff --git a/builder/valid.js.map b/builder/valid.js.map
+index c2a41532d8edc55e7783938340c0a73313f43756..bdc71d000a2a65d0cd6c3f5da443bd4e157cb055 100644
+--- a/builder/valid.js.map	
++++ b/builder/valid.js.map
+@@ -1 +1 @@
+-{"version":3,"sources":["builder/valid.ts"],"names":[],"mappings":";AAAA,6DAA6D;AAC7D,+DAA+D;AAC/D,wDAAwD;AACxD,6DAA6D;AAC7D,oDAAoD;AACpD,6DAA6D;AAC7D,6DAA6D;AAC7D,EAAE;AACF,+CAA+C;AAC/C,EAAE;AACF,6DAA6D;AAC7D,8DAA8D;AAC9D,yDAAyD;AACzD,4DAA4D;AAC5D,0DAA0D;AAC1D,qBAAqB;;;AAGrB,iDAAkD;AAElD;;;;;;;;;;;;;;;;;;;GAmBG;AACH,SAAgB,qBAAqB,CAAwC,UAAiC;IAE1G,IAAI,CAAC,UAAU,IAAI,UAAU,CAAC,MAAM,IAAI,CAAC,EAAE,CAAC;QACxC,aAAa;QACb,OAAO,SAAS,OAAO,CAAC,KAAU,IAAI,OAAO,IAAI,CAAC,CAAC,CAAC,CAAC;IACzD,CAAC;IAED,IAAI,MAAM,GAAG,EAAE,CAAC;IAChB,MAAM,MAAM,GAAG,UAAU,CAAC,MAAM,CAAC,CAAC,CAAC,EAAE,EAAE,CAAC,CAAC,KAAK,CAAC,CAAC,CAAC;IAEjD,IAAI,MAAM,CAAC,MAAM,GAAG,CAAC,EAAE,CAAC;QACpB,MAAM,GAAG;kBACC,MAAM,CAAC,GAAG,CAAC,CAAC,CAAC,EAAE,EAAE,CAAC;eACrB,WAAW,CAAC,CAAC,CAAC,GAAG,CAAC,CAAC,IAAI,CAAC,EAAE,CAAC;;MAEpC,CAAC;IACH,CAAC;IAED,uEAAuE;IACvE,2EAA2E;IAC3E,IAAI,UAAU,CAAC,MAAM,KAAK,MAAM,CAAC,MAAM,EAAE,CAAC;QACtC,MAAM,GAAG,+BAA+B,MAAM,EAAE,CAAC;IACrD,CAAC;IAED,OAAO,IAAI,QAAQ,CAAC,GAAG,EAAE,GAAG,MAAM,gBAAgB,CAA4C,CAAC;AACnG,CAAC;AAzBD,sDAyBC;AAED,cAAc;AACd,SAAS,WAAW,CAAC,CAAM;IACvB,IAAI,OAAO,CAAC,KAAK,QAAQ,EAAE,CAAC;QACxB,OAAO,IAAA,yBAAa,EAAC,CAAC,CAAC,CAAC;IAC5B,CAAC;IACD,OAAO,GAAG,IAAA,yBAAa,EAAC,CAAC,CAAC,GAAG,CAAC;AAClC,CAAC","file":"valid.js","sourceRoot":"../src"}
+\ No newline at end of file
++{"version":3,"file":"valid.js","sourceRoot":"../src/","sources":["builder/valid.ts"],"names":[],"mappings":";AAAA,6DAA6D;AAC7D,+DAA+D;AAC/D,wDAAwD;AACxD,6DAA6D;AAC7D,oDAAoD;AACpD,6DAA6D;AAC7D,6DAA6D;AAC7D,EAAE;AACF,+CAA+C;AAC/C,EAAE;AACF,6DAA6D;AAC7D,8DAA8D;AAC9D,yDAAyD;AACzD,4DAA4D;AAC5D,0DAA0D;AAC1D,qBAAqB;;AAUrB,sDAUC;AAhBD;;;;;GAKG;AACH,SAAgB,qBAAqB,CAAwC,UAAiC;IAC1G,IAAI,CAAC,UAAU,IAAI,UAAU,CAAC,MAAM,KAAK,CAAC,EAAE,CAAC;QACzC,OAAO,SAAS,OAAO,KAAK,OAAO,IAAI,CAAC,CAAC,CAAC,CAAC;IAC/C,CAAC;IACD,2EAA2E;IAC3E,IAAI,UAAU,CAAC,MAAM,KAAK,CAAC,IAAI,UAAU,CAAC,CAAC,CAAC,KAAK,IAAI,EAAE,CAAC;QACpD,OAAO,SAAS,OAAO,CAAC,KAAK,IAAI,OAAO,KAAK,KAAK,IAAI,CAAC,CAAC,CAAC,CAAC;IAC9D,CAAC;IACD,MAAM,KAAK,GAAG,IAAI,GAAG,CAAU,UAAU,CAAC,CAAC;IAC3C,OAAO,SAAS,OAAO,CAAC,KAAK,IAAI,OAAO,CAAC,KAAK,CAAC,GAAG,CAAC,KAAK,CAAC,CAAC,CAAC,CAAC,CAAC;AACjE,CAAC"}
+\ No newline at end of file
+diff --git a/builder/valid.mjs b/builder/valid.mjs
+index 3a08f9af7f6d578581927043ba1285b060ecb465..98af7d85e171027dcb821ffdd83e76cd8476a8b1 100644
+--- a/builder/valid.mjs	
++++ b/builder/valid.mjs
+@@ -14,54 +14,21 @@
+ // KIND, either express or implied.  See the License for the
+ // specific language governing permissions and limitations
+ // under the License.
+-import { valueToString } from '../util/pretty.mjs';
+ /**
+- * Dynamically compile the null values into an `isValid()` function whose
+- * implementation is a switch statement. Microbenchmarks in v8 indicate
+- * this approach is 25% faster than using an ES6 Map.
+- *
+- * @example
+- * console.log(createIsValidFunction([null, 'N/A', NaN]));
+- * `function (x) {
+- *     if (x !== x) return false;
+- *     switch (x) {
+- *         case null:
+- *         case "N/A":
+- *             return false;
+- *     }
+- *     return true;
+- * }`
+- *
++ * Snapshot the null sentinels without compiling JavaScript from their values.
++ * Set equality includes NaN and treats signed zeroes alike, just as the
++ * previous NaN guard and switch cases did.
+  * @ignore
+- * @param nullValues
+  */
+ export function createIsValidFunction(nullValues) {
+-    if (!nullValues || nullValues.length <= 0) {
+-        // @ts-ignore
+-        return function isValid(value) { return true; };
++    if (!nullValues || nullValues.length === 0) {
++        return function isValid() { return true; };
+     }
+-    let fnBody = '';
+-    const noNaNs = nullValues.filter((x) => x === x);
+-    if (noNaNs.length > 0) {
+-        fnBody = `
+-    switch (x) {${noNaNs.map((x) => `
+-        case ${valueToCase(x)}:`).join('')}
+-            return false;
+-    }`;
++    // This is the common vectorFromArray/LanceDB path; avoid a Set per column.
++    if (nullValues.length === 1 && nullValues[0] === null) {
++        return function isValid(value) { return value !== null; };
+     }
+-    // NaN doesn't equal anything including itself, so it doesn't work as a
+-    // switch case. Instead we must explicitly check for NaN before the switch.
+-    if (nullValues.length !== noNaNs.length) {
+-        fnBody = `if (x !== x) return false;\n${fnBody}`;
+-    }
+-    return new Function(`x`, `${fnBody}\nreturn true;`);
+-}
+-/** @ignore */
+-function valueToCase(x) {
+-    if (typeof x !== 'bigint') {
+-        return valueToString(x);
+-    }
+-    return `${valueToString(x)}n`;
++    const nulls = new Set(nullValues);
++    return function isValid(value) { return !nulls.has(value); };
+ }
+-
+ //# sourceMappingURL=valid.mjs.map
+\ No newline at end of file
+diff --git a/builder/valid.mjs.map b/builder/valid.mjs.map
+index 5e1e556a1d3a226696e8daa6aece9ab48ef8d7c4..7ab1d4fd0d2e609aa853a4ad45681ad7d5715aa5 100644
+--- a/builder/valid.mjs.map	
++++ b/builder/valid.mjs.map
+@@ -1 +1 @@
+-{"version":3,"sources":["builder/valid.ts"],"names":[],"mappings":"AAAA,6DAA6D;AAC7D,+DAA+D;AAC/D,wDAAwD;AACxD,6DAA6D;AAC7D,oDAAoD;AACpD,6DAA6D;AAC7D,6DAA6D;AAC7D,EAAE;AACF,+CAA+C;AAC/C,EAAE;AACF,6DAA6D;AAC7D,8DAA8D;AAC9D,yDAAyD;AACzD,4DAA4D;AAC5D,0DAA0D;AAC1D,qBAAqB;AAGrB,OAAO,EAAE,aAAa,EAAE,MAAM,mBAAmB,CAAC;AAElD;;;;;;;;;;;;;;;;;;;GAmBG;AACH,MAAM,UAAU,qBAAqB,CAAwC,UAAiC;IAE1G,IAAI,CAAC,UAAU,IAAI,UAAU,CAAC,MAAM,IAAI,CAAC,EAAE,CAAC;QACxC,aAAa;QACb,OAAO,SAAS,OAAO,CAAC,KAAU,IAAI,OAAO,IAAI,CAAC,CAAC,CAAC,CAAC;IACzD,CAAC;IAED,IAAI,MAAM,GAAG,EAAE,CAAC;IAChB,MAAM,MAAM,GAAG,UAAU,CAAC,MAAM,CAAC,CAAC,CAAC,EAAE,EAAE,CAAC,CAAC,KAAK,CAAC,CAAC,CAAC;IAEjD,IAAI,MAAM,CAAC,MAAM,GAAG,CAAC,EAAE,CAAC;QACpB,MAAM,GAAG;kBACC,MAAM,CAAC,GAAG,CAAC,CAAC,CAAC,EAAE,EAAE,CAAC;eACrB,WAAW,CAAC,CAAC,CAAC,GAAG,CAAC,CAAC,IAAI,CAAC,EAAE,CAAC;;MAEpC,CAAC;IACH,CAAC;IAED,uEAAuE;IACvE,2EAA2E;IAC3E,IAAI,UAAU,CAAC,MAAM,KAAK,MAAM,CAAC,MAAM,EAAE,CAAC;QACtC,MAAM,GAAG,+BAA+B,MAAM,EAAE,CAAC;IACrD,CAAC;IAED,OAAO,IAAI,QAAQ,CAAC,GAAG,EAAE,GAAG,MAAM,gBAAgB,CAA4C,CAAC;AACnG,CAAC;AAED,cAAc;AACd,SAAS,WAAW,CAAC,CAAM;IACvB,IAAI,OAAO,CAAC,KAAK,QAAQ,EAAE,CAAC;QACxB,OAAO,aAAa,CAAC,CAAC,CAAC,CAAC;IAC5B,CAAC;IACD,OAAO,GAAG,aAAa,CAAC,CAAC,CAAC,GAAG,CAAC;AAClC,CAAC","file":"valid.mjs","sourceRoot":"../src"}
+\ No newline at end of file
++{"version":3,"file":"valid.mjs","sourceRoot":"../src/","sources":["builder/valid.ts"],"names":[],"mappings":"AAAA,6DAA6D;AAC7D,+DAA+D;AAC/D,wDAAwD;AACxD,6DAA6D;AAC7D,oDAAoD;AACpD,6DAA6D;AAC7D,6DAA6D;AAC7D,EAAE;AACF,+CAA+C;AAC/C,EAAE;AACF,6DAA6D;AAC7D,8DAA8D;AAC9D,yDAAyD;AACzD,4DAA4D;AAC5D,0DAA0D;AAC1D,qBAAqB;AAIrB;;;;;GAKG;AACH,MAAM,UAAU,qBAAqB,CAAwC,UAAiC;IAC1G,IAAI,CAAC,UAAU,IAAI,UAAU,CAAC,MAAM,KAAK,CAAC,EAAE,CAAC;QACzC,OAAO,SAAS,OAAO,KAAK,OAAO,IAAI,CAAC,CAAC,CAAC,CAAC;IAC/C,CAAC;IACD,2EAA2E;IAC3E,IAAI,UAAU,CAAC,MAAM,KAAK,CAAC,IAAI,UAAU,CAAC,CAAC,CAAC,KAAK,IAAI,EAAE,CAAC;QACpD,OAAO,SAAS,OAAO,CAAC,KAAK,IAAI,OAAO,KAAK,KAAK,IAAI,CAAC,CAAC,CAAC,CAAC;IAC9D,CAAC;IACD,MAAM,KAAK,GAAG,IAAI,GAAG,CAAU,UAAU,CAAC,CAAC;IAC3C,OAAO,SAAS,OAAO,CAAC,KAAK,IAAI,OAAO,CAAC,KAAK,CAAC,GAAG,CAAC,KAAK,CAAC,CAAC,CAAC,CAAC,CAAC;AACjE,CAAC"}
+\ No newline at end of file
+diff --git a/src/builder/valid.ts b/src/builder/valid.ts
+index 942fdaec6722190d9a9e01b1dc850a6690d3bc50..cf83e6df52bd05adc1de5ed3d6f00d47f4b00029 100644
+--- a/src/builder/valid.ts	
++++ b/src/builder/valid.ts
+@@ -16,59 +16,21 @@
+ // under the License.
+ 
+ import { DataType } from '../type.js';
+-import { valueToString } from '../util/pretty.js';
+ 
+ /**
+- * Dynamically compile the null values into an `isValid()` function whose
+- * implementation is a switch statement. Microbenchmarks in v8 indicate
+- * this approach is 25% faster than using an ES6 Map.
+- *
+- * @example
+- * console.log(createIsValidFunction([null, 'N/A', NaN]));
+- * `function (x) {
+- *     if (x !== x) return false;
+- *     switch (x) {
+- *         case null:
+- *         case "N/A":
+- *             return false;
+- *     }
+- *     return true;
+- * }`
+- *
++ * Snapshot the null sentinels without compiling JavaScript from their values.
++ * Set equality includes NaN and treats signed zeroes alike, just as the
++ * previous NaN guard and switch cases did.
+  * @ignore
+- * @param nullValues
+  */
+-export function createIsValidFunction<T extends DataType = any, TNull = any>(nullValues?: ReadonlyArray<TNull>) {
+-
+-    if (!nullValues || nullValues.length <= 0) {
+-        // @ts-ignore
+-        return function isValid(value: any) { return true; };
++export function createIsValidFunction<T extends DataType = any, TNull = any>(nullValues?: ReadonlyArray<TNull>): (value: T['TValue'] | TNull) => boolean {
++    if (!nullValues || nullValues.length === 0) {
++        return function isValid() { return true; };
+     }
+-
+-    let fnBody = '';
+-    const noNaNs = nullValues.filter((x) => x === x);
+-
+-    if (noNaNs.length > 0) {
+-        fnBody = `
+-    switch (x) {${noNaNs.map((x) => `
+-        case ${valueToCase(x)}:`).join('')}
+-            return false;
+-    }`;
+-    }
+-
+-    // NaN doesn't equal anything including itself, so it doesn't work as a
+-    // switch case. Instead we must explicitly check for NaN before the switch.
+-    if (nullValues.length !== noNaNs.length) {
+-        fnBody = `if (x !== x) return false;\n${fnBody}`;
+-    }
+-
+-    return new Function(`x`, `${fnBody}\nreturn true;`) as (value: T['TValue'] | TNull) => boolean;
+-}
+-
+-/** @ignore */
+-function valueToCase(x: any) {
+-    if (typeof x !== 'bigint') {
+-        return valueToString(x);
++    // This is the common vectorFromArray/LanceDB path; avoid a Set per column.
++    if (nullValues.length === 1 && nullValues[0] === null) {
++        return function isValid(value) { return value !== null; };
+     }
+-    return `${valueToString(x)}n`;
++    const nulls = new Set<unknown>(nullValues);
++    return function isValid(value) { return !nulls.has(value); };
+ }

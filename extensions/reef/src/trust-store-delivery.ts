@@ -2,24 +2,16 @@ import type {
   PluginStateOperation,
   PluginStateOperationReceipt,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { reefPeerIdentity, type ReefPeerIdentity } from "./friend-types.js";
+import type { ReefPeerIdentity } from "./friend-types.js";
 import type {
   ReefDeliveryOperationInput,
   ReefTrustStateOperations,
 } from "./trust-state-operation.js";
-import {
-  createReefPeerAssertion,
-  validateReefPeerIdentity,
-  type ReefTrustOperationState,
-} from "./trust-store-authority.js";
+import { createReefPeerAssertion, type ReefTrustOperationState } from "./trust-store-authority.js";
 import {
   ReefOutboundDeliveryBindingSchema,
-  ReefOutboundDeliverySchema,
   ReefRejectionNoticeStateSchema,
-  ReefPeerTrustChangedError,
-  MESSAGE_ID_PATTERN,
   type ReefDeliverySettlement,
-  type ReefOutboundDeliveryPreparation,
 } from "./trust-store-format.js";
 import type { ReefRejectionRecovery } from "./types.js";
 
@@ -33,62 +25,6 @@ export function getReefRecoveryOperationState(
   recovery: ReefRejectionRecovery,
 ): ReefRecoveryOperationState | undefined {
   return recoveryStates.get(recovery);
-}
-
-export async function prepareReefOutboundDelivery(
-  operation: Operation,
-  input: ReefDeliveryOperationInput,
-): Promise<ReefOutboundDeliveryPreparation | undefined> {
-  const captured = { ...input };
-  const receipt = await operation.execute(
-    { type: "prepareDelivery", input: captured },
-    {
-      writeStores: [],
-      watchStores: [0],
-      missingValue: undefined,
-    },
-  );
-  receipt.assertCurrent();
-  const trust = receipt.value;
-  if (!trust) {
-    return undefined;
-  }
-  const identity = reefPeerIdentity(trust);
-  let assertCurrent = createReefPeerAssertion(receipt, captured.peer, trust, identity);
-  let pending = true;
-  return {
-    trust,
-    assertCurrent: () => assertCurrent(),
-    async record(binding, options = {}) {
-      if (!pending) {
-        throw new Error("Reef outbound preparation was already consumed");
-      }
-      pending = false;
-      const delivery = ReefOutboundDeliverySchema.parse({
-        ...binding,
-        ...options,
-        sentAt: Date.now(),
-      });
-      validateReefPeerIdentity(trust, captured.peer, delivery.recipient);
-      assertCurrent = () => {
-        throw new Error("Reef delivery recording did not settle");
-      };
-      const recorded = await operation.execute(
-        { type: "recordDelivery", input: { ...captured, delivery } },
-        {
-          writeStores: [1],
-          watchStores: [0],
-        },
-      );
-      if (recorded.value === "peer-changed") {
-        throw new ReefPeerTrustChangedError(captured.peer);
-      }
-      if (recorded.value === "duplicate") {
-        throw new Error(`Duplicate outbound Reef delivery id ${captured.id}`);
-      }
-      assertCurrent = createReefPeerAssertion(recorded, captured.peer, trust, identity);
-    },
-  };
 }
 
 export async function readReefOutboundDelivery(
@@ -225,16 +161,6 @@ export function createReefRejectionRecovery(
           { writeStores: [0, 1] },
         )
       ).value;
-    },
-    prepareOutboundDelivery(id) {
-      if (!MESSAGE_ID_PATTERN.test(id)) {
-        throw new Error(`Invalid Reef delivery id: ${id}`);
-      }
-      return prepareReefOutboundDelivery(operation, {
-        ...captured,
-        id,
-        deliveryKey: `${captured.peerKey}:${id}`,
-      });
     },
   };
   recoveryStates.set(recovery, {

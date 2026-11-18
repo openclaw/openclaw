@@ -33,7 +33,7 @@ const threadParticipation = createPersistentDedupeCache<SlackThreadParticipation
   persistent: {
     namespace: PERSISTENT_NAMESPACE,
     maxEntries: PERSISTENT_MAX_ENTRIES,
-    openStore: (options) => getOptionalSlackRuntime()?.state.openKeyedStore(options),
+    openStore: (options) => getOptionalSlackRuntime()?.state.openKeyedStoreV2(options),
     logError: createPluginStateErrorReporter(
       getOptionalSlackRuntime,
       "slack",

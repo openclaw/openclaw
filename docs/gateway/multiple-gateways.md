@@ -108,7 +108,7 @@ Base port = `gateway.port` (or `OPENCLAW_GATEWAY_PORT` / `--port`).
 
 - Sandbox host listener port = base + 1 when the isolated widget/MCP App host is active (unless `mcp.apps.sandboxPort` overrides it).
 - Browser control service port = base + 2 (loopback only).
-- Hosted widget documents and A2UI renderer assets are served on the Gateway HTTP server itself (same port as `gateway.port`).
+- Hosted widget documents are served on the Gateway HTTP server itself (same port as `gateway.port`).
 - Browser profile CDP ports auto-allocate from `browser control port + 9` through `+ 108`.
 
 Override any of these in config or env and you must keep them unique per instance.

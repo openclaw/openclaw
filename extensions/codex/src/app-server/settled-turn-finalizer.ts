@@ -1,9 +1,10 @@
-import type {
-  AgentHarnessV2,
-  AgentHarnessSettledTurnFinalizationResult,
+import {
+  prepareAgentRunTerminalReply,
+  projectAgentHarnessTranscriptMessageForDisplay,
+  type AgentHarnessV2,
+  type AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { resolveCodexBoundedTurnIsolation } from "./bounded-turn-isolation.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
@@ -35,7 +36,7 @@ export async function runCodexSettledTurnFinalization(
   options: CodexBoundedTurnOptions,
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   const { attempt, settledAttempt } = operation;
-  const assertActive = createNativeSessionBindingAuthority([], () =>
+  const assertActive = createNativeSessionBindingScope(() =>
     attempt.abortSignal?.throwIfAborted(),
   ).assertLegacyCurrent;
   assertActive();
@@ -45,6 +46,11 @@ export async function runCodexSettledTurnFinalization(
   }
   const { selection, data: historyItems } = finalizationContext;
   const hostAuthPlan = attempt.runtimePlan?.auth;
+  if (hostAuthPlan?.selectedAuthMode === "native-command") {
+    throw new Error(
+      "Native command auth cannot finalize through a separate host-authenticated turn; use the settled-tool fallback.",
+    );
+  }
   const authRequirement = hostAuthPlan?.modelRoute?.authRequirement;
   // Capture fixes binding/ordered-profile selection. Ordinary user-home sessions
   // intentionally authorize private side turns through the host plan instead.
@@ -100,19 +106,22 @@ export async function runCodexSettledTurnFinalization(
     provider: modelProvider,
     api: resolveCodexLocalRuntimeAttribution(attempt).api,
   };
-  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization", {
+  assertCodexPassiveTurnItems(bounded.items, bounded.submittedInput, "settled-turn finalization", {
     allowManagedHookPrompts: bounded.managedHooksEnabled,
   });
-  const text = bounded.text.trim();
-  const assistant = createAttributedCodexAssistantMessage(attribution, text, {
-    tokenUsage: bounded.usage,
-    aborted: false,
-    promptError: null,
+  const text = bounded.text;
+  const preparedTerminalReply = prepareAgentRunTerminalReply({ rawText: text });
+  const assistant = projectAgentHarnessTranscriptMessageForDisplay({
+    hidden: attempt.privateCompletion === true || attempt.trigger === "memory",
+    inputProvenance: attempt.inputProvenance,
+    message: createAttributedCodexAssistantMessage(attribution, text, {
+      tokenUsage: bounded.usage,
+      aborted: false,
+      promptError: null,
+    }),
   });
-  // The host distinguishes authored silence from missing output. Preserve the
-  // sentinel for its optional/required policy without mirroring a non-answer.
-  if (!text || isSilentReplyText(text)) {
-    return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
+  if (preparedTerminalReply.terminalReply.disposition !== "visible") {
+    return { assistant, preparedTerminalReply, ...(bounded.usage ? { usage: bounded.usage } : {}) };
   }
 
   const mirrorIdentity = `settled-finalizer:${attempt.runId}`;
@@ -151,6 +160,7 @@ export async function runCodexSettledTurnFinalization(
     typeof persistedIdempotencyKey === "string" ? persistedIdempotencyKey.trim() : "";
   return {
     assistant: persistedMessage,
+    preparedTerminalReply,
     assistantTranscriptOwned: true,
     ...(assistantTranscriptIdempotencyKey ? { assistantTranscriptIdempotencyKey } : {}),
     ...(bounded.usage ? { usage: bounded.usage } : {}),

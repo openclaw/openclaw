@@ -12,7 +12,13 @@ function target(index: number, agentId: string, depth?: number): PreparedPatchTa
     targetAgentId: agentId,
     archiveActor: undefined,
     storePath: agentId + ".sqlite",
-    initialStoreKeys: [key],
+    initialTarget: {
+      agentId,
+      storePath: agentId + ".sqlite",
+      canonicalKey: key,
+      storeKeys: [key],
+      store: {},
+    },
     lifecycleIdentities: [key],
     fullPatch: {
       key,

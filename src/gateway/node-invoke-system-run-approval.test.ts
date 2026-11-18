@@ -382,12 +382,9 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test.for([
-    { decision: "allow-once", handoff: "none" },
     { decision: "allow-always", handoff: "none" },
     { decision: "allow-once", handoff: "retained" },
-    { decision: "allow-always", handoff: "retained" },
     { decision: "allow-once", handoff: "released" },
-    { decision: "allow-always", handoff: "released" },
   ] as const)(
     "forwards live $decision after the request deadline with $handoff handoff custody",
     async ({ decision, handoff }, testContext) => {

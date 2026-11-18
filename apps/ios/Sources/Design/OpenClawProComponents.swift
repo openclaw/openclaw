@@ -63,6 +63,26 @@ struct ProCard<Content: View>: View {
 }
 
 extension View {
+    @ViewBuilder
+    func openClawToolbarGlyphScale() -> some View {
+        if #available(iOS 27.1, *) {
+            self.modifier(OpenClawVerticalToolbarGlyphScale())
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func openClawToolbarHitTarget(preservesIntrinsicWidth: Bool = false) -> some View {
+        if #available(iOS 27.1, *) {
+            self.modifier(OpenClawToolbarHitTarget(preservesIntrinsicWidth: preservesIntrinsicWidth))
+        } else if preservesIntrinsicWidth {
+            self.frame(minHeight: 44)
+        } else {
+            self.frame(width: 44, height: 44)
+        }
+    }
+
     func proPanelSurface(
         tint: Color? = nil,
         radius: CGFloat = OpenClawProMetric.cardRadius,
@@ -91,6 +111,34 @@ extension View {
 
     func openClawGlassSurface() -> some View {
         self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
+    }
+}
+
+@available(iOS 27.1, *)
+private struct OpenClawVerticalToolbarGlyphScale: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+
+    func body(content: Content) -> some View {
+        // Enlarge only the artwork inside its matching 52pt target. Follow
+        // the system bar's actual axis instead of guessing from screen width.
+        content.scaleEffect(
+            self.verticalEdge != nil && UIDevice.current.userInterfaceIdiom == .phone ? 1.3 : 1)
+    }
+}
+
+@available(iOS 27.1, *)
+private struct OpenClawToolbarHitTarget: ViewModifier {
+    @Environment(\.toolbarVerticalEdge) private var verticalEdge
+    let preservesIntrinsicWidth: Bool
+
+    func body(content: Content) -> some View {
+        let isSideToolbar = self.verticalEdge != nil && UIDevice.current.userInterfaceIdiom == .phone
+        let size: CGFloat = isSideToolbar ? 52 : 44
+        content.frame(
+            minWidth: isSideToolbar || !self.preservesIntrinsicWidth ? size : nil,
+            maxWidth: isSideToolbar || !self.preservesIntrinsicWidth ? size : nil,
+            minHeight: size,
+            maxHeight: self.preservesIntrinsicWidth && !isSideToolbar ? nil : size)
     }
 }
 
@@ -146,29 +194,71 @@ struct OpenClawSidebarHeaderAction {
     let systemName: String
     let accessibilityLabel: OpenClawTextValue
     var accessibilityIdentifier: String?
+    /// Set for a drawer's reveal control. The action stays non-nil while the drawer is
+    /// presented, so a toggle does not rebuild the destination; readers of `isShown`
+    /// hide the control instead.
+    var drawerPresentation: RootSidebarPresentation?
     let action: () -> Void
+
+    /// A presented drawer covers the destination, so its reveal control leaves the header.
+    /// Read this only in small views and modifiers: the reader re-evaluates on every toggle.
+    var isShown: Bool {
+        self.drawerPresentation?.isPresented != true
+    }
+}
+
+/// Builds `content` only while the sidebar reveal control is shown.
+struct OpenClawSidebarRevealContent<Content: View>: View {
+    let action: OpenClawSidebarHeaderAction?
+    @ViewBuilder let content: (OpenClawSidebarHeaderAction) -> Content
+
+    var body: some View {
+        if let action = self.action, action.isShown {
+            self.content(action)
+        }
+    }
+}
+
+/// Sets navigation bar visibility from whether the sidebar reveal control is shown.
+struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
+    let action: OpenClawSidebarHeaderAction?
+    let visibility: (_ isRevealShown: Bool) -> Visibility
+
+    func body(content: Content) -> some View {
+        content.toolbar(self.visibility(self.action?.isShown == true), for: .navigationBar)
+    }
 }
 
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
     var body: some View {
-        self.identified(self.button.buttonStyle(.plain))
+        if self.action.isShown {
+            self.identified(self.button.buttonStyle(.plain))
+                .transition(.opacity)
+        }
     }
 
     private var button: some View {
         Button(action: self.action.action) {
-            self.icon
+            Label {
+                self.action.accessibilityLabel.text
+                    .font(OpenClawType.body)
+            } icon: {
+                self.icon
+            }
+            .labelStyle(.iconOnly)
         }
-        .frame(width: 44, height: 44)
+        .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .accessibilityLabel(self.action.accessibilityLabel.text)
     }
 
     private var icon: some View {
         Image(systemName: self.action.systemName)
-            .font(OpenClawType.subheadSemiBold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundStyle(OpenClawBrand.accent)
+            .openClawToolbarGlyphScale()
             .frame(
                 width: OpenClawProMetric.compactControlSize,
                 height: OpenClawProMetric.compactControlSize)
@@ -190,6 +280,16 @@ struct OpenClawSidebarToolbarItem: ToolbarContent {
 
     @ToolbarContentBuilder
     var body: some ToolbarContent {
+        if self.action.isShown {
+            if #available(iOS 27.1, *) {
+                self.item.axisBehavior(.verticalPreferred).visibilityPriority(.high)
+            } else {
+                self.item
+            }
+        }
+    }
+
+    private var item: some ToolbarContent {
         ToolbarItem(placement: self.placement) {
             OpenClawSidebarControlButton(action: self.action)
         }

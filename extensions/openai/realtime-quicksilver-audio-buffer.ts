@@ -2,6 +2,7 @@ import {
   createStreamingPcmResampler,
   mulawToPcm,
   pcmToMulaw,
+  type RealtimeVoiceAudioOutputPort,
   type RealtimeVoiceBridgeCreateRequest,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 
@@ -24,6 +25,16 @@ export function assertOpenAIQuicksilverPcmOutput(
   ) {
     throw new Error("GPT-Live direct audio output requires mono PCM16 at 24 kHz");
   }
+}
+
+export function closeOpenAIQuicksilverAudioOutput(
+  output: RealtimeVoiceAudioOutputPort | undefined,
+): undefined {
+  if (output) {
+    Atomics.store(new Int32Array(output.state), 0, 1);
+    output.port.close();
+  }
+  return undefined;
 }
 
 /** Keeps telephony resampling state and its delayed output tail with the audio adapter. */
@@ -84,8 +95,7 @@ export class OpenAIQuicksilverAudioClock {
       );
       nextFrameAt += (skippedFrames + 1) * OPENAI_QUICKSILVER_AUDIO_FRAME_DURATION_MS;
       // Publish before delivery so synchronous teardown also cancels the first tick's successor.
-      this.timer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now()));
-      this.timer.unref?.();
+      this.timer = setTimeout(tick, Math.max(0, nextFrameAt - performance.now())).unref();
       this.onFrame(skippedFrames);
     };
     tick();

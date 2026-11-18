@@ -80,11 +80,11 @@ function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: 
   appendField("security", "Security");
   appendField("ask", "Ask");
   lines.push(`Expires in: ${formatExecApprovalExpiresIn(request.expiresAtMs, nowMs)}`);
-  lines.push("Mode: foreground (interactive approvals available in this chat).");
+  lines.push("Approval: awaiting your decision in this chat.");
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
-      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
+      : "Approval covers only the action and duration described above. Additional independent actions require their own authorization.",
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {

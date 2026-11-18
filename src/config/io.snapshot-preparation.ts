@@ -1,9 +1,8 @@
+import { resolveDirectBundledProviderPolicySurface } from "../plugins/provider-policy-surface.js";
 import { hasAnthropicDefaultSignal } from "./defaults.js";
 import type {
   ConfigSnapshotMetadataLoader,
   ConfigSnapshotPreparationContext,
-  MaterializationRequest,
-  MetadataRequest,
   PreparedValidation,
   ValidationRequest,
 } from "./io.snapshot-preparation.types.js";
@@ -13,7 +12,6 @@ import {
   validateConfigObjectWithPluginsAsync,
   validateConfigObjectWithStrictFactsAsync,
 } from "./validation.js";
-import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 /** Preserve the ordinary reader's lazy defaults, including an unused manifest loader. */
 export function materializeConfigSnapshotDefaults(
@@ -29,30 +27,20 @@ export function materializeConfigSnapshotDefaults(
   });
 }
 
-/** Supplied by a native Gateway host, never selected by generic config readers. */
-export function prepareHostConfigSnapshot(request: ValidationRequest): Promise<PreparedValidation>;
-export function prepareHostConfigSnapshot(request: MaterializationRequest): Promise<RuntimeConfig>;
-export function prepareHostConfigSnapshot(
-  request: MetadataRequest,
-): Promise<PreparedConfigValidationPluginMetadata>;
-export async function prepareHostConfigSnapshot(
-  request: ValidationRequest | MaterializationRequest | MetadataRequest,
-): Promise<PreparedValidation | RuntimeConfig | PreparedConfigValidationPluginMetadata> {
-  if (request.kind === "metadata") {
-    return await request.metadata.loadAsync(request.config);
+export async function materializeConfigSnapshotDefaultsAsync(
+  context: ConfigSnapshotPreparationContext,
+  config: OpenClawConfig,
+  metadata: ConfigSnapshotMetadataLoader,
+): Promise<RuntimeConfig> {
+  if (
+    context.options.pluginValidation !== "core-only" &&
+    (config.models?.providers ||
+      (hasAnthropicDefaultSignal(config, context.deps.env) &&
+        !resolveDirectBundledProviderPolicySurface("anthropic")))
+  ) {
+    await metadata.loadAsync(config);
   }
-  const { context, metadata } = request;
-  if (request.kind === "materialize") {
-    if (
-      context.options.pluginValidation !== "core-only" &&
-      (request.config.models?.providers ||
-        hasAnthropicDefaultSignal(request.config, context.deps.env))
-    ) {
-      await metadata.loadAsync(request.config);
-    }
-    return materializeConfigSnapshotDefaults(context, request.config, metadata);
-  }
-  return prepareConfigSnapshotValidation(request);
+  return materializeConfigSnapshotDefaults(context, config, metadata);
 }
 
 /** Runtime validation consumes canonical config; Doctor supplies its own pending facts. */

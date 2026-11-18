@@ -1,15 +1,19 @@
-import {
-  SessionsCreateParamsSchema,
-  SessionPermissionModeSchema,
-  SessionToolOverridesSchema,
-} from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString as isNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Value } from "typebox/value";
 import type { HumanMention } from "../chat/chat-types.ts";
 import { readHumanMentions } from "../chat/human-mentions.ts";
 import { formatUiError } from "../format-error.ts";
+import {
+  isSessionCyberAccessProgram,
+  isSessionDeviceFolder,
+  isSessionFastMode,
+  isSessionPermissionMode,
+  isSessionRepository,
+  isSessionTitleSource,
+  isSessionToolOverrides,
+  isSessionWorktreeSource,
+} from "../protocol-validators.generated/session-input.js";
 import type { SessionCreateParams } from "./create.ts";
 import {
   listSessionPlacementRecoveryStorageKeys,
@@ -17,7 +21,7 @@ import {
   sessionPlacementRecoveryExactStorageKeys,
 } from "./session-placement-recovery-storage-key.ts";
 
-export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry" | "resend";
 
 export type SessionPlacementTarget =
   | { kind: "profile"; profileId: string; os?: string; machineClass?: string; required?: true }
@@ -31,12 +35,22 @@ export type SessionPlacementCreateParams = Omit<SessionCreateParams, "execNode">
   projectId?: string;
   visibility?: "draft";
 } & (
-    | { worktree: true; repository?: undefined }
-    | { repository: NonNullable<SessionCreateParams["repository"]>; worktree?: undefined }
+    | {
+        deviceFolder: NonNullable<SessionCreateParams["deviceFolder"]>;
+        worktree?: undefined;
+        repository?: undefined;
+      }
+    | { worktree: true; repository?: undefined; deviceFolder?: undefined }
+    | {
+        repository: NonNullable<SessionCreateParams["repository"]>;
+        worktree?: undefined;
+        deviceFolder?: undefined;
+      }
   );
 
 type SessionPlacementSubmission = {
   sessionKey: string;
+  sessionId?: string;
   messageId: string;
   message: string;
   mentions?: readonly HumanMention[];
@@ -53,7 +67,7 @@ export type SessionPlacementPendingRecovery = SessionPlacementSubmission & {
 };
 export type SessionPlacementPausedRecovery = SessionPlacementSubmission & {
   phase: "paused";
-  reason: "not-sent" | "rejected" | "unconfirmed";
+  reason: "not-sent" | "rejected";
   error: string;
 };
 export type SessionPlacementRecovery =
@@ -85,10 +99,12 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "worktree",
   "worktreeSource",
   "repository",
+  "deviceFolder",
   "incognito",
   "visibility",
   "permissionMode",
   "fastMode",
+  "cyberAccessProgram",
   "toolOverrides",
   ...PLACEMENT_CREATE_STRING_FIELDS,
 ]);
@@ -108,32 +124,40 @@ export function parseSessionPlacementCreateParams(
     record.agentId !== agentId ||
     record.message !== "" ||
     (record.worktreeSource !== undefined &&
-      (!Value.Check(SessionsCreateParamsSchema.properties.worktreeSource, record.worktreeSource) ||
+      (!isSessionWorktreeSource(record.worktreeSource) ||
         record.worktree !== true ||
         record.repository !== undefined ||
         record.projectId !== undefined ||
         record.cwd !== undefined ||
         record.worktreeBaseRef !== undefined ||
         record.catalogId !== undefined)) ||
-    (record.repository === undefined
-      ? record.worktree !== true
-      : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
+    (record.deviceFolder !== undefined
+      ? !isSessionDeviceFolder(record.deviceFolder) ||
         record.worktree !== undefined ||
+        record.worktreeSource !== undefined ||
+        record.repository !== undefined ||
         record.projectId !== undefined ||
         record.cwd !== undefined ||
         record.worktreeBaseRef !== undefined ||
         record.worktreeName !== undefined ||
-        record.catalogId !== undefined) ||
+        record.catalogId !== undefined
+      : record.repository === undefined
+        ? record.worktree !== true
+        : !isSessionRepository(record.repository) ||
+          record.worktree !== undefined ||
+          record.projectId !== undefined ||
+          record.cwd !== undefined ||
+          record.worktreeBaseRef !== undefined ||
+          record.worktreeName !== undefined ||
+          record.catalogId !== undefined) ||
     (record.incognito !== undefined && record.incognito !== true) ||
     (record.visibility !== undefined && record.visibility !== "draft") ||
-    (record.fastMode !== undefined &&
-      !Value.Check(SessionsCreateParamsSchema.properties.fastMode, record.fastMode)) ||
-    (record.permissionMode !== undefined &&
-      !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
-    (record.toolOverrides !== undefined &&
-      !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
-    (record.titleSource !== undefined &&
-      !Value.Check(SessionsCreateParamsSchema.properties.titleSource, record.titleSource)) ||
+    (record.fastMode !== undefined && !isSessionFastMode(record.fastMode)) ||
+    (record.cyberAccessProgram !== undefined &&
+      !isSessionCyberAccessProgram(record.cyberAccessProgram)) ||
+    (record.permissionMode !== undefined && !isSessionPermissionMode(record.permissionMode)) ||
+    (record.toolOverrides !== undefined && !isSessionToolOverrides(record.toolOverrides)) ||
+    (record.titleSource !== undefined && !isSessionTitleSource(record.titleSource)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -204,12 +228,16 @@ function validateSessionPlacementRecovery(
   if (
     value.createParams?.incognito === true ||
     !isNonEmptyString(value.sessionKey) ||
+    (value.sessionId !== undefined && !isNonEmptyString(value.sessionId)) ||
     (expectedSessionKey !== undefined && value.sessionKey !== expectedSessionKey) ||
     !isNonEmptyString(value.messageId) ||
     typeof value.message !== "string" ||
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !target ||
+    (value.createParams?.deviceFolder !== undefined &&
+      (target.kind !== "device" ||
+        target.deviceId !== value.createParams.deviceFolder?.deviceId)) ||
     !isNonEmptyString(value.agentId) ||
     value.gatewayUrl !== gatewayUrl ||
     value.recoveryScope !== recoveryScope ||
@@ -218,9 +246,7 @@ function validateSessionPlacementRecovery(
       value.phase !== "sending" &&
       value.phase !== "paused") ||
     (value.phase === "paused" &&
-      ((value.reason !== "not-sent" &&
-        value.reason !== "rejected" &&
-        value.reason !== "unconfirmed") ||
+      (!isNonEmptyString(value.reason) ||
         !isNonEmptyString(value.error) ||
         value.error.length > SESSION_PLACEMENT_ERROR_MAX_LENGTH)) ||
     (value.phase === "creating" &&
@@ -239,6 +265,9 @@ function validateSessionPlacementRecovery(
   return {
     ...recovery,
     target,
+    ...(value.phase === "paused"
+      ? { reason: value.reason === "rejected" ? "rejected" : "not-sent" }
+      : {}),
     ...(mentions ? { mentions } : {}),
   } as SessionPlacementRecovery; // SAFETY: every recovery field and target were validated.
 }
@@ -246,7 +275,7 @@ function validateSessionPlacementRecovery(
 function removeSessionPlacementRecoveryRow(storage: Storage, key: string): boolean {
   try {
     storage.removeItem(key);
-    return storage.getItem(key) === null;
+    return true;
   } catch {
     // Recovery state is best-effort to remove after completion or validation failure.
     return false;
@@ -317,20 +346,8 @@ function relocateSessionPlacementRecoveryRow(
     }
     // Relocate instead of copying so a full store needs no duplicate capacity.
     storage.removeItem(sourceKey);
-    if (storage.getItem(sourceKey) !== null) {
-      return null;
-    }
     storage.setItem(key, serialized);
-    const relocated = readOwnedSessionPlacementRecovery(
-      storage,
-      key,
-      recovery.gatewayUrl,
-      recovery.recoveryScope,
-      recovery.sessionKey,
-    );
-    if (relocated) {
-      return relocated;
-    }
+    return recovery;
   } catch {
     // The original bytes are restored below so a later attempt can retry.
   }
@@ -474,9 +491,7 @@ export function writeSessionPlacementRecovery(recovery: SessionPlacementRecovery
       );
     }
     storage.setItem(key, JSON.stringify(normalized));
-    return Boolean(
-      readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope, sessionKey),
-    );
+    return true;
   });
 }
 
@@ -569,16 +584,13 @@ export function clearSessionPlacementRecovery(
   });
 }
 
-/** Paused records cannot be executed by older readers, which reject unknown phases. */
 export function pauseSessionPlacementRecovery(
   recovery: SessionPlacementRecovery,
   error: string,
   persistent: boolean,
   reason: SessionPlacementPausedRecovery["reason"] = recovery.phase === "paused"
     ? recovery.reason
-    : recovery.phase === "sending"
-      ? "unconfirmed"
-      : "not-sent",
+    : "not-sent",
 ): { recovery: SessionPlacementPausedRecovery; persisted: boolean } {
   const paused: SessionPlacementPausedRecovery = {
     ...recovery,

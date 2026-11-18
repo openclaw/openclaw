@@ -4,6 +4,7 @@ import {
   freezeDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
+import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
 import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
@@ -31,6 +32,10 @@ type AttemptToolRunFacts = Pick<
   | "senderUsername"
   | "senderE164"
   | "senderIsOwner"
+  | "gitContributorProfileId"
+  | "requesterOrigin"
+  | "operatorProfileId"
+  | "conversationId"
   | "scheduledToolPolicy"
   | "approvalReviewerDeviceId"
   | "currentChannelId"
@@ -40,18 +45,20 @@ type AttemptToolRunFacts = Pick<
   | "replyToMode"
   | "hasRepliedRef"
   | "sourceReplyDeliveryMode"
+  | "messageToolFinalByDefault"
   | "taskSuggestionDeliveryMode"
 >;
 
 /**
  * Builds the shared tool-run context for embedded and plugin harness attempts.
+ * Pass per-run overrides separately to avoid copying the complete attempt.
  */
 export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
     model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
+    thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
-    continuesConversation?: boolean;
     jobId?: string;
     memoryFlushWritePath?: string;
     memoryFlushTools?: RunEmbeddedAgentParams["memoryFlushTools"];
@@ -62,13 +69,22 @@ export function buildEmbeddedAttemptToolRunContext(
     conversationToolPolicy?: GroupToolPolicyConfig;
     trace?: DiagnosticTraceContext;
     currentInboundAudio?: boolean;
+    sessionId?: string;
+    sessionKey?: string;
     replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
   },
+  overrides: { forceMessageTool?: boolean; trace?: DiagnosticTraceContext } = params,
 ) {
-  const { currentInboundAudio, replyOperation } = params;
+  const { currentInboundAudio } = params;
+  const currentOwner = getCurrentSessionControllerOwner();
+  const replyOperation =
+    params.replyOperation ??
+    (currentOwner?.sessionId === params.sessionId && currentOwner?.key === params.sessionKey
+      ? currentOwner
+      : undefined);
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
-    forceMessageTool: params.forceMessageTool,
+    forceMessageTool: overrides.forceMessageTool,
     forceToolNames:
       params.swarmCollector && params.swarmOutputSchema ? ["structured_output"] : undefined,
   });
@@ -93,6 +109,10 @@ export function buildEmbeddedAttemptToolRunContext(
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
     senderIsOwner: params.senderIsOwner,
+    gitContributorProfileId: params.gitContributorProfileId,
+    requesterOrigin: params.requesterOrigin,
+    operatorProfileId: params.operatorProfileId,
+    conversationId: params.conversationId,
     scheduledToolPolicy: params.scheduledToolPolicy,
     approvalReviewerDeviceId: params.approvalReviewerDeviceId,
     currentChannelId: params.currentChannelId,
@@ -102,14 +122,15 @@ export function buildEmbeddedAttemptToolRunContext(
     replyToMode: params.replyToMode,
     hasRepliedRef: params.hasRepliedRef,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+    messageToolFinalByDefault: params.messageToolFinalByDefault,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
+    requesterThinkingExplicit: params.thinkingExplicit,
     // modelId may still be a configured alias; children need the prepared identity.
     requesterModel: params.model
       ? { provider: params.model.provider, model: params.model.id }
       : undefined,
     trigger: params.trigger,
-    continuesConversation: params.continuesConversation,
     jobId: params.jobId,
     memoryFlushWritePath: params.memoryFlushWritePath,
     memoryFlushTools: params.memoryFlushTools,
@@ -125,6 +146,6 @@ export function buildEmbeddedAttemptToolRunContext(
       : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
     // rewrite the facts attached to tool calls already in flight.
-    ...(params.trace ? { trace: freezeDiagnosticTraceContext(params.trace) } : {}),
+    ...(overrides.trace ? { trace: freezeDiagnosticTraceContext(overrides.trace) } : {}),
   };
 }

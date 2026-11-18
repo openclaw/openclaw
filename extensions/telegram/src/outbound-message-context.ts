@@ -53,7 +53,6 @@ export async function recordOutboundMessageForPromptContext(params: {
   messageThreadId?: number;
   /** Effective server-owned thread for the successful provider send. */
   successfulSendThread?: TelegramThreadSpec;
-  promptContextTimestampMs?: number;
   promptContextProjection?: TelegramPromptContextProjection;
   /** Pre-resolved account owner from the active Telegram runtime. */
   ownerAgentId?: string;
@@ -75,9 +74,6 @@ export async function recordOutboundMessageForPromptContext(params: {
     const cacheMessage: TelegramOutboundPromptContextMessage = {
       ...params.message,
       message_id: params.messageId,
-      ...(params.promptContextTimestampMs !== undefined
-        ? { openclaw_prompt_context_timestamp_ms: params.promptContextTimestampMs }
-        : {}),
       date:
         typeof params.message.date === "number" && Number.isFinite(params.message.date)
           ? params.message.date

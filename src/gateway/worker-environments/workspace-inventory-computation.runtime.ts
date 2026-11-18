@@ -26,28 +26,6 @@ import { gitFileMode, type WorkerWorkspaceManifestEntry } from "./workspace-mani
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 
-/** Exact rsync exemptions, prepared once without walking input file contents. */
-async function readStagedInputDirectories(rootDir: string): Promise<string[]> {
-  const root = await fsRoot(rootDir);
-  const inbound = await root.stat("media/inbound").catch(() => undefined);
-  if (!inbound?.isDirectory || inbound.isSymbolicLink) {
-    return [];
-  }
-  const isStagedInput = createStagedInputPathMatcher(root);
-  const directories: string[] = [];
-  let candidates = 0;
-  for await (const entry of await fs.opendir(path.join(rootDir, "media/inbound"))) {
-    if (++candidates > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw workspaceInventoryError("Cloud workspace has too many entries");
-    }
-    const directory = stagedInputPathDirectory(`media/inbound/${entry.name}`);
-    if (entry.isDirectory() && directory && (await isStagedInput(directory))) {
-      directories.push(directory);
-    }
-  }
-  return directories.toSorted();
-}
-
 function createInventoryPathWriter() {
   let records: string[] = [];
   let bytes = 0;
@@ -126,186 +104,201 @@ async function* readBoundedGitPathCandidates(filePath: string): AsyncGenerator<s
   }
 }
 
-async function selectTransferPaths(params: {
-  gitRoot: string;
-  eligiblePath: string;
-  ignoredPath: string;
-  selectedPath: string;
-}): Promise<void> {
-  const canonicalRoot = await fs.realpath(params.gitRoot);
-  const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
-  const manifestPaths = new Set<string>();
-  const emptyManifestBytes = Buffer.byteLength(
-    JSON.stringify({ version: 1, baseCommit: "0".repeat(64), entries: [] }),
-  );
-  let manifestPathBytes = 0;
-  let transferPathBytes = 0;
-  let manifestEntryBytes = 0;
-  let eligibleBytes = 0;
-  const assertBudget = (): void => {
-    const manifestEntries = manifestPaths.size;
-    if (manifestEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
-      throw workspaceInventoryError(
-        `Cloud workspace inventory exceeds ${MAX_WORKSPACE_INVENTORY_ENTRIES} manifest entries; reduce eligible files or narrow .worktreeinclude`,
-      );
-    }
-    if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw workspaceInventoryError(
-        "Cloud workspace manifest paths exceed the 64 MiB metadata limit; reduce eligible files or shorten their paths",
-      );
-    }
-    if (transferPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
-      throw workspaceInventoryError(
-        "Cloud workspace eligible paths exceed the 64 MiB metadata limit; reduce eligible files or narrow .worktreeinclude",
-      );
-    }
-    if (
-      emptyManifestBytes + manifestEntryBytes + Math.max(0, manifestEntries - 1) >
-      MAX_WORKSPACE_MANIFEST_BYTES
-    ) {
-      throw workspaceInventoryError(
-        "Cloud workspace manifest exceeds the 64 MiB limit; reduce eligible files or shorten their paths",
-      );
-    }
-    if (eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
-      throw workspaceInventoryError(
-        "Cloud workspace eligible content exceeds the 4 GiB limit; remove large eligible files or ignore them",
-      );
-    }
-  };
-  const addEntry = (entry: WorkerWorkspaceInventoryEntry): void => {
-    if (manifestPaths.has(entry.path)) {
-      return;
-    }
-    manifestPaths.add(entry.path);
-    manifestPathBytes += Buffer.byteLength(entry.path);
-    eligibleBytes +=
-      entry.type === "file"
-        ? entry.size
-        : entry.type === "symlink"
-          ? Buffer.byteLength(entry.target)
-          : 0;
-    manifestEntryBytes += Buffer.byteLength(JSON.stringify(entry));
-    assertBudget();
-  };
-  const transferredPaths = new Set<string>();
-  const writer = createInventoryPathWriter();
-  const inspectFile = async (file: string): Promise<WorkerWorkspaceManifestEntry | undefined> => {
-    if (isDerivedWorkspacePath(file, await isStagedInput(file)) || transferredPaths.has(file)) {
-      return undefined;
-    }
-    const absolute = path.join(canonicalRoot, file);
-    const stats = (() => {
-      try {
-        return lstatSync(absolute);
-      } catch (error) {
-        if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
-          return undefined;
-        }
-        throw error;
-      }
-    })();
-    // Gitlinks are directories. Keep their commit in the base repository without
-    // recursively copying nested repositories or their credential-bearing metadata.
-    if (!stats || (!stats.isFile() && !stats.isSymbolicLink())) {
-      return undefined;
-    }
-    if (stats.isSymbolicLink()) {
-      // Mirrors the remote manifest guard, but before transfer: macOS openrsync
-      // stat-fails escaping links with an opaque error instead of copying them.
-      const symlinkTarget = readlinkSync(absolute);
-      if (!isPortableRootContainedSymlink(canonicalRoot, file, symlinkTarget)) {
-        throw workspaceInventoryError(
-          `Cloud workspace symlink is not portable or escapes the sync root: ${sliceUtf16Safe(file, 0, 160)}`,
-        );
-      }
-      return { path: file, type: "symlink", mode: 0o777, target: symlinkTarget };
-    }
-    return {
-      path: file,
-      type: "file",
-      mode: gitFileMode(stats.mode),
-      size: stats.size,
-      sha256: "0".repeat(64),
-    };
-  };
-  async function* candidates() {
-    yield* readBoundedGitPathCandidates(params.eligiblePath);
-    const selected = readBoundedGitPathCandidates(params.selectedPath);
-    try {
-      let selectedItem = await selected.next();
-      for await (const file of readBoundedGitPathCandidates(params.ignoredPath)) {
-        while (
-          !selectedItem.done &&
-          Buffer.compare(Buffer.from(selectedItem.value), Buffer.from(file)) < 0
-        ) {
-          selectedItem = await selected.next();
-        }
-        if ((await isStagedInput(file)) || (!selectedItem.done && selectedItem.value === file)) {
-          yield file;
-        }
-      }
-      while (!selectedItem.done) {
-        selectedItem = await selected.next();
-      }
-    } finally {
-      await selected.return(undefined);
-    }
-  }
-  for await (const file of candidates()) {
-    const entry = await inspectFile(file);
-    if (!entry) {
-      continue;
-    }
-    transferredPaths.add(file);
-    for (const ancestor of workspacePathAncestors(file)) {
-      addEntry({ path: ancestor, type: "directory", mode: 0o700 });
-    }
-    addEntry(entry);
-    transferPathBytes += Buffer.byteLength(file) + 1;
-    assertBudget();
-    const pendingWrite = writer.append(file);
-    if (pendingWrite) {
-      await pendingWrite;
-    }
-  }
-  await writer.flush();
-}
-
-async function filterExistingPaths(params: {
-  gitRoot: string;
-  preparedListPath: string;
-}): Promise<void> {
-  const writer = createInventoryPathWriter();
-  for await (const file of readBoundedGitPathCandidates(params.preparedListPath)) {
-    let stats;
-    try {
-      stats = lstatSync(path.join(params.gitRoot, file));
-    } catch (error) {
-      if (!hasNodeErrorCode(error, "ENOENT")) {
-        throw error;
-      }
-    }
-    if (stats?.isFile() || stats?.isSymbolicLink()) {
-      const pendingWrite = writer.append(file);
-      if (pendingWrite) {
-        await pendingWrite;
-      }
-    }
-  }
-  await writer.flush();
-}
-
 export async function executeWorkspaceInventoryComputation(
   command: WorkspaceInventoryComputationCommand,
 ): Promise<WorkspaceInventoryComputationResult> {
   switch (command.type) {
-    case "workspace.inventory.staged-directories":
-      return await readStagedInputDirectories(command.input.rootDir);
-    case "workspace.inventory.select":
-      return await selectTransferPaths(command.input);
-    case "workspace.inventory.existing":
-      return await filterExistingPaths(command.input);
+    case "workspace.inventory.staged-directories": {
+      // Exact rsync exemptions, prepared once without walking input file contents.
+      const rootDir = command.input.rootDir;
+      const root = await fsRoot(rootDir);
+      const inbound = await root.stat("media/inbound").catch(() => undefined);
+      if (!inbound?.isDirectory || inbound.isSymbolicLink) {
+        return [];
+      }
+      const isStagedInput = createStagedInputPathMatcher(root);
+      const directories: string[] = [];
+      let candidates = 0;
+      for await (const entry of await fs.opendir(path.join(rootDir, "media/inbound"))) {
+        if (++candidates > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+          throw workspaceInventoryError("Cloud workspace has too many entries");
+        }
+        const directory = stagedInputPathDirectory(`media/inbound/${entry.name}`);
+        if (entry.isDirectory() && directory && (await isStagedInput(directory))) {
+          directories.push(directory);
+        }
+      }
+      return directories.toSorted();
+    }
+    case "workspace.inventory.select": {
+      const params = command.input;
+      const canonicalRoot = await fs.realpath(params.gitRoot);
+      const isStagedInput = createStagedInputPathMatcher(await fsRoot(canonicalRoot));
+      const manifestPaths = new Set<string>();
+      const emptyManifestBytes = Buffer.byteLength(
+        JSON.stringify({ version: 1, baseCommit: "0".repeat(64), entries: [] }),
+      );
+      let manifestPathBytes = 0;
+      let transferPathBytes = 0;
+      let manifestEntryBytes = 0;
+      let eligibleBytes = 0;
+      const assertBudget = (): void => {
+        const manifestEntries = manifestPaths.size;
+        if (manifestEntries > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+          throw workspaceInventoryError(
+            `Cloud workspace inventory exceeds ${MAX_WORKSPACE_INVENTORY_ENTRIES} manifest entries; reduce eligible files or narrow .worktreeinclude`,
+          );
+        }
+        if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+          throw workspaceInventoryError(
+            "Cloud workspace manifest paths exceed the 64 MiB metadata limit; reduce eligible files or shorten their paths",
+          );
+        }
+        if (transferPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
+          throw workspaceInventoryError(
+            "Cloud workspace eligible paths exceed the 64 MiB metadata limit; reduce eligible files or narrow .worktreeinclude",
+          );
+        }
+        if (
+          emptyManifestBytes + manifestEntryBytes + Math.max(0, manifestEntries - 1) >
+          MAX_WORKSPACE_MANIFEST_BYTES
+        ) {
+          throw workspaceInventoryError(
+            "Cloud workspace manifest exceeds the 64 MiB limit; reduce eligible files or shorten their paths",
+          );
+        }
+        if (eligibleBytes > MAX_WORKSPACE_INVENTORY_TOTAL_BYTES) {
+          throw workspaceInventoryError(
+            "Cloud workspace eligible content exceeds the 4 GiB limit; remove large eligible files or ignore them",
+          );
+        }
+      };
+      const addEntry = (entry: WorkerWorkspaceInventoryEntry): void => {
+        if (manifestPaths.has(entry.path)) {
+          return;
+        }
+        manifestPaths.add(entry.path);
+        manifestPathBytes += Buffer.byteLength(entry.path);
+        eligibleBytes +=
+          entry.type === "file"
+            ? entry.size
+            : entry.type === "symlink"
+              ? Buffer.byteLength(entry.target)
+              : 0;
+        manifestEntryBytes += Buffer.byteLength(JSON.stringify(entry));
+        assertBudget();
+      };
+      const transferredPaths = new Set<string>();
+      const writer = createInventoryPathWriter();
+      const inspectFile = async (
+        file: string,
+      ): Promise<WorkerWorkspaceManifestEntry | undefined> => {
+        if (isDerivedWorkspacePath(file, await isStagedInput(file)) || transferredPaths.has(file)) {
+          return undefined;
+        }
+        const absolute = path.join(canonicalRoot, file);
+        const stats = (() => {
+          try {
+            return lstatSync(absolute);
+          } catch (error) {
+            if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
+              return undefined;
+            }
+            throw error;
+          }
+        })();
+        // Gitlinks are directories. Keep their commit in the base repository without
+        // recursively copying nested repositories or their credential-bearing metadata.
+        if (!stats || (!stats.isFile() && !stats.isSymbolicLink())) {
+          return undefined;
+        }
+        if (stats.isSymbolicLink()) {
+          // Mirrors the remote manifest guard, but before transfer: macOS openrsync
+          // stat-fails escaping links with an opaque error instead of copying them.
+          const symlinkTarget = readlinkSync(absolute);
+          if (!isPortableRootContainedSymlink(canonicalRoot, file, symlinkTarget)) {
+            throw workspaceInventoryError(
+              `Cloud workspace symlink is not portable or escapes the sync root: ${sliceUtf16Safe(file, 0, 160)}`,
+            );
+          }
+          return { path: file, type: "symlink", mode: 0o777, target: symlinkTarget };
+        }
+        return {
+          path: file,
+          type: "file",
+          mode: gitFileMode(stats.mode),
+          size: stats.size,
+          sha256: "0".repeat(64),
+        };
+      };
+      async function* candidates() {
+        yield* readBoundedGitPathCandidates(params.eligiblePath);
+        const selected = readBoundedGitPathCandidates(params.selectedPath);
+        try {
+          let selectedItem = await selected.next();
+          for await (const file of readBoundedGitPathCandidates(params.ignoredPath)) {
+            while (
+              !selectedItem.done &&
+              Buffer.compare(Buffer.from(selectedItem.value), Buffer.from(file)) < 0
+            ) {
+              selectedItem = await selected.next();
+            }
+            if (
+              (await isStagedInput(file)) ||
+              (!selectedItem.done && selectedItem.value === file)
+            ) {
+              yield file;
+            }
+          }
+          while (!selectedItem.done) {
+            selectedItem = await selected.next();
+          }
+        } finally {
+          await selected.return(undefined);
+        }
+      }
+      for await (const file of candidates()) {
+        const entry = await inspectFile(file);
+        if (!entry) {
+          continue;
+        }
+        transferredPaths.add(file);
+        for (const ancestor of workspacePathAncestors(file)) {
+          addEntry({ path: ancestor, type: "directory", mode: 0o700 });
+        }
+        addEntry(entry);
+        transferPathBytes += Buffer.byteLength(file) + 1;
+        assertBudget();
+        const pendingWrite = writer.append(file);
+        if (pendingWrite) {
+          await pendingWrite;
+        }
+      }
+      await writer.flush();
+      return;
+    }
+    case "workspace.inventory.existing": {
+      const params = command.input;
+      const writer = createInventoryPathWriter();
+      for await (const file of readBoundedGitPathCandidates(params.preparedListPath)) {
+        let stats;
+        try {
+          stats = lstatSync(path.join(params.gitRoot, file));
+        } catch (error) {
+          if (!hasNodeErrorCode(error, "ENOENT")) {
+            throw error;
+          }
+        }
+        if (stats?.isFile() || stats?.isSymbolicLink()) {
+          const pendingWrite = writer.append(file);
+          if (pendingWrite) {
+            await pendingWrite;
+          }
+        }
+      }
+      await writer.flush();
+      return;
+    }
     case "workspace.inventory.paths": {
       const paths = new Set<string>();
       for await (const entry of readBoundedGitPathCandidates(command.input.filePath)) {

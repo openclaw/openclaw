@@ -1,5 +1,6 @@
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import type { SessionParticipantRecord } from "./session-accessor.sqlite-participant-projection.js";
 import type {
   SessionEntryReplacementSelection,
@@ -13,7 +14,6 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import type { SessionColdArchive } from "./session-cold-storage-state.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import type { SessionMember } from "./session-membership-facts.types.js";
@@ -22,8 +22,10 @@ import type {
   SessionSourcePredicateFacts,
   SessionSourceValidation,
 } from "./session-source-authority.js";
+import type { SessionStoreReadCustody } from "./session-store-read-candidates.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.types.js";
+import type { SessionColdMetadataWorkerResult } from "./session-transcript-inventory.types.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -49,7 +51,9 @@ export type SessionEntryReadWorkerResult = {
 export type SessionEntryListWorkerInput = {
   kind: "session-entry-list";
   database: { agentId: string; path: string };
-  scope: SessionEntryListScope & { cleanupSession?: string };
+  scope: SessionEntryListScope & {
+    cleanupSession?: string;
+  };
   expectedIdentity?: DatabasePathIdentity;
   continuation?: CanonicalSessionReaderContinuation;
   ifRevision?: string;
@@ -61,11 +65,16 @@ export type SessionEntryListWorkerResult = {
   source?: CapturedSessionEntryReadSource & { databaseIdentity: string };
   revision?: string;
   unchanged?: true;
+  /** Oldest cron run in the requested logical agent; null means no run rows. */
+  nextCronRunUpdatedAt?: number | null;
+  /** Last scanned cron key when another retention page may remain. */
+  nextCronRunSessionKey?: string | null;
 };
 
 export type SessionExactEntriesWorkerInput = {
   kind: "session-exact-entries";
   database: { agentId: string; path: string };
+  readCustody?: readonly SessionStoreReadCustody[];
 } & SessionExactEntriesWorkerRequest;
 
 export type SessionExactEntriesWorkerSelection =
@@ -77,6 +86,7 @@ export type SessionExactEntriesWorkerSelection =
         | "sharing"
         | "replacement"
         | "creation"
+        | "creation-receipt"
         | "list"
         | "lifecycle"
         | "exact"
@@ -100,7 +110,17 @@ export type SessionExactEntriesWorkerSelection =
       projection: "list";
     };
 
-export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelection & {
+export type SessionExactEntriesWorkerRequest = (
+  | SessionExactEntriesWorkerSelection
+  | {
+      sessionKeys: readonly string[];
+      selection: {
+        kind: "transcript-aliases";
+        sessionIds: readonly string[];
+      };
+      projection: "list";
+    }
+) & {
   /** Validate current entry and conversation predicates in one reader snapshot. */
   sourceChecks?: SessionSourcePredicate[];
   manualCompact?: { sessionId: string; sources: SessionSourcePredicate[] };
@@ -114,8 +134,16 @@ export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelectio
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
+  /** Admission class only: the transport uses the reserved lane and never sends this field. */
+  pointRead?: true;
+  /** Inspect authority facts without opening the original SQLite family. */
+  preserveSourceArtifacts?: true;
+  inspectionSourcePath?: string;
+  /** The enclosing inspection retains these private bytes through worker settlement. */
+  inspectionSnapshot?: DatabasePathIdentity;
   replacementSelection?: SessionEntryReplacementSelection;
   creationLabel?: string;
+  creationDigest?: string;
   continuation?: CanonicalSessionReaderContinuation;
   transcript?: Omit<SessionTranscriptAnchorSelection, "afterSeq" | "includeMessagesForRunId"> & {
     sessionKey: string;
@@ -135,6 +163,7 @@ export type SessionEntryCohortRequest = Pick<
   | "transcript"
 > & {
   sessionKeys: readonly string[];
+  readCustody?: readonly SessionStoreReadCustody[];
   includeAuthProfileSource?: boolean;
   runtimeTarget?: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId" | "sessionKey">;
   includeColdMetadata?: boolean;
@@ -152,11 +181,12 @@ export type SessionEntryCohortRequest = Pick<
 export type SessionExactEntriesWorkerResult = {
   kind: "session-exact-entries";
   source?: SessionEntryListWorkerResult["source"];
+  /** Original copy source, distinct from the private reader's native databaseIdentity. */
+  snapshotSource?: NonNullable<SessionEntryListWorkerResult["source"]>;
   entries: SessionEntrySummary[];
   lifecycleTimestamps: SessionLifecycleTimestamps;
   sourceValidation?: SessionSourceValidation;
-  manualCompact?: {
-    archive?: Omit<SessionColdArchive, "archive_blob">;
+  manualCompact?: SessionColdMetadataWorkerResult & {
     refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
   };
   pendingArchives?: boolean;
@@ -170,6 +200,10 @@ export type SessionExactEntriesWorkerResult = {
   members?: Record<string, SessionMember[]>;
   participantRecords?: Record<string, SessionParticipantRecord[]>;
   replacement?: SessionEntryReplacementState & { databaseIdentity: string };
+  creationReceipt?: {
+    receipt: import("./session-creation-operation.js").SessionCreationReceipt;
+    entry?: SessionEntry;
+  };
   creation?: import("./session-accessor.sqlite-creation-read.js").SessionCreationSnapshot & {
     databaseIdentity: string;
     databasePath: string;

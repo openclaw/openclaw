@@ -33,6 +33,10 @@ conversation's stored route and delivery transcript unchanged. Confirmed partial
 sends can establish a route, but requested content is not mirrored as fully
 delivered.
 
+Conversation recency tracks inbound initialization, observed routes, and address changes. Session-only
+bookkeeping, such as usage or delivery-custody updates, preserves the existing
+conversation association and does not refresh its `lastSeenAt` timestamp.
+
 ## Session key shapes (examples)
 
 Direct messages collapse to the agent's **main** session by default:

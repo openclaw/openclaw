@@ -4,17 +4,33 @@ import {
   type ErrorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { GitHubCredentialReader } from "../../agents/github-credential-reader.js";
 import type { SessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { validateSessionDeviceFolderSelection } from "../session-device-folder.js";
 
 export function prepareRequiredWorkerSessionCreate(
   params: SessionsCreateParams,
   config: OpenClawConfig,
 ): { requiredProfile?: string; automaticEmptyWorkspace: boolean; error?: ErrorShape } {
+  const selectionError = validateSessionDeviceFolderSelection(params);
+  if (selectionError) {
+    return { automaticEmptyWorkspace: false, error: selectionError };
+  }
   const requiredProfile = config.cloudWorkers?.requiredProfile;
+  if (requiredProfile && params.deviceFolder) {
+    return {
+      requiredProfile,
+      automaticEmptyWorkspace: false,
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "Device folder sessions cannot use a required cloud worker profile.",
+      ),
+    };
+  }
   try {
     assertRequiredWorkerSelection(config, params);
   } catch (error) {
@@ -75,6 +91,7 @@ export async function prepareRequiredWorkerCreatedSession(params: {
   session: { entry: Pick<SessionEntry, "sessionId">; key: string; agentId: string };
   assertCurrent: () => void;
   retainDispatch?: () => () => void;
+  readNativeCredential?: GitHubCredentialReader;
   signal?: AbortSignal;
 }): Promise<void> {
   if (!params.requiredProfile || params.pendingWorktree || params.requestedProjectGitUrl) {
@@ -97,6 +114,10 @@ export async function prepareRequiredWorkerCreatedSession(params: {
     },
     params.assertCurrent,
     params.signal,
-    { waitForReady: false, retainDispatch: params.retainDispatch },
+    {
+      waitForReady: false,
+      retainDispatch: params.retainDispatch,
+      readNativeCredential: params.readNativeCredential,
+    },
   );
 }

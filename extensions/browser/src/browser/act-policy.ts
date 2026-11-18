@@ -10,6 +10,7 @@ import {
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_ACT_KIND_FACTS } from "./act-kinds.js";
 import type { BrowserActRequest } from "./client-actions.types.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./constants.js";
 import { normalizeBrowserTimerDelayMs } from "./timer-delay.js";
@@ -19,10 +20,6 @@ export const ACT_MAX_BATCH_DEPTH = 5;
 export const ACT_MAX_CLICK_DELAY_MS = 5_000;
 export const ACT_MAX_WAIT_TIME_MS = 30_000;
 export const ACT_MAX_VIEWPORT_DIMENSION = 8192;
-/** Existing-session actions whose runtime accepts a per-call timeout override. */
-export const EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS: ReadonlySet<BrowserActRequest["kind"]> =
-  new Set(["click", "clickCoords", "evaluate", "wait"]);
-
 const ACT_MIN_TIMEOUT_MS = 500;
 const ACT_MAX_INTERACTION_TIMEOUT_MS = 60_000;
 const ACT_MAX_WAIT_TIMEOUT_MS = 120_000;
@@ -183,7 +180,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
     return resolveLeafExecutionBudgetMs(request);
   }
   // Text locators accept whitespace as content; selector, URL, and function
-  // waits normalize it away. Keep this in lockstep with waitForViaPlaywright.
+  // waits are trimmed by the /act boundary before execution.
   const conditionCount = [
     Boolean(request.text),
     Boolean(request.textGone),
@@ -202,7 +199,7 @@ function resolveExecutionBudgetMs(request: BrowserActRequest): number {
 /** Bound logical action and verification phases without renewing every MCP call's budget. */
 export function resolveExistingSessionActTimeouts(request: BrowserActRequest) {
   const requestedTimeoutMs =
-    EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS.has(request.kind) && "timeoutMs" in request
+    BROWSER_ACT_KIND_FACTS[request.kind]?.existingSessionTimeout && "timeoutMs" in request
       ? parseTimerInteger(request.timeoutMs)
       : undefined;
   const timeoutMs = normalizeBrowserTimerDelayMs(

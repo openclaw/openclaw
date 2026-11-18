@@ -6,6 +6,10 @@ import {
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { consumeSwarmStructuredOutput } from "../agents/tools/structured-output-tool.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
@@ -24,6 +28,7 @@ export function useMcpCollectorRegistry(
     });
   });
   beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     await resetSubagentRegistryForTests({ persist: false });
     await configureMockSubagentRegistryPersistence({ persistRegistryRows: () => {} });
     await addSubagentRunForTests({ ...entry, collect: true });
@@ -31,6 +36,7 @@ export function useMcpCollectorRegistry(
   afterEach(async () => {
     consumeSwarmStructuredOutput(entry.runId);
     await resetSubagentRegistryForTests();
+    clearRuntimeConfigSnapshot();
   });
   afterAll(async () => {
     await state.cleanup();

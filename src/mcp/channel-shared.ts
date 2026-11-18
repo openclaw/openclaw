@@ -162,13 +162,14 @@ export function summarizeResult(
   };
 }
 
-export function summarizeStructuredResult(
+export function summarizeStructuredResult<T extends Record<string, unknown>>(
   label: string,
   count: number,
-  payload: unknown,
-): { content: Array<{ type: "text"; text: string }> } {
+  payload: T,
+): { content: Array<{ type: "text"; text: string }>; structuredContent: T } {
   return {
     content: [{ type: "text", text: `${label}: ${count}\n\n${JSON.stringify(payload, null, 2)}` }],
+    structuredContent: payload,
   };
 }
 

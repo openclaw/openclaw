@@ -6,7 +6,58 @@ import {
 } from "./assistant-visible-text.js";
 import { createTextProjection } from "./text-projection.js";
 
-describe("encoded MiniMax tool envelopes", () => {
+describe("MiniMax tool envelopes", () => {
+  it.each(["delivery", "final-answer-delivery"] as const)(
+    "recovers a terminal invocation with an unclosed JSON quote for %s",
+    (profile) => {
+      const input =
+        'Ready.\n<minimax:tool_call><invoke name="exec">{"note":"TAIL_SENTINEL}</invoke></minimax:tool_call>\nDone.';
+      expect(sanitizeAssistantVisibleTextWithProfile(input, profile)).toBe("Ready.\n\nDone.");
+      expect(sanitizeAssistantVisibleTextWithProfile(input, profile, true)).toBe("Ready.");
+    },
+  );
+
+  it("waits for the real closer while quoted arguments are still streaming", () => {
+    const projection = createTextProjection(
+      assistantVisibleTextFilters("final-answer-delivery", true),
+    );
+    const prefix =
+      'Ready.\n<minimax:tool_call><invoke name="exec">{"command":"printf </invoke>","note":"TAIL_SENTINEL';
+    expect(projection.append(prefix).text).toBe("Ready.");
+    expect(projection.append('"}</invoke></minimax:tool_call>\nDone.').text).toBe(
+      "Ready.\n\nDone.",
+    );
+  });
+
+  it.each([
+    [
+      "a quoted closing tag in JSON arguments",
+      JSON.stringify({ command: 'printf "</invoke>"', note: "TAIL_SENTINEL" }),
+    ],
+    ["a closing tag in inline code", "Write `</invoke>` followed by TAIL_SENTINEL."],
+    ["an apostrophe in ordinary text", "Don't display TAIL_SENTINEL."],
+  ])("removes the whole invocation with %s", (_name, payload) => {
+    const input = `Ready.\n<minimax:tool_call><invoke name="exec">${payload}</invoke></minimax:tool_call>\nDone.`;
+    const expected = "Ready.\n\nDone.";
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "final-answer-delivery")).toBe(expected);
+
+    const projection = createTextProjection(
+      assistantVisibleTextFilters("final-answer-delivery", true),
+    );
+    for (let offset = 0; offset < input.length; offset += 4) {
+      projection.append(input.slice(offset, offset + 4));
+    }
+    expect(projection.text).toBe(expected);
+  });
+
+  it("does not let a JSON backtick mask the invocation closer", () => {
+    const payload = JSON.stringify({ command: "printf `", note: "TAIL_SENTINEL" });
+    const input = `Ready.\n<minimax:tool_call><invoke name="exec">${payload}</invoke>\nAfter \`done\`.`;
+    for (const streaming of [false, true]) {
+      expect(minimaxToolCallTextFilter(streaming).transform(input)).toBe("Ready.\n\nAfter `done`.");
+    }
+  });
+
   it("removes the internal envelope and retains surrounding prose in final answers", () => {
     const input = [
       "Before",
@@ -56,7 +107,7 @@ describe("encoded MiniMax tool envelopes", () => {
     let output: string;
     let closeSearches: number;
     try {
-      output = minimaxToolCallTextFilter.transform(input);
+      output = minimaxToolCallTextFilter().transform(input);
       closeSearches = exec.mock.contexts.filter(
         (context) => context instanceof RegExp && context.source === closeSource,
       ).length;

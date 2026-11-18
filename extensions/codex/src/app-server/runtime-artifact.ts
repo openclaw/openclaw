@@ -6,6 +6,7 @@ import path from "node:path";
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isPathInside, sha256File } from "openclaw/plugin-sdk/file-access-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { resolveWindowsExecutablePath } from "openclaw/plugin-sdk/windows-spawn";
 import type { CodexAppServerClient, CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
@@ -398,12 +399,9 @@ async function resolveCommandPath(
       const entryPath =
         entry === "" ? cwd : path.isAbsolute(entry) ? entry : path.resolve(cwd, entry);
       const possible = path.join(entryPath, command);
-      try {
-        await fs.access(possible, fsConstants.X_OK);
+      if (await canAccess(possible, fsConstants.X_OK)) {
         candidate = possible;
         break;
-      } catch {
-        // Continue through PATH in child-process resolution order.
       }
     }
   }

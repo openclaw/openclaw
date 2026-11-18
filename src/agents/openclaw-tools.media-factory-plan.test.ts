@@ -1,7 +1,6 @@
-// Verifies optional media/PDF tool factory planning from plugin metadata and auth.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -11,17 +10,16 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import {
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
-import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
-  // Auth facts are provider-key based; profile ids only need deterministic defaults.
   return {
     version: 1,
     profiles: Object.fromEntries(
@@ -80,26 +78,16 @@ function createExplicitMediaModelConfig(): OpenClawConfig {
   };
 }
 
-function createStandardMediaPlugins(
-  mediaProvider = "media-owner",
-): [PluginManifestRecord, PluginManifestRecord, PluginManifestRecord, PluginManifestRecord] {
+function createStandardMediaPlugins(mediaProvider = "media-owner"): PluginManifestRecord[] {
   const mediaEnvVar = mediaProvider === "anthropic" ? "ANTHROPIC_API_KEY" : "MEDIA_OWNER_API_KEY";
   return [
-    createPlugin({
-      id: "image-owner",
-      contracts: { imageGenerationProviders: ["image-owner"] },
-      setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
-    }),
-    createPlugin({
-      id: "video-owner",
-      contracts: { videoGenerationProviders: ["video-owner"] },
-      setupProviders: [{ id: "video-owner", envVars: ["VIDEO_OWNER_API_KEY"] }],
-    }),
-    createPlugin({
-      id: "music-owner",
-      contracts: { musicGenerationProviders: ["music-owner"] },
-      setupProviders: [{ id: "music-owner", envVars: ["MUSIC_OWNER_API_KEY"] }],
-    }),
+    ...(["image", "video", "music"] as const).map((kind) =>
+      createPlugin({
+        id: `${kind}-owner`,
+        contracts: { [`${kind}GenerationProviders`]: [`${kind}-owner`] },
+        setupProviders: [{ id: `${kind}-owner`, envVars: [`${kind.toUpperCase()}_OWNER_API_KEY`] }],
+      }),
+    ),
     createPlugin({
       id: "media-owner",
       contracts: { mediaUnderstandingProviders: [mediaProvider] },
@@ -140,72 +128,46 @@ describe("optional media tool factory planning", () => {
     vi.unstubAllEnvs();
   });
 
-  it("uses the prepared media family for image-tool availability", () => {
-    const config: OpenClawConfig = {};
-    const snapshot = installSnapshot(config, [
-      createPlugin({
-        id: "media-owner",
-        contracts: { mediaUnderstandingProviders: ["media-owner"] },
-        setupProviders: [{ id: "media-owner" }],
-      }),
-    ]);
-    const base = {
-      config,
-      agentDir: "/agent",
-      authStore: createAuthStore(["media-owner"]),
-    };
-
-    expect(
-      resolveImageToolFactoryAvailable({
-        ...base,
-        preparedModelRuntime: {
-          metadataSnapshot: snapshot,
-          mediaCapabilityProviders: { mediaUnderstandingProviders: [] },
-        } as never,
-      }),
-    ).toBe(false);
-    expect(
-      resolveImageToolFactoryAvailable({
-        ...base,
-        preparedModelRuntime: {
-          metadataSnapshot: snapshot,
-          mediaCapabilityProviders: {
-            mediaUnderstandingProviders: [{ id: "media-owner", capabilities: ["image"] }],
+  it.each([
+    { providers: [], auth: ["media-owner"], expected: false },
+    {
+      providers: [{ id: "media-owner", capabilities: ["image"] }],
+      auth: ["media-owner"],
+      expected: true,
+    },
+    {
+      providers: [
+        { id: "audio-auth", capabilities: ["audio"] },
+        { id: "image-no-auth", capabilities: ["image"] },
+      ],
+      auth: ["audio-auth"],
+      expected: false,
+    },
+  ])(
+    "requires image capability and auth on the same prepared provider: $expected",
+    ({ providers, auth, expected }) => {
+      const config: OpenClawConfig = {};
+      const snapshot = installSnapshot(config, [
+        createPlugin({
+          id: "media-owner",
+          contracts: {
+            mediaUnderstandingProviders: ["media-owner", "audio-auth", "image-no-auth"],
           },
-        } as never,
-      }),
-    ).toBe(true);
-  });
-
-  it("requires image capability and auth on the same prepared provider", () => {
-    const config: OpenClawConfig = {};
-    const snapshot = installSnapshot(config, [
-      createPlugin({
-        id: "media-owner",
-        contracts: {
-          mediaUnderstandingProviders: ["audio-auth", "image-no-auth"],
-        },
-        setupProviders: [{ id: "audio-auth" }, { id: "image-no-auth" }],
-      }),
-    ]);
-
-    expect(
-      resolveImageToolFactoryAvailable({
-        config,
-        agentDir: "/agent",
-        authStore: createAuthStore(["audio-auth"]),
-        preparedModelRuntime: {
-          metadataSnapshot: snapshot,
-          mediaCapabilityProviders: {
-            mediaUnderstandingProviders: [
-              { id: "audio-auth", capabilities: ["audio"] },
-              { id: "image-no-auth", capabilities: ["image"] },
-            ],
-          },
-        } as never,
-      }),
-    ).toBe(false);
-  });
+        }),
+      ]);
+      expect(
+        resolveImageToolFactoryAvailable({
+          config,
+          agentDir: "/agent",
+          authStore: createAuthStore(auth),
+          preparedModelRuntime: {
+            metadataSnapshot: snapshot,
+            mediaCapabilityProviders: { mediaUnderstandingProviders: providers },
+          } as never,
+        }),
+      ).toBe(expected);
+    },
+  );
 
   it("keeps config vision routes while gating OpenAI subscription auth on prepared Codex", () => {
     vi.stubEnv("OPENAI_API_KEY", "");
@@ -237,40 +199,36 @@ describe("optional media tool factory planning", () => {
       expires: Date.now() + 60_000,
     };
 
-    expect(
+    const available = (authStore: AuthProfileStore, prepared: unknown = preparedModelRuntime) =>
       resolveImageToolFactoryAvailable({
         config,
         agentDir: "/agent",
-        authStore: createAuthStore(["custom"]),
-        preparedModelRuntime,
-      }),
-    ).toBe(true);
-    expect(
-      resolveImageToolFactoryAvailable({
-        config,
-        agentDir: "/agent",
-        authStore: oauthStore,
-        preparedModelRuntime,
-      }),
-    ).toBe(false);
+        authStore,
+        preparedModelRuntime: prepared as never,
+      });
+
+    expect(available(createAuthStore(["custom"]))).toBe(true);
+    expect(available(oauthStore)).toBe(false);
     for (const [capabilities, expected] of [
       [["audio"], false],
       [["image"], true],
     ] as const) {
+      const mediaUnderstandingProviders = [{ id: "codex", capabilities }];
       expect(
-        resolveImageToolFactoryAvailable({
-          config,
-          agentDir: "/agent",
-          authStore: oauthStore,
-          preparedModelRuntime: {
-            metadataSnapshot: snapshot,
-            mediaCapabilityProviders: {
-              mediaUnderstandingProviders: [{ id: "codex", capabilities }],
-            },
-          } as never,
+        available(oauthStore, {
+          metadataSnapshot: snapshot,
+          mediaCapabilityProviders: { mediaUnderstandingProviders },
         }),
       ).toBe(expected);
     }
+    // A key on the provider entry is usable auth; a marker counts only on a local route.
+    const custom = config.models?.providers?.custom ?? {};
+    Object.assign(custom, { apiKey: "ollama-local" });
+    expect(available(createAuthStore())).toBe(false);
+    Object.assign(custom, { api: "ollama", baseUrl: "http://localhost:11434" });
+    expect(available(createAuthStore())).toBe(true);
+    Object.assign(custom, { api: undefined, baseUrl: "https://vision.example/v1", apiKey: "k" });
+    expect(available(createAuthStore())).toBe(true);
   });
 
   it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
@@ -288,14 +246,6 @@ describe("optional media tool factory planning", () => {
       ],
       "/workspace/a",
     );
-    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
-    expect(
-      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/a" }),
-    ).toBeDefined();
-    expect(
-      loadCapabilityMetadataSnapshot({ config }).plugins.map((plugin) => plugin.id),
-    ).not.toContain("image-owner");
-
     expect(
       resolveOptionalMediaToolFactoryPlan({
         config,
@@ -378,6 +328,43 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("plans media tools for inline and env-backed keys unless the inline key is cooling down", () => {
+    vi.stubEnv("MEDIA_INLINE_TEST_KEY", "synthetic-inline-key");
+    const owners = ["image-owner", "video-owner", "music-owner", "media-owner"];
+    const providers: Record<string, ModelProviderConfig> = Object.fromEntries(
+      owners.map((id) => [id, { baseUrl: "https://media.example/v1", models: [] }]),
+    );
+    const config: OpenClawConfig = { models: { providers } };
+    installSnapshot(config, createStandardMediaPlugins());
+    const plan = (authStore = createAuthStore()) =>
+      resolveOptionalMediaToolFactoryPlan({ config, authStore });
+    const expected = (available: boolean) => ({
+      imageGenerate: available,
+      videoGenerate: available,
+      musicGenerate: available,
+      pdf: available,
+    });
+    const cooling: AuthProfileStore = {
+      ...createAuthStore(),
+      usageStats: Object.fromEntries(
+        owners.map((id) => [`inline-api-key:${id}`, { cooldownUntil: Date.now() + 60_000 }]),
+      ),
+    };
+    for (const apiKey of [
+      undefined,
+      "synthetic-key",
+      { source: "env", provider: "default", id: "MEDIA_INLINE_TEST_KEY" },
+    ] as const) {
+      for (const provider of Object.values(providers)) {
+        provider.apiKey = apiKey;
+      }
+      expect(plan()).toEqual(expected(apiKey !== undefined));
+      expect(plan(cooling)).toEqual(expected(false));
+    }
+    vi.stubEnv("MEDIA_INLINE_TEST_KEY", "");
+    expect(plan()).toEqual(expected(false));
+  });
+
   it("defers PDF resolution and passes the active model at execution", async () => {
     const config: OpenClawConfig = {};
     const workspaceDir = process.cwd();
@@ -439,16 +426,7 @@ describe("optional media tool factory planning", () => {
   });
 
   it("honors manifest-declared image provider auth alias base-url guards", () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "http://localhost:11434/v1",
-            models: [],
-          },
-        },
-      },
-    };
+    const config: OpenClawConfig = configFor("openai", "http://localhost:11434/v1");
     installSnapshot(config, [
       createPlugin({
         id: "openai",

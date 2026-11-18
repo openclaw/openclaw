@@ -36,7 +36,7 @@ export async function notifyDiscordActiveTurnThreadCreated(params: {
   sourceChannelId?: string;
   sourceMessageId?: string;
   threadId?: string;
-}): Promise<boolean> {
+}): Promise<void> {
   const key = normalizeId(params.sessionKey ?? undefined);
   const threadId = normalizeId(params.threadId);
   const sourceChannelId = normalizeId(params.sourceChannelId);
@@ -50,7 +50,7 @@ export async function notifyDiscordActiveTurnThreadCreated(params: {
       )
     : undefined;
   if (!route || !threadId) {
-    return false;
+    return;
   }
   route.adoptedThreadId = threadId;
   try {
@@ -58,7 +58,6 @@ export async function notifyDiscordActiveTurnThreadCreated(params: {
   } catch (error) {
     route.onThreadAdoptionError?.(error);
   }
-  return true;
 }
 
 export function notifyDiscordActiveTurnThreadReplyDelivered(params: {

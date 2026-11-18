@@ -6,21 +6,32 @@ import {
 import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync } from "./session-accessor.js";
+import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "./session-work-start.js";
 import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
 export {
   createSessionWorkStartChangedError,
   isSessionWorkStartInvalidatedError,
-  SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE,
-  SessionRestartRecoveryTombstoneError,
   SessionWorkStartChangedError,
   SessionWorkStartInvalidatedError,
 } from "./work-start-error.js";
 
 export {
-  isRestartRecoveryTombstone,
   resolveSessionWorkStartError,
   SESSION_LIFECYCLE_CHANGED_ERROR_REASON,
 } from "./session-work-start.js";
+
+export function isSessionLifecycleChangedGatewayError(error: unknown): boolean {
+  if (!(error instanceof Error) || error.name !== "GatewayClientRequestError") {
+    return false;
+  }
+  const details: unknown = Reflect.get(error, "details");
+  return (
+    Reflect.get(error, "gatewayCode") === "INVALID_REQUEST" &&
+    typeof details === "object" &&
+    details !== null &&
+    Reflect.get(details, "reason") === SESSION_LIFECYCLE_CHANGED_ERROR_REASON
+  );
+}
 
 // Transcript headers are read lazily to recover startedAt without parsing full files.
 
@@ -95,7 +106,7 @@ export function resolveTerminalMainSessionTranscriptRegistryCheck(
   if (registryTimestampMs === undefined) {
     return undefined;
   }
-  const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
+  const sessionId = params.entry.sessionId.trim();
   if (!sessionId) {
     return undefined;
   }

@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   createSqliteAuditRecordKernel,
   type PreparedSqliteAuditRecord,
@@ -14,7 +14,7 @@ export type ConfigSnapshotAuditRecord = {
 };
 
 export function readConfigSnapshotAuditRecordInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): ConfigSnapshotAuditRecord | null {
   return (
     createSqliteAuditRecordKernel<ConfigSnapshotAuditRecord>(database, {
@@ -27,7 +27,7 @@ export function readConfigSnapshotAuditRecordInDatabase(
 }
 
 export function upsertConfigSnapshotAuditRecordInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: { record: PreparedSqliteAuditRecord | null; expectedPayloadJson?: string | null },
 ): boolean {
   const store = createSqliteAuditRecordKernel(database, {

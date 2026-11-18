@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isPendingBackgroundResultMessage,
+  projectPlacedBackgroundResultMessage,
+  readBackgroundResultPlacement,
+} from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
+import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { selectRecentUserAssistantReplayRecords } from "./transcript-replay.js";
 import { selectSessionTranscriptLeafControlledPath } from "./transcript-tree.js";
 
@@ -41,6 +48,25 @@ export function createSessionResetBoundaryId(): string {
 }
 
 function projectLatestBoundaryWindow(entries: readonly unknown[]): unknown[] {
+  if (
+    entries.some(
+      (entry) =>
+        readBackgroundResultPlacement(entry) ||
+        isPendingBackgroundResultMessage(asOptionalRecord(entry)?.message),
+    )
+  ) {
+    return Array.from(
+      iterateSessionContextEntries(entries.filter(isIndexedSessionEntry)),
+      ({ entry, placement }) =>
+        placement && entry.type === "message"
+          ? {
+              ...placement,
+              type: "message",
+              message: projectPlacedBackgroundResultMessage(entry.message),
+            }
+          : entry,
+    );
+  }
   const boundaryIndex = entries.findLastIndex((entry) => {
     const type = asOptionalRecord(entry)?.type;
     return type === "compaction" || type === "reset";

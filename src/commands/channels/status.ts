@@ -1,4 +1,3 @@
-// Implements `openclaw channels status` with gateway status and config-only fallback.
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { isGatewayProtocolResponseError } from "../../../packages/gateway-client/src/protocol-request.js";
@@ -8,12 +7,14 @@ import {
   isExpectedCliError,
   isGatewayCredentialsCliError,
 } from "../../cli/failure-output.js";
+import { prepareCliGatewayStateAccess } from "../../cli/gateway-rpc.runtime.js";
 import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewaySecretRefUnavailableError } from "../../gateway/credentials.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { waitForGatewayDiagnostic } from "../gateway-diagnostic-readiness.js";
 
 export type ChannelsStatusOptions = {
@@ -34,6 +35,8 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  const signal = getAsyncWorkSignal();
+  signal?.throwIfAborted();
   const args =
     normalizeOptionalLowercaseString(opts.channel) === "all"
       ? { ...opts, channel: undefined }
@@ -47,7 +50,10 @@ export async function channelsStatusCommand(
     runtime.log(statusLabel);
   }
   try {
-    const remainingMs = await waitForGatewayDiagnostic({ timeoutMs, json: opts.json }, runtime);
+    const remainingMs = await waitForGatewayDiagnostic(
+      { timeoutMs, json: opts.json, signal },
+      runtime,
+    );
     if (remainingMs === undefined) {
       return;
     }
@@ -69,17 +75,22 @@ export async function channelsStatusCommand(
           method: "channels.status",
           params,
           timeoutMs: remainingMs,
+          signal,
           sharedStateMode: "read-only",
+          beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         });
       },
     );
+    signal?.throwIfAborted();
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
       return;
     }
     const { formatGatewayChannelsStatusLines } = await import("./status.runtime.js");
+    signal?.throwIfAborted();
     runtime.log(formatGatewayChannelsStatusLines(payload).join("\n"));
   } catch (err) {
+    signal?.throwIfAborted();
     if (isGatewayProtocolResponseError(err)) {
       throw err;
     }
@@ -97,6 +108,7 @@ export async function channelsStatusCommand(
       safeError,
       gatewayAuthUnavailable,
       expectedErrorOutput,
+      signal,
     });
   }
 }

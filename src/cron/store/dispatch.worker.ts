@@ -34,8 +34,8 @@ const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.wo
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
 const loadSchedulerActor = createLazyRuntimeModule(() => import("./scheduler-actor.worker.js"));
 let schedulerActor: typeof import("./scheduler-actor.worker.js") | undefined;
-const loadJobMutations = createLazyRuntimeModule(() => import("./job-mutations.worker.js"));
-let jobMutations: typeof import("./job-mutations.worker.js") | undefined;
+const loadProactive = createLazyRuntimeModule(() => import("../default-proactive-job.worker.js"));
+let proactive: typeof import("../default-proactive-job.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
   if (String(type).startsWith("cron.scheduler") && !schedulerActor) {
@@ -43,13 +43,13 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
       schedulerActor = loaded;
     });
   }
-  if (type === "cron.prepareJobMutation" && !jobMutations) {
-    return loadJobMutations().then((loaded) => {
-      jobMutations = loaded;
-    });
-  }
   if (
-    ["cron.requestRuns", "cron.drainQueue", "cron.cancelRequests"].includes(String(type)) &&
+    [
+      "cron.requestRuns",
+      "cron.drainQueue",
+      "cron.cancelRequests",
+      "cron.settleConditionCheck",
+    ].includes(String(type)) &&
     !queue
   ) {
     return loadQueue().then((loaded) => {
@@ -59,6 +59,11 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
   if (type === "cron.finalizeRuns" && !finalization) {
     return loadFinalization().then((loaded) => {
       finalization = loaded;
+    });
+  }
+  if (type === "cron.provisionDefaultProactive" && !proactive) {
+    return loadProactive().then((loaded) => {
+      proactive = loaded;
     });
   }
   if (type === "cron.recordSkippedRuns" && !scheduler) {
@@ -94,7 +99,6 @@ export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> 
   if (
     (type === "cron.scheduleUnowned" ||
       type === "cron.recordFailureAlertOutcome" ||
-      type === "cron.recordFailureRepairSettlement" ||
       type === "cron.maintainHistory") &&
     !maintenance
   ) {
@@ -119,10 +123,11 @@ export function isCronStateWorkerCommand(command: {
     case "cron.schedulerTick":
     case "cron.schedulerRefresh":
     case "cron.schedulerStop":
-    case "cron.prepareJobMutation":
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
+    case "cron.settleConditionCheck":
+    case "cron.provisionDefaultProactive":
     case "cron.recordSkippedRuns":
     case "cron.mutateExternalState":
     case "cron.writeScratch":
@@ -138,7 +143,6 @@ export function isCronStateWorkerCommand(command: {
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
-    case "cron.recordFailureRepairSettlement":
     case "cron.save":
     case "cron.saveChanges":
     case "cron.registerQuarantine":
@@ -164,14 +168,10 @@ export function executeCronStateCommand(
         return schedulerActor.stopCronSchedulerInWorker(command.input);
       }
       return schedulerActor.runCronSchedulerInWorker(database, command);
-    case "cron.prepareJobMutation":
-      if (!jobMutations) {
-        throw new Error("Cron job mutation worker is not prepared");
-      }
-      return jobMutations.prepareCronJobMutationInWorker(database, command.input);
     case "cron.requestRuns":
     case "cron.drainQueue":
     case "cron.cancelRequests":
+    case "cron.settleConditionCheck":
       if (!queue) {
         throw new Error("Cron queue worker is not prepared");
       }
@@ -182,7 +182,14 @@ export function executeCronStateCommand(
           return queue.drainCronQueueInWorker(database, command.input);
         case "cron.cancelRequests":
           return queue.cancelCronRequestsInWorker(database, command.input);
+        case "cron.settleConditionCheck":
+          return queue.settleCronConditionCheckInWorker(database, command.input);
       }
+    case "cron.provisionDefaultProactive":
+      if (!proactive) {
+        throw new Error("Default automation provisioning worker is not prepared");
+      }
+      return proactive.provisionDefaultProactiveJobInWorker(database, command.input);
     case "cron.registerQuarantine":
       return runOpenClawStateWriteTransaction(
         ({ db }) => registerCronQuarantineInDatabase(db, command.input),
@@ -235,7 +242,12 @@ export function executeCronStateCommand(
           return receipts.removeStaleCronFamilyInWorker(database, command.input);
       }
     case "cron.loadMutable":
-      return loadMutableCronStoreInWorker(database, command.input.storeKey);
+      return loadMutableCronStoreInWorker(
+        database,
+        command.input.storeKey,
+        command.input.defaultStorePath,
+        command.input.includeConfigRevisions,
+      );
     case "cron.recoverRuns":
       if (!recovery) {
         throw new Error("Cron recovery worker is not prepared");
@@ -244,15 +256,11 @@ export function executeCronStateCommand(
     case "cron.scheduleUnowned":
     case "cron.maintainHistory":
     case "cron.recordFailureAlertOutcome":
-    case "cron.recordFailureRepairSettlement":
       if (!maintenance) {
         throw new Error("Cron maintenance worker is not prepared");
       }
       if (command.type === "cron.maintainHistory") {
         return maintenance.maintainCronRunHistoryInWorker(database, command.input);
-      }
-      if (command.type === "cron.recordFailureRepairSettlement") {
-        return maintenance.recordCronFailureRepairSettlementInWorker(database, command.input);
       }
       return command.type === "cron.scheduleUnowned"
         ? maintenance.scheduleUnownedCronJobsInWorker(database, command.input)

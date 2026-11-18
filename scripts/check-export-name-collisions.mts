@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
@@ -56,7 +56,13 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -694,7 +700,14 @@ const sealedRecoveryNativeLoaderModules = [
 ];
 // These module owners implement fixed names required by the worker loaders.
 // Other modules remain collisions, including while these consumers land separately.
-const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
+const workerProtocolModules = new Map<string, ReadonlySet<string>>([
+  [
+    "createNativeWorkerResource",
+    new Set([
+      "src/infra/sqlite-readonly-native-resource.ts",
+      "src/plugins/plugin-capture-native-resource.ts",
+    ]),
+  ],
   [
     "createSqliteWorkerBackend",
     new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
@@ -711,17 +724,15 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
-      "src/agents/subagents/spawn/acp-parent-stream-store.worker.ts",
       "src/config/sessions/goals-operations.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-fork-domain.worker.ts",
       "src/config/sessions/session-lifecycle-projection.worker.ts",
       "src/config/sessions/session-message-rewrite.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
+      "src/config/sessions/session-transcript-active-facts-backfill.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
-      "src/infra/heartbeat-outcome-store.worker.ts",
-      "src/infra/message-tool-run-outcome-store.worker.ts",
       "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],
@@ -761,7 +772,7 @@ function analyzeExportNames(modules: SourceModule[]) {
 
   const collisions: ExportNameCollision[] = [];
   for (const [name, fileSet] of filesByName) {
-    const protocolModules = sqliteWorkerProtocolModules.get(name);
+    const protocolModules = workerProtocolModules.get(name);
     if (
       fileSet.size < 2 ||
       intentionalSameNameFamilies.has(name) ||

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
   retainSqliteWriteAdmissionService,
   withSqliteWriteAdmissionService,
@@ -18,7 +19,7 @@ export class SqliteReclamationRequestRefusedError extends Error {}
 /** Preserve the reclamation owner's context when an unrelated synchronous writer helps. */
 export async function withSqliteReclamationAuthorization<T>(
   buffer: SharedArrayBuffer,
-  database: DatabaseSync | string,
+  database: EngineConnection | string,
   assertCurrent: () => void,
   run: (authorize: () => void) => Promise<T>,
 ): Promise<T> {
@@ -60,7 +61,9 @@ export async function withSqliteReclamationAuthorization<T>(
     }
   };
   if (typeof database !== "string") {
-    return await withSqliteWriteAdmissionService(database, service, () => run(authorize));
+    return await withSqliteWriteAdmissionService(sqlPublicationAnchor(database), service, () =>
+      run(authorize),
+    );
   }
   // The execution owner's admitted native location does not require a host connection.
   const release = retainSqliteWriteAdmissionService([database], service);
@@ -99,6 +102,24 @@ export function waitForSqliteReclamationCommit(
       "SQLite session reclamation commit was not authorized",
     );
   }
+}
+
+/** Physical qualification can block; consume the same live or accepted grant afterward. */
+export function assertSqliteReclamationAuthority(
+  buffer: SharedArrayBuffer,
+  assertPendingCurrent?: () => void,
+): void {
+  const state = Atomics.load(new Int32Array(buffer), 0);
+  if (state === COMMITTING) {
+    return;
+  }
+  if (assertPendingCurrent && (state === WAITING || state === REQUESTED)) {
+    assertPendingCurrent();
+    return;
+  }
+  throw new SqliteReclamationRequestRefusedError(
+    "SQLite reclamation authority is no longer current",
+  );
 }
 
 /** Publish only after the transaction ended or its connection successfully closed. */

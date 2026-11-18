@@ -1,4 +1,5 @@
 import { raceWithTimeout } from "@openclaw/retry";
+import { listen } from "../../lib/reactive/listener.ts";
 
 const PLUGIN_ICON_RASTER_SIZE = 256;
 const PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS = 5_000;
@@ -34,7 +35,7 @@ const SVG_ATTRIBUTE_PATTERNS = new Map<string, RegExp>([
   ["fill-rule", /^(?:evenodd|nonzero)$/u],
   ["stroke-linecap", /^(?:butt|round|square)$/u],
   ["stroke-linejoin", /^(?:bevel|miter|round)$/u],
-  ["transform", /^(?:\s*(?:matrix|rotate|scale|skewX|skewY|translate)\(\s*[0-9eE+.,\s-]+\)\s*)+$/u],
+  ["transform", /^(?:(?:matrix|rotate|scale|skewX|skewY|translate)\([0-9eE+.,\s-]+\)\s*)+$/u],
   ["cx", SVG_NUMBER_VALUE_RE],
   ["cy", SVG_NUMBER_VALUE_RE],
   ["height", SVG_NUMBER_VALUE_RE],
@@ -80,13 +81,16 @@ function isSafeSvgAttribute(attribute: Attr): boolean {
 async function loadSvgImage(url: string): Promise<HTMLImageElement> {
   const image = new Image();
   image.decoding = "async";
+  const stops: (() => void)[] = [];
   await raceWithTimeout(
     () =>
       new Promise<void>((resolve, reject) => {
-        image.addEventListener("load", () => resolve(), { once: true });
-        image.addEventListener("error", () => reject(new Error("plugin SVG decode failed")), {
-          once: true,
-        });
+        stops.push(
+          listen(image, "load", () => resolve(), { once: true }),
+          listen(image, "error", () => reject(new Error("plugin SVG decode failed")), {
+            once: true,
+          }),
+        );
         image.src = url;
       }),
     PLUGIN_ICON_SVG_DECODE_TIMEOUT_MS,
@@ -94,7 +98,7 @@ async function loadSvgImage(url: string): Promise<HTMLImageElement> {
       image.src = "";
       throw new Error("plugin SVG decode timed out");
     },
-  );
+  ).finally(() => stops.forEach((stop) => stop()));
   return image;
 }
 

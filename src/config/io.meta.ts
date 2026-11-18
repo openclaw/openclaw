@@ -1,5 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import {
+  getDatabaseEngineSelection,
+  withDatabaseEngineSelection,
+  type DatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import { writeConfigMachineStateAsync } from "../state/config-machine-state-async.js";
 // Maintains config metadata fields written alongside user config.
@@ -7,6 +14,8 @@ import { VERSION } from "../version.js";
 import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import { cloneConfigWithResolutionFacts } from "./resolution-facts.js";
+import { materializeSkillLibraryToolSplit } from "./skill-library-tool-split-migration.js";
+import { stampSkillWorkshopPluginMigration } from "./skill-workshop-plugin-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import { materializeUtilityModelSeparation } from "./utility-model-separation-migration.js";
 
@@ -15,6 +24,8 @@ export const AUTO_MANAGED_CONFIG_META_PATHS = [
   ["meta", "lastTouchedVersion"],
   ["meta", "migrations", "modelPolicyAllowlist"],
   ["meta", "migrations", "utilityModelSeparation"],
+  ["meta", "migrations", "skillWorkshopPlugin"],
+  ["meta", "migrations", "skillLibraryToolSplit"],
 ] as const;
 
 export function hasWebhookMigrationProgress(
@@ -69,8 +80,14 @@ export function stampConfigWriteMetadata(
   const migrationStamped =
     previousConfig === undefined
       ? cfg
-      : materializeUtilityModelSeparation(
-          materializeModelPolicyAllowlist(cfg, previousConfig).config,
+      : materializeSkillLibraryToolSplit(
+          stampSkillWorkshopPluginMigration(
+            materializeUtilityModelSeparation(
+              materializeModelPolicyAllowlist(cfg, previousConfig).config,
+              previousConfig,
+            ).config,
+            previousConfig,
+          ),
           previousConfig,
         ).config;
   if (resolveUpdateRehearsalRoot(env)) {
@@ -82,7 +99,11 @@ export function stampConfigWriteMetadata(
       (beforeMeta?.migrations?.modelPolicyAllowlist &&
         !afterMeta?.migrations?.modelPolicyAllowlist) ||
       (beforeMeta?.migrations?.utilityModelSeparation &&
-        !afterMeta?.migrations?.utilityModelSeparation);
+        !afterMeta?.migrations?.utilityModelSeparation) ||
+      (beforeMeta?.migrations?.skillWorkshopPlugin &&
+        !afterMeta?.migrations?.skillWorkshopPlugin) ||
+      (beforeMeta?.migrations?.skillLibraryToolSplit &&
+        !afterMeta?.migrations?.skillLibraryToolSplit);
     return !removedMarker && isDeepStrictEqual(before, after) ? cfg : migrationStamped;
   }
   return {
@@ -94,9 +115,48 @@ export function stampConfigWriteMetadata(
   };
 }
 
+/** Config repairs remain available when their optional state database cannot be resolved. */
+export async function resolveConfigWriteStateSelection(
+  config: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<Result<DatabaseEngineSelection, unknown>> {
+  const owned = getDatabaseEngineSelection();
+  if (owned) {
+    return ok(owned);
+  }
+  try {
+    const { resolveDatabaseEngineSelection } = await import("../infra/database-engine/config.js");
+    return ok(await resolveDatabaseEngineSelection(config, env));
+  } catch (error) {
+    return err(error);
+  }
+}
+
+/** An unresolved state target never falls back to a native database during config repair. */
+export function withConfigWriteState<T>(
+  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>> | undefined,
+  run: () => T,
+): T | null {
+  return selection?.ok ? withDatabaseEngineSelection(selection.value, run) : null;
+}
+
 /** Persist machine-owned metadata only after the matching config file commit succeeds. */
 export async function recordConfigWriteMetadata(
+  deps: { env: NodeJS.ProcessEnv; logger: Pick<typeof console, "warn"> },
+  selection: Awaited<ReturnType<typeof resolveConfigWriteStateSelection>> | undefined,
   now: string = new Date().toISOString(),
 ): Promise<void> {
-  await writeConfigMachineStateAsync("config.lastTouchedAt", now);
+  if (!selection) {
+    return;
+  }
+  try {
+    if (!selection.ok) {
+      throw selection.error;
+    }
+    await withDatabaseEngineSelection(selection.value, () =>
+      writeConfigMachineStateAsync("config.lastTouchedAt", now, { env: deps.env }),
+    );
+  } catch (error) {
+    deps.logger.warn(`Config metadata state update failed: ${formatErrorMessage(error)}`);
+  }
 }

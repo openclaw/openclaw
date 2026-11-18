@@ -2,7 +2,7 @@ import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const hoistedMocks = vi.hoisted(() => ({
-  applyPluginAutoEnable: vi.fn(),
+  applyPluginAutoEnableAsync: vi.fn(),
   materializePluginAutoEnableCandidates: vi.fn(),
   collectChannelDoctorCompatibilityMutations: vi.fn(),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(),
@@ -31,8 +31,9 @@ const hoistedMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
+// mock-isolation: Sequencing fixtures supply activation outcomes; the setup regression exercises the real loader separately.
 vi.mock("../../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: hoistedMocks.applyPluginAutoEnable,
+  applyPluginAutoEnableAsync: hoistedMocks.applyPluginAutoEnableAsync,
   materializePluginAutoEnableCandidates: hoistedMocks.materializePluginAutoEnableCandidates,
 }));
 
@@ -57,6 +58,7 @@ vi.mock("../../state/user-profiles-owner-migration.js", () => ({
   repairMergedGatewayOwnerProfile: hoistedMocks.repairMergedGatewayOwnerProfile,
 }));
 
+// mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../doctor-auth-flat-profiles.js", () => ({
   maybeRepairLegacyAuthProfileStores: ({
     profileIdMap,
@@ -65,6 +67,7 @@ vi.mock("../doctor-auth-flat-profiles.js", () => ({
   }) => ({
     changes: [],
     warnings: [],
+    findings: [],
     profileIdMap,
   }),
   collectOpenAICodexAuthProfileStoreIdMap: hoistedMocks.collectOpenAICodexAuthProfileStoreIdMap,
@@ -177,6 +180,14 @@ vi.mock("./shared/open-policy-allowfrom.js", () => ({
 
 vi.mock("./shared/stale-plugin-config.js", () => ({
   maybeRepairStalePluginConfig: hoistedMocks.maybeRepairStalePluginConfig,
+}));
+
+vi.mock("./shared/context-engine-plugin-id-selector.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared/context-engine-plugin-id-selector.js")>()),
+  maybeRepairContextEnginePluginIdSelector: (cfg: OpenClawConfig) => ({
+    config: cfg,
+    changes: [],
+  }),
 }));
 
 vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({

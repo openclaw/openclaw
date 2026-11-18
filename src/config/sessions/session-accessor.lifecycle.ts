@@ -81,12 +81,11 @@ export async function applySessionPatchProjection<
       const previousSessionKeys = candidateKeys.filter(
         (sessionKey) => sessionKey !== target.primaryKey && workingStore[sessionKey],
       );
-      const cloned = labelOwners.replaceEntry(candidateKeys, target.primaryKey, projected.entry);
       return {
         replacements: [
           { entry: projected.entry, previousSessionKeys, sessionKey: target.primaryKey },
         ],
-        result: { ok: true, entry: structuredClone(cloned) },
+        result: { ok: true, entry: structuredClone(projected.entry) },
       };
     },
   });

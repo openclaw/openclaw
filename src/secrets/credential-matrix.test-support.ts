@@ -1,5 +1,6 @@
 /** Test support for the documented matrix of user-supplied fields that accept SecretRefs. */
-import { getSecretTargetRegistry } from "./target-registry-data.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { buildSecretTargetRegistryFromPlugins } from "./target-registry-data.js";
 import { unsupportedSecretRefSurfacePolicy } from "./unsupported-surface-policy.js";
 
 type CredentialMatrixEntry = {
@@ -24,8 +25,17 @@ export type SecretRefCredentialMatrixDocument = {
 
 /** Builds the public SecretRef credential matrix from the source target registry. */
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
+  const { plugins } = resolvePluginMetadataSnapshot({
+    env: {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: process.env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "extensions",
+    },
+    allowWorkspaceScopedCurrent: true,
+    preferPersisted: false,
+  });
+  const registry = buildSecretTargetRegistryFromPlugins(plugins, { throwOnLoadError: true });
   const entriesByKey = new Map<string, CredentialMatrixEntry>();
-  for (const entry of getSecretTargetRegistry({ sourceTree: true })) {
+  for (const entry of registry) {
     if (!entry.includeInPlan) {
       continue;
     }
@@ -35,7 +45,7 @@ export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocum
       entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
       { secretShape: entry.secretShape, optIn: true as const },
       entry.secretShape === `sibling_ref` && entry.refPathPattern
-        ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+        ? { notes: `Compatibility exception: sibling ref field remains primary.` }
         : {},
     );
     entriesByKey.set(

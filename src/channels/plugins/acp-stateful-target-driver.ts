@@ -76,7 +76,7 @@ export async function ensureConfiguredAcpBindingTargetReady(params: {
     cfg: params.cfg,
     spec: configuredBinding,
   });
-  return result.ok ? { ok: true } : { ok: false, error: result.error ?? "unknown error" };
+  return result.ok ? { ok: true } : { ok: false, error: result.error };
 }
 
 export async function resetConfiguredAcpBindingTargetInPlace(params: {

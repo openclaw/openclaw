@@ -14,6 +14,7 @@ import type { StartupInstallStatus } from "./update-install-status.types.js";
 export async function resolveStartupInstallStatus(
   fetchRemoteGit: boolean,
   signal: AbortSignal,
+  discovered?: StartupInstallStatus,
 ): Promise<StartupInstallStatus> {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
@@ -23,19 +24,23 @@ export async function resolveStartupInstallStatus(
     }),
     readVerifiedGitUpdateReceipt(),
   ]);
-  const gitUpstreamFallback =
-    installReceipt?.upstreamRef && root && updateInstallRootsMatch(root, installReceipt.root)
-      ? { currentSha: installReceipt.sha, upstreamRef: installReceipt.upstreamRef }
-      : undefined;
   const timeoutMs = resolveGatewayStartupTiming().deadlineMs;
+  const git = discovered?.status.git;
+  // Carry completed discovery, not an obsolete receipt, into read-only admission.
+  // The source resolver still verifies root/revision and prefers live Git configuration.
+  const gitSourceHint =
+    discovered?.root && !discovered.status.error && git?.fetchOk === true && git.sha && git.upstream
+      ? { root: discovered.root, sha: git.sha, upstreamRef: git.upstream }
+      : installReceipt;
   const options = {
     root,
     signal,
     ...(fetchRemoteGit ? {} : { timeoutMs }),
     fetchGit: fetchRemoteGit,
     includeRegistry: false,
-    ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
-    ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
+    ...(gitSourceHint ? { gitSourceHint } : {}),
+    // Read-only admission must use the same live source policy as a remote refresh.
+    useDetachedDevUpstream: true,
   };
   for (let attempt = 0; ; attempt++) {
     let status: UpdateCheckResult | undefined;

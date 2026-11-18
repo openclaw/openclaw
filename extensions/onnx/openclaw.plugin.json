@@ -192,5 +192,19 @@
         "confidence": "none"
       }
     }
+  ],
+  "modelCatalog": {
+    "providers": {
+      "onnx": {
+        "authScope": "plugin",
+        "models": []
+      }
+    }
+  },
+  "providers": [
+    "onnx"
+  ],
+  "nonSecretAuthMarkers": [
+    "onnx-local"
   ]
 }

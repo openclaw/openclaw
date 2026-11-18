@@ -1,10 +1,22 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { z } from "zod";
 import type { UpdateRunRecord as PublicUpdateRunRecord } from "../../packages/gateway-protocol/src/schema/update-runs.js";
+import { classifyUpdateRunCause } from "./update-run-cause.js";
+import type { UpdateRunDriverSchema } from "./update-run-driver-schema.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import type { UpdateRunRecoveryState } from "./update-run-recovery-state.js";
 import type { UpdateRunRecordSchema } from "./update-run-schema.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+
+type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
+
+/**
+ * The process identity alone, as leases, recovery receipts and the public run carry
+ * it. It lives here, not beside the driver schema, so Control UI bundles stay zod-free.
+ */
+export function toUpdateRunDriver({ host, pid, startIdentity }: UpdateRunDriver): UpdateRunDriver {
+  return { host, pid, startIdentity };
+}
 
 export function updateStepDiagnostics(
   step: Pick<UpdateStepResult, "failureFacts" | "stdoutTail" | "stderrTail">,
@@ -100,11 +112,28 @@ export function summarizeUpdateStepFailure(
 
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 
-/** Operational capture receipts stay in the private ledger, not status or diagnostic exports. */
+/** Operational captures and in-memory recovery fields are outside the public run schema. */
 export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
   const origin = { ...record.origin };
   delete origin.updateRecoveryCapture;
-  return { ...record, origin };
+  delete origin.windowsUserSid;
+  delete origin.managedHandoff;
+  delete origin.packageStage;
+  delete origin.packageRelease;
+  delete origin.gitActivation;
+  // The wire driver is closed: recorded boot namespaces stay local.
+  if (origin.driver) {
+    origin.driver = toUpdateRunDriver(origin.driver);
+  }
+  if (origin.previousDrivers) {
+    origin.previousDrivers = origin.previousDrivers.map(toUpdateRunDriver);
+  }
+  const verification = { ...record.verification };
+  if (verification.recovery?.serviceRestartSafe === false) {
+    verification.recovery = { ...verification.recovery };
+    delete verification.recovery.dataAtRisk;
+  }
+  return { ...record, origin, verification };
 }
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
@@ -119,6 +148,10 @@ export type CreateUpdateRunInput = Partial<
   preview?: boolean;
   /** Record an already completed repair without publishing a transient running row. */
   settlement?: { reason: string; detail: string };
+  /** Record an update its external supervisor accepted, from the time the update started. */
+  accepted?: { startedAtMs: number };
+  /** Host-read update-request policy; storage records outcome eligibility only for a new run. */
+  reportResult?: boolean;
 };
 
 export type UpdateRunDiagnostics = Pick<
@@ -136,7 +169,9 @@ export function isAbandonedUpdateRun(
 ): boolean {
   return (
     record.status === "failed" &&
-    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+    (record.reason === "abandoned" ||
+      record.reason === "handoff-terminated" ||
+      record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
   );
 }
 
@@ -188,6 +223,11 @@ export function finishUpdateRunRecord(
   if (result.nextAction !== undefined) {
     record.origin.nextAction = result.nextAction;
   }
+  record.origin.cause = classifyUpdateRunCause({
+    status: record.status,
+    reason: record.reason,
+    facts: record.steps.flatMap((step) => step.failureFacts ?? []),
+  });
   record.finishedAtMs = now;
   record.after = { ...record.after, ...result.after };
   record.downtimeMs = result.downtimeMs ?? record.downtimeMs;

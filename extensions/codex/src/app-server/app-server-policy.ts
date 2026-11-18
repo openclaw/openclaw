@@ -10,7 +10,6 @@ export function resolveCodexAppServerForModelProvider(params: {
   config?: Parameters<typeof canUseCodexModelBackedApprovalsReviewerForModel>[0]["config"];
   env?: NodeJS.ProcessEnv;
   agentDir?: string;
-  codexConfigToml?: string | null;
 }): CodexAppServerRuntimeOptions {
   return params.appServer.approvalsReviewer === "user" ||
     canUseCodexModelBackedApprovalsReviewerForModel({
@@ -20,7 +19,6 @@ export function resolveCodexAppServerForModelProvider(params: {
       // Reviewer trust follows the spawned process, not the gateway's ambient home or endpoint.
       env: { ...(params.env ?? process.env), ...params.appServer.start.env },
       agentDir: params.agentDir,
-      codexConfigToml: params.codexConfigToml,
       homeScope: params.appServer.start.homeScope,
       codexArgs: params.appServer.start.args,
     })

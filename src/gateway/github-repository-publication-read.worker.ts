@@ -1,14 +1,15 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import {
   checkRepositoryGitHubPublication,
+  matchesRepositoryGitHubPublicationInput,
   projectRepositoryGitHubPublicationStatus,
   type RepositoryGitHubPublicationFilter,
   type RepositoryGitHubPublicationPendingQuery,
@@ -16,10 +17,10 @@ import {
 } from "./github-repository-publication.kernel.js";
 
 const table = "github_repository_publication_requests";
-const query = (db: DatabaseSync) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
+const query = (db: EngineConnection) => getNodeSqliteKysely<Pick<DB, typeof table>>(db);
 
 function selectRepositoryGitHubPublications(
-  db: DatabaseSync,
+  db: EngineConnection,
   filter: RepositoryGitHubPublicationFilter,
 ) {
   let selection = query(db).selectFrom(table).selectAll();
@@ -49,7 +50,7 @@ function selectRepositoryGitHubPublications(
 }
 
 export function listRepositoryGitHubPublicationsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filter: RepositoryGitHubPublicationFilter,
 ): RepositoryGitHubPublicationRow[] {
   if (!tableExists(db, table)) {
@@ -61,7 +62,7 @@ export function listRepositoryGitHubPublicationsInDatabase(
 }
 
 export function readPendingRepositoryGitHubPublicationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   input: RepositoryGitHubPublicationPendingQuery,
 ): RepositoryGitHubPublicationStatusRow | undefined {
   if (!tableExists(db, table)) {
@@ -76,4 +77,30 @@ export function readPendingRepositoryGitHubPublicationInDatabase(
     latest = checkRepositoryGitHubPublication(row);
   }
   return latest && projectRepositoryGitHubPublicationStatus(latest);
+}
+
+export function readRepositoryGitHubPublicationInputInDatabase(
+  db: EngineConnection,
+  { row, headCommit }: { row: RepositoryGitHubPublicationRow; headCommit?: string },
+): RepositoryGitHubPublicationRow | undefined {
+  if (!tableExists(db, table)) {
+    return undefined;
+  }
+  let selection = query(db)
+    .selectFrom(table)
+    .selectAll()
+    .where("workspace_id", "=", row.workspace_id)
+    .where("status", "=", "published")
+    .orderBy("updated_at_ms", "desc")
+    .orderBy("request_id", "desc");
+  if (headCommit !== undefined) {
+    selection = selection.where("pushed_head_commit", "=", headCommit);
+  }
+  for (const candidate of iterateSqliteQuerySync(db, selection)) {
+    const published = checkRepositoryGitHubPublication(candidate);
+    if (matchesRepositoryGitHubPublicationInput(row, published)) {
+      return published;
+    }
+  }
+  return undefined;
 }

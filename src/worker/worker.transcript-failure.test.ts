@@ -1,4 +1,3 @@
-import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -6,53 +5,37 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
-import { AgentDatabaseExecutionAdmissionClosedError } from "../state/agent-database-admission-error.js";
 import {
-  AgentDatabaseAdmissionError,
-  createAgentDatabaseInspectionRefusal,
-} from "../state/agent-database-admission.js";
-import {
-  captureOpenClawAgentDatabaseAdmissionPublication,
-  clearOpenClawAgentDatabaseValidationCache,
-  getOpenClawAgentDatabaseValidation,
-  invalidateOpenClawAgentDatabaseValidation,
-} from "../state/openclaw-agent-db-validation-cache.js";
-import {
-  closeOpenClawAgentDatabaseByPath,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+  AgentDatabaseExecutionAdmissionClosedError,
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseSchemaAdmissionInvalidError,
+} from "../state/agent-database-admission-error.js";
+import * as admission from "../state/agent-database-admission.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { ComposedGatewayHarness } from "./worker-fault-injection.test-support.js";
 import { runWorkerDescriptor } from "./worker.runtime.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function schemaPublicationFailure(kind: "stale" | "malformed"): Error {
-  const database = openOpenClawAgentDatabase({
-    agentId: "main",
-    path: path.join(tempDirs.make("oc-admission-"), "agent.db"),
-  });
+type Run = ReturnType<typeof runWorkerDescriptor>;
+type Check = (harness: ComposedGatewayHarness, start: () => Run) => Promise<void>;
+async function withWorker(check: Check) {
+  const harness = await ComposedGatewayHarness.create(tempDirs.make("oc-tf-"));
+  const controller = new AbortController();
+  let run: Run | undefined;
   try {
-    const receipt = getOpenClawAgentDatabaseValidation(database)!;
-    const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
-    if (kind === "stale") {
-      invalidateOpenClawAgentDatabaseValidation(database.path);
-    }
-    try {
-      publish(receipt.identity, kind === "malformed" ? { ...receipt, schema: undefined } : receipt);
-    } catch (error) {
-      if (error instanceof Error) {
-        return error;
-      }
-      throw error;
-    }
-    throw new Error("Expected schema publication to refuse the receipt");
+    await harness.start();
+    await check(harness, async () => {
+      run = runWorkerDescriptor(await harness.createDescriptor(), { signal: controller.signal });
+      return await run;
+    });
   } finally {
-    closeOpenClawAgentDatabaseByPath(database.path);
-    clearOpenClawAgentDatabaseValidationCache(database.path);
+    controller.abort(new Error("fixture teardown"));
+    await Promise.allSettled([run]);
+    await harness.close();
   }
 }
 
+// The validation-cache suite proves receipt validity; this suite proves transport policy.
 it.each(["storage", "malformed schema receipt"])(
   "fails a worker turn after one deterministic %s failure without reconnecting",
   async (kind) => {
@@ -62,18 +45,14 @@ it.each(["storage", "malformed schema receipt"])(
       .spyOn(workerServer, "attachWorkerWsMessageHandler")
       .mockImplementation((params) => attach({ ...params, logGateway: { warn } }));
     onTestFinished(() => attachment.mockRestore());
-    const harness = await ComposedGatewayHarness.create(tempDirs.make("oc-tf-"));
-    const controller = new AbortController();
-    let run: ReturnType<typeof runWorkerDescriptor> | undefined;
-    try {
-      await harness.start();
+    await withWorker(async (harness, start) => {
       const replayed = createDeferred();
       const failure =
         kind === "storage"
           ? new Error("transcript operation failed", {
               cause: new Error("synthetic transcript storage failure"),
             })
-          : schemaPublicationFailure("malformed");
+          : new AgentDatabaseSchemaAdmissionInvalidError();
       const commit = vi
         .spyOn(harness.serviceValue, "commitTranscript")
         .mockImplementation(async () => {
@@ -82,27 +61,22 @@ it.each(["storage", "malformed schema receipt"])(
           }
           throw failure;
         });
-      run = runWorkerDescriptor(await harness.createDescriptor(), { signal: controller.signal });
       const boundedRun = Promise.race([
-        run,
+        start(),
         replayed.promise.then(() => {
           throw new Error("Worker replayed a deterministic transcript failure");
         }),
       ]);
 
+      const details = { reason: "gateway-unavailable" };
       await expect(boundedRun).rejects.toMatchObject({
         name: "WorkerTranscriptCommitError",
         message: "Worker transcript commit failed; check Gateway logs.",
-        response: {
-          code: "UNAVAILABLE",
-          retryable: false,
-          details: { reason: "gateway-unavailable" },
-        },
+        response: { code: "UNAVAILABLE", retryable: false, details },
       });
       expect(commit).toHaveBeenCalledOnce();
-      expect(harness.connectionCount).toBe(1);
+      expect(harness).toMatchObject({ connectionCount: 1, providerCalls: 0 });
       expect(harness.requestParams("worker.transcript.commit")).toHaveLength(1);
-      expect(harness.providerCalls).toBe(0);
       expect(warn).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining(
           kind === "storage"
@@ -110,37 +84,23 @@ it.each(["storage", "malformed schema receipt"])(
             : failure.message,
         ),
       );
-    } finally {
-      controller.abort(new Error("fixture teardown"));
-      await Promise.allSettled([run]);
-      await harness.close();
-    }
+    });
   },
 );
 
 it("replays transient transcript failures and completes the run without duplicate messages", async () => {
-  const harness = await ComposedGatewayHarness.create(tempDirs.make("oc-tf-"));
-  const controller = new AbortController();
-  let run: ReturnType<typeof runWorkerDescriptor> | undefined;
-  try {
-    await harness.start();
+  await withWorker(async (harness, start) => {
+    const pendingInspection = { agentId: "main", paths: [], reason: "pending", pending: true };
+    const storePath = harness.sessionTarget.storePath;
     const failures = [
-      schemaPublicationFailure("stale"),
+      new AgentDatabaseSchemaAdmissionChangedError(),
       Object.assign(new Error("synthetic busy"), { code: "ERR_SQLITE_ERROR", errcode: 5 }),
       Object.assign(new Error("synthetic locked"), { code: "SQLITE_LOCKED" }),
       new AgentDatabaseExecutionAdmissionClosedError("synthetic retiring owner"),
-      new AgentDatabaseAdmissionError(
-        createAgentDatabaseInspectionRefusal({
-          agentId: "main",
-          paths: [],
-          reason: "synthetic pending inspection",
-          pending: true,
-        }),
+      new admission.AgentDatabaseAdmissionError(
+        admission.createAgentDatabaseInspectionRefusal(pendingInspection),
       ),
-      new StateDatabaseAdmissionPendingError(
-        harness.sessionTarget.storePath,
-        "synthetic maintenance",
-      ),
+      new StateDatabaseAdmissionPendingError(storePath, "synthetic maintenance"),
       new StateDatabaseReadAdmissionInvalidatedError("synthetic replaced admission"),
       new SqliteWorkerError("synthetic broker overload", "overloaded"),
       new SqliteWorkerError("synthetic broker retirement", "closed"),
@@ -156,22 +116,17 @@ it("replays transient transcript failures and completes the run without duplicat
       await apply(...args);
       throw new SqliteWorkerError("synthetic lost commit receipt", "outcome-unknown");
     });
-    run = runWorkerDescriptor(await harness.createDescriptor(), { signal: controller.signal });
+    const run = start();
 
     await expect(run).resolves.toMatchObject({ status: "completed" });
     const requests = harness.requestParams("worker.transcript.commit");
-    expect(harness.connectionCount).toBe(failures.length + 2);
+    expect(harness).toMatchObject({ connectionCount: failures.length + 2, providerCalls: 1 });
     expect(requests).toHaveLength(failures.length + 3);
     for (const replay of requests.slice(1, -1)) {
       expect(replay).toEqual(requests[0]);
     }
-    expect(harness.providerCalls).toBe(1);
     const transcript = await SessionManager.openAsync(harness.sessionTarget);
     expect(transcript.getEntries()).toHaveLength(2);
     expect(await run).toMatchObject({ transcriptLeafId: transcript.getLeafId() });
-  } finally {
-    controller.abort(new Error("fixture teardown"));
-    await Promise.allSettled([run]);
-    await harness.close();
-  }
+  });
 });

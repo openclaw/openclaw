@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import type {
@@ -16,6 +15,7 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { hasUncommittedSqliteWrites } from "../infra/sqlite-schema-facts.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
@@ -30,15 +30,15 @@ import {
   prepareArtifactDownload,
   prepareArtifactDownloadResponse,
 } from "./artifact-download-projection.js";
-import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
-import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import {
   type ArtifactRecord,
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
   toArtifactSummary,
-} from "./server-methods/artifacts-content.js";
+} from "./artifacts-content.js";
+import { parseManagedOutgoingArtifactId } from "./managed-outgoing-artifact-id.js";
+import { MAX_PAYLOAD_BYTES } from "./payload-limits.js";
 import type {
   SessionTranscriptPageReader,
   SessionTranscriptVisitor,
@@ -307,7 +307,8 @@ function collectArtifactsFromMessage(
       download: { mode: previewOnly ? "unsupported" : download.mode },
       ...(imageUrl ? { image: { url: imageUrl } } : {}),
       ...(download.data !== undefined ? { data: download.data } : {}),
-      ...(download.url ? { url: download.url } : {}),
+      ...(download.localPath ? { localPath: download.localPath } : {}),
+      ...(params.includeDownloadData !== false && download.url ? { url: download.url } : {}),
     };
     params.collection.artifacts.push(summary);
   }
@@ -335,7 +336,7 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
 }
 
 const summaryLists = new WeakMap<
-  DatabaseSync,
+  EngineConnection,
   Map<string, { revision: string; artifacts: ArtifactRecord[] }>
 >();
 
@@ -487,9 +488,7 @@ export async function selectSessionArtifacts(
         messageRole: query.messageRole,
         imagesOnly: true,
       });
-      const images = collected
-        .map((artifact) => artifact && toArtifactSummary(artifact))
-        .toReversed();
+      const images = collected.toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];

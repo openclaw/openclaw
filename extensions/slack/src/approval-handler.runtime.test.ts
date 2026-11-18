@@ -1,4 +1,3 @@
-// Slack tests cover approval handler plugin behavior.
 import type {
   ApprovalActionView,
   ChannelApprovalKind,
@@ -11,13 +10,18 @@ import { countSlackTextUtf8Bytes } from "./truncate.js";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./send.js", () => ({
-  sendMessageSlack: sendMessageSlackMock,
-}));
+// mock-isolation: approval rendering and routing use the controlled transport fixture.
+vi.mock("./send.js", () => ({ sendMessageSlack: sendMessageSlackMock }));
+
+const { presentation, transport } = slackApprovalNativeRuntime;
 
 type SlackPayload = {
   text: string;
-  blocks?: unknown;
+  blocks?: Array<{
+    type?: string;
+    text?: { type?: string; text?: string };
+    elements?: Array<{ type?: string; text?: string | { text?: string }; value?: unknown }>;
+  }>;
 };
 type ChatUpdatePayload = {
   channel?: string;
@@ -25,26 +29,15 @@ type ChatUpdatePayload = {
   text?: string;
   blocks?: unknown;
 };
-type SlackUpdateEntryParams = Parameters<
-  NonNullable<typeof slackApprovalNativeRuntime.transport.updateEntry>
->[0];
+type SlackUpdateEntryParams = Parameters<NonNullable<typeof transport.updateEntry>>[0];
 const SLACK_CHAT_UPDATE_TEXT_MAX_BYTES = 4000;
-const APPROVAL_TIMING = {
-  createdAtMs: 0,
-  expiresAtMs: 60_000,
-};
+const APPROVAL_TIMING = { createdAtMs: 0, expiresAtMs: 60_000 };
 const APPROVAL_CONTEXT = {
   cfg: {} as never,
   accountId: "default",
-  context: {
-    app: {} as never,
-    config: {} as never,
-  },
+  context: { app: {} as never, config: {} as never },
 };
-const APPROVAL_ENTRY = {
-  channelId: "D123APPROVER",
-  messageTs: "1712345678.999999",
-};
+const APPROVAL_ENTRY = { channelId: "D123APPROVER", messageTs: "1712345678.999999" };
 const SCREEN_SHARE_APPROVAL = {
   approvalKind: "plugin" as const,
   approvalId: "plugin:req-1",
@@ -85,66 +78,44 @@ function buildApprovalAction(
   };
 }
 
-async function buildExecPendingPayload(params: {
-  approvalId: string;
-  commandText: string;
-  metadata?: ApprovalMetadataView[];
-  decisions?: ApprovalDecision[];
-}): Promise<SlackPayload> {
-  const decisions = params.decisions ?? ["allow-once"];
-  return (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
-    ...APPROVAL_CONTEXT,
-    request: {
-      id: params.approvalId,
-      request: { command: params.commandText },
-      ...APPROVAL_TIMING,
-    },
-    approvalKind: "exec",
-    nowMs: 0,
-    view: {
-      approvalKind: "exec",
-      approvalId: params.approvalId,
-      commandText: params.commandText,
-      metadata: params.metadata ?? [],
-      actions: decisions.map((decision) =>
-        buildApprovalAction("exec", params.approvalId, decision),
-      ),
-    } as never,
-  })) as SlackPayload;
-}
+type PendingInput = (
+  | { approvalKind: "exec"; approvalId: string; commandText: string }
+  | {
+      approvalKind: "plugin";
+      approvalId: string;
+      title: string;
+      description: string;
+      severity: "info" | "warning" | "critical";
+      pluginId: string;
+      toolName: string;
+    }
+) & { metadata?: ApprovalMetadataView[]; decisions?: ApprovalDecision[] };
 
-async function buildPluginPendingPayload(params: {
-  approvalId: string;
-  title: string;
-  description: string;
-  severity: "info" | "warning" | "critical";
-  pluginId: string;
-  toolName: string;
-  metadata?: ApprovalMetadataView[];
-  decisions?: ApprovalDecision[];
-}): Promise<SlackPayload> {
-  const decisions = params.decisions ?? ["deny"];
-  return (await slackApprovalNativeRuntime.presentation.buildPendingPayload({
+async function buildPendingPayload(input: PendingInput): Promise<SlackPayload> {
+  const {
+    decisions = input.approvalKind === "exec" ? ["allow-once"] : ["deny"],
+    metadata = [],
+    ...fields
+  } = input;
+  return (await presentation.buildPendingPayload({
     ...APPROVAL_CONTEXT,
-    request: {
-      id: params.approvalId,
-      request: { title: params.title, description: params.description },
-      ...APPROVAL_TIMING,
-    },
-    approvalKind: "plugin",
+    approvalKind: input.approvalKind,
+    request:
+      input.approvalKind === "exec"
+        ? { id: input.approvalId, request: { command: input.commandText }, ...APPROVAL_TIMING }
+        : {
+            id: input.approvalId,
+            request: { title: input.title, description: input.description },
+            ...APPROVAL_TIMING,
+          },
     nowMs: 0,
     view: {
-      approvalKind: "plugin",
+      ...fields,
+      title: input.approvalKind === "exec" ? "Exec approval" : input.title,
       phase: "pending",
-      approvalId: params.approvalId,
-      title: params.title,
-      description: params.description,
-      severity: params.severity,
-      pluginId: params.pluginId,
-      toolName: params.toolName,
-      metadata: params.metadata ?? [],
+      metadata,
       actions: decisions.map((decision) =>
-        buildApprovalAction("plugin", params.approvalId, decision),
+        buildApprovalAction(input.approvalKind, input.approvalId, decision),
       ),
       expiresAtMs: APPROVAL_TIMING.expiresAtMs,
     },
@@ -152,7 +123,7 @@ async function buildPluginPendingPayload(params: {
 }
 
 function buildPluginResolvedResult() {
-  return slackApprovalNativeRuntime.presentation.buildResolvedResult({
+  return presentation.buildResolvedResult({
     ...APPROVAL_CONTEXT,
     request: SCREEN_SHARE_REQUEST,
     resolved: {
@@ -172,13 +143,10 @@ function buildPluginResolvedResult() {
 }
 
 function buildPluginExpiredResult() {
-  return slackApprovalNativeRuntime.presentation.buildExpiredResult({
+  return presentation.buildExpiredResult({
     ...APPROVAL_CONTEXT,
     request: SCREEN_SHARE_REQUEST,
-    view: {
-      ...SCREEN_SHARE_APPROVAL,
-      phase: "expired",
-    },
+    view: { ...SCREEN_SHARE_APPROVAL, phase: "expired" },
     entry: APPROVAL_ENTRY,
   });
 }
@@ -202,26 +170,27 @@ function decodeSlackApprovalElements(block: { elements?: unknown[] } | undefined
   );
 }
 
-function readChatUpdatePayload(
-  chatUpdate: { mock: { calls: unknown[][] } },
-  index: number,
-): ChatUpdatePayload {
-  const call = chatUpdate.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected Slack chat.update call #${index + 1}`);
-  }
-  const [payload] = call;
-  if (!payload || typeof payload !== "object") {
-    throw new Error(`Expected Slack chat.update payload #${index + 1}`);
-  }
-  return payload as ChatUpdatePayload;
+function expectPendingActions(
+  payload: SlackPayload,
+  kind: "exec" | "plugin",
+  labels: string[],
+  decisions: ApprovalDecision[],
+) {
+  expect(payload.text).toContain(`*${kind === "exec" ? "Exec" : "Plugin"} approval required*`);
+  expect(payload.blocks?.[0]).toMatchObject({ block_id: "openclaw_approval_header" });
+  const actions = findSlackActionsBlock(payload.blocks ?? []);
+  expect(readSlackActionLabels(actions)).toEqual(labels);
+  expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
+  expect(decodeSlackApprovalElements(actions)).toEqual(
+    decisions.map((decision) => expect.objectContaining({ approvalKind: kind, decision })),
+  );
 }
 
 async function updateSlackApprovalEntry(
   context: SlackUpdateEntryParams["context"],
   payload: SlackUpdateEntryParams["payload"],
 ): Promise<void> {
-  await slackApprovalNativeRuntime.transport.updateEntry?.({
+  await transport.updateEntry?.({
     ...APPROVAL_CONTEXT,
     context,
     entry: { channelId: "C123", messageTs: "1712345678.999999" },
@@ -240,44 +209,19 @@ async function updateSlackApprovalEntry(
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
-function readMrkdwnTexts(blocks: unknown): string[] {
-  if (!Array.isArray(blocks)) {
-    return [];
-  }
-
-  const texts: string[] = [];
-  for (const block of blocks) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-
-    const text = (block as { text?: unknown }).text;
-    if (
-      text &&
-      typeof text === "object" &&
-      (text as { type?: unknown }).type === "mrkdwn" &&
-      typeof (text as { text?: unknown }).text === "string"
-    ) {
-      texts.push((text as { text: string }).text);
-    }
-
-    const elements = (block as { elements?: unknown }).elements;
-    if (!Array.isArray(elements)) {
-      continue;
-    }
-    for (const element of elements) {
-      if (
-        element &&
-        typeof element === "object" &&
-        (element as { type?: unknown }).type === "mrkdwn" &&
-        typeof (element as { text?: unknown }).text === "string"
-      ) {
-        texts.push((element as { text: string }).text);
-      }
-    }
-  }
-
-  return texts;
+function readMrkdwnTexts(blocks: SlackPayload["blocks"]): string[] {
+  return (blocks ?? [])
+    .flatMap((block) => {
+      const texts: Array<{ type?: string; text?: string | { text?: string } }> = block.text
+        ? [block.text]
+        : [];
+      return texts.concat(block.elements ?? []);
+    })
+    .filter(
+      (text): text is { type: string; text: string } =>
+        text?.type === "mrkdwn" && typeof text.text === "string",
+    )
+    .map(({ text }) => text);
 }
 
 function findApprovalMrkdwn(payload: SlackPayload, prefix: string): string {
@@ -318,12 +262,8 @@ describe("slackApprovalNativeRuntime", () => {
         },
         config: {},
       };
-      const request = {
-        id: "approval-1",
-        request: { command: "echo hi" },
-        ...APPROVAL_TIMING,
-      };
-      const entry = await slackApprovalNativeRuntime.transport.deliverPending({
+      const request = { id: "approval-1", request: { command: "echo hi" }, ...APPROVAL_TIMING };
+      const entry = await transport.deliverPending({
         ...APPROVAL_CONTEXT,
         context,
         request,
@@ -349,7 +289,7 @@ describe("slackApprovalNativeRuntime", () => {
       if (!entry) {
         throw new Error("Expected delivered Slack approval entry");
       }
-      await slackApprovalNativeRuntime.transport.updateEntry?.({
+      await transport.updateEntry?.({
         ...APPROVAL_CONTEXT,
         context,
         request,
@@ -375,7 +315,8 @@ describe("slackApprovalNativeRuntime", () => {
 
   it("does not leave dangling surrogates when truncating exec approval command mrkdwn", async () => {
     const commandText = `${"a".repeat(2598)}😀tail`;
-    const payload = await buildExecPendingPayload({
+    const payload = await buildPendingPayload({
+      approvalKind: "exec",
       approvalId: "req-surrogate",
       commandText,
     });
@@ -386,33 +327,20 @@ describe("slackApprovalNativeRuntime", () => {
   });
 
   it("renders only the allowed pending actions", async () => {
-    const payload = await buildExecPendingPayload({
+    const payload = await buildPendingPayload({
+      approvalKind: "exec",
       approvalId: "req-1",
       commandText: "echo hi",
       decisions: ["allow-once", "deny"],
     });
 
-    expect(payload.text).toContain("*Exec approval required*");
-    expect((payload.blocks as Array<{ block_id?: string }>)[0]?.block_id).toBe(
-      "openclaw_approval_header",
-    );
-    const actionsBlock = findSlackActionsBlock(
-      payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
-    );
-    const labels = readSlackActionLabels(actionsBlock);
-
-    expect(labels).toEqual(["Allow Once", "Deny"]);
+    expectPendingActions(payload, "exec", ["Allow Once", "Deny"], ["allow-once", "deny"]);
     expect(JSON.stringify(payload.blocks)).not.toContain("Allow Always");
-    expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
     expect(JSON.stringify(payload.blocks)).toContain("openclaw:approval_button");
-    expect(decodeSlackApprovalElements(actionsBlock)).toEqual([
-      expect.objectContaining({ approvalKind: "exec", decision: "allow-once" }),
-      expect.objectContaining({ approvalKind: "exec", decision: "deny" }),
-    ]);
   });
 
   it("renders plugin pending approvals with plugin approval actions", async () => {
-    const payload = await buildPluginPendingPayload({
+    const payload = await buildPendingPayload({
       ...SCREEN_SHARE_APPROVAL,
       metadata: [
         { label: "Severity", value: "Warning" },
@@ -425,9 +353,11 @@ describe("slackApprovalNativeRuntime", () => {
       decisions: ["allow-once", "allow-always", "deny"],
     });
 
-    expect(payload.text).toContain("*Plugin approval required*");
-    expect((payload.blocks as Array<{ block_id?: string }>)[0]?.block_id).toBe(
-      "openclaw_approval_header",
+    expectPendingActions(
+      payload,
+      "plugin",
+      ["Allow Once", "Allow Always", "Deny"],
+      ["allow-once", "allow-always", "deny"],
     );
     expect(payload.text).toContain("Share screen with Computer Use");
     expect(payload.text).toContain("*Approval ID:* plugin:req-1");
@@ -438,23 +368,11 @@ describe("slackApprovalNativeRuntime", () => {
       "*Scope:* Send to 3 recipients via email (external): alice@example.com, +2 more",
     );
     expect(payload.text).not.toContain("*Command*");
-    const actionsBlock = findSlackActionsBlock(
-      payload.blocks as Array<{ type?: string; elements?: unknown[] }>,
-    );
-    const labels = readSlackActionLabels(actionsBlock);
-
-    expect(labels).toEqual(["Allow Once", "Allow Always", "Deny"]);
     expect(JSON.stringify(payload.blocks)).toContain("plugin:req-1");
-    expect(JSON.stringify(payload.blocks)).not.toContain("/approve");
-    expect(decodeSlackApprovalElements(actionsBlock)).toEqual([
-      expect.objectContaining({ approvalKind: "plugin", decision: "allow-once" }),
-      expect.objectContaining({ approvalKind: "plugin", decision: "allow-always" }),
-      expect.objectContaining({ approvalKind: "plugin", decision: "deny" }),
-    ]);
   });
 
   it("preserves the Denied system-agent heading after denial", async () => {
-    const result = await slackApprovalNativeRuntime.presentation.buildResolvedResult({
+    const result = await presentation.buildResolvedResult({
       ...APPROVAL_CONTEXT,
       request: {
         approvalKind: "system-agent",
@@ -531,25 +449,10 @@ describe("slackApprovalNativeRuntime", () => {
 
   it("caps resolved update fallback text to Slack chat.update limits while preserving blocks", async () => {
     const blocks = [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "*Command*\n```short preview```",
-        },
-      },
+      { type: "section", text: { type: "mrkdwn", text: "*Command*\n```short preview```" } },
     ];
-    const chatUpdate = vi.fn(async (_payload: { text: string; blocks: typeof blocks }) => ({}));
-    const context = {
-      app: {
-        client: {
-          chat: {
-            update: chatUpdate,
-          },
-        },
-      },
-      config: {},
-    } as never;
+    const chatUpdate = vi.fn(async (_payload: ChatUpdatePayload) => ({}));
+    const context = { app: { client: { chat: { update: chatUpdate } } }, config: {} } as never;
 
     await updateSlackApprovalEntry(context, {
       text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES),
@@ -558,21 +461,23 @@ describe("slackApprovalNativeRuntime", () => {
 
     await updateSlackApprovalEntry(context, { text: "a".repeat(5000), blocks });
 
-    const firstUpdate = readChatUpdatePayload(chatUpdate, 0);
-    const secondUpdate = readChatUpdatePayload(chatUpdate, 1);
-    expect(firstUpdate.channel).toBe("C123");
-    expect(firstUpdate.ts).toBe("1712345678.999999");
-    expect(firstUpdate.text).toBe("a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES));
+    const firstUpdate = chatUpdate.mock.calls[0]![0];
+    const secondUpdate = chatUpdate.mock.calls[1]![0];
+    expect(firstUpdate).toMatchObject({
+      channel: "C123",
+      ts: "1712345678.999999",
+      text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES),
+    });
     expect(firstUpdate.blocks).toBe(blocks);
-    expect(secondUpdate.channel).toBe("C123");
-    expect(secondUpdate.ts).toBe("1712345678.999999");
+    expect(secondUpdate).toMatchObject({ channel: "C123", ts: "1712345678.999999" });
     expect(secondUpdate.text).toMatch(/…$/);
     expect(secondUpdate.blocks).toBe(blocks);
     expect(countSlackTextUtf8Bytes(secondUpdate.text ?? "")).toBe(SLACK_CHAT_UPDATE_TEXT_MAX_BYTES);
   });
 
   it("keeps pending metadata context within Slack Block Kit limits", async () => {
-    const payload = await buildExecPendingPayload({
+    const payload = await buildPendingPayload({
+      approvalKind: "exec",
       approvalId: "req-1",
       commandText: "echo hi",
       metadata: Array.from({ length: 12 }, (_entry, index) => ({

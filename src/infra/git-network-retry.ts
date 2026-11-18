@@ -16,29 +16,43 @@ type GitNetworkResult = {
 };
 
 const log = createSubsystemLogger("git/network");
-const RETRY_DELAY_MS = 1_000;
+const DEFAULT_RETRY_DELAYS_MS = [1_000];
+export const UPDATE_GIT_RETRY_DELAYS_MS = [1_000, 5_000, 15_000] as const;
 
-/** Clone retries require destination cleanup by the clone owner, not this argv classifier. */
-export function retryableGitNetworkOperation(
-  args: readonly string[],
-): GitNetworkOperation | undefined {
+/** Resolve owner-prepared Git argv without mistaking a global option value for a command. */
+export function gitCommandName(args: readonly string[]): string | undefined {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
-    if (arg === "-c" || arg === "-C" || arg === "--git-dir" || arg === "--work-tree") {
+    if (["-c", "-C", "--git-dir", "--work-tree", "--namespace", "--config-env"].includes(arg)) {
       index += 1;
     } else if (
-      /^(?:-c.+|-C.+|--(?:git-dir|work-tree|config-env)=.+)$/u.test(arg) ||
-      ["--no-optional-locks", "--no-lazy-fetch", "--no-replace-objects", "--bare"].includes(arg)
+      /^(?:-c.+|-C.+|--(?:git-dir|work-tree|namespace|config-env|attr-source)=.+)$/u.test(arg) ||
+      [
+        "--no-optional-locks",
+        "--no-lazy-fetch",
+        "--no-replace-objects",
+        "--bare",
+        "--literal-pathspecs",
+        "--no-pager",
+      ].includes(arg)
     ) {
       continue;
     } else {
-      return arg === "fetch" || arg === "ls-remote" ? arg : undefined;
+      return arg;
     }
   }
   return undefined;
 }
 
-function isTransientGitFailure(operation: GitNetworkOperation, result: GitNetworkResult): boolean {
+/** Clone retries require destination cleanup by the clone owner, not this argv classifier. */
+export function retryableGitNetworkOperation(
+  args: readonly string[],
+): GitNetworkOperation | undefined {
+  const command = gitCommandName(args);
+  return command === "fetch" || command === "ls-remote" ? command : undefined;
+}
+
+function isTransientGitFailure(result: GitNetworkResult): boolean {
   if (
     result.termination !== "exit" ||
     result.code === null ||
@@ -54,77 +68,73 @@ function isTransientGitFailure(operation: GitNetworkOperation, result: GitNetwor
   const stderr =
     typeof result.stderr === "string" ? result.stderr : Buffer.from(result.stderr).toString("utf8");
   if (
-    /authentication failed|permission denied|access denied|repository not found|could not read username|couldn't find remote ref|not our ref|certificate|host key verification failed|no space left|disk quota|bad object|returned error: (?:401|403|404)\b/iu.test(
+    /authentication failed|permission denied|access denied|repository not found|could not read username|couldn't find remote ref|not our ref|certificate|host key verification failed|no space left|disk quota|cannot lock ref|bad object|checksum|corrupt|inflate:|hash mismatch|SHA(?:1|256) mismatch|CRC mismatch|returned error: (?:401|403|404)\b/iu.test(
       stderr,
     )
   ) {
     return false;
   }
-  // A settled fetch is safe to repeat after an external ref writer wins its CAS or lock.
-  if (/cannot lock ref/iu.test(stderr)) {
-    return (
-      operation === "fetch" &&
-      /cannot lock ref '[^']+': (?:is at \S+ but expected \S+|Unable to create '[^']+\.lock': File exists)/iu.test(
-        stderr,
-      )
-    );
-  }
-  return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|remote end hung up unexpectedly|unexpected disconnect|early EOF|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|500|502|503|504)\b/iu.test(
+  return /did not send all necessary objects|could not resolve (?:host|proxy)|temporary failure in name resolution|failed to connect|connection (?:reset|timed out|refused|closed)|transfer closed with \d+ bytes remaining to read|remote end hung up unexpectedly|unexpected disconnect|\bEOF\b|ECONNRESET|ETIMEDOUT|empty reply from server|TLS connection was non-properly terminated|SSL_ERROR_SYSCALL|HTTP\/2.*(?:stream|internal_error)|RPC failed; curl (?:5|6|7|18|28|35|52|55|56|92)\b|returned error: (?:408|429|5\d\d)\b/iu.test(
     stderr,
   );
 }
 
-/** Retry one settled network read inside its original deadline and caller-owned admission. */
+/** Retry settled network reads within their original deadline and caller-owned admission. */
 export async function withGitNetworkRetry<T extends GitNetworkResult>(
   operation: GitNetworkOperation | undefined,
   options: {
-    timeoutMs: number;
+    timeoutMs?: number;
+    retryDelaysMs?: readonly number[];
     signal?: AbortSignal;
     beforeRun?: () => void;
     startRun?: GitOperationStarter;
   },
-  run: (timeoutMs: number) => Promise<T>,
+  run: (timeoutMs: number | undefined) => Promise<T>,
 ): Promise<T> {
-  const started = performance.now();
-  const attempt = (timeoutMs: number) => {
+  const deadline = performance.now() + (options.timeoutMs ?? Infinity);
+  const attempt = (timeoutMs: number | undefined) => {
     const start = () => {
       options.beforeRun?.();
       return run(timeoutMs);
     };
     return options.startRun ? options.startRun(start) : start();
   };
-  const result = await attempt(options.timeoutMs);
-  if (!operation || !isTransientGitFailure(operation, result)) {
-    return result;
-  }
+  let result = await attempt(options.timeoutMs);
+  const delays = options.retryDelaysMs ?? DEFAULT_RETRY_DELAYS_MS;
   const cancelled = (): T => ({ ...result, code: null, signal: null, termination: "signal" });
-  if (options.signal?.aborted) {
-    return cancelled();
-  }
-  if (options.timeoutMs - (performance.now() - started) <= RETRY_DELAY_MS) {
-    return result;
-  }
-  log.warn(`Git ${operation} hit a transient failure; retrying once`, {
-    operation,
-    attempt: 1,
-    maxAttempts: 2,
-    delayMs: RETRY_DELAY_MS,
-    exitCode: result.code,
-  });
-  try {
-    await sleepWithAbort(RETRY_DELAY_MS, options.signal);
-  } catch (error) {
+  for (const [index, delayMs] of delays.entries()) {
+    if (!operation || !isTransientGitFailure(result)) {
+      break;
+    }
     if (options.signal?.aborted) {
       return cancelled();
     }
-    throw error;
+    if (deadline - performance.now() <= delayMs) {
+      break;
+    }
+    log.warn(`Git ${operation} hit a transient failure; retrying`, {
+      operation,
+      attempt: index + 1,
+      maxAttempts: delays.length + 1,
+      delayMs,
+      exitCode: result.code,
+    });
+    try {
+      await sleepWithAbort(delayMs, options.signal);
+    } catch (error) {
+      if (options.signal?.aborted) {
+        return cancelled();
+      }
+      throw error;
+    }
+    if (options.signal?.aborted) {
+      return cancelled();
+    }
+    const remainingMs = Math.floor(deadline - performance.now());
+    if (remainingMs <= 0) {
+      break;
+    }
+    result = await attempt(options.timeoutMs === undefined ? undefined : remainingMs);
   }
-  if (options.signal?.aborted) {
-    return cancelled();
-  }
-  const remainingMs = Math.floor(options.timeoutMs - (performance.now() - started));
-  if (remainingMs <= 0) {
-    return result;
-  }
-  return await attempt(remainingMs);
+  return result;
 }

@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   fitsTelegramCallbackData,
   hasTelegramApprovalCallbackPrefix,
@@ -15,6 +16,7 @@ import {
 } from "./approval-callback-data.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import {
+  recordTelegramUpdateReceivedAt,
   runWithTelegramSpooledReplayUpdate,
   type TelegramMessageProcessingResult,
 } from "./bot-processing-outcome.js";
@@ -25,6 +27,12 @@ import {
   resolveTelegramMessageThreadSpec,
 } from "./bot/helpers.js";
 import {
+  adoptTelegramDmTopicUpdate,
+  createTelegramDmTopicAdoptState,
+  readTelegramAdoptedDmThreadId,
+  restoreTelegramAdoptedDmThreadId,
+} from "./dm-topic-adopt.js";
+import {
   getPreparedTelegramPollAnswer,
   isEligibleTelegramPollAnswerUpdate,
   prepareTelegramPollAnswerContextAsync,
@@ -34,7 +42,10 @@ import {
 import { hasTelegramQuestionCallbackPrefix } from "./question-callback-data.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
-import { resolveTelegramIngressNonRetryableFailure } from "./telegram-ingress-non-retryable.js";
+import {
+  resolveTelegramIngressNonRetryableFailure,
+  TelegramCallbackProcessingError,
+} from "./telegram-ingress-non-retryable.js";
 import { resolveTelegramUpdateId, telegramQueueEventId } from "./telegram-ingress-spool.js";
 import {
   TelegramIngressPayloadError,
@@ -42,6 +53,11 @@ import {
   type TelegramSpooledUpdatePayload,
 } from "./telegram-ingress-spool.payload.js";
 import { createShouldSupersedeTelegramSpooledPending } from "./telegram-ingress-supersede.js";
+import {
+  getPreparedTelegramWidgetQuery,
+  prepareTelegramWidgetQueryContextAsync,
+  recordPreparedTelegramWidgetQuery,
+} from "./widgets/widget-query-context.js";
 
 const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
@@ -311,12 +327,19 @@ type CreateTelegramIngressMonitorParams = {
  * committed spool append into the shared pump.
  */
 export function createTelegramIngressMonitor(params: CreateTelegramIngressMonitorParams) {
+  // Client-created DM topic adoption belongs to this account's ingress owner.
+  const dmTopicAdoptState = createTelegramDmTopicAdoptState();
   const inspect: Parameters<typeof createChannelIngressMonitor>[0]["inspect"] = (update, context) =>
     inspectTelegramSpooledUpdate(
       update,
       params.botInfo,
       context.phase === "claim" ? context.claimedLaneKey : undefined,
     );
+  const restoreSpooledUpdate = (payload: TelegramSpooledUpdatePayload): unknown => {
+    const update = payload.update;
+    restoreTelegramAdoptedDmThreadId(update, payload.adoptedDmThreadId);
+    return update;
+  };
   return createChannelIngressMonitor<
     unknown,
     TelegramSpooledUpdatePayload,
@@ -325,11 +348,19 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
     queue: params.queue,
     inspect,
     inspectAsync: async (update, context) => {
-      if (context.phase === "admission" && isEligibleTelegramPollAnswerUpdate(update)) {
-        await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
+      if (context.phase === "admission") {
+        // Decide before lane derivation so the adopted topic owns the lane.
+        adoptTelegramDmTopicUpdate(update, dmTopicAdoptState);
+        if (isEligibleTelegramPollAnswerUpdate(update)) {
+          await prepareTelegramPollAnswerContextAsync({ update, accountId: params.accountId });
+        }
+      }
+      if (context.phase === "admission" && typeof update === "object" && update !== null) {
+        await prepareTelegramWidgetQueryContextAsync({ update, accountId: params.accountId });
       }
       return inspect(update, context);
     },
+    reuseAdmissionFactsForFreshClaims: true,
     payload: {
       version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
       serialize: (update, { receivedAt }) => {
@@ -338,18 +369,31 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
           typeof update === "object" && update !== null
             ? getPreparedTelegramPollAnswer(update)
             : undefined;
+        const adoptedDmThreadId = readTelegramAdoptedDmThreadId(update);
+        const preparedWidgetQuery =
+          typeof update === "object" && update !== null
+            ? getPreparedTelegramWidgetQuery(update)
+            : undefined;
         return {
           version: TELEGRAM_SPOOLED_UPDATE_PAYLOAD_VERSION,
           updateId,
           receivedAt,
           update,
           ...(preparedPollAnswer ? { preparedPollAnswer } : {}),
+          ...(adoptedDmThreadId === undefined ? {} : { adoptedDmThreadId }),
+          ...(preparedWidgetQuery ? { preparedWidgetQuery } : {}),
         };
       },
       deserialize: (payload) => {
-        const update = payload.update;
-        if (payload.preparedPollAnswer && typeof update === "object" && update !== null) {
-          recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+        const update = restoreSpooledUpdate(payload);
+        if (typeof update === "object" && update !== null) {
+          recordTelegramUpdateReceivedAt(update, payload.receivedAt);
+          if (payload.preparedPollAnswer) {
+            recordPreparedTelegramPollAnswer(update, payload.preparedPollAnswer);
+          }
+          if (payload.preparedWidgetQuery) {
+            recordPreparedTelegramWidgetQuery(update, payload.preparedWidgetQuery);
+          }
         }
         return update;
       },
@@ -363,9 +407,16 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         ),
     },
     deliver: async (update, lifecycle) => {
+      const isCallback = isRecord(update) && isRecord(update.callback_query);
+      const wrapFailure = (error: unknown) =>
+        isCallback ? new TelegramCallbackProcessingError(error) : error;
       // The monitor supplies both callbacks; optional public fields preserve
       // structural compatibility for channel lifecycles that do not need them.
-      const telegramLifecycle = lifecycle as TelegramIngressDrainLifecycle;
+      const ingressLifecycle = lifecycle as TelegramIngressDrainLifecycle;
+      const telegramLifecycle: TelegramIngressDrainLifecycle = {
+        ...ingressLifecycle,
+        onFailed: (error) => ingressLifecycle.onFailed(wrapFailure(error)),
+      };
       try {
         const result = await runWithTelegramSpooledReplayUpdate(
           update as object,
@@ -414,6 +465,14 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
                   await telegramLifecycle.onFailed(terminal.error);
                   return;
                 }
+                if (terminal.kind === "dropped") {
+                  if (telegramLifecycle.onDropped) {
+                    await telegramLifecycle.onDropped(terminal.reason);
+                  } else {
+                    await telegramLifecycle.onAbandoned();
+                  }
+                  return;
+                }
                 await lifecycle.onAdopted();
               },
               async (error: unknown) => {
@@ -437,7 +496,14 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         }
         const outcome = result.value;
         if (outcome?.kind === "failed-retryable") {
-          return { kind: "failed-retryable", error: outcome.error };
+          return { kind: "failed-retryable", error: wrapFailure(outcome.error) };
+        }
+        if (outcome?.kind === "dropped") {
+          if (!lifecycle.onDropped) {
+            return { kind: "failed-retryable", error: new Error("terminal drop is unsupported") };
+          }
+          await lifecycle.onDropped(outcome.reason);
+          return { kind: "transferred" };
         }
         // A dispatched update that records no outcome and defers no participant
         // was consumed silently; completing here tombstones the spool row with
@@ -450,7 +516,7 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         await lifecycle.onAdopted();
         return { kind: "completed" };
       } catch (error) {
-        return { kind: "failed-retryable", error };
+        return { kind: "failed-retryable", error: wrapFailure(error) };
       }
     },
     pollIntervalMs: params.pollIntervalMs ?? TELEGRAM_SPOOLED_DRAIN_POLL_INTERVAL_MS,
@@ -470,7 +536,8 @@ export function createTelegramIngressMonitor(params: CreateTelegramIngressMonito
         accountId: params.accountId,
         ...(params.botInfo?.username ? { botUsername: params.botInfo.username } : {}),
       }),
-      deriveLaneKey: (record) => telegramSpooledLaneKey(record.payload.update, params.botInfo),
+      deriveLaneKey: (record) =>
+        telegramSpooledLaneKey(restoreSpooledUpdate(record.payload), params.botInfo),
       reconcileStoredLaneKey: (record, storedLaneKey, derivedLaneKey) =>
         canReconcileTelegramLegacyLane({
           record,

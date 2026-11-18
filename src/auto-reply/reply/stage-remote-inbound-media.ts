@@ -1,4 +1,3 @@
-/** Shared guard for staging remote inbound media into the local cache. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/config.js";
 import { hasStagedMediaFacts } from "../../media/media-facts.js";

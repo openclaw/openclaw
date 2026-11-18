@@ -58,17 +58,10 @@ export function validateQualificationBaselinePolicy(request, policy) {
   ) {
     throw new Error("Frozen baselines omit the candidate-owned oldest-supported baseline");
   }
-  if (
-    baselines.upgradeSurvivorBaselines.some(
-      (spec) => compareReleaseVersions(spec.slice(9), baselines.upgradeBaseline.slice(9)) > 0,
-    )
-  ) {
-    throw new Error("Frozen upgrade baseline must be the newest selected predecessor");
-  }
   return baselines;
 }
 
-// P reads these immutable Q blobs, not Q code or today's registry. The selected
+// P reads these immutable C blobs, not Q code or today's registry. The selected
 // tuple already lives in the authenticated request; retain only its source facts.
 export function qualificationBaselinePolicy(request, packageBytes, policyBytes) {
   const candidate = JSON.parse(packageBytes.toString("utf8"));

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
+import { hasErrnoCode } from "../infra/errno.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
   normalizeDatabasePath,
@@ -10,8 +13,8 @@ import {
 } from "../infra/sqlite-worker-identity.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-type AgentDatabaseOwner = { db: DatabaseSync };
-export type OpenClawAgentDatabaseIdentity = string | symbol;
+type AgentDatabaseOwner = { db: EngineConnection };
+export type OpenClawAgentDatabaseIdentity = string;
 
 const identities = resolveGlobalSingleton(
   Symbol.for("openclaw.agentDatabaseIdentities"),
@@ -31,26 +34,27 @@ const identities = resolveGlobalSingleton(
 
 /** Prepare physical and connection identity once at open; cached aliases are not resolved again. */
 export function registerOpenClawAgentDatabaseIdentity(
-  db: DatabaseSync,
+  db: EngineConnection,
   ownerDatabasePath?: string,
 ): void {
-  const filename = normalizeDatabasePath(db.location() ?? "");
+  const anchor = sqlPublicationAnchor(db);
+  const filename = normalizeDatabasePath(anchor.location() ?? "");
   const admitted = filename ? getSqliteDatabaseAdmissionIdentityForPath(filename) : undefined;
   const file = admitted
     ? { ...admitted, canonicalPath: resolveDatabasePathKey(filename) }
     : filename
       ? readDatabasePathIdentitySync(filename)
       : undefined;
-  if (file && !file.key.startsWith("file:")) {
-    throw new Error("OpenClaw agent database disappeared before identity registration");
+  if (!file || !file.key.startsWith("file:")) {
+    throw new Error("OpenClaw agent database requires a physical file for identity registration");
   }
-  const identity = file ? file.key.slice("file:".length) : Symbol("incognito-agent-database");
-  identities.set(db, {
+  const identity = file.key.slice("file:".length);
+  identities.set(anchor, {
     identity,
-    birthtime: file?.birthtime,
+    birthtime: file.birthtime,
     incarnation: randomUUID(),
     filename,
-    canonicalPath: file?.canonicalPath ?? filename,
+    canonicalPath: file.canonicalPath,
     ownerDatabasePath: ownerDatabasePath ? resolveDatabasePathKey(ownerDatabasePath) : undefined,
   });
 }
@@ -66,25 +70,51 @@ export function readOpenClawAgentDatabaseIdentity(database: AgentDatabaseOwner) 
 
 /** Raw diagnostic connections have no admitted physical identity. */
 export function findOpenClawAgentDatabaseIdentity(database: AgentDatabaseOwner) {
-  return identities.get(database.db);
+  return identities.get(sqlPublicationAnchor(database.db));
 }
 
 /** A retained connection can outlive its pathname or be deserialized away from that file. */
+function currentConnectionIdentity(database: AgentDatabaseOwner) {
+  const anchor = sqlPublicationAnchor(database.db);
+  if (!database.db.isOpen || !anchor.isOpen) {
+    return undefined;
+  }
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  return normalizeDatabasePath(anchor.location() ?? "") === identity.filename
+    ? identity
+    : undefined;
+}
+
 export function isOpenClawAgentDatabasePathCurrent(
   database: AgentDatabaseOwner & { path: string },
 ): boolean {
-  if (!database.db.isOpen) {
-    return false;
-  }
-  const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity === "symbol") {
-    return true;
-  }
-  if (normalizeDatabasePath(database.db.location() ?? "") !== filename) {
+  const identity = currentConnectionIdentity(database);
+  if (!identity) {
     return false;
   }
   const current = statSync(database.path, { bigint: true, throwIfNoEntry: false });
-  return current !== undefined && identity === `${current.dev}:${current.ino}`;
+  return current !== undefined && identity.identity === `${current.dev}:${current.ino}`;
+}
+
+/** Host handoffs retain the connection generation while the physical lookup runs asynchronously. */
+export async function isOpenClawAgentDatabasePathCurrentAsync(
+  database: AgentDatabaseOwner & { path: string },
+): Promise<boolean> {
+  const identity = currentConnectionIdentity(database);
+  if (!identity) {
+    return false;
+  }
+  const current = await stat(database.path, { bigint: true }).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return undefined;
+    }
+    throw error;
+  });
+  return (
+    currentConnectionIdentity(database) === identity &&
+    current !== undefined &&
+    identity.identity === `${current.dev}:${current.ino}`
+  );
 }
 
 export function assertOpenClawAgentDatabaseIdentity(
@@ -93,7 +123,7 @@ export function assertOpenClawAgentDatabaseIdentity(
 ): void {
   const identity = readOpenClawAgentDatabaseIdentity(database);
   if (
-    `file:${String(identity.identity)}` !== expected.key ||
+    `file:${identity.identity}` !== expected.key ||
     (expected.birthtime !== undefined && identity.birthtime !== expected.birthtime) ||
     !isOpenClawAgentDatabasePathCurrent(database)
   ) {
@@ -108,7 +138,8 @@ export function createOpenClawAgentDatabaseClaim(
   release: () => void,
 ) {
   let released = false;
-  const isCurrent = () => !released && database.db.isOpen;
+  const isCurrent = () =>
+    !released && database.db.isOpen && sqlPublicationAnchor(database.db).isOpen;
   const { identity, incarnation } = readOpenClawAgentDatabaseIdentity(database);
   return {
     identity,

@@ -5,6 +5,7 @@ import {
   execContainer,
   type SandboxContainerEngine,
 } from "./container-engine.js";
+import { parseInspectedSandboxMounts } from "./docker-mount-source.js";
 
 /** Termination proof is stricter than provisioning's best-effort existence probe. */
 export async function containerHasTerminated(
@@ -38,7 +39,7 @@ export async function readDockerContainerLabel(
   return await readContainerLabel(DOCKER_SANDBOX_ENGINE, containerName, label);
 }
 
-export async function readContainerLabel(
+async function readContainerLabel(
   engine: SandboxContainerEngine,
   containerName: string,
   label: string,
@@ -105,11 +106,19 @@ export async function dockerContainerState(name: string) {
 export async function containerState(
   engine: SandboxContainerEngine,
   name: string,
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; includePaused?: boolean } = {},
 ) {
-  const result = await execContainer(engine, ["inspect", "-f", "{{.State.Running}}", name], {
-    allowFailure: true,
-  });
+  // .ID keeps Docker's typed template path; raw JSON can omit an empty Tmpfs field.
+  const result = await execContainer(
+    engine,
+    [
+      "inspect",
+      "-f",
+      '{"Id":{{json .ID}},"State":{{json .State}},"Labels":{{json .Config.Labels}},"ReadonlyRootfs":{{json .HostConfig.ReadonlyRootfs}},"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}',
+      name,
+    ],
+    { allowFailure: true },
+  );
   if (result.code !== 0) {
     if (
       options.strict &&
@@ -121,9 +130,29 @@ export async function containerState(
         `Unable to inspect ${engine.displayName} sandbox ${name}: ${result.stderr.trim() || `exit ${result.code}`}`,
       );
     }
-    return { exists: false, running: false };
+    return { exists: false as const, running: false };
   }
-  return { exists: true, running: result.stdout.trim() === "true" };
+  const data: unknown = JSON.parse(result.stdout);
+  if (!isRecord(data) || typeof data.Id !== "string" || !/^[a-f0-9]{64}$/u.test(data.Id)) {
+    throw new Error("Container inspect did not return an immutable container ID.");
+  }
+  if (
+    !isRecord(data.State) ||
+    typeof data.State.Running !== "boolean" ||
+    typeof data.State.Paused !== "boolean"
+  ) {
+    throw new Error("Container inspect did not return runtime state.");
+  }
+  const configHash = isRecord(data.Labels) ? data.Labels["openclaw.configHash"] : null;
+  return {
+    exists: true as const,
+    running: data.State.Running,
+    ...(options.includePaused ? { paused: data.State.Paused } : {}),
+    id: data.Id,
+    readOnlyRoot: data.ReadonlyRootfs === true,
+    configHash: typeof configHash === "string" && configHash ? configHash : null,
+    mounts: parseInspectedSandboxMounts(data.Mounts, data.Tmpfs),
+  };
 }
 
 function isPodmanContainerNotFound(stderr: string): boolean {
@@ -141,10 +170,10 @@ export async function recordedPodmanContainerState(engine: SandboxContainerEngin
     allowFailure: true,
   });
   if (result.code === 0) {
-    return { exists: true, running: result.stdout.trim() === "true" };
+    return { exists: true };
   }
   if (isPodmanContainerNotFound(result.stderr)) {
-    return { exists: false, running: false };
+    return { exists: false };
   }
   const detail = result.stderr.trim();
   throw Object.assign(

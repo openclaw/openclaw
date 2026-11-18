@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   approveChannelPairingCode,
   listChannelPairingRequests,
@@ -11,11 +11,17 @@ import {
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createPluginRuntimeMock } from "./test-helpers/plugin-runtime-mock.js";
 
 let stateDir: string;
 afterEach(async () => {
+  resetGlobalHookRunner();
   await closeStateDatabaseForTest();
   fs.rmSync(stateDir, { recursive: true, force: true });
 });
@@ -36,95 +42,73 @@ function createPairingFixture() {
   return {
     env,
     pairing: createChannelPairingController({ core, channel: "demo", accountId: " Alpha " }),
+    list: (channel = "demo", accountId = "alpha") =>
+      listChannelPairingRequests(channel, env, accountId),
+    approve: (code: string, accountId = "alpha") =>
+      approveChannelPairingCode({ channel: "demo", accountId, code, env }),
   };
 }
 
-describe("channel pairing account isolation", () => {
-  it.each([
-    { name: "ordinary input", extras: {} },
-    { name: "conflicting channel and account", extras: { channel: "other", accountId: "beta" } },
-  ])("persists and approves $name only in the bound account", async ({ extras }) => {
-    const { env, pairing } = createPairingFixture();
-    const beta = await upsertChannelPairingRequest({
-      channel: "demo",
-      accountId: "beta",
-      id: "shared-sender",
-      meta: { name: "Beta sender" },
-      env,
-    });
-    const request = { id: "shared-sender", meta: { name: "Alpha sender" }, ...extras };
-    const alpha = await pairing.upsertPairingRequest(request);
-    expect(alpha.created).toBe(true);
-    expect(alpha.code).not.toBe(beta.code);
-    await expect(pairing.upsertPairingRequest(request)).resolves.toEqual({
-      code: alpha.code,
-      created: false,
-    });
-    await closeStateDatabaseForTest();
-    await expect(listChannelPairingRequests("demo", env, "alpha")).resolves.toMatchObject([
-      { id: "shared-sender", code: alpha.code, meta: { name: "Alpha sender", accountId: "alpha" } },
-    ]);
-    await expect(listChannelPairingRequests("demo", env, "beta")).resolves.toMatchObject([
-      { code: beta.code, meta: { name: "Beta sender", accountId: "beta" } },
-    ]);
-    await expect(listChannelPairingRequests("other", env, "beta")).resolves.toEqual([]);
-    await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "beta", code: alpha.code, env }),
-    ).resolves.toBeNull();
-    await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "alpha", code: alpha.code, env }),
-    ).resolves.toMatchObject({ id: "shared-sender" });
-    await expect(pairing.readAllowFromStore()).resolves.toEqual(["shared-sender"]);
-    await expect(listChannelPairingRequests("demo", env, "alpha")).resolves.toEqual([]);
-    await expect(readChannelAllowFromStore("demo", env, "beta")).resolves.toEqual([]);
-
-    await approveChannelPairingCode({ channel: "demo", accountId: "beta", code: beta.code, env });
-    await expect(pairing.removeAllowFromStoreEntry("shared-sender")).resolves.toEqual({
-      changed: true,
-      allowFrom: [],
-    });
-    await expect(pairing.readAllowFromStore()).resolves.toEqual([]);
-    await expect(pairing.readStoreForDmPolicy("demo", " Beta ")).resolves.toEqual([
-      "shared-sender",
-    ]);
+it("keeps the pairing lifecycle and hooks bound to one account despite replacement inputs", async () => {
+  const { env, pairing, list, approve } = createPairingFixture();
+  const handler = vi.fn(async () => {});
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "channel_pairing_requested", handler }]),
+  );
+  const beta = await upsertChannelPairingRequest({
+    channel: "demo",
+    accountId: "beta",
+    id: "sender",
+    meta: { name: "B" },
+    env,
   });
-
-  it("keeps challenge persistence and approval replies bound despite a replacement writer", async () => {
-    const { env, pairing } = createPairingFixture();
-    const replies: string[] = [];
-    const challenge = {
-      senderId: "challenge-sender",
-      senderIdLine: "Sender: challenge-sender",
-      meta: { name: "Challenge sender" },
-      sendPairingReply: async (text: string) => {
-        replies.push(text);
-      },
-      channel: "other",
-      accountId: "beta",
-      upsertPairingRequest: () =>
-        upsertChannelPairingRequest({
-          channel: "other",
-          accountId: "beta",
-          id: "replacement-sender",
-          env,
-        }),
-    };
-    const result = await pairing.issueChallenge(challenge);
-    const [stored] = await listChannelPairingRequests("demo", env, "alpha");
-    assert.ok(stored);
-    expect(stored).toMatchObject({
-      id: "challenge-sender",
-      code: result.code,
-      meta: { name: "Challenge sender", accountId: "alpha" },
-    });
-    await expect(listChannelPairingRequests("other", env, "beta")).resolves.toEqual([]);
-    expect(replies).toHaveLength(1);
-    expect(replies[0]).toContain(`openclaw pairing approve demo ${stored.code}`);
-    await expect(pairing.issueChallenge(challenge)).resolves.toEqual({ created: false });
-    expect(replies).toHaveLength(1);
-    await expect(
-      approveChannelPairingCode({ channel: "demo", accountId: "alpha", code: stored.code, env }),
-    ).resolves.toMatchObject({ id: "challenge-sender" });
-    await expect(pairing.readAllowFromStore()).resolves.toEqual(["challenge-sender"]);
+  const request = { id: "sender", meta: { name: "A" }, channel: "other", accountId: "beta" };
+  const replies: string[] = [];
+  const challenge = {
+    ...request,
+    senderId: request.id,
+    senderIdLine: "Sender: sender",
+    sendPairingReply: async (text: string) => {
+      replies.push(text);
+    },
+    upsertPairingRequest: () =>
+      upsertChannelPairingRequest({ channel: "other", accountId: "beta", id: "replacement", env }),
+  };
+  const alpha = await pairing.issueChallenge(challenge);
+  expect(alpha.created).toBe(true);
+  assert(alpha.code);
+  expect(alpha.code).not.toBe(beta.code);
+  const hookScope = { accountId: "alpha", senderId: request.id };
+  expect(handler).toHaveBeenCalledWith(
+    expect.objectContaining({ channel: "demo", ...hookScope, code: alpha.code }),
+    expect.objectContaining({ channelId: "demo", ...hookScope }),
+  );
+  expect(replies).toHaveLength(1);
+  expect(replies[0]).toContain(`openclaw pairing approve demo ${alpha.code}`);
+  await expect(pairing.upsertPairingRequest(request)).resolves.toEqual({
+    code: alpha.code,
+    created: false,
   });
+  await expect(pairing.issueChallenge(challenge)).resolves.toEqual({ created: false });
+  expect(replies).toHaveLength(1);
+  await closeStateDatabaseForTest();
+  await expect(list()).resolves.toMatchObject([
+    { id: request.id, code: alpha.code, meta: { name: "A", accountId: "alpha" } },
+  ]);
+  await expect(list("demo", "beta")).resolves.toMatchObject([
+    { code: beta.code, meta: { name: "B", accountId: "beta" } },
+  ]);
+  await expect(list("other", "beta")).resolves.toEqual([]);
+  await expect(approve(alpha.code, "beta")).resolves.toBeNull();
+  await expect(approve(alpha.code)).resolves.toMatchObject({ id: request.id });
+  await expect(pairing.readAllowFromStore()).resolves.toEqual([request.id]);
+  await expect(list()).resolves.toEqual([]);
+  await expect(readChannelAllowFromStore("demo", env, "beta")).resolves.toEqual([]);
+  await approve(beta.code, "beta");
+  await expect(pairing.removeAllowFromStoreEntry(request.id)).resolves.toEqual({
+    changed: true,
+    allowFrom: [],
+  });
+  await expect(pairing.readAllowFromStore()).resolves.toEqual([]);
+  await expect(pairing.readStoreForDmPolicy("demo", " Beta ")).resolves.toEqual([request.id]);
 });

@@ -47,49 +47,25 @@ export async function ensureCliExecutionBootstrap(params: {
   allowInvalid?: boolean;
   beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
   loadPlugins?: boolean;
-  skipConfigGuard?: boolean;
-  validateConfigOnly?: boolean;
 }) {
   const { runtime, commandPath, startupPolicy, allowInvalid, beforeStatePreparation } = params;
-  const { suppressDoctorStdout, pluginRegistry } = startupPolicy;
+  const { suppressDoctorStdout, pluginRegistry, skipConfigGuard, validateConfigOnly } =
+    startupPolicy;
   const loadPlugins = params.loadPlugins ?? startupPolicy.loadPlugins;
-  const skipConfigGuard = params.skipConfigGuard ?? startupPolicy.skipConfigGuard;
-  const validateConfigOnly = params.validateConfigOnly ?? startupPolicy.validateConfigOnly;
   if (!skipConfigGuard) {
     await measureCliCommandStartup("config-ready", async () => {
       const { ensureConfigReady } = await measureCliCommandStartup("config-guard-import", () =>
         configGuardModuleLoader.load(),
       );
-      const runConfigGuard = () =>
-        ensureConfigReady({
-          runtime,
-          commandPath,
-          measure: (stage, run) => measureCliCommandStartup(stage, run),
-          ...(allowInvalid ? { allowInvalid: true } : {}),
-          ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
-          ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
-          ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
-        });
-      const nativeGatewayBootstrap =
-        commandPath[0] === "gateway" &&
-        (commandPath.length === 1 || (commandPath.length === 2 && commandPath[1] === "run"));
-      if (nativeGatewayBootstrap && !validateConfigOnly) {
-        const [
-          { withConfigSnapshotPreparation },
-          { prepareHostConfigSnapshot },
-          { resolveConfigPath },
-        ] = await Promise.all([
-          import("../config/io.snapshot-preparation-scope.js"),
-          import("../config/io.snapshot-preparation.js"),
-          import("../config/paths.js"),
-        ]);
-        await withConfigSnapshotPreparation(
-          { configPath: resolveConfigPath(), prepare: prepareHostConfigSnapshot },
-          runConfigGuard,
-        );
-      } else {
-        await runConfigGuard();
-      }
+      await ensureConfigReady({
+        runtime,
+        commandPath,
+        measure: (stage, run) => measureCliCommandStartup(stage, run),
+        ...(allowInvalid ? { allowInvalid: true } : {}),
+        ...(validateConfigOnly ? { validateConfigOnly: true } : {}),
+        ...(beforeStatePreparation ? { beforeStatePreparation } : {}),
+        ...(suppressDoctorStdout ? { suppressDoctorStdout: true } : {}),
+      });
     });
   }
   if (!loadPlugins) {

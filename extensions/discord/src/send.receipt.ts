@@ -27,17 +27,16 @@ export function createDiscordSendReceiptFromResults(params: {
     results: attachChannelToResults("discord", params.results),
     threadId: params.threadId,
   });
-  return {
-    ...receipt,
-    parts: receipt.parts.map(({ platformMessageId, kind, threadId, replyToId, raw }, index) => ({
-      platformMessageId,
-      kind,
+  // The SDK returns fresh parts; aggregate indexing belongs to Discord.
+  receipt.parts.forEach((part, index) => {
+    Object.assign(part, {
       index,
-      threadId,
-      replyToId,
-      raw,
-    })),
-  };
+      threadId: part.threadId,
+      replyToId: part.replyToId,
+      raw: part.raw,
+    });
+  });
+  return receipt;
 }
 
 export function createDiscordSendReceipt(params: {

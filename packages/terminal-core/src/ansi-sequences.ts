@@ -5,6 +5,8 @@ export const ANSI_COMPAT_CONTROL_SEQUENCE_PATTERN =
   "[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]";
 
 const ansiOscAtIndexRegex = new RegExp(ANSI_OSC_PATTERN, "y");
+// eslint-disable-next-line no-control-regex -- ANSI introducers delimit visible text runs.
+const ansiIntroducerRegex = /[\u001b\u009b\u009d]/g;
 
 type AnsiSegment =
   | { controls: string[]; kind: "ansi"; value: string }
@@ -16,21 +18,11 @@ export function matchAnsiOscAt(input: string, index: number): string | undefined
   return ansiOscAtIndexRegex.exec(input)?.[0];
 }
 
-function csiIntroducerLength(input: string, index: number): number {
-  const code = input.charCodeAt(index);
-  if (code === 0x9b) {
-    return 1;
-  }
-  return code === 0x1b && input.charCodeAt(index + 1) === 0x5b ? 2 : 0;
-}
-
 type AnsiCsiScan = {
   controls: string[];
   ended: boolean;
   value: string;
 };
-
-type AnsiStripState = "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat";
 
 function isCompatPrefixCode(code: number): boolean {
   return (
@@ -73,7 +65,7 @@ function isCompatFinalCode(code: number): boolean {
  * or accumulate outside the caller's output limits.
  */
 export class AnsiSequenceStripper {
-  private state: AnsiStripState = "text";
+  private state: "text" | "escape" | "osc" | "osc-escape" | "csi" | "compat" = "text";
   private csiCompatPrefixOnly = false;
   private compatParameterDigits: number | undefined;
   private csi: string | undefined;
@@ -126,8 +118,10 @@ export class AnsiSequenceStripper {
       }
 
       if (this.state === "text") {
-        output.push(input.charAt(index));
-        index += 1;
+        ansiIntroducerRegex.lastIndex = index;
+        const end = ansiIntroducerRegex.exec(input)?.index ?? input.length;
+        output.push(input.slice(index, end));
+        index = end;
         continue;
       }
 
@@ -159,11 +153,7 @@ export class AnsiSequenceStripper {
           this.state = "text";
           continue;
         }
-        index += 1;
-        continue;
-      }
-
-      if (this.state === "escape") {
+      } else if (this.state === "escape") {
         if (code === 0x5d) {
           this.state = "osc";
         } else if (code === 0x5b) {
@@ -180,11 +170,7 @@ export class AnsiSequenceStripper {
           this.state = "text";
           continue;
         }
-        index += 1;
-        continue;
-      }
-
-      if (code === 0x18 || code === 0x1a) {
+      } else if (code === 0x18 || code === 0x1a) {
         this.state = "text";
       } else if (this.compatParameterDigits === undefined && isCompatPrefixCode(code)) {
         index += 1;
@@ -221,12 +207,12 @@ export class AnsiSequenceStripper {
 
 /** Scan one CSI parser pass, retaining independently executed C0 controls. */
 export function scanAnsiCsiAt(input: string, index: number): AnsiCsiScan | undefined {
-  const introducerLength = csiIntroducerLength(input, index);
-  if (introducerLength === 0) {
+  const firstCode = input.charCodeAt(index);
+  if (firstCode !== 0x9b && (firstCode !== 0x1b || input.charCodeAt(index + 1) !== 0x5b)) {
     return undefined;
   }
 
-  let cursor = index + introducerLength;
+  let cursor = index + (firstCode === 0x9b ? 1 : 2);
   const controls: string[] = [];
   let ended = false;
   while (cursor < input.length) {

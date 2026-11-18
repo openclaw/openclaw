@@ -5,7 +5,7 @@ import {
   projectAgentRunAttemptTerminal,
   type AgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
-import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers.js";
+import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 export type EmbeddedRunTerminalState = {

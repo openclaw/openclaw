@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
@@ -14,7 +15,7 @@ it.runIf(process.env.OPENCLAW_TEST_BUN_LAUNCHER === "1")(
       [
         "--no-install",
         "--conditions=openclaw-custom",
-        "src/infra/sqlite-existing-database.bun.test-support.ts",
+        fileURLToPath(new URL("./sqlite-existing-database.bun.test-support.ts", import.meta.url)),
         home,
       ],
       {

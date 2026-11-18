@@ -8,14 +8,18 @@ How an authorized session reaches a cloud destination, what the Control UI requi
 
 ## Dispatching a session
 
-Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. Session ownership and participation checks are revalidated before placement lifecycle changes commit.
+In **New session**, choose a device under **Cloud**. The picker uses **This computer** for the Gateway’s device and **Device size** for a cloud device’s size.
+
+Administrators can run an authorized session on a configured cloud profile, including a fresh workspace without a repository. An operator with `operator.write` can also dispatch a session they created to a profile listed in their current role’s `workerProfiles`. An omitted or empty list grants no additional cloud dispatch access. Session ownership and current role grants are revalidated before placement lifecycle changes commit. Setup scripts and moves to cloud profiles remain administrator-only.
+
+Fresh workspaces can be created and dispatched concurrently. Creating another session's workspace does not invalidate a dispatch already in preparation; changes to the selected session's own workspace binding or archive status still prevent stale dispatch.
 
 If the session already has an active turn, `sessions.dispatch` returns a busy error without interrupting the turn or starting worker provisioning. Wait for the turn to finish and retry dispatch.
 
-In the Control UI, open **New Session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:
+In the Control UI, open **New session** and choose a **Cloud** destination. A cloud destination is available when these eligibility gates pass:
 
-1. The connected operator has `operator.admin` scope.
-2. `environments.list` advertises at least one configured profile.
+1. The connected operator has `operator.write` scope and either administrator access or an explicit role grant.
+2. `environments.list` advertises at least one configured profile in `dispatchableProfileIds`.
 3. The selected agent runtime advertises cloud placement support.
 
 Without an explicitly selected folder, project, or worktree, remote sessions default to **New workspace**: an empty, isolated working directory. You can also choose **New workspace** from the project picker. No repository, initial commit, or Gateway folder is required. OpenClaw uses a private backing repository for each fresh session so workspace snapshots, recovery, and cleanup keep their normal behavior; sessions do not share Git remotes or history. Existing local files are not copied into the new workspace.
@@ -24,11 +28,13 @@ With a repository selected, the branch picker shows **From main** (or the select
 
 When preparing a Gateway folder on a node, OpenClaw preserves its credential-free HTTP, HTTPS, or Git transport `origin` if the node checkout has none. Existing node origins remain unchanged. Origins with embedded credentials, query strings, fragments, or other schemes are not forwarded. Full workspace replacement retains the existing [Git metadata recovery limits](/gateway/cloud-workers/session-lifecycle#accept-a-completed-turn).
 
+If the origin cannot supply the selected local commit, OpenClaw discards the incomplete clone and transfers the Gateway's exact workspace snapshot, including its Git base. Unpublished local commits do not need to exist on the origin.
+
 If the Gateway restarts during provisioning, the pending first message waits for recovery and continues automatically when its worker is ready. Temporary startup or suspension errors do not cancel setup. The first message stays before later recovery notices in the chat, including after reconnecting.
 
 If startup recovery times out, the notice distinguishes setup still in progress from a Gateway that could not confirm completion, and confirms that the first message has not been sent. **Retry** checks the existing worker first. It waits for setup already in progress and sends the preserved first message once that worker is ready. A replacement is requested only when the placement permits a new dispatch; a failed worker that still needs cleanup must be stopped first. Reconnecting alone never requests a replacement.
 
-Choosing **Stop cloud worker…** while the new session is still provisioning pauses its initial message before requesting teardown. A late dispatch response cannot send that message. The draft stays visible for **Retry** and is not resubmitted automatically. Regular session drafts survive reconnects and page reloads; incognito drafts remain only in the current page. If the first message was already sent, uncertain delivery remains **Check delivery** rather than starting another turn.
+Choosing **Stop cloud device…** while the new session is still provisioning pauses its initial message before requesting teardown. A late dispatch response cannot send that message. The draft stays visible for **Retry** and is not resubmitted automatically. Regular session drafts survive reconnects and page reloads; incognito drafts remain only in the current page. If the first message was already sent, uncertain delivery remains **Check delivery** rather than starting another turn.
 
 While a placement is active, OpenClaw automatically samples available space on the remote workspace volume. Low-space warnings appear in the selected chat and on the session's cloud badge. They are advisory, clear automatically after space recovers, and do not stop or reclaim the worker.
 
@@ -36,7 +42,7 @@ While a placement is active, OpenClaw automatically samples available space on t
 
 When an OpenClaw worker uses `sessions_spawn`, the Gateway creates a visible child session in a separate managed worktree, provisions a worker with the parent's profile, and submits the initial task before returning acceptance. The call does not wait for the child task to finish.
 
-While that call is waiting, the parent remains an active turn under its existing run timeout. Quiet provisioning alone does not let a queued message take over the parent or make recovery abort it early. Worker progress does not extend the timeout, and the chat **Stop** control or `/stop` can still cancel the turn. Use **Stop cloud worker…** separately to reconcile the workspace and release the machine.
+While that call is waiting, the parent remains an active turn under its existing run timeout. Quiet provisioning alone does not let a queued message take over the parent or make recovery abort it early. Worker progress does not extend the timeout, and the **Stop** control on **Chat** or `/stop` can still cancel the turn. Use **Stop cloud device…** separately to reconcile the workspace and release the cloud device.
 
 ### Runtime support
 
@@ -45,4 +51,4 @@ While that call is waiting, the parent remains an active turn under its existing
 
 The Control UI checks each cloud destination's advertised execution modes in both New Session and Move Session. One Crabbox **Cloud · profile** row is selectable for OpenClaw and Codex, while a genuinely single-mode provider stays disabled for the other runtime. An incompatible move is rejected before the active source starts draining or changes its durable placement.
 
-Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec fails closed if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.
+Other runtimes remain unavailable unless their harness explicitly declares a cloud placement mode. Cloud targets are not offered for external CLI session catalogs. Remote-exec refuses execution if the selected provider or placement sandbox is unavailable; it never falls back to running the operation on the Gateway host.

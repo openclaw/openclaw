@@ -4,8 +4,6 @@ import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-
 import type { OpenClawSchemaShape } from "../config/zod-schema.root-shape.js";
 
 /**
- * Configuration normalization for transcript capture/import.
- *
  * Raw config can contain optional auto-start provider locators; resolution
  * returns bounded defaults and drops malformed entries before runtime startup.
  */

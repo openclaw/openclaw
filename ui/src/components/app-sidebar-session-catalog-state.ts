@@ -4,7 +4,8 @@ import type {
   SessionCatalogSession,
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
@@ -58,18 +59,29 @@ function mergeCatalogSessionRows(
   return [...first, ...second.filter((session) => !seen.has(session.threadId))];
 }
 
+export function sessionCatalogPageFailed(host: Pick<SessionCatalogHost, "error">): boolean {
+  // A discovery frontier is a successful partial page, including its rows and exhausted cursor.
+  return host.error !== undefined && host.error.code !== "DISCOVERY_TRUNCATED";
+}
+
 export function preserveExpandedCatalogHost(
   freshHost: SessionCatalogHost,
   previous: SessionCatalogHost | undefined,
+  requiresFreshList = false,
 ): SessionCatalogHost {
+  if (requiresFreshList) {
+    const { nextCursor: _cursor, ...details } = freshHost;
+    return { ...details, sessions: [] };
+  }
   if (!previous) {
     return freshHost;
   }
   const { sessions: _freshSessions, nextCursor: _freshNextCursor, ...freshDetails } = freshHost;
-  const { nextCursor, pending: _pending, ...previousDetails } = previous;
+  const { nextCursor, pending: _pending, error: previousError, ...previousDetails } = previous;
   return {
     ...previousDetails,
     ...freshDetails,
+    ...(freshHost.pending && !freshHost.error && previousError ? { error: previousError } : {}),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   };
 }
@@ -80,30 +92,39 @@ export function mergeSessionCatalogPage(params: {
   cursors: Readonly<Record<string, string>>;
   previousCursors?: ReadonlyMap<string, ReadonlySet<string>>;
 }): { catalog: SessionCatalog; advancedHostIds: string[]; repeatedHostIds: string[] } {
-  const { page } = params;
-  if (!page) {
-    return {
-      catalog: { ...params.current, error: missingCatalogPageError() },
-      advancedHostIds: [],
-      repeatedHostIds: [],
-    };
-  }
+  const page = params.page ?? {
+    ...params.current,
+    pending: undefined,
+    hosts: [],
+    error: missingCatalogPageError(),
+  };
   const pageHosts = new Map(page.hosts.map((host) => [host.hostId, host]));
   const advancedHostIds: string[] = [];
   const repeatedHostIds: string[] = [];
   const hosts = params.current.hosts.map((host) => {
     const requestedCursor = params.cursors[host.hostId];
     const pageHost = pageHosts.get(host.hostId);
-    if (page.error || requestedCursor === undefined || host.nextCursor !== requestedCursor) {
+    if (requestedCursor === undefined || host.nextCursor !== requestedCursor) {
       return host;
     }
-    if (!pageHost) {
-      return { ...host, error: missingCatalogPageError() };
+    if (sessionCatalogPageFailed(page)) {
+      if (page.pending) {
+        return { ...host, pending: true };
+      }
+      const { pending: _pending, ...settledHost } = host;
+      return settledHost;
     }
-    if (pageHost.error) {
+    if (!pageHost) {
+      if (page.pending) {
+        return { ...host, pending: true };
+      }
+      const { pending: _pending, ...settledHost } = host;
+      return { ...settledHost, error: missingCatalogPageError() };
+    }
+    if (pageHost.pending || sessionCatalogPageFailed(pageHost)) {
       return preserveExpandedCatalogHost(pageHost, host);
     }
-    const { nextCursor, sessions, error: _pageError, ...pageHostDetails } = pageHost;
+    const { nextCursor, sessions, ...pageHostDetails } = pageHost;
     const repeatedCursor =
       nextCursor === requestedCursor ||
       (nextCursor !== undefined && params.previousCursors?.get(host.hostId)?.has(nextCursor));
@@ -126,14 +147,19 @@ export function mergeSessionCatalogPage(params: {
       ...(repeatedCursor ? { error: repeatedCatalogCursorError() } : {}),
     };
   });
-  const { hosts: _currentHosts, error: _currentError, ...currentDetails } = params.current;
+  const {
+    hosts: _currentHosts,
+    error: currentError,
+    pending: _currentPending,
+    ...currentDetails
+  } = params.current;
   const { hosts: _pageHosts, error: pageError, ...pageDetails } = page;
   return {
     catalog: {
       ...currentDetails,
       ...pageDetails,
       hosts,
-      ...(pageError ? { error: pageError } : {}),
+      ...(pageError || (page.pending && currentError) ? { error: pageError ?? currentError } : {}),
     },
     advancedHostIds,
     repeatedHostIds,
@@ -152,35 +178,70 @@ export async function refetchExpandedSessionCatalogPages(params: {
   const previousCatalogs = new Map(params.previousCatalogs.map((catalog) => [catalog.id, catalog]));
   return Promise.all(
     params.catalogs.map(async (catalog) => {
+      const previousCatalog = previousCatalogs.get(catalog.id);
       const previousHosts = new Map(
-        previousCatalogs.get(catalog.id)?.hosts.map((host) => [host.hostId, host]) ?? [],
+        previousCatalog?.hosts.map((host) => [host.hostId, host]) ?? [],
       );
+      const catalogError = sessionCatalogPageFailed(catalog) ? catalog.error : undefined;
+      // Both native catalogs use this marker when paired-node enumeration fails.
+      // It cannot withdraw nodes, but successfully read local hosts remain authoritative.
+      const nodeInventoryError = catalog.hosts.find(
+        (host) =>
+          host.kind === "node" &&
+          host.hostId === "node:registry" &&
+          host.error?.code === "NODE_LIST_FAILED",
+      )?.error;
+      const catalogHosts = new Map(catalog.hosts.map((host) => [host.hostId, host]));
+      if (catalog.pending || catalogError || nodeInventoryError) {
+        for (const host of previousHosts.values()) {
+          const error = catalogError ?? (host.kind === "node" ? nodeInventoryError : undefined);
+          if (catalogHosts.has(host.hostId) || (!catalog.pending && !error)) {
+            continue;
+          }
+          const { pending: _pending, ...previousHost } = host;
+          catalogHosts.set(host.hostId, {
+            ...previousHost,
+            ...(catalog.pending ? { pending: true } : {}),
+            ...(error ? { error } : {}),
+          });
+        }
+      }
       const hosts = await Promise.all(
-        catalog.hosts.map(async (host) => {
+        [...catalogHosts.values()].map(async (host) => {
           const pageDepth =
             params.pageDepths.get(sessionCatalogHostKey(catalog.id, host.hostId)) ?? 0;
-          if (pageDepth === 0 || host.pending) {
-            return host;
-          }
           const previous = previousHosts.get(host.hostId);
-          if (host.error || catalog.error) {
+          if (host.pending) {
+            return preserveExpandedCatalogHost(host, previous, catalog.requiresFreshList);
+          }
+          if (sessionCatalogPageFailed(host) || sessionCatalogPageFailed(catalog)) {
             return preserveExpandedCatalogHost(
               { ...host, error: host.error ?? catalog.error },
               previous,
+              catalog.requiresFreshList,
             );
+          }
+          if (pageDepth === 0) {
+            return host;
           }
           let sessions = host.sessions;
           let nextCursor = host.nextCursor;
+          let pageError = host.error;
           const preserveOnError = (error: NonNullable<SessionCatalog["error"]>) =>
             preserveExpandedCatalogHost(
               { ...host, error },
               previous ?? { ...host, sessions, nextCursor },
+              catalog.requiresFreshList,
             );
           const requestedCursors = new Set<string>();
           for (let loadedPages = 0; loadedPages < pageDepth && nextCursor; loadedPages += 1) {
             // Pausing automatic replay must retain the full visible window, not its partial prefix.
             if (!params.canRequestPage()) {
-              return preserveExpandedCatalogHost(host, previous);
+              return preserveExpandedCatalogHost(
+                catalog.requiresFreshList ? { ...host, pending: true } : host,
+                previous,
+                catalog.requiresFreshList,
+              );
             }
             requestedCursors.add(nextCursor);
             let result: SessionsCatalogListResult;
@@ -202,26 +263,49 @@ export async function refetchExpandedSessionCatalogPages(params: {
             }
             const page = result.catalogs.find((candidate) => candidate.id === catalog.id);
             const pageHost = page?.hosts.find((candidate) => candidate.hostId === host.hostId);
-            if (page?.error) {
-              return preserveOnError(page.error);
+            if (page && sessionCatalogPageFailed(page)) {
+              return preserveOnError(page.error!);
+            }
+            if (pageHost?.pending || (page?.pending && !pageHost)) {
+              return preserveExpandedCatalogHost(
+                pageHost ?? { ...host, pending: true },
+                previous ?? { ...host, sessions, nextCursor },
+                catalog.requiresFreshList,
+              );
             }
             if (!pageHost) {
               return preserveOnError(missingCatalogPageError());
             }
-            if (pageHost.error) {
-              return preserveExpandedCatalogHost({ ...host, ...pageHost }, previous ?? host);
+            if (sessionCatalogPageFailed(pageHost)) {
+              return preserveExpandedCatalogHost(
+                { ...host, ...pageHost },
+                previous ?? host,
+                catalog.requiresFreshList,
+              );
             }
             sessions = mergeCatalogSessionRows(sessions, pageHost.sessions);
             nextCursor = pageHost.nextCursor;
+            pageError = pageHost.error ?? page?.error;
             if (nextCursor && requestedCursors.has(nextCursor)) {
               return preserveOnError(repeatedCatalogCursorError());
             }
           }
-          const { nextCursor: _cursor, sessions: _sessions, ...freshHost } = host;
-          return { ...freshHost, sessions, ...(nextCursor ? { nextCursor } : {}) };
+          const { nextCursor: _cursor, sessions: _sessions, error: _error, ...freshHost } = host;
+          return Object.assign(
+            freshHost,
+            { sessions },
+            nextCursor ? { nextCursor } : {},
+            pageError ? { error: pageError } : {},
+          );
         }),
       );
-      return { ...catalog, hosts };
+      return {
+        ...catalog,
+        hosts,
+        ...(catalog.pending && !catalog.error && previousCatalog?.error
+          ? { error: previousCatalog.error }
+          : {}),
+      };
     }),
   );
 }

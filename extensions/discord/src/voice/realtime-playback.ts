@@ -24,7 +24,7 @@ import {
 } from "./audio-worker-protocol.js";
 import { DiscordRealtimeOutput } from "./realtime-output.js";
 import type { DiscordRealtimePlayer } from "./realtime-player.js";
-import type { DiscordVoiceMode, VoiceSessionEntry } from "./session.js";
+import type { VoiceSessionEntry } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_CONTROL_SPEECH_DEDUPE_MS = 5_000;
@@ -91,7 +91,6 @@ export class DiscordRealtimePlayback<TState> {
       player: DiscordRealtimePlayer;
       harness: RealtimeVoiceSessionHarness<TState>;
       markProviderGenerationObserved: () => void;
-      mode: Exclude<DiscordVoiceMode, "stt-tts">;
       onTerminalError: (error: Error) => void;
       providerId: () => string | undefined;
       realtimeConfig: () => DiscordRealtimeVoiceConfig;
@@ -138,13 +137,13 @@ export class DiscordRealtimePlayback<TState> {
       if (event.type === "continuous-flushed" && event.marker === this.pendingDirectCompletion) {
         this.pendingDirectCompletion = undefined;
         this.responseAudio = "completed";
-        this.completeExactSpeechResponse("provider-completed");
+        this.completeExactSpeechResponse();
       }
       if (event.type === "continuous-idle") {
         this.responseAudio = "completed";
         this.params.harness.finishOutputAudio("player-idle");
         this.params.harness.outputActivity.reset();
-        this.completeExactSpeechResponse("player-idle");
+        this.completeExactSpeechResponse();
       }
     };
     const close = () => {
@@ -215,9 +214,6 @@ export class DiscordRealtimePlayback<TState> {
       );
       return false;
     }
-    logger.info(
-      `discord voice: realtime barge-in requested reason=${reason} guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} outputAudioMs=${this.outputAudioMs()} outputActive=${this.isOutputAudioActive()} playbackChunks=${this.params.harness.outputActivity.snapshot().chunks}`,
-    );
     // A native handler may decline short audio as echo. Providers without one
     // still need local interruption when another speaker owns the incoming audio.
     const clearGeneration = this.outputClearGeneration;
@@ -379,7 +375,7 @@ export class DiscordRealtimePlayback<TState> {
         this.params.entry.audio.send({ type: "continuous-clear", id: this.directOutput.id });
       }
     }
-    this.completeExactSpeechResponse(reason);
+    this.completeExactSpeechResponse();
   }
 
   handleResponseDone(outcome: {
@@ -398,14 +394,14 @@ export class DiscordRealtimePlayback<TState> {
     this.responseAudio = "completed";
     // Generation ends before queued playback. Only this response may end its stream.
     output?.finish(outcome.status, outcome.status === "completed");
-    this.completeExactSpeechResponse(outcome.status);
+    this.completeExactSpeechResponse();
   }
 
   enqueueExactSpeechMessage(text: string): void {
     if (this.params.stopped() || !this.retainExactSpeechMessage(text)) {
       return;
     }
-    this.drainQueuedExactSpeechMessages("enqueue");
+    this.drainQueuedExactSpeechMessages();
   }
 
   deliverRetainedSpeech(text: string): void {
@@ -415,7 +411,7 @@ export class DiscordRealtimePlayback<TState> {
     if (this.speechSuccessor) {
       this.speechSuccessor.deliverRetainedSpeech(text);
     } else if (this.retainExactSpeechMessage(text)) {
-      this.drainQueuedExactSpeechMessages("handoff");
+      this.drainQueuedExactSpeechMessages();
     }
   }
 
@@ -446,9 +442,6 @@ export class DiscordRealtimePlayback<TState> {
       return false;
     }
     this.queuedExactSpeechMessages.push(text);
-    logger.info(
-      `discord voice: realtime exact speech queued guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} queued=${this.queuedExactSpeechMessages.length} outputAudioMs=${this.outputAudioMs()} outputActive=${this.isOutputAudioActive()}`,
-    );
     return true;
   }
 
@@ -459,7 +452,7 @@ export class DiscordRealtimePlayback<TState> {
     ];
   }
 
-  drainQueuedExactSpeechMessages(reason: string): void {
+  drainQueuedExactSpeechMessages(): void {
     if (
       this.params.stopped() ||
       !this.params.bridgeReady() ||
@@ -474,9 +467,6 @@ export class DiscordRealtimePlayback<TState> {
     if (!next) {
       return;
     }
-    logger.info(
-      `discord voice: realtime exact speech dequeued reason=${reason} guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} queued=${this.queuedExactSpeechMessages.length}`,
-    );
     this.sendExactSpeechMessage(next);
   }
 
@@ -493,9 +483,6 @@ export class DiscordRealtimePlayback<TState> {
     const ack =
       DISCORD_REALTIME_WAKE_ACKS[this.wakeNameAckIndex % DISCORD_REALTIME_WAKE_ACKS.length];
     this.wakeNameAckIndex += 1;
-    logger.info(
-      `discord voice: realtime wake-name ack canonical=${result.activationName} heard=${result.heardName} match=${result.match} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
-    );
     this.enqueueExactSpeechMessage(ack ?? "Yeah.");
   }
 
@@ -547,9 +534,6 @@ export class DiscordRealtimePlayback<TState> {
     if (recent.assistantTranscriptCount <= 1) {
       return;
     }
-    logger.info(
-      `discord voice: realtime duplicate active-run control speech suppressed guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`,
-    );
     this.params.harness.handleBargeIn({ audioPlaybackActive: true, force: true }, () =>
       this.clearOutputAudio("duplicate-active-run-control"),
     );
@@ -612,16 +596,11 @@ export class DiscordRealtimePlayback<TState> {
   }
 
   private createOutput(): DiscordRealtimeOutput {
-    const logContext = `guild=${this.params.entry.guildId} channel=${this.params.entry.channelId}`;
     const output = new DiscordRealtimeOutput({
       player: this.params.player,
       continuous: this.isContinuousOutput(),
       onStart: () => {
         this.params.harness.outputActivity.markPlaybackStarted();
-        const config = this.params.realtimeConfig();
-        logger.info(
-          `discord voice: realtime audio playback started ${logContext} mode=${this.params.mode} model=${config?.model ?? "provider-default"} voice=${config?.speakerVoice ?? config?.speakerVoiceId ?? "provider-default"}`,
-        );
       },
       onClose: (closed, reason) => {
         if (!this.outputs.delete(closed)) {
@@ -642,7 +621,7 @@ export class DiscordRealtimePlayback<TState> {
           }
           this.params.harness.outputActivity.reset();
         }
-        this.completeExactSpeechResponse(reason);
+        this.completeExactSpeechResponse();
       },
       onBargeIn: (reason) => this.handleBargeIn(reason),
       onError: (error) =>
@@ -677,7 +656,7 @@ export class DiscordRealtimePlayback<TState> {
     this.params.bridge()?.sendUserMessage(this.params.buildSpeakExactMessage(text));
   }
 
-  private completeExactSpeechResponse(reason: string): void {
+  private completeExactSpeechResponse(): void {
     if (
       this.pendingDirectCompletion !== undefined ||
       this.responseAudio !== "completed" ||
@@ -686,6 +665,6 @@ export class DiscordRealtimePlayback<TState> {
       return;
     }
     this.retireExactSpeech();
-    this.drainQueuedExactSpeechMessages(reason);
+    this.drainQueuedExactSpeechMessages();
   }
 }

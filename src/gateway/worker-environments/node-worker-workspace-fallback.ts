@@ -16,6 +16,8 @@ import type {
 import {
   resolveWorkerWorkspaceGitAuthor,
   validateWorkspaceSyncRequest,
+  workerWorkspaceCommandSucceeded,
+  workspaceSyncError,
 } from "./workspace-sync-helpers.js";
 
 const GIT_TIMEOUT_MS = 60_000;
@@ -83,6 +85,7 @@ async function localGit(root: string, args: string[]): Promise<string> {
       baseEnv: {
         ...process.env,
         GIT_TERMINAL_PROMPT: "0",
+        GIT_NO_LAZY_FETCH: "1",
         GIT_ASKPASS: "",
         SSH_ASKPASS: "",
       },
@@ -185,17 +188,31 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
         inspection.identity,
         expectedManifestRef,
       );
-      return prepared.kind === "prepared"
-        ? {
-            kind: "synced",
-            seeded: prepared.seeded,
-            result: {
-              mode: "git",
-              remoteWorkspaceDir: prepared.result.remoteWorkspaceDir,
-              manifestRef: prepared.result.manifestRef,
-            },
-          }
-        : { kind: "fallback", reason: prepared.reason };
+      if (prepared.kind === "failed") {
+        // A partial origin clone is not retained worker history. Clear it before
+        // the canonical transfer preserves existing Git metadata during replacement.
+        const cleared = await exec({
+          argv: ["node", "-e", ""],
+          resetWorkspace: true,
+          timeoutMs: GIT_TIMEOUT_MS,
+          transportRetry: "never",
+          assertCurrent: request.authorize,
+        });
+        request.authorize?.();
+        if (!workerWorkspaceCommandSucceeded(cleared)) {
+          throw workspaceSyncError(cleared);
+        }
+        return { kind: "fallback", reason: prepared.reason };
+      }
+      return {
+        kind: "synced",
+        seeded: prepared.seeded,
+        result: {
+          mode: "git",
+          remoteWorkspaceDir: prepared.result.remoteWorkspaceDir,
+          manifestRef: prepared.result.manifestRef,
+        },
+      };
     },
     async finalizeSync(
       request: WorkerLocalWorkspaceSyncRequest,
@@ -205,8 +222,12 @@ export function createNodeWorkerWorkspaceFallback(exec: NodeWorkerRepositoryExec
       if (result.mode === "plain") {
         return result;
       }
-      const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv) =>
-        runCommandWithTimeout(argv, { timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 1024 }),
+      const author = await resolveWorkerWorkspaceGitAuthor(request, async (argv, gitOptions) =>
+        runCommandWithTimeout(argv, {
+          timeoutMs: GIT_TIMEOUT_MS,
+          maxOutputBytes: 1024,
+          ...gitOptions,
+        }),
       );
       const origin = credentialFreeOrigin(
         await localGit(request.localPath, ["remote", "get-url", "origin"]).catch(() => ""),

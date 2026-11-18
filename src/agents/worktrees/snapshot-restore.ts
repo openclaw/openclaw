@@ -2,21 +2,23 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from "./capacity.js";
 import { materializeManagedWorktree } from "./checkout-materialize.js";
 import { usesSourceOnlyWorktreeGit } from "./checkout-policy.js";
 import { addManagedWorktree } from "./checkout.js";
+import { hasWorktreeUnknownOutcome, WorktreeRecordNotFoundError } from "./errors.js";
 import {
   requireGit,
   worktreePathExists,
   commandError,
   listGitWorktrees,
-  lstatIfExists,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
+import { releasePendingWorktree, reservePendingWorktree } from "./pending-slots.js";
 import { restoreProvisionedFiles } from "./provisioned-files.js";
 import { SNAPSHOT_CHUNK_BYTES } from "./provisioned-snapshot.js";
 import { captureWorktreeRegistryReadGuard, readRegistryWorktree } from "./registry-read.js";
@@ -31,25 +33,22 @@ import {
   restoreRetiredExactWorktree,
   requireExactWorktreeRepository,
 } from "./removal-git.js";
+import { resolveRepository, type ResolvedRepository } from "./repository-paths.js";
 import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
 import {
   abortWorktreeRemoval,
   claimWorktreeRemoval,
   finalizeWorktreeRemoval,
 } from "./run-lease.js";
-import {
-  removeFailedWorktree,
-  resolveRepository,
-  withWorktreeSources,
-  type ResolvedRepository,
-} from "./service-preparation.js";
+import { removeFailedWorktree, withWorktreeSources } from "./service-preparation.js";
 import {
   exactStateRetirementSchema,
   type ExactStateRetirement,
 } from "./snapshot-exact-state-contract.js";
 import { readExactStateSnapshot, type ExactStateSnapshot } from "./snapshot-exact-state.js";
+import { worktreeSnapshotBase } from "./snapshot-ref.js";
 import {
-  clearExactRestoreReceipt,
+  clearCompletedExactRestoreReceipt,
   readExactRestoreReceipt,
   restoreExactSnapshotFallback,
 } from "./snapshot-restore-exact.js";
@@ -60,7 +59,7 @@ export function requireManagedWorktreeRestoreRecord(
   record: ManagedWorktreeRecord | undefined,
 ): ManagedWorktreeRecord {
   if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
-    throw new Error(`worktree ${id} is not restorable`);
+    throw new WorktreeRecordNotFoundError(`worktree ${id} is not restorable`);
   }
   return record;
 }
@@ -71,9 +70,8 @@ type RestoreInput = {
 } & WorktreeAllocationGuard;
 type RestoreDependencies = {
   env: NodeJS.ProcessEnv;
-  now: () => number;
   getConfig?: () => OpenClawConfig;
-  admitCapacity: () => Promise<void>;
+  admitCapacity: (reserve: (guard: WorktreeAllocationGuard) => Promise<void>) => Promise<void>;
 };
 type RestoreContext = Omit<RestoreDependencies, "admitCapacity"> & {
   registryContext: OpenClawStateWorkerContext;
@@ -81,6 +79,7 @@ type RestoreContext = Omit<RestoreDependencies, "admitCapacity"> & {
   admitCapacity: (requiredPaths: readonly string[], alreadyCounted: boolean) => Promise<void>;
   requireSpace: (target: string, repository: ResolvedRepository, bytes?: number) => Promise<void>;
   recoveryClaim?: string;
+  pendingId?: string;
 };
 
 async function settleRestoredProjection(
@@ -105,11 +104,13 @@ export async function restoreManagedWorktreeSnapshot(
 ): Promise<ManagedWorktreeRecord> {
   const { env } = dependencies;
   const registryContext = captureWorktreeRunEndContext(env);
-  // Queued removal can rebind the record before these allocation and checkout leases admit us.
+  const accept = captureWorktreeRegistryReadGuard(registryContext, "exact-owner");
+  // Queued removal can rebind the record before checkout custody admits us.
   const preparedRecord = requireManagedWorktreeRestoreRecord(
     input.id,
     await readRegistryWorktree(registryContext, input.id),
   );
+  const assertRecordCurrent = accept(preparedRecord);
   input.commitGuard();
   if (!(await worktreePathExists(preparedRecord.repoRoot))) {
     throw new Error(`source repository no longer exists: ${preparedRecord.repoRoot}`);
@@ -125,28 +126,47 @@ export async function restoreManagedWorktreeSnapshot(
     const context: RestoreContext = {
       env,
       registryContext,
-      now: dependencies.now,
       getConfig: dependencies.getConfig,
       repository,
       admitCapacity: async (requiredPaths, alreadyCounted) => {
         await retainSources(requiredPaths);
         if (!alreadyCounted) {
-          await dependencies.admitCapacity();
+          await dependencies.admitCapacity(async (allocation) => {
+            input.commitGuard();
+            allocation.commitGuard();
+            await reservePendingWorktree(
+              env,
+              { ...preparedRecord, removedAt: undefined },
+              {
+                ...allocation.workerAuthority,
+                predicates: [
+                  ...(allocation.workerAuthority.predicates ?? []),
+                  { kind: "exact-snapshot", record: preparedRecord },
+                ],
+              },
+            );
+            context.pendingId = preparedRecord.id;
+          });
         }
       },
       requireSpace: (target, sourceRepository, bytes) =>
         requireAllocationSpace(input, env, target, sourceRepository, bytes),
     };
     // An unfinished retirement still has a live row: retain its removal claim during recovery.
-    const accept = captureWorktreeRegistryReadGuard(registryContext, "exact-owner");
-    const record = requireManagedWorktreeRestoreRecord(
-      input.id,
-      await readRegistryWorktree(registryContext, input.id),
-    );
-    const assertRecordCurrent = accept(record);
+    const record = preparedRecord;
     input.commitGuard();
+    assertRecordCurrent();
     if (!input.recoverExactState || record.removedAt !== undefined) {
-      return await restoreSnapshot(input, context);
+      try {
+        return await restoreSnapshot(input, context);
+      } catch (error) {
+        if (context.pendingId && !hasWorktreeUnknownOutcome(error)) {
+          await releasePendingWorktree(env, context.pendingId, {
+            leaseSet: input.workerAuthority.leaseSet,
+          });
+        }
+        throw error;
+      }
     }
     const expected = exactStateRetirementSchema.parse(input.recoverExactState);
     assertExactStateOwner(record, expected);
@@ -195,7 +215,7 @@ async function restoreSnapshot(
   input: RestoreInput,
   context: RestoreContext,
 ): Promise<ManagedWorktreeRecord> {
-  const { env, now, getConfig, requireSpace, repository } = context;
+  const { env, getConfig, requireSpace, repository } = context;
   let params = input;
   let finalized = false;
   const onFinalized = () => {
@@ -211,9 +231,18 @@ async function restoreSnapshot(
   const assertSnapshotCurrent = accept(record);
   params.commitGuard();
   let capacityAdmitted = record.removedAt === undefined;
+  const callerGuard = params.commitGuard;
+  params = {
+    ...params,
+    commitGuard: () => {
+      callerGuard();
+      if (!finalized) {
+        assertSnapshotCurrent();
+      }
+    },
+  };
   if (record?.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-")) {
     const original = record;
-    const callerGuard = params.commitGuard;
     params = {
       ...params,
       workerAuthority: {
@@ -222,13 +251,6 @@ async function restoreSnapshot(
           ...(params.workerAuthority?.predicates ?? []),
           { kind: "exact-snapshot", record: original },
         ],
-      },
-      commitGuard: () => {
-        callerGuard?.();
-        if (finalized) {
-          return;
-        }
-        assertSnapshotCurrent();
       },
     };
   }
@@ -253,21 +275,7 @@ async function restoreSnapshot(
       throw commandError("git show-ref exact recovery", pending);
     }
     await requireExactWorktreeRepository(live, live.path, options);
-    const receipt = await readExactRestoreReceipt(live, options);
-    if (receipt) {
-      if (
-        receipt.snapshot !==
-        (await requireGit(live.repoRoot, ["rev-parse", live.snapshotRef + "^{commit}"], options))
-      ) {
-        throw new Error("Completed exact restore snapshot changed; source and receipt preserved");
-      }
-      const assertCurrent = () => {
-        params.commitGuard?.();
-        assertExactStateSourceIdentity(live.path, receipt);
-      };
-      assertCurrent();
-      await clearExactRestoreReceipt(live, receipt, { ...options, beforeRun: assertCurrent });
-    }
+    await clearCompletedExactRestoreReceipt(live, options);
     // Exact restore publishes this live row only after all recovery cleanup.
     // A lost acknowledgement after receipt deletion is therefore a completed retry.
     params.commitGuard?.();
@@ -327,7 +335,7 @@ async function restoreSnapshot(
       assertExactStateOwner(record, expected);
       // This is only a local restore plan. A failed recovery must not start an
       // expiration deadline or finalize an unfinished registry lifecycle.
-      record = { ...record, removedAt: now() };
+      record = { ...record, removedAt: Date.now() };
     }
   }
   if (!record?.snapshotRef || record.removedAt === undefined) {
@@ -357,7 +365,7 @@ async function restoreSnapshot(
   };
   const registrationOptions = {
     env,
-    now,
+    now: Date.now,
     repoRoot: record.repoRoot,
     commonDir: repository.commonDir,
     worktreeRoot: path.dirname(path.dirname(record.path)),
@@ -391,7 +399,7 @@ async function restoreSnapshot(
   if (exact) {
     const restoreRecord = record;
     const finalize = async (identity: ExactStateSnapshot) => {
-      const callerGuard = params.commitGuard;
+      const finalizeGuard = params.commitGuard;
       const workerAuthority = params.workerAuthority;
       params = {
         ...params,
@@ -403,7 +411,7 @@ async function restoreSnapshot(
           },
         },
         commitGuard: () => {
-          callerGuard?.();
+          finalizeGuard?.();
           assertExactStateSourceIdentity(restoreRecord.path, identity);
         },
       };
@@ -472,7 +480,11 @@ async function restoreSnapshot(
   }
   let parent: string;
   try {
-    parent = await requireGit(record.repoRoot, ["rev-parse", `${snapshot}^`], gitOptions);
+    parent = await requireGit(
+      record.repoRoot,
+      ["rev-parse", worktreeSnapshotBase(record.snapshotRef!, snapshot)],
+      gitOptions,
+    );
   } catch (error) {
     const shallow = await runGit(
       record.repoRoot,
@@ -493,7 +505,7 @@ async function restoreSnapshot(
       signal: params.signal,
       assertCurrent: params.commitGuard,
     });
-  const target = await lstatIfExists(record.path);
+  const target = await lstatIfExists(record.path, "ENOENT");
   const registrations = await listGitWorktrees(record.repoRoot, gitOptions);
   if (
     (target && (!target.isDirectory() || (await fs.readdir(record.path)).length > 0)) ||
@@ -626,13 +638,13 @@ async function restoreSnapshot(
 
 async function finishRestoredSnapshot(
   params: { id: string } & WorktreeAllocationGuard,
-  context: Pick<RestoreContext, "env" | "now" | "recoveryClaim">,
+  context: Pick<RestoreContext, "env" | "recoveryClaim" | "pendingId">,
   record: ManagedWorktreeRecord,
   restoredProvisionedPaths: string[],
   onFinalized: () => void,
   exact = false,
 ) {
-  const { env, now } = context;
+  const { env } = context;
   const gitOptions = {
     signal: params.signal,
     beforeRun: params.commitGuard,
@@ -642,7 +654,7 @@ async function finishRestoredSnapshot(
   // Advance past the stored stamp even within the same millisecond: stale
   // cleanup writes fence on the activity stamp they observed, so a restore
   // must never revive the row with an identical value.
-  const lastActiveAt = Math.max(now(), record.lastActiveAt + 1);
+  const lastActiveAt = Math.max(Date.now(), record.lastActiveAt + 1);
   const restored = { ...record, lastActiveAt };
   delete restored.removedAt;
   delete restored.runEndCleanup;
@@ -686,7 +698,19 @@ async function finishRestoredSnapshot(
       // a live row until the next run-end cleanup records fresh truth.
       runEndCleanup: undefined,
     },
-    { assertCurrent: params.commitGuard, workerAuthority: params.workerAuthority },
+    {
+      assertCurrent: params.commitGuard,
+      workerAuthority: exact
+        ? params.workerAuthority
+        : {
+            ...params.workerAuthority,
+            predicates: [
+              ...(params.workerAuthority.predicates ?? []),
+              { kind: "exact-snapshot", record },
+            ],
+          },
+      pendingId: context.pendingId,
+    },
   );
   onFinalized();
   if (!exact) {

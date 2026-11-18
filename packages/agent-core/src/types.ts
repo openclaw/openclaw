@@ -4,6 +4,8 @@ import type {
   ImageContent,
   Message,
   Model,
+  ModelThinkingLevel,
+  PreparedSystemPrompt,
   SimpleStreamOptions,
   StreamFn as LlmStreamFn,
   TextContent,
@@ -11,6 +13,8 @@ import type {
   ToolResultMessage,
 } from "@openclaw/llm-core";
 import type { Static, TSchema } from "typebox";
+import type { ToolInterruptions } from "./tool-interruption.js";
+import type { ToolRepeatState, ToolRepeatVerdict } from "./tool-repeat-guard.js";
 
 /**
  * Stream function used by the agent loop.
@@ -53,48 +57,6 @@ export interface BeforeToolCallResult {
   block?: boolean;
   reason?: string;
 }
-
-/** A call participating in an internal whole-batch admission check. */
-export interface InternalToolBatchCall {
-  toolCall: AgentToolCall;
-  /** Validated arguments, or the raw arguments when validation rejected the call. */
-  args: unknown;
-  /** Resolved tool identity for OpenClaw-owned argument canonicalization. */
-  tool?: AgentTool;
-  /**
-   * Error result for a call rejected by argument validation. It never executes;
-   * the batch lifecycle commits it at its assistant-order launch position.
-   */
-  validationFailure?: AgentToolResult<unknown>;
-}
-
-/** Typed core signal used to recover once from a critical tool loop. */
-export interface ToolLoopIntervention {
-  kind: "critical-tool-loop";
-  toolCallId: string;
-  toolName: string;
-  actionKey: string;
-  detector: string;
-  count: number;
-  reason: string;
-}
-
-/** Bucketed feedback for an admitted call, not a veto or recovery attempt. */
-export interface ToolLoopWarning {
-  kind: "tool-loop-warning";
-  toolCallId: string;
-  count: number;
-}
-
-export interface InternalBeforeToolBatchContext {
-  assistantMessage: AssistantMessage;
-  calls: InternalToolBatchCall[];
-  context: AgentContext;
-}
-
-export type InternalBeforeToolBatchResult =
-  | { intervention: ToolLoopIntervention; warnings?: never }
-  | { intervention?: never; warnings?: ToolLoopWarning[] };
 
 export interface DeferredToolCallContext {
   assistantMessage: AssistantMessage;
@@ -184,13 +146,11 @@ export interface AgentLoopTurnUpdate {
 
 export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
 
-/** @internal Mutable loop safety evidence shared by prompt retries in one Agent run. */
-export type ToolLoopRecoveryState = {
-  criticalToolLoopSeen: boolean;
-  repeatedToolError?: { signature: string; count: number };
-};
-
 export interface AgentLoopConfig extends SimpleStreamOptions {
+  /** @internal Call-scoped cancellation owned by the active Agent. */
+  toolInterruptions?: ToolInterruptions;
+  /** @internal Host-resolved small-model repetition policy. */
+  repetitionGuard?: (model: Model) => boolean;
   model: Model;
   /** Logical thinking level retained across model changes before provider mapping. */
   thinkingLevel?: ThinkingLevel;
@@ -295,12 +255,6 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     signal?: AbortSignal,
   ) => Promise<BeforeToolCallResult | undefined>;
 
-  /** @internal OpenClaw-owned batch admission. Not a plugin or session SDK hook. */
-  beforeToolBatch?: (
-    context: InternalBeforeToolBatchContext,
-    signal?: AbortSignal,
-  ) => Promise<InternalBeforeToolBatchResult | undefined>;
-
   /**
    * @internal OpenClaw-owned turn completion. Runs once after every tool call from one
    * assistant message has settled; returning true ends the turn even when not every
@@ -310,10 +264,17 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     message: AssistantMessage;
     toolResults: ToolResultMessage[];
     terminalToolCallIds: ReadonlySet<string>;
+    inputScope: object;
   }) => boolean;
 
-  /** @internal Preserves loop safety evidence across Agent.continue() retries. */
-  toolLoopRecoveryState?: ToolLoopRecoveryState;
+  /** Set false to disable the identical tool-call repeat guard. Default: enabled. */
+  toolRepeatGuard?: boolean;
+
+  /** @internal Preserves the repeat streak across Agent.continue() retries. */
+  toolRepeatState?: ToolRepeatState;
+
+  /** @internal Host diagnostics for each repeat note or stop. */
+  onToolRepeat?: (verdict: ToolRepeatVerdict) => void;
 
   /**
    * Hydrates an already-authorized tool that was deferred out of the current
@@ -352,7 +313,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  * Note: "xhigh" is only supported by selected model families. Use model thinking-level metadata
  * from openclaw/plugin-sdk/llm to detect support for a concrete model.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = ModelThinkingLevel;
 
 export interface BashExecutionMessage {
   role: "bashExecution";
@@ -520,12 +481,23 @@ export interface AgentTool<
    * If omitted, the default execution mode applies.
    */
   executionMode?: ToolExecutionMode;
+  /** Abort settles all call-owned effects before execute resolves or rejects. */
+  interruptible?: true | ((args: unknown) => boolean);
+  /**
+   * Identical consecutive calls are expected (polling, waiting); skip the repeat guard.
+   * `actions` limits the exemption to calls whose `action` argument is listed. Plain
+   * data, so the declaration crosses the worker wire unchanged.
+   */
+  repeatable?: ToolRepeatable;
 }
+
+export type ToolRepeatable = true | { readonly actions: readonly string[] };
 
 /** Context snapshot passed into the low-level agent loop. */
 export interface AgentContext {
   /** System prompt included with the request. */
   systemPrompt: string;
+  preparedSystemPrompt?: PreparedSystemPrompt;
   /** Transcript visible to the model. */
   messages: AgentMessage[];
   /** Tools available for this run. */

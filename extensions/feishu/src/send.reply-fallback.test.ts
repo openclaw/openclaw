@@ -1,4 +1,3 @@
-// Feishu tests cover send.reply fallback plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +13,20 @@ let sendMessageFeishu: typeof import("./send.js").sendMessageFeishu;
 describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const replyMock = vi.fn();
   const createMock = vi.fn();
+  const target = (receiveId = "ou_target", receiveIdType = "open_id") => ({
+    client: { im: { message: { reply: replyMock, create: createMock } } },
+    receiveId,
+    receiveIdType,
+  });
+  const sendReply = (options: Partial<Parameters<typeof sendMessageFeishu>[0]> = {}) =>
+    sendMessageFeishu({
+      cfg: {},
+      to: "chat:oc_group_1",
+      text: "hello",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+      ...options,
+    });
 
   async function expectFallbackResult(
     send: () => Promise<{ messageId?: string; receipt?: { replyToId?: string } }>,
@@ -24,6 +37,9 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe(expectedMessageId);
     expect(result.receipt?.replyToId).toBeUndefined();
+    expect(createMock.mock.calls[0]?.[0]?.data.uuid).not.toBe(
+      replyMock.mock.calls[0]?.[0]?.data.uuid,
+    );
   }
 
   beforeAll(async () => {
@@ -37,18 +53,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveFeishuSendTargetMock.mockReturnValue({
-      client: {
-        im: {
-          message: {
-            reply: replyMock,
-            create: createMock,
-          },
-        },
-      },
-      receiveId: "ou_target",
-      receiveIdType: "open_id",
-    });
+    resolveFeishuSendTargetMock.mockReturnValue(target());
   });
 
   it("preserves Feishu diagnostics when direct sends reject before response checks", async () => {
@@ -125,18 +130,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   });
 
   it("falls back to a top-level group send when normal quoted replies target withdrawn messages", async () => {
-    resolveFeishuSendTargetMock.mockReturnValue({
-      client: {
-        im: {
-          message: {
-            reply: replyMock,
-            create: createMock,
-          },
-        },
-      },
-      receiveId: "oc_group_1",
-      receiveIdType: "chat_id",
-    });
+    resolveFeishuSendTargetMock.mockReturnValue(target("oc_group_1", "chat_id"));
     replyMock.mockResolvedValue({
       code: 230011,
       msg: "The message was withdrawn.",
@@ -147,15 +141,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
     });
 
     await expectFallbackResult(
-      () =>
-        sendMessageFeishu({
-          cfg: {} as never,
-          to: "chat:oc_group_1",
-          text: "hello",
-          replyToMessageId: "om_parent",
-          replyInThread: true,
-          allowTopLevelReplyFallback: true,
-        }),
+      () => sendReply({ allowTopLevelReplyFallback: true }),
       "om_group_fallback",
     );
 
@@ -164,6 +150,7 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         msg_type: "post",
+        uuid: expect.any(String),
         reply_in_thread: true,
       },
     });
@@ -173,25 +160,18 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
         content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         receive_id: "oc_group_1",
         msg_type: "post",
+        uuid: expect.any(String),
       },
     });
   });
 
-  it("fails native thread replies instead of falling back to a top-level send", async () => {
-    replyMock.mockResolvedValue({
-      code: 230011,
-      msg: "The message was withdrawn.",
-    });
-
-    await expect(
-      sendMessageFeishu({
-        cfg: {} as never,
-        to: "chat:oc_group_1",
-        text: "hello",
-        replyToMessageId: "om_parent",
-        replyInThread: true,
-      }),
-    ).rejects.toThrow(
+  it.each(["response", "throw"])("fails withdrawn native thread replies (%s)", async (mode) => {
+    if (mode === "response") {
+      replyMock.mockResolvedValue({ code: 230011, msg: "The message was withdrawn." });
+    } else {
+      replyMock.mockRejectedValue(Object.assign(new Error("request failed"), { code: 230011 }));
+    }
+    await expect(sendReply()).rejects.toThrow(
       "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
     );
 
@@ -204,73 +184,22 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       data: { message_id: "om_thread_reply" },
     });
 
-    const result = await sendMessageFeishu({
-      cfg: {} as never,
-      to: "chat:oc_group_1",
-      text: "hello",
-      replyToMessageId: "om_parent",
-      replyInThread: true,
-    });
+    const result = await sendReply();
 
     expect(result.receipt.replyToId).toBe("om_parent");
     expect(result.receipt.threadId).toBeUndefined();
     expect(createMock).not.toHaveBeenCalled();
   });
 
-  it("fails thrown withdrawn native thread replies instead of falling back to create", async () => {
-    const sdkError = Object.assign(new Error("request failed"), { code: 230011 });
-    replyMock.mockRejectedValue(sdkError);
-
-    await expect(
-      sendMessageFeishu({
-        cfg: {} as never,
-        to: "chat:oc_group_1",
-        text: "hello",
-        replyToMessageId: "om_parent",
-        replyInThread: true,
-      }),
-    ).rejects.toThrow(
-      "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
+  it.each(["response", "throw"])("preserves non-withdrawn thread failures (%s)", async (mode) => {
+    if (mode === "response") {
+      replyMock.mockResolvedValue({ code: 999999, msg: "unknown failure" });
+    } else {
+      replyMock.mockRejectedValue(Object.assign(new Error("rate limited"), { code: 99991400 }));
+    }
+    await expect(sendReply({ allowTopLevelReplyFallback: true })).rejects.toThrow(
+      mode === "response" ? "Feishu reply failed" : "rate limited",
     );
-
-    expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves non-withdrawn thread reply failures", async () => {
-    replyMock.mockResolvedValue({
-      code: 999999,
-      msg: "unknown failure",
-    });
-
-    await expect(
-      sendMessageFeishu({
-        cfg: {} as never,
-        to: "chat:oc_group_1",
-        text: "hello",
-        replyToMessageId: "om_parent",
-        replyInThread: true,
-        allowTopLevelReplyFallback: true,
-      }),
-    ).rejects.toThrow("Feishu reply failed");
-
-    expect(createMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves thrown non-withdrawn thread reply failures", async () => {
-    const sdkError = Object.assign(new Error("rate limited"), { code: 99991400 });
-    replyMock.mockRejectedValue(sdkError);
-
-    await expect(
-      sendMessageFeishu({
-        cfg: {} as never,
-        to: "chat:oc_group_1",
-        text: "hello",
-        replyToMessageId: "om_parent",
-        replyInThread: true,
-        allowTopLevelReplyFallback: true,
-      }),
-    ).rejects.toThrow("rate limited");
-
     expect(createMock).not.toHaveBeenCalled();
   });
 });

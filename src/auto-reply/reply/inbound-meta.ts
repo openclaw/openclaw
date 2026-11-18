@@ -1,11 +1,7 @@
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  sliceUtf16Safe,
-  truncateUtf16Safe,
-  truncateWithMarker,
-} from "@openclaw/normalization-core/utf16-slice";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveSessionGoalDisplayState } from "../../config/sessions/goals.js";
@@ -16,16 +12,19 @@ import type { EnvelopeFormatOptions } from "../envelope.js";
 import { formatAgentEnvelopeTimestamp } from "../envelope.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import type { TemplateContext } from "../templating.js";
-import {
-  formatContextJsonBlock,
-  MAX_CONTEXT_JSON_STRING_CHARS,
-  neutralizeMarkdownFences,
-  selectInboundHistoryContext,
-} from "./channel-prompt-context.js";
+import { formatContextJsonBlock, selectInboundHistoryContext } from "./channel-prompt-context.js";
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
+import { formatTelegramCurrentMessageContext } from "./inbound-meta.current-message.js";
+import {
+  MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS,
+  normalizePromptMetadataString,
+  normalizePromptMetadataStringArray,
+  sanitizePromptBody,
+  sanitizeTranscriptText,
+  truncateBodyHeadTail,
+} from "./inbound-meta.text.js";
 
-const MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS = 500;
 const MAX_ACTIVE_GOAL_OBJECTIVE_CHARS = 200;
 const ACTIVE_GOAL_CONTEXT_PREFIX = "Active goal: ";
 const ACTIVE_GOAL_CONTEXT_SUFFIX =
@@ -119,10 +118,6 @@ export function refreshActiveGoalContext(
   };
 }
 
-function normalizePromptMetadataString(value: unknown): string | undefined {
-  return normalizeOptionalString(value)?.replaceAll("\u0000", "") || undefined;
-}
-
 function normalizePromptMediaPath(value: unknown): string | undefined {
   const mediaPath = normalizePromptMetadataString(value);
   if (!mediaPath) {
@@ -161,55 +156,6 @@ function normalizePromptMediaPath(value: unknown): string | undefined {
   return toInboundMediaPath(path.posix.basename(normalized));
 }
 
-function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .map(normalizePromptMetadataString)
-    .filter((entry): entry is string => Boolean(entry));
-  return normalized.length > 0 ? normalized : undefined;
-}
-
-function sanitizePromptBody(value: unknown): string | undefined {
-  return typeof value === "string" ? value.replaceAll("\u0000", "") || undefined : undefined;
-}
-
-const HEAD_TAIL_OMISSION_MARKER = "…[omitted]…";
-
-// Retain actionable tail content within the downstream JSON string cap.
-function truncateBodyHeadTail(body: string): string {
-  if (body.length <= MAX_CONTEXT_JSON_STRING_CHARS) {
-    return body;
-  }
-  const available = MAX_CONTEXT_JSON_STRING_CHARS - HEAD_TAIL_OMISSION_MARKER.length;
-  const headChars = Math.floor(available * 0.6);
-  const tailChars = available - headChars;
-  const head = truncateUtf16Safe(body, headChars);
-  const tail = sliceUtf16Safe(body, -tailChars);
-  return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
-}
-
-function sanitizeTranscriptText(
-  value: unknown,
-  kind: "field" | "body" = "field",
-): string | undefined {
-  const body = sanitizePromptBody(value);
-  if (!body) {
-    return undefined;
-  }
-  const truncated =
-    kind === "body"
-      ? truncateBodyHeadTail(body)
-      : truncateWithMarker(body, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS, {
-          marker: "…[truncated]",
-          reserve: 14,
-          trimEnd: true,
-        });
-  const sanitized = neutralizeMarkdownFences(truncated).replace(/\s+/g, " ").trim();
-  return kind === "body" ? sanitized || undefined : sanitized;
-}
-
 function formatChatWindowTimestamp(
   value: unknown,
   envelope?: EnvelopeFormatOptions,
@@ -246,61 +192,12 @@ function formatChatWindowMessage(
   return `${details.length > 0 ? `${details.join(" ")} ` : ""}${sender}: ${content}`;
 }
 
-function formatChatWindowStructuredContext(
-  entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
-  envelope?: EnvelopeFormatOptions,
-): string | undefined {
-  if (!isChatWindowStructuredContext(entry)) {
-    return undefined;
-  }
-  const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
-  const lines = messages.flatMap((message) => {
-    const line = formatChatWindowMessage(message, envelope);
-    return line ? [line] : [];
-  });
-  if (lines.length === 0) {
-    return undefined;
-  }
-  const label = sanitizeTranscriptText(entry.label) ?? "Chat window";
-  const rawRelation = sanitizeTranscriptText(entry.payload["relation"]);
-  const relation =
-    rawRelation === "around_reply_target"
-      ? "around replied-to message"
-      : rawRelation?.replaceAll("_", " ");
-  const order = sanitizeTranscriptText(entry.payload["order"]);
-  const qualifiers = [order, relation].filter(Boolean).join(", ");
-  const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
-  return [markInboundContextLabel(header), ...lines].join("\n");
-}
-
 function isChatWindowStructuredContext(
   entry: NonNullable<TemplateContext["ChannelStructuredContext"]>[number],
 ): entry is NonNullable<TemplateContext["ChannelStructuredContext"]>[number] & {
   payload: Record<string, unknown>;
 } {
   return normalizePromptMetadataString(entry.type) === "chat_window" && isRecord(entry.payload);
-}
-
-function collectChatWindowMessageIds(
-  entries: NonNullable<TemplateContext["ChannelStructuredContext"]>,
-): Set<string> {
-  const ids = new Set<string>();
-  for (const entry of entries) {
-    if (!isChatWindowStructuredContext(entry)) {
-      continue;
-    }
-    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
-    for (const message of messages) {
-      if (!isRecord(message)) {
-        continue;
-      }
-      const id = normalizePromptMetadataString(message["message_id"]);
-      if (id) {
-        ids.add(id);
-      }
-    }
-  }
-  return ids;
 }
 
 function isChatWindowHistoryContext(
@@ -311,82 +208,6 @@ function isChatWindowHistoryContext(
   }
   const relation = normalizePromptMetadataString(entry.payload["relation"]);
   return relation === "before_current_message" || relation === "selected_for_current_message";
-}
-
-function readInboundHistoryMediaTypes(value: unknown): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return value.flatMap((entry) => {
-    if (!isRecord(entry)) {
-      return [];
-    }
-    const contentType = normalizePromptMetadataString(entry["contentType"]);
-    return contentType ? [contentType] : [];
-  });
-}
-
-function buildReplyChainPayload(
-  ctx: TemplateContext,
-  envelope?: EnvelopeFormatOptions,
-): Array<Record<string, unknown>> {
-  if (!Array.isArray(ctx.ReplyChain)) {
-    return [];
-  }
-  return ctx.ReplyChain.flatMap((entry) => {
-    const rawBody = sanitizePromptBody(entry.body);
-    const body = rawBody ? truncateBodyHeadTail(rawBody) : rawBody;
-    const mediaType = normalizePromptMetadataString(entry.mediaType);
-    const mediaPath = normalizePromptMediaPath(entry.mediaPath);
-    const mediaRef = normalizePromptMetadataString(entry.mediaRef);
-    if (!body && !mediaType && !mediaPath && !mediaRef) {
-      return [];
-    }
-    return [
-      {
-        message_id: normalizePromptMetadataString(entry.messageId),
-        thread_id: normalizePromptMetadataString(entry.threadId),
-        sender: normalizePromptMetadataString(entry.sender),
-        sender_id: normalizePromptMetadataString(entry.senderId),
-        sender_username: normalizePromptMetadataString(entry.senderUsername),
-        timestamp: formatChatWindowTimestamp(entry.timestamp, envelope),
-        body,
-        is_quote: entry.isQuote === true ? true : undefined,
-        media_type: mediaType,
-        media_path: mediaPath,
-        media_ref: mediaRef,
-        reply_to_id: normalizePromptMetadataString(entry.replyToId),
-        forwarded_from: normalizePromptMetadataString(entry.forwardedFrom),
-        forwarded_from_id: normalizePromptMetadataString(entry.forwardedFromId),
-        forwarded_from_username: normalizePromptMetadataString(entry.forwardedFromUsername),
-        forwarded_date: formatChatWindowTimestamp(entry.forwardedDate, envelope),
-      },
-    ];
-  });
-}
-
-function isTelegramInboundContext(ctx: TemplateContext): boolean {
-  return [ctx.OriginatingChannel, ctx.Surface, ctx.Provider].some(
-    (value) => normalizePromptMetadataString(value) === "telegram",
-  );
-}
-
-function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | undefined {
-  if (!isTelegramInboundContext(ctx)) {
-    return undefined;
-  }
-  const quote =
-    sanitizeTranscriptText(ctx.ReplyToQuoteText) ?? sanitizeTranscriptText(ctx.ReplyToBody, "body");
-  if (!quote) {
-    return undefined;
-  }
-  const messageId =
-    normalizePromptMetadataString(ctx.MessageSid) ??
-    normalizePromptMetadataString(ctx.MessageSidFull);
-  const header = messageId ? `#${messageId}:` : undefined;
-  return ["Current message:", `[Replying to: ${JSON.stringify(quote)}]`, header]
-    .filter((line) => line !== undefined)
-    .join("\n");
 }
 
 export function resolveInboundUserContextPromptJoiner(ctx: TemplateContext): " " | undefined {
@@ -452,7 +273,7 @@ export function buildInboundMetaSystemPrompt(
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? "direct",
   };
-  // Heartbeats and system events use the same prepared context, including their delivery channel.
+  // System events use the same prepared context, including their delivery channel.
   const deliveryFormat =
     options?.includeFormattingHints === false
       ? undefined
@@ -498,11 +319,54 @@ export function buildInboundUserContextPrefix(
   const resolvedMessageId = messageId ?? messageIdFull;
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const { boundedHistory, historyLabel, truncated } = selectInboundHistoryContext(ctx);
-  const replyChainPayload = buildReplyChainPayload(ctx, envelope);
-  const structuredContext = Array.isArray(ctx.ChannelStructuredContext)
-    ? ctx.ChannelStructuredContext
-    : [];
-  const chatWindowMessageIds = collectChatWindowMessageIds(structuredContext);
+  const replyChainPayload =
+    ctx.ReplyChain?.flatMap((entry) => {
+      const rawBody = sanitizePromptBody(entry.body);
+      const body = rawBody ? truncateBodyHeadTail(rawBody) : rawBody;
+      const mediaType = normalizePromptMetadataString(entry.mediaType);
+      const mediaPath = normalizePromptMediaPath(entry.mediaPath);
+      const mediaRef = normalizePromptMetadataString(entry.mediaRef);
+      if (!body && !mediaType && !mediaPath && !mediaRef) {
+        return [];
+      }
+      return [
+        {
+          message_id: normalizePromptMetadataString(entry.messageId),
+          thread_id: normalizePromptMetadataString(entry.threadId),
+          sender: normalizePromptMetadataString(entry.sender),
+          sender_id: normalizePromptMetadataString(entry.senderId),
+          sender_username: normalizePromptMetadataString(entry.senderUsername),
+          timestamp: formatChatWindowTimestamp(entry.timestamp, envelope),
+          body,
+          is_quote: entry.isQuote === true ? true : undefined,
+          media_type: mediaType,
+          media_path: mediaPath,
+          media_ref: mediaRef,
+          reply_to_id: normalizePromptMetadataString(entry.replyToId),
+          forwarded_from: normalizePromptMetadataString(entry.forwardedFrom),
+          forwarded_from_id: normalizePromptMetadataString(entry.forwardedFromId),
+          forwarded_from_username: normalizePromptMetadataString(entry.forwardedFromUsername),
+          forwarded_date: formatChatWindowTimestamp(entry.forwardedDate, envelope),
+        },
+      ];
+    }) ?? [];
+  const structuredContext = ctx.ChannelStructuredContext ?? [];
+  const chatWindowMessageIds = new Set<string>();
+  for (const entry of structuredContext) {
+    if (!isChatWindowStructuredContext(entry)) {
+      continue;
+    }
+    const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+    for (const message of messages) {
+      if (!isRecord(message)) {
+        continue;
+      }
+      const id = normalizePromptMetadataString(message["message_id"]);
+      if (id) {
+        chatWindowMessageIds.add(id);
+      }
+    }
+  }
   const replyToId = normalizePromptMetadataString(ctx.ReplyToId);
   const chatWindowCoversReplyContext =
     replyChainPayload.length > 0
@@ -523,7 +387,7 @@ export function buildInboundUserContextPrefix(
     name: normalizePromptMetadataString(ctx.SenderName),
     username: normalizePromptMetadataString(ctx.SenderUsername),
     e164: senderE164Digits && senderE164Digits === senderIdDigits ? undefined : senderE164,
-    is_bot: typeof ctx.SenderIsBot === "boolean" ? ctx.SenderIsBot : undefined,
+    is_bot: ctx.SenderIsBot,
   };
 
   // Keep volatile conversation/message identifiers in the user-role block so the system
@@ -561,8 +425,7 @@ export function buildInboundUserContextPrefix(
     is_forum: ctx.IsForum === true ? true : undefined,
     is_group_chat: !isDirect ? true : undefined,
     was_mentioned: ctx.WasMentioned === true ? true : undefined,
-    explicitly_mentioned_bot:
-      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    explicitly_mentioned_bot: ctx.ExplicitlyMentionedBot,
     mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
     mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
     implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
@@ -602,17 +465,17 @@ export function buildInboundUserContextPrefix(
     title: normalizePromptMetadataString(ctx.ForwardedFromTitle),
     signature: normalizePromptMetadataString(ctx.ForwardedFromSignature),
     chat_type: normalizePromptMetadataString(ctx.ForwardedFromChatType),
-    date_ms: typeof ctx.ForwardedDate === "number" ? ctx.ForwardedDate : undefined,
+    date_ms: ctx.ForwardedDate,
   };
   if (forwardedFrom) {
     appendJsonContext("Forwarded message context:", forwardedContext);
   }
 
   const locationContext = {
-    latitude: typeof ctx.LocationLat === "number" ? ctx.LocationLat : undefined,
-    longitude: typeof ctx.LocationLon === "number" ? ctx.LocationLon : undefined,
+    latitude: ctx.LocationLat,
+    longitude: ctx.LocationLon,
     accuracy_m:
-      typeof ctx.LocationAccuracy === "number" && Number.isFinite(ctx.LocationAccuracy)
+      ctx.LocationAccuracy !== undefined && Number.isFinite(ctx.LocationAccuracy)
         ? ctx.LocationAccuracy
         : undefined,
     source: normalizePromptMetadataString(ctx.LocationSource),
@@ -626,13 +489,25 @@ export function buildInboundUserContextPrefix(
   }
 
   for (const entry of structuredContext) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-    const chatWindow = formatChatWindowStructuredContext(entry, envelope);
-    if (chatWindow) {
-      blocks.push(chatWindow);
-      continue;
+    if (isChatWindowStructuredContext(entry)) {
+      const messages = Array.isArray(entry.payload["messages"]) ? entry.payload["messages"] : [];
+      const lines = messages.flatMap((message) => {
+        const line = formatChatWindowMessage(message, envelope);
+        return line ? [line] : [];
+      });
+      if (lines.length > 0) {
+        const label = sanitizeTranscriptText(entry.label) ?? "Chat window";
+        const rawRelation = sanitizeTranscriptText(entry.payload["relation"]);
+        const relation =
+          rawRelation === "around_reply_target"
+            ? "around replied-to message"
+            : rawRelation?.replaceAll("_", " ");
+        const order = sanitizeTranscriptText(entry.payload["order"]);
+        const qualifiers = [order, relation].filter(Boolean).join(", ");
+        const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
+        blocks.push([markInboundContextLabel(header), ...lines].join("\n"));
+        continue;
+      }
     }
     const label = normalizePromptMetadataString(entry.label)?.replace(/\s+/g, " ").trim();
     appendJsonContext(label ? `${label}:` : "Structured object:", {
@@ -644,7 +519,14 @@ export function buildInboundUserContextPrefix(
 
   if (boundedHistory.length > 0 && !chatWindowCoversHistory) {
     const historyLines = boundedHistory.flatMap((entry) => {
-      const mediaTypes = [...new Set(readInboundHistoryMediaTypes(entry.media))];
+      const mediaTypes = [
+        ...new Set(
+          entry.media?.flatMap((media) => {
+            const contentType = normalizePromptMetadataString(media.contentType);
+            return contentType ? [contentType] : [];
+          }) ?? [],
+        ),
+      ];
       const line = formatChatWindowMessage(
         {
           message_id: entry.messageId,

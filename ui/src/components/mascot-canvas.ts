@@ -217,24 +217,6 @@ function sparklePath(center: Point, size: number): Path2D {
   return path;
 }
 
-function drawZ(ctx: CanvasRenderingContext2D, position: Point, size: number, alpha: number): void {
-  const path = new Path2D();
-  const width = size * 0.62;
-  const height = size * 0.78;
-  path.moveTo(position.x - width / 2, position.y - height / 2);
-  path.lineTo(position.x + width / 2, position.y - height / 2);
-  path.lineTo(position.x - width / 2, position.y + height / 2);
-  path.lineTo(position.x + width / 2, position.y + height / 2);
-  ctx.save();
-  ctx.globalAlpha *= alpha * 0.9;
-  ctx.strokeStyle = EYE_GLOW;
-  ctx.lineWidth = Math.max(1.2, size * 0.16);
-  ctx.lineCap = "round";
-  ctx.lineJoin = "round";
-  ctx.stroke(path);
-  ctx.restore();
-}
-
 function drawEffect(ctx: CanvasRenderingContext2D, pose: MascotPose, palette: MascotPalette): void {
   switch (pose.effect) {
     case "none":
@@ -265,15 +247,26 @@ function drawEffect(ctx: CanvasRenderingContext2D, pose: MascotPose, palette: Ma
         if (alpha <= 0.05) {
           continue;
         }
-        drawZ(
-          ctx,
-          {
-            x: 86 + 14 * phase + 2 * Math.sin(phase * 4 * Math.PI),
-            y: 24 - 20 * phase,
-          },
-          6 + 4 * phase,
-          alpha,
-        );
+        const position: Point = {
+          x: 86 + 14 * phase + 2 * Math.sin(phase * 4 * Math.PI),
+          y: 24 - 20 * phase,
+        };
+        const size = 6 + 4 * phase;
+        const path = new Path2D();
+        const width = size * 0.62;
+        const height = size * 0.78;
+        path.moveTo(position.x - width / 2, position.y - height / 2);
+        path.lineTo(position.x + width / 2, position.y - height / 2);
+        path.lineTo(position.x - width / 2, position.y + height / 2);
+        path.lineTo(position.x + width / 2, position.y + height / 2);
+        ctx.save();
+        ctx.globalAlpha *= alpha * 0.9;
+        ctx.strokeStyle = EYE_GLOW;
+        ctx.lineWidth = Math.max(1.2, size * 0.16);
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.stroke(path);
+        ctx.restore();
       }
       return;
     case "sparks":

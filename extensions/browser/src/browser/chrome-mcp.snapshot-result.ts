@@ -15,7 +15,6 @@ export function buildChromeMcpRouteSnapshot(params: {
     ? {
         ...built,
         snapshot: appendRoleSnapshotDepthTruncationMarker(built.snapshot),
-        truncated: true as const,
       }
     : built;
 }

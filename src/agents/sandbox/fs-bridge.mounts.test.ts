@@ -96,7 +96,9 @@ describe("sandbox effective filesystem mounts", () => {
         },
       });
       const catalog = getSkills(null);
-      await expect(readInstalledSkill(catalog, "guide")).resolves.toBe("Inside instructions");
+      await expect(readInstalledSkill(catalog, "guide")).resolves.toMatchObject({
+        content: "Inside instructions",
+      });
       await fs.unlink(alias);
       await fs.symlink("/data/SKILL.md", alias);
       mockContainerCanonicalPaths({ "/workspace/alias.md": "/data/SKILL.md" });
@@ -149,31 +151,6 @@ describe("sandbox effective filesystem mounts", () => {
     });
   });
 
-  it("remaps relative and host aliases through a nested override and guard", async () => {
-    await withTempDir("openclaw-effective-mounts-", async (root) => {
-      const workspaceDir = path.join(root, "workspace");
-      const override = path.join(root, "override");
-      await fs.mkdir(path.join(workspaceDir, "sub"), { recursive: true });
-      await fs.mkdir(override);
-      await fs.writeFile(path.join(override, "marker"), "VISIBLE");
-      const relative = "sub/marker";
-      await fs.writeFile(path.join(workspaceDir, relative), "HIDDEN");
-      const sandbox = mountedSandbox(workspaceDir, {
-        binds: [`${override}:/workspace/sub:ro`],
-      });
-      const bridge = createSandboxFsBridge({ sandbox });
-      for (const filePath of [
-        relative,
-        `/workspace/${relative}`,
-        path.join(workspaceDir, relative),
-      ]) {
-        expect((await bridge.readFile({ filePath })).toString()).toBe("VISIBLE");
-        await expect(bridge.writeFile({ filePath, data: "changed" })).rejects.toThrow("read-only");
-      }
-      expectOnlyCanonicalPathCommands();
-    });
-  });
-
   it("refuses configured tmpfs and symlink aliases while allowing a deeper bind", async () => {
     await withTempDir("openclaw-effective-mounts-", async (workspaceDir) => {
       await fs.mkdir(path.join(workspaceDir, "cache"));
@@ -198,6 +175,9 @@ describe("sandbox effective filesystem mounts", () => {
       expect((await bridge.readFile({ filePath: "cache/export/marker" })).toString()).toBe(
         "VISIBLE",
       );
+      await expect(
+        bridge.writeFile({ filePath: "cache/export/marker", data: "changed" }),
+      ).rejects.toThrow("read-only");
       expectOnlyCanonicalPathCommands();
     });
   });
@@ -293,33 +273,30 @@ describe("sandbox effective filesystem mounts", () => {
         const open = mockedOpenRootFile.getMockImplementation()!;
         let fd: number | undefined;
         let closeCallOffset = 0;
-        const close = vi.spyOn(fsSync, "closeSync");
-        try {
-          mockedOpenRootFile.mockImplementationOnce(async (request) => {
-            await fs.unlink(path.join(workspaceDir, target));
-            await fs.symlink(other, path.join(workspaceDir, target));
-            const result = await open(request);
-            if (result.ok) {
-              fd = result.fd;
-              closeCallOffset = close.mock.calls.length;
-            }
-            return result;
-          });
-          await expect(
-            bridge.readFile({ filePath: path.join(workspaceDir, target) }),
-          ).rejects.toThrow("hidden by another mount");
-          expect(fd).toBeDefined();
-          // A released descriptor number can already identify another resource.
-          const closeIndex = close.mock.calls.findIndex(
-            ([descriptor], index) => index >= closeCallOffset && descriptor === fd,
-          );
-          expect(closeIndex).toBeGreaterThanOrEqual(closeCallOffset);
-          expect(close.mock.results[closeIndex]).toEqual({ type: "return", value: undefined });
-          expect(await fs.readFile(path.join(workspaceDir, other), "utf8")).toBe("HIDDEN");
-          expectOnlyCanonicalPathCommands();
-        } finally {
-          close.mockRestore();
-        }
+        using close = vi.spyOn(fsSync, "closeSync");
+
+        mockedOpenRootFile.mockImplementationOnce(async (request) => {
+          await fs.unlink(path.join(workspaceDir, target));
+          await fs.symlink(other, path.join(workspaceDir, target));
+          const result = await open(request);
+          if (result.ok) {
+            fd = result.fd;
+            closeCallOffset = close.mock.calls.length;
+          }
+          return result;
+        });
+        await expect(
+          bridge.readFile({ filePath: path.join(workspaceDir, target) }),
+        ).rejects.toThrow("hidden by another mount");
+        expect(fd).toBeDefined();
+        // A released descriptor number can already identify another resource.
+        const closeIndex = close.mock.calls.findIndex(
+          ([descriptor], index) => index >= closeCallOffset && descriptor === fd,
+        );
+        expect(closeIndex).toBeGreaterThanOrEqual(closeCallOffset);
+        expect(close.mock.results[closeIndex]).toEqual({ type: "return", value: undefined });
+        expect(await fs.readFile(path.join(workspaceDir, other), "utf8")).toBe("HIDDEN");
+        expectOnlyCanonicalPathCommands();
       });
     },
   );

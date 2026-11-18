@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
 vi.mock("./onboard-interactive-runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-interactive-runner.js")>()),
@@ -21,8 +21,12 @@ vi.mock("../plugins/provider-setup-availability.js", () => ({
 
 let root: string | undefined;
 afterEach(async () => {
-  const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
-  const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+  const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+    await import("../state/openclaw-state-db.js");
+  const { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest } =
+    await import("../state/openclaw-agent-db.js");
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -42,7 +46,8 @@ it.each(["interrupted", "replaced"] as const)(
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
-    const { runGuidedOnboarding } = await import("./onboard-guided.js");
+    const { runGuidedOnboardingWithFixtures: runGuidedOnboarding } =
+      await import("./onboard-guided-runtime.test-support.js");
     const { readConfigFileSnapshot } = await import("../config/config.js");
     const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
     const { beginLocalOnboarding, readLocalOnboardingState } =

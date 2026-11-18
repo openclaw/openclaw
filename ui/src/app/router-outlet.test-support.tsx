@@ -1,6 +1,5 @@
-import { render } from "@solidjs/testing-library";
-import { ReactiveElement } from "lit";
 import { createSignal, flush, onSettled } from "solid-js";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { RouterOutlet, type RouterOutletProps } from "./router-outlet.tsx";
 
@@ -8,6 +7,9 @@ type Inputs = {
   router: unknown;
   retryContext?: unknown;
   retentionScope?: object;
+  onNotFound?: RouterOutletProps["onNotFound"];
+  notFoundRecoveryReady?: boolean;
+  retryEnabled?: boolean;
 };
 
 export type MountedRouterOutlet = ControlUiReadinessOutlet & {
@@ -20,7 +22,7 @@ const mounts = new Set<MountedRouterOutlet>();
 export function mountRouterOutlet(inputs: Inputs): MountedRouterOutlet {
   // These fixtures use a smaller synthetic route/context union than the app.
   const [props, setProps] = createSignal(inputs as RouterOutletProps);
-  const view = render(() => <RouterOutlet {...props()} />);
+  const view = mountSolid(() => <RouterOutlet {...props()} />);
   const host = view.container.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
   if (!host) {
     throw new Error("Solid did not mount the router outlet");
@@ -51,10 +53,11 @@ export async function settleRouterOutlet(outlet: ControlUiReadinessOutlet): Prom
     onSettled(resolve);
   });
   // Test fixtures may inspect descendants; production readiness stops at the outlet.
-  const elements = [...outlet.querySelectorAll("*")].filter(
-    (element): element is ReactiveElement => element instanceof ReactiveElement,
+  await Promise.all(
+    [...outlet.querySelectorAll("*")].map((element) =>
+      "updateComplete" in element ? element.updateComplete : undefined,
+    ),
   );
-  await Promise.all(elements.map((element) => element.updateComplete));
   flush();
   await new Promise<void>((resolve) => {
     onSettled(resolve);

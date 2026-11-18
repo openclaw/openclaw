@@ -67,7 +67,10 @@ export type SkillLibraryAuthoringCapability = {
   target: "personal";
   defaultTarget: "workspace" | "personal";
   multipleProfiles: boolean;
-  assertWorkspaceCurrent?: () => void;
+  /** Set on a grant that only keeps the declaration of an earlier human turn. */
+  expired?: true;
+  /** Gate for Workshop calls through the workspace-default wrapper, given the run's sandbox state. */
+  assertWorkspaceCurrent?: (run?: { sandboxed?: boolean }) => void;
   bind: (context: AdmittedRunContext) => void;
   invoke: (
     params: SkillLibraryAuthoringInput,

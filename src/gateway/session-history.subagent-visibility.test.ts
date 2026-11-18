@@ -8,9 +8,10 @@ import {
   replaceSessionEntry,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
+import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import * as inputVisibility from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -20,15 +21,15 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
 import { readChatHistoryDelta } from "./server-methods/chat-history-delta.js";
-import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
+import { createPreparedSessionHistorySubagentProjection } from "./session-history-delta-visibility.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readSessionHistorySnapshotKernel } from "./session-history-snapshot.js";
 import {
   readSessionHistorySnapshotAsync,
   SessionHistorySseState,
 } from "./session-history-state.js";
-import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import * as subagentSources from "./session-history-subagent-sources.js";
 import { readChatHistoryMessageId } from "./session-history-tail.js";
 import { collectSessionTranscriptMessages } from "./session-transcript-source-pages.js";
@@ -254,6 +255,44 @@ describe("subagent coordination history", () => {
     });
   });
 
+  it("keeps message-tool replies from a hidden child coordination run in history and live", async () => {
+    // A private coordination turn reaches the human only through message(action=send).
+    const reply = (runId: string, text: string, callId = "call-1") => ({
+      role: "assistant",
+      content: [{ type: "text", text }],
+      api: "openclaw-transcript",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      stopReason: "stop",
+      idempotencyKey: `${runId}:message-tool:${callId}`,
+      __openclaw: { runId },
+    });
+    await withHistory(
+      [
+        ["child-input", childInput("coordination-run")],
+        ["user-update", reply("coordination-run", "Update for the human")],
+        ["private-final", response("coordination-run", "Private coordination note")],
+      ],
+      async ({ scope, entry }) => {
+        const page = await readSessionHistorySnapshotAsync({
+          target: { ...scope, sessionEntry: entry },
+          limit: 10,
+        });
+        expect(page.history.messages.map(readChatHistoryMessageId)).toEqual(["user-update"]);
+        const sse = SessionHistorySseState.fromSnapshot({
+          target: { ...scope, sessionEntry: entry },
+          snapshot: page,
+        });
+        const late = reply("coordination-run", "Second update for the human", "call-2");
+        await appendTranscriptMessage(scope, { eventId: "late-update", now: 4, message: late });
+        const live = (await sse.prepareInlineMessage({ message: late, messageSeq: 4 }))();
+        expect(live?.message).toMatchObject({
+          content: [{ type: "text", text: "Second update for the human" }],
+        });
+      },
+    );
+  });
+
   it("rejects prepared inline visibility when shared-state custody retires before publication", async () => {
     await withHistory([["worker-input", childInput("worker-run")]], async ({ scope, entry }) => {
       const snapshot = await readSessionHistorySnapshotAsync({
@@ -276,7 +315,7 @@ describe("subagent coordination history", () => {
   });
 
   it.each(["uncached-source", "cached-source", "cached-run", "projected-fast-path"])(
-    "rejects local history after source authority changes (%s)",
+    "rejects prepared history after source authority changes (%s)",
     async (readKind) => {
       await withHistory(
         [
@@ -285,7 +324,20 @@ describe("subagent coordination history", () => {
         ],
         async ({ scope }) => {
           const database = openOpenClawStateDatabase();
-          const subagentCoordination = createSessionHistorySubagentProjection(scope);
+          const prepared = await readSessionHistoryPageInWorker({
+            kind: "inline-visibility",
+            params: {
+              target: scope,
+              lookup:
+                readKind === "cached-run"
+                  ? { kind: "run", runId: "worker-run", messageSeq: 2 }
+                  : { kind: "session", sessionKey: childKey },
+            },
+          });
+          const subagentCoordination = createPreparedSessionHistorySubagentProjection(
+            prepared.subagentCoordination,
+            prepared.assertCurrent,
+          );
           if (readKind === "cached-source") {
             expect(subagentCoordination.isSubagentSession(childKey)).toBe(true);
           } else if (readKind === "cached-run") {

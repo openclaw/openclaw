@@ -2,6 +2,7 @@ import {
   isRecord,
   normalizeOptionalString as readNonEmptyString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { safeParseQaJson } from "./json.js";
 import {
   extractQaMessageText,
   readQaMessageToolCalls,
@@ -149,17 +150,6 @@ export function extractGatewayMessageText(message: Record<string, unknown>) {
   });
 }
 
-function parseJsonArguments(value: unknown): unknown {
-  if (typeof value !== "string") {
-    return value;
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return value;
-  }
-}
-
 function hasCurrentChatMessageSend(message: Record<string, unknown>) {
   for (const { block, tool, args } of readQaMessageToolCalls(message, {
     includeFunctionCalls: true,
@@ -180,7 +170,7 @@ function isCurrentChatMessageSend(name: unknown, rawArgs: unknown) {
   if (readNonEmptyString(name) !== "message") {
     return false;
   }
-  const args = parseJsonArguments(rawArgs);
+  const args = typeof rawArgs === "string" ? safeParseQaJson(rawArgs) : rawArgs;
   if (!isRecord(args) || readNonEmptyString(args.action)?.toLowerCase() !== "send") {
     return false;
   }

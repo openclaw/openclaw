@@ -1,12 +1,12 @@
-import type { DatabaseSync } from "node:sqlite";
 import { hasAgentAuthProfileSourceInDatabase } from "../../agents/auth-profiles/sqlite-json.js";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadOperationSync } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   assertOpenClawAgentDatabaseIdentity,
   readOpenClawAgentDatabaseIdentity,
@@ -17,13 +17,11 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryFactsInDatabase } from "./session-accessor.sqlite-entry-facts.worker.js";
 import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import {
-  sessionColdArchiveMetadataColumns,
-  type SessionColdArchive,
-} from "./session-cold-storage-state.js";
+import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import type {
   SessionEntryCohortRequest,
@@ -36,7 +34,7 @@ import { MAX_SESSION_ROW_FACTS_KEYS } from "./session-transcript-worker.types.js
 
 /** The entry cohort bounds this selection and owns its fresh snapshot. */
 function readSessionColdTranscripts(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionIds: readonly string[],
 ): Array<Omit<SessionColdArchive, "archive_blob">> {
   if (sessionIds.length === 0) {
@@ -76,7 +74,7 @@ export function createSessionEntryReadScope(capturedDatabase?: OpenClawAgentRead
     snapshot: <T>(database: OpenClawAgentReadOnlyDatabase, read: () => T) =>
       capturedDatabase?.db === database.db && database.db.isTransaction
         ? read()
-        : runSqliteDeferredTransactionSync(database.db, read),
+        : runSqliteReadSnapshotSync(database.db, read),
   };
 }
 
@@ -117,10 +115,8 @@ export function readSessionEntryCohort(
   const identity = source.identity;
   const requiresSnapshot = Boolean(
     transcript ||
-    runtimeTarget ||
     includeAuthProfileSource ||
     includeColdMetadata ||
-    input.lifecycleSessionKey ||
     input.replyInitializationSessionKey,
   );
   if (expected && source.incarnation !== expected.incarnation) {
@@ -130,25 +126,26 @@ export function readSessionEntryCohort(
   const read = (): SessionEntryCohortResult => {
     const sharedHeader =
       transcript?.includeHeader && transcript.sessionKey === input.lifecycleSessionKey;
-    const result: SessionExactEntriesWorkerResult = requiresSnapshot
-      ? readEntries({
-          ...selection,
-          kind: "session-exact-entries",
-          database: { agentId: database.agentId, path: database.path },
-          env: {},
-          projection: "full",
-          includeAuthorization: true,
-          ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
-        })
-      : {
-          kind: "session-exact-entries",
-          ...readExactSessionEntryFactsInDatabase(
-            database,
-            input.sessionKeys,
-            input.snapshotFields ?? "full",
-          ),
-          lifecycleTimestamps: {},
-        };
+    const result: SessionExactEntriesWorkerResult =
+      requiresSnapshot || input.lifecycleSessionKey
+        ? readEntries({
+            ...selection,
+            kind: "session-exact-entries",
+            database: { agentId: database.agentId, path: database.path },
+            env: {},
+            projection: "full",
+            includeAuthorization: true,
+            ...(sharedHeader ? { lifecycleSessionKey: undefined } : {}),
+          })
+        : {
+            kind: "session-exact-entries",
+            ...readExactSessionEntryFactsInDatabase(
+              database,
+              input.sessionKeys,
+              input.snapshotFields ?? "full",
+            ),
+            lifecycleTimestamps: {},
+          };
     for (const selected of expected?.sessions ?? []) {
       const entry = result.entries.find(
         ({ sessionKey }) => sessionKey === selected.sessionKey,
@@ -183,9 +180,13 @@ export function readSessionEntryCohort(
     const authProfileSource = includeAuthProfileSource
       ? hasAgentAuthProfileSourceInDatabase(database.db)
       : undefined;
+    // A historical target may observe a newer key; live run admission owns the effect.
     const preparedRuntimeTarget = runtimeTarget && {
       ...runtimeTarget,
       sessionKey:
+        result.entries.find(
+          ({ entry: selectedEntry }) => selectedEntry.sessionId === runtimeTarget.sessionId,
+        )?.sessionKey ??
         readSessionKeyBySessionIdInDatabase(database, runtimeTarget.sessionId) ??
         runtimeTarget.sessionKey,
       storePath: database.path,
@@ -225,7 +226,7 @@ export function readSessionEntryCohort(
   // A single statement owns simple facts; richer cohorts retain one shared snapshot.
   return database.db.isTransaction || !requiresSnapshot
     ? runSqliteReadOperationSync(database.db, read)
-    : runSqliteDeferredTransactionSync(database.db, read);
+    : runSqliteReadSnapshotSync(database.db, read);
 }
 
 /** Standalone data reads retain their original canonical kernel without a cohort transaction. */

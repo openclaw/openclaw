@@ -10,6 +10,7 @@ import {
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
 import { runMemoryFlushIfNeeded, runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
+import { createModifiedMemoryFlushPlan } from "./agent-runner-memory.test-support.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 
 const { accounting, compact, flush, runEntry, increment } = vi.hoisted(() => ({
@@ -34,22 +35,15 @@ vi.mock("./session-updates.js", () => ({ incrementCompactionCount: increment }))
 beforeEach(() => {
   vi.clearAllMocks();
   registerMemoryCapability("memory-core", {
-    flushPlanResolver: () => ({
-      softThresholdTokens: 4000,
-      forceFlushTranscriptBytes: 1000,
-      reserveTokensFloor: 20000,
-      prompt: "Save memory",
-      systemPrompt: "Save memory",
-      relativePath: "memory/synthetic.md",
-    }),
+    flushPlanResolver: () => createModifiedMemoryFlushPlan({ forceFlushTranscriptBytes: 1000 }),
   });
 });
 afterEach(() => clearMemoryPluginState());
 
 function runAccounting(
   kind: "memory" | "compaction",
-  signal?: AbortSignal,
   assertCurrent?: () => void,
+  alreadyFlushed = false,
 ) {
   const followupRun = createTestFollowupRun();
   if (assertCurrent) {
@@ -68,32 +62,25 @@ function runAccounting(
       totalTokens: 10000,
       totalTokensFresh: false,
       totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-      ...(kind === "compaction"
-        ? {
-            transcriptByteCompactionLatch: {
-              sessionId: "session",
-              activeBytes: 3000,
-              maxBytes: 1000,
-            },
-          }
-        : {}),
+      memoryFlush: alreadyFlushed ? { kind: "succeeded" as const, compactionCount: 0 } : undefined,
+      transcriptByteCompactionLatch:
+        kind === "compaction"
+          ? { sessionId: "session", activeBytes: 3000, maxBytes: 1000 }
+          : undefined,
     },
     sessionKey: "main",
     storePath: path.join(followupRun.run.workspaceDir, "sessions.json"),
-    isHeartbeat: false,
-    abortSignal: signal,
-    cfg: withTestModelContextTokens({
-      cfg: {
-        agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1000, memoryFlush: {} } } },
-      },
-      followupRun,
-      defaultModel: "anthropic/claude-opus-4-6",
-      contextTokens: 100000,
-    }),
+
+    cfg: {
+      agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1000, memoryFlush: {} } } },
+    },
   };
-  return kind === "memory"
-    ? runMemoryFlushIfNeeded({ ...params, resolvedVerboseLevel: "off" })
-    : runSessionCompactionIfNeeded(params);
+  const execute = kind === "memory" ? runMemoryFlushIfNeeded : runSessionCompactionIfNeeded;
+  return execute({
+    ...params,
+    cfg: withTestModelContextTokens({ ...params, contextTokens: 100000 }),
+    resolvedVerboseLevel: "off",
+  });
 }
 
 it.each(["memory", "compaction"] as const)(
@@ -108,30 +95,27 @@ it.each(["memory", "compaction"] as const)(
       await release.promise;
       return {
         byteSize: 2000,
-        eventCount: 1,
         turnTainted: false,
         usage: { promptTokens: 90000, outputTokens: 7, trailingMessages: [] },
       };
     });
-    const pending = runAccounting(kind, undefined, () => {
+    const pending = runAccounting(kind, () => {
       if (!current) {
         throw new Error("authority retired during accounting");
       }
     });
     try {
       await awaitGateBeforeSettlement(entered.promise, pending, "accounting was not awaited");
-      expect(compact).not.toHaveBeenCalled();
-      expect(flush).not.toHaveBeenCalled();
-      expect(runEntry).not.toHaveBeenCalled();
+      for (const effect of [compact, flush, runEntry]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
       current = false;
       const rejected = expect(pending).rejects.toThrow("authority retired during accounting");
       release.resolve();
       await rejected;
-      expect(increment).not.toHaveBeenCalled();
-      expect(persist).not.toHaveBeenCalled();
-      expect(compact).not.toHaveBeenCalled();
-      expect(flush).not.toHaveBeenCalled();
-      expect(runEntry).not.toHaveBeenCalled();
+      for (const effect of [increment, persist, compact, flush, runEntry]) {
+        expect(effect).not.toHaveBeenCalled();
+      }
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
@@ -140,10 +124,13 @@ it.each(["memory", "compaction"] as const)(
   },
 );
 
-it("keeps failed memory accounting conservative without a native retry", async () => {
+it.each([
+  { state: "unavailable accounting", alreadyFlushed: false, reads: 1 },
+  { state: "already flushed", alreadyFlushed: true, reads: 0 },
+])("skips memory flush with $state without retrying history", async ({ alreadyFlushed, reads }) => {
   accounting.mockRejectedValue(new Error("accounting worker unavailable"));
-  const result = await runAccounting("memory");
-  expect(accounting).toHaveBeenCalledOnce();
+  const result = await runAccounting("memory", undefined, alreadyFlushed);
+  expect(accounting).toHaveBeenCalledTimes(reads);
   expect(result).toMatchObject({ outcome: "skipped" });
   expect(flush).not.toHaveBeenCalled();
   expect(runEntry).not.toHaveBeenCalled();

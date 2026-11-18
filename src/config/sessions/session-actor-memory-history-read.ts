@@ -13,14 +13,15 @@ import { readSessionActorMemoryHistoryFacts } from "./session-actor-memory-histo
 import {
   readSessionActorMemoryProjection,
   readSessionActorMemoryRawDelta,
-  readSessionActorMemoryVisibleDelta,
   type SessionActorMemoryHistoryScope,
 } from "./session-actor-memory-history-projection.js";
 import { readSessionActorMemoryHistory } from "./session-actor-memory-history.js";
+import { readSessionActorMemoryReplayGroups } from "./session-actor-memory-replay-groups.js";
 import {
   resolveSessionActorMemoryWindow,
   type SessionActorMemoryState,
 } from "./session-actor-memory-state.js";
+import { readSessionActorMemoryVisibleDelta } from "./session-actor-memory-visible-delta.js";
 import { SessionTranscriptReadFenceError } from "./session-transcript-read-fence-error.js";
 
 /** Runs synchronously in the actor's owner-wide FIFO. The facade detaches its result. */
@@ -62,6 +63,9 @@ export function readSessionActorMemoryHistoryQuery(
       }
     : scope;
   switch (query.type) {
+    case "session.history.replay-groups":
+      // Resolve the full active path before clipping by admission; clipping first can revive a branch.
+      return readSessionActorMemoryReplayGroups(selected, query.input.selection, admission?.rawSeq);
     case "session.history.hydrate": {
       const max = query.input.maxEventBytes;
       if (!query.input.limits && max !== undefined && Number.isFinite(max) && max >= 0) {
@@ -78,7 +82,7 @@ export function readSessionActorMemoryHistoryQuery(
       return readSessionActorMemoryHistory(window, query.input.limits);
     }
     case "session.history.context-messages":
-      return readSessionActorMemoryContextMessages(window);
+      return readSessionActorMemoryContextMessages(window, query.input.seed);
     case "session.history.context":
       return readSessionActorMemoryContext(window, scope, query.input.through, query.input.limits);
     case "session.history.raw-delta":

@@ -24,7 +24,7 @@ describe("e2e vitest config", () => {
       BUNDLED_PLUGIN_E2E_TEST_GLOB,
     ]);
     expect(e2eConfig.test?.pool).toBe("forks");
-    expect(e2eConfig.test?.isolate).toBe(false);
+    expect(e2eConfig.test?.isolate).toBe(true);
     expect(normalizeConfigPath(e2eConfig.test?.runner)).toBe("test/non-isolated-runner.ts");
     expect(normalizeConfigPaths(e2eConfig.test?.setupFiles)).toEqual([
       "test/setup.ts",

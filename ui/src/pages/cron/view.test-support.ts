@@ -1,10 +1,18 @@
-import { expect } from "vitest";
-import type { CronJob } from "../../api/types.ts";
+import { expect, vi } from "vitest";
+import type { CronJob, CronRunLogEntry } from "../../api/types.ts";
 import { DEFAULT_CRON_FORM } from "../../test-helpers/cron.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { CronProps } from "./view-types.ts";
 import { CronView } from "./view.tsx";
+
+export function createCronViewRun(overrides: Partial<CronRunLogEntry> = {}): CronRunLogEntry {
+  return { ts: 1, jobId: "job-1", action: "finished", status: "ok", ...overrides };
+}
+
+export function cronRunsResponse(entries: CronRunLogEntry[] = []) {
+  return { entries, total: entries.length, offset: 0, hasMore: false };
+}
 
 export function createCronViewJob(id: string, overrides: Partial<CronJob> = {}): CronJob {
   return {
@@ -34,36 +42,24 @@ export function scheduledJob(id: string, overrides: Partial<CronJob> = {}): Cron
 }
 
 export function createCronViewProps(overrides: Partial<CronProps> = {}): CronProps {
+  const retired = new Promise<void>(() => {});
   return {
-    loading: false,
-    hasLoaded: true,
     listError: null,
     canManage: true,
-    jobsLoadingMore: false,
-    status: {
-      enabled: true,
-      triggersEnabled: true,
-      jobs: Math.max(overrides.jobsTotal ?? 0, overrides.jobs?.length ?? 0),
-    },
+    connected: true,
+    status: { enabled: true, triggersEnabled: true, jobs: overrides.jobs?.length ?? 0 },
     jobs: [],
-    jobsTotal: 0,
-    jobsHasMore: false,
-    jobsQuery: "",
-    jobsEnabledFilter: "all",
-    jobsScheduleKindFilter: "all",
-    jobsLastStatusFilter: "all",
-    jobsTriggerFilter: "all",
-    jobsSortBy: "nextRunAtMs",
-    jobsSortDir: "asc",
     error: null,
+    notice: null,
     busy: false,
     form: { ...DEFAULT_CRON_FORM },
-    heartbeatScratch: "",
+    gateway: null,
+    getActionRetired: () => retired,
     fieldErrors: {},
     canSubmit: true,
     editingJob: null,
     createOpen: false,
-    listTab: "tasks",
+    activityOpen: false,
     detailTab: "settings",
     channels: [],
     channelLabels: {},
@@ -82,33 +78,39 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     deliveryToSuggestions: [],
     failureAlertToSuggestions: [],
     accountSuggestions: [],
-    onListTabChange: () => undefined,
     onDetailTabChange: () => undefined,
+    onCancelEdit: () => undefined,
     onFormChange: () => undefined,
-    onRefresh: () => undefined,
+    onRefresh: () => Promise.resolve(),
     onSubmit: () => undefined,
-    onSubmitRunNow: () => undefined,
     onSelectJob: () => undefined,
     onOpenCreate: () => undefined,
     onClosePanel: () => undefined,
     onClone: () => undefined,
     onToggle: () => undefined,
     onRun: () => undefined,
-    onRemove: () => undefined,
-    onLoadMoreJobs: () => undefined,
-    onJobsFiltersChange: () => undefined,
-    onJobsFiltersReset: () => undefined,
+    onRemove: async () => undefined,
     onLoadMoreRuns: () => undefined,
     onRunsFiltersChange: () => undefined,
     ...overrides,
   };
 }
 
-export function renderCronView(overrides: Partial<CronProps> = {}) {
-  const container = document.createElement("div");
-  mountSolid(() => CronView(createCronViewProps(overrides)), { container });
+export async function renderCronView(overrides: Partial<CronProps> = {}) {
+  const { container } = mountSolid(() => CronView(createCronViewProps(overrides)));
+  await vi.dynamicImportSettled();
   flush();
   return container;
+}
+
+export async function openCronMenu(container: Element, selector: string) {
+  const trigger = getElement(container, `${selector} .oc-menu-trigger`, HTMLButtonElement);
+  trigger.click();
+  await waitForSolid(() => {
+    expect(trigger.getAttribute("aria-expanded")).toBe("true");
+    expect(trigger.getAttribute("data-state")).toBe("open");
+  });
+  return trigger;
 }
 
 export function getButtonByText(container: Element, text: string): HTMLButtonElement {
@@ -123,7 +125,7 @@ export function getButtonByText(container: Element, text: string): HTMLButtonEle
 }
 
 export function getElement<T extends Element>(
-  container: Element,
+  container: Pick<ParentNode, "querySelector">,
   selector: string,
   constructor: new () => T,
 ): T {
@@ -135,8 +137,26 @@ export function getElement<T extends Element>(
   return element;
 }
 
-export function selectSegmented(control: HTMLElement) {
-  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
+const SENTENCE_FREQUENCY: Record<string, string> = {
+  at: "once",
+  every: "every",
+  cron: "custom",
+  event: "event",
+};
+
+/** Chooses a schedule kind as a person does: Repeat for kinds with their own controls, else the sentence's frequency. */
+export function chooseSchedule(root: Pick<ParentNode, "querySelector">, kind: string) {
+  const segmented = root.querySelector<HTMLElement>(`[data-test-id="cron-schedule-kind-${kind}"]`);
+  if (segmented) {
+    getElement(segmented, "input.settings-segmented__input", HTMLInputElement).click();
+    return;
+  }
+  getElement(root, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
+  getElement(
+    root,
+    `[data-test-id="cron-schedule-frequency-${SENTENCE_FREQUENCY[kind] ?? kind}"]`,
+    HTMLButtonElement,
+  ).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {

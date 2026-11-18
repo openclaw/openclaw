@@ -108,7 +108,7 @@ export function collectGatewayConfigFindings(
       title: "Gateway HTTP /tools/invoke re-enables dangerous tools",
       detail:
         `gateway.tools.allow includes ${reenabledOverHttp.join(", ")} which removes them from the default HTTP deny list. ` +
-        "This can allow remote session spawning / control-plane actions via HTTP and increases RCE blast radius if the gateway is reachable.",
+        "This can allow remote session spawning / control-plane actions via HTTP and increases the damage from remote code execution if the gateway is reachable.",
       remediation:
         "Remove these entries from gateway.tools.allow (recommended). " +
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
@@ -331,7 +331,7 @@ export function collectGatewayConfigFindings(
       title: "Trusted-proxy auth mode enabled",
       detail:
         'gateway.auth.mode="trusted-proxy" delegates authentication to a reverse proxy. ' +
-        "Ensure your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
+        "Check that your proxy (Pomerium, Caddy, nginx) handles auth correctly and that gateway.trustedProxies " +
         "only contains IPs of your actual proxy servers.",
       remediation:
         "Verify: (1) Your proxy terminates TLS and authenticates users. " +

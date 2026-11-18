@@ -5,7 +5,6 @@
 
 import {
   createToolArgumentPreviewSchedule,
-  createSseByteGuard,
   parseStreamingJson,
   parseTerminalToolCallArguments,
   type ToolArgumentPreviewSchedule,
@@ -27,8 +26,7 @@ import { AssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { makeZeroUsageSnapshot } from "../usage.js";
 
 const PROXY_ERROR_BODY_MAX_BYTES = 16 * 1024 * 1024;
-const PROXY_SSE_STREAM_MAX_BYTES = 16 * 1024 * 1024;
-const PROXY_SSE_PENDING_BUFFER_MAX_BYTES = PROXY_SSE_STREAM_MAX_BYTES;
+const PROXY_SSE_PENDING_BUFFER_MAX_BYTES = 16 * 1024 * 1024;
 const PROXY_SSE_READ_IDLE_TIMEOUT_MS = 120_000;
 
 /**
@@ -63,6 +61,7 @@ type ProxySerializableStreamOptions = Pick<
   | "maxTokens"
   | "reasoning"
   | "cacheRetention"
+  | "promptCacheTtl"
   | "sessionId"
   | "promptCacheKey"
   | "metadata"
@@ -106,6 +105,7 @@ function buildProxyRequestOptions(options: ProxyStreamOptions): ProxySerializabl
     maxTokens: options.maxTokens,
     reasoning: options.reasoning,
     cacheRetention: options.cacheRetention,
+    promptCacheTtl: options.promptCacheTtl,
     sessionId: options.sessionId,
     promptCacheKey: options.promptCacheKey,
     metadata: options.metadata,
@@ -140,27 +140,6 @@ function buildProxyRequestAbort(callerSignal: AbortSignal | undefined, timeoutMs
       clearTimeout(timeoutId);
     },
   };
-}
-
-async function readProxyErrorData(
-  response: Response,
-  readIdleTimeoutMs: number,
-): Promise<{ error?: string } | undefined> {
-  const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
-    onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
-    chunkTimeoutMs: readIdleTimeoutMs,
-    onIdleTimeout: ({ chunkTimeoutMs }) =>
-      new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
-  });
-  return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as { error?: string };
-}
-
-function assertProxySsePendingBufferWithinLimit(buffer: string): void {
-  const size = new TextEncoder().encode(buffer).byteLength;
-  if (size <= PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
-    return;
-  }
-  throw new Error(`Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`);
 }
 
 export function streamProxy(
@@ -232,7 +211,15 @@ export function streamProxy(
       if (!response.ok) {
         let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
         try {
-          const errorData = await readProxyErrorData(response, readIdleTimeoutMs);
+          const bytes = await readResponseWithLimit(response, PROXY_ERROR_BODY_MAX_BYTES, {
+            onOverflow: ({ maxBytes }) => new Error(`Proxy error body exceeded ${maxBytes} bytes`),
+            chunkTimeoutMs: readIdleTimeoutMs,
+            onIdleTimeout: ({ chunkTimeoutMs }) =>
+              new Error(`Proxy error body stalled: no data received for ${chunkTimeoutMs}ms`),
+          });
+          const errorData = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as {
+            error?: string;
+          };
           if (errorData?.error) {
             errorMessage = `Proxy error: ${errorData.error}`;
           }
@@ -245,12 +232,9 @@ export function streamProxy(
       }
 
       reader = response.body!.getReader();
-      const sseReader = createSseByteGuard(reader, {
-        maxBytes: PROXY_SSE_STREAM_MAX_BYTES,
-        onOverflow: ({ maxBytes }) => new Error(`Proxy SSE stream exceeded ${maxBytes} bytes`),
-      });
       const decoder = new TextDecoder();
       let buffer = "";
+      let pendingBytes = 0;
       let terminalEventSeen = false;
       const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
 
@@ -280,7 +264,7 @@ export function streamProxy(
             new Error(`Proxy SSE stream stalled: no data received for ${readIdleTimeoutMs}ms`),
           cancel: cancelReader,
           read: () =>
-            sseReader.read().catch((error: unknown) => {
+            reader!.read().catch((error: unknown) => {
               throw toStringifiedError(error);
             }),
         });
@@ -293,16 +277,26 @@ export function streamProxy(
           throw new Error("Request aborted by user");
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() || "";
-        assertProxySsePendingBufferWithinLimit(buffer);
-
-        for (const line of lines) {
-          terminalEventSeen = processSseLine(line);
-          if (terminalEventSeen) {
+        for (let offset = 0; offset < value.byteLength && !terminalEventSeen;) {
+          const newline = value.indexOf(10, offset);
+          const end = newline === -1 ? value.byteLength : newline;
+          // Charge only the outstanding line, before decoding or retaining it.
+          pendingBytes += end - offset;
+          if (pendingBytes > PROXY_SSE_PENDING_BUFFER_MAX_BYTES) {
+            throw new Error(
+              `Proxy SSE pending buffer exceeded ${PROXY_SSE_PENDING_BUFFER_MAX_BYTES} bytes`,
+            );
+          }
+          buffer += decoder.decode(value.subarray(offset, newline === -1 ? end : end + 1), {
+            stream: true,
+          });
+          if (newline === -1) {
             break;
           }
+          terminalEventSeen = processSseLine(buffer.slice(0, -1));
+          buffer = "";
+          pendingBytes = 0;
+          offset = end + 1;
         }
       }
 

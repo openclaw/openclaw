@@ -160,9 +160,7 @@ function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAs
       : {}),
     usage: {
       ...projectWorkerTokenUsage(message.usage),
-      ...(message.usage.contextUsage
-        ? { contextUsage: structuredClone(message.usage.contextUsage) }
-        : {}),
+      ...(message.usage.contextUsage ? { contextUsage: message.usage.contextUsage } : {}),
     },
     stopReason: message.stopReason,
     ...(message.errorMessage
@@ -171,6 +169,7 @@ function toWorkerAssistantMessage(message: AssistantMessage): WorkerTranscriptAs
     ...(message.errorCode ? { errorCode: message.errorCode } : {}),
     ...(message.errorType ? { errorType: message.errorType } : {}),
     ...(message.errorBody ? { errorBody: redactWorkerDiagnosticText(message.errorBody) } : {}),
+    ...(message.retryAfterMs === undefined ? {} : { retryAfterMs: message.retryAfterMs }),
     timestamp: message.timestamp,
   };
 }

@@ -83,13 +83,10 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
   const inflight = new Map<string, Promise<boolean>>();
   // Namespace ordering keeps a queued forget after earlier writes and warmup reads.
   const operations = new KeyedAsyncQueue();
-  // A synchronous clear/forget must fence memory publication from older worker results.
-  let memoryGeneration = 0;
 
   async function warmup(namespace = "global", onError?: (error: unknown) => void): Promise<number> {
     const now = Date.now();
     const normalizedNamespace = resolveNamespace(namespace);
-    const generation = memoryGeneration;
     const store = captureStore(normalizedNamespace);
     return operations.enqueue(store.namespace, async () => {
       try {
@@ -102,10 +99,8 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
           if (ttlMs > 0 && now - ts >= ttlMs) {
             continue;
           }
-          if (generation === memoryGeneration) {
-            memory.check(resolveScopedKey(normalizedNamespace, entry.value.key), ts);
-            loaded++;
-          }
+          memory.check(resolveScopedKey(normalizedNamespace, entry.value.key), ts);
+          loaded++;
         }
         return loaded;
       } catch (error) {
@@ -131,13 +126,10 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
 
     const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
     const now = dedupeOptions?.now ?? Date.now();
-    const generation = memoryGeneration;
     const store = captureStore(namespace);
     const work = operations.enqueue(store.namespace, async () => {
       const cached = memory.peek(scopedKey, now);
-      if (generation === memoryGeneration) {
-        memory.check(scopedKey, now);
-      }
+      memory.check(scopedKey, now);
       if (cached) {
         return false;
       }
@@ -164,16 +156,12 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
             observed = outcome.current;
             continue;
           }
-          if (generation === memoryGeneration) {
-            memory.check(scopedKey, duplicate ? seenAt : now);
-          }
+          memory.check(scopedKey, duplicate ? seenAt : now);
           return !duplicate;
         }
       } catch (error) {
         onDiskError?.(error);
-        if (generation === memoryGeneration) {
-          memory.check(scopedKey, now);
-        }
+        memory.check(scopedKey, now);
         return true;
       }
     });
@@ -199,7 +187,6 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     const scopedKey = resolveScopedKey(namespace, trimmed);
     const onDiskError = dedupeOptions?.onDiskError ?? options.onDiskError;
     const now = dedupeOptions?.now ?? Date.now();
-    const generation = memoryGeneration;
     const store = captureStore(namespace);
     return operations.enqueue(store.namespace, async () => {
       if (memory.peek(scopedKey, now)) {
@@ -213,9 +200,7 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
         if (!isRecentTimestamp(seenAt, ttlMs, now)) {
           return false;
         }
-        if (generation === memoryGeneration) {
-          memory.check(scopedKey, seenAt);
-        }
+        memory.check(scopedKey, seenAt);
         return true;
       } catch (error) {
         onDiskError?.(error);
@@ -234,11 +219,11 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
-    memoryGeneration++;
     memory.delete(scopedKey);
     inflight.delete(scopedKey);
     const store = captureStore(namespace);
     return operations.enqueue(store.namespace, async () => {
+      memory.delete(scopedKey);
       try {
         return await store.get().delete(resolveEntryKey(trimmed));
       } catch (error) {
@@ -253,10 +238,8 @@ export function createPersistentDedupe(options: PersistentDedupeOptions): Persis
     hasRecent,
     forget,
     warmup,
-    clearMemory: () => {
-      memoryGeneration++;
-      memory.clear();
-    },
+    // In-flight reads may refill this best-effort cache after a clear.
+    clearMemory: () => memory.clear(),
     memorySize: () => memory.size(),
   };
 }
@@ -312,11 +295,10 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return false;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
     if (persistent) {
       return persistent.hasRecent(trimmed, dedupeOptions);
     }
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     return memory.peek(scopedKey, dedupeOptions?.now);
   }
 
@@ -328,8 +310,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return false;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const claimValue = inflight.get(scopedKey);
     claimValue?.reject(createReleasedClaimError(scopedKey));
     inflight.delete(scopedKey);
@@ -348,8 +329,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return { kind: "claimed" };
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const existing = inflight.get(scopedKey);
     if (existing) {
       return { kind: "inflight", pending: existing.promise };
@@ -391,8 +371,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return true;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const claimValue = inflight.get(scopedKey);
     try {
       const recorded = persistent
@@ -421,8 +400,7 @@ export function createClaimableDedupe(
     if (!trimmed) {
       return;
     }
-    const namespace = resolveNamespace(dedupeOptions?.namespace);
-    const scopedKey = resolveScopedKey(namespace, trimmed);
+    const scopedKey = resolveScopedKey(resolveNamespace(dedupeOptions?.namespace), trimmed);
     const claimLocal = inflight.get(scopedKey);
     if (!claimLocal) {
       return;

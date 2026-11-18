@@ -26,12 +26,17 @@ export class WorkerEnvironmentServiceError extends Error {
   }
 }
 
+/** Maintenance interruption retains the lease for the next reconciliation. */
+export class WorkerEnvironmentReconcileInterruptedError extends Error {}
+
 export const workerEnvironmentServiceError = (
   code: WorkerEnvironmentServiceErrorCode,
   message: string,
 ) => new WorkerEnvironmentServiceError(code, message);
 
 const FORCED_ABANDONMENT_DIAGNOSTIC_PREFIX = `${FORCED_WORKER_ABANDONMENT_ERROR}; `;
+// A parked diagnostic survives restart; an original bootstrap failure follows on line two.
+export const CONVERSATION_CLEANUP_PARKED = "Conversation environment cleanup parked";
 
 export function hasForcedWorkerEnvironmentAbandonment(
   record: Pick<WorkerEnvironmentRecord, "destroyRequestedAtMs" | "lastError">,

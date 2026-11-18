@@ -8,8 +8,6 @@ export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
   ...catalog.assertionOnlyScenarios,
 ]);
 
-// Oldest release line supported by the operator-state upgrade regression gate.
-export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE = catalog.oldestSupportedBaseline;
 export const MINIMUM_UPGRADE_SURVIVOR_BASELINE = "2026.6.1";
 export const CUSTOM_PLUGIN_SIBLINGS_BASELINE = "openclaw@2026.9.4";
 
@@ -34,9 +32,15 @@ export function usesStructuredToolSearchAtBaseline(baselineVersion) {
   return comparison !== null && comparison >= 0;
 }
 
+// The June SQLite cron codec predates persisted owners; July introduced the owner columns.
+export function usesCronOwnerAtBaseline(baselineVersion) {
+  const comparison = compareReleaseVersions(baselineVersion ?? "", "2026.7.1");
+  return comparison !== null && comparison >= 0;
+}
+
 const scenarioMinimumBaselines = new Map([
   ["custom-plugin-siblings", CUSTOM_PLUGIN_SIBLINGS_BASELINE],
-  ["legacy-operator-state", `openclaw@${OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE}`],
+  ["legacy-operator-state", "openclaw@2026.6.34"],
   ["mobile-pairing-reconnect", "openclaw@2026.7.1"],
   ["watchos-direct-node", "openclaw@2026.8.1"],
 ]);
@@ -67,6 +71,7 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
   (scenario) =>
     scenario !== "abandoned-update" &&
     scenario !== "backup-schedule" &&
+    scenario !== "session-share" &&
     scenario !== "missing-configured-plugin-migration" &&
     scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
@@ -237,6 +242,9 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   }
   if (scenario === "backup-schedule") {
     return baselineSpec === "openclaw@2026.9.7";
+  }
+  if (scenario === "session-share") {
+    return baselineSpec === "openclaw@2026.10.7";
   }
   if (scenario === "missing-load-path") {
     const release = parseReleaseVersion((baselineSpec ?? "").replace(/^openclaw@/u, ""));

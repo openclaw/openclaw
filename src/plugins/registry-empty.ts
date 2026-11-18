@@ -11,7 +11,6 @@ export const pluginArrays = [
   "modelCatalogProviders",
   "sessionCatalogs",
   "cliBackends",
-  "textTransforms",
   "decisionProviders",
   "embeddingProviders",
   "speechProviders",
@@ -25,7 +24,6 @@ export const pluginArrays = [
   "webFetchProviders",
   "webSearchProviders",
   "migrationProviders",
-  "codexAppServerExtensionFactories",
   "agentToolResultMiddlewareOwners",
   "agentToolResultMiddlewares",
   "agentHarnesses",
@@ -34,7 +32,7 @@ export const pluginArrays = [
   "memoryCorpusSupplements",
   "memoryPromptPreparations",
   "memoryPromptSupplements",
-  "hostedMediaResolvers",
+  "learnContributions",
   "widgetPresenters",
   "mcpServerConnectionResolvers",
   "cliRegistrars",
@@ -42,10 +40,12 @@ export const pluginArrays = [
   "nodeHostCommands",
   "nodeInvokePolicies",
   "gatewayAccessPolicies",
+  "repositoryIntegrations",
   "securityAuditCollectors",
   "services",
   "gatewayDiscoveryServices",
   "commands",
+  "subagentProfiles",
   "interactiveHandlers",
   "sessionExtensions",
   "trustedToolPolicies",
@@ -58,13 +58,11 @@ export const pluginArrays = [
   "conversationBindingResolvedHandlers",
 ] as const satisfies ReadonlyArray<keyof PluginRegistry>;
 export const pluginMaps = [
-  "agentExecutorControllers",
   "workerProviders",
   "storageProviders",
   "sessionDiscussionProviders",
   "dashboardDataBindings",
   "dashboardActionVerbs",
-  "boardWidgetContentKinds",
 ] as const satisfies ReadonlyArray<keyof PluginRegistry>;
 
 export function createEmptyPluginRegistry(): PluginRegistry {

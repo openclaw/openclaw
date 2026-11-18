@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
@@ -11,10 +12,7 @@ const suite = createNewSessionPageE2eSuite();
 suite.define(() => {
   it("keeps a revoked provisional page display-only while the next route loads", async () => {
     const browser = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
-    let releaseRoute = () => {};
-    const routeReady = new Promise<void>((resolve) => {
-      releaseRoute = resolve;
-    });
+    const { promise: routeReady, resolve: releaseRoute } = createDeferred();
     try {
       const page = await browser.newPage();
       let loadingNextRoute = false;
@@ -69,8 +67,8 @@ suite.define(() => {
       expect(observed.mountedPane).toBe(false);
       expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
       expect(observed.text).not.toContain("private pending draft");
-      await display.evaluate((value) => value.stop());
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
       const settings = await page.evaluate(() =>
         Object.keys(localStorage)
           .filter((key) => key.startsWith("openclaw.control.settings.v1"))
@@ -85,8 +83,15 @@ suite.define(() => {
         runStarted: true,
         runId: "late-run",
       });
+      // The accepted session can appear as an active rail row without reviving its canceled view.
+      const narration = await gateway.waitForRequest("sessions.messages.subscribe");
+      expect(narration.params).toMatchObject({ key: params.key, mode: "narration" });
       expect(page.url()).toBe(targetUrl);
+      expect((await display.evaluate((value) => value.read())).mountedPane).toBe(false);
+      expect(await page.locator("openclaw-chat-pane").count()).toBe(0);
+      await display.evaluate((value) => value.stop());
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(1);
     } finally {
       releaseRoute();
       await browser.close();

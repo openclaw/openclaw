@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   WorkerWriteOperationContext,
@@ -7,13 +6,17 @@ import type {
 import { gitCommitPrefixesMatch } from "./git-commit.js";
 import {
   deleteRestartSentinelRowSync,
+  recordManagedHandoffSentinelOutcomeRowSync,
   readRestartSentinelRowSync,
   readRestartSentinelSnapshotSync,
   writeRestartSentinelRowIfRevisionSync,
   writeRestartSentinelRowSync,
   writeUpdateInstallReceiptRowSync,
+  type RestartSentinel,
+  type ManagedHandoffSentinelOutcome,
   type RestartSentinelPayload,
 } from "./restart-sentinel-store.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
@@ -23,18 +26,17 @@ import {
   beginUpdateFailureReportReceiptCleanupRowSync,
   beginStaleUpdateFailureReportReceiptCleanupRowSync,
   completeUpdateFailureReportReceiptCleanupRowSync,
-  claimUpdateFailureReportArtifactSweepRowSync,
-  releaseUpdateFailureReportArtifactSweepRowSync,
   refreshUpdateFailureReportReceiptPreparationRowSync,
   finalizeUpdateFailureReportReceiptRowSync,
   markUpdateFailureReportReceiptPendingRowSync,
   markUpdateFailureReportReceiptPreparedRowSync,
+  readUpdateFailureReportReceiptRowSync,
 } from "./update-failure-report-receipt-store.js";
 import type { UpdateFailureReportReceipt } from "./update-failure-report-receipt.js";
 
 function transaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, { writeAdmitted }: WorkerWriteOperationContext): Output =>
     writeAdmitted(({ db }) => operation(db, input), { operationLabel: label });
@@ -42,7 +44,7 @@ function transaction<Input, Output>(
 
 function receiptTransaction<Input, Output>(
   label: string,
-  operation: (db: DatabaseSync, input: Input) => Output,
+  operation: (db: EngineConnection, input: Input) => Output,
 ) {
   return (input: Input, { write }: WorkerWriteOperationContext): Output =>
     write(
@@ -57,7 +59,28 @@ function receiptTransaction<Input, Output>(
     );
 }
 
+// SDK-reachable legacy sweep keys confirm the reservation without claiming custody.
+function sweepReservationCurrent(
+  db: EngineConnection,
+  input: {
+    attemptId: string;
+    expectedReservationId: string;
+    sweepOwnerId: string;
+    sweepGeneration: string;
+  },
+): boolean {
+  const receipt = readUpdateFailureReportReceiptRowSync(db, input.attemptId);
+  return (
+    receipt?.reservationId === input.expectedReservationId && receipt.artifactSweep === "pending"
+  );
+}
+
 export const restartSentinelOperations = {
+  "restartSentinel.managedHandoffOutcome": transaction(
+    "restart-sentinel.managed-handoff-outcome",
+    (db, input: ManagedHandoffSentinelOutcome) =>
+      recordManagedHandoffSentinelOutcomeRowSync(db, input),
+  ),
   "restartSentinel.reserve": receiptTransaction(
     "update-failure-report.reserve",
     (db, input: { attemptId: string; reservationId: string; previewDigest: string }) =>
@@ -85,41 +108,11 @@ export const restartSentinelOperations = {
   ),
   "restartSentinel.claimSweep": receiptTransaction(
     "update-failure-report.claimSweep",
-    (
-      db,
-      input: {
-        attemptId: string;
-        expectedReservationId: string;
-        sweepOwnerId: string;
-        sweepGeneration: string;
-      },
-    ) =>
-      claimUpdateFailureReportArtifactSweepRowSync(
-        db,
-        input.attemptId,
-        input.expectedReservationId,
-        input.sweepOwnerId,
-        input.sweepGeneration,
-      ),
+    sweepReservationCurrent,
   ),
   "restartSentinel.releaseSweep": receiptTransaction(
     "update-failure-report.releaseSweep",
-    (
-      db,
-      input: {
-        attemptId: string;
-        expectedReservationId: string;
-        sweepOwnerId: string;
-        sweepGeneration: string;
-      },
-    ) =>
-      releaseUpdateFailureReportArtifactSweepRowSync(
-        db,
-        input.attemptId,
-        input.expectedReservationId,
-        input.sweepOwnerId,
-        input.sweepGeneration,
-      ),
+    sweepReservationCurrent,
   ),
   "restartSentinel.refreshPreparation": receiptTransaction(
     "update-failure-report.refreshPreparation",
@@ -163,7 +156,7 @@ export const restartSentinelOperations = {
     (db, input: { payload: RestartSentinelPayload; expectedRevision: number | null }) => {
       const current = readRestartSentinelSnapshotSync(db);
       return current.state.kind !== "invalid" && current.revision === input.expectedRevision
-        ? writeRestartSentinelRowSync(db, input.payload)
+        ? writeRestartSentinelRowSync(db, input.payload, current.revision)
         : null;
     },
   ),
@@ -213,7 +206,7 @@ export const restartSentinelOperations = {
         current.sentinel.revision !== input.expectedRevision ||
         current.sentinel.payload.kind !== "update"
       ) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
 
       const payload = current.sentinel.payload;
@@ -266,15 +259,24 @@ export const restartSentinelOperations = {
         ? writeRestartSentinelRowIfRevisionSync(db, payload, current.sentinel.revision)
         : current.sentinel;
       if (!finalized) {
-        return null;
+        return { sentinel: null, installReceipt: null };
       }
-      // This receipt records the install fact proven by the running process. Post-install
-      // failures such as managed-service-handoff-failed keep the sentinel in error without
-      // erasing the upstream fallback for campaign-managed detached installs (#121634).
-      if (stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall) {
-        writeUpdateInstallReceiptRowSync(db, payload);
+      return {
+        sentinel: changed ? finalized : null,
+        installReceipt:
+          stats.mode === "git" && verifiesInstallRoot && verifiesGitRevision && changedInstall
+            ? finalized
+            : null,
+      };
+    },
+  ),
+  "restartSentinel.recordInstall": transaction(
+    "restart-sentinel.record-install",
+    (db, receipt: RestartSentinel) => {
+      const current = readRestartSentinelRowSync(db);
+      if (current.kind === "valid" && current.sentinel.revision === receipt.revision) {
+        writeUpdateInstallReceiptRowSync(db, receipt.payload);
       }
-      return changed ? finalized : null;
     },
   ),
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

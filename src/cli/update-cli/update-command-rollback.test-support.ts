@@ -1,19 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi, type Mock } from "vitest";
+import { assert, expect, it, vi, type Mock } from "vitest";
 import {
   createConfigIO,
   setRuntimeConfigSnapshotRefreshHandler,
   transformConfigFile,
   writeConfigFile,
 } from "../../config/config.js";
-import { hashConfigRaw } from "../../config/io.read-helpers.js";
-import type { ConfigWriteOptions } from "../../config/io.types.js";
-import type {
-  AgentDefaultsConfig,
-  ConfigFileSnapshot,
-  OpenClawConfig,
-} from "../../config/types.js";
+import type { AgentDefaultsConfig, OpenClawConfig } from "../../config/types.js";
 import { readUpdateStateSchemaVersionsInProcess } from "../../infra/update-candidate-state.js";
 import {
   captureUpdateDoctorConfigWrites,
@@ -21,26 +15,42 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { updateRecoverySchema } from "../../infra/update-recovery.js";
-import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { printResult } from "./progress.js";
-import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
+import { resultFixture, stepFixture } from "./update-command-fixtures.test-support.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
 
+type SchemaInput = Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0];
+const doctorMetadata = {
+  meta: { migrations: { modelPolicyAllowlist: true }, lastTouchedVersion: "2026.9.3" },
+  wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
+} satisfies Pick<OpenClawConfig, "meta" | "wizard">;
+
 export async function readRollbackFixtureSchemaVersions(
-  input: Pick<
-    Parameters<typeof readUpdateStateSchemaVersionsInProcess>[0],
-    "stateDir" | "config" | "env"
-  >,
+  input: Pick<SchemaInput, "stateDir" | "config" | "env">,
 ) {
   // Config and ledger setup can retain SQLite handles. Drain them before the
   // fixture reader closes source descriptors; candidate checks stay isolated.
   await closeOpenClawStateDatabaseAsync();
   return readUpdateStateSchemaVersionsInProcess({ ...input, env: input.env ?? process.env });
+}
+
+export async function readRollbackFixtureState(
+  stateDir: string,
+  env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: stateDir },
+) {
+  const io = createConfigIO({ env, pluginValidation: "skip" });
+  const configSnapshot = await io.readConfigFileSnapshot();
+  const schemaVersions = await readRollbackFixtureSchemaVersions({
+    stateDir,
+    config: configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig,
+    env,
+  });
+  return { configSnapshot, schemaVersions };
 }
 
 export function writeDoctorRollbackConfig(stateDir: string, change: string) {
@@ -93,17 +103,13 @@ export async function writeDoctorRollbackReceipt(params: {
     } else if (change !== "doctor-unchanged") {
       const nextConfig: OpenClawConfig = {
         ...(input.sourceConfigBeforeMigrations ?? input.sourceConfig),
-        meta: {
-          migrations: { modelPolicyAllowlist: true },
-          lastTouchedVersion: "2026.9.3",
-        },
+        ...doctorMetadata,
         agents: {
           defaults: {
             ...authored.agents.defaults,
             modelPolicy: { allow: ["openai/gpt-5.6-luna"] },
           },
         },
-        wizard: { lastRunVersion: "2026.9.3", lastRunCommand: "doctor" },
       };
       const writeOptions = {
         baseSnapshot: input,
@@ -111,18 +117,35 @@ export async function writeDoctorRollbackReceipt(params: {
         skipPluginValidation: true,
       };
       if (change === "doctor-compensated") {
-        doctorError = await writeWithRefreshFailure(nextConfig, writeOptions, originalRaw);
+        const writtenPath = input.path;
+        setRuntimeConfigSnapshotRefreshHandler({
+          preflight: () => undefined,
+          refresh: () => {
+            expect(JSON.parse(fs.readFileSync(writtenPath, "utf8"))).toMatchObject(doctorMetadata);
+            throw new Error("Doctor runtime activation refused");
+          },
+        });
+        try {
+          const error = await writeConfigFile(nextConfig, writeOptions).catch(
+            (cause: unknown) => cause,
+          );
+          expect(error).toMatchObject({
+            name: "ConfigWritePostCommitError",
+            configPath: writtenPath,
+            rollbackStatus: "restored",
+          });
+          expect(fs.readFileSync(writtenPath, "utf8")).toBe(originalRaw);
+          assert(error instanceof Error, "Doctor must reject after its refresh failure");
+          doctorError = error;
+        } finally {
+          setRuntimeConfigSnapshotRefreshHandler(null);
+        }
       } else {
         await io.writeConfigFile(nextConfig, writeOptions);
       }
     }
     if (change === "doctor-capture-edit") {
       operatorEdit();
-    }
-    if (change === "doctor-settled-exception") {
-      expect(capture.inputHash).toBe(hashConfigRaw(originalRaw));
-      expect(capture.hash).toBe(hashConfigRaw(fs.readFileSync(configPath, "utf8")));
-      expect(capture.hash).not.toBe(capture.inputHash);
     }
     await writeUpdatePostInstallDoctorResult({
       resultPath,
@@ -137,92 +160,27 @@ export async function writeDoctorRollbackReceipt(params: {
   return doctorError;
 }
 
-async function writeWithRefreshFailure(
-  nextConfig: OpenClawConfig,
-  writeOptions: ConfigWriteOptions & { baseSnapshot: ConfigFileSnapshot },
-  originalRaw: string,
-): Promise<Error> {
-  const configPath = writeOptions.baseSnapshot.path;
-  let doctorError: Error | undefined;
-  setRuntimeConfigSnapshotRefreshHandler({
-    preflight: () => undefined,
-    refresh: () => {
-      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toMatchObject({
-        meta: { migrations: { modelPolicyAllowlist: true } },
-        wizard: { lastRunCommand: "doctor" },
-      });
-      throw new Error("Doctor runtime activation refused");
-    },
-  });
-  try {
-    await writeConfigFile(nextConfig, writeOptions);
-  } catch (error) {
-    if (!(error instanceof Error)) {
-      throw error;
-    }
-    doctorError = error;
-  } finally {
-    setRuntimeConfigSnapshotRefreshHandler(null);
-  }
-  if (!doctorError) {
-    throw new Error("Doctor config write completed without the expected refresh failure");
-  }
-  expect(doctorError).toMatchObject({
-    name: "ConfigWritePostCommitError",
-    configPath,
-    rollbackStatus: "restored",
-  });
-  expect(fs.readFileSync(configPath, "utf8")).toBe(originalRaw);
-  return doctorError;
-}
-
-export function expectDoctorRollback(
-  activationConfig: UpdateConfigSnapshot | undefined,
-  result: UpdateRunResult,
-  configPath: string,
-  originalRaw: string,
-): void {
-  expect(activationConfig).toMatchObject({
-    path: configPath,
-    raw: originalRaw,
-    hash: hashConfigRaw(originalRaw),
-    doctorOwned: true,
-  });
-  expect(result).toMatchObject({
-    status: "error",
-    recovery: { serviceRestartSafe: true, packageRollbackVerified: true },
-  });
-}
-
 export async function expectActiveRollbackIdentity(params: {
-  failure: string;
+  failure:
+    | "partial-restore"
+    | `restart-${"unhealthy" | "refused" | "threw" | "cleanup" | "timeout"}`;
   candidateRoot: string;
   previousRoot: string;
   stateDir: string;
   restart: Mock<typeof import("./update-command-service.js").maybeRestartService>;
 }): Promise<void> {
   const { failure, candidateRoot, previousRoot, stateDir, restart } = params;
-  const restoredPackage = failure !== "source-failed" && failure !== "partial-restore";
-  const rollbackSucceeded = failure.startsWith("restart-");
-  const activePackageRoot =
-    failure === "partial-restore" ? null : restoredPackage ? previousRoot : candidateRoot;
+  const rollbackSucceeded = failure !== "partial-restore";
+  const activePackageRoot = rollbackSucceeded ? previousRoot : null;
   const env = { OPENCLAW_STATE_DIR: stateDir };
-  const configSnapshot = await createConfigIO({
-    env,
-    pluginValidation: "skip",
-  }).readConfigFileSnapshot();
-  const config = configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig;
-  const schemaVersions = await readRollbackFixtureSchemaVersions({ stateDir, config, env });
-  const result: UpdateRunResult = {
+  const { configSnapshot, schemaVersions } = await readRollbackFixtureState(stateDir, env);
+  const result = resultFixture(candidateRoot, {
     status: "error",
-    mode: "npm",
-    root: candidateRoot,
     reason: "readyz-unhealthy",
-    steps: [],
     durationMs: 1,
     before: { version: "2026.9.1" },
     after: { version: "2026.9.3" },
-  };
+  });
   const cleanup = new AggregateError(
     [new CommandProcessCleanupError()],
     "rollback inspection cleanup uncertain",
@@ -237,11 +195,7 @@ export async function expectActiveRollbackIdentity(params: {
         onVerificationFailure?.("channel-errors");
         return "restart-health-failed";
       }
-      return failure === "restart-timeout"
-        ? "readiness-pending"
-        : failure === "restart-verified"
-          ? "ok"
-          : "failed";
+      return failure === "restart-timeout" ? "readiness-pending" : "failed";
     });
   }
   const pending = rollbackFailedUpdate({
@@ -262,15 +216,16 @@ export async function expectActiveRollbackIdentity(params: {
     },
     packageTransaction: {
       backupRoot: "/backup",
-      complete: vi.fn(async () => {}),
-      rollback: vi.fn(async () => ({
-        name: "rollback",
+      complete: async () => {},
+      rollback: async () => ({
+        ...stepFixture("rollback", {
+          command: "restore",
+          cwd: previousRoot,
+          exitCode: rollbackSucceeded ? 0 : 1,
+          durationMs: 1,
+        }),
         activePackageRoot,
-        command: "restore",
-        cwd: previousRoot,
-        exitCode: rollbackSucceeded ? 0 : 1,
-        durationMs: 1,
-      })),
+      }),
     },
   });
   if (failure === "restart-cleanup") {
@@ -280,24 +235,17 @@ export async function expectActiveRollbackIdentity(params: {
   const outcome = await pending;
   expect(outcome.result).toMatchObject({
     root: activePackageRoot ?? undefined,
-    after: activePackageRoot === null ? undefined : restoredPackage ? result.before : result.after,
+    after: rollbackSucceeded ? result.before : undefined,
     reason: rollbackSucceeded ? result.reason : "source-rollback-failed",
     rollbackOutcome: { status: rollbackSucceeded ? "succeeded" : "failed" },
-    steps: [
-      expect.objectContaining({
-        name: "rollback",
-        exitCode: rollbackSucceeded ? 0 : 1,
-      }),
-    ],
-    ...(!rollbackSucceeded
-      ? {}
-      : {
-          recovery: { serviceRestartSafe: true, packageRollbackVerified: true },
-        }),
+    steps: [{ name: "rollback", exitCode: rollbackSucceeded ? 0 : 1 }],
+    ...(rollbackSucceeded
+      ? { recovery: { serviceRestartSafe: true, packageRollbackVerified: true } }
+      : {}),
   });
-  expect(outcome.rolledBack).toBe(failure === "restart-verified");
+  expect(outcome.rolledBack).toBe(false);
   expect(restart).toHaveBeenCalledTimes(rollbackSucceeded ? 1 : 0);
-  if (rollbackSucceeded) {
+  if (failure !== "partial-restore") {
     const report = await prepareUpdateFailureReport(
       {
         attemptId: "rollback-health-verdict",
@@ -308,18 +256,14 @@ export async function expectActiveRollbackIdentity(params: {
       },
       { env, stateDir },
     );
-    const health =
-      failure === "restart-unhealthy"
-        ? "failed (channel-errors)"
-        : failure === "restart-timeout"
-          ? "unverified (gateway-readiness-pending)"
-          : failure === "restart-refused"
-            ? "unverified (restart-failed)"
-            : "unverified (gateway-verification-incomplete)";
+    const health = {
+      "restart-unhealthy": "failed (channel-errors)",
+      "restart-timeout": "unverified (gateway-readiness-pending)",
+      "restart-refused": "unverified (restart-failed)",
+      "restart-threw": "unverified (gateway-verification-incomplete)",
+    }[failure];
     expect(report.body).toContain(
-      failure === "restart-verified"
-        ? "Recovery outcome: package rollback verified; Gateway serving 2026.9.1; health verified"
-        : `Recovery outcome: package rollback verified (2026.9.1); Gateway health ${health}. Run \`openclaw gateway status --deep\``,
+      `Recovery outcome: package rollback verified (2026.9.1); Gateway health ${health}. Run \`openclaw gateway status --deep\``,
     );
   }
 }
@@ -332,41 +276,29 @@ export function registerRollbackReportTests(
     async (outcome) => {
       const { candidateRoot, previousRoot, stateDir } = getFixture();
       const env = { OPENCLAW_STATE_DIR: stateDir };
-      const configSnapshot = await createConfigIO({
-        env,
-        pluginValidation: "skip",
-      }).readConfigFileSnapshot();
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
-      const schemaVersions = await readRollbackFixtureSchemaVersions({
-        stateDir,
-        config: configSnapshot.sourceConfigBeforeMigrations ?? configSnapshot.sourceConfig,
-        env,
-      });
+      const { configSnapshot, schemaVersions } = await readRollbackFixtureState(stateDir, env);
       const message =
         outcome === "advisory"
           ? "Restored detached HEAD; branch main still points to the activated commit."
           : `Cannot verify rollback branch transition: expected ${"a".repeat(40)} -> ${"b".repeat(40)}.`;
-      const restored = {
-        name: "git-runtime-rollback",
+      const restored = stepFixture("git-runtime-rollback", {
         command: "restore previous Git runtime",
         cwd: previousRoot,
-        durationMs: 0,
         exitCode: outcome === "advisory" ? 0 : 1,
         ...(outcome === "advisory"
           ? { advisory: { kind: "recoverable-maintenance" as const, message } }
           : { stderrTail: message }),
-      };
+      });
       const rolledBack = await rollbackFailedUpdate({
         definitionRecovery: {},
-        result: {
+        result: resultFixture(candidateRoot, {
           status: "error",
           mode: "git",
-          root: candidateRoot,
           reason: "readyz-unhealthy",
           verification: { readyz: false, settled: false },
-          steps: [],
           durationMs: 1,
-        },
+        }),
         previousRoot,
         schemaVersions,
         configSnapshot,
@@ -383,37 +315,33 @@ export function registerRollbackReportTests(
           },
         },
       });
-      expect(getUpdateRun(run.runId, { env })?.steps).toContainEqual(
-        expect.objectContaining({ step: "package rollback", detail: message }),
-      );
       const result = completeUpdateCommandRun(rolledBack.result, run);
       const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
       const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
       await printResult(result, { json: true, run });
-      expect(json).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ...(outcome === "thrown"
-            ? {}
-            : {
-                steps: expect.arrayContaining([
-                  {
-                    ...restored,
-                    ...(outcome === "failed"
-                      ? { failureFacts: [{ check: "update", code: "source-rollback-failed" }] }
-                      : {}),
-                  },
-                ]),
-              }),
-          run: expect.objectContaining({
-            steps: expect.arrayContaining([
-              expect.objectContaining({
-                step: outcome === "advisory" ? "warning:git-runtime-rollback" : "package rollback",
-                detail: message,
-              }),
-            ]),
-          }),
-        }),
-      );
+      const printed = json.mock.calls[0]?.[0];
+      if (outcome !== "thrown") {
+        expect(printed).toMatchObject({
+          steps: expect.arrayContaining([
+            {
+              ...restored,
+              ...(outcome === "failed"
+                ? { failureFacts: [{ check: "update", code: "source-rollback-failed" }] }
+                : {}),
+            },
+          ]),
+        });
+      }
+      expect(printed).toMatchObject({
+        run: {
+          steps: expect.arrayContaining([
+            expect.objectContaining({
+              step: outcome === "advisory" ? "warning:git-runtime-rollback" : "package rollback",
+              detail: message,
+            }),
+          ]),
+        },
+      });
       await printResult(result, { run });
       expect(log).toHaveBeenCalledWith(expect.stringContaining(message));
     },

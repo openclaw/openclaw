@@ -2,7 +2,7 @@ import { expectDefined, safeParseJsonRecord } from "@openclaw/normalization-core
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
-import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-ranges.js";
 
 type CanvasSurface = "assistant_message" | "node_panel";
 type CanvasSandbox = "strict" | "scripts";
@@ -78,9 +78,8 @@ export function isCanvasBoardWidgetName(value: unknown): value is string {
   return typeof value === "string" && /^[a-z0-9][a-z0-9._-]{0,63}$/u.test(value);
 }
 
-function coerceCanvasPreview(
-  record: Record<string, unknown> | undefined,
-): CanvasPreview | undefined {
+export function extractCanvasFromRecord(value: unknown): CanvasPreview | undefined {
+  const record = asOptionalRecord(value);
   if (!record) {
     return undefined;
   }
@@ -149,7 +148,7 @@ function coerceCanvasPreview(
 /** Extracts an MCP App Canvas preview from sanitized tool-result details. */
 export function extractCanvasFromDetails(value: unknown): CanvasPreview | undefined {
   const details = asOptionalRecord(value);
-  return coerceCanvasPreview(asOptionalRecord(details?.mcpAppPreview));
+  return extractCanvasFromRecord(details?.mcpAppPreview);
 }
 
 function parseCanvasAttributes(raw: string): Record<string, string> {
@@ -194,11 +193,14 @@ function previewFromShortcode(attrs: Record<string, string>): CanvasPreview | un
 /** Extracts a canvas preview from a JSON-shaped tool or assistant payload. */
 export function extractCanvasFromText(outputText: string | undefined): CanvasPreview | undefined {
   const parsed = outputText ? safeParseJsonRecord(outputText) : undefined;
-  return coerceCanvasPreview(parsed);
+  return extractCanvasFromRecord(parsed);
 }
 
 /** Extracts [embed ...] shortcodes outside Markdown code and returns stripped text. */
-export function extractCanvasShortcodes(text: string | undefined): {
+export function extractCanvasShortcodes(
+  text: string | undefined,
+  includePreview?: (preview: CanvasPreview) => boolean,
+): {
   text: string;
   previews: CanvasPreview[];
 } {
@@ -246,7 +248,7 @@ export function extractCanvasShortcodes(text: string | undefined): {
     }
     stripped += text.slice(cursor, match.start);
     const preview = previewFromShortcode(match.attrs);
-    if (!preview) {
+    if (!preview || (includePreview && !includePreview(preview))) {
       stripped += text.slice(match.start, match.end);
     } else {
       previews.push(preview);

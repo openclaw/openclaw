@@ -52,6 +52,7 @@ import { resolveOpenAiChatCompletionsLimits } from "./openai-compatible-input-li
 import { extractImageUrls, resolveImagesForRequest } from "./openai-http-images.js";
 import { applyToolChoice, resolveChatToolChoice } from "./openai-tool-choice.js";
 import { authorizeGatewaySessionCreation } from "./operator-role-policy.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
 
 const OpenAiChatCompletionRequestSchema = z.object({
@@ -361,10 +362,6 @@ function buildAgentPrompt(
   };
 }
 
-function resolveChatCompletionUsage(result: unknown): OpenAiChatCompletionsUsage {
-  return toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
-}
-
 export async function handleOpenAiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -453,9 +450,11 @@ export async function handleOpenAiHttpRequest(
   }
   const creationAuth = authorizeGatewaySessionCreation({
     cfg: getRuntimeConfig(),
-    ...(handled.requestAuth.operatorRoleActor
-      ? { actor: handled.requestAuth.operatorRoleActor }
-      : { profileId: handled.requestAuth.authenticatedUserProfile?.profileId }),
+    client: createSyntheticPluginRuntimeClient({
+      authenticatedUserProfile: handled.requestAuth.authenticatedUserProfile,
+      operatorRoleActor: handled.requestAuth.operatorRoleActor,
+      openclawIdPrincipal: handled.requestAuth.openclawIdPrincipal,
+    }),
     agentId,
   });
   if (creationAuth) {
@@ -566,7 +565,7 @@ export async function handleOpenAiHttpRequest(
       run: runAgentCommand,
       failureLabel: "openai-compat: chat completion failed",
       complete: ({ result, stopReason, toolCalls, text, toolChoiceError }) => {
-        const usage = resolveChatCompletionUsage(result);
+        const usage = toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
 
         if (toolChoiceError) {
           sendJson(res, 502, {
@@ -611,7 +610,7 @@ export async function handleOpenAiHttpRequest(
 
   setSseHeaders(res);
   writeChatCompletionChoice(res, streamIdentity, { role: "assistant" });
-  handled.onDisconnect = startOpenAiCompatibleStream({
+  startOpenAiCompatibleStream({
     protocol: "chat",
     res,
     runId,
@@ -632,11 +631,9 @@ export async function handleOpenAiHttpRequest(
         {},
         toolCalls ? "tool_calls" : stopReason === "length" ? "length" : "stop",
       );
-      if (streamIncludeUsage) {
-        writeChatCompletionChunk(res, streamIdentity, {
-          choices: [],
-          usage: resolveChatCompletionUsage(result),
-        });
+      const usage = toOpenAiChatCompletionsUsage(resolveAgentRunUsage(result));
+      if (streamIncludeUsage && usage) {
+        writeChatCompletionChunk(res, streamIdentity, { choices: [], usage });
       }
     },
     fail: (error) => writeSse(res, { error }),

@@ -1,19 +1,26 @@
-import { createHash } from "node:crypto";
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import { isDeepStrictEqual } from "node:util";
 import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-  type MentionInboxItem,
-  type MentionsListResult,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorName,
+} from "@openclaw/normalization-core/error-coercion";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
+import type {
+  ErrorShape,
+  MentionInboxItem,
+  MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { warnMentionInboxDeprecation } from "../plugins/compat/mention-inbox-deprecation.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  sessionChangeScopeAffectsStoredRows,
+  sessionChanges,
+} from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   openClawStateDatabaseCache,
   registerOpenClawStateDatabaseAsyncResource,
@@ -23,12 +30,14 @@ import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-pro
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
 import {
-  formatMentionSessionTitle,
+  deprecatedMentionInboxError,
   mentionInboxUnavailable,
+  publishMentionDeliveryFailure,
 } from "./mention-inbox-presentation.js";
 import {
   createMentionProjection,
   createMentionMutationProjection,
+  mentionTargetKey,
   reconcileMentionProfiles,
   removeMentionItem,
   expireMentionItems,
@@ -40,8 +49,8 @@ import {
   createMentionInputRecorder,
   prepareCommittedMentionInput,
 } from "./mention-inbox-recording.js";
-import { createMentionSharingTargets, type SharingTargets } from "./mention-inbox-sharing.js";
 import { MAX_MENTION_SOURCES } from "./mention-inbox-store.js";
+import { createMentionTargetCache } from "./mention-inbox-targets.js";
 import { readMentionSnapshot, commitMentionChanges } from "./mention-inbox-worker.js";
 import type {
   MentionCommittedInput,
@@ -57,27 +66,31 @@ const log = createSubsystemLogger("gateway/mentions");
 /** Durable sources own retention and replay; each Gateway keeps disposable projection indexes. */
 export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   const scheduler = params.scheduler.scope();
-  const policy = createHumanMentionPolicy(params);
   const context = captureOpenClawStateWorkerContext();
   const acceptedWork = new AsyncWorkScope();
   let state = createMentionProjection({ head: { revision: -1, nextSequence: 0 }, sources: [] });
+  const { readTarget, prepareTarget, prepareTargets, invalidateTargets } = createMentionTargetCache(
+    {
+      getRuntimeConfig: () => params.getRuntimeConfig(),
+      readItems: () => state.items.values(),
+    },
+  );
+  const policy = createHumanMentionPolicy({
+    ...params,
+    readSessionTarget: (sessionKey, agentId) =>
+      readTarget(mentionTargetKey(sessionKey, agentId))?.target ?? null,
+  });
   let tail: Promise<void> = Promise.resolve();
   let closing = false;
   let needsSynchronization = true;
   let sessionRevision = 0;
-  const views = new WeakMap<GatewayClient, { signature: string; revision: number }>();
-  const sharingTargets = createMentionSharingTargets({
-    getRuntimeConfig: () => params.getRuntimeConfig(),
-    getProjection: () => state,
-    now: () => scheduler.now(),
-    policy,
-  });
-  const {
-    targets: connectedTargets,
-    invalidate: invalidateTargets,
-    currentTarget,
-  } = sharingTargets;
-  const prepareTargets = sharingTargets.prepare.bind(sharingTargets);
+  let refreshRetryAt = 0;
+  let refreshRetryMs = 0;
+  const views = new WeakMap<GatewayClient, { profileId: string; result: MentionsListResult }>();
+  const presentedItems = new WeakMap<
+    StoredMention,
+    { sender: ReturnType<typeof policy.readProfile>; value: MentionInboxItem }
+  >();
   let capacityReported = false;
   let profileInvalidationPending = false;
   const applyCommittedInput = createMentionInputRecorder({
@@ -104,11 +117,14 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   async function enqueue<T>(operation: () => Promise<T>): Promise<T> {
     assertActive();
     // Scheduler cancellation closes admission; accepted work retains its own settlement scope.
-    const pending = acceptedWork.track(() =>
-      tail.then(() => {
-        context.admission.assertCurrent();
-        return operation();
-      }),
+    // Post-commit work must not borrow the completed input writer's custody.
+    const pending = runInDetachedAsyncContext(() =>
+      acceptedWork.track(() =>
+        tail.then(() => {
+          context.admission.assertCurrent();
+          return operation();
+        }),
+      ),
     );
     // Failed work must not poison later FIFO operations.
     tail = pending.then(
@@ -189,7 +205,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
           {
             expectedHead,
             nextSequence: draft.head.nextSequence,
-            changes: [...draft.dirtySources].map((key) => {
+            changes: Array.from(draft.dirtySources, (key) => {
               const source = draft.processed.get(key);
               return [key, source ? serializeMentionSource(source) : undefined];
             }),
@@ -223,27 +239,62 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     return changed || maintenance;
   }
 
+  function currentTarget(item: StoredMention, cfg: OpenClawConfig, projection = state) {
+    const { source, message } = item;
+    const { senderProfileId } = message.content;
+    if (projection.items.get(item.id) !== item || source.expiresAt <= scheduler.now()) {
+      return undefined;
+    }
+    const resolved = readTarget(item.targetKey);
+    if (!resolved || resolved.target.entry.sessionId !== message.sessionId) {
+      return undefined;
+    }
+    const target = {
+      agentId: resolved.target.agentId,
+      sessionKey: resolved.target.canonicalKey,
+      entry: resolved.target.entry,
+      membership: resolved.target.membership,
+    };
+    const recipient = policy.recipientProfile(item.recipientProfileId, target, cfg);
+    const sender = policy.readProfile(senderProfileId);
+    return recipient && recipient.profileId !== sender?.profileId
+      ? { target, recipient, sender, sessionTitle: resolved.sessionTitle }
+      : undefined;
+  }
+
   function projectItem(
     item: StoredMention,
     current: NonNullable<ReturnType<typeof currentTarget>>,
   ): MentionInboxItem {
+    const previous = presentedItems.get(item);
+    if (
+      previous &&
+      previous.sender === current.sender &&
+      previous.value.sessionTitle === current.sessionTitle &&
+      previous.value.expiresAt === item.source.expiresAt
+    ) {
+      return previous.value;
+    }
     const { content } = item.message;
-    return {
+    const value: MentionInboxItem = {
       ...content,
       id: item.id,
+      excerpt: content.excerpt,
       expiresAt: item.source.expiresAt,
       senderProfileId: current.sender?.profileId ?? content.senderProfileId,
       senderLabel: humanMentionDisplayLabel(current.sender?.label, content.senderProfileId),
-      ...(current.sender ? { senderAvatarUrl: current.sender.avatarUrl } : {}),
-      sessionTitle: formatMentionSessionTitle(current.target.entry),
+      senderAvatarUrl: current.sender?.avatarUrl,
+      sessionTitle: current.sessionTitle,
     };
+    // Stored message content is immutable; profile display, title and expiry own replacements.
+    presentedItems.set(item, { sender: current.sender, value });
+    return value;
   }
 
   function readView(
     client: GatewayClient | null,
     cfg: OpenClawConfig,
     remember: boolean,
-    targets: SharingTargets,
     projection = state,
   ): Result<MentionsListResult, ErrorShape> {
     const identified = policy.identify(client, cfg);
@@ -253,24 +304,32 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     const requester = identified.value;
     const visible: MentionInboxItem[] = [];
     const profileItems = projection.itemsByProfile.get(requester.profile.profileId);
-    for (const item of [...(profileItems ?? [])].toReversed()) {
-      const current = currentTarget(item, cfg, targets, projection);
+    for (const item of profileItems ?? []) {
+      const current = currentTarget(item, cfg, projection);
       if (current && requester.canRead(current.target)) {
         visible.push(projectItem(item, current));
       }
     }
-    const signature = createHash("sha256")
-      .update(JSON.stringify([requester.profile.profileId, visible]))
-      .digest("hex");
+    visible.reverse();
     const previous = client && views.get(client);
-    const revision = previous ? previous.revision + Number(signature !== previous.signature) : 0;
-    if (client && remember) {
-      views.set(client, { signature, revision });
+    if (
+      previous?.profileId === requester.profile.profileId &&
+      isDeepStrictEqual(previous.result.items, visible)
+    ) {
+      return ok(previous.result);
     }
-    return ok({ gatewayInstanceId: params.gatewayInstanceId, revision, items: visible });
+    const result = {
+      gatewayInstanceId: params.gatewayInstanceId,
+      revision: previous ? previous.result.revision + 1 : 0,
+      items: visible,
+    };
+    if (client && remember) {
+      views.set(client, { profileId: requester.profile.profileId, result });
+    }
+    return ok(result);
   }
 
-  function publishConnectedViews(targets: SharingTargets): void {
+  function publishConnectedViews(): void {
     if (scheduler.signal.aborted) {
       return;
     }
@@ -280,10 +339,12 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         continue;
       }
       const previous = views.get(client);
-      const result = readView(client, cfg, true, targets);
+      const result = readView(client, cfg, true);
       if (
         !result.ok ||
-        (previous ? previous.revision === result.value.revision : result.value.items.length === 0)
+        (previous
+          ? previous.result.revision === result.value.revision
+          : result.value.items.length === 0)
       ) {
         continue;
       }
@@ -297,21 +358,17 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   async function refreshConnectedViews(): Promise<void> {
     await prepareTargets();
-    publishConnectedViews(connectedTargets);
+    publishConnectedViews();
   }
 
-  function scheduleExpiry(retryAfterMs?: number): void {
-    if (
-      closing ||
-      scheduler.signal.aborted ||
-      (state.processed.size === 0 && retryAfterMs === undefined)
-    ) {
+  function scheduleExpiry(): void {
+    const idle = state.processed.size === 0 && refreshRetryAt === 0;
+    if (closing || scheduler.signal.aborted || idle) {
       return;
     }
     scheduler.schedule({
       id: `mentions:expiry:${params.gatewayInstanceId}`,
-      mode: "earliest",
-      ...(retryAfterMs === undefined ? { atMs: state.nextExpiryAt } : { delayMs: retryAfterMs }),
+      atMs: refreshRetryAt || state.nextExpiryAt,
       run: refresh,
     });
   }
@@ -320,16 +377,36 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     if (closing || scheduler.signal.aborted) {
       return;
     }
+    const started = performance.now();
+    let phase = "admission";
     try {
       await enqueue(async () => {
+        // Queued invalidations share the retry budget; foreground reads still retry immediately.
+        if (scheduler.now() < refreshRetryAt) {
+          return;
+        }
+        phase = "maintenance";
         await maintain();
         context.admission.assertCurrent();
-        await refreshConnectedViews();
+        phase = "sharing";
+        await prepareTargets();
+        phase = "publication";
+        publishConnectedViews();
+        refreshRetryAt = 0;
+        refreshRetryMs = 0;
         scheduleExpiry();
       });
-    } catch {
-      log.warn("Unable to refresh the mention Inbox; current reads will retry.");
-      scheduleExpiry(60_000);
+    } catch (error) {
+      if (closing || scheduler.signal.aborted) {
+        return;
+      }
+      refreshRetryMs = Math.min(refreshRetryMs ? refreshRetryMs * 2 : 60_000, 15 * 60_000);
+      refreshRetryAt = scheduler.now() + refreshRetryMs;
+      log.warn(
+        `Unable to refresh the mention Inbox; current reads will retry. phase=${phase} error=${readErrorName(error) || "unknown"} code=${extractErrorCode(error) ?? "unknown"} elapsedMs=${Math.round(performance.now() - started)} retryAfterMs=${refreshRetryMs} cause=${formatErrorMessage(error, { includeCode: true })}`,
+        { source: context.admission.databasePath },
+      );
+      scheduleExpiry();
     }
   }
 
@@ -342,6 +419,9 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
   // The inbox retains worker-prepared sharing facts. Committed row publications
   // invalidate them; direct reads and delayed pushes consume the same receipt-backed facts.
   const stopRows = sessionChanges.subscribeFacts((change) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
     if (
       !("facts" in change) ||
       !change.facts ||
@@ -380,23 +460,16 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     return mentionInboxUnavailable();
   }
 
-  function legacyError(
-    method: "list" | "dismiss" | "recordCommittedInput" | "invalidate",
-  ): ErrorShape {
-    warnMentionInboxDeprecation(method);
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `mentionInbox.${method} is unavailable; await mentionInbox.${method}Async instead.`,
-    );
+  function readResponse(client: GatewayClient | null): Result<MentionsListResult, ErrorShape> {
+    const result = readOperation(() => readView(client, params.getRuntimeConfig(), true));
+    // Embedded list/dismiss callers own mutable responses; publication snapshots stay private.
+    return result.ok
+      ? ok({ ...result.value, items: result.value.items.map((item) => ({ ...item })) })
+      : result;
   }
 
-  function dismissItems(
-    draft: InboxState,
-    client: GatewayClient | null,
-    ids: readonly string[],
-    targets = connectedTargets,
-  ) {
-    const current = readView(client, params.getRuntimeConfig(), false, targets, draft);
+  function dismissItems(draft: InboxState, client: GatewayClient | null, ids: readonly string[]) {
+    const current = readView(client, params.getRuntimeConfig(), false, draft);
     if (current.ok) {
       const owned = new Set(current.value.items.map((item) => item.id));
       for (const id of ids) {
@@ -408,16 +481,13 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     return current;
   }
 
-  function publishCommittedMentions(
-    committed: readonly StoredMention[],
-    targets = connectedTargets,
-  ): void {
+  function publishCommittedMentions(committed: readonly StoredMention[]): void {
     if (scheduler.signal.aborted || !params.onMentionCreated) {
       return;
     }
     for (const item of committed) {
       const retained = state.items.get(item.id);
-      const current = retained && currentTarget(retained, params.getRuntimeConfig(), targets);
+      const current = retained && currentTarget(retained, params.getRuntimeConfig());
       if (!retained || !current) {
         continue;
       }
@@ -443,7 +513,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
               return false;
             }
             const latest = state.items.get(item.id);
-            return Boolean(latest && currentTarget(latest, params.getRuntimeConfig(), targets));
+            return Boolean(latest && currentTarget(latest, params.getRuntimeConfig()));
           } catch {
             return false;
           }
@@ -483,7 +553,10 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   void refresh();
 
-  function recordCommittedInputAsync(committedInput: MentionCommittedInput): Promise<void> {
+  function recordCommittedInputAsync(
+    committedInput: MentionCommittedInput,
+    client?: GatewayClient | null,
+  ): Promise<void> {
     const input = {
       ...committedInput,
       recipientProfileIds: [...committedInput.recipientProfileIds],
@@ -505,16 +578,13 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         agentId,
       });
       try {
-        await policy.recordCommittedInvolvementAsync(input, prepared);
+        await policy.recordCommittedInvolvementAsync(input, prepared, client);
         const committed = await mutate<StoredMention[]>(
           (draft, guards, bounds) =>
-            applyCommittedInput(
-              input,
-              draft,
-              guards,
-              bounds,
-              () => prepared.readCurrent(params.getRuntimeConfig()).target,
-            ),
+            applyCommittedInput(input, draft, guards, bounds, () => {
+              const { target, membership } = prepared.readCurrent(params.getRuntimeConfig());
+              return target && { ...target, membership };
+            }),
           () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),
         );
         context.admission.assertCurrent();
@@ -524,40 +594,48 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } finally {
         prepared.release();
       }
-    }).catch(() => {
+    }).catch((error: unknown) => {
+      if (client) {
+        const connections = policy.senderConnectionIds(client, input.senderProfileId);
+        throw publishMentionDeliveryFailure(params, input, connections, error);
+      }
       log.warn("Mention delivery could not be completed; the posted message is unchanged.");
     });
   }
 
   return {
-    async mentionable(client, input, publish) {
-      let preparationFailure: Result<never, ErrorShape> | undefined;
+    prepareInvitation: policy.prepareInvitation,
+    async mentionable(client, input, publish, displayIds) {
       try {
         // A committed profile change can invalidate preparation before this continuation runs.
         while (policy.needsDirectoryPreparation()) {
           await policy.prepareDirectory();
         }
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
-      let prepared: Awaited<ReturnType<typeof policy.prepareContext>> | undefined;
+      let prepared: Awaited<ReturnType<typeof policy.prepareContext>>;
       try {
-        prepared = await policy.prepareContext(input);
+        // Legacy synchronous recipient validation consumes the lookup’s prepared target cache.
+        if ("sessionKey" in input) {
+          await prepareTarget(input.sessionKey, input.agentId);
+        }
+        prepared = await policy.prepareContext(input, true);
       } catch {
-        preparationFailure = mentionInboxUnavailable(log);
+        publish(mentionInboxUnavailable(log));
+        return;
       }
-      // Current policy selection and response publication must not cross another await.
       try {
-        publish(
-          preparationFailure ?? readOperation(() => policy.mentionable(client, input, prepared)),
-        );
+        // Current policy selection and response publication must not cross another await.
+        publish(readOperation(() => policy.mentionable(client, input, prepared, displayIds)));
       } finally {
-        prepared?.release();
+        prepared.release();
       }
     },
-    validateRecipients: (...args: Parameters<typeof policy.validateRecipients>) => {
+    validateRecipients(client, input, profileIds) {
       warnMentionInboxDeprecation("validateRecipients");
-      return readOperation(() => policy.validateRecipients(...args));
+      return readOperation(() => policy.validateRecipients(client, input, profileIds));
     },
     async validateRecipientsAsync(client, input, profileIds) {
       try {
@@ -573,26 +651,26 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         return mentionInboxUnavailable(log);
       }
     },
-    list: () => err(legacyError("list")),
-    dismiss: () => err(legacyError("dismiss")),
+    list: () => err(deprecatedMentionInboxError("list")),
+    dismiss: () => err(deprecatedMentionInboxError("dismiss")),
     async listAsync(client, publish) {
-      let failure: Result<never, ErrorShape> | undefined;
       try {
         await enqueue(async () => {
           const changed = await maintain();
-          await prepareTargets();
           if (changed) {
             await refreshConnectedViews();
+          } else {
+            const viewer = policy.identify(client, params.getRuntimeConfig());
+            if (viewer.ok) {
+              await prepareTargets(state.itemsByProfile.get(viewer.value.profile.profileId) ?? []);
+            }
           }
           scheduleExpiry();
         });
       } catch {
-        failure = mentionInboxUnavailable(log);
+        return publish(mentionInboxUnavailable(log));
       }
-      publish(
-        failure ??
-          readOperation(() => readView(client, params.getRuntimeConfig(), true, connectedTargets)),
-      );
+      return publish(readResponse(client));
     },
     async dismissAsync(client, ids, publish) {
       let failure: Result<never, ErrorShape> | undefined;
@@ -636,10 +714,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } catch {
         failure = mentionInboxUnavailable(log);
       }
-      publish(
-        failure ??
-          readOperation(() => readView(client, params.getRuntimeConfig(), true, connectedTargets)),
-      );
+      publish(failure ?? readResponse(client));
     },
     recordCommittedInput(input: MentionCommittedInput): void {
       warnMentionInboxDeprecation("recordCommittedInput");
@@ -658,7 +733,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     },
     recordCommittedInputAsync,
     invalidate(): never {
-      throw new Error(legacyError("invalidate").message);
+      throw new Error(deprecatedMentionInboxError("invalidate").message);
     },
     invalidateAsync,
     dispose,

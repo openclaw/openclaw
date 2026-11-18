@@ -1,5 +1,6 @@
 import { AbortController as TelegramAbortController } from "abort-controller";
 import type { Bot } from "grammy";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveTelegramMediaRuntimeOptions } from "./accounts.js";
 import { resolveMedia } from "./bot/delivery.resolve-media.js";
@@ -83,7 +84,7 @@ export function createTelegramDirectAvatarResolver(params: {
             getFile: (signal) => params.api.getFile(photo.file_id, signal),
           },
           maxBytes: AVATAR_MAX_BYTES,
-          abortSignal,
+          budget: abortSignal,
         });
         return abortSignal.aborted ? undefined : media?.path;
       } catch {
@@ -102,12 +103,7 @@ export function createTelegramDirectAvatarResolver(params: {
         }
         cache.delete(senderId);
         cache.set(senderId, { path: path ?? cached?.path, expiresAt: Date.now() + AVATAR_TTL_MS });
-        if (cache.size > AVATAR_MAX_ENTRIES) {
-          const oldest = cache.keys().next().value;
-          if (oldest !== undefined) {
-            cache.delete(oldest);
-          }
-        }
+        pruneMapToMaxSize(cache, AVATAR_MAX_ENTRIES);
       })
       .finally(() => pending.delete(senderId));
     return cached?.path;

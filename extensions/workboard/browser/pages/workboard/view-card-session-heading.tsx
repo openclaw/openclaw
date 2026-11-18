@@ -2,7 +2,7 @@
 import { createMemo } from "solid-js";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
-import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/index.ts";
+import type { WorkboardCard, WorkboardLifecycle } from "../../lib/workboard/types.ts";
 import { cardAgentLabel } from "./agent-filter.ts";
 import {
   OpenSessionCardAction,

@@ -121,11 +121,12 @@ export function reconcileChatReasoning(
 /** View preferences select one owner while a committed preview remains available to stream mode. */
 export function projectChatReasoning(props: {
   showThinking: boolean;
-  selectedSession?: { reasoningLevel?: string | null };
+  selectedSession?: { reasoningLevel?: string | null; reasoningDefault?: string | null };
   reasoning?: ChatReasoning | null;
   runId?: string | null;
 }) {
-  const level = props.selectedSession?.reasoningLevel;
+  const session = props.selectedSession;
+  const level = session?.reasoningLevel ?? session?.reasoningDefault;
   const showReasoning = props.showThinking && level === "on";
   const reasoning = props.reasoning;
   const ownsPreview = !props.runId || props.runId === reasoning?.runId;

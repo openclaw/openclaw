@@ -1,9 +1,9 @@
-import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import type { Model } from "../../llm/types.js";
 import { createAttemptCompactionThinkingResolver } from "../embedded-agent-runner/run/attempt-compaction-thinking.js";
+import { textStream } from "./agent-session-boundary.test-support.js";
 import {
   createAssistant,
-  createAssistantResultStream,
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
   streamMocks,
@@ -15,106 +15,76 @@ import { SettingsManager } from "./settings-manager.js";
 
 registerAgentSessionLoopTestLifecycle();
 
-describe("AgentSession threshold compaction thinking", () => {
-  it.each([
-    { configured: undefined, providerDefault: undefined, expected: "low" },
-    { configured: undefined, providerDefault: "off", expected: "off" },
-    { configured: "low", providerDefault: "off", expected: "low" },
-    { configured: "inherit", providerDefault: undefined, expected: "high" },
-    { configured: "adaptive", providerDefault: undefined, expected: "medium" },
-    { configured: "ultra", providerDefault: undefined, expected: "high" },
-  ] as const)(
-    "applies $configured compaction thinking with provider default $providerDefault to threshold summaries",
-    async ({ configured, providerDefault, expected }) => {
-      const model = {
-        ...testModel,
-        reasoning: true,
-        contextWindow: 4_096,
-        maxTokens: 512,
-        ...(providerDefault ? { compactionThinkingDefault: providerDefault } : {}),
-      };
-      const sessionManager = SessionManager.inMemory();
-      sessionManager.appendMessage({ role: "user", content: "old prompt", timestamp: 1 });
-      sessionManager.appendMessage({
-        ...createAssistant(model, [{ type: "text", text: "old answer" }]),
-        timestamp: 2,
-      });
-      sessionManager.appendMessage({ role: "user", content: "latest prompt", timestamp: 3 });
-      sessionManager.appendMessage({
-        ...createAssistant(model, [{ type: "text", text: "latest answer" }]),
-        timestamp: 4,
-      });
-      const reasoning: Array<string | undefined> = [];
-      streamMocks.streamSimple.mockImplementation(
-        (activeModel: Model, _context: Context, options?: SimpleStreamOptions) => {
-          reasoning.push(options?.reasoning);
-          return createAssistantResultStream(
-            createAssistant(
-              activeModel,
-              [{ type: "text", text: reasoning.length === 1 ? "reply" : "summary" }],
-              "stop",
-              reasoning.length === 1 ? 3_900 : 30,
-            ),
-          );
-        },
-      );
-      const { session } = await createTestSession({
-        model,
-        sessionManager,
-        settingsManager: SettingsManager.inMemory({
-          defaultThinkingLevel: "high",
-          compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 1 },
-          retry: { enabled: false },
-        }),
-        resolveCompactionThinkingLevel: createAttemptCompactionThinkingResolver(
-          {
-            config: configured
-              ? { agents: { defaults: { compaction: { thinkingLevel: configured } } } }
-              : undefined,
-            sessionKey: undefined,
-            sandboxSessionKey: undefined,
-          },
-          "main",
-        ),
-      });
-      const ends: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
-      session.subscribe((event) => {
-        if (event.type === "compaction_end") {
-          ends.push(event);
-        }
-      });
+function resolver(thinkingLevel?: "low" | "inherit" | "adaptive" | "ultra") {
+  const compaction = { thinkingLevel };
+  const config = thinkingLevel ? { agents: { defaults: { compaction } } } : undefined;
+  return createAttemptCompactionThinkingResolver({ config }, "main");
+}
 
-      await session.prompt("trigger threshold");
-
-      expect(ends).toMatchObject([{ reason: "threshold", outcome: { status: "completed" } }]);
-      expect(reasoning[0]).toBe("high");
-      expect(reasoning.slice(1)).toEqual([expected, expected]);
-    },
-  );
-
-  it.each([
-    { provider: "anthropic", id: "claude-sonnet-4-6" },
-    {
-      provider: "claude-gateway",
-      id: "team-sonnet",
-      params: { canonicalModelId: "claude-sonnet-4-6" },
-    },
-  ])("runs adaptive summaries at high effort for $provider/$id", (model) => {
-    const resolveCompactionThinkingLevel = createAttemptCompactionThinkingResolver(
-      {
-        config: { agents: { defaults: { compaction: { thinkingLevel: "adaptive" } } } },
-        sessionKey: undefined,
-        sandboxSessionKey: undefined,
-      },
-      "main",
-    );
-    const candidate = {
+it.each([
+  [undefined, undefined, "low"],
+  [undefined, "off", "off"],
+  ["low", "off", "low"],
+  ["inherit", undefined, "high"],
+  ["adaptive", undefined, "medium"],
+  ["ultra", undefined, "high"],
+] as const)(
+  "applies compaction thinking %s with provider default %s as %s",
+  async (configured, providerDefault, expected) => {
+    const model = {
       ...testModel,
-      ...model,
-      api: "anthropic-messages" as const,
       reasoning: true,
+      contextWindow: 4_096,
+      maxTokens: 512,
+      ...(providerDefault ? { compactionThinkingDefault: providerDefault } : {}),
     };
+    const sessionManager = SessionManager.inMemory();
+    for (const [index, turn] of ["old", "latest"].entries()) {
+      const timestamp = index * 2 + 1;
+      sessionManager.appendMessage({ role: "user", content: `${turn} prompt`, timestamp });
+      sessionManager.appendMessage({
+        ...createAssistant(model, `${turn} answer`),
+        timestamp: timestamp + 1,
+      });
+    }
+    const reasoning: Array<string | undefined> = [];
+    streamMocks.streamSimple.mockImplementation((activeModel, _context, options) => {
+      reasoning.push(options?.reasoning);
+      const first = reasoning.length === 1;
+      return textStream(activeModel, first ? "reply" : "summary", "stop", first ? 3_900 : 30);
+    });
+    const { session } = await createTestSession({
+      model,
+      sessionManager,
+      settingsManager: SettingsManager.inMemory({
+        defaultThinkingLevel: "high",
+        compaction: { enabled: true, reserveTokens: 1_024, keepRecentTokens: 1 },
+        retry: { enabled: false },
+      }),
+      resolveCompactionThinkingLevel: resolver(configured),
+    });
+    const ends: Array<Extract<AgentSessionEvent, { type: "compaction_end" }>> = [];
+    session.subscribe((event) => {
+      if (event.type === "compaction_end") {
+        ends.push(event);
+      }
+    });
 
-    expect(resolveCompactionThinkingLevel(candidate, "low")).toBe("high");
-  });
+    await session.prompt("trigger threshold");
+
+    expect(ends).toMatchObject([{ reason: "threshold", outcome: { status: "completed" } }]);
+    expect(reasoning).toEqual(["high", expected, expected]);
+  },
+);
+
+it.each([
+  { provider: "anthropic", id: "claude-sonnet-4-6" },
+  {
+    provider: "claude-gateway",
+    id: "team-sonnet",
+    params: { canonicalModelId: "claude-sonnet-4-6" },
+  },
+])("runs adaptive summaries at high effort for $provider/$id", (model) => {
+  const candidate: Model = { ...testModel, ...model, api: "anthropic-messages", reasoning: true };
+  expect(resolver("adaptive")(candidate, "low")).toBe("high");
 });

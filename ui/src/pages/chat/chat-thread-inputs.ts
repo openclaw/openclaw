@@ -3,13 +3,13 @@ import type { ChatPendingInputsPage } from "../../../../packages/gateway-protoco
 import { compareChatQueueOrder } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatItem, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
-import { buildPendingInputItems } from "./chat-pending-inputs.ts";
+import { buildPendingInputItems } from "./chat-pending-input-presentation.ts";
 import { isQueuedSendInlineState, shouldRenderQueuedSendInThread } from "./chat-progress.ts";
 import {
   buildMessageItems,
   hasRenderableNormalizedMessage,
   insertChatItemsByTimestamp,
-  messageMatchesSearchQuery,
+  createChatSearchMatcher,
   queuedSendThreadMessage,
 } from "./chat-thread-items.ts";
 import { selectChatInputDisplay } from "./history-merge.ts";
@@ -45,12 +45,7 @@ export function placeChatInputs(
   props: ChatInputPlacementProps,
   orderState: ChatInputOrderState,
   currentRunId: string | null,
-): {
-  pendingKeys: Set<string>;
-  historicalKeys: Set<string>;
-  hiddenKeys: Set<string>;
-  activeInputKey?: string;
-} {
+) {
   const orderedQueue = (props.queue ?? []).toSorted(compareChatQueueOrder);
   const { queue, pendingInputs } = selectChatInputDisplay(
     history,
@@ -63,12 +58,12 @@ export function placeChatInputs(
   const blocks: InputBlock[] = [];
   let activeInputKey: string | undefined;
   let previousStoppedKey: string | undefined;
+  const matchesSearch = createChatSearchMatcher(
+    props.searchOpen ? (props.searchQuery ?? "") : "",
+    props.messageRecovery,
+  );
   const markSearchVisibility = (message: unknown, inputItems: readonly ChatItem[]) => {
-    if (
-      props.searchOpen &&
-      props.searchQuery?.trim() &&
-      !messageMatchesSearchQuery(message, props.searchQuery, props.messageRecovery)
-    ) {
+    if (props.searchOpen && props.searchQuery?.trim() && !matchesSearch(message)) {
       for (const item of inputItems) {
         hiddenKeys.add(item.key);
       }
@@ -77,11 +72,8 @@ export function placeChatInputs(
   for (const input of pendingInputs) {
     const inputItems = buildPendingInputItems(
       [input],
-      undefined,
-      orderedQueue,
       props.workspaceSyncPendingRunIds,
       props.workerSetupPending,
-      props.messageRecovery,
     );
     const first = inputItems[0];
     if (!first) {
@@ -90,8 +82,9 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // The active run owns this floor even when a fresh client has no local send.
-      if (currentRunId && input.runId === currentRunId) {
+      // On an empty transcript, the first accepted input owns the startup floor
+      // even before execution identity arrives. Later inputs remain ceilings.
+      if (currentRunId ? input.runId === currentRunId : history.length === 0 && !activeInputKey) {
         activeInputKey = first.key;
       }
       continue;
@@ -110,7 +103,36 @@ export function placeChatInputs(
     blocks.flatMap((block) => (block.runId ? [[block.runId, block] as const] : [])),
   );
   const acceptedKeys = new Map(blocks.map((block) => [block.items[0]!.key, block]));
-  const historyKeys = new Set(items.map((item) => item.key));
+  const historyItems = new Map(items.map((item) => [item.key, item]));
+  const newLocalInput = blocks.length
+    ? items.find((item) => {
+        const identity = item.kind === "message" ? readSessionMessageIdentity(item.message) : null;
+        return (
+          identity?.role === "user" &&
+          identity.sendId &&
+          identity.id === null &&
+          identity.sequence === null &&
+          !identity.isImported &&
+          !orderState.keys.includes(item.key)
+        );
+      })
+    : undefined;
+  for (const block of blocks) {
+    const previousPosition = orderState.keys.indexOf(block.items[0]!.key);
+    if (previousPosition >= 0) {
+      // Custody can replace a steer before younger optimistic inputs settle.
+      // Keep its observed input successor without treating custody as run output.
+      block.beforeKey =
+        orderState.keys.slice(previousPosition + 1).find((key) => {
+          const item = historyItems.get(key);
+          return (
+            item?.kind === "message" && readSessionMessageIdentity(item.message)?.role === "user"
+          );
+        }) ??
+        // An ACK can arrive before the next local send has a previous position.
+        newLocalInput?.key;
+    }
+  }
   for (const queued of queue) {
     if (!shouldRenderQueuedSendInThread(queued)) {
       continue;
@@ -147,8 +169,8 @@ export function placeChatInputs(
         ? undefined
         : orderState.keys
             .slice(previousPosition + 1)
-            .find((key) => acceptedKeys.has(key) || historyKeys.has(key));
-    if (previousSuccessor && historyKeys.has(previousSuccessor)) {
+            .find((key) => acceptedKeys.has(key) || historyItems.has(key));
+    if (previousSuccessor && historyItems.has(previousSuccessor)) {
       block.beforeKey = previousSuccessor;
     }
     const nextAccepted =

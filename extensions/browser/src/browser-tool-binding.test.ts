@@ -53,9 +53,8 @@ describe("browser tab tool binding", () => {
   });
 
   it("fails closed on malformed bindings", () => {
-    expect(parseBrowserTabToolBinding({ kind: "tab", tabId: 1, target: "host" })).toEqual({
-      ok: false,
-      error: "browser tool binding requires target, profile, and targetId",
-    });
+    expect(() => parseBrowserTabToolBinding({ kind: "tab", tabId: 1, target: "host" })).toThrow(
+      "invalid browser run binding: browser tool binding requires target, profile, and targetId",
+    );
   });
 });

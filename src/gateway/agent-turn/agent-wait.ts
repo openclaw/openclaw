@@ -1,6 +1,11 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  isRpcSourceQueued,
+} from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { resolveAgentWaitSource } from "./agent-dedupe.js";
 import {
@@ -10,19 +15,26 @@ import {
   waitForAgentJob,
 } from "./agent-job.js";
 
+/** Capture an agent wait's initial session and defer its terminal or queued result. */
 export function prepareAgentWaitForTurn(
-  context: Pick<GatewayRequestContext, "chatAbortControllers" | "chatQueuedTurns" | "dedupe">,
+  context: Pick<GatewayRequestContext, "dedupe"> &
+    Partial<Pick<GatewayRequestContext, "resolveGatewayContext">>,
   params: AgentWaitParams,
+  // Turn waits preserve byte-exact protocol run IDs.
+  options: { exactTurnSource?: boolean } = {},
 ) {
-  const runId = params.runId.trim();
+  const runId = options.exactTurnSource ? params.runId : params.runId.trim();
   const timeoutMs = params.timeoutMs ?? 30_000;
   const source = resolveAgentWaitSource(context, runId);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const queuedResult = () => {
-    const queued = context.chatQueuedTurns.get(runId);
-    return queued
+    const queued = getRpcSourceForGateway(runId, context.resolveGatewayContext);
+    return queued && queued.input.custody.enqueued === true && isRpcSourceQueued(queued)
       ? {
-          session: captureAgentJobSession({ ...queued, lifecycleGeneration }),
+          session: captureAgentJobSession({
+            ...getRpcSourceIdentity(queued),
+            lifecycleGeneration,
+          }),
           result: {
             runId,
             status: "pending" as const,

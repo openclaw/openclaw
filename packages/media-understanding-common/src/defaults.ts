@@ -1,35 +1,41 @@
-import type { MediaUnderstandingCapability } from "./types.js";
+import type { MediaUnderstandingCapability, MediaUnderstandingKind } from "./types.js";
 
 const MB = 1024 * 1024;
 
 /** Default max response characters for bounded text outputs. */
 export const DEFAULT_MAX_CHARS = 500;
-/** Default max response characters by capability. */
-export const DEFAULT_MAX_CHARS_BY_CAPABILITY: Record<
+/** Default limits, prompt, and output kind for each media capability. */
+export const MEDIA_CAPABILITY_DEFAULTS: Record<
   MediaUnderstandingCapability,
-  number | undefined
+  {
+    maxChars: number | undefined;
+    maxBytes: number;
+    timeoutSeconds: number;
+    prompt: string;
+    kind: MediaUnderstandingKind;
+  }
 > = {
-  image: DEFAULT_MAX_CHARS,
-  audio: undefined,
-  video: DEFAULT_MAX_CHARS,
-};
-/** Default input byte limits by capability. */
-export const DEFAULT_MAX_BYTES: Record<MediaUnderstandingCapability, number> = {
-  image: 10 * MB,
-  audio: 20 * MB,
-  video: 50 * MB,
-};
-/** Default request timeout by capability. */
-export const DEFAULT_TIMEOUT_SECONDS: Record<MediaUnderstandingCapability, number> = {
-  image: 60,
-  audio: 60,
-  video: 120,
-};
-/** Default prompts by capability. */
-export const DEFAULT_PROMPT: Record<MediaUnderstandingCapability, string> = {
-  image: "Describe the image.",
-  audio: "Transcribe the audio.",
-  video: "Describe the video.",
+  image: {
+    maxChars: DEFAULT_MAX_CHARS,
+    maxBytes: 10 * MB,
+    timeoutSeconds: 60,
+    prompt: "Describe the image.",
+    kind: "image.description",
+  },
+  audio: {
+    maxChars: undefined,
+    maxBytes: 20 * MB,
+    timeoutSeconds: 60,
+    prompt: "Transcribe the audio.",
+    kind: "audio.transcription",
+  },
+  video: {
+    maxChars: DEFAULT_MAX_CHARS,
+    maxBytes: 50 * MB,
+    timeoutSeconds: 120,
+    prompt: "Describe the video.",
+    kind: "video.description",
+  },
 };
 /** Upper bound for base64-expanded video payloads. */
 export const DEFAULT_VIDEO_MAX_BASE64_BYTES = 70 * MB;

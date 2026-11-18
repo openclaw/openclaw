@@ -1,4 +1,5 @@
 import { raceWithTimeout } from "@openclaw/retry";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export type RealtimeTalkVideoFrame = {
   data: string;
@@ -54,22 +55,13 @@ export async function captureRealtimeTalkVideoFrame(
 
 async function waitForRealtimeTalkVideoData(video: HTMLVideoElement): Promise<void> {
   const ready = Promise.withResolvers<void>();
-  const onData = () => ready.resolve();
+  const removeListener = listen(video, "loadeddata", () => ready.resolve());
+  // If a native readiness event is missed, the deadline reports the failure.
   try {
-    await raceWithTimeout(
-      () => {
-        video.addEventListener("loadeddata", onData);
-        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
-          ready.resolve();
-        }
-        return ready.promise;
-      },
-      5_000,
-      () => {
-        throw new Error("Camera preview did not become ready");
-      },
-    );
+    await raceWithTimeout(ready.promise, 5_000, () => {
+      throw new Error("Camera preview did not become ready");
+    });
   } finally {
-    video.removeEventListener("loadeddata", onData);
+    removeListener();
   }
 }
