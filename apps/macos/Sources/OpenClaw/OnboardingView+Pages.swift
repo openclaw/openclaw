@@ -52,7 +52,8 @@ extension OnboardingView {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
+                // Every page stays mounted, so Return must only reach this button on Welcome.
+                .keyboardShortcut(self.activePageIndex == 0 ? .defaultAction : nil)
                 .padding(.top, 20)
                 if self.startsOnThisMac {
                     HStack(spacing: 4) {

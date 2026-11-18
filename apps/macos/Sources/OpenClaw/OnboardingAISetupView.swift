@@ -526,7 +526,7 @@ struct OnboardingAISetupView: View {
                 }
             }
             ForEach(picker.localAuthOptions) { option in
-                self.providerAuthRow(option)
+                self.providerAuthRow(option, row: .localModel)
             }
         }
     }
@@ -554,7 +554,7 @@ struct OnboardingAISetupView: View {
                 .padding(.bottom, 6)
             }
             ForEach(picker.moreAuthOptions) { option in
-                self.providerAuthRow(option)
+                self.providerAuthRow(option, row: nil)
             }
             if self.model.manualProviders.isEmpty, self.model.authOptions.isEmpty {
                 OnboardingErrorCard(
@@ -712,7 +712,11 @@ struct OnboardingAISetupView: View {
         return false
     }
 
-    private func providerAuthRow(_ option: OnboardingAISetupModel.AuthOption) -> some View {
+    /// `row` is where the started steps show; nil shows them under the list with the option's own name.
+    private func providerAuthRow(
+        _ option: OnboardingAISetupModel.AuthOption,
+        row: OnboardingAIPicker.RowID?) -> some View
+    {
         let (fallbackSymbol, actionLabel): (String, LocalizedStringKey) = switch option.kind {
         case "device-code": ("link.badge.plus", "Pair")
         case "install": ("puzzlepiece.extension", "Set up…")
@@ -727,6 +731,7 @@ struct OnboardingAISetupView: View {
             fallbackSymbol: fallbackSymbol,
             actionLabel: Text(actionLabel))
         {
+            self.expandedRow = row
             self.model.startProviderWizard(option, kind: .auth)
         }
     }
