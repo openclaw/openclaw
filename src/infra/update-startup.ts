@@ -42,9 +42,8 @@ import { resolveNpmChannelTag, type UpdateCheckResult } from "./update-check.js"
 import { devUpdateTargetFromGitTarget } from "./update-dev-target.js";
 import { prepareStartupUpdateInstall, withUpdateInstallStatus } from "./update-install-status.js";
 import type { StartupInstallStatus } from "./update-install-status.types.js";
-import { selectUpdateOwedSteps, UPDATE_OWED_STEP_HISTORY } from "./update-run-owed-step.js";
+import { owesAutomaticPluginRetry, UPDATE_OWED_STEP_HISTORY } from "./update-run-owed-step.js";
 import { listUpdateRunsAsync } from "./update-run-reader.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
 import { runCampaignUpdate, type AutoUpdateRunner } from "./update-startup-auto-run.js";
 import { canRunDevGitCampaign, resolveDevGitUpdate } from "./update-startup-refresh.js";
 import {
@@ -214,34 +213,10 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-/**
- * Owed plugin convergence a same-version campaign can still retry, from runs listed newest first.
- * Each row gets one such campaign: a same-version campaign run created at or after the run that
- * owes the row (including that run, when the retry owed it again) ends automatic retries until a
- * real update or a manual command takes the row. A Doctor-only row is not a reason to restart:
- * the update path settles it only after changing plugins.
- */
-function owesPluginRetry(runs: readonly UpdateRunRecord[]): boolean {
-  if (runs.some((run) => run.status === "running")) {
-    return false;
-  }
-  const retried = (run: UpdateRunRecord) =>
-    run.trigger === "campaign" && run.target.version === VERSION && run.before.version === VERSION;
-  return selectUpdateOwedSteps(runs).some((step) => {
-    const owner = runs.find((run) => run.runId === step.runId);
-    return (
-      step.id === "plugin-convergence" &&
-      owner !== undefined &&
-      (owner.after.version ?? owner.target.version) === VERSION &&
-      !runs.some((run) => run.createdAtMs >= owner.createdAtMs && retried(run))
-    );
-  });
-}
-
 /** Unreadable history proves nothing is owed, so it never starts a retry. */
 async function readOwedPluginRetry(): Promise<boolean> {
   return listUpdateRunsAsync({ limit: UPDATE_OWED_STEP_HISTORY }).then(
-    owesPluginRetry,
+    (runs) => owesAutomaticPluginRetry(runs, VERSION),
     () => false,
   );
 }

@@ -1,5 +1,5 @@
 // A current core that still owes plugin convergence retries it once through a same-version campaign.
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -63,7 +63,8 @@ beforeEach(async () => {
   });
   versionMock.value = "2.0.0";
   vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
-  clock = createGatewaySchedulerClock(Date.parse("2026-01-17T10:00:00Z"));
+  // The ledger worker stamps campaign runs with real time; start here so runs keep their order.
+  clock = createGatewaySchedulerClock(Date.now());
   vi.spyOn(Date, "now").mockImplementation(clock.clock.now);
   scheduler = createTestGatewayScheduler(clock.clock);
   lifecycle = createGatewayUpdateLifecycle(scheduler);
@@ -90,8 +91,6 @@ afterEach(async () => {
   await state.cleanup();
 });
 
-afterAll(closeUpdateFixtureDatabases);
-
 function registry(tag: string, version: string) {
   vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag, version });
   checkTelemetryUpdateMock.mockResolvedValue({ version });
@@ -117,6 +116,7 @@ async function hourlyCheck(cfg: OpenClawConfig = stable) {
 function owedUpdate(
   options: {
     trigger?: "campaign" | "cli";
+    before?: string;
     installed?: string;
     step?: "plugin-convergence" | "post-plugin-doctor";
   } = {},
@@ -125,7 +125,7 @@ function owedUpdate(
   const { runId } = ledger.createUpdateRun({
     trigger: options.trigger ?? "campaign",
     target: { channel: "stable", kind: "package", version: installed },
-    before: { version: "1.0.0" },
+    before: { version: options.before ?? "1.0.0" },
   });
   ledger.recordUpdateRunOwedStep(
     runId,
@@ -200,6 +200,30 @@ describe("automatic retry of owed plugin steps", () => {
     },
   );
 
+  it("retries once more after a manual same-version update owes the row again", async () => {
+    const owner = owedUpdate();
+    await hourlyCheck();
+    const [retry] = ledger.listUpdateRuns();
+    finishHandoff(retry!.runId, owner, "failed");
+    await hourlyCheck();
+    expect(runAuto).toHaveBeenCalledOnce();
+
+    // A person runs `openclaw update` on the current core; convergence fails again.
+    owedUpdate({ trigger: "cli", before: "2.0.0" });
+    await hourlyCheck();
+    expect(runAuto).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries on the beta channel", async () => {
+    owedUpdate();
+    registry("beta", "2.0.0");
+    await hourlyCheck({ update: { channel: "beta", auto: { enabled: true } } });
+    expect(runAuto).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ channel: "beta", packageTargetVersion: "2.0.0" }),
+      expect.anything(),
+    );
+  });
+
   it("leaves automatic updates to a new release after a failed retry", async () => {
     const owner = owedUpdate();
     await hourlyCheck();
@@ -246,6 +270,18 @@ describe("automatic retry of owed plugin steps", () => {
     expect(ledger.listUpdateRuns().map(({ runId }) => runId)).toEqual([owner]);
   });
 
+  it("ends the campaign without an update run when an update starts during the countdown", async () => {
+    const owner = owedUpdate();
+    await check();
+    expect(getUpdateSchedule()?.campaign).toMatchObject({ state: "countdown" });
+    const manual = ledger.createUpdateRun({ trigger: "cli", target: { kind: "package" } });
+    await clock.advanceBy(60_000);
+
+    expect(runAuto).not.toHaveBeenCalled();
+    expect(getUpdateSchedule()?.campaign).toBeUndefined();
+    expect(ledger.listUpdateRuns().map(({ runId }) => runId)).toEqual([manual.runId, owner]);
+  });
+
   it("waits an hour after the automatic update that installed this version", async () => {
     owedUpdate();
     // The Gateway that handed off that update recorded its attempt just before.
@@ -270,7 +306,12 @@ describe("automatic retry of owed plugin steps", () => {
     },
     { name: "OPENCLAW_NO_AUTO_UPDATE", env: true },
     { name: "no service supervisor", supervisor: null },
+    { name: "an external supervisor", external: true },
     { name: "dev channel", cfg: { update: { channel: "dev", auto: { enabled: true } } } },
+    {
+      name: "extended-stable channel",
+      cfg: { update: { channel: "extended-stable", auto: { enabled: true } } },
+    },
     { name: "a row owed by another version", installed: "1.9.0" },
     { name: "a Doctor-only row", step: "post-plugin-doctor" },
     { name: "the registry naming an older version", latest: "1.9.0" },
@@ -278,6 +319,7 @@ describe("automatic retry of owed plugin steps", () => {
     name: string;
     cfg?: OpenClawConfig;
     env?: boolean;
+    external?: boolean;
     supervisor?: null;
     installed?: string;
     step?: "post-plugin-doctor";
@@ -287,11 +329,14 @@ describe("automatic retry of owed plugin steps", () => {
     if (cell.env) {
       process.env.OPENCLAW_NO_AUTO_UPDATE = "1";
     }
+    if (cell.external) {
+      process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    }
     if (cell.supervisor === null) {
       detectRespawnSupervisorMock.mockReturnValue(null);
     }
-    if (cell.cfg?.update?.channel === "dev") {
-      registry("dev", "2.0.0");
+    if (cell.cfg?.update?.channel === "dev" || cell.cfg?.update?.channel === "extended-stable") {
+      registry(cell.cfg.update.channel, "2.0.0");
     }
     if (cell.latest) {
       registry("latest", cell.latest);

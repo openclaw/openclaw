@@ -1,9 +1,11 @@
 // A killed `openclaw update` that stopped a real managed Gateway: a plain next update
 // finishes it and the Gateway serves the version that update installed. With
 // --no-restart the next update refuses and names repair, which restores the Gateway.
-// With automatic updates on, the Gateway itself retries owed plugin convergence once.
+// The owed-plugin-retry cut instead proves that, with automatic updates on, the Gateway
+// itself retries owed plugin convergence once.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -63,11 +65,16 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   const hasStep = (run, name, status = "completed") =>
     run.steps.some((step) => step.step === name && step.status === status);
 
+  const cut = process.env.OPENCLAW_UPGRADE_SURVIVOR_INSTALLED_RECOVERY_CUT;
+  assert(["live-gateway", "owed-plugin-retry"].includes(cut), "unknown live Gateway cut");
   const evidence = {
     status: "running",
     runDirectory: path.basename(artifacts),
-    selectedCuts: ["live-gateway"],
-    scope: "installed-killed-update-live-gateway",
+    selectedCuts: [cut],
+    scope:
+      cut === "owed-plugin-retry"
+        ? "installed-owed-plugin-retry-live-gateway"
+        : "installed-killed-update-live-gateway",
     commands: [],
   };
   write(summary, evidence);
@@ -190,8 +197,264 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
     );
   };
 
+  /** With automatic updates on, the Gateway itself retries owed plugin convergence once. */
+  const retryOwedPluginConvergence = async (previousPid) => {
+    // With automatic updates on, a kept update that still owes plugin convergence is
+    // retried once by the Gateway itself, through a campaign for the installed version.
+    const owedTarget = path.join(artifacts, "owed-update.tgz");
+    packFirstHopUpdateFixture(tarball, owedTarget, 5);
+    const owedVersion = packedVersion(owedTarget);
+    const beforeOwed = new Set(runs().map((row) => row.run_id));
+    await run("owed-update", ["update", "--tag", `file:${owedTarget}`, "--yes", "--json"], 0);
+    const [owner, ...extraOwners] = runs().filter((row) => !beforeOwed.has(row.run_id));
+    assert.equal(extraOwners.length, 0, "one update run installs the owed version");
+    assert.equal(owner?.status, "succeeded");
+    const owedPid = await assertServing("owed-update", owedVersion, previousPid);
+    const owedStep = "finalize:owed:plugin-convergence";
+    const unitFile = path.join(env.HOME, ".config/systemd/user/openclaw-gateway.service");
+    const unit = fs.readFileSync(unitFile, "utf8");
+    const registryDirectory = fs.mkdtempSync(path.join(artifacts, "owed-registry-"));
+    const registryPort = path.join(registryDirectory, "port");
+    const registryLog = fs.openSync(path.join(artifacts, "owed-registry.log"), "a");
+    // The package registry names the installed version as current for stable.
+    let registryError;
+    const registry = spawn(
+      node,
+      [
+        fileURLToPath(new URL("../plugins/npm-registry-server.mjs", import.meta.url)),
+        registryPort,
+        "openclaw",
+        owedVersion,
+        owedTarget,
+      ],
+      {
+        env: {
+          ...env,
+          OPENCLAW_NPM_REGISTRY_UPSTREAM: "",
+          OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "",
+          OPENCLAW_NPM_REGISTRY_DIST_TAGS: `beta=${owedVersion}`,
+          OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
+          OPENCLAW_NPM_REGISTRY_PORT: "0",
+        },
+        stdio: ["ignore", registryLog, registryLog],
+      },
+    );
+    registry.once("error", (error) => {
+      registryError = error;
+    });
+    const registryExit = once(registry, "close");
+    // The cell's shell opts out of automatic updates; this service runs without that opt-out.
+    const serviceEnv = { ...env };
+    delete serviceEnv.OPENCLAW_NO_AUTO_UPDATE;
+    const systemctl = (...args) => {
+      const manager = spawnSync("systemctl", ["--user", ...args], {
+        env: serviceEnv,
+        stdio: "ignore",
+      });
+      assert.equal(manager.status, 0, `systemctl ${args.join(" ")}`);
+    };
+    const waitFor = async (name, predicate, timeoutMs) => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const value = await predicate();
+        if (value) {
+          return value;
+        }
+        assert(Date.now() < deadline, `${name}: timed out`);
+        await delay(1_000);
+      }
+    };
+    const checkState = () =>
+      readDatabase(stateDatabase, (db) =>
+        JSON.parse(
+          db
+            .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
+            .get("update.checkState")?.value_json ?? "{}",
+        ),
+      );
+    const writeState = (mutate) => {
+      const db = new DatabaseSync(stateDatabase);
+      try {
+        mutate(db);
+      } finally {
+        db.close();
+      }
+    };
+    /** Fixture time: the hourly check and automatic-attempt throttles are two hours old. */
+    const shiftChecksBack = () => {
+      const earlier = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+      const shifted = { ...checkState(), lastCheckedAt: earlier, autoLastAttemptAt: earlier };
+      writeState((db) =>
+        db
+          .prepare(
+            "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?) ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json, updated_at_ms = excluded.updated_at_ms",
+          )
+          .run("update.checkState", JSON.stringify(shifted), Date.now()),
+      );
+      return earlier;
+    };
+    try {
+      const registryAddress = await waitFor(
+        "owed-registry",
+        () => {
+          if (registryError || registry.exitCode !== null) {
+            throw registryError ?? new Error(`owed registry exited ${registry.exitCode}`);
+          }
+          return fs.existsSync(registryPort) && fs.readFileSync(registryPort, "utf8");
+        },
+        30_000,
+      );
+      // Fixture: the update kept its result but owes plugin convergence, recorded in the
+      // same row shape the updater writes when convergence cannot complete.
+      systemctl("stop", "openclaw-gateway.service");
+      writeState((db) => {
+        // Reread after the stop so steps the Gateway recorded on this run are kept.
+        const steps = [
+          ...runs().find((row) => row.run_id === owner.run_id).steps,
+          {
+            step: owedStep,
+            status: "skipped",
+            endedAtMs: Date.now(),
+            detail: "Fixture: the plugin registry was unreachable",
+          },
+        ];
+        db.prepare("UPDATE update_runs SET steps_json = ? WHERE run_id = ?").run(
+          JSON.stringify(steps),
+          owner.run_id,
+        );
+      });
+      // The local registry seam: loopback registry plus the matching package override.
+      fs.writeFileSync(
+        unitFile,
+        unit.replace(
+          "[Service]\n",
+          `[Service]\nEnvironment=OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw\nEnvironment=NPM_CONFIG_REGISTRY=http://127.0.0.1:${registryAddress}\n`,
+        ),
+      );
+      systemctl("daemon-reload");
+      await run(
+        "owed-enable-auto",
+        [
+          "config",
+          "set",
+          "update",
+          JSON.stringify({ channel: "stable", auto: { enabled: true } }),
+          "--strict-json",
+        ],
+        0,
+      );
+      await run("owed-status-before", ["update", "status", "--json"], 0);
+      // The update that installed this version ran its own check within the hour.
+      const firstEarlier = shiftChecksBack();
+      systemctl("start", "openclaw-gateway.service");
+      await waitFor(
+        "owed-first-check",
+        () => checkState().lastCheckedAt !== firstEarlier,
+        5 * 60_000,
+      );
+
+      // No person runs a command: the Gateway announces, waits for idle, and hands off.
+      const retry = await waitFor(
+        "owed-campaign",
+        () =>
+          runs().find(
+            (row) =>
+              !beforeOwed.has(row.run_id) &&
+              row.run_id !== owner.run_id &&
+              row.status !== "running",
+          ),
+        10 * 60_000,
+      );
+      const retryRecord = readDatabase(stateDatabase, (db) =>
+        db
+          .prepare("SELECT target_json, before_json FROM update_runs WHERE run_id = ?")
+          .get(retry.run_id),
+      );
+      const retryPid = await waitFor(
+        "owed-serving",
+        async () => {
+          const { pid } = read(runtimeFile);
+          return serviceActive() === 0 && pid > 1 && alive(pid) && (await readyz()) === 200 && pid;
+        },
+        5 * 60_000,
+      );
+      const statusAfter = await run("owed-status-after", ["update", "status", "--json"], 0);
+      const ownerAfter = runs().find((row) => row.run_id === owner.run_id);
+      evidence.owedPluginRetry = {
+        ownerRunId: owner.run_id,
+        version: owedVersion,
+        retry: {
+          runId: retry.run_id,
+          trigger: retry.trigger,
+          status: retry.status,
+          reason: retry.reason,
+          target: JSON.parse(retryRecord.target_json),
+          before: JSON.parse(retryRecord.before_json),
+          steps: retry.steps.map((entry) => `${entry.step}:${entry.status}`),
+        },
+        ownerOwedStep: ownerAfter.steps.find(({ step }) => step === owedStep)?.status,
+        owedSteps: JSON.parse(statusAfter.stdout).owedSteps ?? [],
+        gatewayPids: [owedPid, retryPid],
+      };
+      write(summary, evidence);
+      assert.equal(retry.trigger, "campaign");
+      assert.notEqual(retry.status, "failed", "the same-version update must keep its result");
+      assert.deepEqual(
+        [
+          evidence.owedPluginRetry.retry.target.version,
+          evidence.owedPluginRetry.retry.before.version,
+        ],
+        [owedVersion, owedVersion],
+      );
+      assert.equal(
+        evidence.owedPluginRetry.ownerOwedStep,
+        "completed",
+        "the retry settles the row",
+      );
+      assert.deepEqual(evidence.owedPluginRetry.owedSteps, [], "nothing stays owed");
+      assert.equal(installedVersion(), owedVersion, "the core is unchanged");
+      await assertServing("owed-retry", owedVersion);
+
+      // Two hours later the next check finds nothing to retry and starts no campaign.
+      systemctl("stop", "openclaw-gateway.service");
+      const earlier = shiftChecksBack();
+      const settledRuns = runs().map((row) => row.run_id);
+      systemctl("start", "openclaw-gateway.service");
+      await waitFor("owed-next-check", () => checkState().lastCheckedAt !== earlier, 5 * 60_000);
+      // Longer than the one-minute countdown a campaign would need before its update run.
+      await delay(90_000);
+      evidence.owedPluginRetry.nextCheck = {
+        lastCheckedAt: checkState().lastCheckedAt,
+        runs: runs().map((row) => row.run_id),
+      };
+      write(summary, evidence);
+      assert.deepEqual(evidence.owedPluginRetry.nextCheck.runs, settledRuns, "no second campaign");
+      await assertServing("owed-next-check", owedVersion);
+    } finally {
+      // Best effort: a failed assertion must still leave the original unit and no registry.
+      fs.writeFileSync(unitFile, unit);
+      spawnSync("systemctl", ["--user", "daemon-reload"], { env, stdio: "ignore" });
+      if (registry.exitCode === null && registry.signalCode === null) {
+        registry.kill("SIGTERM");
+      }
+      await registryExit;
+      fs.closeSync(registryLog);
+      fs.rmSync(owedTarget, { force: true });
+    }
+  };
+
   const baselineVersion = installedVersion();
   const firstPid = await assertServing("baseline", baselineVersion);
+  if (cut === "owed-plugin-retry") {
+    await retryOwedPluginConvergence(firstPid);
+    evidence.status = "passed";
+    delete evidence.current;
+    write(summary, evidence);
+    console.log(
+      "[installed-recovery-gateway] PASS: the Gateway retried owed plugin convergence once",
+    );
+    return;
+  }
 
   // A plain next update finishes the killed one itself: one result document,
   // the Gateway serving the version this update installed.
@@ -286,207 +549,6 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
   evidence.noRestart.gatewayPids = [nextPid, repairedPid];
   write(summary, evidence);
 
-  // With automatic updates on, a kept update that still owes plugin convergence is
-  // retried once by the Gateway itself, through a campaign for the installed version.
-  const owedTarget = path.join(artifacts, "owed-update.tgz");
-  packFirstHopUpdateFixture(tarball, owedTarget, 5);
-  const owedVersion = packedVersion(owedTarget);
-  const beforeOwed = new Set(runs().map((row) => row.run_id));
-  await run("owed-update", ["update", "--tag", `file:${owedTarget}`, "--yes", "--json"], 0);
-  const [owner, ...extraOwners] = runs().filter((row) => !beforeOwed.has(row.run_id));
-  assert.equal(extraOwners.length, 0, "one update run installs the owed version");
-  assert.equal(owner?.status, "succeeded");
-  const owedPid = await assertServing("owed-update", owedVersion, repairedPid);
-  const owedStep = "finalize:owed:plugin-convergence";
-  const unitFile = path.join(env.HOME, ".config/systemd/user/openclaw-gateway.service");
-  const unit = fs.readFileSync(unitFile, "utf8");
-  const registryDirectory = fs.mkdtempSync(path.join(artifacts, "owed-registry-"));
-  const registryPort = path.join(registryDirectory, "port");
-  const registryLog = fs.openSync(path.join(artifacts, "owed-registry.log"), "a");
-  // The package registry names the installed version as current for stable.
-  const registry = spawn(
-    node,
-    [
-      fileURLToPath(new URL("../plugins/npm-registry-server.mjs", import.meta.url)),
-      registryPort,
-      "openclaw",
-      owedVersion,
-      owedTarget,
-    ],
-    {
-      env: {
-        ...env,
-        OPENCLAW_NPM_REGISTRY_UPSTREAM: "",
-        OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL: "",
-        OPENCLAW_NPM_REGISTRY_DIST_TAGS: `beta=${owedVersion}`,
-        OPENCLAW_NPM_REGISTRY_BIND_HOST: "127.0.0.1",
-        OPENCLAW_NPM_REGISTRY_PORT: "0",
-      },
-      stdio: ["ignore", registryLog, registryLog],
-    },
-  );
-  const systemctl = (...args) => {
-    const manager = spawnSync("systemctl", ["--user", ...args], { env, stdio: "ignore" });
-    assert.equal(manager.status, 0, `systemctl ${args.join(" ")}`);
-  };
-  const waitFor = async (name, predicate, timeoutMs) => {
-    const deadline = Date.now() + timeoutMs;
-    for (;;) {
-      const value = await predicate();
-      if (value) {
-        return value;
-      }
-      assert(Date.now() < deadline, `${name}: timed out`);
-      await delay(1_000);
-    }
-  };
-  const checkState = () =>
-    readDatabase(stateDatabase, (db) =>
-      JSON.parse(
-        db
-          .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
-          .get("update.checkState")?.value_json ?? "{}",
-      ),
-    );
-  const writeState = (mutate) => {
-    const db = new DatabaseSync(stateDatabase);
-    try {
-      mutate(db);
-    } finally {
-      db.close();
-    }
-  };
-  try {
-    const registryAddress = await waitFor(
-      "owed-registry",
-      () => fs.existsSync(registryPort) && fs.readFileSync(registryPort, "utf8"),
-      30_000,
-    );
-    // Fixture: the update kept its result but owes plugin convergence, recorded in the
-    // same row shape the updater writes when convergence cannot complete.
-    systemctl("stop", "openclaw-gateway.service");
-    writeState((db) => {
-      const steps = [
-        ...owner.steps,
-        {
-          step: owedStep,
-          status: "skipped",
-          endedAtMs: Date.now(),
-          detail: "Fixture: the plugin registry was unreachable",
-        },
-      ];
-      db.prepare("UPDATE update_runs SET steps_json = ? WHERE run_id = ?").run(
-        JSON.stringify(steps),
-        owner.run_id,
-      );
-    });
-    // The local registry seam: loopback registry plus the matching package override.
-    fs.writeFileSync(
-      unitFile,
-      unit.replace(
-        "[Service]\n",
-        `[Service]\nEnvironment=OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw\nEnvironment=NPM_CONFIG_REGISTRY=http://127.0.0.1:${registryAddress}\n`,
-      ),
-    );
-    systemctl("daemon-reload");
-    await run(
-      "owed-enable-auto",
-      [
-        "config",
-        "set",
-        "update",
-        JSON.stringify({ channel: "stable", auto: { enabled: true } }),
-        "--strict-json",
-      ],
-      0,
-    );
-    await run("owed-status-before", ["update", "status", "--json"], 0);
-    systemctl("start", "openclaw-gateway.service");
-
-    // No person runs a command: the Gateway announces, waits for idle, and hands off.
-    const retry = await waitFor(
-      "owed-campaign",
-      () =>
-        runs().find(
-          (row) =>
-            !beforeOwed.has(row.run_id) && row.run_id !== owner.run_id && row.status !== "running",
-        ),
-      10 * 60_000,
-    );
-    const retryRecord = readDatabase(stateDatabase, (db) =>
-      db
-        .prepare("SELECT target_json, before_json FROM update_runs WHERE run_id = ?")
-        .get(retry.run_id),
-    );
-    const retryPid = await waitFor(
-      "owed-serving",
-      async () => {
-        const { pid } = read(runtimeFile);
-        return serviceActive() === 0 && pid > 1 && alive(pid) && (await readyz()) === 200 && pid;
-      },
-      5 * 60_000,
-    );
-    const statusAfter = await run("owed-status-after", ["update", "status", "--json"], 0);
-    const ownerAfter = runs().find((row) => row.run_id === owner.run_id);
-    evidence.owedPluginRetry = {
-      ownerRunId: owner.run_id,
-      version: owedVersion,
-      retry: {
-        runId: retry.run_id,
-        trigger: retry.trigger,
-        status: retry.status,
-        reason: retry.reason,
-        target: JSON.parse(retryRecord.target_json),
-        before: JSON.parse(retryRecord.before_json),
-        steps: retry.steps.map((entry) => `${entry.step}:${entry.status}`),
-      },
-      ownerOwedStep: ownerAfter.steps.find(({ step }) => step === owedStep)?.status,
-      owedSteps: JSON.parse(statusAfter.stdout).owedSteps ?? [],
-      gatewayPids: [owedPid, retryPid],
-    };
-    write(summary, evidence);
-    assert.equal(retry.trigger, "campaign");
-    assert.notEqual(retry.status, "failed", "the same-version update must keep its result");
-    assert.deepEqual(
-      [
-        evidence.owedPluginRetry.retry.target.version,
-        evidence.owedPluginRetry.retry.before.version,
-      ],
-      [owedVersion, owedVersion],
-    );
-    assert.equal(evidence.owedPluginRetry.ownerOwedStep, "completed", "the retry settles the row");
-    assert.deepEqual(evidence.owedPluginRetry.owedSteps, [], "nothing stays owed");
-    assert.equal(installedVersion(), owedVersion, "the core is unchanged");
-    await assertServing("owed-retry", owedVersion);
-
-    // Two hours later the next check finds nothing to retry and starts no campaign.
-    systemctl("stop", "openclaw-gateway.service");
-    const shifted = checkState();
-    const earlier = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
-    Object.assign(shifted, { lastCheckedAt: earlier, autoLastAttemptAt: earlier });
-    writeState((db) =>
-      db
-        .prepare("UPDATE config_machine_state SET value_json = ? WHERE state_key = ?")
-        .run(JSON.stringify(shifted), "update.checkState"),
-    );
-    const settledRuns = runs().map((row) => row.run_id);
-    systemctl("start", "openclaw-gateway.service");
-    await waitFor("owed-next-check", () => checkState().lastCheckedAt !== earlier, 5 * 60_000);
-    // Longer than the one-minute countdown a campaign would need before its update run.
-    await delay(90_000);
-    evidence.owedPluginRetry.nextCheck = {
-      lastCheckedAt: checkState().lastCheckedAt,
-      runs: runs().map((row) => row.run_id),
-    };
-    write(summary, evidence);
-    assert.deepEqual(evidence.owedPluginRetry.nextCheck.runs, settledRuns, "no second campaign");
-    await assertServing("owed-next-check", owedVersion);
-  } finally {
-    registry.kill("SIGTERM");
-    fs.closeSync(registryLog);
-    fs.writeFileSync(unitFile, unit);
-  }
-  fs.unlinkSync(owedTarget);
   evidence.status = "passed";
   delete evidence.current;
   write(summary, evidence);
