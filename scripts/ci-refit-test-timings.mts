@@ -183,9 +183,11 @@ async function main() {
             );
           const kind =
             source === "packed-release"
-              ? job.name.startsWith("checks-node-release-packed-")
-                ? "release-packed"
-                : undefined
+              ? compactJob
+                ? "compact"
+                : job.name.startsWith("checks-node-release-packed-")
+                  ? "release-packed"
+                  : undefined
               : source === "release"
                 ? /(?:^| \/ )Repo E2E \(Gateway \d+\/\d+\)$/u.test(job.name)
                   ? "repoE2e"

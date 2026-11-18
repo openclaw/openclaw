@@ -502,7 +502,7 @@ const COMPACT_GITHUB_MAX_PREDICTED_SECONDS = 150;
 // its 196-file sibling took 2867s. Bound admission independently of stale costs.
 const COMPACT_HOSTED_STORAGE_STATE_MAX_FILES = 64;
 // Hourly hosted run 35983526919 spent ~25 minutes in each of these owners.
-// Bound the main-tier work independently of stale whole-owner timing estimates.
+// Bound main and full-inventory work independently of stale whole-owner timing estimates.
 const COMPACT_HOSTED_MAIN_MAX_FILES = new Map([
   ["agentic-control-plane-agent-chat", 30],
   ["agentic-gateway-methods", 96],
@@ -3862,13 +3862,16 @@ function splitOversizedCompactGroup(
   onHostedToolingTailDonation?: (donation: HostedToolingTailDonation) => void,
   selectedToolingFiles?: ReadonlySet<string>,
   hostedMain = false,
+  fullInventory = false,
 ): Array<{ group: NodeTestShardGroup; seconds: number }> {
   // Hybrid groups must fit both the first-attempt runner and hosted retries;
   // a faster retry estimate must not leave a slow first attempt unsplit.
   const isCliProcess = group.shard_name === "agentic-cli-process";
   const isTooling = isParallelToolingGroup(group);
   const hostedFileLimit =
-    (hostedMain ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name) : undefined) ??
+    (hostedMain || (runnerBackend === "github" && fullInventory)
+      ? COMPACT_HOSTED_MAIN_MAX_FILES.get(group.shard_name)
+      : undefined) ??
     (runnerBackend === "github" && group.shard_name === "core-runtime-infra-storage-state"
       ? COMPACT_HOSTED_STORAGE_STATE_MAX_FILES
       : undefined);
@@ -5151,6 +5154,7 @@ function createCompactNodeTestShardBundles(
             selectedToolingFiles,
             options.runnerBackend === "github" &&
               (compactMode === "push" || options.mainValidation === true),
+            options.includeReleaseOnlyRuntimeTests === true,
           )
         : [{ group, seconds: estimateCompactGroupSeconds(group, options.runnerBackend) }];
     const reducedToolingTier =
