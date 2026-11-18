@@ -32,7 +32,9 @@ Codex harness runs. For example, GPT-6.2 requires Codex `0.166.0`. A Codex-harne
 turn on such a model fails and tells you to update your global Codex with
 `npm i -g @openai/codex` and restart the Gateway; OpenClaw then
 [selects the newer installed Codex](/plugins/codex-harness-reference/app-server-transport#newer-installed-codex).
-The OpenClaw harness runs these models without a Codex update.
+In Control UI, **Start a new session** on that failure opens a session on the
+OpenClaw harness that asks the agent to run the update. The OpenClaw harness
+runs these models without a Codex update.
 
 Automatic discovery and hosted-search model selection use visible picker entries.
 Bounded turns with an explicit model selection, including image understanding,

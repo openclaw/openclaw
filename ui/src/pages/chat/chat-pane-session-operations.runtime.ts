@@ -1,5 +1,7 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { buildQualifiedChatModelValue } from "../../lib/chat/model-ref.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
@@ -17,6 +19,39 @@ type SessionOperation = {
   isCurrent: () => boolean;
   onSessionChange: (nextSessionKey: string) => boolean | void;
 };
+
+export type HarnessUpdateSessionTarget = {
+  agentId: string;
+  session: GatewaySessionRow | undefined;
+  create: ApplicationContext["sessions"]["createResult"];
+  open: (key: string) => boolean | void;
+  signal: AbortSignal;
+  isCurrent: () => boolean;
+};
+
+export async function createHarnessUpdateSession(
+  target: HarnessUpdateSessionTarget,
+  summary: string,
+) {
+  if (target.signal.aborted || !target.isCurrent()) {
+    return false;
+  }
+  const model = target.session?.model
+    ? buildQualifiedChatModelValue(target.session.model, target.session.modelProvider)
+    : undefined;
+  const result = await target.create(
+    {
+      agentId: target.agentId,
+      ...(model ? { model, agentRuntime: "openclaw" as const } : {}),
+      message: t("chat.recovery.harnessUpdatePrompt", { summary }),
+    },
+    { signal: target.signal },
+  );
+  if (!result || target.signal.aborted || !target.isCurrent()) {
+    return false;
+  }
+  return target.open(result.key) !== false;
+}
 
 export async function createCapturedChatSession({
   state,

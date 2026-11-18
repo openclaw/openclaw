@@ -23,7 +23,12 @@ import { isExpiredIncognitoSession, setChatError } from "./chat-history-state.ts
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { resolveChatPaneParentSession } from "./chat-pane-header-identity.ts";
 import { ChatPaneRetainedPresentation } from "./chat-pane-retained-presentation.ts";
-import { canCreateChatSession, resolveChatAgentId } from "./chat-state-route.ts";
+import { createChatPaneRunRecoveryActions } from "./chat-pane-state.ts";
+import {
+  canCreateChatSession,
+  resolveChatAgentId,
+  selectedChatSessionRow,
+} from "./chat-state-route.ts";
 
 registerSessionNavigationEnglish();
 
@@ -31,7 +36,7 @@ registerSessionNavigationEnglish();
 registerSessionOrganizationSharedEnglish();
 
 export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentation {
-  readonly sessionCreation = { creatingIncognito: false };
+  readonly sessionCreation = { creatingIncognito: false, creatingHarnessUpdate: false };
 
   private activeCatalogContinuation: symbol | null = null;
 
@@ -223,9 +228,26 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       : undefined;
   }
 
-  protected readonly createSession = async (): Promise<boolean> => {
+  /** Failure recovery for the visible run; "Start a new session" uses this owner's creation path. */
+  protected runRecoveryActions(
+    state: Parameters<typeof createChatPaneRunRecoveryActions>[0],
+    options: Omit<Parameters<typeof createChatPaneRunRecoveryActions>[1], "onStartNewSession">,
+  ) {
+    return createChatPaneRunRecoveryActions(state, {
+      ...options,
+      onStartNewSession: (summary) => this.createSession(summary),
+    });
+  }
+
+  protected readonly createSession = async (harnessUpdateSummary?: string): Promise<boolean> => {
     const state = this.state;
-    if (!state || !state.client || !state.connected || this.sessionCreation.creatingIncognito) {
+    if (
+      !state ||
+      !state.client ||
+      !state.connected ||
+      this.sessionCreation.creatingIncognito ||
+      this.sessionCreation.creatingHarnessUpdate
+    ) {
       return false;
     }
     const context = this.context;
@@ -233,7 +255,8 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
     const client = state.client;
     const previousSessionKey = state.sessionKey;
     const expiredIncognito = isExpiredIncognitoSession(state);
-    const preservesBoard = !expiredIncognito && this.resolveBoardView().hasBoard;
+    const preservesBoard =
+      harnessUpdateSummary === undefined && !expiredIncognito && this.resolveBoardView().hasBoard;
     const createParams = {
       ...(expiredIncognito
         ? { incognito: true as const }
@@ -273,10 +296,32 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     }
     this.sessionCreation.creatingIncognito = expiredIncognito;
+    this.sessionCreation.creatingHarnessUpdate = harnessUpdateSummary !== undefined;
     const signal = this.headerSessionMutationAbortController.signal;
     try {
-      const { createCapturedChatSession } =
+      const { createCapturedChatSession, createHarnessUpdateSession } =
         await import("./chat-pane-session-operations.runtime.ts");
+      if (harnessUpdateSummary !== undefined) {
+        const access = readCreateAccess();
+        if (!access.allowed) {
+          if (isCurrent()) {
+            setChatError(state, access.reason);
+          }
+          return false;
+        }
+        return await createHarnessUpdateSession(
+          {
+            agentId: createParams.agentId,
+            session: selectedChatSessionRow(state),
+            create: sessions.createResult,
+            open: (key) => this.onPaneSessionChange?.(this.paneId, key),
+            signal,
+            isCurrent: () =>
+              isCurrent() && state.sessionKey === previousSessionKey && canCreateChatSession(state),
+          },
+          harnessUpdateSummary,
+        );
+      }
       return await createCapturedChatSession({
         state,
         context,
@@ -299,6 +344,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return false;
     } finally {
       this.sessionCreation.creatingIncognito = false;
+      this.sessionCreation.creatingHarnessUpdate = false;
     }
   };
 }

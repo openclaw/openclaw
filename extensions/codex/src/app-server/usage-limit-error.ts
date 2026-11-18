@@ -1,5 +1,6 @@
 import {
   AgentHarnessModelRequestPolicyError,
+  AgentHarnessRuntimeUpdateRequiredError,
   embeddedAgentLog,
   formatErrorMessage,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
@@ -97,7 +98,7 @@ export function resolveCodexPromptError(
       nativeMessage: source.message,
     });
     return Object.assign(
-      new Error(
+      new AgentHarnessRuntimeUpdateRequiredError(
         `${runtime.model} needs a newer Codex${version}. Update your global Codex with "npm i -g @openai/codex", then restart the Gateway. Or choose another model.`,
       ),
       { nativeMessage: source.message, ...(status === undefined ? {} : { status }) },

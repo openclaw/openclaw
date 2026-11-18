@@ -232,6 +232,8 @@ describe("CodexAppServerEventProjector terminal errors", () => {
           expect(terminal.promptError).toMatchObject({
             message: testCase.expected,
             nativeMessage: testCase.message,
+            // Clients key the "Start a new session" action on this host code.
+            code: "harness_update_required",
           });
         } else {
           expect(terminal.promptError).toBe(testCase.message);

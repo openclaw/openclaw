@@ -6,6 +6,8 @@ import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createHarnessUpdateSession } from "../chat-pane-session-operations.runtime.ts";
+import { createChatPaneRunRecoveryActions } from "../chat-pane-state.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.tsx";
 import { ChatNotice } from "./chat-notice-view.tsx";
@@ -212,4 +214,79 @@ it("names a provider's billing problem and sends its fix to Models, not another 
   expect(part("title")?.textContent).toBe("Couldn’t finish this reply");
   expect(container.querySelectorAll(".chat-run-failure__retry")).toHaveLength(1);
   expect(query(".chat-run-failure__retry")?.classList.contains("primary")).toBe(true);
+});
+
+it("starts an OpenClaw update session only for a harness-update failure", async () => {
+  vi.useRealTimers();
+  const summary = 'gpt-6.2-sol needs a newer Codex. Update with "npm i -g @openai/codex".';
+  const create = vi.fn<ApplicationContext["sessions"]["createResult"]>().mockResolvedValue({
+    key: "agent:cx:update-session",
+    initialRun: { status: "started", runId: "update-run" },
+  });
+  const open = vi.fn();
+  const actions = createChatPaneRunRecoveryActions(
+    {
+      sessionKey: "agent:cx:failed",
+      connected: true,
+      chatRunId: null,
+      chatSending: false,
+      chatMessages: [],
+      chatMessage: "",
+      chatAttachments: [],
+      handleSendChat: vi.fn(),
+    },
+    {
+      canSend: true,
+      isCurrent: () => true,
+      latestFailedRunId: () => "run-a",
+      onStartNewSession: (failureSummary) =>
+        createHarnessUpdateSession(
+          {
+            agentId: "cx",
+            session: {
+              key: "agent:cx:failed",
+              kind: "direct",
+              model: "gpt-6.2-sol",
+              modelProvider: "openai",
+            },
+            create,
+            open,
+            signal: new AbortController().signal,
+            isCurrent: () => true,
+          },
+          failureSummary,
+        ),
+    },
+  );
+  const item = failure(summary);
+  const recovery = { failureActionsRunId: "run-a", ...actions };
+  const start = () =>
+    Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent === "Start a new session",
+    );
+  // Matching prose alone must not offer an update.
+  drawNotice(item, recovery);
+  expect(start()).toBeUndefined();
+  const updateItem = {
+    ...item,
+    runError: {
+      ...item.runError,
+      cause: { provider: "openai", code: "harness_update_required" as const },
+    },
+  };
+  drawNotice(updateItem, { failureActionsRunId: "run-a" });
+  expect(start()).toBeUndefined();
+  drawNotice(updateItem, recovery);
+  expect(start()?.classList.contains("primary")).toBe(true);
+  start()?.click();
+  await waitForSolid(() => expect(open).toHaveBeenCalledExactlyOnceWith("agent:cx:update-session"));
+  expect(create).toHaveBeenCalledExactlyOnceWith(
+    {
+      agentId: "cx",
+      model: "openai/gpt-6.2-sol",
+      agentRuntime: "openclaw",
+      message: expect.stringContaining(summary),
+    },
+    { signal: expect.any(AbortSignal) },
+  );
 });
