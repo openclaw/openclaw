@@ -9,7 +9,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 declare global {
   interface Window {
-    composerWidthFrames: { width: number; maxWidth: string }[];
+    composerWidthFrames: number[];
   }
 }
 
@@ -330,8 +330,10 @@ suite.define(() => {
     async (route) => {
       await suite.withPage({ viewport: { width: 1600, height: 900 } }, async ({ page }) => {
         const sessionKey = "agent:main:composer-width-reload";
-        const savedWidth = "1000px";
-        await seedChatSettings(page, suite.server.baseUrl, { chatMessageMaxWidth: savedWidth });
+        const savedWidth = 1000;
+        await seedChatSettings(page, suite.server.baseUrl, {
+          chatMessageMaxWidth: `${savedWidth}px`,
+        });
         await installMockGateway(page, {
           sessionKey,
           historyMessages: [{ role: "assistant", content: "Reload keeps the composer still." }],
@@ -341,23 +343,21 @@ suite.define(() => {
             ? controlUiSessionUrl(suite.server.baseUrl, sessionKey)
             : suite.server.baseUrl + "new",
         );
-        await page.locator(".agent-chat__composer-shell").waitFor();
+        const composer = page.locator(".agent-chat__composer-shell");
+        const composerWidth = () =>
+          composer.evaluate((element) => Math.round(element.getBoundingClientRect().width));
+        await composer.waitFor();
         await waitForLayoutSettled(page, ".agent-chat__composer-shell");
-        const expectedWidth = await page
-          .locator(".agent-chat__composer-shell")
-          .evaluate((element) => Math.round(element.getBoundingClientRect().width));
+        const expectedWidth = await composerWidth();
         expect(expectedWidth).toBeGreaterThan(0);
-        expect(expectedWidth).toBeLessThanOrEqual(1000);
+        expect(expectedWidth).toBeLessThanOrEqual(savedWidth);
         await page.addInitScript(() => {
           window.composerWidthFrames = [];
           const tick = () => {
             const shell = document.querySelector(".agent-chat__composer-shell");
             const rect = shell?.getBoundingClientRect();
-            if (shell && rect && rect.width > 0 && rect.height > 0) {
-              window.composerWidthFrames.push({
-                width: Math.round(rect.width),
-                maxWidth: getComputedStyle(shell).maxWidth,
-              });
+            if (rect && rect.width > 0 && rect.height > 0) {
+              window.composerWidthFrames.push(Math.round(rect.width));
             }
             if (window.composerWidthFrames.length < 30) {
               requestAnimationFrame(tick);
@@ -368,9 +368,10 @@ suite.define(() => {
         await page.reload();
         await expect.poll(() => page.evaluate(() => window.composerWidthFrames.length)).toBe(30);
         const frames = await page.evaluate(() => window.composerWidthFrames);
-        const widths = frames.map(({ width }) => width);
-        expect(new Set(widths), widths.join(", ")).toEqual(new Set([expectedWidth]));
-        expect(new Set(frames.map(({ maxWidth }) => maxWidth))).toEqual(new Set([savedWidth]));
+        expect(new Set(frames), frames.join(", ")).toEqual(new Set([expectedWidth]));
+        // The wider viewport leaves room for the full preference even beside docked Details.
+        await page.setViewportSize({ width: 1900, height: 900 });
+        await expect.poll(composerWidth).toBe(savedWidth);
       });
     },
   );
