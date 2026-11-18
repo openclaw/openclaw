@@ -202,7 +202,18 @@ function installedRecoveryCurrent(value, sanitize) {
   }
   const names =
     value.cut === null
-      ? ["killed-update", "next-update", "next-update-status"]
+      ? [
+          "killed-update",
+          "next-update",
+          "next-update-status",
+          // The live-gateway cell's commands; its files live at the run root.
+          "baseline-probe",
+          "next-update-probe",
+          "killed-update-no-restart",
+          "refused-update",
+          "update-repair",
+          "update-repair-probe",
+        ]
       : [
           "displacement",
           "missing-status",

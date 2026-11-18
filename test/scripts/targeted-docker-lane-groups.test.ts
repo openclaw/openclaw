@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { installedRecoveryLaneNames } from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
+import {
+  installedRecoveryLaneNames,
+  serviceRecoveryCuts,
+} from "../../scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs";
 import { parseLaneSelection } from "../../scripts/lib/docker-e2e-plan.mts";
 import { planTargetedDockerLaneGroups } from "../../scripts/plan-targeted-docker-lane-groups.mjs";
 
@@ -23,11 +26,14 @@ const cells = (groups: Group[]) =>
     group.published_upgrade_survivor_scenarios,
   ]);
 
-it("runs packaged older-runtime recovery once without historical baseline fan-out", () => {
-  const lane = "package-installed-recovery-older-runtime";
-  const groups = planGroups(lane, "2026.9.3 2026.9.4", "base legacy-operator-state");
-  expect(groups).toEqual([{ docker_lanes: lane, label: lane }]);
-});
+it.each(serviceRecoveryCuts)(
+  "runs packaged %s recovery once without historical baseline fan-out",
+  (cut) => {
+    const lane = `package-installed-recovery-${cut}`;
+    const groups = planGroups(lane, "2026.9.3 2026.9.4", "base legacy-operator-state");
+    expect(groups).toEqual([{ docker_lanes: lane, label: lane }]);
+  },
+);
 
 it("retains the reported 9.4 sibling-import cell when current-version baselines are omitted", () => {
   const groups = planGroups(
