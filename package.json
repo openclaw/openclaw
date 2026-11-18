@@ -2430,7 +2430,6 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
-    "@homebridge/ciao",
     "acorn",
     "chrome-devtools-mcp",
     "playwright-core"
@@ -2446,7 +2445,6 @@
     "@earendil-works/pi-tui": "1.4.0",
     "@google/genai": "2.32.0",
     "@grammyjs/transformer-throttler": "1.2.1",
-    "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.18",
     "@modelcontextprotocol/client": "2.4.0",
     "@modelcontextprotocol/core": "2.4.0",

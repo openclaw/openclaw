@@ -251,9 +251,10 @@ Upstream follow-up: offer the native-source-map entry and per-responder logger t
 [homebridge/ciao](https://github.com/homebridge/ciao). Remove the patch and its
 registration when an upstream release supports both contracts and passes
 `extensions/bonjour/src/ciao-runtime.test.ts` and `advertiser.test.ts` without the
-patch. The root and Bonjour packages bundle the patched dependency so npm installs
-and installed plugin artifacts retain the same entry and logger behavior as source
-installs.
+patch. Bonjour owns the patched dependency. The core build compiles its native
+runtime into the bundled Bonjour plugin's JavaScript; the separately packed
+Bonjour package bundles the patched dependency. Both retain the same entry and
+logger behavior as source installs without a root Ciao dependency or npm bundle.
 
 `proper-lockfile@4.1.2`, used by Crabline's recorder, uses native `node:fs` and
 installs its own exit/signal listeners only while locks are held. Importing it

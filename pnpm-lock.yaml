@@ -264,9 +264,6 @@ importers:
       '@grammyjs/transformer-throttler':
         specifier: 1.2.1
         version: 1.2.1(grammy@1.46.0(supports-color@10.2.2))
-      '@homebridge/ciao':
-        specifier: 1.3.12
-        version: 1.3.12(patch_hash=1aa69b0c9796f4c7f3255bcc8cdae0c2409c3ad040ecac5e915160f0e58e49ae)(supports-color@10.2.2)
       '@lydell/node-pty':
         specifier: 1.2.0-beta.18
         version: 1.2.0-beta.18

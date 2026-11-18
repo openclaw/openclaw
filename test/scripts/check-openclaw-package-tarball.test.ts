@@ -1146,6 +1146,21 @@ syncBuiltinESMExports();
       ],
     },
     {
+      name: "rejects an unbundled Bonjour runtime that still imports Ciao",
+      files: {
+        "dist/index.js": 'export const load = () => import("@homebridge/ciao/native.js");\n',
+      },
+      status: "nonzero",
+      stderr: ["@homebridge/ciao must be compiled into the Bonjour runtime"],
+    },
+    {
+      name: "accepts compiled Ciao without a root package dependency",
+      files: {
+        "dist/index.js": "// @homebridge/ciao/native.js\nexport const getResponder = () => ({});\n",
+      },
+      status: 0,
+    },
+    {
       name: "accepts separately published private workspace dependencies by default",
       version: "2026.6.11",
       options: { packageJson: { dependencies: { "@openclaw/ai": "2026.6.11" } } },

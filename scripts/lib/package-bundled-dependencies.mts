@@ -10,7 +10,10 @@ import {
   PATCHED_MCP_CLI,
   PATCHED_MCP_NAME,
 } from "./package-bundled-mcp.mts";
-import { collectPackageDistImportErrors } from "./package-dist-imports.mjs";
+import {
+  collectPackageDistImportErrors,
+  collectPackageDistImports,
+} from "./package-dist-imports.mjs";
 import { isRecord } from "./record-shared.mjs";
 
 const PATCHED_CIAO_NAME = "@homebridge/ciao";
@@ -166,13 +169,24 @@ export function collectBundledDependencyErrors({
   const bundledDependencies = new Set(listBundleDependencies(packageJson));
   const patchedRuntime = "its patched runtime must not be replaced by the registry package";
   const required = new Map<string, string>([[PATCHED_MCP_NAME, patchedRuntime]]);
-  // Registry Ciao lacks the patch-only native entry. Released packages that
-  // import the package root stay valid with the registry dependency.
-  if (
-    runtime.files.some(
-      (file) => DIST_SCRIPT_RE.test(file) && runtime.readText(file).includes(PATCHED_CIAO_ENTRY),
-    )
-  ) {
+  const ciaoImports = new Set<string>();
+  collectPackageDistImports({
+    files: runtime.files.filter(
+      (file) => DIST_SCRIPT_RE.test(file) && runtime.readText(file).includes(PATCHED_CIAO_NAME),
+    ),
+    readText: runtime.readText,
+    onImportOccurrence({ specifier }: { specifier?: string }) {
+      if (specifier === PATCHED_CIAO_NAME || specifier?.startsWith(`${PATCHED_CIAO_NAME}/`)) {
+        ciaoImports.add(specifier);
+      }
+    },
+  });
+  // Current builds compile Ciao into Bonjour. Frozen packages may still own
+  // the dependency, but registry Ciao cannot supply the patched native entry.
+  if (ciaoImports.size && typeof dependencies[PATCHED_CIAO_NAME] !== "string") {
+    errors.push(`${PATCHED_CIAO_NAME} must be compiled into the Bonjour runtime`);
+  }
+  if (ciaoImports.has(PATCHED_CIAO_ENTRY)) {
     required.set(PATCHED_CIAO_NAME, patchedRuntime);
   }
   if (requireBundledWorkspaceDeps) {
