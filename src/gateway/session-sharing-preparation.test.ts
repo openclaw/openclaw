@@ -527,6 +527,25 @@ it("requires an existing session before preparing sharing facts", async ({ harne
   expect(harness.authorize(facts)?.message).toContain("session is draft");
 });
 
+it("retains missing-session facts through empty database creation, but not a new session", async ({
+  state,
+}) => {
+  const cfg = { agents: { entries: { main: {} } } };
+  await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
+  const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+  const harness = sharingHarness(cfg, "agent:main:first-chat", storePath);
+  using prepared = releasing(await harness.prepareMissing());
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  await prepareOpenClawAgentDatabaseExecution(
+    { agentId: "main", path: storePath, env: state.env },
+    () => {},
+  );
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  harness.write(restrictedEntry("new-session", "new-generation"));
+  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+});
+
 // Alias retargets apply to the next preparation; captured requests retain their physical store.
 it.for(["pending", "prepared"] as const)(
   "does not transfer %s sharing facts through a same-path replacement",

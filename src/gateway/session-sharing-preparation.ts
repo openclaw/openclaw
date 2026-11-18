@@ -13,6 +13,7 @@ import type {
   SessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import type { SessionStoreReadCandidate } from "../config/sessions/session-store-read-candidates.js";
 import {
   createSessionStoreRegistryMutationFilter,
@@ -35,7 +36,10 @@ import {
   type SessionRowChange,
 } from "../sessions/session-row-changes.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
-import type { AgentDatabaseRegistryChange } from "../state/openclaw-agent-db-contract.js";
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  type AgentDatabaseRegistryChange,
+} from "../state/openclaw-agent-db-contract.js";
 import { isOpenClawAgentDatabaseRegistryChange } from "../state/openclaw-agent-db-registry-listing.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
@@ -91,6 +95,7 @@ export async function prepareSessionMutationFacts(
   let waitingForStorage = false;
   let invalidated = false;
   let facts: PreparedSessionSourceFacts | undefined;
+  let missingDatabaseIdentity: string | undefined;
   let assertRegistryPublication: (() => void) | undefined;
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
   let creation: SessionEntryCreationOperation | undefined;
@@ -375,17 +380,29 @@ export async function prepareSessionMutationFacts(
       identity: string;
       birthtime: string;
     }> = [];
+    const unchangedRegistry = createSessionStoreRegistryMutationFilter({
+      captured: candidateIdentities.map(({ candidate, identity }) => ({
+        candidate,
+        identity: identity.key,
+        birthtime: identity.birthtime,
+      })),
+      preparedSources,
+      registryDiscovery: inventory.registryDiscovery,
+    });
+    const registryFilter: typeof unchangedRegistry = (mutation, entries) =>
+      unchangedRegistry(mutation, entries) ||
+      // Empty-store creation changes no session facts; row publications still invalidate them.
+      (facts?.target === null &&
+        mutation.kind === "upsert" &&
+        mutation.sources.every(
+          (source) =>
+            source.agentId === agentId &&
+            source.identity === missingDatabaseIdentity &&
+            source.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+        ));
     const inventoryRead = prepareSessionStoreTargetInventoryRead(
       discoveryInventory,
-      createSessionStoreRegistryMutationFilter({
-        captured: candidateIdentities.map(({ candidate, identity }) => ({
-          candidate,
-          identity: identity.key,
-          birthtime: identity.birthtime,
-        })),
-        preparedSources,
-        registryDiscovery: inventory.registryDiscovery,
-      }),
+      registryFilter,
       undefined,
       true,
     );
@@ -549,6 +566,13 @@ export async function prepareSessionMutationFacts(
       if (!params.allowMissing) {
         throw new SessionMutationFactsUnavailableError();
       }
+      const selectedDatabase = resolveUnsuffixedSqliteTargetFromSessionStorePath(
+        selected.storePath,
+      );
+      missingDatabaseIdentity = candidateIdentities.find(
+        ({ candidate, identity }) =>
+          candidate.path === selectedDatabase.path && identity.birthtime === undefined,
+      )?.identity.key;
       facts = {
         target: null,
         membership: new Set(),
