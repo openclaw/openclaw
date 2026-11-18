@@ -19,7 +19,6 @@ import { OPENAI_UNKNOWN_MODEL_COST } from "./account-models.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   resolveOpenAICodexModelsEndpoint,
-  type OpenAICodexModelsEndpointContext,
   resolveOpenAIDefaultBaseUrl,
 } from "./base-url.js";
 import {
@@ -210,12 +209,11 @@ function buildOpenAICodexStaticProviderConfig(): ModelProviderConfig {
 async function buildOpenAICodexLiveProviderConfig(params: {
   discoveryApiKey: string;
   accountId?: string;
-  catalogContext?: OpenAICodexModelsEndpointContext;
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveCatalogValue } = await import("openclaw/plugin-sdk/provider-catalog-shared");
   const { fetchLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
-  const endpoint = await resolveOpenAICodexModelsEndpoint(params.catalogContext);
+  const endpoint = await resolveOpenAICodexModelsEndpoint();
   try {
     return await getCachedLiveCatalogValue({
       ttlMs: OPENAI_CODEX_MODELS_CACHE_TTL_MS,
@@ -350,7 +348,6 @@ export function buildOpenAIProviderCatalog(): Pick<
             await buildOpenAICodexLiveProviderConfig({
               discoveryApiKey: runtimeAuth.apiKey,
               accountId: metadata.accountId,
-              catalogContext: ctx,
             }),
             runtimeAuth.profileId ?? auth.profileId,
           );
@@ -366,7 +363,7 @@ export function buildOpenAIProviderCatalog(): Pick<
             };
           }
           return projectOpenAICatalog(
-            await buildOpenAICodexLiveProviderConfig({ discoveryApiKey, catalogContext: ctx }),
+            await buildOpenAICodexLiveProviderConfig({ discoveryApiKey }),
           );
         }
         if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
@@ -408,7 +405,6 @@ export function buildOpenAIProviderCatalog(): Pick<
               apiKey: auth.apiKey,
               baseUrl: resolveOpenAICatalogBaseUrl(ctx),
               discoveryApiKey,
-              catalogContext: ctx,
             }),
             auth.profileId,
           );
