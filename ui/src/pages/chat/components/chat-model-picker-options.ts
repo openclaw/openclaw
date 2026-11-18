@@ -113,6 +113,16 @@ export function formatModelLabel(
 export type ChatModelPickerOptionProps = {
   rowKey?: string;
   favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
+  reorder?: {
+    disabled: boolean;
+    indicator?: "before" | "after";
+    onDragStart: (event: DragEvent) => void;
+    onDragEnd: () => void;
+    onDragOver: (event: DragEvent) => void;
+    onDragLeave: (event: DragEvent) => void;
+    onDrop: (event: DragEvent) => void;
+    onMove: (offset: number) => void;
+  };
   contextWindow?: ChatContextWindowControlParams;
   hideCooldown?: boolean;
   sessionKey?: string;

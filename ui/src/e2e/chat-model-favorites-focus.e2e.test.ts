@@ -17,6 +17,69 @@ const cases = ["provider", "search"].flatMap((target) =>
 );
 
 suite.define(() => {
+  it("reorders Favorites without selecting a model and keeps the order after reload", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "dark", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const models = [
+          { provider: "openai", id: "example-large", name: "Example Large" },
+          { provider: "anthropic", id: "example-sonnet", name: "Example Sonnet" },
+          { provider: "google", id: "example-flash", name: "Example Flash" },
+        ];
+        const initial = models.map(({ provider, id }) => provider + "/" + id);
+        const [first, second, third] = initial;
+        // An unavailable model ref must not disappear from the saved preference.
+        const missing = "test/unlisted";
+        const gateway = await installMockGateway(page, {
+          agentModel: first,
+          models,
+          presenceUsers: [{ id: "synthetic-operator", self: true }],
+          featureMethods: [...defaultControlUiFeatureMethods, "users.prefs.get", "users.prefs.set"],
+          bootstrapPreferences: {
+            profileId: "synthetic-operator",
+            entries: { [prefsKey]: [first, missing, second, third] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const { picker, trigger, search } = modelPicker(page);
+        await trigger.click();
+        const tab = picker.getByRole("tab", { name: "Favorites" });
+        await tab.click();
+        const list = picker.getByRole("listbox", { name: "Favorites models" });
+        const order = () =>
+          list
+            .getByRole("option")
+            .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-chat-model-option")));
+        const row = (model: string) => list.locator('[data-chat-model-option="' + model + '"]');
+        const handle = (model: string) => row(model).getByRole("button", { name: /^Reorder/ });
+        await expect.poll(order).toEqual(initial);
+        expect(await handle(third!).count()).toBe(1);
+        await handle(third!).dragTo(row(first!));
+        await expect.poll(order).toEqual([third, first, second]);
+        expect(
+          await gateway.getRequests("users.prefs.set", {
+            entries: { [prefsKey]: [third, first, missing, second] },
+            expectedEntries: { [prefsKey]: [first, missing, second, third] },
+          }),
+        ).toHaveLength(1);
+        await search.fill("example");
+        await expect.poll(() => picker.getByRole("button", { name: /^Reorder/ }).count()).toBe(0);
+        await search.clear();
+        await expect.poll(order).toEqual([third, first, second]);
+        await page.reload();
+        await trigger.click();
+        await expect.poll(order).toEqual([third, first, second]);
+        await expect.poll(() => handle(first!).getAttribute("aria-disabled")).toBe("false");
+        await handle(first!).press("Alt+ArrowDown");
+        await expect.poll(order).toEqual([third, second, first]);
+        await expect
+          .poll(() => handle(first!).evaluate((button) => document.activeElement === button))
+          .toBe(true);
+        expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      },
+    );
+  });
+
   it.each(["chat", "new"])(
     "persists provider drag order after closing and reloading /%s",
     async (route) => {

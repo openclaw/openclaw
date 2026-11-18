@@ -5257,6 +5257,43 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
   }
 }
 
+.chat-controls__model-reorder {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 28px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-menu-item);
+  background: transparent;
+  color: var(--muted);
+  cursor: grab;
+
+  &:hover:not([aria-disabled="true"]) {
+    color: var(--text-strong);
+  }
+
+  &[aria-disabled="true"] {
+    cursor: default;
+    opacity: 0.5;
+  }
+
+  & > svg {
+    width: 14px;
+    height: 14px;
+  }
+}
+
+.chat-controls__model-option[data-favorite-drop="before"] {
+  box-shadow: inset 0 2px var(--accent);
+}
+
+.chat-controls__model-option[data-favorite-drop="after"] {
+  box-shadow: inset 0 -2px var(--accent);
+}
+
 [data-chat-model-provider-group="$favorites"] .chat-controls__model-option-provider {
   display: inline-flex;
   visibility: visible;

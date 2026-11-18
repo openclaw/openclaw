@@ -264,6 +264,10 @@ function ModelOptionButton(
             props.presentation.selected && !props.presentation.blocked,
         },
       ]}
+      data-favorite-drop={props.reorder?.indicator}
+      onDragOver={(event) => props.reorder?.onDragOver(event)}
+      onDragLeave={(event) => props.reorder?.onDragLeave(event)}
+      onDrop={(event) => props.reorder?.onDrop(event)}
       data-chat-model-option={props.entry.value}
       data-chat-model-key={key()}
       data-chat-model-rank={rank()}
@@ -316,6 +320,28 @@ function ModelOptionButton(
         }
       }}
     >
+      <Show when={props.reorder}>
+        <button
+          type="button"
+          class="chat-controls__model-reorder"
+          aria-disabled={props.reorder?.disabled ? "true" : "false"}
+          aria-label={t("chat.modelFavorites.reorder", { model: props.presentation.modelLabel })}
+          aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
+          draggable={props.reorder?.disabled ? "false" : "true"}
+          onDragStart={(event) => props.reorder?.onDragStart(event)}
+          onDragEnd={() => props.reorder?.onDragEnd()}
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
+              event.preventDefault();
+              event.stopPropagation();
+              props.reorder?.onMove(event.key === "ArrowUp" ? -1 : 1);
+            }
+          }}
+        >
+          <Icon name="gripVertical" />
+        </button>
+      </Show>
       <span class="chat-controls__model-option-provider">
         <ChatModelProviderIcon
           provider={props.entry.provider}
