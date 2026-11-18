@@ -240,12 +240,12 @@ vi.mock("./model-catalog.js", async () => ({
   buildPreparedModelCatalogSnapshot: mocks.buildPreparedModelCatalogSnapshot,
 }));
 
-// mock-isolation: Static startup fixtures keep model planning and publication persistence unloaded.
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../state/openclaw-agent-execution.js")>()),
   prepareOpenClawAgentDatabaseExecution: async () => {},
 }));
 
+// mock-isolation: Static startup fixtures keep model planning and publication persistence unloaded.
 vi.mock("./models-config.core.js", () => ({
   ensureOpenClawModelsJsonWithInput: mocks.ensureOpenClawModelsJson,
   planOpenClawModelsJsonSourceWithInput: mocks.planOpenClawModelsJsonSource,
