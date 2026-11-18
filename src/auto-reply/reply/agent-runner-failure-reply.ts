@@ -61,6 +61,7 @@ import {
 import { isProviderRefusalNoticeText } from "../../shared/assistant-error-format.js";
 import { formatInlineCodeSpan } from "../../shared/markdown-code.js";
 import { SkillResourceDeliveryLimitError } from "../../skills/runtime/resource-delivery-error.js";
+import { resolveConfiguredCommandOwners } from "../command-auth.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -159,7 +160,7 @@ type ExternalRunFailureInput = string | { message: string; error?: unknown };
 
 type ExternalFailureConversationContext = Pick<
   TemplateContext,
-  "ChatType" | "Provider" | "SessionKey" | "Surface"
+  "AccountId" | "ChatType" | "Provider" | "SessionKey" | "Surface"
 >;
 
 export function isNonDirectConversationContext(ctx: ExternalFailureConversationContext): boolean {
@@ -195,8 +196,12 @@ export function resolveNonOwnerProviderFailureText(params: {
   const { error, facts } = params;
   if (
     params.senderIsOwner !== false ||
-    // Command auth ignores "*" for ownership, so a wildcard-only list names no owner.
-    !params.config?.commands?.ownerAllowFrom?.some((entry) => String(entry).trim() !== "*") ||
+    // Ownership only resolves against owners this channel can match (no wildcards).
+    !params.config ||
+    resolveConfiguredCommandOwners(params.config, {
+      channel: params.sessionCtx.Provider ?? params.sessionCtx.Surface,
+      accountId: params.sessionCtx.AccountId,
+    }).length === 0 ||
     !isNonDirectConversationContext(params.sessionCtx)
   ) {
     return undefined;
