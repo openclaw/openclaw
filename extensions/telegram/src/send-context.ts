@@ -84,8 +84,6 @@ export function toAcceptedThreadScopedParams(
   return Object.keys(scoped).length > 0 ? scoped : undefined;
 }
 
-const MESSAGE_DELETE_NOOP_RE =
-  /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
 export const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
@@ -246,15 +244,6 @@ export function normalizeMessageId(raw: string | number): number {
     return Math.trunc(parsed);
   }
   throw new Error("Message id is required for Telegram actions");
-}
-
-export function isTelegramMessageDeleteNoopError(err: unknown): boolean {
-  return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
-}
-
-// Only absence proves the requested end state; the other no-op refusals leave the message visible.
-export function isTelegramMessageAlreadyDeletedError(err: unknown): boolean {
-  return /message to delete not found/i.test(formatErrorMessage(err));
 }
 
 export type TelegramApiContext = {
