@@ -10,7 +10,8 @@ plugins {
 }
 
 // Resolve local defaults once; release callers supply all three Gradle properties.
-val openClawAndroidVersionDefaults by extra(
+extra.set(
+  "openClawAndroidVersionDefaults",
   providers.exec {
     workingDir(rootDir.resolve("../.."))
     commandLine("node", "--import", "./scripts/tsx.mjs", "scripts/android-version.ts", "--for-build", "--shell")

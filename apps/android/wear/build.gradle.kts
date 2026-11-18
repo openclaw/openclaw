@@ -7,7 +7,7 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
 }
 
-val openClawAndroidVersionDefaults: Provider<Properties> by rootProject.extra
+val openClawAndroidVersionDefaults = rootProject.extra["openClawAndroidVersionDefaults"] as Provider<Properties>
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
   (providers.gradleProperty(name).orNull ?: openClawAndroidVersionDefaults.get().getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }

@@ -93,7 +93,7 @@ abstract class GenerateGatewayProtocol : Exec() {
 val dnsjavaInetAddressResolverService = "META-INF/services/java.net.spi.InetAddressResolverProvider"
 val openClawAndroidApplicationId = "ai.openclaw.app"
 val thirdPartyLicensesDir = rootProject.file("THIRD_PARTY_LICENSES")
-val openClawAndroidVersionDefaults: Provider<Properties> by rootProject.extra
+val openClawAndroidVersionDefaults = rootProject.extra["openClawAndroidVersionDefaults"] as Provider<Properties>
 
 fun requireOpenClawAndroidVersionProperty(name: String): String =
   (providers.gradleProperty(name).orNull ?: openClawAndroidVersionDefaults.get().getProperty(name))?.trim()?.takeIf { it.isNotEmpty() }
