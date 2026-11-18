@@ -8,7 +8,14 @@ read_when:
   - Understanding how skill commands are registered
 ---
 
-The Gateway handles commands sent as standalone messages starting with `/`.
+The Gateway recognizes text slash commands, directives, and inline shortcuts only
+when the sender text starts with `/` (leading whitespace and channel-owned bot
+addressing are allowed). Ordinary prose and quotations such as
+`Send /model to choose another model.` stay unchanged.
+A leading directive can still be followed by a task or chained with other directives,
+for example `/think high /verbose on explain this code`. Once a message starts
+with `/`, existing chained directive parsing remains; this is not Markdown-aware
+quote parsing.
 Host-only bash commands use `! <cmd>` (with `/bash <cmd>` as an alias).
 The bang must start the command text, after any required group mention. Bang
 commands still require command authorization and elevated access; text such as
@@ -47,8 +54,13 @@ command handling is enabled for the surface.
       and an adjacent separator (or its own line ending when alone on a line)
       are removed. Text with no recognized directive is unchanged.
       Added prompt context is not scanned for text commands or stripped as directives.
-    - Ordinary prose such as `How does /queue work?` stays unchanged. Native
-      `/queue` commands and explicit `/queue:` syntax still validate their arguments;
+    - Integrations that wrap sender text in envelopes or sender labels must supply
+      clean command text as `CommandBody` or `BodyForCommands`. A wrapped `Body`
+      alone no longer exposes a command; a plain slash-leading `Body` still works.
+    - Ordinary prose such as `How does /queue work?` or `Use /model openai/gpt-5.4`
+      stays unchanged, even when the model or directive argument is valid. A slash
+      on a later line does not turn a prose message into a command. Native
+      `/queue` commands and leading `/queue:` syntax still validate their arguments;
       a mistyped mode such as `/queue backlog` still produces an error.
     - In **directive-only** messages (the message is only directives), they
       persist to the session and reply with an acknowledgement. Both the literal
@@ -58,7 +70,7 @@ command handling is enabled for the surface.
       to the current message and never change later turns. Include them with
       the task. Use [session permission modes](/gateway/permission-modes) for
       session-wide policy. `/exec host=... node=...` still persists placement.
-    - In **normal chat** messages with other text, they act as inline hints and
+    - In **messages starting with a slash** that include task text, directives act as inline hints and
       do **not** persist session settings.
       Model selection is the exception: an authorized inline `/model` or
       configured `/<alias>` persists the session selection. Owner/admin `-a`
@@ -706,9 +718,10 @@ See [BTW side questions](/tools/btw) for the full behavior.
   </Accordion>
   <Accordion title="Fast path and inline shortcuts">
     - Command-only messages from allowlisted senders are handled immediately (bypass queue + model).
-    - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
+    - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) can accompany task text in messages starting with `/`, and are stripped before the model sees the remaining text. Mid-sentence mentions such as `Please explain /status` do not run a shortcut.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - A later slash token at the caret keeps its completion menu even when the draft starts with another command. Enter or clicking a command runs only that invocation; Tab completes without sending. Active freeform argument collection still owns slash-like argument text.
+    - A slash token at the start of the draft is the draft's own command even when text follows it, such as `/loop` typed in front of a pasted prompt. Its menu offers every command, selecting completes the token in place and keeps the text as arguments, and selecting `/goal` opens Goal mode with that text as the objective.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - On external channels, unauthorized text command-only messages are silently ignored. Inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.

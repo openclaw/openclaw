@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
+import { observeMainThreadFs } from "../../test-utils/main-thread-fs-spies.test-support.js";
 import {
   listCandidateAuthProfileStores as discover,
   loadCandidateAuthProfileStoreAsync as load,
@@ -156,6 +157,7 @@ it("dedupes configured, state-root, and registered custom database paths", async
     configured: { agentDir: configured },
     custom: { agentDir: path.join(root, "active-custom-agent") },
   };
+  using filesystem = observeMainThreadFs();
   const candidates = await discover({ cfg: { agents: { entries } }, env });
   const ids = candidates.map(({ agentId }) => agentId);
   expect(ids).toEqual(["custom", "configured", "custom", "state-agent"]);
@@ -179,4 +181,7 @@ it("dedupes configured, state-root, and registered custom database paths", async
     refresh: "custom-refresh",
   });
   expect(readSqliteReaderDiagnosticsForPath(customPath).connections).toEqual([]);
+  expect(filesystem.stacks().filter(({ stack }) => /candidate-stores\.[jt]s/.test(stack))).toEqual(
+    [],
+  );
 });

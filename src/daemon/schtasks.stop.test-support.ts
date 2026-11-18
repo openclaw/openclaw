@@ -270,6 +270,7 @@ export {
   readActiveGatewayLockIdentity,
   readWindowsProcessStartTimeSync,
   spawnSync,
+  timeState,
 };
 
 export function mockSettledSchedulerSupervision() {

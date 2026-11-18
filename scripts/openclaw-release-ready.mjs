@@ -29,6 +29,7 @@ import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version
 import {
   authenticatePreparedNpmArtifact,
   consumePreparedNpmPackage,
+  createPreparedNpmCapacityObserver,
   downloadPreparedNpmRelease,
   validatePreparedNpmArtifactDescriptor,
 } from "./plugin-npm-prepared-release.mjs";
@@ -404,13 +405,6 @@ function authenticateReadyNpm({
       .update(readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)))
       .digest("hex"),
     evidenceClient,
-    isTrustedMainAncestor: (sha) => {
-      const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
-      return (
-        ["ahead", "identical"].includes(comparison.status) &&
-        comparison.merge_base_commit?.sha === sha
-      );
-    },
   });
 }
 
@@ -425,47 +419,60 @@ async function loadPreparedPlugins({
   token,
   fetchImpl,
   evidenceClient,
+  targets = ["npm", "clawhub"],
 }) {
   requireValue(
-    isRecord(plugins) && Object.keys(plugins).toSorted().join(",") === "clawhub,npm",
-    "Both npm and ClawHub preparation artifacts are required.",
+    targets.length > 0 && targets.every((target) => ["npm", "clawhub"].includes(target)),
+    "Unknown prepared plugin target.",
+  );
+  requireValue(
+    isRecord(plugins) &&
+      Object.keys(plugins).every((target) => ["npm", "clawhub"].includes(target)) &&
+      targets.every((target) => isRecord(plugins[target])),
+    "Preparation artifacts are required for each selected target.",
   );
   mkdirSync(outputDir, { recursive: true });
-  const adoption = await authenticateReadyNpm({
-    artifact: plugins.npm,
-    inputs,
-    sourceSha,
-    toolingSha,
-    toolingFullRef,
-    evidenceClient,
-  });
-  const { publisherPolicySha256 } = adoption;
+  const adoption = targets.includes("npm")
+    ? await authenticateReadyNpm({
+        artifact: plugins.npm,
+        inputs,
+        sourceSha,
+        toolingSha,
+        toolingFullRef,
+        evidenceClient,
+      })
+    : undefined;
+  const publisherPolicySha256 = adoption?.publisherPolicySha256;
   const common = { token, fetchImpl, sourceRoot, selectionMode: "all-publishable", plugins: "" };
   const results = await Promise.allSettled([
-    downloadPreparedNpmRelease({
-      ...common,
-      artifact: plugins.npm,
-      sourceSha,
-      workflowSha: adoption.workflowSha,
-      repository: REPOSITORY,
-      npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
-      publisherPolicySha256,
-      archivePath: join(outputDir, `npm-${plugins.npm.artifactId}.zip`),
-    }),
-    resolvePreparedClawHubMatrix({
-      ...common,
-      descriptor: plugins.clawhub,
-      candidateSha: sourceSha,
-      toolingSha,
-      archivePath: join(outputDir, `clawhub-${plugins.clawhub.artifactId}.zip`),
-    }),
+    targets.includes("npm")
+      ? downloadPreparedNpmRelease({
+          ...common,
+          artifact: plugins.npm,
+          sourceSha,
+          workflowSha: adoption.workflowSha,
+          repository: REPOSITORY,
+          npmDistTag: inputs.npm_dist_tag === "extended-stable" ? "extended-stable" : "default",
+          publisherPolicySha256,
+          archivePath: join(outputDir, `npm-${plugins.npm.artifactId}.zip`),
+        })
+      : { packages: [] },
+    targets.includes("clawhub")
+      ? resolvePreparedClawHubMatrix({
+          ...common,
+          descriptor: plugins.clawhub,
+          candidateSha: sourceSha,
+          toolingSha,
+          archivePath: join(outputDir, `clawhub-${plugins.clawhub.artifactId}.zip`),
+        })
+      : [],
   ]);
   const failure = results.find((result) => result.status === "rejected");
   if (failure) {
     throw failure.reason;
   }
   const [npm, clawhub] = results.map((result) => result.value);
-  await adoption.revalidateAuthority?.();
+  await adoption?.revalidateAuthority?.();
   return {
     npm,
     clawhub: { packages: clawhub.map((entry) => entry.prepared) },
@@ -475,9 +482,15 @@ async function loadPreparedPlugins({
 }
 
 export async function prefetchPreparedPlugins(options) {
-  const manifests = await loadPreparedPlugins(options);
-  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token, fetchImpl } =
-    options;
+  const capacity = options.reportCapacity
+    ? createPreparedNpmCapacityObserver(options.fetchImpl)
+    : undefined;
+  const manifests = await loadPreparedPlugins({
+    ...options,
+    fetchImpl: capacity?.fetchImpl ?? options.fetchImpl,
+  });
+  const { plugins, inputs, sourceSha, toolingSha, sourceRoot, outputDir, token } = options;
+  const fetchImpl = capacity?.packageFetchImpl ?? options.fetchImpl;
   const admissionDir = mkdtempSync(join(outputDir, "verified-"));
   const tasks = [
     ...manifests.npm.packages.map(
@@ -518,7 +531,8 @@ export async function prefetchPreparedPlugins(options) {
       throw failure.reason;
     }
   }
-  await manifests.adoption.revalidateAuthority?.();
+  await manifests.adoption?.revalidateAuthority?.();
+  capacity?.report(tasks.length);
   writeJson(join(admissionDir, "verified.json"), {
     sourceSha,
     toolingSha,
@@ -648,14 +662,6 @@ async function verifyPublicationOutcome(run, request, tooling, token, directory)
       outputDir: join(directory, "core-postpublish-verification"),
     });
   }
-  const { verifyClawHubPostpublish } = await import("./clawhub-postpublish.mjs");
-  await verifyClawHubPostpublish({
-    event: { workflow_run: run },
-    parentStatePolicy: "sealed-producer",
-    verifierSha: tooling.sha,
-    token,
-    outputDir: join(directory, "clawhub-public-verification"),
-  });
 }
 
 async function main() {
@@ -717,13 +723,6 @@ async function main() {
           readFileSync(new URL("../.github/workflows/plugin-npm-release.yml", import.meta.url)),
         )
         .digest("hex"),
-      isTrustedMainAncestor: (sha) => {
-        const comparison = api(`compare/${sha}...main`, ["--jq", "{status,merge_base_commit}"]);
-        return (
-          ["ahead", "identical"].includes(comparison.status) &&
-          comparison.merge_base_commit?.sha === sha
-        );
-      },
     });
     const npmArtifact = adoption.artifact;
     const request = {

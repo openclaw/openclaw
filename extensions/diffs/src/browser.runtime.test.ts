@@ -215,8 +215,8 @@ describe("PlaywrightDiffScreenshotter", () => {
 
   it.each([
     ["pdf", 2, 240, 8_000_000, 2, 1],
-    ["png", 2, 240, 8_000_000, 2, 1],
-    ["png", 4, 1700, 8_000_000, 2.14, 2],
+    ["png", 4, 2206, 8_000_000, 1.88, 2],
+    ["png", 1.01, 240, 320_000, 1, 2],
     ["pdf", 2, 60_000, 8_000_000, null, 1],
     ["png", 1, 240, 10, null, 1],
   ] as const)("renders %s at %s", async (format, scale, height, maxPixels, actual, count) => {

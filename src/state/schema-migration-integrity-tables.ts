@@ -110,6 +110,7 @@ const migrationTables: Readonly<
       "session_canonical_validation_pending",
     ],
     26: ["session_nodes", "context_engine_turn_outbox", "transcript_events"],
+    43: ["session_pending_inputs"],
   },
   state: {
     ...SCHEMA_MIGRATION_BACKUP_TABLES.state,
@@ -200,10 +201,15 @@ export function resolveSchemaMigrationIntegrityTables(
   }
   if (
     migration.kind === "agent" &&
-    migration.foundVersion === 40 &&
-    migration.supportedVersion === 41
+    migration.foundVersion >= 40 &&
+    migration.foundVersion < migration.supportedVersion &&
+    migration.supportedVersion <= 42
   ) {
-    return ["schema_meta", "session_transcript_active_event_facts"];
+    return [
+      "schema_meta",
+      ...(migration.foundVersion < 41 ? ["session_transcript_active_event_facts"] : []),
+      ...(migration.supportedVersion >= 42 ? ["agent_tool_usage"] : []),
+    ];
   }
   const tables = new Set(["schema_meta"]);
   if (migration.foundVersion === migration.supportedVersion) {

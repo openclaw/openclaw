@@ -18,18 +18,23 @@ Template again creates another agent.
 After Add, manage the agent with [agent commands](/cli/agents), its automations
 with [cron commands](/automation/cron-jobs), and shared dependencies with their
 ordinary plugin or MCP controls. There are no Template status, update, remove, or
-export commands. To use a newer release, Add it as another agent.
+export commands. To use a newer release, Add it as another agent. Agents enrolled
+by the earlier installed-Template lifecycle can be
+[released to ordinary agents](#agents-from-the-earlier-lifecycle).
 
 Enable **Templates** in **Settings → Labs** before adding one. On a headless installation, set
 `gateway.controlUi.experimental.templates` to `true` in OpenClaw config.
 Authoring and inspecting local Template packages do not require the Labs toggle.
 
-`templates add` accepts a ClawHub package name, a canonical local package directory,
-or `CLAW.md` with YAML frontmatter. Other source-reading commands remain local-only.
+`templates add` accepts a ClawHub Template reference (`@publisher/slug`), a canonical
+local package directory, or `CLAW.md` with YAML frontmatter. The reference uses the
+publisher's ClawHub handle, as skill references do, including for a Template whose
+package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
-path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
+path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
+[project commands](/cli/templates#author-locally) require `CLAW.md` at the package root. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
-`CLAW.md`, `package.json`, and OpenClaw YAML profiles must contain valid UTF-8.
+`CLAW.md` and `package.json` must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
 Add refuses it before creating an agent or workspace.
 Publishing and searching Templates through ClawHub use the separate registry
@@ -38,36 +43,68 @@ when **Templates** is enabled in **Settings → Labs**.
 
 ## Create with an agent
 
-With Templates enabled in Labs, choose **Create Template** from the agent's left-sidebar
-row menu. Pinned agents keep this action in a focused row menu. The action sends
-the bundled `$create-template` skill invocation into that agent's existing main
-chat. The agent proposes portable behavior with an input, job, output, and
-authority boundary, then writes its private draft in that conversation. When
-the draft is ready, the Control UI opens a review modal; the agent does not
-return a review link or create or fork a session. This flow currently requires
-a workspace on the Gateway host.
+Ask the agent, “create a new template from this agent.” The bundled
+`create-template` skill prepares a request-specific private draft and opens
+review in that same conversation. No sidebar setup or special command is
+required. The agent proposes portable behavior with an input, job, output, and
+authority boundary; it does not publish, return a review link, or create or
+fork a session. Review requires Templates enabled in Labs, an active administrator
+Control UI connection, and a workspace on the Gateway host. If review is unavailable,
+the proposal stays private.
 
-The review modal shows the exact archive files and
-declared skill, plugin, MCP, and automation requirements. The Name field is
-the new agent's display name, defaulted to readable title case; it does not
-change the package slug used as the Template's registry identity. Change the name
-or description and uncheck any optional workspace file or requirement before
-publishing. **Ask for changes** returns to the same chat; review the rebuilt
-package after the agent revises the draft. The package includes only newly
-authored proposal contents; it does not copy the source workspace, memories,
-or raw conversations. Known private paths and credential-like text are
-rejected. Review the remaining text for personal facts and private context.
+The optional **Create Template** action in the agent's left-sidebar row menu
+still invokes the same skill in that agent's existing main chat. Pinned agents
+keep this action in a focused row menu.
 
-Sign in with `clawhub login` on the Gateway host. **Publish to ClawHub** uploads
-the exact reviewed artifact using that account; changing the selection
-requires another review. The editable Name is the agent display name; the
-ClawHub package slug and authenticated publisher are separate identities. An
-agent turn cannot authorize publication. After submission, a dismissing
-notification confirms that publication is pending security review and links
-to the Template's ClawHub page.
-After ClawHub makes it public, others can discover it and Add it as an ordinary agent.
+The inline review card shows the exact archive files and declared skill, plugin,
+MCP, and automation requirements. Open an item to inspect its contents, or use
+**View all** to inspect the archive files. Review is read-only. To change a name,
+description, file, or requirement, ask the agent to revise its private proposal
+in the same conversation, then inspect the fresh review. The agent's display
+name, ClawHub package slug, and authenticated publisher are separate identities.
+The package includes only newly authored proposal contents; it does not copy the
+source workspace, memories, or raw conversations. Known private paths and
+credential-like text are rejected. Review the remaining text for personal facts
+and private context.
+
+Sign in with `clawhub login` on the Gateway host. **Publish** uploads the exact
+reviewed artifact using that account. An agent turn cannot authorize publication.
+The card stays in the conversation and shows **Pending** while ClawHub checks
+the submission; **View submission** opens its ClawHub page. Once the registry
+confirms publication, the card shows **Published** and offers **Copy link**.
+Others can then discover the Template and Add it as an ordinary agent.
+
+## Add through the setup helper
+
+An agent can delegate a published ClawHub Template installation to the
+`openclaw` setup helper. The helper first uses `template_review` with an exact
+`source: { packageName, version }`, then proposes `template_install` using the returned
+`target.agentId` and `planIntegrity`. Required Template risk, plugin
+capability, and skill warning acknowledgements must match that review. Template
+contents are untrusted data, not instructions for the requesting agent. The host carries
+its result into later helper turns; users do not need to paste the review JSON.
+
+The host uses the requesting session's existing setup-change approval policy;
+an agent-supplied `approved: true` does not authorize installation. Trust warnings require exact human approval even under Full Access. Review and
+installation retain the original administrator connection, cancellation, and
+revocation checks and use the same installer as **Pages → Templates**. Templates
+must already be enabled in **Settings → Labs**. The helper does not enable Labs,
+install local paths, publish Templates, or gain shell access.
+
+The result names the actual agent and workspace and reports complete or partial
+installation, readiness requirements, and dependency and automation receipts.
+An absent receipt is not confirmation; a created automation may still be paused.
+If an agent was retained after a partial installation, inspect that agent and
+continue its existing setup rather than adding another copy.
 
 ## Author locally
+
+`openclaw templates draft <workspace> --json` initializes an empty private
+proposal in that workspace and returns its unique `draftId` and path. It does
+not copy source files, start a model turn, contact ClawHub, or publish. Each
+invocation creates a distinct proposal; retain the returned ID instead of
+searching for a latest draft. The bundled skill uses this command when a chat
+request did not arrive with a UI-created draft.
 
 Create a minimal project, validate its inputs, preview it without mutation,
 and build an immutable package artifact:
@@ -80,9 +117,12 @@ openclaw templates build ./incident-triage --out ./incident-triage-1.0.0.tgz
 ```
 
 A package contains `package.json`, `CLAW.md`, and any files selected by its
-manifest. `create` writes only `package.json` and `CLAW.md` and refuses to merge
-into a nonempty directory. Project validation rejects package scripts and
-lifecycle hooks. `dev` builds the same package artifact and checks its Add
+manifest. `validate`, `dev` and `build` require a project whose `CLAW.md` sits
+beside `package.json`, with `openclaw.template` set to `"CLAW.md"`; move a nested
+`CLAW.md` to the package root before validating or building. `inspect` and `add`
+also read a package whose selector names a nested `CLAW.md`. `create` writes
+only `package.json` and `CLAW.md` and refuses to merge into a nonempty directory.
+Project validation rejects package scripts and lifecycle hooks. `dev` builds the same package artifact and checks its Add
 requirements locally without installing packages, contacting ClawHub,
 starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
@@ -118,9 +158,10 @@ agent:
 categories: [operations, research]
 workspace:
   bootstrapFiles: {}
-packages: []
+skills: []
+plugins: []
 mcpServers: {}
-cronJobs: []
+automations: []
 ---
 
 # Incident triage
@@ -133,18 +174,13 @@ a concise handoff with evidence.
 catalog discovery; the receiving registry decides which category names it
 accepts. Categories do not change the agent's runtime behavior.
 
-OpenClaw automatically discovers the optional `profiles/openclaw.yml` file.
-No manifest pointer is required. Other harnesses may discover their own
-conventional profile, such as `profiles/codex.yml`, without changing the
-portable manifest.
-
-The older `metadata.openclaw.config` pointer is deprecated but still read, so
-packages published against it keep working. Reading one reports a
-`deprecated_openclaw_profile_pointer` warning; move that file to
-`profiles/openclaw.yml` and remove the metadata entry. A pointer that is not a
-package-relative `.yml`/`.yaml` path is rejected, and a pointer that references
-a different file while `profiles/openclaw.yml` also exists is rejected as a
-conflict.
+`CLAW.md` is the sole configuration entry point. Put native agent settings
+under `agent`, and dependencies in `skills` and `plugins`. Each entry selects
+either a bundled package-relative folder with `path`, or an exact ClawHub release
+with `ref` and `version`; do not combine those forms.
+The retired `packages`, `profiles`, and `metadata.openclaw.config` declarations
+are rejected with migration guidance. Remove the profile directory after moving
+its supported settings into `agent`; retain `schemaVersion: 1`.
 
 A package may add named bootstrap files and other workspace files from
 package-relative sources. These go into the new agent's dedicated workspace:
@@ -164,14 +200,12 @@ The package may also declare exact ClawHub skill and plugin requirements,
 MCP servers, and scheduled automations:
 
 ```yaml
-packages:
-  - kind: skill
-    source: clawhub
-    ref: incident-triage
+skills:
+  - path: skills/incident-checklist
+  - ref: incident-triage
     version: 1.0.0
-  - kind: plugin
-    source: clawhub
-    ref: "@acme/audit-plugin"
+plugins:
+  - ref: "@acme/audit-plugin"
     version: 2.0.0
 mcpServers:
   statuspage:
@@ -179,30 +213,71 @@ mcpServers:
     args: ["--yes", "@acme/statuspage-mcp@1.0.0"]
     env:
       STATUSPAGE_TOKEN: "${STATUSPAGE_TOKEN}"
-cronJobs:
+automations:
   - id: daily-summary
     name: Daily incident summary
     schedule: { cron: "0 9 * * *", timezone: UTC }
-    session: isolated
+    session: main
     message: Summarize active incidents.
 ```
 
+A bundled skill folder must contain a valid root `SKILL.md`. Add installs that
+folder under the new agent's ordinary workspace `skills/` directory, using its
+native skill identity. Supporting files are included automatically, including
+binary assets. Declare only folders you intend to share; undeclared skill
+folders are not installed or counted as dependencies. Bundled contents show their
+name and package-relative path; they have no invented registry version or
+standalone ClawHub verification claim.
+
+`validate` and `build` also stop at 4,096 folders and unselected files in the
+project, outside `.git` and `node_modules`; selected files do not count toward it.
+
+Bundled skill and plugin folders use the same bounded selection: regular files
+only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
+per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
+excluded regardless of case. Links, nonregular files, unsafe portable paths,
+overlapping bundled directories, and conflicting skill identities or workspace
+destinations are rejected. Build and Add preserve executable files and reject changes to source bytes,
+executable flags, or folder membership after review. Other permission bits are
+normalized when packaging and installing bundled folders.
+
+Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
+move its declarations to `automations` and remove `cronJobs`.
+
+Add preserves each automation's required `session`: `main` runs in the new
+agent's main conversation, while `isolated` runs in a separate session.
+Declared automations start with no channel delivery; Add accepts but does not
+apply `delivery`. To post a summary to a channel, configure delivery in the
+automation's settings after Add. Previously added jobs keep their saved session
+target; change those in the automation's settings if needed.
+
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
-reports the conflict without replacing them. Plugin and skill trust warnings
-require explicit consent. Automations are assigned to the new agent.
+reports the conflict without replacing them. An MCP server's `timeout` and
+`connectTimeout` are in seconds; Add stores and compares them as
+`requestTimeoutMs` and `connectionTimeoutMs` in milliseconds. Plugin and skill
+trust warnings require explicit consent. Automations are assigned to the new agent.
+If a declared plugin still needs setup, a referenced environment variable is
+missing, or an OAuth MCP server is not authorized, Add creates the declared
+automations disabled. Their schedules, prompts, and imported scratch stay intact.
+Connect the requirement through its ordinary plugin or MCP controls, then enable
+the jobs through the agent's automation controls; Add does not create substitute
+routines or automatically enable disabled jobs later.
 
-Older packages may declare `agent.heartbeat` in the OpenClaw profile or include
+A package may declare `agent.heartbeat` in `CLAW.md` or include
 `HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
 and private job scratch instead of installing heartbeat configuration. Legacy
 `tasks:` entries become separate automations, and the remaining checklist stays
 in the monitor's scratch. An `every: 0m` declaration stays disabled.
+Because it becomes job scratch, `HEARTBEAT.md` must be valid UTF-8 and at most
+256 KiB; `validate`, `inspect`, `build` and Add report a larger or non-UTF-8
+file as a Template diagnostic.
 The Add review shows each converted job with its interval and owner delivery;
-existing cron schedules and `none` or last-channel delivery keep their meaning.
+existing cron schedules keep their meaning.
 Gateway review responses represent interval schedules as `{ everyMs }`, where
 `everyMs` is a positive integer, and
 owner delivery as `owner`, alongside the existing `{ cron, timezone }` schedules
-and `none` or `last-channel` delivery variants.
+and the `none` delivery of declared automations.
 
 Add creates a job disabled until its imported scratch is saved and verified.
 If scratch import conflicts with another edit, or its write cannot be confirmed,
@@ -210,18 +285,83 @@ Add reports a partial result and keeps the new agent and jobs for inspection.
 Check their scratch and enabled state before retrying; Add does not overwrite
 concurrent edits to make the import succeed.
 
-OpenClaw discovers optional harness settings from `profiles/openclaw.yml`.
-Those settings can refine the agent's tools, sandbox, memory search, and
-extension requirements, but cannot set a model, provider, credentials, or
-named delegate agents. Host policy still constrains every grant. Foreign
-harness profiles are ignored by OpenClaw. A released older
-`metadata.openclaw.config` profile pointer is still read with a deprecation
-warning; new packages should use the conventional profile path.
+Native settings under `agent` include `groupChat`, `sandbox`, `tools`,
+`memory`, `heartbeat`, and `humanDelay`. The native `tools.profile` field
+selects a built-in tool policy; its grants are bounded and frozen when Add
+creates the agent. Host policy still constrains every grant. A Template cannot
+configure a provider, credentials, or named delegate agents.
+
+Authors may optionally set `agent.model` to a preferred, fully qualified model:
+
+```yaml
+agent:
+  id: incident-triage
+  model: anthropic/claude-sonnet-4-5
+```
+
+At Add time, the receiving Gateway checks its ordinary model picker. If that
+exact model is available and permitted, the new agent uses it. Otherwise Add
+continues using the Gateway's default model; it does not install a provider,
+request credentials, or change the Gateway default. Omitting `model` keeps the
+existing default-inheritance behavior. Use `provider/model`, not a host-local
+alias or account pin. This is a one-time creation preference, not an ongoing
+Template-managed model selection; users can change the agent's model normally.
+
+```yaml
+agent:
+  id: incident-triage
+  tools:
+    profile: coding
+    allow: [read, write]
+    fs: { workspaceOnly: true }
+  sandbox: { mode: all, workspaceAccess: ro }
+  memory: { search: { enabled: false } }
+```
+
+Exec mode (`tools.exec`) and cross-provider messaging (`tools.message`) are
+operator decisions, so a Template cannot set them either; after Add, set them on
+the new agent with `openclaw config set agents.entries.<id>.tools.exec ...`.
+
+Set `enabled: false` on an automation to install it disabled; omitting the field
+keeps the enabled default. Jobs belong to the new agent. First-run instructions
+in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
+and update its timezone, tools, or timeout through ordinary automation controls.
+Enable that same job after setup and the user's activation choice; avoid creating
+a duplicate job for the same recipe.
 
 Package and workspace paths must stay inside the package root. Manifests are
 limited to 1 MiB, package metadata to 256 KiB, and workspace files have
 per-file and aggregate limits. Selected files become package content, so
 review them for secrets before building or publishing.
+
+### Welcome description and conversation starters
+
+A Template may set optional `agent.description` and `agent.recommendedPrompts`
+metadata for the installed agent’s main/new-chat welcome page:
+
+```yaml
+agent:
+  id: project-briefing
+  description: Follows your repositories and briefs you on meaningful changes.
+  recommendedPrompts:
+    - Set up a repository
+    - Brief me on recent changes
+    - Show my tracked projects
+```
+
+When no recent chats are available, a nonempty list replaces the default welcome
+prompts. An unset or empty list keeps the defaults. Recent chats, incognito,
+phone layout, and model setup keep their existing display rules. The Template
+page, Add flow, and bootstrap instructions are unchanged.
+
+Prompts use the shared metadata limits: at most three nonempty strings, each at
+most 128 Unicode code points after whitespace normalization. Declare them in
+`CLAW.md`, not in `profiles/openclaw.yml`.
+
+**Compatibility:** this field requires a build with agent welcome prompt support.
+OpenClaw 2026.11.4 and older reject it because Template agent schemas are strict.
+Keep `schemaVersion: 1`; omit `recommendedPrompts` when supporting those versions.
+See [agent welcome settings](/gateway/config-agents/entries-and-multi-agent#chat-welcome).
 
 <a id="inspect-and-preview"></a>
 
@@ -246,6 +386,14 @@ openclaw templates add @openclaw/api-integration-engineer --dry-run --json
 openclaw templates add @openclaw/api-integration-engineer
 ```
 
+With a running Gateway, Add sends the ClawHub name to that Gateway for an exact
+version review and installation. The Gateway chooses the new workspace;
+`--workspace` is rejected instead of being ignored. Local paths still take
+precedence over registry names and require the Gateway to be stopped.
+
+Offline Add uses the same installer and local scheduler after acquiring exclusive
+state ownership. Explicitly disabled automations remain disabled.
+
 A registry name resolves the latest published release to an exact version and
 immutable artifact digest before planning. OpenClaw uses its existing registry
 trust checks, verifies the downloaded artifact, and safely extracts it under
@@ -262,26 +410,120 @@ approval never approves its skill or plugin dependencies: their existing trust
 acknowledgments and `--accept-capabilities` checks still apply independently.
 
 Each Add chooses an unused agent ID. The CLI reports that ID so you can open
-or configure the agent afterward. The Control UI opens the new agent's chat
-and starts with "What can you do?" after a successful Add.
+or configure the agent afterward. The first assistant response is a normal
+personality/SOUL greeting, not a saved canned greeting or a message sent on your
+behalf. Later setup failure retains the exposed agent and conversation;
+completion does not replace an existing draft.
+
+During a CLI Add, the installer shows a card for each newly installed plugin and
+an automation-created notice as each routine is added. Disabled routines remain
+disabled while their setup prerequisites are missing. Actual installation failures
+appear in the plugin card or a concise automation-failed notice; continue setup in
+the same agent. Successful skill and MCP setup, absent optional files, and empty
+categories stay silent. There is no final setup receipt or second model recap.
+Declared package bootstrap still follows shared setup; MCP configuration alone does
+not prove a working connection.
+When offline Add keeps an agent after a later step fails, the agent gets the default
+`AGENTS.md`, `IDENTITY.md` and `USER.md`, and the package `BOOTSTRAP.md` is held
+back because its setup did not finish.
+
+### Add from the Control UI
+
+**Add** in the Control UI has no review step and no preview. It opens the new
+agent's pending chat immediately, and the Gateway creates the agent:
+
+1. It creates the agent and its chat. If the Template's agent ID is taken, the
+   new agent gets the next unused ID; an existing agent is never changed.
+2. It fetches the exact Template release shown in the catalog.
+3. It writes the Template's workspace files and its `BOOTSTRAP.md`.
+4. It copies the Template's `CLAW.md` unchanged to the workspace root, as an
+   ordinary file the agent can read. The workspace root `CLAW.md` is reserved
+   for that original manifest; a conflicting workspace-file declaration fails
+   creation before any Template files are written and removes the new agent.
+5. It installs the declared skills, from ClawHub or bundled in the package.
+6. It installs plugins bundled in the package.
+7. It adds the declared MCP servers.
+8. It grants `read`, `automations`, `plugins`, and `message` additively for setup.
+   Explicit Template denies and operator policy ceilings still apply.
+
+After creation, the Gateway starts one hidden setup turn in that chat, with the
+agent's ordinary tools. The agent reads declarations from the persisted `CLAW.md`
+and responds in this order:
+
+1. A brief greeting in its own voice.
+2. Declared automations, created **paused**, bound to this conversation. Existing
+   matching automations are left unchanged, including ones you already enabled.
+3. Added MCP servers and any sign-in needed in **Settings → MCP**.
+4. Plugin state and exact-package ClawHub cards for missing plugins. Official
+   cards offer **Install**; community cards offer **View details** for normal
+   plugin review. Unknown packages produce a not-found result, not a card.
+5. Creation failures, by name and reason. Successful skills are not listed.
+6. The author's opening from `BOOTSTRAP.md`, last in the same turn.
+
+Neither creation nor this turn installs or enables a plugin referenced on
+ClawHub, or enables an automation. A missing or disabled referenced plugin never
+stops agent creation. You choose installation or enabling afterwards.
+This path creates declared `automations` (`cronJobs` in older manifests); it
+does not convert legacy `agent.heartbeat` settings into a heartbeat automation.
+
+Intermediate text and card sends are non-final; the final reply closes setup.
+Sending becomes available when setup finishes; a message typed earlier stays in
+the composer.
+
+If that first turn fails or is interrupted, **Retry setup** runs only that turn
+with a fresh run ID in the existing chat. It does not re-create the agent,
+rewrite its files, fetch the Template again, or reinstall dependencies. The
+ordinary session retains the creation report until the turn completes; a retry
+cannot start a second setup while the first still owns the agent's setup lease.
+Retry explicitly targets the admitted agent. If setup completed while the client
+was disconnected, Retry reconciles that existing chat without adding another copy.
+The CLI Add flow and its no-tools opening are unchanged.
+
+If the Gateway cannot fetch the Template or write its workspace files, it removes
+the new agent and chat, and the catalog shows the error on that Template's card.
+Add it again after fixing the cause. A skill, bundled plugin, or MCP server that
+cannot be set up does not stop Add: the agent is kept without it. A skill or
+bundled plugin that carries a trust warning is not installed. An MCP server whose
+name is already configured with different settings is left unchanged. Missing
+dependencies are reported as incomplete setup, with their reasons in the opening
+conversation. Continue in that chat instead of adding another copy; no installer
+is continuing those steps in the background. Configured MCP servers may still
+need sign-in or connection checks.
+
+A Template release that ClawHub flagged for review still needs your confirmation.
+The catalog shows the ClawHub warning with **Add anyway** before any agent is kept.
 
 `--dry-run --json` remains available for automation or local-source inspection.
-`--agent-id` and `--workspace` override the default destination with an
-unused ID or new path. Ordinary Add does not require a separate plan or
-review token. Exceptional trust warnings can still require explicit consent.
+`--agent-id` selects an unused ID, or names an agent that a failed Gateway Add
+kept so Add continues its setup. `--workspace` selects a new path for local
+preview or offline Add. Ordinary Add binds its review internally and does not
+require a separate plan token. Trust warnings and plugin capabilities still
+require their separate explicit acknowledgements.
 
 For `add` and `dev`, an explicitly empty `--agent-id` is invalid. Omit the option
 to use the default unused ID.
 
 Gateway Add review responses describe schedules as either `{ cron, timezone }`
 or `{ everyMs }`, where `everyMs` is a positive integer in milliseconds. Delivery
-values are `none`, `last-channel`, or `owner`.
+is `owner` for converted heartbeat jobs and `none` for declared automations.
 
-Add reuses matching shared dependencies, installs missing requirements,
-creates the agent and its workspace, and assigns its automations. An existing
-agent or workspace is never overwritten. If Add fails, inspect the specific
-error and retry after resolving it; newly created resources are cleaned up
-where safe, while resources that existed before Add are left alone.
+CLI Add from a local source requires exclusive offline state ownership; it refuses
+to run while a Gateway owns that state. For published ClawHub Templates, both the
+CLI and Control UI can Add through a running Gateway; the Control UI uses the
+[plan-free Add](#add-from-the-control-ui) above. Offline Add uses the same
+session, local agent runtime, and scheduler
+owners without starting scheduled execution. `--json` suppresses conversational
+terminal output but keeps the ordinary conversation and per-result install notices.
+
+Add reuses matching shared dependencies, installs missing requirements, and
+assigns the declared automations. An existing agent or workspace is never
+overwritten. If Add fails before exposing the agent, newly created resources are
+cleaned up where safe; preexisting resources remain untouched. If the result says
+the agent was retained, continue in that agent and inspect the specific error
+instead of adding another copy. When Gateway Add kept the agent before its setup
+finished, rerun `openclaw templates add <source> --agent-id <id>` once the error
+is resolved. The rerun continues in the same agent and conversation, and only
+for the Template version the first Add resolved.
 
 ## Remove the agent
 
@@ -298,25 +540,54 @@ Shared plugins, MCP servers, and other host-level integrations remain installed;
 remove them separately through their ordinary controls when no longer needed.
 There is no Template ownership record or reverse-install operation.
 
+## Agents from the earlier lifecycle
+
+Agents created by the earlier `claws add` or `claws migrate` commands still carry
+a Template consent record. OpenClaw refuses to run such an agent after its
+configuration changes, for example after
+`openclaw config set agents.entries.<id>.tools.exec '{"mode":"full"}'`, and the
+error names the agent. Undo the change, or release the agent with the Gateway
+stopped:
+
+```bash
+openclaw gateway stop
+openclaw templates release <agent-id>
+openclaw gateway start
+```
+
+Release shows the agent's tool settings and asks for confirmation; pass `--yes`
+in scripts. It removes the Template consent and ownership records only. The
+agent, its workspace, sessions, plugins, MCP servers, and automations stay, and
+from then on it is an ordinary agent whose settings you manage with
+`openclaw config` and the agent commands. Release refuses to run while the
+Gateway is running.
+
 ## Command reference
 
-| Command                              | Purpose                                          |
-| ------------------------------------ | ------------------------------------------------ |
-| `templates create [path]`            | Create a minimal local Template project.         |
-| `templates validate [path]`          | Validate project inputs and package contents.    |
-| `templates dev [path]`               | Build and preview locally without mutation.      |
-| `templates build [path] --out <tgz>` | Build a deterministic package artifact.          |
-| `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.        |
-| `templates add <source>`             | Create a new agent and install its requirements. |
+| Command                              | Purpose                                           |
+| ------------------------------------ | ------------------------------------------------- |
+| `templates draft <workspace>`        | Initialize a private proposal without publishing. |
+| `templates create [path]`            | Create a minimal local Template project.          |
+| `templates validate [path]`          | Validate project inputs and package contents.     |
+| `templates dev [path]`               | Build and preview locally without mutation.       |
+| `templates build [path] --out <tgz>` | Build a deterministic package artifact.           |
+| `templates inspect <source>`         | Inspect a canonical package or `CLAW.md`.         |
+| `templates add <source>`             | Create a new agent and install its requirements.  |
+| `templates release <agent-id>`       | Make an earlier Template-managed agent ordinary.  |
 
 Use `--json` for experimental machine-readable output. Validation errors,
 blocked requirements, and failed additions exit `1`.
+Gateway-owned Add reports the native `agentId`, `status`, and `readiness` result.
+A partial result exits `1`. A lost Gateway reply reports an unknown outcome;
+inspect the agent and its automations before retrying, since no local fallback
+or automatic replay is attempted.
 
 Human-readable reports sanitize terminal control characters in Template fields
 and project paths. `--json` retains the original field values for machine processing.
 
 ## See also
 
+- [Agents and Templates](/concepts/agents-and-templates)
 - [Agents](/cli/agents)
 - [Skills](/tools/skills)
 - [Plugins](/tools/plugin)

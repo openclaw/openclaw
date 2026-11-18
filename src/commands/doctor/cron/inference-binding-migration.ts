@@ -19,10 +19,6 @@ import {
   hasSyntheticLocalProviderAuthConfig,
   resolveProviderEntryApiKeyProfileReference,
 } from "../../../agents/model-auth-provider-config.js";
-import {
-  isCliRuntimeProvider,
-  resolveCliRuntimeExecutionProvider,
-} from "../../../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
 import { isConfiguredKeyAuthSource } from "../../../agents/provider-model-auth-source-plan.js";
 import { prepareAgentRuntimeAuth } from "../../../agents/runtime-plan/prepare-auth.js";
@@ -36,15 +32,13 @@ import { prepareSqliteTargetFromSessionStorePath } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import type { CronInferenceBinding } from "../../../cron/inference-binding.js";
-import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
-import { resolveCronAgentSessionKey } from "../../../cron/isolated-agent/session-key.js";
-import { prepareCronSession } from "../../../cron/isolated-agent/session.js";
-import { normalizeCronJobCreate } from "../../../cron/normalize.js";
 import {
-  isDetachedCronSessionTarget,
-  isInvalidCronSessionTargetIdError,
-  resolveCronSessionTargetSessionKey,
-} from "../../../cron/session-target.js";
+  inspectCronInferenceAccount,
+  prepareCronInferenceDiagnosticSession,
+} from "../../../cron/inference-diagnostics.js";
+import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
+import { normalizeCronJobCreate } from "../../../cron/normalize.js";
+import { isInvalidCronSessionTargetIdError } from "../../../cron/session-target.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { prepareArtifactPreservingSqliteRead } from "../../../infra/sqlite-snapshot-source.js";
 import type { PluginDoctorCronJob } from "../../../plugins/doctor-contract-module.js";
@@ -131,25 +125,10 @@ export async function maybeRepairCronInferenceBindings(params: {
           }
           inspectedAgents.add(agentId);
         }
-        const baseKey =
-          resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${stored.id}`;
-        const sessionKey = resolveCronAgentSessionKey({
+        const session = await prepareCronInferenceDiagnosticSession({
           cfg: config,
           agentId,
-          sessionKey: baseKey,
-        });
-        const sourceSessionKey =
-          job.sessionTarget === "current" && job.sessionKey
-            ? resolveCronAgentSessionKey({ cfg: config, agentId, sessionKey: job.sessionKey })
-            : undefined;
-        const session = await prepareCronSession({
-          cfg: config,
-          agentId,
-          sessionKey,
-          sourceSessionKey,
-          forceNew: isDetachedCronSessionTarget(job.sessionTarget),
-          exactRunSession: true,
-          nowMs: Date.now(),
+          job: { ...job, id: stored.id },
         });
         if (session.initialSessionEntry?.modelSelectionLocked === true) {
           warnings.push(
@@ -172,15 +151,20 @@ export async function maybeRepairCronInferenceBindings(params: {
         }
         modelRef = `${selected.provider}/${selected.model}`;
         const cfg = captureConfig(selected.owner.config);
-        if (
-          isCliRuntimeProvider(selected.provider, { config: cfg }) ||
-          resolveCliRuntimeExecutionProvider({
-            cfg,
-            agentId,
-            provider: selected.provider,
-            modelId: selected.model,
-          })
-        ) {
+        const account = await inspectCronInferenceAccount({
+          cfg: selected.cfgWithAgentDefaults,
+          agentId,
+          agentDir: selected.owner.agentDir,
+          job: { id: stored.id, name: job.name },
+          provider: selected.provider,
+          model: selected.model,
+          configuredProfileId: selected.configuredProfileId,
+          session,
+        });
+        if (account.cliExecution) {
+          if (account.warning) {
+            warnings.push(account.warning);
+          }
           continue;
         }
         const runtime =

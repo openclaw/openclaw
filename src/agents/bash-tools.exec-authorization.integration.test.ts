@@ -41,6 +41,8 @@ vi.mock("./shell-snapshot.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const python3 = resolveExecutablePath("python3", { useCache: false });
+const nodeOnPath = resolveExecutablePath("node", { useCache: false });
+const nodeBinary = nodeOnPath ? fs.realpathSync(nodeOnPath) : "";
 
 describe.skipIf(process.platform === "win32")("gateway execution authorization boundary", () => {
   let root: string;
@@ -72,6 +74,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
   function tool(
     autoReviewer: ExecAutoReviewer,
@@ -137,6 +140,57 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     expect(review).not.toHaveBeenCalled();
     expect(boundary.spawn).not.toHaveBeenCalled();
   });
+
+  it.each(["/bin/bash", "/usr/bin/false"])(
+    "executes a safe-bin pipeline without synchronous probes (SHELL=%s)",
+    async (shell) => {
+      vi.stubEnv("SHELL", shell);
+      const syncCalls: string[] = [];
+      const ownerCall = (method: string) => {
+        if (
+          /\/(?:exec-safe-bin-trust|exec-command-resolution|executable-path|system-run-(?:cwd-binding|file-snapshot|mutable-file-(?:operand|policy)|approval-binding))\.(?:ts|js):/.test(
+            new Error().stack ?? "",
+          )
+        ) {
+          syncCalls.push(method);
+        }
+      };
+      const statSync = fs.statSync;
+      const accessSync = fs.accessSync;
+      const realpathSync = fs.realpathSync;
+      vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+        ownerCall("stat");
+        return statSync(file, options);
+      });
+      vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+        ownerCall("access");
+        return accessSync(file, mode);
+      });
+      vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+        ownerCall("realpath");
+        return realpathSync(file, options);
+      });
+      const exec = createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode: "allowlist",
+        safeBins: ["wc"],
+        cwd: root,
+        notifyOnExit: false,
+      });
+      const result = await exec.execute("safe-bin-pipeline", {
+        command: "pwd | wc -l",
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: expect.stringMatching(/^\s*1\s*$/),
+      });
+      expect(boundary.spawn).toHaveBeenCalledTimes(1);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(syncCalls).toEqual([]);
+    },
+  );
 
   it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
     saveExecApprovals({
@@ -477,4 +531,107 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       }
     },
   );
+
+  // A program file started from a shell chain: the command text does not show what runs.
+  describe.skipIf(path.basename(nodeBinary) !== "node")("opaque interpreter programs", () => {
+    // The base refused each command as a "complex interpreter invocation".
+    const command = "echo start && node main.js";
+    const unbindableCommands = (dir: string) => [
+      `cd ${JSON.stringify(dir)} && node main.js`,
+      "cat main.js | node",
+    ];
+    beforeEach(() => {
+      fs.writeFileSync(path.join(root, "main.js"), 'process.stdout.write("program-ran");\n');
+    });
+    function setApprovals(security: "full" | "allowlist") {
+      saveExecApprovals({
+        version: 1,
+        defaults: {
+          security,
+          ask: security === "full" ? "off" : "on-miss",
+          askFallback: "deny",
+        },
+        agents:
+          security === "allowlist"
+            ? {
+                main: {
+                  allowlist: ["/bin/cat", "/bin/echo"]
+                    .map((bin) => ({ pattern: fs.realpathSync(bin) }))
+                    .concat({ pattern: nodeBinary }),
+                },
+              }
+            : {},
+      });
+    }
+    function programTool(mode: "full" | "ask" | "auto", autoReviewer?: ExecAutoReviewer) {
+      return createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode,
+        pathPrepend: [path.dirname(nodeBinary)],
+        safeBins: [],
+        autoReviewer,
+        cwd: root,
+        runId: "opaque-program-run",
+        // Full mode has no channel: such runs keep the model's per-call ask (subagent launches).
+        messageProvider: mode === "full" ? undefined : "webchat",
+        notifyOnExit: false,
+      });
+    }
+    function expectProgramRan(
+      result: Awaited<ReturnType<ReturnType<typeof programTool>["execute"]>>,
+    ) {
+      if (result.details.status !== "completed") {
+        throw new Error(`Unexpected exec status: ${result.details.status}`);
+      }
+      expect(result.details.exitCode).toBe(0);
+      expect(result.details.aggregated).toMatch(/program-ran$/);
+    }
+
+    it.each([
+      ["without a per-call ask", {}],
+      ["when the call asks for approvals", { ask: "on-miss" }],
+    ])("runs under full/off %s", async (_name, extra) => {
+      setApprovals("full");
+      const exec = programTool("full");
+      for (const each of [command, ...unbindableCommands(root)]) {
+        expectProgramRan(await exec.execute("opaque-full", { command: each, ...extra }));
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    });
+
+    it("requests approval instead of refusing under an asking policy", async () => {
+      setApprovals("allowlist");
+      const exec = programTool("ask");
+      // Control: the same allowlisted program runs without approval when the command shows it.
+      expectProgramRan(await exec.execute("visible-program", { command: "node main.js" }));
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      approve("allow-once");
+      const result = await exec.execute("opaque-ask", { command });
+      expect(vi.mocked(callGatewayTool).mock.calls.map(([method]) => method)).toContain(
+        "exec.approval.request",
+      );
+      expectProgramRan(result);
+    });
+
+    it("runs allowlisted programs under an asking policy when approval cannot bind them", async () => {
+      setApprovals("allowlist");
+      const exec = programTool("ask");
+      for (const each of unbindableCommands(root)) {
+        expectProgramRan(await exec.execute("opaque-ask-unbindable", { command: each }));
+      }
+      expect(callGatewayTool).not.toHaveBeenCalled();
+    });
+
+    it("sends the program to the auto-reviewer as an allowlist miss", async () => {
+      setApprovals("allowlist");
+      const review = reviewer();
+      expectProgramRan(await programTool("auto", review).execute("opaque-auto", { command }));
+      expect(review).toHaveBeenCalledOnce();
+      expect(review.mock.calls[0]?.[0]).toMatchObject({
+        reason: "allowlist-miss",
+        analysis: { parsed: true, allowlistMatched: true },
+      });
+    });
+  });
 });

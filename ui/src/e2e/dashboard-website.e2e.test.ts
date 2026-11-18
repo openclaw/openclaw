@@ -80,24 +80,10 @@ suite.define(() => {
         const content = page.frameLocator(".board-website__frame");
         await content.getByText("All systems operational", { exact: true }).waitFor();
         const sidebar = page.locator("openclaw-app-sidebar");
-        await sidebar
-          .locator(".sidebar-rail")
-          .getByRole("button", { name: "Pages", exact: true })
-          .click();
-        const pages = sidebar.locator(".sidebar-pages");
-        const catalogRow = pages.locator(".sidebar-pages__entry").filter({
-          has: page.locator(`[data-sidebar-entry="session:${sessionKey}"]`),
-        });
-        await catalogRow.hover();
-        await catalogRow.getByRole("button", { name: "Pin", exact: true }).click();
-        expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
-          1,
-        );
-        const showView = (name: "Pages" | "Sessions") =>
-          sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
-        // Pinned dashboards join the Sessions list's Pinned section, not the rail.
-        expect(await sidebar.locator(".sidebar-rail__pin").count()).toBe(0);
-        await showView("Sessions");
+        // A personal pin moves the dashboard's Sessions row into the Pinned section.
+        const row = sidebar.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
+        await row.hover();
+        await row.getByRole("button", { name: "Pin session", exact: true }).click();
         const pinned = sidebar
           .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
           .locator("a.sidebar-recent-session__link");
@@ -153,10 +139,13 @@ suite.define(() => {
             "*",
           );
         });
-        await showView("Pages");
-        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
-        await page.waitForURL(`${suite.server.baseUrl}sessions`);
-        await showView("Sessions");
+        // Leave the dashboard for Usage, one of the rail's default pins, and come back.
+        await sidebar
+          .locator('.sidebar-rail__pin[data-sidebar-entry="route:usage"] a')
+          .first()
+          .click();
+        await page.waitForURL(`${suite.server.baseUrl}usage`);
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         await pinned.click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);

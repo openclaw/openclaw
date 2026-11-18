@@ -3,6 +3,7 @@ import type { ResponseOutputItem } from "openai/resources/responses/responses.js
 import { expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
+import { suppressOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import { resolveResponsesContinuationRequest } from "./openai-responses-continuation.js";
 import {
   responsesInputFingerprint,
@@ -310,3 +311,72 @@ it.each(["before", "after"] as const)(
     }
   },
 );
+
+it.each([
+  ["provider early", convertProviderResponsesMessages, false],
+  ["provider late", convertProviderResponsesMessages, true],
+  ["transport early", convertResponsesMessages, false],
+  ["transport late", convertResponsesMessages, true],
+] as const)("%s stops recovery at the first cloned async fragment", (_name, convert, late) => {
+  const old = asyncPrefix("resp_old", undefined, "old");
+  const prefix = asyncPrefix("resp_repaired", "repaired_turn", "fresh");
+  suppressOpenAIResponsesCompaction(prefix, model, undefined, undefined, "repair-anchor");
+  const tail = answer("repaired answer", "resp_repaired", "msg_repaired", "repaired_turn");
+  tail.providerReplay = structuredClone(prefix.providerReplay);
+  const oldResult = makeTextToolResult("call_old|fc_old", "lookup", "old result", false, 1);
+  const context: Context = {
+    messages: [
+      user("old task"),
+      old,
+      ...(late ? [] : [oldResult]),
+      user("new task"),
+      structuredClone(prefix),
+      makeTextToolResult("call_fresh|fc_fresh", "lookup", "fresh result", false, 2),
+      tail,
+      ...(late ? [oldResult] : []),
+    ],
+  };
+  const input = convert(model, context, new Set(["openai"]));
+  const calls = input.filter((item) => item.type === "function_call");
+  const results = input.filter((item) => item.type === "function_call_output");
+  expect(results.find((item) => item.output === "old result")?.call_id).toBe(calls[0]?.call_id);
+  expect(results.find((item) => item.output === "fresh result")?.call_id).toBe(calls[1]?.call_id);
+  expect(calls[0]?.call_id).not.toBe("call_old");
+  expect(calls[1]?.call_id).toBe("call_fresh");
+});
+
+it.each([
+  ["provider", convertProviderResponsesMessages],
+  ["transport", convertResponsesMessages],
+] as const)("%s retains the recovery cutoff through filtered failed receipts", (_name, convert) => {
+  const contents: AssistantMessage["content"][] = [
+    [],
+    [{ type: "thinking", thinking: "Partial reasoning", thinkingSignature: "unfinished" }],
+    [{ type: "text", text: " " }],
+    [{ type: "text", text: "[assistant turn failed before producing content]" }],
+    [{ type: "toolCall", id: "call_unfinished|fc_unfinished", name: "lookup", arguments: {} }],
+  ];
+  for (const content of contents) {
+    const failed = createAssistant(model, content, { stopReason: "error" });
+    suppressOpenAIResponsesCompaction(failed, model, undefined, undefined, "repair-anchor");
+    const old = asyncPrefix("resp_old", undefined, "old");
+    const fresh = asyncPrefix("resp_fresh", undefined, "fresh");
+    const context: Context = {
+      messages: [
+        user("old task"),
+        old,
+        makeTextToolResult("call_old|fc_old", "lookup", "old result", false, 1),
+        failed,
+        user("try again"),
+        fresh,
+        makeTextToolResult("call_fresh|fc_fresh", "lookup", "fresh result", false, 2),
+      ],
+    };
+    const input = convert(model, context, new Set(["openai"]));
+    const calls = input.filter((item) => item.type === "function_call");
+    expect(calls[0]?.call_id).not.toBe("call_old");
+    expect(calls[1]?.call_id).toBe("call_fresh");
+    expect(input.filter((item) => item.type === "message")).toHaveLength(2);
+    expect(failed.stopReason).toBe("error");
+  }
+});

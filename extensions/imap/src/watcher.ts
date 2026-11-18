@@ -323,6 +323,11 @@ export class ImapAccountWatcher {
       );
       messages.sort((left, right) => left.uid - right.uid);
       for (const message of messages) {
+        // IMAP can interleave unsolicited FETCH updates with the requested rows.
+        // Only this batch may dispatch messages or advance the cursor.
+        if (!batchUids.includes(message.uid)) {
+          continue;
+        }
         if (
           this.scheduler.signal.aborted ||
           this.client !== client ||

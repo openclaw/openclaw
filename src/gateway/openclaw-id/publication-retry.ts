@@ -206,29 +206,32 @@ export function createPublicationRetry(params: PublicationRetryParams) {
     }
   };
 
+  // Takes over after a publication the caller ran directly to report its outcome (linking,
+  // `openclaw id publish`): a failure stays pending durably, and a transient one is retried.
+  const adopt = async (outcome: PublishOutcome | undefined) => {
+    if (outcome?.state === "failed") {
+      await params.setPending(true);
+      if (outcome.retryable && !running) {
+        schedule();
+      }
+    }
+    return outcome;
+  };
+
   return {
     /** Runs a caller's direct publication through the same refresh owner as scheduled attempts. */
     publishDirect: publishWithRefresh,
+
+    /** A direct publication whose failure is then adopted (see `adopt`). */
+    publishAdopted: async (direct: PublicationRetryParams["publish"]) =>
+      await adopt(await publishWithRefresh(direct)),
+
+    adopt,
 
     /** Records a pending publication durably, then publishes (or joins the attempt in flight). */
     async request(): Promise<void> {
       await params.setPending(true);
       await run();
-    },
-
-    /**
-     * Takes over after a publication the caller ran directly to report its outcome
-     * (linking): a failure stays pending durably, and a
-     * transient one is retried with backoff.
-     */
-    async adopt(outcome: PublishOutcome | undefined): Promise<void> {
-      if (outcome?.state !== "failed") {
-        return;
-      }
-      await params.setPending(true);
-      if (outcome.retryable && !running) {
-        schedule();
-      }
     },
 
     /** Publishes now, with the backoff reset, if a publication is pending. */

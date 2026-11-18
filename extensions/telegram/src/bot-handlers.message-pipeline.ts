@@ -56,6 +56,18 @@ const mediaLog = createSubsystemLogger("telegram/media");
 const HOUR_MS = 60 * 60_000;
 const SENDER_MEDIA_MAX_AGE_MS = 2 * 60_000;
 const SENDER_MEDIA_LIMIT = 4;
+// Two batches (attachments, then reply-chain media) fit inside the 5 min adoption watchdog.
+const TELEGRAM_MEDIA_BATCH_BUDGET_MS = 2 * 60_000;
+
+function createMediaBatchBudget(): AbortSignal {
+  const budget = new AbortController();
+  // Never cleared: the batch has no end hook, and an unref'd timer outliving it is harmless.
+  setTimeout(
+    () => budget.abort(new Error("Telegram media budget for this message ran out")),
+    TELEGRAM_MEDIA_BATCH_BUDGET_MS,
+  ).unref?.();
+  return budget.signal;
+}
 
 function resolveRetainedTelegramMedia(params: {
   media?: TelegramResolvedMedia;
@@ -82,6 +94,7 @@ function resolveRetainedTelegramMedia(params: {
     ? {
         path,
         kind: media.kind,
+        fileUniqueId: media.fileUniqueId,
         ...(media.contentType ? { contentType: media.contentType } : {}),
         ...(fileName ? { fileName } : {}),
         ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
@@ -111,6 +124,11 @@ export function createTelegramMessagePipeline({
   });
   // Resolve the ALS owner at operation time; buffered callers retain ownership
   // after that frame ends by passing their participant signals explicitly.
+  // Each runtime carries one budget shared by every fetch it serves. Inbound media is
+  // fetched before the update is adopted, and the ingress drain retries an update that
+  // has not been adopted after 5 min: that retry holds every later message in the chat.
+  // A batch (an album, a forwarded burst, one message's reply chain) therefore shares one
+  // budget, and the attachment fetch plus the reply-chain fetch stay inside the watchdog.
   const resolveMediaRuntime = (...explicitSignals: AbortSignal[]) => {
     const abortSignals = [
       opts.mediaAbortSignal,
@@ -121,6 +139,7 @@ export function createTelegramMessagePipeline({
     return {
       ...mediaRuntimeOptions,
       abortSignal: abortSignals.length > 1 ? AbortSignal.any(abortSignals) : abortSignals[0],
+      budget: createMediaBatchBudget(),
     };
   };
   const sessionRuntime = createTelegramMessageSessionRuntime({
@@ -369,6 +388,13 @@ export function createTelegramMessagePipeline({
       );
       const replyMedia: TelegramMediaRef[] = [];
       const replyChain: TelegramReplyChainEntry[] = [];
+      // Only downloaded current media claims its source; an unavailable attachment
+      // must still allow a replied-to copy to hydrate.
+      const seenFileUniqueIds = new Set(
+        params.allMedia.flatMap((media) =>
+          media.fileUniqueId && !media.unavailable ? [media.fileUniqueId] : [],
+        ),
+      );
       const hydrateMedia = async (
         sourceMessage: Parameters<typeof resolveMedia>[0]["ctx"]["message"],
         replyFileId: string,
@@ -401,6 +427,7 @@ export function createTelegramMessagePipeline({
           mediaRef = {
             path: media.path,
             kind: media.kind,
+            fileUniqueId: media.fileUniqueId,
             ...(media.contentType ? { contentType: media.contentType } : {}),
             ...(media.fileName ? { fileName: media.fileName } : {}),
             ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
@@ -427,13 +454,21 @@ export function createTelegramMessagePipeline({
         return mediaRef;
       };
       for (const [index, node] of replyChainNodes.entries()) {
-        const replyFileId = resolveTelegramPrimaryMedia(node.sourceMessage)?.fileRef.file_id;
+        const replyPrimaryMedia = resolveTelegramPrimaryMedia(node.sourceMessage);
+        const replyFileId = replyPrimaryMedia?.fileRef.file_id;
+        const replyFileUniqueId =
+          node.resolvedMedia?.fileUniqueId ?? replyPrimaryMedia?.fileRef.file_unique_id;
         const mediaRef =
-          replyFileId && (await shouldHydrateReplyMedia(node, index))
+          replyFileId &&
+          (!replyFileUniqueId || !seenFileUniqueIds.has(replyFileUniqueId)) &&
+          (await shouldHydrateReplyMedia(node, index))
             ? await hydrateMedia(node.sourceMessage, replyFileId, node)
             : undefined;
         if (mediaRef) {
           replyMedia.push(mediaRef);
+          if (mediaRef.fileUniqueId) {
+            seenFileUniqueIds.add(mediaRef.fileUniqueId);
+          }
         }
         replyChain.push(toReplyChainEntry(node, replyCtx, mediaRef));
       }
@@ -442,12 +477,15 @@ export function createTelegramMessagePipeline({
         replyChainNodes.length === 0 && !replyCtx.message.reply_to_message
           ? replyCtx.message.external_reply
           : undefined;
-      const externalFileId = resolveTelegramPrimaryMedia(externalReply)?.fileRef.file_id;
+      const externalPrimaryMedia = resolveTelegramPrimaryMedia(externalReply);
+      const externalFileId = externalPrimaryMedia?.fileRef.file_id;
+      const externalFileUniqueId = externalPrimaryMedia?.fileRef.file_unique_id;
       const externalTarget = externalFileId ? describeReplyTarget(replyCtx.message) : null;
       if (
         externalReply &&
         externalFileId &&
         externalTarget &&
+        (!externalFileUniqueId || !seenFileUniqueIds.has(externalFileUniqueId)) &&
         (await shouldHydrateReplyMedia(externalTarget, 0))
       ) {
         const mediaRef = await hydrateMedia(externalReply, externalFileId);
@@ -594,3 +632,4 @@ export function createTelegramMessagePipeline({
 }
 
 export type TelegramMessagePipeline = ReturnType<typeof createTelegramMessagePipeline>;
+export type TelegramMediaRuntime = ReturnType<TelegramMessagePipeline["resolveMediaRuntime"]>;

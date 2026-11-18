@@ -17,7 +17,7 @@ const enNewSessionRuntime = {
       "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
     cloud: "Cloud",
     runsOn: "Runs on {place}",
-    starting: "Starting…",
+    starting: "Starting",
     followUpCommandsUnavailable: "Commands are available after the session is created.",
     followUpReloadBlocked:
       "Finish starting the session or remove its follow-up messages and draft before reloading.",
@@ -26,6 +26,7 @@ const enNewSessionRuntime = {
     followUpsAdmissionFailed:
       "Your follow-up messages are held. Retry them after checking browser storage.",
     createFailed: "Couldn't create the session.",
+    retrySetup: "Retry setup",
     preferenceSaveUnconfirmed:
       "Saving your new-session choices could not be confirmed. Check them before starting a session.",
     worktreeNameClearUnconfirmed:

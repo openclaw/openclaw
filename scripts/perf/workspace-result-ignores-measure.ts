@@ -6,6 +6,9 @@
  * Run fresh processes serially: two baseline A/A pairs, then five interleaved A/B
  * pairs. Default fixture: 22k tracked files +40k ignored files, 1.144 GB logical.
  * WORKSPACE_BENCH_TRACKED/IGNORED override counts for smoke checks only.
+ * WORKSPACE_BENCH_OUTPUT=tool-cache writes unignored npm cache entries instead,
+ * including one 64 MiB + 1 byte object. The 62k-file fixture is 1.21 GB logical;
+ * baseline must reject that object, candidate must publish only the source edit.
  * Acceptance: preserve one tracked edit and exclude every ignored output; rejected
  * changed bytes become 12 accepted bytes. Compare median/p95 wall, CPU and sampled
  * allocation against identical-code controls; timing and profiling are separate.
@@ -55,6 +58,9 @@ const { parseChangedWorkspaceResult } =
   await import("../../src/gateway/worker-environments/workspace-manifest-comparison.js");
 const tracked = Number(process.env.WORKSPACE_BENCH_TRACKED ?? 22_000);
 const ignored = Number(process.env.WORKSPACE_BENCH_IGNORED ?? 40_000);
+const toolCache = process.env.WORKSPACE_BENCH_OUTPUT === "tool-cache";
+const oversizedCacheBytes = 64 * 1024 * 1024 + 1;
+const cacheObject = ".npm/_cacache/0000/0.txt";
 assert(
   Number.isSafeInteger(tracked) && tracked > 0 && Number.isSafeInteger(ignored) && ignored > 0,
 );
@@ -111,9 +117,14 @@ openOpenClawStateDatabase();
 try {
   const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
   const base = await withLocalWorkspaceProjection(owner, (state) => state.baselineDocument());
-  const half = Math.floor(ignored / 2);
-  await writeGroup(projection, half, ignoredBytes, "dist");
-  await writeGroup(projection, ignored - half, ignoredBytes, ".cache/openclaw-bun");
+  if (toolCache) {
+    await writeGroup(projection, ignored, ignoredBytes, ".npm/_cacache");
+    await fs.truncate(path.join(projection, cacheObject), oversizedCacheBytes);
+  } else {
+    const half = Math.floor(ignored / 2);
+    await writeGroup(projection, half, ignoredBytes, "dist");
+    await writeGroup(projection, ignored - half, ignoredBytes, ".cache/openclaw-bun");
+  }
   const editedPath = "source/0000/0.txt";
   const edit = "source edit\n";
   await fs.writeFile(path.join(projection, editedPath), edit);
@@ -199,16 +210,27 @@ try {
   let changedBytes: number;
   if (expected === "rejected") {
     assert(errorMessage, "Expected staged-result byte cap rejection");
-    assert(
-      errorMessage.includes("Cloud workspace staged result exceeds its byte limit"),
-      errorMessage,
-    );
-    const match = /: (\d+) bytes across (\d+) changed files\/symlinks/u.exec(errorMessage);
-    assert(match, errorMessage);
-    changedBytes = Number(match[1]);
-    changedFiles = Number(match[2]);
-    assert.equal(changedBytes, ignored * ignoredBytes + Buffer.byteLength(edit));
-    assert.equal(changedFiles, ignored + 1);
+    if (toolCache) {
+      assert(
+        errorMessage.includes(`Cloud workspace result is too large: ${cacheObject}`),
+        errorMessage,
+      );
+      // Fixture changed bytes are rejected before publication, including the source edit.
+      changedBytes =
+        ignored * ignoredBytes - ignoredBytes + oversizedCacheBytes + Buffer.byteLength(edit);
+      changedFiles = ignored + 1;
+    } else {
+      assert(
+        errorMessage.includes("Cloud workspace staged result exceeds its byte limit"),
+        errorMessage,
+      );
+      const match = /: (\d+) bytes across (\d+) changed files\/symlinks/u.exec(errorMessage);
+      assert(match, errorMessage);
+      changedBytes = Number(match[1]);
+      changedFiles = Number(match[2]);
+      assert.equal(changedBytes, ignored * ignoredBytes + Buffer.byteLength(edit));
+      assert.equal(changedFiles, ignored + 1);
+    }
     assert.equal((await fs.stat(path.join(canonical, editedPath))).size, trackedBytes);
   } else {
     assert.equal(errorMessage, undefined);
@@ -230,7 +252,10 @@ try {
     changedFiles = result.entries.length;
     changedBytes = Buffer.byteLength(edit);
     assert.equal(await fs.readFile(path.join(canonical, editedPath), "utf8"), edit);
-    assert.equal(await fs.stat(path.join(canonical, "dist")).catch(() => undefined), undefined);
+    assert.equal(
+      await fs.stat(path.join(canonical, toolCache ? ".npm" : "dist")).catch(() => undefined),
+      undefined,
+    );
   }
   const finalReady = await retainedWorkers();
   const report = {
@@ -242,7 +267,12 @@ try {
     load,
     trackedFiles: tracked + 1,
     ignoredFiles: ignored,
-    logicalBytes: tracked * trackedBytes + ignored * ignoredBytes + 14,
+    outputKind: toolCache ? "tool-cache" : "ignored-build-output",
+    logicalBytes:
+      tracked * trackedBytes +
+      ignored * ignoredBytes +
+      14 +
+      (toolCache ? oversizedCacheBytes - ignoredBytes : 0),
     changedFiles,
     changedBytes,
     elapsedMs,

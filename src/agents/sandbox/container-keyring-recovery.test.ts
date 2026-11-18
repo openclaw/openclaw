@@ -19,7 +19,12 @@ vi.mock("./registry.js", () => ({
   assertSandboxRegistryEntryCurrent: () => {},
 }));
 // mock-isolation: registry snapshots do not acquire a real Gateway state root.
-vi.mock("./state-owner.js", () => ({ captureSandboxStateOwner: async () => () => {} }));
+vi.mock("./state-owner.js", () => ({
+  captureSandboxStateOwner: async () => ({
+    assertCurrent: () => {},
+    prepareCurrent: async () => {},
+  }),
+}));
 // mock-isolation: synthetic targets avoid probing an operator's actual Podman connection.
 vi.mock("./podman-runtime.js", () => ({
   validateSandboxContainerEngineTarget: async () => {},
@@ -39,7 +44,18 @@ vi.mock("../../process/exec.js", async (original) => ({
       failed,
       isCanceled: false,
       exitCode: failed ? 125 : 0,
-      stdout: Buffer.from(args[0] === "inspect" ? `${id("a")}\ntrue\ntrue\nhash\n` : ""),
+      stdout: Buffer.from(
+        args[0] === "inspect"
+          ? JSON.stringify({
+              Id: id("a"),
+              State: { Running: true, Paused: false },
+              ReadonlyRootfs: true,
+              Labels: { "openclaw.configHash": "hash" },
+              Mounts: [],
+              Tmpfs: {},
+            })
+          : "",
+      ),
       stderr: Buffer.from(failed ? "crun: create keyring 'container': Disk quota exceeded" : ""),
     };
   },

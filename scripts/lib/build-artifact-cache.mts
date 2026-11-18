@@ -90,6 +90,8 @@ export function hashInputFiles(
   envEntries: string[] = [],
   env: NodeJS.ProcessEnv = process.env,
   compilerIdentity = "",
+  // Callers hashing many overlapping input sets in one run share file digests.
+  fileDigests?: Map<string, string>,
 ) {
   const hash = createHash("sha256");
   hash.update(`v${ARTIFACT_CACHE_VERSION}\0node:${process.versions.node}\0${compilerIdentity}\0`);
@@ -102,7 +104,16 @@ export function hashInputFiles(
   for (const file of files) {
     hash.update(portableRelativePath(rootDir, file));
     hash.update("\0");
-    hash.update(fsImpl.readFileSync(file));
+    if (fileDigests) {
+      let digest = fileDigests.get(file);
+      if (digest === undefined) {
+        digest = createHash("sha256").update(fsImpl.readFileSync(file)).digest("hex");
+        fileDigests.set(file, digest);
+      }
+      hash.update(digest);
+    } else {
+      hash.update(fsImpl.readFileSync(file));
+    }
     hash.update("\0");
   }
   return hash.digest("hex");

@@ -582,6 +582,32 @@ describe("transcript payload storage boundary", () => {
     );
   });
 
+  it.each(["sql", "row"] as const)(
+    "classifies missing and malformed bodies through %s reads",
+    (mode) => {
+      using database = openNodeSqliteDatabase(":memory:");
+      createTable(database);
+      insert(database, 7, {
+        event_json: null,
+        event_zstd: null,
+        event_utf8_bytes: 128,
+        navigation_json: '{"type":"message"}',
+      });
+      const read = () => readBody(database, 7, mode);
+      expect(read).toThrow(
+        expect.objectContaining({ name: "SessionTranscriptColdError", code: "TRANSCRIPT_COLD" }),
+      );
+      database.prepare("UPDATE transcript_events SET event_zstd = ?").run(Buffer.alloc(0));
+      expect(read).toThrow(
+        expect.objectContaining({
+          name: "SessionTranscriptCorruptionError",
+          code: "TRANSCRIPT_CORRUPT",
+          message: expect.stringContaining("Restore a verified backup"),
+        }),
+      );
+    },
+  );
+
   it("bounds malformed frames and rejects size, checksum and UTF-8 corruption", () => {
     const database = openNodeSqliteDatabase(":memory:");
     try {

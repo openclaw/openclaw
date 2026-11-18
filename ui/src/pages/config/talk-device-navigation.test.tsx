@@ -6,6 +6,7 @@ import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createNativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createNativeDeviceSettingsSnapshot } from "../../test-helpers/native-device-settings.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -30,14 +31,16 @@ it("leaves Talk while an admitted native language edit is held", async () => {
     gateway,
     nativeDeviceSettings: capability,
   } as unknown as ApplicationContext);
+  const config = { broadcast: { strategy: "sequential" } };
   Object.assign(context.runtimeConfig.state, {
+    configSnapshot: configSnapshot(config),
     configSchema: {
       type: "object",
       properties: {
         broadcast: { type: "object", properties: { strategy: { type: "string" } } },
       },
     },
-    configForm: { broadcast: { strategy: "sequential" } },
+    configForm: config,
   });
   const provider = createSolidApplicationContextProvider(context);
   const routes = pages.filter(

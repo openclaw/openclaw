@@ -27,6 +27,7 @@ import {
   stopScheduledTask,
   suspendScheduledTaskAutoStartForUpdate,
   withPreparedGatewayTask,
+  timeState,
 } from "./schtasks.stop.test-support.js";
 import {
   inspectPortUsageMock,
@@ -704,13 +705,11 @@ describe("Scheduled Task settlement", () => {
     "handles %s settlement inspection without reporting a false restart",
     async (failure, { env, stdout }) => {
       vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-      let now = 0;
       let exited = false;
       let failedProbes = 0;
       let prepared = false;
       const noRun = failure === "stop" || failure === "no-owner";
       const onMutation = vi.fn();
-      vi.spyOn(Date, "now").mockImplementation(() => now);
       readGatewayOwnerLease.mockImplementation(() =>
         exited || failure === "no-owner" ? undefined : GATEWAY_OWNER,
       );
@@ -731,15 +730,15 @@ describe("Scheduled Task settlement", () => {
             return scheduledTaskProbeResult(4);
           }
           if (failure === "end-unavailable" && exited && !taskAction("/End")) {
-            now += Math.min(
+            timeState.now += Math.min(
               Number(options?.timeout),
-              GATEWAY_SERVICE_STOP_TIMEOUT_MS - 135_000 - now,
+              GATEWAY_SERVICE_STOP_TIMEOUT_MS - 135_000 - timeState.now,
             );
             return scheduledTaskProbeResult(4);
           }
           if ((exited || failure === "no-owner") && !taskAction("/Run")) {
             failedProbes++;
-            now += Number(options?.timeout);
+            timeState.now += Number(options?.timeout);
             return {
               ...spawnSyncResult("", 1),
               error: Object.assign(new Error("probe timed out"), { code: "ETIMEDOUT" }),
@@ -765,7 +764,7 @@ describe("Scheduled Task settlement", () => {
       expect(error).toMatchObject(noRun ? { cause: fact } : { taskSettlement: fact });
       expect(String(error)).toContain(noRun ? "stop unverified" : "restart unverified");
       expect(failedProbes).toBeGreaterThan(1);
-      expect(now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
+      expect(timeState.now).toBe(GATEWAY_SERVICE_STOP_TIMEOUT_MS);
       expect(stdout.read()?.toString() ?? "").not.toContain("Restarted Scheduled Task");
       expect(taskAction("/Run")).toBe(!noRun);
       if (!noRun) {

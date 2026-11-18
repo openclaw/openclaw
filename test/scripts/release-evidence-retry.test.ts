@@ -21,7 +21,7 @@ import {
   runReleaseCiGh,
   validateReleaseRunEvidence,
 } from "../../scripts/release-ci-summary.mjs";
-import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
+import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
 
 function readPluginArtifactMetadata() {
   const workflow = parse(readFileSync(".github/workflows/plugin-npm-release.yml", "utf8"));
@@ -59,6 +59,26 @@ afterEach(() => {
 });
 
 describe("release evidence API reads", () => {
+  it("reads a complete fresh artifact inventory once per authentication", () => {
+    let artifacts = Array.from({ length: 101 }, (_, index) => ({ id: index + 1 }));
+    transport.read.mockImplementation((_bin: string, args: string[]) => {
+      const query = new URLSearchParams((args[1] ?? "").split("?")[1]);
+      const start = (Number(query.get("page")) - 1) * 100;
+      return JSON.stringify({
+        total_count: artifacts.length,
+        artifacts: artifacts.slice(start, start + 100),
+      });
+    });
+    const client = createReleaseEvidenceClient("openclaw/openclaw");
+    expect(client.getRunArtifacts("42")).toEqual(artifacts);
+    expect(transport.read).toHaveBeenCalledTimes(2);
+    artifacts = artifacts.slice(1);
+    expect(client.getRunArtifacts("42")).toEqual(artifacts);
+    expect(transport.read).toHaveBeenCalledTimes(3);
+    artifacts = [{ id: 1 }, { id: 1 }];
+    expect(() => client.getRunArtifacts("42")).toThrow("incomplete or duplicated");
+  });
+
   it("reads only the named plugin artifact after a transient metadata failure", () => {
     vi.spyOn(Atomics, "wait").mockReturnValue("timed-out");
     transport.read.mockImplementationOnce(() => {
@@ -143,9 +163,9 @@ describe("release evidence API reads", () => {
   );
 
   it("recovers strict child verification when GitHub 5xxs 100-job attempt pages", async () => {
-    const fixture = trustedMainNpmFixture("stable");
+    const fixture = candidatePublicationFixture({ candidateVersion: "2026.8.28" });
     const fixtureJobs = fixture.client.getRunAttemptJobs;
-    transport.read.mockImplementation((_bin: string, args: string[]) => {
+    transport.read.mockImplementation(async (_bin: string, args: string[]) => {
       const match =
         /^repos\/openclaw\/openclaw\/actions\/runs\/(\d+)\/attempts\/\d+\/jobs\?page=1&per_page=(\d+)$/u.exec(
           args[1] ?? "",
@@ -156,7 +176,7 @@ describe("release evidence API reads", () => {
       if (match[2] === "100") {
         throw Object.assign(new Error("gh failed"), { stderr: "gh: Server Error (HTTP 502)" });
       }
-      const jobs = fixtureJobs(match[1]!);
+      const jobs = await fixtureJobs(match[1]!);
       return JSON.stringify({ total_count: jobs.length, jobs });
     });
     const evidenceClient = createReleaseEvidenceClient("openclaw/openclaw");
@@ -164,20 +184,24 @@ describe("release evidence API reads", () => {
       {
         runId: fixture.runId,
         verifierSourceContent: readFileSync("scripts/release-ci-summary.mjs"),
-        verifierSourceSha: "c".repeat(40),
+        trustedWorkflowFullRef: fixture.publisherFullRef,
+        trustedWorkflowRef: fixture.publisherFullRef.slice("refs/tags/".length),
+        trustedWorkflowSha: fixture.p,
+        verifierSourceSha: fixture.p,
       },
       {
         ...fixture.client,
-        getRunAttemptJobs: (runId: string, runAttempt: number) =>
-          evidenceClient.getRunAttemptJobs(runId, runAttempt),
+        getRunAttemptJobs: (...args: Parameters<typeof evidenceClient.getRunAttemptJobs>) =>
+          evidenceClient.getRunAttemptJobs(...args),
       },
     );
     expect(evidence.children).toHaveLength(6);
     const pageSizes = transport.read.mock.calls.map((call) => call[1][1].split("per_page=")[1]);
-    // Children are read concurrently; each one reads 100 (502) then 50 exactly once.
-    expect(pageSizes.filter((size) => size === "100")).toHaveLength(6);
-    expect(pageSizes.filter((size) => size === "50")).toHaveLength(6);
-    expect(pageSizes).toHaveLength(12);
+    // Parent admission and coverage each read jobs; the six children read once.
+    // Every inventory falls back from 100 (502) to 50 without sleeping.
+    expect(pageSizes.filter((size) => size === "100")).toHaveLength(8);
+    expect(pageSizes.filter((size) => size === "50")).toHaveLength(8);
+    expect(pageSizes).toHaveLength(16);
     expect(transport.sleep).not.toHaveBeenCalled();
   });
 

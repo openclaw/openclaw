@@ -12,7 +12,10 @@ import type { SqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-o
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { beginPluginStatePublication } from "../../plugin-state/plugin-state-publication.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import type { AgentDatabaseExecutionScope } from "../../state/openclaw-agent-execution-contract.js";
+import type {
+  AgentDatabaseExecutionFileIdentity,
+  AgentDatabaseExecutionScope,
+} from "../../state/openclaw-agent-execution-contract.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   hydrateOpenClawStateWorkerError,
@@ -53,7 +56,11 @@ export function deleteSessionWithNativeBindingsInWorker(
   plan: SessionNativeBindingDeletion["plan"],
   captured: NativeDeletionCapture,
   assertCurrent: (operation?: RetainedWorkerTransactionAdmission) => void,
-  onResult?: (result: SessionNativeBindingCandidate["result"], identity: string) => void,
+  onResult?: (
+    result: SessionNativeBindingCandidate["result"],
+    identity: string,
+    fileIdentity: AgentDatabaseExecutionFileIdentity,
+  ) => void,
 ) {
   return runSessionNativeBindingWorkerOperation<
     SessionNativeBindingCandidate,
@@ -68,9 +75,9 @@ export function deleteSessionWithNativeBindingsInWorker(
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
-    onCommitted(candidate, published, identity) {
+    onCommitted(candidate, published, identity, _context, fileIdentity) {
       try {
-        onResult?.(candidate.result, identity);
+        onResult?.(candidate.result, identity, fileIdentity);
         publishSessionLifecycleWorkerEffects(plan, candidate.result);
       } finally {
         if (plan.kind === "lifecycle-projection-commit") {

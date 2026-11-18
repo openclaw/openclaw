@@ -37,7 +37,7 @@ function createSessionStorageHandler(
       sessionMutationCommitGuard?.();
       sessionMutationAuthorization?.assertCurrent();
       if (hasCurrentClientAuthority?.() === false) {
-        throw new Error("Transcript maintenance requester is no longer authorized");
+        throw new Error("Chat history maintenance requester is no longer authorized");
       }
       if (method === "sessions.storage.run") {
         requestGatewaySessionColdStorageMaintenance(context.getRuntimeConfig);

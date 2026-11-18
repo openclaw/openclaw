@@ -175,6 +175,7 @@ function readProjectionRows(
       "preparation_key",
       "preparation_purpose",
       "provision_operation_id",
+      "provision_source_json",
       "resource_receipt_json",
       "node_setup_id",
       "node_device_id",

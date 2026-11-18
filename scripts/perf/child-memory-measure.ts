@@ -7,6 +7,9 @@
 // then use --roots <roots.json> --trees 20 --watched 1|2|4|8|12|20 against each owner.
 // --trees 1 --descendants 9 measures an unchanged ten-process tree. All descendants
 // originate on nonleader threads; normal Node threads remain in every process.
+// For a native thread-heavy forest, compile child-memory-thread-fixture.c and use
+// its roots file with --trees 20 --descendants 13. --buffer-allocations counts
+// Buffer allocation requests separately; these captures are not timing evidence.
 import assert from "node:assert/strict";
 import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { spawn, type ChildProcess } from "node:child_process";
@@ -14,6 +17,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -37,6 +41,8 @@ const { values } = parseArgs({
     "gc-log": { type: "string" },
     allocations: { type: "boolean", default: false },
     "work-counts": { type: "boolean", default: false },
+    "buffer-allocations": { type: "boolean", default: false },
+    "assert-buffer-budget": { type: "boolean", default: false },
     "assert-promise-budget": { type: "boolean", default: false },
     runaway: { type: "boolean", default: false },
     output: { type: "string" },
@@ -52,6 +58,10 @@ assert.ok(
 assert.ok(
   !values["assert-promise-budget"] || values["work-counts"],
   "--assert-promise-budget requires --work-counts",
+);
+assert.ok(
+  !values["assert-buffer-budget"] || values["buffer-allocations"],
+  "--assert-buffer-budget requires --buffer-allocations",
 );
 const integer = (name: "trees" | "descendants" | "seconds", min: number) =>
   parseStrictIntegerOption({ raw: values[name], label: `--${name}`, min, fallback: min });
@@ -85,6 +95,24 @@ const warmupSeconds = parseStrictIntegerOption({
 const outputPath = path.resolve(values.output);
 const profilePath = `${outputPath}.heapprofile`;
 const fixture = fileURLToPath(new URL("./child-memory-fixture.cjs", import.meta.url));
+let countingBuffers = false;
+let procfsFiles = 0;
+const fsMethods = { open: fs.open, readFile: fs.readFile };
+if (values["buffer-allocations"]) {
+  for (const name of ["open", "readFile"] as const) {
+    Object.defineProperty(fs, name, {
+      value: new Proxy(fs[name], {
+        apply(target, thisArgument, args) {
+          if (countingBuffers && String(args[0]).startsWith("/proc/")) {
+            procfsFiles++;
+          }
+          return Reflect.apply(target, thisArgument, args);
+        },
+      }),
+    });
+  }
+  syncBuiltinESMExports();
+}
 const {
   watchHostExecMemory,
   getHostExecMemoryBudget,
@@ -106,8 +134,10 @@ function allocated(profile: HeapProfiler.SamplingHeapProfile) {
   const visit = (node: HeapProfiler.SamplingHeapProfileNode, owner = false) => {
     const inOwner =
       owner ||
-      (node.callFrame.url.includes("child-memory") &&
-        !node.callFrame.url.includes("child-memory-measure"));
+      (values.owner
+        ? node.callFrame.url === pathToFileURL(path.resolve(values.owner)).href
+        : node.callFrame.url.includes("child-memory") &&
+          !node.callFrame.url.includes("child-memory-measure"));
     bytes += node.selfSize;
     if (inOwner) {
       ownerBytes += node.selfSize;
@@ -146,7 +176,55 @@ const resourceHook = values["work-counts"]
       },
     })
   : undefined;
+const bufferAllocations = { bytes: 0, calls: 0, unknownSizeReadChunks: 0 };
+const bufferMethods = {
+  alloc: Buffer.alloc.bind(Buffer),
+  allocUnsafe: Buffer.allocUnsafe.bind(Buffer),
+  allocUnsafeSlow: Buffer.allocUnsafeSlow.bind(Buffer),
+};
+function countBufferAllocations() {
+  const count = (size: number, slow = false) => {
+    bufferAllocations.bytes += size;
+    bufferAllocations.calls++;
+    if (slow && size === 65536) {
+      bufferAllocations.unknownSizeReadChunks++;
+    }
+  };
+  Buffer.alloc = (size, fill, encoding) => {
+    count(size);
+    return bufferMethods.alloc(size, fill, encoding);
+  };
+  Buffer.allocUnsafe = (size) => {
+    count(size);
+    return bufferMethods.allocUnsafe(size);
+  };
+  Buffer.allocUnsafeSlow = (size) => {
+    count(size, true);
+    return bufferMethods.allocUnsafeSlow(size);
+  };
+}
+let forestShape: { processes: number; threads: number; nonleaderChildren: number } | undefined;
 try {
+  if (Array.isArray(roots)) {
+    const pids = new Set<number>(roots);
+    let threads = 0;
+    let nonleaderChildren = 0;
+    for (const pid of pids) {
+      const tids = fs.readdirSync(`/proc/${pid}/task`);
+      threads += tids.length;
+      for (const tid of tids) {
+        const text = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8").trim();
+        for (const child of text ? text.split(/\s+/u).map(Number) : []) {
+          pids.add(child);
+          if (Number(tid) !== pid) {
+            nonleaderChildren++;
+          }
+        }
+      }
+    }
+    assert.equal(pids.size, trees * (descendants + 1), "Fixture process count changed");
+    forestShape = { processes: pids.size, threads, nonleaderChildren };
+  }
   // Prepare each identical tree sequentially. Setup allocation is outside capture.
   for (let index = 0; index < trees; index++) {
     const child: ChildProcess | undefined = roots
@@ -277,10 +355,16 @@ try {
   const threadCpuStart = process.threadCpuUsage();
   const cpuStart = process.cpuUsage();
   resourceHook?.enable();
+  if (values["buffer-allocations"]) {
+    countBufferAllocations();
+    countingBuffers = true;
+  }
   writeGatewayGcTraceMarker("heap-start", profilePath);
   await delay(seconds * 1000);
   writeGatewayGcTraceMarker("heap-stop", profilePath);
   resourceHook?.disable();
+  Object.assign(Buffer, bufferMethods);
+  countingBuffers = false;
   const cpu = process.cpuUsage(cpuStart);
   const threadCpu = process.threadCpuUsage(threadCpuStart);
   const allocatedBytes = getHeapStatistics().total_allocated_bytes - allocatedBefore;
@@ -303,7 +387,12 @@ try {
   const result = {
     scope: "watchHostExecMemory shared budget with real procfs and worker-spawned descendants",
     timingGateEligible:
-      !values.runaway && !values.allocations && !values["gc-log"] && !values["work-counts"],
+      !values.runaway &&
+      !values.allocations &&
+      !values["gc-log"] &&
+      !values["work-counts"] &&
+      !values["buffer-allocations"],
+    forestShape,
     trees,
     watched,
     descendantsPerTree: descendants,
@@ -312,6 +401,15 @@ try {
     warmupSeconds,
     treeSeconds: trees * seconds,
     allocation,
+    bufferAllocationRequests: values["buffer-allocations"]
+      ? {
+          ...bufferAllocations,
+          procfsFiles,
+          bytesPerProcfsFile: bufferAllocations.bytes / procfsFiles,
+          bytesPerSecond: bufferAllocations.bytes / seconds,
+          scope: "Buffer.alloc/allocUnsafe/allocUnsafeSlow requested bytes; not retained storage",
+        }
+      : null,
     cpuMs: (cpu.user + cpu.system) / 1000,
     mainThreadCpuMs: (threadCpu.user + threadCpu.system) / 1000,
     v8AllocationBytes: allocatedBytes,
@@ -345,6 +443,13 @@ try {
   }
   fs.writeFileSync(outputPath, `${JSON.stringify(result, null, 2)}\n`);
   fs.writeSync(1, `${JSON.stringify(result)}\n`);
+  if (values["assert-buffer-budget"]) {
+    assert.ok(procfsFiles > 0, "No procfs reads observed during capture");
+    assert.ok(
+      bufferAllocations.bytes / procfsFiles <= 8192,
+      "Procfs sampling exceeded 8 KiB of requested Buffer storage per file",
+    );
+  }
   if (values["assert-promise-budget"]) {
     const readJobs = asyncResources.FSREQCALLBACK ?? 0;
     assert.ok(
@@ -357,6 +462,9 @@ try {
     );
   }
 } finally {
+  Object.assign(Buffer, bufferMethods);
+  Object.assign(fs, fsMethods);
+  syncBuiltinESMExports();
   watcherContext.disable();
   resourceHook?.disable();
   diagnosticsStop?.();

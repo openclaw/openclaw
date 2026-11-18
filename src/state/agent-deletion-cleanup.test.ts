@@ -359,8 +359,9 @@ describe("agent deletion database cleanup authority", () => {
       expect(await f.purgeStore(deletion, {})).toBe(false);
       expect(() => fs.fstatSync(retainedAdmission.descriptor)).not.toThrow();
       try {
+        using close = vi.spyOn(fs, "closeSync");
         await closeDeletedAgentDatabases("worker", [f.target.path], deletion);
-        expect(() => fs.fstatSync(retainedAdmission.descriptor)).toThrow();
+        expect(close).toHaveBeenCalledWith(retainedAdmission.descriptor);
       } finally {
         await reviveAgentDatabases(["worker"]);
       }
@@ -464,7 +465,8 @@ describe("agent deletion database cleanup authority", () => {
       invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(f.target.path);
       {
         using writer = openNodeSqliteDatabase(f.target.path);
-        writer.exec("DROP INDEX idx_agent_cache_expiry");
+        // Unique index repair retains verification before the authority-bound mutation.
+        writer.exec("DROP INDEX idx_agent_conversations_identity");
       }
       const operation = vi.fn(() => {});
       await f.withDeletion(async (deletion) => {
@@ -495,7 +497,7 @@ describe("agent deletion database cleanup authority", () => {
       expect(
         readRow(
           f.target.path,
-          "SELECT name FROM sqlite_schema WHERE name='idx_agent_cache_expiry'",
+          "SELECT name FROM sqlite_schema WHERE name='idx_agent_conversations_identity'",
         ),
       ).toBeUndefined();
       expect(operation).not.toHaveBeenCalled();
@@ -507,6 +509,10 @@ describe("agent deletion database cleanup authority", () => {
     const f = fixture();
     closeOpenClawAgentDatabasesForTest(f.root);
     invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(f.target.path);
+    {
+      using writer = openNodeSqliteDatabase(f.target.path);
+      writer.exec("DROP INDEX idx_agent_conversations_identity");
+    }
     await f.withDeletion(async (deletion) => {
       const { checked, resume } = holdIntegrityCheck();
       const releaseOwner = createDeferred();

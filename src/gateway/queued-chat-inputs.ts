@@ -1,19 +1,24 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readMessageClientSources } from "../chat/message-client-source.js";
 import { readTranscriptSenderIdentity } from "../chat/sender-identity.js";
+import type { SessionPendingInputEndCause } from "../config/sessions/session-pending-input-end-cause.types.js";
 import { readSessionQueuedInputPage } from "../config/sessions/session-pending-input-history.js";
 import { preparePendingInputStore } from "../config/sessions/session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "../config/sessions/session-pending-input-value.js";
 import type { SessionPendingInputRow } from "../config/sessions/session-pending-input.types.js";
+import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { MEDIA_ONLY_USER_TEXT } from "../sessions/user-turn-media.js";
+import { resolvePendingInputEndCause } from "../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { getResidentUserProfileDisplay } from "../state/user-profile-list.js";
 import { isBrowserCopilotClient } from "../utils/message-channel.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { queuedChatInputAdmission } from "./queued-chat-input-admission.js";
 import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
 
 type Target = { agentId: string; storePath: string; sessionKey: string; sessionId: string };
 
@@ -21,6 +26,7 @@ async function failQueuedInput(
   target: Target,
   row: SessionPendingInputRow,
   assertCurrent: () => void,
+  endCause: SessionPendingInputEndCause,
 ) {
   const store = await preparePendingInputStore(target, assertCurrent);
   try {
@@ -35,6 +41,7 @@ async function failQueuedInput(
         lifecycleGeneration: row.lifecycle_generation,
         inputId: row.input_id,
         disposition: "cancelled",
+        endCause,
       },
       assertCurrent,
     );
@@ -43,26 +50,29 @@ async function failQueuedInput(
   }
 }
 
-/** Continue only accepted FIFO inputs belonging to an explicitly marked graceful shutdown. */
+type QueuedInputReplayFailure = { error: unknown };
+type DeferredQueuedInputReplay = QueuedInputReplayFailure & { resume: () => Promise<void> };
+
+/** Re-admit durable FIFO rows; only a committed transcript append consumes them. */
 export async function continueSessionQueuedInputs(
   context: GatewayRequestContext,
   target: Target,
   options: {
     signal: AbortSignal;
     assertCurrent: () => void;
-    queuedInputIds: readonly string[];
   },
-): Promise<void> {
+): Promise<DeferredQueuedInputReplay | undefined> {
   const assertCurrent = () => {
     options.signal.throwIfAborted();
     options.assertCurrent();
   };
   const admit = async (row: SessionPendingInputRow) => {
     assertCurrent();
-    const message = parseSessionPendingInputMessage(row.message_json);
-    const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
-    let admitted: Awaited<ReturnType<typeof prepareSessionPrincipalRunAuthority>> | undefined;
+    let admitted: Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>> | undefined;
+    let dispatchAttempted = false;
     try {
+      const message = parseSessionPendingInputMessage(row.message_json);
+      const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {
         throw new Error("Browser-bound queued input requires a fresh browser send");
@@ -70,25 +80,38 @@ export async function continueSessionQueuedInputs(
       if (sender?.type !== "profile") {
         throw new Error("Queued input sender has no current human principal");
       }
-      admitted = await prepareSessionPrincipalRunAuthority({
+      if (!row.origin_source_json) {
+        throw new Error("Queued input has no original operator source; submit a new request.");
+      }
+      admitted = await restoreGatewayQueuedOperatorRecovery({
         context,
-        ...target,
-        profileId: sender.id,
+        source: decodeQueuedOperatorRecoverySource(JSON.parse(row.origin_source_json)),
         assertCurrent,
       });
       const { authority } = admitted;
       authority.assertCurrent();
+      if (authority.profileId !== sender.id) {
+        throw new Error("Queued input operator source does not match its sender.");
+      }
       const profile = getResidentUserProfileDisplay(authority.profileId);
       const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: admitted.authenticatedUserProfile,
         operatorRoleActor: { kind: "operator", profileId: authority.profileId },
         operatorRunAuthority: authority,
         scopes: [...authority.scopes],
       });
       let execution: Promise<void> | undefined;
       try {
+        dispatchAttempted = true;
         await queuedChatInputAdmission.run(
           {
-            target: { ...target, runId: row.run_id, message, requestHash: row.request_hash },
+            target: {
+              ...target,
+              inputId: row.input_id,
+              runId: row.run_id,
+              message,
+              requestHash: row.request_hash,
+            },
             requestFingerprint: row.request_hash.startsWith("request:")
               ? row.request_hash.slice(8)
               : row.request_hash,
@@ -156,27 +179,69 @@ export async function continueSessionQueuedInputs(
       }
     } catch (error) {
       assertCurrent();
+      // Before dispatch, an unclassified failure means the stored source cannot be restored.
+      const endCause = resolvePendingInputEndCause(
+        undefined,
+        error,
+        dispatchAttempted ? "failed" : "restart-unrecoverable",
+      );
+      if (endCause === undefined) {
+        context.logGateway.warn(
+          `Queued input ${row.run_id} is waiting for restart authority: ${String(error)}`,
+        );
+        return { error };
+      }
       context.logGateway.warn(
         `Queued input ${row.run_id} was not sent after restart: ${String(error)}`,
       );
-      await failQueuedInput(target, row, assertCurrent);
+      await failQueuedInput(target, row, assertCurrent, endCause);
     } finally {
       admitted?.release();
     }
+    return undefined;
   };
   // History pages are bounded newest-first; admit the older page before this one.
-  const continuePage = async (before?: number): Promise<void> => {
+  const continuePage = async (before?: number): Promise<QueuedInputReplayFailure | undefined> => {
     assertCurrent();
     const page = await readSessionQueuedInputPage(target, {
       before,
-      queuedInputIds: options.queuedInputIds,
     });
     if (page.nextBefore !== undefined) {
-      await continuePage(page.nextBefore);
+      const deferred = await continuePage(page.nextBefore);
+      if (deferred) {
+        return deferred;
+      }
     }
     for (const row of page.rows.toReversed()) {
-      await admit(row);
+      const deferred = await admit(row);
+      if (deferred) {
+        return deferred;
+      }
     }
+    return undefined;
   };
-  await continuePage();
+  const deferred = await continuePage();
+  if (!deferred) {
+    return undefined;
+  }
+  let flight: Promise<void> | undefined;
+  return {
+    error: deferred.error,
+    resume: () => {
+      flight ??= runWithGatewayIndependentRootWorkAdmission(
+        () =>
+          withPluginRuntimeGatewayContextResolver(context.resolveGatewayContext, async () => {
+            const remaining = await continuePage();
+            if (remaining) {
+              throw remaining.error;
+            }
+          }),
+        "startup:queued-input-resume",
+        options.signal,
+      ).finally(() => {
+        flight = undefined;
+      });
+      return flight;
+    },
+  };
 }
