@@ -1,15 +1,21 @@
 import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import type { BoardSnapshot } from "../../../packages/gateway-protocol/src/index.js";
 import {
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
 } from "../../gateway/methods/registry.js";
 import type {
+  GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
 } from "../../gateway/server-methods/types.js";
+import { gatewayConnect } from "../../gateway/server/client-fixtures.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createDashboardTool } from "./dashboard-tool.js";
@@ -287,7 +293,33 @@ it.each([
 ])("emits board.command for %s", async (action, args, command) => {
   const harness = recorder();
   const gateway = createGatewayAffinityHarness(0);
-  gateway.context.getClientConnIds = () => new Set(["control-ui-1", "control-ui-2"]);
+  const renderers = [
+    GATEWAY_CLIENT_IDS.CONTROL_UI,
+    GATEWAY_CLIENT_IDS.MACOS_APP,
+    GATEWAY_CLIENT_IDS.LINUX_APP,
+    GATEWAY_CLIENT_IDS.IOS_APP,
+    GATEWAY_CLIENT_IDS.ANDROID_APP,
+  ];
+  const clients: Array<GatewayClient & { connId: string }> = [
+    ...renderers,
+    GATEWAY_CLIENT_IDS.CLI,
+  ].map((id) => ({
+    connId: id,
+    connect: {
+      ...gatewayConnect(["operator.read"], { id, mode: "ui" }),
+      caps: [GATEWAY_CLIENT_CAPS.UI_COMMANDS],
+    },
+  }));
+  clients.push({
+    connId: "native-chat-without-presentation-support",
+    connect: gatewayConnect(["operator.read"], { id: GATEWAY_CLIENT_IDS.IOS_APP, mode: "ui" }),
+  });
+  clients.push({
+    connId: "native-node",
+    connect: gatewayConnect([], { id: GATEWAY_CLIENT_IDS.ANDROID_APP, mode: "node" }, 1, "node"),
+  });
+  gateway.context.getClientConnIds = (filter) =>
+    new Set(clients.filter((client) => filter?.(client) !== false).map((client) => client.connId));
   gateway.broadcastToConnIds.mockImplementation((_event: string, payload: unknown) => {
     harness.commands.push(payload);
   });
@@ -295,7 +327,12 @@ it.each([
     const result = await harness.tool.execute("command", { action, ...args });
     expect(harness.calls).toEqual([]);
     expect(harness.commands).toEqual([{ sessionKey: "agent:main:main", command }]);
-    expect(result.details).toEqual({ ok: true, delivered: 2 });
+    expect(result.details).toEqual({ ok: true, delivered: renderers.length });
+    expect(gateway.broadcastToConnIds).toHaveBeenCalledWith(
+      "board.command",
+      expect.any(Object),
+      new Set(renderers),
+    );
   });
 });
 

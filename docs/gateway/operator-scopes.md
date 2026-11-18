@@ -924,6 +924,20 @@ independent of the connecting client's `client.id` or `client.mode`. Client
 identity can still affect connection and device-auth policy, but it neither
 grants nor removes session mutation authority.
 
+At the Gateway boundary, native app UI connections can receive the same
+capability-supported presentation commands and display-safe plugin guidance as
+browser Control UI connections. Agent UI commands target only the requesting
+connection, never another person’s tab or device. Native dashboard command
+recipients must also advertise UI-command support; an operator connection alone
+does not prove that the app renders dashboards. Native node connections remain
+separate and do not gain operator authority.
+
+Native mobile shells retain their chat-first presentation policy and do not
+advertise agent-driven UI commands. This is separate from operator permissions:
+OS device access, browser-origin authentication, and host-owned navigation remain
+platform-specific. Native and CLI avatar responses also retain their inline-image
+contract instead of requiring browser-authenticated image requests.
+
 `audit.run.inspect` intentionally uses `operator.read`. Every client with that
 scope in a Gateway operator domain may receive the retained execution-identity
 context, including bounded pseudonymized references and secret-redacted display

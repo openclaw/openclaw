@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
+  isControlUiClient,
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -124,7 +124,7 @@ export function dispatchUiCommandToRequester({
         !recipient.invalidated &&
         !recipient.connectionSignal?.aborted &&
         (!target.profileId || recipient.authenticatedUserProfile?.profileId === target.profileId) &&
-        recipient.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
+        isControlUiClient(recipient.connect.client) &&
         hasGatewayClientCap(recipient.connect.caps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
         (!requiredCommandCapability ||
           hasGatewayClientCap(recipient.connect.caps, requiredCommandCapability));
@@ -161,7 +161,8 @@ export const uiCommandHandlers: GatewayRequestHandlers = {
       const pending = presentations.get(params.requestId);
       if (
         !pending ||
-        client?.connect.client.id !== GATEWAY_CLIENT_IDS.CONTROL_UI ||
+        !client ||
+        !isControlUiClient(client.connect.client) ||
         client.connId !== pending.recipient.connId ||
         pending.recipient.invalidated ||
         pending.recipient.connectionSignal?.aborted ||
