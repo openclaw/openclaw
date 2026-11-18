@@ -56,7 +56,6 @@ import { testing as controllerTesting } from "../../sessions/session-controller.
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { hasControlCommand } from "../command-detection.js";
-import { bindCommandOwnerAuthority } from "../command-owner-authority.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import {
   loadAgentRunnerRuntime,
@@ -64,6 +63,10 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import {
+  bindOwnerIngress,
+  createOwnerIngress,
+} from "./get-reply-run.owner-ingress.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -402,32 +405,6 @@ function createConfig(overrides: Partial<ReplyRunParams["cfg"]> = {}): ReplyRunP
   return { session: {}, channels: {}, agents: { defaults: {} }, ...overrides };
 }
 
-function createOwnerIngress(kind: string, channel: string, body: string, runId: string) {
-  const params = ownerParams();
-  params.command.senderId = "owner-1";
-  params.command.senderIsOwner = kind !== "non-owner" && kind !== "discord-promoted-before-drain";
-  return {
-    ...params,
-    ...turn(body, {
-      ...createProviderSurface(channel),
-      ChatType: "group",
-      SenderId:
-        kind === "owner-alias" || kind === "discord-owner-alias" ? "transport-alias" : "owner-1",
-      InboundEventKind: kind === "room-event" ? "room_event" : undefined,
-      InputProvenance:
-        kind === "internal" || kind === "inter-session"
-          ? { kind: "inter_session" as const, sourceTool: "sessions_send" }
-          : undefined,
-    }),
-    conversation: undefined,
-    sessionEntry:
-      kind === "spawned"
-        ? { sessionId: "spawned-session", updatedAt: 1, spawnedBy: "agent:parent:main" }
-        : undefined,
-    opts: { runId, suppressNextUserMessagePersistence: kind === "replay" },
-  };
-}
-
 async function useActualSystemEventDrain() {
   const actual = await vi.importActual<typeof import("./session-system-events.js")>(
     "./session-system-events.js",
@@ -569,16 +546,12 @@ describe("runPreparedReply media-only handling", () => {
                       ? withCronManagementGrant(grant, identity, method, async () => {
                           getCronManagementAuthority(identity)!();
                           expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
-                          expect(getCronManagementChannelRequester(identity)).toEqual(
-                            channel === "discord"
-                              ? {
-                                  version: 1,
-                                  channel,
-                                  accountId: "default",
-                                  senderId: promoted ? "owner-1" : "transport-alias",
-                                }
-                              : undefined,
-                          );
+                          expect(getCronManagementChannelRequester(identity)).toEqual({
+                            version: 1,
+                            channel,
+                            accountId: "default",
+                            senderId: "owner-1",
+                          });
                           return { jobs: [], total: 0, hasMore: false } as T;
                         })
                       : ({ jobs: [], total: 0, hasMore: false } as T);
@@ -607,9 +580,7 @@ describe("runPreparedReply media-only handling", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
         });
-        if (kind !== "configured-owner" && kind !== "configured-owner-revoked") {
-          bindCommandOwnerAuthority(params.sessionCtx, { isCurrent: () => current });
-        }
+        bindOwnerIngress(params, channel, kind, () => current);
         try {
           await runPrepared({ ...params, cfg });
           if (capturedOpts?.cronCreatorAuthorityCapability) {
@@ -679,9 +650,7 @@ describe("runPreparedReply media-only handling", () => {
               kind === "owner-overflow" ||
               kind === "owner-batch" ||
               kind === "foreign-defaults" ||
-              kind === "configured-owner" ||
-              kind === "discord-owner-alias" ||
-              refreshOwner
+              kind === "owner-source-replaced"
               ? "gateway"
               : kind === "revoked-after-bind"
                 ? "revoked"
@@ -708,6 +677,7 @@ describe("runPreparedReply media-only handling", () => {
     turn,
   });
   it.each([
+    "owner",
     "owner-alias",
     "non-owner",
 
@@ -718,11 +688,11 @@ describe("runPreparedReply media-only handling", () => {
     "revoked-before-bind",
     "revoked",
   ] as const)(
-    "admits configured Discord owner management through the reply ingress and real automation tool: %s",
+    "admits host-bound Discord owner management through the reply ingress and real automation tool: %s",
     async (kind) => {
       const runId = "discord-owner-management";
       const cfg = { commands: { ownerAllowFrom: ["discord:owner-1"] } };
-      const admitted = kind === "owner-alias" || kind === "revoked";
+      const admitted = kind === "owner" || kind === "revoked";
       setRuntimeConfigSnapshot(cfg);
       const { operationalRunInstance } = createTestAdmittedRunContext(runId);
       const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -750,7 +720,7 @@ describe("runPreparedReply media-only handling", () => {
                   calls.push("restricted");
                   return { jobs: [], total: 0, hasMore: false } as T;
                 }
-                expect(grant, "configured owner must receive a management grant").toBeDefined();
+                expect(grant, "host-bound owner must receive a management grant").toBeDefined();
                 return await withCronManagementGrant(grant!, identity, method, async () => {
                   const assertActive = getCronManagementAuthority(identity)!;
                   assertActive();
@@ -776,11 +746,10 @@ describe("runPreparedReply media-only handling", () => {
         );
         return undefined;
       });
+      const params = createOwnerIngress(kind, "discord", "list automations", runId);
+      bindOwnerIngress(params, "discord", kind);
       try {
-        await runPrepared({
-          ...createOwnerIngress(kind, "discord", "list automations", runId),
-          cfg,
-        });
+        await runPrepared({ ...params, cfg });
         expect(calls).toEqual(kind === "revoked" ? [] : admitted ? ["cron.list"] : ["restricted"]);
       } finally {
         releaseAgentRunDelegatedAuthority(authority);
