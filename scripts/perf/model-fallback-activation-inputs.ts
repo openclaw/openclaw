@@ -3,7 +3,7 @@
  * ClickClack needs auto-enable to fill its missing enabled flag; one other plugin
  * is explicitly disabled. The same authored config is reused for every turn.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/model-fallback-activation-inputs.ts \
- *   --iterations 1000 [--flow runner|activation] [--allocation | --counts]
+ *   --iterations 1000 [--flow runner|prepared-runner|activation] [--allocation | --counts]
  *   [--config published|frozen] [--warmup 100] [--profile <output.cpuprofile>]
  * Run separate processes in A/A controls and five alternating AB/BA pairs. Accept
  * unchanged model selection, one materialization per config/metadata generation,
@@ -23,6 +23,8 @@ import { loadavg } from "node:os";
 import { setImmediate } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { runWithModelFallback } from "../../src/agents/model-fallback-runner.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "../../src/agents/prepared-model-runtime-generation-scope.js";
+import { createFallbackRateLimitFixture } from "../../src/agents/test-helpers/fallback-rate-limit-fixture.js";
 import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -51,7 +53,7 @@ assert(Number.isSafeInteger(warmup) && warmup >= 0);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 const gc = globalThis.gc;
 assert(gc, "Use --expose-gc");
-assert(["runner", "activation"].includes(values.flow));
+assert(["runner", "prepared-runner", "activation"].includes(values.flow));
 assert(["published", "frozen"].includes(values.config));
 assert(!(values.allocation && values.counts), "Measure allocation and coverage separately");
 const channels = ["clickclack", "discord", "nextcloud-talk", "reef", "slack", "x"];
@@ -61,7 +63,9 @@ const ids = [
   "synthetic-disabled",
   ...Array.from({ length: 32 }, (_, index) => `synthetic-plugin-${index}`),
 ];
-const config: OpenClawConfig = {
+const preparedFixture =
+  values.flow === "prepared-runner" ? createFallbackRateLimitFixture() : undefined;
+const config: OpenClawConfig = preparedFixture?.config ?? {
   agents: {
     defaults: {
       model: {
@@ -106,7 +110,9 @@ const config: OpenClawConfig = {
     ),
   },
 };
-if (values.config === "published") {
+if (preparedFixture) {
+  prepareRuntimePluginsConfig(config);
+} else if (values.config === "published") {
   setRuntimeConfigSnapshot(config);
   assert.equal(getRuntimeConfigSnapshot(), config);
   assert.equal(Object.isFrozen(config), false);
@@ -114,19 +120,27 @@ if (values.config === "published") {
   freezeJsonSnapshot(config);
   prepareRuntimePluginsConfig(config);
 }
-const snapshot = createPluginMetadataSnapshotFixture({
-  plugins: ids.map((id) => ({
-    id,
-    origin: "config",
-    rootDir: `/synthetic/${id}`,
-    channels: channels.includes(id) ? [id] : [],
-    channelCatalogMeta: { id, preferOver: ["unused-synthetic-predecessor"] },
-  })),
-});
+const snapshot =
+  preparedFixture?.metadata ??
+  createPluginMetadataSnapshotFixture({
+    plugins: ids.map((id) => ({
+      id,
+      origin: "config",
+      rootDir: `/synthetic/${id}`,
+      channels: channels.includes(id) ? [id] : [],
+      channelCatalogMeta: { id, preferOver: ["unused-synthetic-predecessor"] },
+    })),
+  });
 snapshot.discovery = { candidates: [], diagnostics: [] };
+const preparationCpu = process.cpuUsage();
+const preparationStart = performance.now();
+const preparedSnapshot = preparedFixture?.publish();
+const preparationWallMs = performance.now() - preparationStart;
+const preparationCpuDelta = process.cpuUsage(preparationCpu);
 const params = {
   cfg: config,
-  provider: "synthetic-provider",
+  provider: preparedFixture ? "synthetic-first" : "synthetic-provider",
+  manifestPlugins: snapshot,
   model: "primary",
   skipAuthProfileRuntime: true,
   run: async (_provider: string, model: string) => model,
@@ -142,17 +156,26 @@ const activationParams = {
 };
 let activation: ReturnType<typeof resolveBundledCompatActivationInputs> | undefined;
 let ownerWallMs = 0;
+let ownerSamples: number[] = [];
 async function run(count: number) {
   for (let iteration = 0; iteration < count; iteration++) {
     // Separate turns must not reuse the pre-existing same-turn auto-enable memo.
     await setImmediate();
     const ownerStart = performance.now();
-    if (values.flow === "runner") {
+    if (preparedFixture && preparedSnapshot) {
+      result = await withPreparedModelRuntimePluginGenerationScope(
+        preparedFixture.generation,
+        () => runWithModelFallback(params),
+        () => preparedSnapshot,
+      );
+    } else if (values.flow === "runner") {
       result = await runWithModelFallback(params);
     } else {
       activation = resolveBundledCompatActivationInputs(activationParams);
     }
-    ownerWallMs += performance.now() - ownerStart;
+    const elapsed = performance.now() - ownerStart;
+    ownerWallMs += elapsed;
+    ownerSamples.push(elapsed);
   }
 }
 const inspector = new Session();
@@ -180,6 +203,7 @@ await withPluginMetadataSnapshotScope(
       await inspector.post("Profiler.start");
     }
     ownerWallMs = 0;
+    ownerSamples = [];
     const hostLoadBefore = loadavg();
     const cpuBefore = process.cpuUsage();
     const threadBefore = process.threadCpuUsage();
@@ -225,6 +249,9 @@ await withPluginMetadataSnapshotScope(
               "applyPluginAutoEnable",
               "materializePluginAutoEnableCandidatesInternal",
               "normalizePluginEntries",
+              "normalizePluginsConfig",
+              "normalizeConfiguredProviderModel",
+              "resolveProviderRuntimePluginLookup",
             ].includes(fn.functionName)
           ) {
             const range = fn.ranges[0];
@@ -239,19 +266,28 @@ await withPluginMetadataSnapshotScope(
       const { profile } = await inspector.post("Profiler.stop");
       writeFileSync(values.profile, JSON.stringify(profile));
     }
-    if (values.flow === "runner") {
+    if (values.flow !== "activation") {
       assert.equal(result?.result, "primary");
       assert.equal(result?.model, "primary");
     } else {
       assert.equal(activation?.config?.plugins?.entries?.["synthetic-disabled"]?.enabled, false);
       assert.equal(activation?.config?.plugins?.entries?.clickclack?.enabled, true);
     }
-    assert.equal(config.plugins?.entries?.["synthetic-disabled"]?.enabled, false);
-    assert.equal(config.plugins?.entries?.clickclack?.enabled, undefined);
+    if (!preparedFixture) {
+      assert.equal(config.plugins?.entries?.["synthetic-disabled"]?.enabled, false);
+      assert.equal(config.plugins?.entries?.clickclack?.enabled, undefined);
+    }
     console.log(
       JSON.stringify({
         ownerSha256: Object.fromEntries(
-          ["plugins/activation-context.ts", "config/plugin-auto-enable.apply.ts"].map((file) => [
+          [
+            "plugins/activation-context.ts",
+            "config/plugin-auto-enable.apply.ts",
+            "agents/model-fallback-rate-limit.ts",
+            "agents/embedded-agent-runner/model.registry-resolution.ts",
+            "agents/prepared-model-runtime.full-catalog.ts",
+            "plugins/provider-model-normalization.ts",
+          ].map((file) => [
             file,
             hash("sha256", readFileSync(new URL(`../../src/${file}`, import.meta.url))),
           ]),
@@ -260,12 +296,17 @@ await withPluginMetadataSnapshotScope(
         flow: values.flow,
         configMode: values.config,
         mode: values.counts ? "counts" : values.allocation ? "allocation" : "timing",
-        entries: ids.length,
-        configuredChannels: channels.length,
-        activationRewrites: 1,
-        candidates: 2,
+        entries: Object.keys(config.plugins?.entries ?? {}).length,
+        preparationWallMs,
+        preparationCpuMs: (preparationCpuDelta.user + preparationCpuDelta.system) / 1000,
+        configuredChannels: preparedFixture ? 0 : channels.length,
+        activationRewrites: preparedFixture ? 0 : 1,
+        candidates: preparedFixture ? 5 : 2,
         iterations,
         warmup,
+        ownerMedianUs: ownerSamples.toSorted((a, b) => a - b)[Math.floor(iterations / 2)]! * 1000,
+        ownerP95Us:
+          ownerSamples.toSorted((a, b) => a - b)[Math.ceil(iterations * 0.95) - 1]! * 1000,
         ownerWallUsPerRun: (ownerWallMs * 1000) / iterations,
         wallMs,
         wallUsPerRun: (wallMs * 1000) / iterations,
