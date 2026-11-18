@@ -49,7 +49,6 @@ import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.t
 import { transcriptArraysEqual } from "./chat-transcript-memo.ts";
 import { WorkGroupSummary } from "./chat-work-group-summary.tsx";
 import "../../../styles/chat/source-previews.css";
-import "../../../styles/chat/inline-swarm.css";
 
 const ChatSourcePreviews = lazy(() => import("./chat-source-previews.tsx"), {
   export: "ChatSourcePreviews",
