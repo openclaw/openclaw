@@ -144,9 +144,11 @@ See [AI connection options](/start/onboarding#ai-connection-options) below for l
 local models, and custom endpoints.
 </Step>
 <Step title="Continue in the dashboard">
-A newly verified model opens guided setup for your workspace, Gateway,
-channels, and optional features, then agent chat. An already configured model
-opens the normal dashboard.
+On this Mac, the dashboard opens as soon as the AI test passes; there is no
+separate final page. A newly verified model opens guided setup for your
+workspace, Gateway, channels, and optional features, then agent chat. An
+already configured model opens the normal dashboard. Remote setups end on a
+short confirmation page first.
 
 - **Import memory (optional):** choose files during guided setup or later in
   **Settings → Import Memory**. Local Gateways can import Claude Code, Codex,

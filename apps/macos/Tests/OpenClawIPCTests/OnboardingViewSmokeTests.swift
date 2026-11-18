@@ -170,7 +170,7 @@ struct OnboardingViewSmokeTests {
             #expect(!view.cliInstalled)
             // A fresh install's Get started means this Mac, so it skips the hosting choice (1).
             // Mac setup runs behind the AI page; its own page (2) appears only after a failed attempt.
-            let localOrder = [0, 1, 3, 5, 9]
+            let localOrder = [0, 1, 3]
                 .filter { scenario != "fresh-recommended" || $0 != 1 }
             // Remote setup visits the remote connection page (4) before AI setup.
             let expectedOrder = scenario == "remote" ? [0, 1, 4, 3, 9] : localOrder
@@ -303,15 +303,15 @@ struct OnboardingViewSmokeTests {
         #expect(secondaryInvocations == (actions == "dual" ? 1 : 0))
     }
 
-    @Test func `configured flows keep native reachability and final steps after AI setup`() {
+    @Test func `local setup ends on AI setup while remote keeps its final step`() {
         // Memory import, permissions, channels and hatch remain Dashboard-owned.
-        // Native onboarding retains the optional reachability and final pages.
+        // A local setup opens the chat once AI works; remote keeps the native ready page.
         #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: true) == [0, 1, 2, 3, 5, 9])
+            requiresCLIInstall: true) == [0, 1, 2, 3])
         #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: false) == [0, 1, 3, 5, 9])
+            requiresCLIInstall: false) == [0, 1, 3])
         #expect(OnboardingView.pageOrder(
             for: .remote,
             requiresCLIInstall: true) == [0, 1, 4, 3, 9])
@@ -398,7 +398,7 @@ struct OnboardingViewSmokeTests {
                 afterFreshInstall: afterFreshInstall)
 
             #expect(!outcome.ready)
-            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3, 5, 9])
+            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3])
             #expect(outcome.status == "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
         }
     }

@@ -175,7 +175,7 @@ struct OnboardingDashboardHandoffTests {
         view.configuredGatewayProbe.invalidate()
     }
 
-    @Test func `fresh inference waits for the optional native steps before finishing once`() {
+    @Test func `fresh local inference finishes into the chat once`() {
         let state = AppState(preview: true)
         state.connectionMode = .local
         var handoffs: [OnboardingDashboardHandoff] = []
@@ -186,9 +186,6 @@ struct OnboardingDashboardHandoffTests {
         view.prepareSystemAgentHandoff()
         view.aiSetup.onConnected?()
 
-        #expect(!view.finishState.didFinish)
-        #expect(handoffs.isEmpty)
-        #expect(view.finish())
         #expect(view.finishState.didFinish)
         // Fresh connections own the remaining first-run steps via the custodian.
         #expect(handoffs == [.custodianOnboarding])
@@ -314,9 +311,6 @@ struct OnboardingDashboardHandoffTests {
             #expect(OnboardingSystemAgentResumeStore.activationOwner(for: "local", defaults: defaults) == nil)
         } else {
             #expect(view.aiSetup.connected)
-            #expect(!view.finishState.didFinish)
-            #expect(handoffs.isEmpty)
-            #expect(view.finish())
             #expect(view.finishState.didFinish)
             #expect(handoffs == [utility ? .custodianOnboarding : .dashboard])
             #expect(OnboardingSystemAgentResumeStore.pendingState(for: "local", defaults: defaults) == .none)
@@ -626,9 +620,6 @@ struct OnboardingDashboardHandoffTests {
         } else {
             #expect(aiSetup.connected)
             #expect(!aiSetup.verifiedExistingInference)
-            #expect(!view.finishState.didFinish)
-            #expect(handoffs.isEmpty)
-            #expect(view.finish())
             #expect(view.finishState.didFinish)
             #expect(handoffs == [.custodianOnboarding])
             #expect(OnboardingSystemAgentResumeStore.pendingState(

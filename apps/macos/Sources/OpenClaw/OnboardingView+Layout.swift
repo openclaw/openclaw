@@ -376,7 +376,10 @@ extension OnboardingView {
             // KeyEquivalent.return defaults to Command-Return; defaultAction is plain Return.
             .keyboardShortcut(.defaultAction)
             .buttonStyle(.borderedProminent)
-            .disabled(!self.canAdvance)
+            .disabled(!self.canAdvance || self.picksAIToFinish)
+            // On this Mac, picking an AI is the last step: a working reply opens the chat.
+            .opacity(self.picksAIToFinish ? 0 : 1)
+            .accessibilityHidden(self.picksAIToFinish)
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 13)
@@ -426,6 +429,10 @@ extension OnboardingView {
         }
     }
 
+    private var picksAIToFinish: Bool {
+        self.activePageIndex == self.aiPageIndex && self.state.connectionMode == .local
+    }
+
     /// Mac setup runs while the user picks an AI; one line reports it until it is done.
     private var macSetupStatus: some View {
         HStack(spacing: 8) {
@@ -448,7 +455,6 @@ extension OnboardingView {
         switch pageIndex {
         case self.connectionPageIndex: "Where should your assistant run?"
         case self.findPageIndex: "Find your OpenClaw"
-        case self.reachabilityPageIndex: "Reach it from anywhere?"
         case self.cliPageIndex: "Getting things ready"
         case self.aiPageIndex: self.aiSetup.configuredGatewayAuthIssue == nil
             ? "Connect your AI" : "Authenticate with your Gateway"

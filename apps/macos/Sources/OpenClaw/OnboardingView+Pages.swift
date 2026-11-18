@@ -30,8 +30,6 @@ extension OnboardingView {
             self.aiSetupPage(contentHeight: contentHeight)
         case 4:
             self.findGatewayPage()
-        case 5:
-            self.reachabilityPage()
         case 9:
             self.readyPage()
         default:
@@ -183,15 +181,6 @@ extension OnboardingView {
         .onChange(of: state.remoteUrl) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
         .onChange(of: state.remoteToken) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
         .onChange(of: state.remoteIdentity) { _, _ in self.retireGatewayStateForRemoteEndpointEdit() }
-    }
-
-    func reachabilityPage() -> some View {
-        onboardingPage {
-            OnboardingReachabilityContent(unavailableReason: self.openClawID.accountUnavailableReason) {
-                self.openClawID.begin(.makeReachable)
-                self.showOpenClawID = true
-            }
-        }
     }
 
     private var localGatewaySubtitle: String {
@@ -795,15 +784,6 @@ extension OnboardingView {
                         title: "Configure later",
                         subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
                         systemImage: "gearshape")
-                } else if self.selectedConnectionMode == .local {
-                    self.featureRow(
-                        title: "Reach it from anywhere",
-                        subtitle: "Optional OpenClaw ID setup. Native sign-in is not available in this build.",
-                        systemImage: "globe",
-                        buttonTitle: "Learn more")
-                    {
-                        self.currentPage = self.pageOrder.firstIndex(of: self.reachabilityPageIndex) ?? 0
-                    }
                 } else {
                     self.featureRow(
                         title: "Connected to your Gateway",

@@ -717,7 +717,6 @@ struct OnboardingView: View {
     let cliPageIndex = 2
     let aiPageIndex = 3
     let findPageIndex = 4
-    let reachabilityPageIndex = 5
     let readyPageIndex = 9
 
     /// The active page is scrollable on short screens. Taller windows donate all
@@ -737,7 +736,8 @@ struct OnboardingView: View {
         if mode == .remote, joinedClaw { return [0, 1, 9] }
         return switch mode {
         case .local:
-            (requiresCLIInstall ? [0, 1, 2, 3, 5, 9] : [0, 1, 3, 5, 9]).filter { hostingChoice || $0 != 1 }
+            // A local setup ends on the chat once AI works; Dashboard owns the remaining first-run steps.
+            (requiresCLIInstall ? [0, 1, 2, 3] : [0, 1, 3]).filter { hostingChoice || $0 != 1 }
         case .remote:
             [0, 1, 4, 3, 9]
         case .unconfigured:
@@ -813,8 +813,7 @@ struct OnboardingView: View {
     }
 
     var buttonTitle: String {
-        if self.activePageIndex == self.reachabilityPageIndex { return "Not now" }
-        return self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
+        self.currentPage == self.pageCount - 1 ? "Finish" : "Next"
     }
 
     var isCLIBlocking: Bool {
