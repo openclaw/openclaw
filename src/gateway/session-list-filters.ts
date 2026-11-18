@@ -470,7 +470,7 @@ export function filterSessionEntries(
       continue;
     }
     if (agentFilter && storeKey !== "global") {
-      const ownerAgentId = target.storeKey ? normalizeAgentId(target.agentId) : selection.agentId;
+      const ownerAgentId = normalizeAgentId(target.agentId);
       if (ownerAgentId !== agentFilter) {
         continue;
       }
