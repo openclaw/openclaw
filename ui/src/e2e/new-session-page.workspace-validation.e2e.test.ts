@@ -180,19 +180,19 @@ suite.define(() => {
           { workspaceGit: true, models: NEW_SESSION_MODEL_CATALOG },
         );
         await gateway.waitForRequest("worktrees.branches");
-        await page.locator("#new-session-checkout-trigger").click();
-        const picker = checkoutPopover(page);
-        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+        const trigger = page.locator("#new-session-checkout-trigger");
         if (cold) {
-          expect(await worktreeOption(page).isDisabled()).toBe(true);
+          expect(await trigger.count()).toBe(0);
           await captureUiProof(suite, page, "checkout-cold-refreshing.png");
           await gateway.setMethodResponse("worktrees.branches", {
             ...branchList(),
             refreshing: true,
           });
           await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
-          await expect.poll(() => worktreeOption(page).isDisabled()).toBe(false);
         }
+        await trigger.click();
+        const picker = checkoutPopover(page);
+        await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
         await worktreeOption(page).click();
         const base = checkoutBaseRefInput(picker);
         await base.fill("release/custom");
@@ -233,14 +233,14 @@ suite.define(() => {
       );
       await gateway.waitForRequest("worktrees.branches");
       const trigger = page.locator("#new-session-checkout-trigger");
-      await trigger.click();
-      const picker = checkoutPopover(page);
-      await picker.getByText("Refreshing…", { exact: true }).waitFor({ state: "visible" });
+      expect(await trigger.count()).toBe(0);
       await gateway.setMethodResponse("worktrees.branches", {
         branches: [],
         branchesUnavailable: true,
       });
       await gateway.emitGatewayEvent("worktrees.branches.changed", { repoRoot: WORKSPACE });
+      await trigger.click();
+      const picker = checkoutPopover(page);
       await picker
         .getByText("Couldn’t verify Git for this folder. Try again.", {
           exact: true,
@@ -433,19 +433,21 @@ suite.define(() => {
         }
         if (repositoryStatus === "not_git") {
           await expect.poll(() => trigger.count()).toBe(0);
-          expect(
-            await page.evaluate(() => {
-              const storageKey = Object.keys(localStorage).find((candidate) =>
-                candidate.startsWith("openclaw.new-session.preferences.v1:"),
-              );
-              const value = storageKey
-                ? (JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
-                    agents?: Record<string, { worktree?: boolean }>;
-                  } | null)
-                : null;
-              return value?.agents?.main?.worktree;
-            }),
-          ).toBe(false);
+          await expect
+            .poll(() =>
+              page.evaluate(() => {
+                const storageKey = Object.keys(localStorage).find((candidate) =>
+                  candidate.startsWith("openclaw.new-session.preferences.v1:"),
+                );
+                const value = storageKey
+                  ? (JSON.parse(localStorage.getItem(storageKey) ?? "null") as {
+                      agents?: Record<string, { worktree?: boolean }>;
+                    } | null)
+                  : null;
+                return value?.agents?.main?.worktree;
+              }),
+            )
+            .toBe(false);
         } else {
           await expectAttribute(trigger, "data-worktree", "true");
           await messageInput(page).fill(message);
