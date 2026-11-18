@@ -114,7 +114,7 @@ export function createCliModelRequestGate(params: {
 
 /** Gate for one CLI run; its prepared user row carries provenance and sender metadata. */
 export function createCliRunModelRequestGate(params: {
-  hookRunner: HookRunner | undefined;
+  hookRunner: ReturnType<typeof getGlobalHookRunner> | undefined;
   hookContext: PluginHookAgentContext;
   run: Pick<
     RunCliAgentParams,
