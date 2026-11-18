@@ -19,6 +19,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   resolveOpenClawAgentSqlitePath,
+  resolveIncognitoOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -538,6 +539,7 @@ test("search discards hits and page metadata when sharing is revoked during its 
     const viewer = ensureProfileForEmail("worker-search@example.test").id;
     const context = requestContext({
       agents: { entries: { main: {} } },
+      tools: { sessions: { visibility: "all" } },
       gateway: {
         roles: {
           default: "viewer",
@@ -550,8 +552,8 @@ test("search discards hits and page metadata when sharing is revoked during its 
     setRuntimeConfigSnapshot(context.getRuntimeConfig());
     const client = identifiedClient(viewer);
     const read = transcriptSearch.searchSessionTranscripts;
-    for (const scoped of [true, false]) {
-      const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+    for (const mode of ["scope", "keys", "recall"] as const) {
+      const key = await seed("main", `worker-revoked-${mode}`, "foreign", "needle");
       const spy = vi
         .spyOn(transcriptSearch, "searchSessionTranscripts")
         .mockImplementationOnce(async (...args) => {
@@ -566,14 +568,54 @@ test("search discards hits and page metadata when sharing is revoked during its 
       try {
         const response = await search(context, client, {
           query: "needle",
-          ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
+          ...(mode === "scope"
+            ? { scope: {} }
+            : mode === "keys"
+              ? { sessionKeys: [key] }
+              : {
+                  recall: {
+                    requesterAgentId: "main",
+                    requesterSessionKey: "agent:main:main",
+                    visibility: "all",
+                  },
+                }),
         });
         expect(response.ok).toBe(true);
-        expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
+        expect(response.payload).toEqual({
+          results: [],
+          ...(mode === "scope" ? { sessions: [] } : {}),
+        });
       } finally {
         spy.mockRestore();
       }
     }
+  });
+});
+
+test("agent recall excludes actor memory results that bypass worker candidate filtering", async () => {
+  await withSearchState(async () => {
+    const viewer = ensureProfileForEmail("private-recall@example.test").id;
+    const cfg: OpenClawConfig = {
+      agents: { entries: { main: {} } },
+      tools: { sessions: { visibility: "all" } },
+    };
+    setRuntimeConfigSnapshot(cfg);
+    const key = await seed("main", "dashboard:incognito-recall", viewer, "privateword");
+    const read = transcriptSearch.searchSessionTranscripts;
+    const privatePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+    vi.spyOn(transcriptSearch, "searchSessionTranscripts").mockImplementationOnce(
+      async (params, _database, filter) => {
+        const result = await read({ ...params, storePath: privatePath }, undefined, filter);
+        expect(result.hits.map((hit) => hit.sessionKey)).toEqual([key]);
+        return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
+      },
+    );
+    const result = await search(requestContext(cfg), identifiedClient(viewer), {
+      query: "privateword",
+      recall: { requesterAgentId: "main", requesterSessionKey: "agent:main:main" },
+    });
+    expect(result).toMatchObject({ ok: true, payload: { results: [] } });
+    expect(result.payload).toEqual({ results: [] });
   });
 });
 
