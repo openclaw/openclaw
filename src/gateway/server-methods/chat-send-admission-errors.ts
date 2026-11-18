@@ -12,8 +12,21 @@ import { errorShapeFromError } from "../error-shape.js";
 import { formatForLog } from "../ws-log.js";
 import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
 import { SESSION_SETTINGS_CHANGED_ERROR_REASON } from "./chat-send-session-settings.js";
+import type { PreparedChatSendSession } from "./chat-send-session.js";
 import { respondError } from "./response.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
+
+/** Bind routing checks to the prepared session rather than rediscovering its target. */
+export function createChatSessionRoutingAssertion(
+  session: Pick<PreparedChatSendSession, "sessionRoutingChanged">,
+  context: Pick<GatewayRequestContext, "getRuntimeConfig">,
+) {
+  return () => {
+    if (session.sessionRoutingChanged(context.getRuntimeConfig())) {
+      throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
+    }
+  };
+}
 
 export function resolveChatSendStorageErrorMessage(error: unknown): string | undefined {
   return renderStorageFailureSummary(classifyGatewayStorageFailure(error));

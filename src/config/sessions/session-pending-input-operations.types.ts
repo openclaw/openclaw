@@ -32,6 +32,7 @@ export type PendingInputSourceSnapshot = {
   pending?: SessionPendingInputRow;
   committed?: PersistedUserTurnMessage;
   committedMessageSeq?: number;
+  completion?: AgentRunTerminalOutcome;
 };
 
 export type PendingInputSnapshot = {

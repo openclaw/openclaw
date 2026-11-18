@@ -43,7 +43,13 @@ type ChatSendRetryParams = Pick<
 > & {
   request: Pick<
     ChatSendPreAdmissionParams["request"],
-    "goalOperation" | "requestIdentity" | "rawMessage" | "mentions" | "workContext" | "appContext"
+    | "goalOperation"
+    | "requestIdentity"
+    | "rawMessage"
+    | "mentions"
+    | "workContext"
+    | "appContext"
+    | "activeSteer"
   >;
   session: Pick<
     ChatSendPreAdmissionParams["session"],
@@ -172,6 +178,25 @@ export function respondChatSendRetry(
   const conflict = resolveChatSendRequestConflict(params, comparison);
   if (conflict) {
     respond(false, undefined, conflict);
+    return true;
+  }
+  // A staged active-only input is never re-admitted, even after restart or a lost native reply.
+  if (params.request.activeSteer && comparison?.submitted) {
+    const receipt = comparison.completion?.activeSteer;
+    const live = getRpcSourceForGateway(clientRunId, context.resolveGatewayContext);
+    respond(
+      true,
+      {
+        inputId: clientRunId,
+        runId: params.request.activeSteer.runId,
+        status: receipt?.status ?? (live ? "in_flight" : "indeterminate"),
+        ...(receipt?.reason ? { reason: receipt.reason } : {}),
+        ...(comparison.messageSeq ? { messageSeq: comparison.messageSeq } : {}),
+        receiptPersisted: receipt !== undefined,
+      },
+      undefined,
+      { cached: true, runId: clientRunId },
+    );
     return true;
   }
   if (comparison?.state === "cancelled") {

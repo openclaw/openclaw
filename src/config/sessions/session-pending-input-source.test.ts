@@ -28,11 +28,12 @@ const message = (runId: string, content = "Synthetic source"): PersistedUserTurn
   timestamp: 100,
   idempotencyKey: `${runId}:user`,
 });
-const stage = async (runId: string, committed = false) => {
+const stage = async (runId: string, committed = false, trackCompletion = false) => {
   await upsertSessionEntryCore(scope(), { sessionId, updatedAt: 1 });
   const receipt = await stageSessionPendingInput(scope(), {
     runId,
     message: message(runId),
+    trackCompletion,
     assertCurrent: () => {},
   });
   assert(receipt, "Expected staged source");
@@ -131,3 +132,40 @@ it.each([
   });
   expect(readIndex()).toEqual(before);
 });
+
+it.each(["accepted", "rejected", "indeterminate"] as const)(
+  "keeps durable %s active-only source after completion without a transcript",
+  async (status) => {
+    const receipt = await stage("active-only", false, true);
+    const outcome = {
+      status: "error",
+      reason: "failed",
+      activeSteer: { runId: "native-run", status },
+    } as const;
+    assert(receipt.completeAsync, "Expected completion owner");
+    expect(await receipt.completeAsync(outcome)).toEqual(outcome);
+    receipt.finish("cancelled", "failed");
+    await receipt.settled?.();
+    const db = database().db;
+    expect(
+      db
+        .prepare("SELECT message_json FROM session_pending_inputs WHERE idempotency_key = ?")
+        .get("active-only:user"),
+    ).toBeDefined();
+    expect(
+      db
+        .prepare("SELECT outcome_json FROM session_input_completions WHERE idempotency_key = ?")
+        .get("active-only:user"),
+    ).toBeDefined();
+    await readOnly(async () => {
+      expect(
+        await readSessionSubmittedInput(scope(), "active-only:user", { includeSource: true }),
+      ).toMatchObject({
+        message: receipt.message,
+        source: "pending",
+        state: "cancelled",
+        completion: outcome,
+      });
+    });
+  },
+);

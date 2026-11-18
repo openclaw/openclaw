@@ -17,6 +17,7 @@ export function parseSessionPendingInputMessage(messageJson: string): PersistedU
 
 export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {
   return (
+    outcome.activeSteer !== undefined ||
     outcome.reason === "completed" ||
     (outcome.reason === "cancelled" && outcome.stopReason !== "restart")
   );

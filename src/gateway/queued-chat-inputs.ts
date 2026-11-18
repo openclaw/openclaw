@@ -78,6 +78,11 @@ export async function continueSessionQueuedInputs(
     let dispatchAttempted = false;
     try {
       const message = parseSessionPendingInputMessage(row.message_json);
+      if (message["__openclaw"]?.activeSteer) {
+        // Native delivery may have succeeded before a crash. Never replay into any run.
+        await failQueuedInput(target, row, assertCurrent, "restart-unrecoverable");
+        return undefined;
+      }
       const sender = readTranscriptSenderIdentity(message["__openclaw"]?.senderIdentity);
       // A paired browser's process-local tab/profile capability cannot survive restart.
       if (readMessageClientSources(message).some(isBrowserCopilotClient)) {

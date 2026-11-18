@@ -31,6 +31,7 @@ import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js"
 import { deriveGatewaySessionLifecycleSnapshot } from "../session-lifecycle-projection.js";
 import { recordSessionOperatorSource } from "../session-operator-sources.js";
 import { invalidateSkillAuthoringForOtherRequester } from "../skill-library-authoring.js";
+import { finishActiveSteerInput } from "./chat-send-active-steer.js";
 import { startChatDispatch } from "./chat-send-agent-dispatch.js";
 import type { StartChatDispatchParams } from "./chat-send-agent-dispatch.types.js";
 import {
@@ -585,6 +586,18 @@ export async function handleChatSendWithStorage(
         },
       });
       assertInputAdmissionCurrent();
+    }
+    if (request.activeSteer) {
+      await finishActiveSteerInput(setup, {
+        context,
+        ctx,
+        userTurnRecorder,
+        begin: beginCapturedMessageInjection,
+        persist: persistGatewayUserTurnTranscriptBestEffort,
+        assertCurrent: assertInputAdmissionCurrent,
+        respond,
+      });
+      return;
     }
     context.addChatRun(clientRunId, {
       sessionKey,

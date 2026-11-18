@@ -126,6 +126,28 @@ describe("memory actor pending input custody", () => {
     );
   });
 
+  it.each(["accepted", "rejected", "indeterminate"] as const)(
+    "retains %s active-only source and final outcome without allowing restaging",
+    (status) => {
+      const { pending, stageInput, source, complete, finish } = fixture();
+      pending.mutate(stageInput());
+      const outcome = {
+        status: "error",
+        reason: "failed",
+        activeSteer: { runId: "native-run", status },
+      } as const;
+      expect(complete(outcome)).toEqual(outcome);
+      finish();
+      expect(source(false)).toMatchObject({
+        pending: { state: "cancelled", message_json: JSON.stringify(message) },
+        completion: outcome,
+      });
+      expect(complete({ reason: "completed", status: "ok" })).toEqual(outcome);
+      const snapshot = pending.read({ ...scope, kind: "stage", trackCompletion: true });
+      expect(snapshot).toMatchObject({ previous: { outcome } });
+    },
+  );
+
   it("settles only the accepted owner and supplies current authority to admission", () => {
     const { state, pending, grants, stageInput, source, finish } = fixture();
     state.hot.members = [{ identityId: "person-1", addedAt: 1, addedBy: "person-1" }];

@@ -42,30 +42,76 @@ import {
   type ReplyMessageInjectionAttempt,
   type ReplyMessageInjectionTarget,
 } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { captureReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { prepareReplyMessageContinuation } from "../../sessions/session-controller.message-join.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.state.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import type { UserTurnTranscriptPersistResult } from "../../sessions/user-turn-transcript.types.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
 import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
+import type { ChatSendAdmissionParams } from "./chat-send-pre-admission.types.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
 import type { GatewayRequestContext } from "./types.js";
 
+/** Capture one opaque backend before asynchronous preparation; never select a successor. */
+export function captureActiveSteerTarget({
+  request,
+  session,
+  respond,
+}: Pick<ChatSendAdmissionParams, "request" | "session" | "respond">) {
+  if (!request.activeSteer) {
+    return { ok: true as const, target: undefined };
+  }
+  const operation = getSessionControllerOperation(
+    session.activeRunScopeKey,
+    captureSessionTarget({
+      storeScope: session.storePath,
+      sessionKey: session.sessionKey,
+      agentId: session.agentId,
+      incarnation: session.backingSessionId,
+    }),
+  );
+  const target = captureReplyMessageInjectionTarget(operation);
+  if (
+    target?.runId === request.activeSteer.runId &&
+    operation?.sessionId === session.requestedSessionId
+  ) {
+    return { ok: true as const, target };
+  }
+  respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      "The requested run is not active or does not support steering.",
+      {
+        details: { reason: "active-steer-unavailable" },
+      },
+    ),
+  );
+  return { ok: false as const };
+}
+
 /** Captures admitted request data for the detached injection attempt. */
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   sourceRef: RpcSourceRef;
   abortSignal: AbortSignal;
-  request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
+  request: Pick<
+    NormalizedChatSendRequest,
+    "p" | "rawMessage" | "supportsTaskSuggestions" | "activeSteer"
+  >;
   session: Pick<
     PreparedChatSendSession,
     | "agentId"
@@ -91,7 +137,10 @@ export function createChatSendMessageInjectionStarter(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   diagnostics?: ChatSendDiagnostics;
 }) {
-  const { p, rawMessage, supportsTaskSuggestions } = params.request;
+  const { p, rawMessage, supportsTaskSuggestions, activeSteer } = params.request;
+  const rejectionMessage = activeSteer
+    ? "active-only steering rejected; no fallback"
+    : "chat steering rejected; falling back to follow-up dispatch";
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
     params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
@@ -134,7 +183,7 @@ export function createChatSendMessageInjectionStarter(params: {
           if (!(error instanceof MessageInjectionTargetUnavailableError)) {
             throw error;
           }
-          params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+          params.logGateway.warn(rejectionMessage, {
             reason: "terminal-delivery-unavailable",
             runId: clientRunId,
             activeRunId: target.runId,
@@ -218,7 +267,7 @@ export function createChatSendMessageInjectionStarter(params: {
         },
       });
       if (join.kind === "deferred") {
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        params.logGateway.warn(rejectionMessage, {
           reason: join.reason,
           error: join.errorMessage,
           runId: clientRunId,
@@ -233,7 +282,7 @@ export function createChatSendMessageInjectionStarter(params: {
         await delivery.prepareCurrent();
       } catch (error) {
         assertCurrent();
-        params.logGateway.warn("chat steering rejected; falling back to follow-up dispatch", {
+        params.logGateway.warn(rejectionMessage, {
           reason: "terminal-delivery-unavailable",
           runId: clientRunId,
           activeRunId: target.runId,
@@ -328,9 +377,12 @@ export function createChatSendMessageInjectionStarter(params: {
           ...(injectionImages?.length ? { images: injectionImages } : {}),
           ...(params.imageOrder?.length ? { imageOrder: params.imageOrder } : {}),
           ...(replyOptionMedia?.length ? { media: replyOptionMedia } : {}),
+          ...(activeSteer ? { debounceMs: 0 } : {}),
           waitForTranscriptCommit: true,
           abortSignal: params.abortSignal,
-          ...(!isProgressCardRefreshInputProvenance(ctx.InputProvenance) && debounceMs !== undefined
+          ...(!activeSteer &&
+          !isProgressCardRefreshInputProvenance(ctx.InputProvenance) &&
+          debounceMs !== undefined
             ? { debounceMs }
             : {}),
           // A prepared continuation keeps the incumbent's negotiated tool

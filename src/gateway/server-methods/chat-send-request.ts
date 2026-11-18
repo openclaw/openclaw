@@ -67,6 +67,7 @@ type ChatSendRequestParams = Omit<
 };
 
 export type NormalizedChatSendRequest = {
+  activeSteer?: { runId: string; profileId: string };
   normalizeThinkingLevelOverride?: boolean;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   goalOperation?: SessionGoalOperation & { action: "start" | "resume" };
@@ -114,6 +115,7 @@ export function normalizeChatSendRequest(params: {
   params: Record<string, unknown>;
   client: GatewayRequestHandlerOptions["client"];
   trustedSystemInput?: boolean;
+  activeSteer?: { runId: string; profileId: string };
   goalResume?: SessionGoalOperation & { action: "resume" };
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
 }): NormalizeChatSendRequestResult | Promise<NormalizeChatSendRequestResult> {
@@ -227,7 +229,10 @@ export function normalizeChatSendRequest(params: {
 
   const hasGoalOperation = params.goalResume !== undefined || p.intent !== undefined;
   const commandInterpretationSuppressed =
-    suppressCommandInterpretation || hasGoalOperation || providerReview !== undefined;
+    suppressCommandInterpretation ||
+    hasGoalOperation ||
+    providerReview !== undefined ||
+    params.activeSteer !== undefined;
   // This text comes from the current provider review, not a browser-supplied command.
   const inboundMessage = p.intent || providerReview ? p.message : sanitizedMessageResult.message;
   const systemInputProvenance = params.goalResume
@@ -313,6 +318,9 @@ export function normalizeChatSendRequest(params: {
     : rawMessage;
   const requestInput = JSON.stringify([
     p.message,
+    ...(params.activeSteer
+      ? [{ operation: "active-steer", sessionId: p.sessionId, ...params.activeSteer }]
+      : []),
     p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
     ...(workContext ? [workContext.snapshot] : []),
     ...(p.appContext ? [{ appContext: stableStringify(p.appContext) }] : []),
@@ -320,6 +328,7 @@ export function normalizeChatSendRequest(params: {
   ]);
 
   const value: NormalizedChatSendRequest = {
+    ...(params.activeSteer ? { activeSteer: params.activeSteer } : {}),
     chatSendReceivedAtMs,
     clientInfo,
     supportsTaskSuggestions,

@@ -147,6 +147,38 @@ a terminal result no longer blocks a new request.
 
 - `sessions.create.surface` optionally accepts `"plugin-dock"` for an operator-created conversation owned by a plugin dock. It persists the immutable `createdSurface` marker; `createdVia`, the authenticated human creator, sharing, and sandbox policies retain their ordinary operator behavior. Omitting it keeps the existing creation behavior. Trusted spawn and other internal creation contracts cannot be replaced by this option. Adopting an existing session preserves its original creation surface and provenance.
 
+### Active-only human steering
+
+`sessions.steerActive` accepts
+`{ sessionKey, agentId?, sessionId, runId, message, idempotencyKey }`.
+It requires a source-authenticated personal operator with current session write
+access, through a registered connection or a host-bound person ingress grant.
+Agent callers, synthetic attribution, shared-owner fallback, and read-only
+Session Share reader credentials do not qualify.
+
+Use the exact physical `sessionId` and the active backend `runId`, not another
+input's submission ID. The Gateway captures that backend once. Idle, replaced,
+unsupported, and unauthorized targets do not start a turn, enqueue a follow-up,
+interrupt an existing run, or retarget a successor. `message` is literal human
+text, including a leading slash; it is not executed as a chat command.
+
+The result is `{ inputId, runId, status, receiptPersisted, messageSeq?, reason? }`.
+`inputId` identifies this submission; `runId` remains the requested target.
+`accepted` means native delivery was confirmed, not that the run completed.
+`rejected` means no delivery was accepted. `indeterminate` means acceptance
+cannot be established safely; `in_flight` means the original input still has a
+live owner. `messageSeq` is present only for a committed transcript row.
+`receiptPersisted` reports a durable delivery outcome, not merely saved text.
+
+After a lost response, retry the same request with the same idempotency key.
+The retained request binds the person, physical session, target run, and text;
+changed requests conflict. A retained active-only input is never injected again,
+even when its native outcome is unknown or the Gateway restarted. This guarantee
+lasts while its source or receipt remains in that session. Reconciliation still
+requires current access. Do not generate a new key to recover an uncertain result.
+This host method does not add remote writer authentication or grant write access
+to a Session Share reader.
+
 ### Chat input reconciliation
 
 `chat.steerNow` accelerates an already accepted steer without stopping its run.

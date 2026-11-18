@@ -23,6 +23,7 @@ export type ChatSendRetryComparison = {
   messageSeq?: number;
   state?: string;
   endCause?: SessionPendingInputEndCause;
+  completion?: import("../../agents/agent-run-terminal-outcome.types.js").AgentRunTerminalOutcome;
 };
 
 export function chatSendRequestConflictError(unverifiable = false) {
@@ -59,6 +60,7 @@ export function readChatSendRetryComparison(session: ComparisonSession) {
       messageSeq: submitted?.messageSeq,
       state: submitted?.state,
       endCause: submitted?.endCause,
+      completion: submitted?.completion,
     };
   });
 }

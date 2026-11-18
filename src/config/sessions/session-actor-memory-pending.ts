@@ -129,6 +129,7 @@ export function createSessionActorMemoryPending(
         return snapshot;
       }
       const row = pending(input);
+      snapshot.completion = completion(input)?.outcome;
       let committedEntryId: string | undefined;
       if (row) {
         if (Buffer.byteLength(row.message_json, "utf8") > MAX_PAYLOAD_BYTES) {
@@ -314,7 +315,7 @@ export function createSessionActorMemoryPending(
           if (!retained || retained.succeeded === 0) {
             state.completions.set(input.idempotencyKey, next);
           }
-          if (isFinalInputCompletion(outcome) && row) {
+          if (isFinalInputCompletion(outcome) && !outcome.activeSteer && row) {
             state.pendingInputs.delete(input.idempotencyKey);
           }
           receipt.outcome = structuredClone(outcome);

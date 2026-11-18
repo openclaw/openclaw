@@ -1,3 +1,4 @@
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
@@ -105,6 +106,7 @@ export function readSessionSubmittedInput(
       messageSeq?: number;
       state?: string;
       endCause?: SessionPendingInputEndCause;
+      completion?: AgentRunTerminalOutcome;
     }
   | undefined
 >;
@@ -129,6 +131,7 @@ export async function readSessionSubmittedInput(
     return options?.includeSource
       ? {
           message,
+          ...(snapshot.completion ? { completion: snapshot.completion } : {}),
           // A consumed receipt still supplies the original request, not its aggregate transcript.
           source: pending ? ("pending" as const) : ("transcript" as const),
           ...(pending && pending.consumed_event_id == null

@@ -2,7 +2,12 @@ import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { hasSessionPendingInputsSchema } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  hasSessionPendingInputsSchema,
+  SESSION_INPUT_COMPLETIONS_TABLE,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readSessionInputCompletion } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptMessageByScopedIdempotencyKey } from "./session-accessor.sqlite-transcript-identity.js";
 import type {
@@ -171,6 +176,9 @@ export function readPendingInputSourceInDatabase(
           snapshot.committedMessageSeq = transcript.message_position + 1;
         }
       }
+    }
+    if (tableExists(database.db, SESSION_INPUT_COMPLETIONS_TABLE)) {
+      snapshot.completion = readSessionInputCompletion(database, input)?.outcome;
     }
     return snapshot;
   });

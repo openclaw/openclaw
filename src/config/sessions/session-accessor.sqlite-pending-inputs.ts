@@ -412,7 +412,8 @@ export function writeSessionInputCompletion(
       actor.completionsComplete = false;
     }
   }
-  if (isFinalInputCompletion(outcome)) {
+  // Active-only input needs its original source for exact retries even without a transcript.
+  if (isFinalInputCompletion(outcome) && !outcome.activeSteer) {
     // Handled hooks can finish without appending a user message. The completion
     // receipt retires that exact custody atomically in the caller's transaction.
     executeSqliteQuerySync(
