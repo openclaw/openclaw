@@ -364,7 +364,6 @@ async function restoreGatewayOperatorSnapshot(params: {
       assertCurrent: assertRecoveryCurrent,
       readCurrentRoleFacts: admittedRoleFacts ? () => admittedRoleFacts : undefined,
       reauthorize: () => {
-        assertRecoveryCurrent();
         const cfg = reauthorizePolicy();
         if (!isDeepStrictEqual(capturedModelPolicy, resolveRole(cfg)?.modelPolicy)) {
           throw new GatewayOperatorRecoveryAuthorizationError(

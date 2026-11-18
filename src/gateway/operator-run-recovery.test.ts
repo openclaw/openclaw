@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import * as stableJson from "@openclaw/normalization-core/stable-stringify";
 import { describe, expect, it, vi } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { getCommandOwnerAuthority } from "../auto-reply/command-owner-authority.js";
 import { withAdminIngress } from "../channels/message-access/operator-authority.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -866,6 +870,7 @@ describe("scheduled authenticated operator source", () => {
 
         if (change === "claim retired") {
           fixture.retire();
+          expect(restored.authority.reauthorize).not.toThrow();
         }
         if (change === "device revoked") {
           await rotateDeviceToken({ deviceId: "recovery-device", role: "operator" });
@@ -999,3 +1004,52 @@ describe("scheduled authenticated operator source", () => {
       }
     }));
 });
+
+it.each(["connection", "stop", "revocation"] as const)(
+  "checks queued recovery start after original socket closure (%s)",
+  (change) =>
+    withRecovery(async (fixture, _stateDir, profile) => {
+      const connection = new AbortController();
+      Object.assign(fixture.client, { connectionSignal: connection.signal });
+      const stop = new AbortController();
+      const restored = await restoreGatewayOperatorSource({
+        snapshot: fixture.snapshot,
+        target: fixture.target,
+        context: fixture.context,
+        // The new start owns cancellation; the old socket is not its authority.
+        assertCurrent: () => stop.signal.throwIfAborted(),
+      });
+      using _ = { [Symbol.dispose]: restored.release };
+      const runId = `queued-recovery-${change}`;
+      const operationalRunInstance = createOperationalRunInstanceRef(runId);
+      const prepared = prepareAgentRunAdmission({
+        cfg: fixture.context.getRuntimeConfig(),
+        operatorAuthority: restored.authority,
+        operationalRunInstance,
+        facts: {
+          runId,
+          agentId: fixture.target.agentId,
+          ingress: { kind: "system", boundary: "queued-recovery", state: "present" },
+        },
+      });
+      try {
+        connection.abort(new Error("Original socket closed"));
+        if (change === "stop") {
+          stop.abort(new Error("Stop requested"));
+        } else if (change === "revocation") {
+          setUserProfileRole(profile.id, "revoked-role");
+        }
+        if (change === "connection") {
+          expect((await prepared.admit("embedded")).operationalRunInstance).toBe(
+            operationalRunInstance,
+          );
+        } else {
+          await expect(prepared.admit("embedded")).rejects.toThrow(
+            change === "stop" ? /Stop requested|authority.*no longer active/ : /identity changed/,
+          );
+        }
+      } finally {
+        prepared.close();
+      }
+    }),
+);
