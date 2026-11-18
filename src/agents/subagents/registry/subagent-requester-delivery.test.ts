@@ -22,7 +22,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])(
+it.each([false, true, "ambiguous"] as const)(
   "settles a persisted consumed input after restart (answered=%s)",
   (answered) => {
     const entry = createSubagentStoreRunFixture({
@@ -56,15 +56,23 @@ it.each([false, true])(
           kind: "requesterBatch",
           entries: [{ subagent: restored }],
           now: 100,
-          outcome: answered
-            ? {
-                delivered: false,
-                path: "direct",
-                finalAssistantVisibleText: "answer",
-                reason: "message_tool_delivery_missing",
-                disposition: "permanent_failure",
-              }
-            : { delivered: false, path: "direct", error: "provider unavailable" },
+          outcome:
+            answered === "ambiguous"
+              ? {
+                  delivered: false,
+                  path: "direct",
+                  disposition: "ambiguous",
+                  error: "send identity missing",
+                }
+              : answered
+                ? {
+                    delivered: false,
+                    path: "direct",
+                    finalAssistantVisibleText: "answer",
+                    reason: "message_tool_delivery_missing",
+                    disposition: "permanent_failure",
+                  }
+                : { delivered: false, path: "direct", error: "provider unavailable" },
         }),
       { database },
     );
@@ -74,8 +82,11 @@ it.each([false, true])(
     expect(settled.delivery?.requesterDelivery?.state).toBe("consumed");
     expect(settled.delivery?.status).toBe(answered ? "failed" : "delivered");
     expect(settled.requesterSettleWake).toBeUndefined();
+    if (answered === "ambiguous") {
+      expect(settled.delivery?.disposition).toBe("ambiguous");
+    }
     expect(settled.delivery?.lastDropReason).toBe(
-      answered ? "message_tool_delivery_missing" : undefined,
+      answered === true ? "message_tool_delivery_missing" : undefined,
     );
   },
 );

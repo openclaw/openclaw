@@ -277,7 +277,10 @@ export function recordRequesterDelivery(
     return;
   }
   delivery.requesterDelivery = fact;
-  if (delivery.status === "pending" || delivery.status === "in_progress") {
+  if (
+    delivery.disposition !== "ambiguous" &&
+    (delivery.status === "pending" || delivery.status === "in_progress")
+  ) {
     delivery.disposition = undefined;
     delivery.lastError = undefined;
   }
@@ -309,7 +312,9 @@ export function resolveRequesterDeliveryOutcome(
     outcome.finalAssistantVisibleText === undefined &&
     entries.length > 0 &&
     turnFailedBeforeAnswer &&
-    entries.every(hasConsumedRequesterInput)
+    entries.every(
+      (entry) => entry.delivery?.disposition !== "ambiguous" && hasConsumedRequesterInput(entry),
+    )
     ? { delivered: true, path: "direct" }
     : outcome;
 }

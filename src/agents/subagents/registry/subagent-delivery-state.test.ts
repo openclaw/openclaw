@@ -129,3 +129,36 @@ describe("requester consumption", () => {
     },
   );
 });
+
+it("keeps an ambiguous send when the requester consumed the result first", () => {
+  const run = baseRun();
+  recordRequesterDelivery(run, { state: "consumed", runId: "requester-turn" });
+  const outcome = {
+    delivered: false,
+    path: "direct",
+    disposition: "ambiguous",
+    error: "automatic completion delivery could not be confirmed",
+  } as const;
+
+  expect(resolveRequesterDeliveryOutcome([run], outcome)).toEqual(outcome);
+});
+
+it("keeps recorded send ambiguity when transcript consumption arrives later", () => {
+  const run = baseRun({
+    delivery: {
+      status: "pending",
+      disposition: "ambiguous",
+      lastError: "send returned no identity",
+    },
+  });
+  recordRequesterDelivery(run, { state: "consumed", runId: "requester-turn" });
+
+  expect(run.delivery).toMatchObject({
+    status: "pending",
+    disposition: "ambiguous",
+    lastError: "send returned no identity",
+    requesterDelivery: { state: "consumed", runId: "requester-turn" },
+  });
+  const receipt = { delivered: true, path: "direct", deliveredAt: 200 } as const;
+  expect(resolveRequesterDeliveryOutcome([run], receipt)).toEqual(receipt);
+});

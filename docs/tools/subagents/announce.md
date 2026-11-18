@@ -11,6 +11,9 @@ An ordinary requester run ending or a later follow-up taking over does not disca
 the waiting results. An accepted completion turn keeps its delivery; findings not
 yet accepted remain pending for the requester's next turn.
 
+Transcript consumption does not confirm a channel send. An ambiguous send keeps its
+recorded uncertainty until the delivery owner resolves it.
+
 ## Announce
 
 Sub-agents report back through completion delivery:
