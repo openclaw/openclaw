@@ -74,6 +74,33 @@ export async function prepareCrabboxWorkerRuntime(params: {
     timeoutMs,
     async inspectPreparedWorkspace() {
       if (params.project?.preparation) {
+        params.project.assertCurrent();
+        const verification = createCrabboxNodeRuntimeSetup({
+          nodeBootstrap: runtime.nodeBootstrap,
+          workerBundle: runtime.workerBundle,
+          leaseId: params.leaseId,
+          target: params.context.profile.target,
+          verifyOnly: true,
+        });
+        // Inspect expanded package code before core can prune machine caches.
+        // Unlike setup, this command carries no download or enrollment grants.
+        crabboxCommandOutput(
+          "node runtime verification",
+          await runCrabboxCommand({
+            ...params.context,
+            action: "node runtime verification",
+            args: leaseRunArgs({ ...params.context, id: params.leaseId }),
+            input: verification.command,
+            timeoutMs: remainingProvisionTimeout(params.context.deadline, CRABBOX_SETUP_TIMEOUT_MS),
+            signal: AbortSignal.any([
+              ...(params.context.signal ? [params.context.signal] : []),
+              ...(params.preparationSignal ? [params.preparationSignal] : []),
+              ...(runtime.signal ? [runtime.signal] : []),
+            ]),
+            assertCurrent: params.assertCurrent,
+          }),
+        );
+        params.assertCurrent();
         await prepareCrabboxProjectFiles({
           ...params.context,
           id: params.leaseId,

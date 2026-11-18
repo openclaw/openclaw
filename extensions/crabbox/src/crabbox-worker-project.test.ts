@@ -15,6 +15,7 @@ import {
   createWorkerArchiveFixture,
 } from "./crabbox-worker-node-enrollment.test-support.js";
 import { operationLeaseId } from "./crabbox-worker-profile.js";
+import { createCrabboxProjectNativeVerificationFixture } from "./crabbox-worker-project-native.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import { CrabboxCheckpointCreateError } from "./crabbox-worker-warm-image-checkpoint.js";
 import {
@@ -980,3 +981,34 @@ exec "$CRABBOX_TEST_NODE" "$@"
     expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
   });
 });
+
+describe.skipIf(process.platform === "win32")(
+  "project snapshot native package verification",
+  () => {
+    it.each([false, true])(
+      "verifies expanded code before core pruning and capture (corrupt=%s)",
+      async (corrupt) => {
+        const f = await createCrabboxProjectNativeVerificationFixture(corrupt);
+        const provision = f.provider.provision(PROFILE, "native-project", f.options);
+        if (corrupt) {
+          await expect(provision).rejects.toThrow("expanded bundle verification failed");
+          expect(f.inspectPreparedWorkspace).not.toHaveBeenCalled();
+          expect(f.options.beginNodeEnrollment).not.toHaveBeenCalled();
+          expect(f.calls.filter((call) => call.argv[2] === "create")).toHaveLength(0);
+          expect(f.calls.filter((call) => call.argv[1] === "stop")).toHaveLength(1);
+          expect(fs.readFileSync(f.expandedWorker, "utf8")).toBe("corrupt expanded worker");
+        } else {
+          const lease = await provision;
+          expect(f.events).toEqual(["prepared", "native-verified", "core-prune", "checkpoint"]);
+          await f.provider.provision(PROFILE, "native-project", f.options);
+          await f.provider.provision(PROFILE, "native-fork", f.options);
+          await f.provider.inspect({ leaseId: lease.leaseId, profile: PROFILE });
+          expect(f.verifications).toBe(1);
+          expect(f.events).toEqual(["prepared", "native-verified", "core-prune", "checkpoint"]);
+        }
+        expect(f.verifications).toBe(1);
+        expect(fs.readFileSync(f.prewarmMarker, "utf8")).toBe("ready\n");
+      },
+    );
+  },
+);
