@@ -805,7 +805,12 @@ function resetProcessRegistryForTests() {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashProcessRegistryTestApi")] =
     // Fixtures build a record, adjust it, then track it; production registers through one factory.
-    { resetProcessRegistryForTests, buildProcessSession, trackProcessSession };
+    {
+      resetProcessRegistryForTests,
+      buildProcessSession,
+      trackProcessSession,
+      listExecSessionsForCancellation,
+    };
 }
 
 function scheduleSweeper() {

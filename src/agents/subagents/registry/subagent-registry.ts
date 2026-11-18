@@ -21,7 +21,10 @@ import {
   loadSubagentAnnounceModule,
   loadSubagentBrowserCleanupModule,
 } from "./subagent-registry-deps.js";
-import { stopEndedSubagentProcesses } from "./subagent-registry-execution-cleanup.js";
+import {
+  endedSubagentTask,
+  stopEndedSubagentProcesses,
+} from "./subagent-registry-execution-cleanup.js";
 import {
   ANNOUNCE_EXPIRY_MS,
   GATEWAY_ADMISSION_RETRY_DELAY_MS,
@@ -545,6 +548,11 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 const testing = {
   sweepOnceForTests: subagentSweeper.sweepOnce,
   runSweeperTickForTests: subagentSweeper.runTick,
+  /** The shared test teardown checks that no ended hidden subagent still runs a process. */
+  endedSubagentTasksForTests: () =>
+    [...new Map([...subagentRuns.values()].map((run) => [run.childSessionKey, run])).values()]
+      .map((run) => endedSubagentTask(run.childSessionKey, run.childAgentId))
+      .filter((task) => task !== undefined),
 } as const;
 
 export const markSubagentRunTerminated = subagentRunManager.markSubagentRunTerminated;

@@ -154,7 +154,7 @@ function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
 }
 
 /** A hidden subagent chat whose task ended: its scope keys and when it ended; undefined while it can still take a turn. */
-function endedSubagentTask(childSessionKey: string, childAgentId?: string) {
+export function endedSubagentTask(childSessionKey: string, childAgentId?: string) {
   const runs = [...getSubagentRunsForChildSession(childSessionKey, childAgentId)];
   if (
     runs.length === 0 ||
