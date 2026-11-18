@@ -4803,7 +4803,7 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 
 .chat-controls__account-popover .chat-controls__account-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 40px;
+  grid-template-columns: minmax(0, 1fr) 24px;
   column-gap: 12px;
   min-height: 34px;
   padding: 4px 2px 4px 8px;
@@ -4853,10 +4853,32 @@ html[dir="rtl"] .chat-attachments-preview .chat-attachment-loading__line > span 
 }
 
 .chat-controls__account-popover .chat-controls__model-option-action {
-  width: 40px;
+  width: 24px;
   margin: 0;
-  justify-content: flex-end;
-  gap: 6px;
+}
+
+.chat-controls__account-page-end {
+  position: relative;
+}
+
+.chat-controls__account-page-end--loading {
+  position: sticky;
+  bottom: 0;
+  background: var(--popover);
+}
+
+/* Intersect just inside the last row, including when keyboard focus reveals it. */
+.chat-controls__account-page-sentinel {
+  position: absolute;
+  inset: auto 0 12px;
+  height: 1px;
+  pointer-events: none;
+}
+
+.chat-controls__account-page-loader {
+  display: grid;
+  min-height: 28px;
+  place-items: center;
 }
 
 .chat-controls__account-spinner {

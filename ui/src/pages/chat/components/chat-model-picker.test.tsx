@@ -52,6 +52,7 @@ function accountSection(
       open,
       error: null,
       loading: null,
+      onNextPage: undefined,
       startIndex,
       onToggle() {},
       onSelect,

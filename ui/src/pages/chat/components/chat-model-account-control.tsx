@@ -3,9 +3,23 @@ import { createMemo, createUniqueId, For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover } from "../../../components/solid/popover.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../../../lib/reactive/observers.ts";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
+
+function AccountPageSentinel(props: { onVisible: () => void }) {
+  let sentinel!: HTMLSpanElement;
+  createIntersectionObserver(
+    () => [sentinel],
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onVisible();
+      }
+    },
+  );
+  return <span ref={sentinel} class="chat-controls__account-page-sentinel" aria-hidden="true" />;
+}
 
 export function ChatModelAccountSectionView(
   props: ReturnType<ChatModelAccountSection["viewProps"]>,
@@ -65,7 +79,6 @@ export function ChatModelAccountOptions(
     const renderer = renderRow();
     return renderer ? renderer(key, render) : render();
   };
-  const loadingOption = () => (props.loading === "initial" ? props.currentValue : "more");
   return (
     <>
       <div
@@ -93,9 +106,7 @@ export function ChatModelAccountOptions(
                       class={[
                         "chat-controls__inline-select-option chat-controls__model-option",
                         {
-                          "chat-controls__account-row": !["more", "manage"].includes(
-                            option().value,
-                          ),
+                          "chat-controls__account-row": option().value !== "manage",
                           "chat-controls__account-manage": option().value === "manage",
                         },
                         {
@@ -125,9 +136,7 @@ export function ChatModelAccountOptions(
                       data-chat-model-provider-label="account"
                       hidden={search?.row(`account:${option().value}`)?.hidden ?? !props.open}
                       aria-disabled={option().disabled ? "true" : undefined}
-                      disabled={
-                        props.disabled || Boolean(option().disabled && option().value !== "more")
-                      }
+                      disabled={props.disabled || option().disabled}
                       onClick={(event) => props.onSelect(option().value, event)}
                     >
                       <Show when={option().value === "manage"}>
@@ -146,12 +155,6 @@ export function ChatModelAccountOptions(
                         </Show>
                       </span>
                       <span class="chat-controls__model-option-action">
-                        <Show when={props.loading && option().value === loadingOption()}>
-                          <span
-                            class="btn__spinner chat-controls__account-spinner"
-                            aria-hidden="true"
-                          />
-                        </Show>
                         <Show when={option().value === props.currentValue}>
                           <span class="chat-controls__inline-select-check" aria-hidden="true">
                             <Icon name="check" />
@@ -167,9 +170,22 @@ export function ChatModelAccountOptions(
         </For>
       </div>
       <Show when={!renderRow() && props.open}>
-        <span class="sr-only" role="status">
-          {props.loading ? t("common.loading") : ""}
-        </span>
+        <div
+          class={[
+            "chat-controls__account-page-end",
+            { "chat-controls__account-page-end--loading": Boolean(props.loading) },
+          ]}
+        >
+          <Show when={props.onNextPage}>
+            {(next) => <AccountPageSentinel onVisible={next()} />}
+          </Show>
+          <Show when={props.loading}>
+            <div class="chat-controls__account-page-loader" role="status">
+              <span class="btn__spinner chat-controls__account-spinner" aria-hidden="true" />
+              <span class="sr-only">{t("common.loading")}</span>
+            </div>
+          </Show>
+        </div>
       </Show>
       <Show when={props.error}>
         {row("error:accounts", () => (

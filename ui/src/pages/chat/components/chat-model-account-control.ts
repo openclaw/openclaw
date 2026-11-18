@@ -185,15 +185,6 @@ export function renderChatModelAccountControl(
     ...(params.onAutomatic
       ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
       : []),
-    ...(currentInventory.nextCursor
-      ? [
-          {
-            value: "more",
-            label: t("profilePage.modelAccounts.loadMore"),
-            disabled: currentInventory.loading,
-          },
-        ]
-      : []),
     ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
   ];
   const selectAccount = (value: string, event: MouseEvent) => {
@@ -205,7 +196,7 @@ export function renderChatModelAccountControl(
       params.onManage?.();
     } else if (value === "automatic") {
       params.onAutomatic?.();
-    } else if (value === "more" || value === "retry") {
+    } else if (value === "retry") {
       event.preventDefault();
       void loadAccounts(currentInventory, client, currentInventory.nextCursor);
     } else {
@@ -228,6 +219,7 @@ export function renderChatModelAccountControl(
   const open = currentInventory.open;
   const error = currentInventory.error;
   const loading = currentInventory.loading ? (currentInventory.loaded ? "more" : "initial") : null;
+  const cursor = currentInventory.nextCursor;
   const viewProps = (startIndex: number) => ({
     selectionKind: selection.kind,
     disabled: params.disabled,
@@ -240,6 +232,19 @@ export function renderChatModelAccountControl(
     startIndex,
     onToggle: toggleAccounts,
     onSelect: selectAccount,
+    onNextPage:
+      open && cursor && !loading && !error && !params.disabled
+        ? () => {
+            if (
+              currentInventory.open &&
+              currentInventory.nextCursor === cursor &&
+              !currentInventory.error &&
+              params.ownsSelection?.() !== false
+            ) {
+              void loadAccounts(currentInventory, client, cursor);
+            }
+          }
+        : undefined,
   });
   return {
     prefetch: params.disabled ? undefined : accountPrefetch(currentInventory, client),

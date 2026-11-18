@@ -786,6 +786,7 @@ it("opens account choices without covering model choices while closed", async ()
       open: false,
       error: null,
       loading: null,
+      onNextPage: undefined,
       startIndex,
       onToggle() {},
       onSelect() {},
