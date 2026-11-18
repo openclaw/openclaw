@@ -134,7 +134,7 @@ module.exports = {
           "PostgreSQL connections must run in a worker",
         );
         const deniedCalls: string[] = [];
-        using guard = vi
+        using _guard = vi
           .spyOn(databaseAdmission, "assertEngineStoreExecutionAllowed")
           .mockImplementation(() => {
             try {
