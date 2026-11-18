@@ -59,7 +59,7 @@ export function TemplatePackageConsent(props: { plan: TemplateAddReviewPlan }) {
     <>
       <For each={props.plan.pluginReviews.filter((item) => item.ownerAction === "install")}>
         {(item) => (
-          <div class="templates-add-consent__item">
+          <div class="templates-add-consent__item template-creator__detail-panel template-creator__detail-group">
             <strong>{"path" in item ? item.path : item.ref}</strong>
             <span>
               {"path" in item
@@ -92,7 +92,7 @@ export function TemplatePackageConsent(props: { plan: TemplateAddReviewPlan }) {
       </For>
       <For each={props.plan.skillReviews}>
         {(item) => (
-          <div class="templates-add-consent__item">
+          <div class="templates-add-consent__item template-creator__detail-panel template-creator__detail-group">
             <strong>{"path" in item ? item.path : item.ref}</strong>
             <span>
               {"path" in item

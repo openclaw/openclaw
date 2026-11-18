@@ -466,6 +466,12 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   border: 1px solid var(--border);
   border-radius: 14px;
 
+  .template-import-dialog > & {
+    max-height: var(--openclaw-modal-height-limit);
+    border: 0;
+    border-radius: inherit;
+  }
+
   & > header {
     & h2 {
       overflow-wrap: anywhere;
@@ -474,7 +480,6 @@ section[aria-labelledby="template-catalog-detail-title"] .settings-row__desc {
   & > footer {
     min-height: 64px;
     padding: 12px 20px;
-    border-top: 0;
 
     & > .template-creator__actions {
       display: flex;

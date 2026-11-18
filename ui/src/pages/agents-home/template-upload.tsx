@@ -1,4 +1,3 @@
-import "../../styles/template-upload.css";
 import { createSignal, createUniqueId, For, Show } from "solid-js";
 import { MAX_TEMPLATE_UPLOAD_ARCHIVE_BYTES } from "../../../../packages/gateway-protocol/src/template-source-limits.js";
 import "../../components/modal-dialog.tsx";
@@ -291,8 +290,13 @@ export function TemplateUpload() {
                   </header>
                   <div class="template-creator__body">
                     <Show when={reviewing()}>
-                      <div class="template-import-skeleton" aria-hidden="true">
-                        <For each={[1, 2, 3]}>{() => <span class="skeleton skeleton-line" />}</For>
+                      <div
+                        class="template-import-skeleton templates-content-skeleton"
+                        aria-hidden="true"
+                      >
+                        <For each={[1, 2, 3]}>
+                          {() => <span class="skeleton templates-content-skeleton__row" />}
+                        </For>
                       </div>
                     </Show>
                     <Show when={installed()}>
@@ -320,7 +324,7 @@ export function TemplateUpload() {
                   readPackagePreview={readPackagePreview}
                   notices={
                     <>
-                      <div id={consentId} class="template-import-consent">
+                      <div id={consentId} class="template-import-consent templates-add-consent">
                         <TemplatePackageConsent plan={plan()} />
                       </div>
                       <Show when={plan().blockers.length}>
