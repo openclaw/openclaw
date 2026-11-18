@@ -35,6 +35,13 @@ suite.define(() => {
           await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe(theme);
         }
 
+        // Leave just enough room for Remove without covering the next preview.
+        const clearance = await thumbnails.evaluateAll(([first, next]) => {
+          const remove = first!.querySelector(".chat-attachment-remove")!;
+          return next!.getBoundingClientRect().left - remove.getBoundingClientRect().right;
+        });
+        expect(clearance).toBeCloseTo(0);
+
         const containment = await rail.evaluate((element) => {
           const surface = element.closest<HTMLElement>(".agent-chat__input")!;
           const outer = surface.getBoundingClientRect();
