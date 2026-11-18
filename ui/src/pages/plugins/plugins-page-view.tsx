@@ -376,11 +376,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         {PluginRowMessageView(page().state.pageNotice ?? undefined)}
         {page().surface === "discovery" ? (
           <div {...pluginsHubPanel("plugins")}>
-            <Show when={page().loading && !hasInventory()}>
-              <div class="muted" role="status">
-                {t("pluginsPage.loading")}
-              </div>
-            </Show>
             <Show when={page().state.error}>
               {(error) => (
                 <PluginRetryError error={error()} onRetry={() => void page().refreshCatalog()} />

@@ -531,7 +531,6 @@ const enPluginManagement = {
     viewAllInstalledPlugins: "View all",
     hideInstalledPlugins: "Hide",
     tryAgain: "Try again",
-    loading: "Loading plugins…",
     noInstalledTitle: "No optional plugins installed",
     noInstalledMatchTitle: "No installed plugins match your search.",
     categoryChannels: "Channels",
