@@ -19,6 +19,7 @@ export const SESSION_ENTRY_NUMERIC_FIELDS = [
   "endedAt",
   "runtimeMs",
   "abortCutoffTimestamp",
+  "userStoppedAt",
   "lastTtsReadLatestAt",
   "authProfileOverrideCompactionCount",
   "queueDebounceMs",

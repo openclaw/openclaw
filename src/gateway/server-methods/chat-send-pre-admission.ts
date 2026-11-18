@@ -395,6 +395,8 @@ export async function runChatSendPreAdmission(
         stopReason: "stop",
         requester: stopRequester,
         stopSource: "channel-user",
+        // A person typed /stop: provenance for the next turn's note, never cancellation authority.
+        userInitiated: true,
         // The controller keeps the selected store locator; persistence uses its physical DB.
         controllerTargets: [
           captureSessionTarget({

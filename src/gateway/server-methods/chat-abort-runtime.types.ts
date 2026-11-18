@@ -1,10 +1,8 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
-import type {
-  SessionStopHookContext,
-  SessionStopSource,
-} from "../../sessions/session-controller.stop.js";
+import type { SessionStopSource } from "../../sessions/session-controller.stop-source.types.js";
+import type { SessionStopHookContext } from "../../sessions/session-controller.stop.js";
 import type { ChatAbortOps } from "../chat-abort.js";
 import type { ChatAbortRequester } from "./chat-abort-authorization.js";
 import type { abortControlledSubagents } from "./chat-abort-descendants.js";

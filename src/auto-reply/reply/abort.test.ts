@@ -331,6 +331,7 @@ describe("abort handling", () => {
       expect(result.handled).toBe(true);
       const entry = loadSessionEntry({ storePath, sessionKey: targetKey });
       expect(entry?.abortedLastRun).toBe(true);
+      expect(entry?.userStoppedAt).toEqual(expect.any(Number));
       expect(entry?.abortCutoffMessageSid).toBe(explicit ? undefined : messageSid);
       expect(entry?.abortCutoffTimestamp).toBe(explicit ? undefined : timestamp);
     },

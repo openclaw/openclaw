@@ -654,7 +654,7 @@ export function createSessionActions(context: SessionActionContext) {
         sessionKey: selection.sessionKey,
         ...(!parseAgentSessionKey(selection.sessionKey) ? { agentId: selection.agentId } : {}),
       };
-      const result = await client.abortChat(target);
+      const result = await client.abortChat({ ...target, userInitiated: true });
       const history = result.aborted
         ? undefined
         : await client.loadHistory({ ...target, limit: 1 });

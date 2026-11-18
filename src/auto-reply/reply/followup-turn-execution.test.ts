@@ -564,4 +564,19 @@ describe("executeFollowupTurn lifecycle", () => {
     await expect(drain).rejects.toBe(failure);
     expect(order).toEqual(["slow-finished"]);
   });
+
+  it.each([true, false])(
+    "states a Stop the turn claimed (%s) once, in its prompt",
+    async (claimed) => {
+      const bodies: string[] = [];
+      mockExecution((params) => void bodies.push(params.commandBody));
+      const turn = createTurn({ userStopClaimed: claimed });
+      await executeTestTurn({ turn });
+      expect(bodies).toHaveLength(1);
+      expect(bodies[0]?.split("The user stopped the previous agent run")).toHaveLength(
+        claimed ? 2 : 1,
+      );
+      expect(turn.queued.prompt).toBe("queued prompt");
+    },
+  );
 });

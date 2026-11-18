@@ -4,6 +4,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../../config/sessions.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { captureAbortTargetMark } from "../../sessions/session-run-stopped.js";
 import { resolveAbortCutoffFromContext, shouldPersistAbortCutoff } from "./abort-cutoff.js";
 import {
   abortSessionRunTargetWithOutcome,
@@ -104,7 +105,13 @@ async function executeChannelUserStop(params: Parameters<CommandHandler>[0]) {
     messageIdentity: abortCutoff,
     recordAbortTarget: async ({ recordCutoff }) => {
       assertCurrent();
-      await persistAbortTargetEntry({
+      // The mark names the row the receipt stopped: its store and key.
+      const [stopped] = capture.stoppedSessions;
+      const mark =
+        abortTarget.entry && stopped
+          ? captureAbortTargetMark(stopped, abortTarget.entry)
+          : undefined;
+      const applied = await persistAbortTargetEntry({
         isCurrent: params.opts?.isCommandTargetCurrent,
         entry: abortTarget.entry,
         key: abortTarget.key,
@@ -112,6 +119,7 @@ async function executeChannelUserStop(params: Parameters<CommandHandler>[0]) {
         storePath: params.storePath,
         abortCutoff: recordCutoff ? abortCutoff : undefined,
       });
+      return applied ? mark : undefined;
     },
     // The controller invokes this adapter only for sources whose policy stops children.
     stopChildren: (applyParentStop) =>

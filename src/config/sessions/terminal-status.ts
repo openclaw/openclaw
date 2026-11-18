@@ -7,6 +7,13 @@ export function isRecoverableTerminalSessionStatus(
   return status === "failed" || status === "timeout" || status === "killed";
 }
 
+/** When a user's Stop ended this incarnation's work; a Stop carried into another sessionId is not its. */
+export function resolveUserStoppedAt(entry: SessionEntry | undefined): number | undefined {
+  return entry?.sessionId && entry.userStoppedSessionId === entry.sessionId
+    ? entry.userStoppedAt
+    : undefined;
+}
+
 /** Clears stale terminal lifecycle fields before reusing a recoverable session entry. */
 export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): SessionEntry {
   return {

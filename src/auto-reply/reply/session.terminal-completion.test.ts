@@ -30,6 +30,9 @@ describe("terminal completion session reuse", () => {
       const retained = {
         sessionId,
         lifecycleRevision: "completion-revision",
+        // A Stop's record outlives the recovery, so the next prompt can still say so.
+        userStoppedAt: 1_000,
+        userStoppedSessionId: sessionId,
       };
       await writeSessionStoreFast(storePath, {
         [sessionKey]: { ...retained, status, abortedLastRun: true, updatedAt: Date.now() },
@@ -63,6 +66,7 @@ describe("terminal completion session reuse", () => {
       expect(result.sessionId).toBe(sessionId);
       expect(result.abortedLastRun).toBe(false);
       expect(entry).toMatchObject(retained);
+      expect(result.sessionEntry).toMatchObject(retained);
       expect(entry?.status).toBeUndefined();
       expect(entry?.abortedLastRun).toBeUndefined();
       expect(await loadTranscriptEvents(scope)).toEqual(transcriptBefore);

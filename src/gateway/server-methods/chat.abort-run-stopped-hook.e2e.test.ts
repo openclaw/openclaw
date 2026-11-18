@@ -25,6 +25,8 @@ const disabledServices = [
 const PLUGIN_ID = "run-stopped-observer";
 const EVENTS_KEY = "openclaw.test.runStoppedEvents";
 const TOKEN = "run-stopped-proof-token";
+const STOP_NOTE = "The user stopped the previous agent run.";
+const RESUME_NOTE = "continue the unfinished work";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-run-stopped-proof-");
 
@@ -38,7 +40,7 @@ function recordedEvents(): RecordedEvent[] {
 }
 
 it(
-  "fires run_stopped once per explicit Gateway Stop and never for a timeout",
+  "fires run_stopped once per explicit Gateway Stop, tells the next turn the user stopped it, and does neither for a timeout",
   { timeout: 120_000 },
   async () => {
     const tempHome = tempDirs.make();
@@ -58,6 +60,7 @@ it(
     const envSnapshot = captureEnv(Object.keys(env));
     // The provider holds every response open, so only a Stop or the run timeout ends a turn.
     const openResponses: ServerResponse[] = [];
+    const requestBodies: string[] = [];
     let providerServer: ReturnType<typeof createServer> | undefined;
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
 
@@ -71,7 +74,9 @@ it(
         setTestEnvValue(key, value);
       }
       providerServer = createServer((request, response) => {
-        request.resume();
+        const chunks: Buffer[] = [];
+        request.on("data", (chunk: Buffer) => chunks.push(chunk));
+        request.on("end", () => requestBodies.push(Buffer.concat(chunks).toString("utf8")));
         openResponses.push(response);
       });
       const provider = buildMockOpenAiResponsesProvider(await listenProvider(providerServer));
@@ -149,16 +154,35 @@ it(
           { runId, timeoutMs: 30_000 },
           { timeoutMs: 35_000 },
         );
+      // The prompt the model receives on the turn after a Stop.
+      const nextPrompt = async (sessionKey: string) => {
+        const bodiesBefore = requestBodies.length;
+        await client.request("chat.send", {
+          sessionKey,
+          message: "What now?",
+          deliver: false,
+          idempotencyKey: `${sessionKey}:next`,
+        });
+        await vi.waitFor(() => expect(requestBodies.length).toBeGreaterThan(bodiesBefore), {
+          timeout: 30_000,
+        });
+        return requestBodies.at(-1)!;
+      };
       const eventsFor = (sessionKey: string) =>
         recordedEvents().filter((event) =>
           event.sessions.some((session) => session.sessionKey === sessionKey),
         );
 
-      // Exact-run Stop from a Gateway client (Control UI and native apps send the runId).
+      // Exact-run Stop from a Gateway client (Control UI and native apps send the runId). The
+      // Control UI's Stop button marks it userInitiated, which is what earns the next-turn note.
       const exactKey = "agent:main:run-stopped-exact";
       const exactRun = await startHeldRun(exactKey);
       await expect(
-        client.request("chat.abort", { sessionKey: exactKey, runId: exactRun }),
+        client.request("chat.abort", {
+          sessionKey: exactKey,
+          runId: exactRun,
+          userInitiated: true,
+        }),
       ).resolves.toMatchObject({ aborted: true, runIds: [exactRun] });
       await waitForTerminal(exactRun);
       expect(eventsFor(exactKey)).toEqual([
@@ -169,11 +193,16 @@ it(
           ctx: { agentId: "main", sessionKey: exactKey },
         },
       ]);
+      const afterExact = await nextPrompt(exactKey);
+      expect.soft(afterExact).toContain(STOP_NOTE);
+      expect.soft(afterExact).not.toContain(RESUME_NOTE);
 
       // Session Stop from a Gateway client.
       const sessionKey = "agent:main:run-stopped-session";
       const sessionRun = await startHeldRun(sessionKey);
-      await expect(client.request("chat.abort", { sessionKey })).resolves.toMatchObject({
+      await expect(
+        client.request("chat.abort", { sessionKey, userInitiated: true }),
+      ).resolves.toMatchObject({
         aborted: true,
         runIds: [sessionRun],
       });
@@ -186,6 +215,9 @@ it(
           ctx: { agentId: "main", sessionKey },
         },
       ]);
+      const afterSession = await nextPrompt(sessionKey);
+      expect.soft(afterSession).toContain(STOP_NOTE);
+      expect.soft(afterSession).not.toContain(RESUME_NOTE);
 
       // A typed "/stop" is a channel-user Stop.
       const commandKey = "agent:main:run-stopped-command";
@@ -205,12 +237,16 @@ it(
           ctx: { agentId: "main", sessionKey: commandKey },
         },
       ]);
+      const afterCommand = await nextPrompt(commandKey);
+      expect.soft(afterCommand).toContain(STOP_NOTE);
+      expect.soft(afterCommand).not.toContain(RESUME_NOTE);
 
       // A run timeout is not a user Stop.
       const timeoutKey = "agent:main:run-stopped-timeout";
       const timeoutRun = await startHeldRun(timeoutKey, { timeoutMs: 1_500 });
       expect((await waitForTerminal(timeoutRun)).status).not.toBe("ok");
       expect(eventsFor(timeoutKey)).toEqual([]);
+      expect.soft(await nextPrompt(timeoutKey)).not.toContain(STOP_NOTE);
       expect(recordedEvents()).toHaveLength(3);
     } finally {
       for (const response of openResponses) {

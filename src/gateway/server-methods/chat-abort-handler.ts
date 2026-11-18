@@ -613,7 +613,7 @@ export async function handleChatAbortRequestWithLifecycle(
     afterParent: cancelWorker,
     // Control UI and native chat clients Stop ordinary local runs with an exact runId; that
     // accepted Stop is announced exactly like a session Stop.
-    stoppedSession: { agentId: agentId ?? abortAgentId, sessionKey },
+    stoppedSession: { agentId: agentId ?? abortAgentId, sessionKey, storePath, sessionId },
     onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
