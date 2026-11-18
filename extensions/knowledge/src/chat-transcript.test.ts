@@ -16,11 +16,13 @@ const message = (id: any, at: any, author: any, name: any, content: any, extra =
   payload: { author_id: author, author_name: name, author_bot: 0, content, ...extra },
 });
 
-it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and part labels", async () => {
+it.each([false, true])("exports bounded chat chunks (deleted=%s)", async (deleted) => {
   const out = tempDirs.make("chat-transcript-");
   const at = "2026-10-02T00:30:00Z";
   const rows = [
-    message("1", "2026-10-01T23:50:00.000000000Z", "11", "Ann", "ship it?"),
+    message("1", "2026-10-01T23:50:00.000000000Z", "11", "Ann", "ship it?", {
+      deleted_at: deleted ? "2026-10-02T00:00:00Z" : undefined,
+    }),
     message("2", "2026-10-02T00:10:00.000000000Z", "12", "Bo", "yes <@11>", {
       reply_to_message_id: "1",
     }),
@@ -46,7 +48,9 @@ it("keeps day/thread boundaries and replies while budgeting UTF-8 headers and pa
   ]);
   const read = (chunk: { file: string }) => readFile(path.join(out, chunk.file));
   const texts = await Promise.all(chunks.map(read));
-  expect(texts[1].toString()).toMatch(/^00:10 Bo ↩ Ann 2026-10-01 23:50 "ship it\?": yes @Ann$/m);
+  expect(texts[1].toString()).toContain(
+    `00:10 Bo ↩ Ann 2026-10-01 23:50 "${deleted ? "[deleted]" : "ship it?"}": yes @Ann`,
+  );
   expect(texts[2].toString()).toMatch(/## Thread: release plan\n00:20 Ann: plan\n {6}step two\n/);
   for (const [i, chunk] of chunks.entries()) {
     expect(chunk.bytes).toBe(texts[i].length);

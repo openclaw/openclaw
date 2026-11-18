@@ -76,10 +76,11 @@ async function run(argv) {
         target.occurred_at.slice(0, 10) === day
           ? clock(target.occurred_at)
           : target.occurred_at.slice(0, 10) + " " + clock(target.occurred_at);
+      const content = target.payload.deleted_at ? "[deleted]" : target.payload.content || "";
       const quote =
         target.occurred_at.slice(0, 10) === day
           ? ""
-          : ' "' + (target.payload.content || "").replace(/\s+/g, " ").slice(0, 80) + '"';
+          : ' "' + content.replace(/\s+/g, " ").slice(0, 80) + '"';
       reply = " ↩ " + labels.get(target.payload.author_id) + " " + when + quote;
     } else if (payload.reply_to_message_id) {
       reply = " ↩ earlier message";
