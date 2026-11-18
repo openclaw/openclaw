@@ -12,6 +12,7 @@ import { getPostgresPhysicalFactsForPath } from "../infra/database-engine/physic
 import { recordSessionRowSelection } from "../infra/gateway-work-metrics.js";
 import { getMainThreadTaskName } from "../infra/main-thread-stall.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
+import { resolveDatabasePathKey } from "../infra/sqlite-worker-identity.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -259,7 +260,10 @@ export function prepareSessionRowScopes(
   prepared: CombinedSessionStoreScopeTargets,
 ) {
   const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
-  const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
+  // Resident stores are keyed by canonical filename; another spelling of the same file
+  // (a different case on a case-insensitive volume) must select that store.
+  const residentPath = (pathname: string) =>
+    residentPaths.get(pathname) ?? residentPaths.get(resolveDatabasePathKey(pathname)) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const admittedIdentity = (pathname: string) => {
     const identity = getSqliteDatabaseAdmissionIdentityForPath(pathname);
