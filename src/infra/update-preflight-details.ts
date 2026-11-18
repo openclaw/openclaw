@@ -23,6 +23,10 @@ export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
     /FATAL ERROR: (?:Reached heap limit|Ineffective mark-compacts near heap limit) Allocation failed - JavaScript heap out of memory/u,
     "startup ran out of memory",
   ],
+  [
+    /\bTemp workspace ancestor "[^"\r\n]{1,4096}" is group\/world writable without sticky protection\b/u,
+    "temp workspace ancestor is group/world writable without sticky protection; have its owner run chmod +t for a shared temp directory or chmod go-w for a private ancestor",
+  ],
 ] as const;
 
 // Public descriptions contain only platform facts: registry responses and local paths stay local.

@@ -10,6 +10,7 @@ import {
 } from "./errors.js";
 import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
+import { UPDATE_CANDIDATE_STARTUP_FAILURES } from "./update-preflight-details.js";
 import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 const DIAGNOSTIC_TAIL_CHARS = 12_000;
 const CAPTURE_SPACE_PREFIX = "Update capture space: ";
@@ -208,10 +209,13 @@ export function createUpdateStateInspectionDiagnostics(params: {
       const outputLimited =
         termination === "output-limit" || termination?.startsWith("output-limit,");
       // Worker causes may follow warnings or a generic first line. Promote only closed public facts.
+      const closedCause = UPDATE_CANDIDATE_STARTUP_FAILURES.find(([pattern]) =>
+        pattern.test(detail),
+      )?.[1];
       const summary = outputLimited
         ? "Worker output exceeded its capture limit"
         : detail
-          ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
+          ? (closedCause ?? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" }))
           : "Worker exited without diagnostic output";
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
       const idle = Math.max(0, Date.now() - progressAt) / 1000;

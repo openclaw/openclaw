@@ -266,3 +266,14 @@ it.each([
   expect(fact?.message).not.toContain("private operator");
   expect(fact?.message?.length).toBeLessThanOrEqual(200);
 });
+
+it("keeps the temp workspace ancestor refusal when the worker fails", () => {
+  const ancestor = `${privateRoot}/.local/lib`;
+  const refusal = `Temp workspace ancestor "${ancestor}" is group/world writable without sticky protection; have its owner run chmod +t '${ancestor}' for a shared temp directory or chmod go-w '${ancestor}' for a private ancestor.`;
+  const error = workerFailure(new Error(refusal));
+  expect(error.message).toContain(
+    "temp workspace ancestor is group/world writable without sticky protection",
+  );
+  expect(error.message).toContain("chmod +t");
+  expect(error.message).not.toContain("[redacted-diagnostic]");
+});
