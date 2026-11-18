@@ -95,7 +95,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
     <Show when={displayPhase() !== "idle"}>
       <openclaw-modal-dialog
         prop:initialFocus={initialFocus}
-        ref={(element) => props.onDialogRef?.(element)}
+        ref={[props.onDialogRef]}
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >

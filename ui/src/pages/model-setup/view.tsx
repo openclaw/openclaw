@@ -237,10 +237,7 @@ function Manual(props: ModelSetupViewProps & { detected: SystemAgentSetupDetectR
             </span>
             <input
               class="input"
-              ref={(element) => {
-                input = element;
-                props.onManualInput?.(element);
-              }}
+              ref={[(element) => (input = element), props.onManualInput]}
               type="password"
               autocomplete="off"
               required
@@ -593,7 +590,7 @@ function EmbeddedModelSetup(props: {
     <>
       {" "}
       <openclaw-modal-dialog
-        ref={(element) => props.view.onWizardDialog?.(element)}
+        ref={[props.view.onWizardDialog]}
         label={t("modelSetup.discovery.title")}
         onModal-cancel={() => props.view.onClose?.()}
         onOverlay-after-show={(event: Event) =>

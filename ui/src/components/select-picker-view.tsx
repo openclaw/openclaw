@@ -229,7 +229,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     () => (opened() && canWindow() ? renderWindowSizer()?.(rows()) : undefined),
     { lazy: true },
   );
-  const windowed = () => windowSizer() !== undefined;
+  const inlineSections = () => (opened() && windowSizer() === undefined ? sections() : []);
   const control = useOverlayControl(overlay, undefined, {
     get disabled() {
       return props.params.disabled;
@@ -406,7 +406,7 @@ export function PickerContent<Option extends PickerOption>(props: {
       const staticHighlighted = active();
       return {
         reveal:
-          opened() && !windowed()
+          opened() && windowSizer() === undefined
             ? {
                 identity: [opened(), staticHighlighted, query(), rows()],
                 target: () =>
@@ -622,9 +622,9 @@ export function PickerContent<Option extends PickerOption>(props: {
           aria-activedescendant={opened() && active() !== null ? optionId(active()!) : undefined}
         >
           <Show
-            when={opened() && windowed()}
+            when={windowSizer() !== undefined}
             fallback={
-              <For each={opened() ? sections() : []} keyed={(section) => section.position}>
+              <For each={inlineSections()} keyed={(section) => section.position}>
                 {(section, index) => (
                   <Show
                     when={section().group}
