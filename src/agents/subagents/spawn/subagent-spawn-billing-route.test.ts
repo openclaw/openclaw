@@ -20,6 +20,7 @@ import {
   mockRouteResolverFactory,
   routeResolverFactory,
 } from "../../model-auth-availability.test-support.js";
+import type { ModelAuthAvailabilityEvaluation } from "../../model-auth-availability.types.js";
 import {
   harnessRegistry,
   row,
@@ -27,9 +28,27 @@ import {
 } from "../../model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { markPreparedModelCatalogFull } from "../../prepared-model-runtime.full-catalog.js";
-import { describeSpawnAuth, resolveSpawnBillingRoute } from "./subagent-spawn-billing-route.js";
+import { resolveSpawnBillingRoute } from "./subagent-spawn-billing-route.js";
 
-const storeMocks = vi.hoisted(() => ({ fail: false, owner: undefined as unknown }));
+const storeMocks = vi.hoisted(() => ({
+  fail: false,
+  owner: undefined as unknown,
+  evaluation: undefined as ModelAuthAvailabilityEvaluation | undefined,
+}));
+
+vi.mock("../../model-auth-availability.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../model-auth-availability.js")>();
+  return {
+    ...actual,
+    createModelAuthAvailabilityResolver: (
+      ...args: Parameters<typeof actual.createModelAuthAvailabilityResolver>
+    ) => {
+      const resolver = actual.createModelAuthAvailabilityResolver(...args);
+      const evaluation = storeMocks.evaluation;
+      return evaluation ? { ...resolver, evaluateRuntimeModelAuth: () => evaluation } : resolver;
+    },
+  };
+});
 
 // A running Gateway publishes the prepared owner; tests supply one built from catalog fixtures.
 // Credential evaluation then runs through the real decision owner and evaluator.
@@ -60,7 +79,11 @@ vi.mock("../../auth-profiles.js", async (importOriginal) => {
   };
 });
 
-describe("describeSpawnAuth", () => {
+describe("resolveSpawnBillingRoute credential projection", () => {
+  afterEach(() => {
+    storeMocks.evaluation = undefined;
+    cliBackendsTesting.resetDepsForTest();
+  });
   it.each([
     [
       { availability: true, selectedAuthMode: "api_key", selectedProfileId: "anthropic:default" },
@@ -108,21 +131,44 @@ describe("describeSpawnAuth", () => {
       { availability: undefined, runtimeAuth: { id: "claude-cli", source: "native" as const } },
       { resolvedAuth: "unknown" },
     ],
-  ])("maps %j", (evaluation, expected) => {
-    expect(describeSpawnAuth(evaluation)).toEqual(expected);
+  ])("maps %j", async (evaluation, expected) => {
+    storeMocks.evaluation = { ...evaluation, routeResolution: null };
+    await expect(
+      resolveSpawnBillingRoute({
+        cfg: {},
+        agentId: "main",
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      }),
+    ).resolves.toEqual({ resolvedRuntime: "openclaw", ...expected });
   });
 
-  it("keeps a CLI backend's own login native, like session_status", () => {
-    expect(
-      describeSpawnAuth(
-        {
-          availability: true,
-          selectedAuthMode: "oauth",
-          runtimeAuth: { id: "claude-cli", source: "native" },
+  it("keeps a CLI backend's own login native, like session_status", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
+      resolveRuntimeCliBackends: createClaudeCliBackends,
+    });
+    storeMocks.evaluation = {
+      availability: true,
+      selectedAuthMode: "oauth",
+      runtimeAuth: { id: "claude-cli", source: "native" },
+      routeResolution: null,
+    };
+    await expect(
+      resolveSpawnBillingRoute({
+        cfg: {
+          agents: {
+            defaults: {
+              models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: "claude-cli" } } },
+            },
+          },
         },
-        { cliBackend: true },
-      ),
-    ).toEqual({ resolvedAuth: "native" });
+        agentId: "main",
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+      }),
+    ).resolves.toEqual({ resolvedRuntime: "claude-cli", resolvedAuth: "native" });
   });
 });
 
