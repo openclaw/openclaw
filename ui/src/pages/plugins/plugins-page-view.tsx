@@ -31,10 +31,7 @@ import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { renderPluginCatalogResults as PluginCatalogResults } from "./catalog-results.tsx";
 import "./custom-elements.ts";
-import {
-  PluginArtTile,
-  renderPluginConsentDialog as PluginConsentDialog,
-} from "./consent-dialog.tsx";
+import { renderPluginConsentDialog as PluginConsentDialog } from "./consent-dialog.tsx";
 import { pluginDetailLocation, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import {
   pluginRowKey,
@@ -44,6 +41,7 @@ import { PluginsHubHeader } from "./plugins-hub-header.tsx";
 import { pluginsHubPanel, type PluginsHubTab } from "./plugins-hub.ts";
 import { installRequestForDiscoveryDetail } from "./plugins-page-model.ts";
 import type { PluginsPageModel } from "./plugins-page.ts";
+import { PluginArtTile } from "./presentation.tsx";
 import { renderPluginSettingsInventory as PluginSettingsInventory } from "./settings-inventory.tsx";
 import {
   pluginAdvancedSchema,
