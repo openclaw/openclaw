@@ -3,6 +3,8 @@ import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-p
 import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
 import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
 import { logVerbose } from "../../globals.js";
+import { resolveActiveSessionRunId } from "../../sessions/session-controller.queries.js";
+import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
@@ -117,8 +119,25 @@ export function recordCommittedCommandExchange(params: CommandExchangeParams) {
   return recordCommandExchange(params);
 }
 
-/** Records only settled command output; callers must first confirm delivery. */
-export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
+/** Bounds how often a deferred exchange re-waits when follow-up turns keep the session busy. */
+const MAX_DEFERRED_COMMAND_EXCHANGE_WAITS = 8;
+
+/**
+ * A started turn owns the session's model-context fence until it commits. A context-bearing
+ * exchange appended inside that window invalidates the turn's prepared answer, so it waits
+ * until no turn is executing. Rows coordinated with a writer run or kept out of context
+ * cannot move the fence.
+ */
+function shouldDeferUntilActiveTurnSettles(params: CommandExchangeParams): boolean {
+  return (
+    params.contextFreeCommand !== true &&
+    !params.expectedWriterRunId &&
+    resolveActiveSessionRunId(params.sessionKey, undefined, { executionStartedOnly: true }) !==
+      undefined
+  );
+}
+
+async function recordDeliveredCommandExchangeNow(params: CommandExchangeParams) {
   try {
     return await recordCommandExchange(params);
   } catch {
@@ -126,6 +145,32 @@ export async function recordDeliveredCommandExchange(params: CommandExchangePara
     logVerbose("Command transcript recording failed after delivery");
     return { ok: false as const, reason: "transcript recording failed" };
   }
+}
+
+async function recordAfterActiveTurnSettles(params: CommandExchangeParams) {
+  for (let attempt = 0; attempt < MAX_DEFERRED_COMMAND_EXCHANGE_WAITS; attempt += 1) {
+    await waitForSessionRunIdle(params.sessionKey);
+    if (!shouldDeferUntilActiveTurnSettles(params)) {
+      return await recordDeliveredCommandExchangeNow(params);
+    }
+  }
+  logVerbose("Command transcript recording skipped: session stayed busy after delivery");
+  return { ok: false as const, reason: "session stayed busy" };
+}
+
+/**
+ * Records only settled command output; callers must first confirm delivery. During an active
+ * turn the exchange is recorded after that turn settles, so it still enters later model context
+ * without cancelling the running answer.
+ */
+export async function recordDeliveredCommandExchange(params: CommandExchangeParams) {
+  if (shouldDeferUntilActiveTurnSettles(params)) {
+    void recordAfterActiveTurnSettles(params).catch(() => {
+      logVerbose("Command transcript recording failed after delivery");
+    });
+    return { ok: false as const, reason: "deferred until the active turn settles" };
+  }
+  return await recordDeliveredCommandExchangeNow(params);
 }
 
 async function recordCommandExchange(params: CommandExchangeParams) {
