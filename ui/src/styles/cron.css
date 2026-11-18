@@ -703,8 +703,8 @@
   margin-left: 3px;
 }
 
-.cron-editor input[aria-invalid="true"],
-.cron-editor textarea[aria-invalid="true"] {
+.cron-editor-layout input[aria-invalid="true"],
+.cron-editor-layout textarea[aria-invalid="true"] {
   border-color: var(--danger);
 }
 
@@ -1298,4 +1298,369 @@
 
 .cron-filter-dropdown__details > .oc-menu {
   width: min(300px, calc(100vw - 48px));
+}
+
+/* Schedule sentence: each part is quiet text that opens its own small menu. */
+.cron-sentence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cron-sentence__part {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.8);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: var(--cursor-action);
+}
+
+.cron-sentence__part:hover,
+.cron-sentence__part[aria-expanded="true"] {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.cron-sentence__part:disabled {
+  cursor: default;
+  background: none;
+}
+
+.cron-sentence__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.cron-sentence__text svg {
+  width: 12px;
+  height: 12px;
+  color: var(--muted);
+}
+
+.cron-sentence__menu {
+  min-width: 180px;
+  padding: 6px;
+}
+
+.cron-sentence__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cron-sentence__choice {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--radius-md) * 0.7);
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.cron-sentence__choice:hover {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.cron-sentence__choice[aria-pressed="true"] {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.cron-sentence__days {
+  display: flex;
+  gap: 4px;
+}
+
+.cron-sentence__day {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.cron-sentence__day[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-foreground);
+}
+
+.cron-sentence__field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 4px 6px;
+  font-size: 13px;
+}
+
+.cron-sentence__field input,
+.cron-sentence__field select {
+  min-width: 0;
+  width: 120px;
+}
+
+.cron-sentence__range {
+  display: flex;
+  flex-direction: column;
+  margin-top: 4px;
+  padding-top: 4px;
+}
+
+/* The layout wrappers keep the desktop tray and field spacing unchanged. */
+.cron-editor-layout,
+.cron-editor-extra {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.cron-editor-section {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cron-editor-schedule,
+.cron-editor-tray-errors,
+.cron-sentence__row {
+  display: contents;
+}
+
+.cron-sentence__label,
+.cron-scratch-chevron {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .cron-page[data-view="edit"] {
+    --cron-phone-card: color-mix(in srgb, var(--text) 2%, var(--bg-content));
+    --cron-phone-control: color-mix(in srgb, var(--text) 6%, var(--bg-content));
+    --cron-phone-row-height: 48px;
+  }
+
+  .cron-page[data-view="edit"] .cron-tab-panel {
+    gap: var(--space-4);
+  }
+
+  .cron-page--create[data-view="edit"] .cron-detail-header {
+    margin-top: 0;
+  }
+
+  .cron-prompt--editing .cron-prompt__tray,
+  .cron-prompt--editing .cron-prompt__controls {
+    display: contents;
+  }
+
+  .cron-editor-schedule .cron-sentence {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .cron-prompt--editing .cron-prompt__clock,
+  .cron-schedule-summary--expression,
+  .cron-editor-active .cron-detail-sub {
+    display: none;
+  }
+
+  .cron-prompt--editing .cron-prompt__run-controls {
+    position: relative;
+    z-index: 1;
+    order: 1;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin: calc(-1 * var(--cron-prompt-radius)) 0 0;
+    padding: calc(var(--cron-prompt-radius) + 7px) 10px 8px;
+    border-radius: 0 0 var(--cron-prompt-radius) var(--cron-prompt-radius);
+    background: var(--cron-phone-control);
+  }
+
+  .cron-prompt--editing .cron-prompt__run-controls .cron-tray-input,
+  .cron-prompt--editing .cron-prompt__run-controls .picker-select__trigger {
+    background: var(--cron-phone-card);
+    border-radius: var(--radius-md);
+    min-block-size: 34px;
+  }
+
+  .cron-editor-schedule,
+  .cron-editor-placement {
+    background: var(--cron-phone-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xl);
+  }
+
+  .cron-editor-schedule {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    order: 2;
+    margin-top: var(--space-4);
+    padding-block: 4px;
+    min-inline-size: 0;
+  }
+
+  .cron-editor-placement {
+    padding-block: 4px;
+  }
+
+  .cron-editor-tray-errors {
+    order: 3;
+    display: block;
+  }
+
+  .cron-editor-tray-errors:empty {
+    display: none;
+  }
+
+  .cron-prompt--editing .cron-schedule-summary {
+    order: 4;
+  }
+
+  .cron-editor-schedule .cron-sentence__row,
+  .cron-editor-placement .settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: nowrap;
+    gap: var(--space-2);
+    min-block-size: var(--cron-phone-row-height);
+    padding: 4px 16px;
+    border: 0;
+  }
+
+  .cron-sentence__label {
+    display: inline;
+    white-space: nowrap;
+    color: var(--text-strong);
+  }
+
+  .cron-editor-schedule .cron-sentence__part {
+    margin-inline-start: auto;
+    padding-inline: 8px;
+    background: var(--cron-phone-control);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+
+  .cron-editor-schedule .cron-sentence__text,
+  .cron-editor-schedule .cron-tray-input {
+    min-inline-size: 0;
+    white-space: nowrap;
+    text-align: end;
+  }
+
+  .cron-editor-schedule .cron-sentence__text svg {
+    display: none;
+  }
+
+  .cron-editor-schedule .cron-tray-input,
+  .cron-editor-placement .settings-input,
+  .cron-editor-placement .picker-select__trigger {
+    margin-inline-start: auto;
+    border-radius: var(--radius-md);
+    background: var(--cron-phone-control);
+  }
+
+  .cron-editor-placement .settings-row__text {
+    flex: 0 0 auto;
+  }
+
+  .cron-editor-placement .settings-row__title {
+    font-weight: 400;
+    white-space: nowrap;
+  }
+
+  .cron-editor-placement .settings-row__control {
+    width: auto;
+    max-width: 75%;
+    flex-wrap: nowrap;
+    flex: 0 1 auto;
+  }
+
+  .cron-editor-placement .cron-control {
+    width: auto;
+  }
+
+  .cron-editor-placement .settings-input {
+    width: 12ch;
+    text-align: end;
+  }
+
+  .cron-editor-placement .picker-select__trigger {
+    white-space: nowrap;
+  }
+
+  .cron-page[data-view="edit"] .cron-editor-actions {
+    margin-top: var(--space-3);
+  }
+
+  .cron-page[data-view="edit"] .cron-editor-actions > .btn {
+    flex: 1 1 0;
+    min-block-size: 46px;
+    border-radius: var(--radius-lg);
+  }
+
+  .cron-page[data-view="edit"] .cron-editor-actions > .btn--ghost {
+    background: var(--cron-phone-card);
+    border-color: var(--border);
+  }
+
+  .cron-page[data-view="edit"] .cron-submit-reason {
+    flex-basis: 100%;
+  }
+
+  .cron-page[data-view="edit"] .cron-advanced__summary,
+  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-block-size: 36px;
+    margin: 0;
+    padding: 5px 8px;
+    color: var(--text-strong);
+    font: inherit;
+    font-weight: 600;
+    letter-spacing: normal;
+    text-transform: none;
+    list-style: none;
+  }
+
+  .cron-page[data-view="edit"] openclaw-cron-scratch-editor summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .cron-scratch-chevron {
+    display: inline-block;
+    inline-size: 14px;
+    block-size: 14px;
+  }
+
+  details[open] > summary > .cron-scratch-chevron {
+    transform: rotate(180deg);
+  }
 }

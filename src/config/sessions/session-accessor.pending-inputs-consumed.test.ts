@@ -127,7 +127,7 @@ const finish = async (
   receipt: SessionPendingInputReceipt,
   reason: Parameters<SessionPendingInputReceipt["finish"]>[0] = "interrupted",
 ) => {
-  receipt.finish(reason);
+  receipt.finish(reason, "failed");
   await receipt.settled?.();
 };
 const close = async () => {
@@ -162,7 +162,7 @@ beforeEach(async () => {
 afterEach(async () => {
   const retained = receipts.splice(0);
   for (const receipt of retained) {
-    receipt.finish("interrupted");
+    receipt.finish("interrupted", "failed");
   }
   await Promise.allSettled(retained.map(async (receipt) => receipt.settled?.()));
   await close();
@@ -174,7 +174,7 @@ it.each([false, true])(
     const source = await stage("closed-persistence");
     const receipt = collected ? collect([source], message("closed-aggregate")) : source;
     await promote(receipt);
-    receipt.finish("cancelled");
+    receipt.finish("cancelled", "failed");
     expect(() => receipt.run(() => {})).toThrow("ownership ended");
     const before = await loadTranscriptEvents(scope());
     expect(await persist(receipt)).toMatchObject({ appended: false, messageId: receipt.inputId });
@@ -221,7 +221,7 @@ it.each([
     try {
       foreign.exec("BEGIN IMMEDIATE");
       runWithSqliteBusyTimeout(requireNativeSqliteDatabase(primary.db), 1, () => {
-        expect(() => receipt.finish("cancelled")).not.toThrow();
+        expect(() => receipt.finish("cancelled", "failed")).not.toThrow();
         for (const source of sources) {
           expect(() => source.run(() => {})).toThrow("ownership ended");
         }

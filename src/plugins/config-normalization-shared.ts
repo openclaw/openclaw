@@ -28,6 +28,7 @@ export type NormalizedPluginsConfig = {
     string,
     {
       enabled?: boolean;
+      allowMetrics?: boolean;
       hooks?: SchemaContract<NonNullable<PluginEntryConfig["hooks"]>>;
       subagent?: SchemaContract<NonNullable<PluginEntryConfig["subagent"]>> & {
         hasAllowedModelsConfig?: boolean;
@@ -159,6 +160,10 @@ function normalizePluginEntries(
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
+      allowMetrics:
+        typeof entry.allowMetrics === "boolean"
+          ? entry.allowMetrics
+          : normalized[normalizedKey]?.allowMetrics,
       hooks: normalizePluginHooks(entry.hooks) ?? normalized[normalizedKey]?.hooks,
       subagent:
         normalizePluginModelConfig(entry.subagent, "subagent") ??

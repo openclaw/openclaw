@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import { getRequesterProfile } from "../auto-reply/requester-profile.js";
@@ -7,11 +8,22 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   listSessionPendingInputs,
-  loadSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { stageSessionPendingInput } from "../config/sessions/session-accessor.pending-inputs.js";
 import { prepareSqliteScope } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { captureSessionQueuedInputsForRestart } from "../config/sessions/session-pending-input-history.js";
-import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import {
+  captureSessionQueuedInputsForRestart,
+  readSessionQueuedInputPage,
+} from "../config/sessions/session-pending-input-history.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
+import { GatewayDispatchUnavailableError } from "../infra/restart-recovery-errors.js";
+import { createAgentDatabaseStartupObservation } from "../state/agent-database-startup-observation.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { setDisplayName, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -19,18 +31,24 @@ import { useUserProfileCatalogForTest } from "../test-utils/user-profile-catalog
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { readMentionInbox } from "./mention-inbox.test-support.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
+import * as operatorRecovery from "./operator-run-recovery.js";
 import {
   createOperatorRecoveryFixture,
   pairedOperator,
   persistDevices,
 } from "./operator-run-recovery.test-support.js";
 import { continueSessionQueuedInputs } from "./queued-chat-inputs.js";
+import * as dashboardAuthority from "./server-methods/chat-send-dashboard-authority.js";
 import {
   setClientProfile,
   useBrowserFollowupFixture,
 } from "./server-methods/chat-send-pending-inputs.test-support.js";
 import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
-import { persistRunningSessionsForRestart } from "./session-restart-resume.js";
+import {
+  persistRunningSessionsForRestart,
+  resumeMarkedSessions,
+} from "./session-restart-resume.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -90,11 +108,8 @@ async function createFixture() {
 }
 
 async function retireOriginalInputs(fixture: Fixture) {
+  const captured = await captureSessionQueuedInputsForRestart(fixture.scope);
   await persistRunningSessionsForRestart({ cfg: getRuntimeConfig() });
-  const marker = loadSessionEntry(fixture.scope)?.resumeAfterRestart;
-  if (!marker) {
-    throw new Error("Expected graceful shutdown to capture the queued inputs");
-  }
   rotateAgentEventLifecycleGeneration();
   await fixture.finishDispatch();
   fixture.context.dedupe.clear();
@@ -104,7 +119,7 @@ async function retireOriginalInputs(fixture: Fixture) {
     throw new Error("Expected the queued inputs' physical database");
   }
   return {
-    ...marker,
+    queuedInputIds: captured.queuedInputIds,
     target: { ...fixture.scope, storePath: physical.path },
     signal: new AbortController().signal,
     assertCurrent() {},
@@ -130,11 +145,6 @@ it("retains each accepted input's scope ceiling when the same person sends throu
     ),
   );
   entryLifetime.beginClose();
-  const physical = await prepareSqliteScope(fixture.scope);
-  const captured = await captureSessionQueuedInputsForRestart({
-    ...fixture.scope,
-    storePath: physical.path!,
-  });
   const retained = await retireOriginalInputs(fixture);
   fixture.context.requestEntryLifetime = new GatewayRequestEntryLifetime();
   const dispatchedScopes: string[][] = [];
@@ -146,15 +156,150 @@ it("retains each accepted input's scope ceiling when the same person sends throu
     await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
     return {};
   });
-  await continueSessionQueuedInputs(fixture.context, retained.target, {
-    ...retained,
-    queuedInputSources: captured.queuedInputSources,
-  });
+  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
   expect(dispatchedScopes).toEqual([["operator.read", "operator.write"], ["operator.admin"]]);
 });
 
-it.each(["missing source", "different run", "revoked device"] as const)(
+it.each([
+  new GatewayOperatorAccessUnavailableError(),
+  new GatewayDispatchUnavailableError("chat.send", true),
+])(
+  "keeps accepted FIFO rows queued when restart admission is temporarily unavailable: %s",
+  async (error) => {
+    const created = await createFixture();
+    await using fixture = created.fixture;
+    expectStarted(await fixture.send());
+    expectStarted(
+      await fixture.send(undefined, {}, { ...fixture.params, idempotencyKey: "later-fifo-input" }),
+    );
+    const retained = await retireOriginalInputs(fixture);
+    const restore = vi
+      .spyOn(operatorRecovery, "restoreGatewayQueuedOperatorRecovery")
+      .mockRejectedValueOnce(error);
+    try {
+      await continueSessionQueuedInputs(fixture.context, retained.target, retained);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
+        { state: "queued" },
+        { state: "queued" },
+      ]);
+    } finally {
+      restore.mockRestore();
+    }
+  },
+);
+
+it.each([
+  new GatewayOperatorAccessUnavailableError(),
+  new GatewayDispatchUnavailableError("chat.send", true),
+])("keeps deferred restart input ahead of a fresh send: %s", async (error) => {
+  const created = await createFixture();
+  await using fixture = created.fixture;
+  fixture.params.message = "OLDER_RESTART_INPUT";
+  expectStarted(await fixture.send());
+  const retained = await retireOriginalInputs(fixture);
+  await patchSessionEntryCore(retained.target, () => ({
+    resumeAfterRestart: undefined,
+    lifecycleRunId: undefined,
+    status: "done",
+  }));
+  setRuntimeConfigSnapshot({
+    ...getRuntimeConfig(),
+    session: { store: fixture.scope.storePath },
+  });
+  const lifetime = new AbortController();
+  fixture.context.agentDatabaseStartup = createAgentDatabaseStartupObservation(
+    new Map(),
+    lifetime.signal,
+  );
+  let unavailable = true;
+  const restoreSource = operatorRecovery.restoreGatewayQueuedOperatorRecovery;
+  using restore = vi
+    .spyOn(operatorRecovery, "restoreGatewayQueuedOperatorRecovery")
+    .mockImplementation((params) => {
+      if (unavailable) {
+        return Promise.reject(error);
+      }
+      return restoreSource(params);
+    });
+  const dispatched: string[] = [];
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    const body = input.ctx.RawBody ?? input.ctx.Body ?? "";
+    dispatched.push(body.includes("OLDER_RESTART_INPUT") ? "older" : "fresh");
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+  try {
+    await resumeMarkedSessions({
+      context: fixture.context,
+      signal: lifetime.signal,
+      log: fixture.context.logGateway,
+    });
+    expect(dispatched).toEqual([]);
+    const fresh = {
+      ...fixture.params,
+      message: "FRESH_INPUT",
+      idempotencyKey: "fresh-after-restart",
+    };
+    await expect(fixture.send(undefined, {}, fresh)).rejects.toBe(error);
+    expect(dispatched).toEqual([]);
+    expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
+      { state: "queued" },
+    ]);
+    unavailable = false;
+    expectStarted(await fixture.send(undefined, {}, fresh));
+    await fixture.finishDispatch();
+    expect(dispatched).toEqual(["older", "fresh"]);
+    expect(restore).toHaveBeenCalledTimes(3);
+    expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+    expect(fixture.context.agentDatabaseStartup.hasPendingAgents).toBe(false);
+  } finally {
+    lifetime.abort();
+    fixture.context.agentDatabaseStartup = undefined;
+  }
+});
+
+it("retries relinquished startup input after a post-staging authority outage exactly once", async () => {
+  const created = await createFixture();
+  await using fixture = created.fixture;
+  expectStarted(await fixture.send());
+  const retained = await retireOriginalInputs(fixture);
+  const outage = new GatewayOperatorAccessUnavailableError();
+  using authority = vi
+    .spyOn(dashboardAuthority, "createChatSendDashboardAuthority")
+    .mockRejectedValueOnce(outage);
+  dispatchInboundMessageMock.mockImplementation(async (input) => {
+    await input.replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+    return {};
+  });
+
+  const deferred = expectDefined(
+    await continueSessionQueuedInputs(fixture.context, retained.target, retained),
+    "deferred startup replay",
+  );
+  expect(deferred.error).toMatchObject({ message: outage.message });
+  expect(authority).toHaveBeenCalledOnce();
+  expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+  expect((await readSessionQueuedInputPage(retained.target)).rows).toMatchObject([
+    {
+      input_id: retained.queuedInputIds[0],
+      run_id: fixture.params.idempotencyKey,
+      state: "queued",
+      lifecycle_generation: getAgentEventLifecycleGeneration(),
+    },
+  ]);
+
+  await deferred.resume();
+  await fixture.finishDispatch();
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+  expect((await listSessionPendingInputs(fixture.scope)).items).toEqual([]);
+  await deferred.resume();
+  await fixture.finishDispatch();
+  expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+});
+
+it.each(["missing source", "different sender", "revoked device"] as const)(
   "cancels queued input with %s despite the sender's local administrator role",
   async (change) => {
     const created = await createFixture();
@@ -165,22 +310,51 @@ it.each(["missing source", "different run", "revoked device"] as const)(
     if (change === "revoked device") {
       persistDevices(resolveStateDir(), [], "both");
     }
-    const original = retained.queuedInputSources![inputId]!;
-    await continueSessionQueuedInputs(fixture.context, retained.target, {
-      ...retained,
-      queuedInputSources:
-        change === "missing source"
-          ? undefined
-          : {
-              [inputId]:
-                change === "different run" ? { ...original, runId: "another-run" } : original,
-            },
+    const database = openOpenClawAgentDatabase({
+      agentId: fixture.scope.agentId,
+      path: retained.target.storePath,
     });
+    if (change === "missing source") {
+      database.db
+        .prepare("UPDATE session_pending_inputs SET origin_source_json = NULL WHERE input_id = ?")
+        .run(inputId);
+    } else if (change === "different sender") {
+      const [row] = (await readSessionQueuedInputPage(retained.target)).rows;
+      const source = decodeQueuedOperatorRecoverySource(JSON.parse(row!.origin_source_json!));
+      if (source.kind !== "gateway") {
+        throw new Error("Expected a durable Gateway operator source");
+      }
+      const other = ensureProfileForEmail("different-queued-author@example.test");
+      database.db
+        .prepare("UPDATE session_pending_inputs SET origin_source_json = ? WHERE input_id = ?")
+        .run(
+          JSON.stringify({ ...source, snapshot: { ...source.snapshot, profileId: other.id } }),
+          inputId,
+        );
+    }
+    if (change === "revoked device") {
+      expect(
+        database.db
+          .prepare("SELECT origin_source_json FROM session_pending_inputs WHERE input_id = ?")
+          .get(inputId)?.origin_source_json,
+      ).toEqual(expect.any(String));
+    }
+    await continueSessionQueuedInputs(fixture.context, retained.target, retained);
     await fixture.finishDispatch();
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
-      { id: inputId, state: "cancelled" },
+      {
+        id: inputId,
+        state: "cancelled",
+        ...(change === "missing source" ? { endCause: "restart-unrecoverable" } : {}),
+        ...(change === "revoked device" ? { endCause: "revoked" } : {}),
+      },
     ]);
+    expect(
+      database.db
+        .prepare("SELECT origin_source_json FROM session_pending_inputs WHERE input_id = ?")
+        .get(inputId)?.origin_source_json,
+    ).toBeNull();
     expect(fixture.context.logGateway.warn).toHaveBeenCalledWith(
       expect.stringContaining("was not sent after restart"),
     );
@@ -208,12 +382,11 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
     timeoutMs: 90_000,
   });
   expectStarted(await fixture.send());
-  const second = { ...fixture.params, idempotencyKey: "queued-after-demotion" };
-  expectStarted(await fixture.send(undefined, undefined, second));
   const accepted = (await listSessionPendingInputs(fixture.scope)).items;
-  expect(accepted).toHaveLength(2);
+  expect(accepted).toHaveLength(1);
   const retained = await retireOriginalInputs(fixture);
-  expect(retained.queuedInputIds).toHaveLength(2);
+  const [row] = (await readSessionQueuedInputPage(retained.target)).rows;
+  const recoverySource = decodeQueuedOperatorRecoverySource(JSON.parse(row!.origin_source_json!));
   const dispatched: DispatchedInput[] = [];
   dispatchInboundMessageMock.mockImplementation(async (input) => {
     dispatched.push(input);
@@ -222,15 +395,11 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
     return {};
   });
   const first = accepted.find((input) => input.runId === fixture.params.idempotencyKey);
-  const demoted = accepted.find((input) => input.runId === second.idempotencyKey);
-  if (!first || !demoted) {
-    throw new Error("Expected both accepted queued sends");
+  if (!first) {
+    throw new Error("Expected accepted queued send");
   }
   vi.mocked(fixture.context.logGateway.warn).mockClear();
-  await continueSessionQueuedInputs(fixture.context, retained.target, {
-    ...retained,
-    queuedInputIds: [first.id],
-  });
+  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
   expect(fixture.context.logGateway.warn).not.toHaveBeenCalled();
   expect(dispatched).toHaveLength(1);
@@ -249,15 +418,27 @@ it("readmits accepted delivery, reply, and runtime intent with the sender's curr
     fastModeAutoOnSecondsOverride: 7,
     timeoutOverrideMs: 90_000,
   });
-  setUserProfileRole(profile.id, "writer");
-  await continueSessionQueuedInputs(fixture.context, retained.target, {
-    ...retained,
-    queuedInputIds: [demoted.id],
+  // Accept the next input only after the first replay finishes, then demote its
+  // sender before readmission. Selection is owned by the durable queue, not IDs.
+  const demoted = await stageSessionPendingInput(retained.target, {
+    runId: "queued-after-demotion",
+    message: { ...first.message, idempotencyKey: "queued-after-demotion:user" },
+    recoverySource,
+    assertCurrent() {},
   });
+  if (!demoted) {
+    throw new Error("Expected the second accepted queued input");
+  }
+  const secondCapture = await captureSessionQueuedInputsForRestart(retained.target);
+  secondCapture.preserve();
+  demoted.finish("interrupted", "restart-unrecoverable");
+  await demoted.settled?.();
+  setUserProfileRole(profile.id, "writer");
+  await continueSessionQueuedInputs(fixture.context, retained.target, retained);
   await fixture.finishDispatch();
   expect(dispatched).toHaveLength(1);
   expect((await listSessionPendingInputs(fixture.scope)).items).toMatchObject([
-    { id: demoted.id, state: "cancelled" },
+    { id: demoted.inputId, state: "cancelled", endCause: "revoked" },
   ]);
 });
 
