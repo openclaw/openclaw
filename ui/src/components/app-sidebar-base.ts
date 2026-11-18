@@ -1,5 +1,9 @@
 import { createChangeListeners } from "../../../src/shared/listeners.js";
-import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  DEFAULT_SIDEBAR_ENTRIES,
+  type NavigationRouteId,
+  type SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
@@ -46,8 +50,10 @@ export type AppSidebarProps = {
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
   connectionPending?: boolean;
-  navigationView: "pages" | "sessions" | "online";
+  navigationView: SidebarNavigationView;
   navigationCollapsed: boolean;
+  /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
+  navigationCollapsedByChoice?: boolean;
   sidebarAgentsMode: "chip" | "roster";
   sidebarLiveActivity: boolean;
   pinnedAgentIds: readonly string[];
@@ -90,6 +96,7 @@ export const appSidebarProperties = {
   connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
+  navigationCollapsedByChoice: { default: undefined, attribute: false },
   sidebarAgentsMode: { default: "chip", attribute: false },
   sidebarLiveActivity: { default: true, attribute: false },
   pinnedAgentIds: { default: [], attribute: false },
@@ -137,6 +144,7 @@ export abstract class AppSidebarBase {
   declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
+  declare navigationCollapsedByChoice: AppSidebarProps["navigationCollapsedByChoice"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
   declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
   declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];

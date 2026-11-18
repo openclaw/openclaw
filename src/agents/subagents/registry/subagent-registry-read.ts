@@ -39,10 +39,7 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import {
-  isRequesterSettleWakeForRun,
-  owesRequesterCompletion,
-} from "./subagent-requester-settle-identity.js";
+import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   copySubagentRunRuntimeOwner,
@@ -119,7 +116,6 @@ type YieldWaitSource = "waiting" | "resume" | undefined;
 function resolveYieldWaitingChild(
   sessionKey: string,
   agentId: string,
-  session: Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision">,
   runId: string,
   visited: Set<string>,
 ): YieldWaitSource {
@@ -127,8 +123,6 @@ function resolveYieldWaitingChild(
   for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
     if (
       resolveRecordedRequester(child) !== agentId ||
-      child.completionRequesterSessionId !== session.sessionId ||
-      child.completionRequesterLifecycleRevision !== session.lifecycleRevision ||
       child.requesterSettleWake?.requesterYieldBatch !== true ||
       (child.requesterSettleWake.requesterRunId &&
         child.requesterSettleWake.requesterRunId !== runId)
@@ -168,13 +162,7 @@ export function resolveSubagentYieldWaitSource(
   }
   const authority = getRecordedSubagentChildAuthority(entry);
   return authority.status === "verified"
-    ? resolveYieldWaitingChild(
-        entry.childSessionKey,
-        authority.childAgentId,
-        authority.sessionIdentity,
-        entry.runId,
-        visited,
-      )
+    ? resolveYieldWaitingChild(entry.childSessionKey, authority.childAgentId, entry.runId, visited)
     : undefined;
 }
 
@@ -222,21 +210,14 @@ export function resolveSessionYieldWait(
     return undefined;
   }
   const interruptedRunId = session.lifecycleRunId ?? session.lastRunId;
-  if (interruptedRunId?.startsWith("announce:")) {
+  if (interruptedRunId?.startsWith("announce:requester-settle:")) {
     for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
       if (
-        child.completionRequesterSessionId === session.sessionId &&
-        child.completionRequesterLifecycleRevision === session.lifecycleRevision &&
         !subagentRuns.isCompletionAuthorityRetired(child) &&
-        isRequesterSettleWakeForRun({
-          entry: child,
-          runId: interruptedRunId,
-          requesterSessionKey: sessionKey,
-          requesterAgentId: agentId,
-          runsById: subagentRuns,
-        })
+        resolveRecordedRequester(child) === agentId &&
+        child.requesterSettleWake !== undefined
       ) {
-        // The retained input owns this continuation; a separate restart turn would duplicate it.
+        // The registry owns this continuation even if recovery changed its cohort or retry ID.
         return "waiting";
       }
     }
@@ -266,7 +247,7 @@ export function resolveSessionYieldWait(
     return undefined;
   }
   return (
-    resolveYieldWaitingChild(sessionKey, agentId, session, session.lifecycleRunId, new Set()) ??
+    resolveYieldWaitingChild(sessionKey, agentId, session.lifecycleRunId, new Set()) ??
     "unreachable"
   );
 }
@@ -419,10 +400,6 @@ export function listSubagentRunsForRequester(
     lookup
       .selectReadScope([requesterSessionKey], lookup, false)
       .map((runId) => subagentRuns.get(runId)!),
-    {
-      getLatestSubagentRun: (key, agentId) =>
-        getLatestLiveSubagentRunByChildSessionKey(key, undefined, agentId),
-    },
   );
 }
 

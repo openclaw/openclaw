@@ -267,9 +267,7 @@ it.each(["startup", "doctor"] as const)(
           expect(stored.lastRunError).toBeUndefined();
           expect(stored.pendingDeliveryNotice).toBeUndefined();
         }
-        expect(stored.resumeAfterRestart).toEqual(
-          scope.agentId === "pending" ? undefined : { queuedInputIds: [] },
-        );
+        expect(stored.resumeAfterRestart).toEqual(scope.agentId === "pending" ? undefined : {});
         const entry = loadExactSessionEntry(scope)?.entry;
         expect(entry?.sessionId).toBe(scope.agentId);
         expect(resolveSessionWorkStartBlock(scope.sessionKey, entry)).toBeUndefined();

@@ -21,6 +21,7 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { formatUpdateOwedStep, listUpdateOwedSteps } from "./update-run-owed-step.js";
 import { isAcknowledgedAbandonedUpdateRun, type UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunReportHealth } from "./update-run-report-health.js";
 import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
@@ -281,7 +282,14 @@ export function renderUpdateRunReport(
     run.status === "failed" &&
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
-  const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
+  const owed = listUpdateOwedSteps(run);
+  // An owed step restates the warning it was recorded with; report that failure once.
+  const warnings = [
+    ...updateRunWarningMessages(run.steps).filter(
+      (message) => !owed.some((step) => message.startsWith(step.reason)),
+    ),
+    ...owed.map(formatUpdateOwedStep),
+  ].map((message) => `Warning: ${message}`);
   // A fresh prerequisite refusal leads with its producer's refusal block: the problem line,
   // then the owner's recovery steps. Saved records keep the historical-advice layout below.
   const refusalBlock =

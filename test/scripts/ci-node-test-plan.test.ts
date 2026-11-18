@@ -633,9 +633,14 @@ function mockPackingEntries(entries: readonly PackingEntry[], timingName = (name
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
-  it.each([false, true])(
-    "keeps the scheduled main inventory within its reserved compact capacity (extra group: %s)",
-    (extraGroup) => {
+  it.each(
+    ["hybrid", "github"].flatMap((runnerBackend) =>
+      [false, true].map((extraGroup) => ({ runnerBackend, extraGroup })),
+    ),
+  )(
+    "keeps the scheduled main inventory within its reserved compact capacity ($runnerBackend, extra group: $extraGroup)",
+    ({ runnerBackend, extraGroup }) => {
+      vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       const original = fullSuiteVitestShards.slice();
       if (extraGroup) {
         // A new isolated group must not exhaust main's capacity on arrival.
@@ -658,7 +663,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           compactMode: "pull-request",
           compactNodeJobCap: 77 - workerRows.length,
           mainValidation: true,
-          runnerBackend: "hybrid",
+          runnerBackend,
         });
         const jobs = [...compactRows, ...workerRows];
         expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
@@ -3012,22 +3017,42 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
-  it("shares one prepared runtime across affordable github groups", () => {
+  it("shares one prepared runtime across affordable github groups", async () => {
     const runnerBackend = "github";
-
+    const config = configPath("infra");
     const targets = [
       PRIVATE_QA_TOOLING_TEST,
-      "src/plugin-state/plugin-state-store.runtime.test.ts",
+      "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     ];
-    spyTimings().mockReturnValue(
-      Object.fromEntries(defaultShards.map((shard) => [shard.shardName, 1])),
-    );
-    const plan = selectTests(targets, { runnerBackend });
+    // Keep the misc and system-runtime owners distinct so affordable groups
+    // exercise build sharing instead of coalescing into one prerequisite group.
+    vi.resetModules();
+    mockPlanShards(() => [fixtureShard("core-runtime", [config])]);
+    mockOriginal("database", { databaseWorkerCoreTestFiles: [] });
+    mockOriginal("inventory", {
+      listScopedOwnerTestFiles: ({ root }) => (root === "src/infra" ? targets : []),
+      listNodeTestConfigFiles: (candidate) => (candidate === config ? targets : []),
+    });
+    mockPlanTimings(() => ({
+      "core-runtime-infra-misc": 1,
+      "core-runtime-infra-system-runtime": 1,
+    }));
+    const { createSelectedNodeTestShardBundles: select } = await loadPlanModule([
+      "database",
+      "inventory",
+    ]);
+    const plan = select(targets, { runnerBackend });
     expect(plan).not.toBeNull();
     const readers = plan!.filter((shard) => !shard.requiresDist);
     const reader = only(readers);
     expect(reader).toMatchObject({ pretestBuildMode: "private-qa", planConcurrency: 1 });
     expect(reader.predictedSeconds).toBeLessThanOrEqual(210);
+    expect(reader.groups).toHaveLength(2);
+    expect(
+      reader.groups
+        .map((group) => required(group.pretestBuildMode))
+        .toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["private-qa", "runtime"]);
     expectEvery(reader.groups, (group) => group.pretestBuildMode);
     expectSameEntries(reader.groups.flatMap(optionalPatterns), targets);
   });

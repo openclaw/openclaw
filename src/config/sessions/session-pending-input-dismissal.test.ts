@@ -54,7 +54,7 @@ async function createFixture(database: OpenClawAgentDatabase) {
     );
     receipts.push(receipt);
     if (disposition) {
-      receipt.finish(disposition);
+      receipt.finish(disposition, "failed");
       await receipt.settled?.();
     }
     return receipt.inputId;
@@ -96,7 +96,7 @@ it.aroundEach(async (run) => {
     try {
       await run();
     } finally {
-      f.receipts.forEach((receipt) => receipt.finish("cancelled"));
+      f.receipts.forEach((receipt) => receipt.finish("cancelled", "failed"));
       await Promise.all(f.receipts.map(async (receipt) => receipt.settled?.()));
     }
   });

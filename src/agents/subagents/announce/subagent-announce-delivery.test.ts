@@ -238,7 +238,7 @@ describe("queued completion handoff", () => {
         expect(executed).toBe(false);
         if (outcome === "delivery deadline") {
           deliveryDeadline.abort(new Error("completion delivery expired"));
-          expect(await delivery).toMatchObject({ delivered: false, path: "none" });
+          expect(await delivery).toMatchObject({ delivered: false, disposition: "retryable" });
           parentSettled.resolve();
           await vi.advanceTimersByTimeAsync(0);
           expect(executed).toBe(false);
@@ -879,19 +879,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each([null, "replacement-parent"])(
-    "does not deliver private completion to a missing or replaced parent: %s",
+    "hands a private completion only to a live parent chat, also after a reset: %s",
     async (currentRequesterSessionId) => {
       const { result, callGateway, sendMessage } = await runDelivery("discord", {
-        response: { status: "ok", result: { payloads: [] } },
+        response: { status: "ok", inputProcessingCompleted: true, result: { payloads: [] } },
         completionTarget: "parent",
         currentRequesterSessionId,
         internalEvents: taskCompletionEvents(),
       });
-      expect(result).toMatchObject({
-        delivered: false,
-        reason: "completion_handoff_unavailable",
-        terminal: true,
-      });
+      if (currentRequesterSessionId) {
+        expectGatewayAgentParams(callGateway, { expectedExistingSessionId: "replacement-parent" });
+        return expect(sendMessage).not.toHaveBeenCalled();
+      }
+      expect(result).toMatchObject({ delivered: false, reason: "completion_handoff_unavailable" });
       expectNoExternalDelivery(callGateway, sendMessage);
     },
   );
@@ -1684,7 +1684,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         "no_visible_payload",
         "adapter_returned_no_identity",
       ]),
-      expected: ambiguousCompletion,
+      expected: { ...ambiguousCompletion, finalAssistantVisibleText: "" },
     },
     {
       name: "empty output before a hook cancellation",
@@ -1730,10 +1730,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     { name: "empty", deliveryStatus: { status: "sent", resultCount: 0 } },
   ])("does not credit a $name automatic completion receipt", async (testCase) => {
     const { deliveryStatus, expected } = testCase;
-    const payloads = "payloads" in testCase ? testCase.payloads : undefined;
     const callGateway = createGatewayMock({
+      status: "ok",
       result: {
-        payloads: payloads ?? [{ text: "Generated completion" }],
+        payloads: "payloads" in testCase ? testCase.payloads : [{ text: "Generated completion" }],
         deliveryStatus,
       },
     });

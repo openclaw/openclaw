@@ -368,6 +368,80 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
   };
 }
 
+/**
+ * A same-schema future fixture whose post-activation Doctor worker fails against
+ * `stateDir`. Rehearsal runs the `doctor` command on copied state, so only the
+ * Doctor that runs after activation fails, which must roll the activation back.
+ */
+export function packFailingDoctorUpdateFixture(
+  candidateTarball,
+  outputTarball,
+  stateDir,
+  sequence = 0,
+) {
+  return {
+    method: "candidate-failing-post-activation-doctor-fixture",
+    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
+      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
+      prependPostActivationDoctor(
+        root,
+        stateDir,
+        `process.stderr.write("fixture: post-activation Doctor fails\\n"); process.exit(1);`,
+      );
+    }),
+  };
+}
+
+/**
+ * A same-schema future fixture whose first post-activation Doctor against `stateDir`
+ * SIGKILLs the updater that started it: the candidate is installed and that update
+ * is not confirmed. Creating `marker` arms it once, so every later Doctor is real.
+ */
+export function packKilledUpdaterDoctorFixture(
+  candidateTarball,
+  outputTarball,
+  stateDir,
+  marker,
+  sequence = 0,
+) {
+  return {
+    method: "candidate-updater-killed-in-post-activation-doctor-fixture",
+    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
+      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
+      prependPostActivationDoctor(
+        root,
+        stateDir,
+        `const fs = process.getBuiltinModule("node:fs"); let armed = true; try { fs.writeFileSync(${JSON.stringify(marker)}, fs.readFileSync(\`/proc/\${process.ppid}/cmdline\`, "utf8").split("\\0").join(" "), { flag: "wx" }); } catch (error) { if (error?.code !== "EEXIST") { throw error; } armed = false; } if (armed) { process.kill(process.ppid, "SIGKILL"); process.exit(1); }`,
+      );
+    }),
+  };
+}
+
+/** Rehearsal runs `doctor` on copied state, so only the post-activation Doctor runs `body`. */
+function prependPostActivationDoctor(root, stateDir, body) {
+  const relative = "dist/infra/update-migrated-finalize.worker.js";
+  const worker = path.join(root, relative);
+  fs.writeFileSync(
+    worker,
+    `if (process.argv.includes("--doctor") && process.env.OPENCLAW_STATE_DIR === ${JSON.stringify(stateDir)}) { ${body} }\n${fs.readFileSync(worker, "utf8")}`,
+  );
+  const bytes = fs.readFileSync(worker);
+  updateFixtureContentInventory(resolveFixturePaths(root), (entries) =>
+    entries.map((entry) =>
+      entry.path === relative
+        ? createPackageDistContentInventoryEntry(
+            entry.path,
+            {
+              bytes: bytes.byteLength,
+              digest: createHash("sha256").update(bytes).digest("hex"),
+            },
+            fs.statSync(worker).mode,
+          )
+        : entry,
+    ),
+  );
+}
+
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",

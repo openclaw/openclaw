@@ -282,19 +282,31 @@ export function createHooksRequestHandler(
 
     // gmail-path mappings carry a producer-derived bound (gog batch contract);
     // every other path keeps the shared default cap.
-    const body = await readJsonBody(req, resolveHookPathBodyLimit(hooksConfig, subPath));
+    const bodyLimit = resolveHookPathBodyLimit(hooksConfig, subPath);
+    const body = await readJsonBody(req, bodyLimit);
     if (!body.ok) {
       const error = { ok: false, error: body.error };
-      if (body.error === "payload too large" || body.error === "request body timeout") {
+      const status =
+        body.error === "payload too large"
+          ? 413
+          : body.error === "request body timeout"
+            ? 408
+            : 400;
+      // An authenticated sender's delivery is lost here; name the path and bound so
+      // the operator can see it. Parse errors may quote the body, so log only the status.
+      logHooks.warn(
+        `hook request rejected for ${basePath}/${subPath}: status=${status} bodyLimitBytes=${bodyLimit}`,
+      );
+      if (status === 400) {
+        sendJson(res, 400, error);
+      } else {
         await sendHttpRequestRejection(
           req,
           res,
-          body.error === "payload too large" ? 413 : 408,
+          status,
           JSON.stringify(error),
           "application/json; charset=utf-8",
         );
-      } else {
-        sendJson(res, 400, error);
       }
       return true;
     }

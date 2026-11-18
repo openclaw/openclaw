@@ -521,14 +521,16 @@ describe("cold transcript storage workers", () => {
         .filter((record) => record.message === "slow SQLite reclamation Worker operation")
         .map((record) => record["1"]);
       expect(summaries).toMatchObject(
-        ["cold-batch", "cold-restore", "cold-restore"].map((reclamationKind) => ({
-          reclamationKind,
-          elapsedMs: 1_500,
-          outcome: "resolved",
-        })),
+        ["cold-batch", "cold-batch", "cold-maintain", "cold-restore", "cold-restore"].map(
+          (reclamationKind) => ({
+            reclamationKind,
+            elapsedMs: 1_500,
+            outcome: "resolved",
+          }),
+        ),
       );
       expect(archiveDiagnostics.map((item) => workers.get(item.workerThreadId!)?.threadId)).toEqual(
-        [-1, -1, -1],
+        [-1, -1, -1, -1, -1],
       );
     } finally {
       process.off("worker", observeWorker);
@@ -685,11 +687,8 @@ describe("cold transcript storage workers", () => {
   it("reaches eligible history after more than one batch of protected old windows", async () => {
     const fixture = await createFixture();
     const protectedIds = Array.from({ length: 129 }, (_, index) => `protected-history-${index}`);
-    await replaceSessionEntry(fixture.scope, {
-      sessionId: currentId,
-      updatedAt: 1,
-      usageFamilySessionIds: protectedIds,
-    });
+    // Recent window activity protects these old transcripts.
+    const recentWindowAt = Date.now();
     runOpenClawAgentWriteTransaction(({ db: database }) => {
       const db = getNodeSqliteKysely<DB>(database);
       for (const sessionId of protectedIds) {
@@ -699,7 +698,7 @@ describe("cold transcript storage workers", () => {
             session_id: sessionId,
             session_key: fixture.scope.sessionKey,
             created_at: 0,
-            updated_at: 0,
+            updated_at: recentWindowAt,
             transcript_updated_at: 0,
           }),
         );

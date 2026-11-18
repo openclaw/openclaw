@@ -3,9 +3,9 @@ import {
   resolveSqliteReadScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
-import { prepareCronRootSessionGeneration } from "../../../config/sessions/session-delivery-generation.js";
 import { assertSessionEntryCohortScope } from "../../../config/sessions/session-entry-cohort-scope.js";
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
+import { acquireCronRootTranscriptLease } from "../../../config/sessions/transcript-lease.js";
 import type { OwnedSessionTranscriptWriteContext } from "../../../config/sessions/transcript-write-context-store.js";
 import {
   getOwnedSessionTranscriptInitialWriter,
@@ -13,6 +13,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../../../config/sessions/transcript-write-context.js";
 import { captureAgentRunTerminalPersistence } from "../../../infra/agent-run-terminal-writes.js";
+import { chatRef } from "../../../sessions/chat-ref.js";
 /** Prepares the admitted writer context and teardown tracker for one attempt. */
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { IncognitoSessionMissingError } from "../../../state/incognito-session-error.js";
@@ -105,10 +106,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle({
   };
   // The stable cron root can rotate while its exact run remains stored. Retain
   // its admitted generation only for this attempt, before compaction adoption.
-  const generation = await prepareCronRootSessionGeneration(
+  const generation = await acquireCronRootTranscriptLease(
+    chatRef({ ...sessionTarget, sessionKey: sessionKey ?? sessionTarget.sessionKey }),
     {
-      ...sessionTarget,
-      sessionKey: sessionKey ?? sessionTarget.sessionKey,
+      sessionId: sessionTarget.sessionId,
       lifecycleRevision: fencedSessionTarget.expectedLifecycleRevision,
     },
     runAbortController ? (reason) => runAbortController.abort(reason) : undefined,

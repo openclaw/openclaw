@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import {
   retainSilentFinalPayloads,
   setReplyPayloadMetadata,
@@ -52,6 +53,7 @@ import {
 import {
   DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT,
   DEFAULT_REASONING_ONLY_RETRY_LIMIT,
+  isRejectedBeforeDispatch,
   resolveNonVisibleTurnRetryInstructions,
   resolveSettledToolBatchEvidence,
   resolveSettledToolTerminalContinuation,
@@ -103,11 +105,10 @@ export function resolveSettledTurnFinalizationRequest(input: {
   settledTurnFinalizationAvailable: boolean;
   replyDeliveryState?: ReplyDeliveryState;
 }): string | null {
-  const terminalAssistant = resolveCurrentAttemptAssistant(input.attempt);
   if (
     !input.settledTurnFinalizationAvailable ||
     resolveReplyExpectation(input.runParams) === "optional" ||
-    isTerminalAssistantError(terminalAssistant) ||
+    isTerminalAssistantError(resolveCurrentAttemptAssistant(input.attempt)) ||
     (input.replyDeliveryState ?? "missing") !== "missing"
   ) {
     return null;
@@ -227,7 +228,8 @@ export async function resolveEmbeddedRunTerminal(input: {
     replyExpectation === "result-required" && classifyAssistantTurn(terminalFacts).silent;
   const replyRecoverySuppressed =
     !authoredSilenceRequiresResult &&
-    (replyExpectation === "optional" ||
+    // Optional replies may be silent, but a rejected call is not authored silence.
+    ((replyExpectation === "optional" && !isRejectedBeforeDispatch(attempt)) ||
       emptyAssistantReplyIsSilent ||
       input.prepared.replyDeliveryState !== "missing");
   const replyRecoveryAllowed = !replyRecoverySuppressed && !settledTurnFinalizationAttempted;
@@ -463,6 +465,9 @@ async function completeEmbeddedRun(
       ? {
           kind: "incomplete_turn" as const,
           message: storageFailureText ?? formatErrorMessage(terminalFailure),
+          code:
+            extractErrorCode(terminalFailure) ??
+            resolveCurrentAttemptAssistant(input.attempt)?.errorCode,
           fallbackSafe: input.incompleteTurnFallbackSafe ?? false,
           terminalPresentation: input.terminalToolPresentation !== undefined,
         }
