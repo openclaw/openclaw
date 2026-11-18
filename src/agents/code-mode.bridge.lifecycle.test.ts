@@ -11,6 +11,7 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
+import { readSessionWatchdogFailure } from "../sessions/session-controller.watchdog-error.js";
 import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../sessions/session-controller.watchdog-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -124,6 +125,86 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     await resetCodeModeTestState();
     clearRuntimeConfigSnapshot();
   });
+
+  it.each([undefined, 1_800_000])(
+    "names an off-VM wait at watchdog stop (deadline=%s)",
+    async (deadline) => {
+      await import("./session-placement-admission.js");
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      vi.setSystemTime(0);
+      const harness = createHarness({ name: "await-diagnostic", timeoutMs: 2_000 });
+      const operation = harness.replyOperation;
+      operation.setPhase("running");
+      operation.attachBackend({
+        kind: "embedded",
+        runId: harness.runId,
+        cancel: () => {
+          harness.runAbortController.abort();
+          operation.complete();
+        },
+      });
+      const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
+      const started = createDeferred();
+      const target = tool(
+        "stalled",
+        "Wait for an external operation",
+        async (_id, _args, signal) => {
+          recordDiagnosticToolExecutionDeadline(deadline);
+          started.resolve();
+          await new Promise<void>((resolve) => {
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return jsonResult({ done: true });
+        },
+      );
+      const surface = applyCodeModeCatalog({
+        ...harness,
+        tools: [...harness.tools, target],
+        toolHookContext: { runId: harness.runId, watchdogAttempt },
+      });
+      const exec = expectDefined(
+        surface.tools.find((entry) => entry.name === "exec"),
+        "exec",
+      );
+      const execution = exec
+        .execute(
+          "await-cell",
+          { code: "return await stalled({});", awaitResults: true },
+          harness.runAbortController.signal,
+        )
+        .catch((error: unknown) => error);
+      try {
+        await started.promise;
+        // The host can dispatch before the worker publishes its parked frontier.
+        await vi.waitFor(() =>
+          expect(
+            readSessionWatchdogFailure(operation.watchdog.describeStop().error)?.pendingTools[0]
+              ?.awaiting,
+          ).toHaveLength(1),
+        );
+        const stoppedAtMs = (deadline ?? 0) + SESSION_WATCHDOG_QUIET_TOOL_MS + 1;
+        vi.setSystemTime(stoppedAtMs);
+        await operation.watchdog.tick(Date.now());
+        await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+        expect(readSessionWatchdogFailure(operation.abortSignal.reason)?.pendingTools[0]).toEqual({
+          toolName: "exec",
+          toolCallId: "await-cell",
+          elapsedMs: stoppedAtMs,
+          awaiting: [
+            {
+              kind: "bridge",
+              method: "callValue",
+              deadlineAtMs: deadline ?? null,
+              elapsedMs: stoppedAtMs,
+            },
+          ],
+        });
+      } finally {
+        harness.runAbortController.abort();
+        await execution;
+      }
+    },
+  );
 
   it("preserves a silent host exec deadline without ambient caller context", async () => {
     await import("./session-placement-admission.js");

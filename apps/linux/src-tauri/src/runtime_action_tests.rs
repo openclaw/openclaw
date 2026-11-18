@@ -129,6 +129,82 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn fresh_setup_exposes_only_gateway_owned_cli_before_baseline_and_preserves_parent_path() {
+    const CHILD: &str = "OPENCLAW_RUNTIME_ACTION_EXECUTION_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        // Launcher publication must not leak a writer to concurrently forked sibling tests.
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed"));
+        return;
+    }
+    for purpose in [Purpose::Gateway, Purpose::Browser] {
+        for reject in [false, true] {
+            let fixture = Fixture::new();
+            fixture.canonical_launcher();
+            assert!(Command::new("/bin/cp")
+                .arg(Fixture::script())
+                .arg(&fixture.runtime().executable)
+                .status()
+                .unwrap()
+                .success());
+            fs::set_permissions(
+                &fixture.runtime().executable,
+                fs::Permissions::from_mode(0o700),
+            )
+            .unwrap();
+            let cli = fixture.cli();
+            bind_runtime(&cli, &fixture.runtime(), purpose).unwrap();
+            let mut candidate = fixture.runtime();
+            candidate.executable = fixture.0.join("second-bun");
+            candidate.entry = Some(fixture.0.join("candidate-entry.js"));
+            fs::write(candidate.entry.as_ref().unwrap(), "fixture").unwrap();
+            fs::copy(&fixture.runtime().executable, &candidate.executable).unwrap();
+            fixture.write_state(&fixture.absent());
+            fs::write(fixture.0.join("setup-reject"), "").unwrap();
+            if reject {
+                fs::write(fixture.0.join("path-reject"), "").unwrap();
+            }
+            // Measure fresh(), excluding the CLI construction's version probe.
+            fs::remove_file(fixture.0.join("executables")).unwrap();
+            let error = fresh(&cli, &candidate, &|| true).unwrap_err();
+            let executed = fs::read_to_string(fixture.0.join("executables")).unwrap();
+            let first = if purpose == Purpose::Gateway {
+                fixture.runtime().executable
+            } else {
+                candidate.executable
+            };
+            assert_eq!(executed.lines().next(), first.to_str());
+            let terminal = fixture.0.join("terminal-path");
+            if purpose == Purpose::Gateway && reject {
+                assert!(error.contains("terminal fixture refusal"));
+                assert!(!fixture.0.join("setup-calls").exists());
+            } else {
+                assert!(error.contains("baseline setup failed"));
+                assert_eq!(terminal.exists(), purpose == Purpose::Gateway);
+                if terminal.exists() {
+                    assert_eq!(
+                        fs::read_to_string(terminal).unwrap(),
+                        std::env::var("PATH").unwrap_or_default()
+                    );
+                }
+            }
+            assert_eq!(fixture.installs(), 0);
+            assert!(read_launcher(&cli).unwrap().unwrap().selection.is_some());
+        }
+    }
+}
+
+#[test]
 fn fresh_setup_initializes_pending_profile_before_gateway_install() {
     let fixture = Fixture::new();
     let mut pending = fixture.absent();

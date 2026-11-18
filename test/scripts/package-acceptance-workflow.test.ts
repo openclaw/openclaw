@@ -1715,6 +1715,43 @@ describe("frozen admission workflow barriers", () => {
     },
   );
 
+  it("admits the current bundle contract from the parent's sparse tooling checkout", () => {
+    const client = "test/e2e/qa-lab/runtime/agent-bundle-mcp-tools-docker-client.ts";
+    const f = liveAdmissionFixture({ docker_lanes: "agent-bundle-mcp-tools" }, {}, {}, [client]);
+    const origin = join(f.root, "tooling-origin.git");
+    const sparse = join(f.root, "sparse-tooling");
+    f.toolingGit("clone", "--bare", "--no-hardlinks", f.tooling, origin);
+    f.toolingGit("-C", origin, "config", "uploadpack.allowFilter", "true");
+    f.toolingGit(
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(origin).href,
+      sparse,
+    );
+    const checkout = workflowStep(
+      workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
+      "Checkout trusted workflow helper",
+    );
+    f.toolingGit(
+      "-C",
+      sparse,
+      "sparse-checkout",
+      "set",
+      "--no-cone",
+      ...String(checkout.with?.["sparse-checkout"]).trim().split("\n"),
+    );
+    f.toolingGit("-C", sparse, "checkout", "--detach", f.toolingSha);
+    const planned = f.run("Plan frozen source admission", { ADMISSION_TOOLING_ROOT: sparse });
+    expect(planned.status, planned.stderr).toBe(0);
+    const admitted = f.admit({ ADMISSION_TOOLING_ROOT: sparse });
+    expect(admitted.status, admitted.stderr).toBe(0);
+    expect(f.readJson().sources.tooling).toContainEqual({
+      path: client,
+      oid: f.toolingGit("rev-parse", `${f.toolingSha}:${client}`),
+    });
+  });
+
   it("plans without selected objects and rejects admission before acquisition", () => {
     const f = liveAdmissionFixture(
       {
@@ -9693,7 +9730,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(job.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(workflow).toContain("telegram_mode: none");
     expect(job.secrets).toBeUndefined();
-    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended/floor");
+    expect(packageWorkflow).toContain("supported-lines for latest/previous/extended,");
   });
 });
 

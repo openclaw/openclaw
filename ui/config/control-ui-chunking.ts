@@ -451,12 +451,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/cron/event-source.ts":
     case "ui/src/pages/cron/human-owner.ts":
     case "ui/src/pages/cron/route-model.ts":
-    case "ui/src/pages/cron/suggestions.ts":
     case "ui/src/pages/cron/view-props.ts":
     case "ui/src/pages/cron/view-controls.tsx":
     case "ui/src/pages/cron/view-job-status.tsx":
-    case "ui/src/pages/cron/view-jobs-filter.tsx":
-    case "ui/src/pages/cron/view-list.tsx":
     case "ui/src/pages/cron/view-runs.tsx":
     case "ui/src/pages/cron/view.tsx":
     case "src/cron/run-link.ts":

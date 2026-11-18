@@ -338,7 +338,7 @@ suite.define(() => {
         }),
       ).toBe(true);
       if (cancel) {
-        await button(page, "Sessions", true).click();
+        await button(page, "Collapse sidebar", true).click();
         await page.locator(".shell--nav-collapsed").waitFor();
         expect(await isFocused(textarea)).toBe(false);
         await page.keyboard.press("Escape");

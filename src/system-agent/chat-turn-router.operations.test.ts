@@ -341,19 +341,31 @@ describe("SystemAgentChatEngine operations", () => {
     async (failure) => {
       useTempStateDir();
       const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async (params) => {
-        if (runAgentTurn.mock.calls.length === 1) {
-          return {
-            text: "Proposing the config change.",
-            directive: unset
-              ? { kind: "config-unset", path: "agents.defaults.fastModeDefault" }
-              : { kind: "config-set", path: "gateway.port", value: published ? "18789" : "banana" },
-          };
-        }
         const tool = createSystemAgentTool({
           surface: params.surface,
           approvalArmed: params.approvalArmed,
           proposalRef: params.session.proposalRef,
         });
+        if (runAgentTurn.mock.calls.length === 1) {
+          if (unset) {
+            const proposal = await tool.execute("initial-proposal", {
+              action: "config_unset",
+              path: "agents.defaults.fastModeDefault",
+            });
+            return { text: expectDefined(extractToolResultText(proposal), "proposal text") };
+          }
+          return {
+            text: "Applying the approved change.",
+            directive: {
+              kind: "approved-operation",
+              operation: {
+                kind: "config-set",
+                path: "gateway.port",
+                value: published ? "18789" : "banana",
+              },
+            },
+          };
+        }
         const result = await tool.execute("repair-proposal", {
           action: "config_set",
           path: "gateway.port",
@@ -401,9 +413,8 @@ describe("SystemAgentChatEngine operations", () => {
         operatorApprovalOnly: unset,
         yes: failure === "cli-error" || published,
       });
-      let reply;
+      let reply = await engine.handle("Apply this configuration change.");
       if (unset) {
-        await engine.handle("Apply this configuration change.");
         reply = expectDefined(
           await engine.resolveOperatorApproval(
             "allow-once",
@@ -412,8 +423,6 @@ describe("SystemAgentChatEngine operations", () => {
           "operator reply",
         );
         expect(operationMocks.runConfigUnset).toHaveBeenCalledOnce();
-      } else {
-        reply = await engine.handle("Apply this configuration change.");
       }
       expect(reply.text).toContain("The config write failed");
       expect(reply.text).toContain(error.message);
