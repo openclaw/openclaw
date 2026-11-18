@@ -64,10 +64,6 @@ it
       Object.defineProperty(process,'constrainedMemory',{value:()=>${failure === "low-memory" ? 768 * 1024 ** 2 : failure === "small-host" ? 2 * 1024 ** 3 : 0}});
       ${failure === "small-host" ? "mock.method(os,'totalmem',()=>1024 ** 3);" : ""}
       registerHooks({resolve(specifier,context,nextResolve) {
-        if (${lowMemory} && context.parentURL === ${JSON.stringify(contextUrl)} &&
-            new URL(specifier, context.parentURL).href === ${JSON.stringify(new URL("./host.js", contextUrl).href)}) {
-          throw new Error('Constrained Gateway loaded the unused broker host');
-        }
         if (context.parentURL === ${JSON.stringify(serverUrl.href)}) {
           const requested = specifier.startsWith('.') ? new URL(specifier, context.parentURL).href : specifier;
           if (requested === ${JSON.stringify(new URL("./server-start.js", serverUrl).href)}) return {url:${JSON.stringify(`data:text/javascript,${encodeURIComponent(coreSource)}`)},shortCircuit:true};
@@ -130,6 +126,8 @@ it
     expect(result.error, result.stderr).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     const observed = JSON.parse(result.stdout);
+    // The synchronous native-resource owner shares the host module. The small-host
+    // contract is no optional broker process, not an unavailable shared implementation.
     expect(observed).toMatchObject({
       attempts: lowMemory ? 0 : 1,
       brokers: [null, null],
