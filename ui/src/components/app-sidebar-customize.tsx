@@ -41,7 +41,9 @@ function sidebarPlugins(plugins: readonly PluginCatalogEntry[]): SidebarPlugin[]
     )
     .toSorted(
       (left, right) =>
-        (right.installedAt ?? -1) - (left.installedAt ?? -1) || left.name.localeCompare(right.name),
+        Number(left.origin === "bundled") - Number(right.origin === "bundled") ||
+        (right.installedAt ?? -1) - (left.installedAt ?? -1) ||
+        left.name.localeCompare(right.name),
     )
     .slice(0, MAX_SIDEBAR_PLUGINS);
 }
@@ -72,38 +74,55 @@ function SidebarPages(props: { host: AppSidebarRenderHost; pluginSelected: boole
   );
 }
 
+function SidebarPluginArt(props: { plugin: SidebarPlugin }) {
+  const context = useApplication();
+  const [iconUrl, setIconUrl] = createSignal<string | undefined>();
+  const [unavailable, setUnavailable] = createSignal(false);
+  let mounted = true;
+  const icons = new PluginIconOwner({
+    getFetchContext: () => pluginIconFetchContext(context),
+    isConnected: () => mounted,
+    onUrlsChange: (urls) => setIconUrl(urls[props.plugin.id]),
+    onUnavailable: () => setUnavailable(true),
+  });
+  onSettled(() => {
+    if (props.plugin.hasIcon) {
+      icons.load(props.plugin.id);
+    }
+    return () => {
+      mounted = false;
+      icons.reset();
+    };
+  });
+  return (
+    <PluginArtTile
+      slug={props.plugin.id}
+      // One initial reads at row size; the detail page shows the full monogram.
+      name={Array.from(props.plugin.name.trim())[0] ?? ""}
+      iconUrl={iconUrl()}
+      loading={props.plugin.hasIcon === true && !unavailable()}
+      onIconError={() => {
+        icons.handleError(props.plugin.id);
+        setUnavailable(true);
+      }}
+      class="sidebar-customize__plugin-icon"
+    />
+  );
+}
+
 function SidebarPlugins(props: {
   host: AppSidebarRenderHost;
   plugins: readonly SidebarPlugin[];
   pathname: string;
 }) {
-  const context = useApplication();
-  const [iconUrls, setIconUrls] = createSignal<Record<string, string>>({}, { ownedWrite: true });
-  // Misses are owner state; this revision lets a missing icon settle on its monogram.
-  const [iconMisses, setIconMisses] = createSignal(0, { ownedWrite: true });
-  let mounted = true;
-  const icons = new PluginIconOwner({
-    getFetchContext: () => pluginIconFetchContext(context),
-    isConnected: () => mounted,
-    onUrlsChange: setIconUrls,
-    onUnavailable: () => setIconMisses((count) => count + 1),
-  });
-  const iconPending = (plugin: SidebarPlugin) => {
-    iconMisses();
-    return plugin.hasIcon === true && !icons.isUnavailable(plugin.id);
-  };
-  onSettled(() => () => {
-    mounted = false;
-    icons.reset();
-  });
   return (
     <Show when={props.plugins.length > 0}>
       <div
-        class="sidebar-customize__plugins"
+        class="sidebar-list-group sidebar-customize__plugins"
         role="group"
         aria-labelledby="sidebar-customize-plugins"
       >
-        <div class="sidebar-customize__heading">
+        <div class="sidebar-section-heading">
           <span id="sidebar-customize-plugins" class="sidebar-recent-sessions__label-text">
             {t("nav.installedPlugins")}
           </span>
@@ -116,24 +135,10 @@ function SidebarPlugins(props: {
                 href={href()}
                 active={props.pathname === href()}
                 icon={
-                  <PluginArtTile
-                    registerIcon={(readId) => {
-                      if (plugin().hasIcon) {
-                        icons.load(readId());
-                      }
-                      return () => {};
-                    }}
-                    slug={plugin().id}
-                    // One initial reads at row size; the detail page shows the full monogram.
-                    name={Array.from(plugin().name.trim())[0] ?? ""}
-                    iconUrl={iconUrls()[plugin().id]}
-                    loading={iconPending(plugin())}
-                    onIconError={() => {
-                      icons.handleError(plugin().id);
-                      setIconMisses((count) => count + 1);
-                    }}
-                    class="sidebar-customize__plugin-icon"
-                  />
+                  // Refresh artwork with the inventory snapshot while keeping the link mounted.
+                  <Show when={plugin()} keyed>
+                    {(entry) => <SidebarPluginArt plugin={entry} />}
+                  </Show>
                 }
                 label={plugin().name}
                 onNavigate={() => props.host.onNavigate?.("plugins", { pathname: href() })}

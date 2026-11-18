@@ -2372,13 +2372,6 @@ div.shell.shell--onboarding {
   gap: 2px;
 }
 
-.sidebar-customize__plugins {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-block-start: 14px;
-}
-
 /* Plugin artwork keeps its own color; the line icons above dim instead. */
 .sidebar-customize__plugins .nav-item__icon {
   opacity: 1;
@@ -2407,9 +2400,8 @@ div.shell.shell--onboarding {
   object-fit: cover;
 }
 
-/* The people and installed-plugin headings match the Sessions group headings, without a toggle. */
-.sidebar-online__heading,
-.sidebar-customize__heading {
+/* Noninteractive headings use the same inset and height as Sessions group controls. */
+.sidebar-section-heading {
   display: flex;
   align-items: center;
   min-height: 30px;
