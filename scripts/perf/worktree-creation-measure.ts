@@ -28,6 +28,12 @@
  * placement; session-row admission and model execution are not measured.
  * Routing acceptance: identical source commit, zero base-clone scratch bytes.
  * Report the added checkout cost; this correctness change is not a speedup.
+ * --refresh-commit alternates that commit and --expected-commit after an untimed
+ * seed. On APFS it checks every tracked file's clone identity after each refresh.
+ * --filesystem-owner loads a frozen filesystem-native.ts for receipt overhead A/B.
+ * Native worker code is unchanged between arms; Linux procfs costs need Linux proof.
+ * Acceptance: only changed-file bytes lose shared extents, clean old/new templates,
+ * A/A controls and five serial A/B pairs; diagnostics must not add material cost.
  */
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -56,6 +62,8 @@ const { values } = parseArgs({
     "project-owner": { type: "string" },
     "eviction-delay-ms": { type: "string" },
     "agent-db-fixture": { type: "string" },
+    "refresh-commit": { type: "string" },
+    "filesystem-owner": { type: "string" },
   },
 });
 assert(values.repo && values.output, "--repo and --output are required");
@@ -164,6 +172,13 @@ Reflect.set(globalThis, contentionKey, {
 });
 const hooks = registerHooks({
   load(url, context, next) {
+    if (values["filesystem-owner"] && url.endsWith("/src/agents/worktrees/filesystem-native.ts")) {
+      return {
+        format: "module-typescript",
+        shortCircuit: true,
+        source: readFileSync(values["filesystem-owner"], "utf8"),
+      };
+    }
     if (
       values["project-owner"] &&
       url.endsWith("/src/gateway/server-methods/session-create-project.ts")
@@ -246,11 +261,15 @@ if (values["agent-db-fixture"]) {
     "agents/main/agent/openclaw-agent.sqlite",
   );
   await fs.mkdir(path.dirname(destination), { recursive: true });
-  await fs.copyFile(
-    values["agent-db-fixture"],
-    destination,
-    fs.constants.COPYFILE_FICLONE | fs.constants.COPYFILE_EXCL,
-  );
+  if (process.platform === "darwin") {
+    execFileSync("/bin/cp", ["-c", values["agent-db-fixture"], destination]);
+  } else {
+    await fs.copyFile(
+      values["agent-db-fixture"],
+      destination,
+      fs.constants.COPYFILE_FICLONE_FORCE | fs.constants.COPYFILE_EXCL,
+    );
+  }
 }
 const { ManagedWorktreeService } = await import("../../src/agents/worktrees/service.js");
 const { requireGit } = await import("../../src/agents/worktrees/git.js");
@@ -259,6 +278,26 @@ if (values["default-base"]) {
   assert((await requireGit(repo, ["remote", "get-url", "origin"])).startsWith("file://"));
 }
 const commit = values["expected-commit"] ?? (await requireGit(repo, ["rev-parse", "HEAD"]));
+const { listTemplatesAsync } =
+  await import("../../src/agents/worktrees/template-registry-async.js");
+const { nativeWorktreeFilesystem } =
+  await import("../../src/agents/worktrees/filesystem-native.js");
+const refreshCommit = values["refresh-commit"]
+  ? await requireGit(repo, ["rev-parse", "--verify", `${values["refresh-commit"]}^{commit}`])
+  : undefined;
+if (refreshCommit) {
+  assert(process.platform === "darwin", "Clone identity proof requires APFS");
+  assert(!values.prewarm && !values["alternate-policy"] && !values["default-base"]);
+  await new ManagedWorktreeService({ getConfig: () => config }).create({
+    repoRoot: repo,
+    name: `seed-${path.basename(output)}`,
+    baseRef: commit,
+    ownerKind: "session",
+    ownerId: "synthetic-seed",
+    runSetupScript: false,
+    provisionIgnoredFiles: false,
+  });
+}
 const projectSelection = values["project-routing"]
   ? await (async () => {
       const { prepareProjectRegistration, registerPreparedProjectRegistry } =
@@ -323,6 +362,10 @@ try {
     await drainGlobalSingletonLifecycleState();
   }
   for (let index = 0; index < samples; index++) {
+    const requestedCommit = refreshCommit && index % 2 === 0 ? refreshCommit : commit;
+    const previous = refreshCommit
+      ? (await listTemplatesAsync(process.env)).find((entry) => entry.status === "ready")
+      : undefined;
     gitTimings = {};
     workerTimings = {};
     const service = new ManagedWorktreeService({ getConfig: () => config });
@@ -375,7 +418,7 @@ try {
         : await service.create({
             repoRoot: selected?.root ?? repo,
             name: `measure-${path.basename(output)}-${index}`,
-            baseRef: values["default-base"] ? undefined : commit,
+            baseRef: values["default-base"] ? undefined : requestedCommit,
             ownerKind: "session",
             ownerId: `synthetic-${index}`,
             runSetupScript: false,
@@ -414,6 +457,8 @@ try {
       refillMainAllocatedBytes: 0,
       baseScratchBytes: 0,
       managedScratchBytes: 0,
+      sharedTrackedBytes: 0,
+      nonsharedTrackedBytes: 0,
     };
     if (collecting) {
       const { acquireWorktreeRunLease } = await import("../../src/agents/worktrees/run-lease.js");
@@ -430,8 +475,53 @@ try {
         await lease.release();
       }
     }
-    assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), commit);
+    assert.equal(await requireGit(created.path, ["rev-parse", "HEAD"]), requestedCommit);
     assert.equal(await requireGit(created.path, ["status", "--porcelain"]), "");
+    if (refreshCommit) {
+      assert(previous?.backend === "apfs");
+      const current = (await listTemplatesAsync(process.env)).find(
+        (entry) => entry.cacheKey === previous.cacheKey,
+      );
+      assert(current && current.id !== previous.id);
+      assert.equal(current.sourceCommit, requestedCommit);
+      const gitPaths = (args: string[]) =>
+        execFileSync("git", ["-C", current.path, ...args], {
+          encoding: "utf8",
+          maxBuffer: 16 * 1024 * 1024,
+        })
+          .split("\0")
+          .filter(Boolean);
+      const changed = new Set(
+        gitPaths([
+          "diff-tree",
+          "--no-commit-id",
+          "--name-only",
+          "-r",
+          "-z",
+          previous.sourceCommit,
+          requestedCommit,
+        ]),
+      );
+      const files = gitPaths(["ls-files", "-z"]);
+      for (let offset = 0; offset < files.length; offset += 512) {
+        const batch = files.slice(offset, offset + 512);
+        const metadata = await nativeWorktreeFilesystem.readMetadata(
+          batch.flatMap((name) => [path.join(previous.path, name), path.join(current.path, name)]),
+          { commitGuard() {} },
+        );
+        for (const [i, name] of batch.entries()) {
+          const old = metadata[2 * i];
+          const fresh = metadata[2 * i + 1];
+          assert(fresh?.type === 1, "Fixture must contain regular files");
+          const shared = Boolean(old?.cloneId && old.cloneId === fresh.cloneId);
+          assert.equal(shared, !changed.has(name), `Unexpected clone sharing: ${name}`);
+          row[shared ? "sharedTrackedBytes" : "nonsharedTrackedBytes"] += Number(fresh.size);
+        }
+      }
+      assert.equal(await requireGit(previous.path, ["rev-parse", "HEAD"]), previous.sourceCommit);
+      assert.equal(await requireGit(previous.path, ["status", "--porcelain"]), "");
+      assert.equal(await requireGit(current.path, ["status", "--porcelain"]), "");
+    }
     if (projectSelection) {
       const scratch = path.join(created.path, ".openclaw/tmp/placement-measure");
       await fs.mkdir(scratch, { recursive: true });

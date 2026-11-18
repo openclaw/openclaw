@@ -352,12 +352,30 @@ can overlap, so their sum is not the total preparation duration.
 Linux provisioning records `clonedFiles`/`clonedBytes` and
 `copiedFiles`/`copiedBytes` in `copyDetails` when GNU coreutils 9.2 or newer
 reports the transfer method. `reflinkFallbackReason` records the first reported
-clone fallback. Older tools or incomplete reports use
+clone fallback. `reflinkFallbackRootHash` and `reflinkFallbackPrefixHash` identify
+the resolved source checkout and the first fallback file’s top-level path component,
+respectively (first 16 hexadecimal characters of SHA-256; no literal paths).
+`reflinkFallbackErrno` classifies the report as `EOPNOTSUPP`, `EINVAL`, `EXDEV`,
+or `unknown`. When older coreutils reports only `unsupported`, one clone-only
+probe of the still-pinned source writes into private staging. Its separate
+`reflinkFallbackProbeErrno` records the error class, `unknown`, or
+`clone-succeeded`; a probe cannot establish the original attempt’s errno and
+never retries byte copying. Older tools or incomplete reports use
 `unreportedFiles`/`unreportedBytes`; they are never counted as confirmed clones.
 Byte counts are admitted logical source sizes for completed copy batches, not physical
 storage writes. Cross-filesystem and incompatible filesystem-policy copies may
 still fall back to copying bytes. These counters describe included-file
 provisioning, separately from native template snapshots.
+
+Native template copies record `nativeCloneCount` in `templateDetails`. On Linux,
+`nativeCloneWriteBytes` sums the worker's `/proc/self/io` `write_bytes` increase
+during completed clone calls. This is kernel IO accounting at page-dirtying time,
+not measured device traffic, logical tree size, or evidence of a byte-copy fallback. It excludes
+worker startup, Git checkout/index writes, and failed clone calls. A Btrfs snapshot
+can incur metadata writes while sharing file contents. Operations without IO
+accounting, including macOS clones, increment `nativeCloneUnmeasuredCount` instead
+of reporting zero. Native copies require cloning; unsupported clones fail rather
+than silently copying the tree.
 
 Repository-backed creation discovers unmanaged Git branches and checkout paths before waiting for capacity admission. Reservation still checks current managed names, owners, and pending slots under the allocation lease. Git enforces branch and path conflicts when creating the checkout, including external changes after discovery. Each admission retry refreshes its Git inventory.
 

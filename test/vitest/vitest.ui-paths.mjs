@@ -149,6 +149,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/theme-startup.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-owner-filter.real-gateway.e2e.test.ts",
   "ui/src/e2e/browser-pair-code.real-gateway.e2e.test.ts",
+  "ui/src/e2e/template-upload.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
   "ui/src/e2e/gateway-fresh-visit.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",

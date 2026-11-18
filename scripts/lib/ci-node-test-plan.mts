@@ -4082,9 +4082,7 @@ function splitOversizedCompactGroup(
         : runtimePartition
           ? (seconds * files.reduce((sum, file) => sum + weightForFile(file), 0)) / totalWeight
           : seconds;
-      // Apply the storage file bound during balancing, before slicing can strand tiny tails.
-      const stripeFileLimit =
-        group.shard_name === "core-runtime-infra-storage-state" ? hostedFileLimit : undefined;
+      // Apply file bounds during balancing, before slicing can strand tiny tails.
       stripes = createStripedBatches(
         files,
         Math.min(
@@ -4094,12 +4092,12 @@ function splitOversizedCompactGroup(
           Math.max(
             1,
             Math.ceil(remainingSeconds / COMPACT_GITHUB_MAX_PREDICTED_SECONDS),
-            stripeFileLimit ? Math.ceil(files.length / stripeFileLimit) : 1,
+            hostedFileLimit ? Math.ceil(files.length / hostedFileLimit) : 1,
           ),
         ),
         weightForValue,
         isCliProcess || isTooling ? batchWeight : undefined,
-        stripeFileLimit,
+        hostedFileLimit,
       );
     }
     const partitioned = runtimePartition ? [runtimePartition.runtimeFiles, ...stripes] : stripes;

@@ -590,7 +590,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onSettled(() => void presentation.runTask(loadCronRuns));
   }
 
-  function submitForm(runNow = false): void {
+  function submitForm(): void {
     const view = presentation.capture();
     if (!presentation.isCurrent(view) || !canManageCron()) {
       return;
@@ -633,10 +633,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         }
         return;
       }
-      if (runNow) {
-        // Explicit create-and-run intent survives navigation while saving.
-        await runCronJob(cronState, result.jobId);
-      }
       // Creating returns to the overview's all-job history.
       if (
         !cronState.cronEditingJob &&
@@ -674,8 +670,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       onSettled(() => ensureEditorSources(true));
       return refreshCron({ refresh: true });
     },
-    onSubmit: () => submitForm(),
-    onSubmitRunNow: () => submitForm(true),
+    onSubmit: submitForm,
     onSelectJob: selectJob,
     onOpenCreate: openCreate,
     onClosePanel: closePanel,

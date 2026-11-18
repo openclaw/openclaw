@@ -83,7 +83,6 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     onFormChange: () => undefined,
     onRefresh: () => Promise.resolve(),
     onSubmit: () => undefined,
-    onSubmitRunNow: () => undefined,
     onSelectJob: () => undefined,
     onOpenCreate: () => undefined,
     onClosePanel: () => undefined,
@@ -126,7 +125,7 @@ export function getButtonByText(container: Element, text: string): HTMLButtonEle
 }
 
 export function getElement<T extends Element>(
-  container: Element,
+  container: Pick<ParentNode, "querySelector">,
   selector: string,
   constructor: new () => T,
 ): T {
@@ -138,8 +137,26 @@ export function getElement<T extends Element>(
   return element;
 }
 
-export function selectSegmented(control: HTMLElement) {
-  getElement(control, "input.settings-segmented__input", HTMLInputElement).click();
+const SENTENCE_FREQUENCY: Record<string, string> = {
+  at: "once",
+  every: "every",
+  cron: "custom",
+  event: "event",
+};
+
+/** Chooses a schedule kind as a person does: Repeat for kinds with their own controls, else the sentence's frequency. */
+export function chooseSchedule(root: Pick<ParentNode, "querySelector">, kind: string) {
+  const segmented = root.querySelector<HTMLElement>(`[data-test-id="cron-schedule-kind-${kind}"]`);
+  if (segmented) {
+    getElement(segmented, "input.settings-segmented__input", HTMLInputElement).click();
+    return;
+  }
+  getElement(root, '[data-test-id="cron-schedule-frequency"]', HTMLElement).click();
+  getElement(
+    root,
+    `[data-test-id="cron-schedule-frequency-${SENTENCE_FREQUENCY[kind] ?? kind}"]`,
+    HTMLButtonElement,
+  ).click();
 }
 
 export function findToggleByLabel(container: Element, label: string) {

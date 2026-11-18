@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -24,7 +25,12 @@ import {
   buildCodeModeCatalogPrompt,
   createCodeModeTools,
 } from "./code-mode.js";
-import { createCatalogCodeModeHarness, resetCodeModeTestState } from "./code-mode.test-support.js";
+import {
+  createCatalogCodeModeHarness,
+  createCodeModeHarness,
+  resetCodeModeTestState,
+  runUntilCompleted,
+} from "./code-mode.test-support.js";
 import { bindHostSkillCatalog } from "./harness/host-skills.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
@@ -335,6 +341,32 @@ it("reports bounded, redacted installed-skill failures returned by a Gateway", a
   });
   expect(String(result.error)).not.toContain(secret);
   expect(String(result.error).length).toBeLessThan(1_200);
+});
+
+it("returns Workshop guidance for installed skill requests during restricted reviews", async () => {
+  const harness = createCodeModeHarness();
+  const ctx = { ...harness.ctx, toolExecutionAllow: ["skill_workshop"] };
+  const tools = createCodeModeTools(ctx);
+  applyCodeModeCatalog({ ...ctx, tools: [...tools, createStubTool("skill_workshop")] });
+  onTestFinished(() => clearToolSearchCatalog(ctx));
+
+  const result = await runUntilCompleted({
+    execTool: expectDefined(tools[0], "Code Mode exec"),
+    waitTool: expectDefined(tools[1], "Code Mode wait"),
+    code: `return {
+      list: await skills.list(),
+      search: await skills.search("demo"),
+      read: await skills.read("demo"),
+    };`,
+  });
+  const guidance = expect.objectContaining({
+    gated: true,
+    message: expect.stringContaining("Use skill_workshop instead"),
+  });
+  expect(result).toMatchObject({
+    status: "completed",
+    value: { list: guidance, search: guidance, read: guidance },
+  });
 });
 
 it("reads a known skill with resource context before discovery through the worker bridge", async () => {
