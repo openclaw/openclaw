@@ -44,6 +44,7 @@ import {
 import { retirePreparedModelRuntimeOwnerIfUnused } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeBuildStats,
+  PreparedModelRuntimeQualification,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimeOwner,
@@ -462,6 +463,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
     isOwnerRegistered?: (key: string, owner: PreparedModelRuntimeOwner) => boolean;
     isBuildCurrent?: () => boolean;
     onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
+    qualification?: PreparedModelRuntimeQualification;
     registerEntriesAfterBuildStart?: boolean;
     selectPluginGeneration?: (
       owner: PreparedModelRuntimeOwner,
@@ -602,6 +604,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
           : undefined,
         params.acquisitionSignal,
         params.providerDiscoveryTimeoutMs,
+        params.qualification,
       );
       for (const candidate of currentGroup) {
         if (params.registerEntriesAfterBuildStart === true) {
@@ -679,6 +682,7 @@ export async function publishModelRuntimeSnapshot(
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration,
   pluginMetadataSnapshot?: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"],
   providerDiscoveryTimeoutMs?: number,
+  qualification?: PreparedModelRuntimeQualification,
 ): Promise<PreparedModelRuntimeSnapshot> {
   const key = ownerKey(input);
   const owner = prepareModelRuntimeOwner(input, provenance, catalogMode, existing);
@@ -698,6 +702,7 @@ export async function publishModelRuntimeSnapshot(
       selectPluginGeneration: () => reusablePluginGeneration,
       pluginMetadataSnapshot,
       providerDiscoveryTimeoutMs,
+      qualification,
     },
     {
       published: (isGenerationCurrent) => {

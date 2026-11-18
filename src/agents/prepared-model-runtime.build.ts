@@ -53,6 +53,7 @@ import { PreparedModelRuntimeBuildResources } from "./prepared-model-runtime.res
 import { prepareAgentCatalogSource } from "./prepared-model-runtime.scoped-catalog.js";
 import type {
   PreparedModelRuntimeBuildStats,
+  PreparedModelRuntimeQualification,
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
   PreparedModelRuntimePluginGeneration,
@@ -479,6 +480,7 @@ export function startSerializedSnapshotBuildBatch(
   },
   acquisitionSignal?: AbortSignal,
   providerDiscoveryTimeoutMs?: number,
+  qualification?: PreparedModelRuntimeQualification,
 ): {
   pending: Promise<PreparedModelRuntimeBuildResult[]>;
   completion: Promise<void>;
@@ -515,37 +517,54 @@ export function startSerializedSnapshotBuildBatch(
       retainPreparedPluginRegistry,
     );
     if (previousBuildCompletions.length > 0) {
-      await Promise.all(previousBuildCompletions);
+      qualification?.("previous-build-wait", "begin", previousBuildCompletions.length);
+      try {
+        await Promise.all(previousBuildCompletions);
+        qualification?.("previous-build-wait", "ok", previousBuildCompletions.length);
+      } catch (error) {
+        qualification?.("previous-build-wait", signal.aborted ? "abort" : "error");
+        throw error;
+      }
       // Queued publications register while the prior build settles. Recheck them here so a
       // retired owner cannot start expensive workspace preparation ahead of its replacement.
       assertPreparedModelRuntimeCandidatesCurrent(candidates);
+    } else {
+      qualification?.("previous-build-wait", "skip", 0);
     }
     signal.throwIfAborted();
-    return await buildSnapshotBatch(
-      candidates,
-      registryResources,
-      catalogMode,
-      pluginMetadataSnapshot,
-      onBuildStats,
-      includeCredentialProviders,
-      (nextStage) => {
-        stage = nextStage;
-        progress?.onStage(nextStage);
-      },
-      progress
-        ? (input, result) => {
-            progress.onPrepared(input, result);
-            const remaining = remainingByAgent.get(input.agentDir)! - 1;
-            remainingByAgent.set(input.agentDir, remaining);
-            if (remaining === 0) {
-              // This directory has no remaining writes; another workspace must not hold its auth refresh.
-              agentCompletions!.get(input.agentDir)!.resolve();
+    qualification?.("build", "begin");
+    let buildSucceeded = false;
+    try {
+      const built = await buildSnapshotBatch(
+        candidates,
+        registryResources,
+        catalogMode,
+        pluginMetadataSnapshot,
+        onBuildStats,
+        includeCredentialProviders,
+        (nextStage) => {
+          stage = nextStage;
+          progress?.onStage(nextStage);
+        },
+        progress
+          ? (input, result) => {
+              progress.onPrepared(input, result);
+              const remaining = remainingByAgent.get(input.agentDir)! - 1;
+              remainingByAgent.set(input.agentDir, remaining);
+              if (remaining === 0) {
+                // This directory has no remaining writes; another workspace must not hold its auth refresh.
+                agentCompletions!.get(input.agentDir)!.resolve();
+              }
             }
-          }
-        : undefined,
-      signal,
-      providerDiscoveryTimeoutMs,
-    );
+          : undefined,
+        signal,
+        providerDiscoveryTimeoutMs,
+      );
+      buildSucceeded = true;
+      return built;
+    } finally {
+      qualification?.("build", buildSucceeded ? "ok" : signal.aborted ? "abort" : "error");
+    }
   })();
   let abandoned = false;
   const pending = runAbortableTimeout(

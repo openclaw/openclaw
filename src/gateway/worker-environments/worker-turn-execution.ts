@@ -73,7 +73,10 @@ export async function executeWorkerTurn(params: WorkerTurnExecutionParams) {
       agentDir: input.agentDir ?? resolveAgentDir(input.config ?? {}, placement.agentId),
       workspaceDir: input.workspaceDir,
     },
-    workerTurnRuntimeLeaseOptions(input),
+    {
+      ...workerTurnRuntimeLeaseOptions(input),
+      qualification: params.qualificationAcquisition?.(),
+    },
   );
   params.qualificationPhase?.("input-context");
   return await preparedRuntime.run(async () => {

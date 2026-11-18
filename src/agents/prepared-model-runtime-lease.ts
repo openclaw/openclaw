@@ -45,6 +45,7 @@ import {
 } from "./prepared-model-runtime.retention.js";
 import type {
   PreparedModelRuntimeLeaseOptions,
+  PreparedModelRuntimeQualification,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
 
@@ -125,48 +126,66 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   context: PreparedModelRuntimeLeaseContext,
   options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
-  const assertLifetime = context.captureLifetime();
-  const assertAdmission = () => {
-    assertLifetime();
-    if (options.abortSignal?.aborted) {
-      throw createAbortError("Prepared model runtime lease admission aborted", {
-        cause: options.abortSignal.reason,
-      });
+  const leaseObservation = options.qualification?.(0);
+  leaseObservation?.("lease", "begin");
+  let leaseSucceeded = false;
+  try {
+    const assertLifetime = context.captureLifetime();
+    const assertAdmission = () => {
+      assertLifetime();
+      if (options.abortSignal?.aborted) {
+        throw createAbortError("Prepared model runtime lease admission aborted", {
+          cause: options.abortSignal.reason,
+        });
+      }
+    };
+    const acquire = (observation?: PreparedModelRuntimeQualification) =>
+      acquirePreparedModelRuntimeLeaseAttempt(
+        rawInput,
+        provenance,
+        context,
+        options,
+        assertAdmission,
+        observation,
+      );
+    for (let attempt = 0; ; attempt += 1) {
+      const observation = options.qualification?.(attempt + 1);
+      observation?.("attempt", "begin");
+      try {
+        const result = await (attempt === 0
+          ? acquire(observation)
+          : runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+              runOutsidePluginRuntimeGenerationScope(() => acquire(observation)),
+            ));
+        observation?.("lease-finalize", "ok");
+        observation?.("attempt", "ok");
+        leaseSucceeded = true;
+        return result;
+      } catch (error) {
+        observation?.("attempt", options.abortSignal?.aborted ? "abort" : "error");
+        // Explicit and inherited pins belong to admitted work, including nested completions.
+        if (
+          !(error instanceof PreparedModelRuntimePublicationSupersededError) ||
+          provenance !== "run" ||
+          options.pluginGeneration ||
+          getPreparedModelRuntimePluginGeneration()
+        ) {
+          throw error;
+        }
+        assertAdmission();
+        if (attempt === 1) {
+          throw new PreparedModelRuntimePublicationSupersededError(
+            "Model runtime changed during both preparation attempts; retry the request",
+            { cause: error },
+          );
+        }
+      }
     }
-  };
-  const acquire = () =>
-    acquirePreparedModelRuntimeLeaseAttempt(
-      rawInput,
-      provenance,
-      context,
-      options,
-      assertAdmission,
+  } finally {
+    leaseObservation?.(
+      "lease",
+      leaseSucceeded ? "ok" : options.abortSignal?.aborted ? "abort" : "error",
     );
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      return await (attempt === 0
-        ? acquire()
-        : runOutsidePreparedModelRuntimePluginGenerationScope(() =>
-            runOutsidePluginRuntimeGenerationScope(acquire),
-          ));
-    } catch (error) {
-      // Explicit and inherited pins belong to admitted work, including nested completions.
-      if (
-        !(error instanceof PreparedModelRuntimePublicationSupersededError) ||
-        provenance !== "run" ||
-        options.pluginGeneration ||
-        getPreparedModelRuntimePluginGeneration()
-      ) {
-        throw error;
-      }
-      assertAdmission();
-      if (attempt === 1) {
-        throw new PreparedModelRuntimePublicationSupersededError(
-          "Model runtime changed during both preparation attempts; retry the request",
-          { cause: error },
-        );
-      }
-    }
   }
 }
 
@@ -176,10 +195,14 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
   context: PreparedModelRuntimeLeaseContext,
   options: PreparedModelRuntimeLeaseOptions,
   assertAdmission: () => void,
+  observation?: PreparedModelRuntimeQualification,
 ): Promise<PreparedModelRuntimeLease> {
+  observation?.("borrow-check", "begin");
   assertAdmission();
   const generation = options.pluginGeneration;
   const borrowed = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
+  observation?.("generation-supplied", "mark", generation !== undefined);
+  observation?.("borrowed-present", "mark", borrowed !== undefined);
   if (provenance === "run" && options.catalogMode !== "live" && generation && borrowed) {
     const deriveSelections = options.deriveRuntimePluginSelections;
     const input = normalizePreparedModelRuntimeInput({
@@ -203,14 +226,27 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
     if (preparedModelRuntimeBorrowMatchesInput(borrowed, generation, input)) {
       // Admitted work must finish before replacement can drain its retained generation.
       assertAdmission();
+      observation?.("borrowed-matched", "mark", true);
+      observation?.("borrow-check", "ok");
+      observation?.("return-route", "mark", 1);
+      observation?.("lease-finalize", "begin");
       return createPreparedModelRuntimeLease(borrowed, generation);
     }
   }
+  observation?.("borrowed-matched", "mark", false);
+  observation?.("borrow-check", "ok");
   if (!getPreparedSharedAuthStoreOwnership(rawInput.env ?? process.env)) {
+    observation?.("shared-auth", "begin");
     await prepareSharedAuthStoreOwnership(rawInput.env);
+    observation?.("shared-auth", "ok");
+  } else {
+    observation?.("shared-auth", "skip");
   }
   assertAdmission();
   let replacement = context.getPendingReplacement(rawInput);
+  if (!replacement) {
+    observation?.("replacement-wait", "skip");
+  }
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
   // A refresh continuation has already run tools, so it waits through back-to-back reloads: each
   // gate is one reload that settles within its own drain and stop budget, a gate that settles
@@ -219,7 +255,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
   for (let waits = 0; replacement && waits < maxWaits; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
     const awaited = replacement;
+    observation?.("replacement-wait", "begin", waits + 1);
     await racePromiseWithAbortSignal(awaited.promise, options.abortSignal);
+    observation?.("replacement-wait", "ok", waits + 1);
     assertAdmission();
     replacement = context.getPendingReplacement(rawInput);
     // An unbounded wait still needs each gate to give way to the next reload.
@@ -239,12 +277,20 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       rawInput.preserveWorkspaceDirOnRefresh ?? rawInput.workspaceDir !== undefined,
   });
   if (provenance === "run" && context.getGatewayLifecycleActive()) {
+    observation?.("gateway-active", "mark", true);
     const configured = resolveConfiguredOwner(context.owners, input);
     if (configured?.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(configured);
+      observation?.("configured-owner-wait", "begin");
       await racePromiseWithAbortSignal(configured.pending, options.abortSignal);
+      observation?.("configured-owner-wait", "ok");
       assertAdmission();
+    } else {
+      observation?.("configured-owner-wait", "skip");
     }
+  } else {
+    observation?.("gateway-active", "mark", false);
+    observation?.("configured-owner-wait", "skip");
   }
   if (provenance === "run" && !options.pluginGeneration && context.getGatewayLifecycleActive()) {
     try {
@@ -263,17 +309,29 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
 
   let pluginMetadataSnapshot = options.pluginMetadataSnapshot;
   if (options.deriveRuntimePluginSelections) {
-    pluginMetadataSnapshot =
-      options.pluginGeneration?.pluginMetadataSnapshot ??
-      pluginMetadataSnapshot ??
-      (await resolvePluginMetadataSnapshotAsync({
+    // Preserve nullish precedence; do not invoke the resolver merely to observe it.
+    const generationMetadata = options.pluginGeneration?.pluginMetadataSnapshot;
+    if (generationMetadata != null) {
+      observation?.("metadata-source", "mark", 1);
+      observation?.("metadata-resolve", "skip");
+      pluginMetadataSnapshot = generationMetadata;
+    } else if (pluginMetadataSnapshot != null) {
+      observation?.("metadata-source", "mark", 2);
+      observation?.("metadata-resolve", "skip");
+    } else {
+      observation?.("metadata-source", "mark", 3);
+      observation?.("metadata-resolve", "begin");
+      pluginMetadataSnapshot = await resolvePluginMetadataSnapshotAsync({
         config: input.config,
         env: input.env,
         workspaceDir: input.workspaceDir,
         allowWorkspaceScopedCurrent: true,
-      }));
+      });
+      observation?.("metadata-resolve", "ok");
+    }
     const metadataSnapshot = pluginMetadataSnapshot;
     const deriveSelections = options.deriveRuntimePluginSelections;
+    observation?.("derive-selections", "begin");
     input = withPluginMetadataSnapshotScope(
       pluginMetadataSnapshot,
       () =>
@@ -286,12 +344,17 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         }),
       { trustConfigIdentity: true },
     );
+    observation?.("derive-selections", "ok");
+  } else {
+    observation?.("metadata-resolve", "skip");
+    observation?.("derive-selections", "skip");
   }
 
   const key = ownerKey(input);
   const admission = createPreparedModelRuntimeAdmissionClaim(context);
   try {
     let owner = context.owners.get(key);
+    observation?.("owner-present", "mark", owner !== undefined);
     const configuredOwner = resolveConfiguredOwner(context.owners, input);
     const requestedGeneration = options.pluginGeneration;
     const activeBorrowedSnapshot =
@@ -360,26 +423,39 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       preparedPluginGenerationSupportsSelections(configuredOwner.pluginGeneration, inventoryInput)
     ) {
       owner = configuredOwner;
+      observation?.("configured-reuse", "mark", true);
+    } else {
+      observation?.("configured-reuse", "mark", false);
     }
 
-    const ownerGenerationChanged = () =>
-      (options.pluginGeneration !== undefined &&
-        !preparedPluginGenerationReusesBase(
-          owner?.pending ? owner.pendingPluginGeneration : owner?.pluginGeneration,
-          options.pluginGeneration,
-        )) ||
-      (options.catalogMode === "live" && owner?.catalogMode === "static");
+    const ownerGenerationChanged = () => {
+      const changed =
+        (options.pluginGeneration !== undefined &&
+          !preparedPluginGenerationReusesBase(
+            owner?.pending ? owner.pendingPluginGeneration : owner?.pluginGeneration,
+            options.pluginGeneration,
+          )) ||
+        (options.catalogMode === "live" && owner?.catalogMode === "static");
+      observation?.("generation-changed", "mark", changed);
+      return changed;
+    };
     if (owner?.pending) {
       assertPreparedModelRuntimeAdmissionCanWait(owner);
       admission.claim(key, owner);
+      observation?.("owner-pending-wait", "begin");
       await racePromiseWithAbortSignal(owner.pending, options.abortSignal);
+      observation?.("owner-pending-wait", "ok");
       assertAdmission();
+    } else {
+      observation?.("owner-pending-wait", "skip");
     }
 
     let snapshot: PreparedModelRuntimeSnapshot;
     const staleDynamicOwner =
       owner?.needsRefresh && (owner.provenance === "run" || owner.provenance === "ephemeral");
+    observation?.("owner-stale", "mark", Boolean(staleDynamicOwner));
     if (!owner || staleDynamicOwner || ownerGenerationChanged()) {
+      observation?.("publish", "begin");
       const publication = publishModelRuntimeSnapshot(
         input,
         context.owners,
@@ -390,6 +466,8 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         options.catalogMode,
         options.pluginGeneration,
         pluginMetadataSnapshot,
+        undefined,
+        observation,
       );
       owner = context.owners.get(key);
       if (!owner) {
@@ -399,7 +477,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       }
       admission.claim(key, owner);
       snapshot = await racePromiseWithAbortSignal(publication, options.abortSignal);
+      observation?.("publish", "ok");
     } else {
+      observation?.("publish", "skip");
       if (owner.needsRefresh) {
         throw owner.refreshError ?? new Error("prepared model runtime refresh is pending");
       }
@@ -413,6 +493,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       }
       snapshot = owner.snapshot;
     }
+    observation?.("lease-finalize", "begin");
     assertAdmission();
     if (owner.needsRefresh || owner.snapshot !== snapshot) {
       throw new PreparedModelRuntimePublicationSupersededError(
@@ -442,6 +523,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       bindPreparedPluginGenerationConfiguredBase(pluginGeneration, options.pluginGeneration);
     }
     if (owner.provenance !== provenance) {
+      observation?.("return-route", "mark", 2);
       return createPreparedModelRuntimeLease(snapshot, pluginGeneration);
     }
     if (provenance === "run" && options.retainIdleRunOwner) {
@@ -461,6 +543,7 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
     });
     owner.leaseCount = (owner.leaseCount ?? 0) + 1;
     admission.release();
+    observation?.("return-route", "mark", 3);
     return lease;
   } finally {
     admission.release();

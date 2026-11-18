@@ -457,6 +457,7 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               assertPreparationCurrent();
               const executionOptions = {
                 qualificationPhase: preparationObservation.phase,
+                qualificationAcquisition: preparationObservation.acquisition,
                 environments: options.environments,
                 onHandoff: (custody?: { requiresTerminalReceipt: true }) => {
                   handedOff = true;

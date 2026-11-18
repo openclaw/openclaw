@@ -178,7 +178,40 @@ export type PreparedModelRuntimeLease = Readonly<{
   [Symbol.asyncDispose](): Promise<void>;
 }>;
 
+// Disposable worker-timeout qualification packet, not a supported runtime option.
+export type PreparedModelRuntimeQualificationPhase =
+  | "lease"
+  | "attempt"
+  | "borrow-check"
+  | "shared-auth"
+  | "replacement-wait"
+  | "configured-owner-wait"
+  | "metadata-resolve"
+  | "derive-selections"
+  | "owner-pending-wait"
+  | "publish"
+  | "lease-finalize"
+  | "previous-build-wait"
+  | "build"
+  | "generation-supplied"
+  | "borrowed-present"
+  | "borrowed-matched"
+  | "gateway-active"
+  | "metadata-source"
+  | "configured-reuse"
+  | "owner-present"
+  | "owner-stale"
+  | "generation-changed"
+  | "return-route";
+export type PreparedModelRuntimeQualification = (
+  phase: PreparedModelRuntimeQualificationPhase,
+  event: "begin" | "ok" | "error" | "abort" | "mark" | "skip",
+  value?: number | boolean,
+) => void;
+
 export type PreparedModelRuntimeLeaseOptions = {
+  /** Explicit per-acquisition factory; attempt 0 is the enclosing lease. Diagnostic only. */
+  qualification?: (attempt: number) => PreparedModelRuntimeQualification;
   retainIdleRunOwner?: boolean;
   catalogMode?: PreparedModelRuntimeCatalogMode;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
