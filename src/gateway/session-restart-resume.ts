@@ -69,10 +69,9 @@ import {
   recordRestartYieldFailure,
 } from "./session-restart-resume-failure.js";
 import { createRestartResumeSummary } from "./session-restart-resume-log.js";
+import { GATEWAY_RESTART_RESUME_TEXT } from "./session-restart-resume-prompt.js";
 import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
 
-const GATEWAY_RESTART_RESUME_TEXT =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue. Child runs do not resume independently. Inspect their saved work; send a fresh instruction to the same retained child session when appropriate. A stopped execution is not a yielded pause, and restarting it does not transfer workspace or publication ownership.";
 // Old shutdown bumped updatedAt, but abandoned cycles can survive for weeks. Limit adoption
 // to six hours before process start; longer stops lose this one-time upgrade resume.
 // Remove this bridge once stable includes the graceful-restart redesign (#185730).
