@@ -7,7 +7,10 @@ import type { AsyncPluginHook } from "./hook-handler.types.js";
  * so `payload` is the text OpenClaw hands it: `{ prompt, prependContext?, appendContext? }`
  * for a turn or a steered input. `messages` is a detached copy of the model-facing
  * history, including host-owned metadata such as `__openclaw.senderIsOwner` and input
- * `provenance`; edits to it do not change the request.
+ * `provenance`; edits to it do not change the request. A compaction summary request
+ * serializes older history into one user message, so its `messages` is only that request,
+ * without per-message metadata; a CLI side question carries the history as text in
+ * `payload.prompt`, with that history and its metadata in `messages`.
  *
  * `requestKind` names the call: `turn` for an agent turn (including steered CLI input),
  * `compaction` for a summary or server-side compaction request over older history,
