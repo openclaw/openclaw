@@ -676,8 +676,12 @@ and ownership), the snapshot child checks the exact database's recorded Gateway
 or embedded-writer owner. A verified live process uses the existing online-backup
 owner in one read transaction while writes continue. Native SQLite may update SHM
 read marks; it does not change stored rows or the WAL. An absent, dead, or
-unverifiable owner retains the artifact-preserving copy path. Explicit inherited
-snapshots and offline maintenance/recovery remain byte-neutral. Snapshot failures
+unverifiable owner retains the artifact-preserving copy path. If a live writer
+moves a complete WAL family (main, WAL, and index present) through every copy
+attempt, that path takes one read transaction instead; only a live connection can
+keep checkpointing, so the index is current and its 96-byte commit header stays
+unchanged. Explicit inherited snapshots and offline maintenance/recovery remain
+byte-neutral whenever no writer is active. Snapshot failures
 remain errors with their original diagnostics; they never become empty inventory.
 Migration publication rechecks the current generation inside the same native
 write transaction that protects synchronous publication. Empty historical state
