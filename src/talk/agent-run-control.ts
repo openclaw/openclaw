@@ -137,6 +137,10 @@ export async function controlRealtimeVoiceAgentRun(
     } | null;
     text: string;
     getToolAuthorityOverlay?: () => ReplyToolAuthorityOverlay;
+    /** Worker-backed caller policy; takes precedence over the synchronous reader. */
+    getToolAuthorityOverlayAsync?: () => Promise<ReplyToolAuthorityOverlay>;
+    /** Live caller lifetime, checked after preparation and at each control effect. */
+    assertCurrent?: () => void;
     prepareToolAuthorityOverlay?: (overlay: ReplyToolAuthorityOverlay) => Promise<void>;
     /** Host context prepared by the validated authority callback, never provider text. */
     getSteeringContext?: () => string | undefined;
@@ -153,10 +157,7 @@ export async function controlRealtimeVoiceAgentRun(
 
 /** Gateway Talk reads caller policy through the worker-backed session reader. */
 export async function controlTalkAgentRun(
-  params: Parameters<typeof controlRealtimeVoiceAgentRun>[0] & {
-    /** Takes precedence over getToolAuthorityOverlay. */
-    getToolAuthorityOverlayAsync?: () => Promise<ReplyToolAuthorityOverlay>;
-  },
+  params: Parameters<typeof controlRealtimeVoiceAgentRun>[0],
   providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
   const sessionKey = params.sessionKey.trim();
@@ -269,10 +270,12 @@ export async function controlTalkAgentRun(
   const toolAuthorityOverlay = params.getToolAuthorityOverlayAsync
     ? await params.getToolAuthorityOverlayAsync()
     : params.getToolAuthorityOverlay?.();
+  params.assertCurrent?.();
   if (toolAuthorityOverlay && (mode === "cancel" || !deferMessagePreparation)) {
     await params.prepareToolAuthorityOverlay?.(toolAuthorityOverlay);
   }
   const preparedOwner = resolveCurrentRun();
+  params.assertCurrent?.();
   if (
     preparedOwner.sessionId !== sessionId ||
     (target ? !target.isCurrent(sessionId) : !isLegacyCurrent())
@@ -284,7 +287,14 @@ export async function controlTalkAgentRun(
       target === undefined
         ? providedDeps
           ? providedDeps.abortEmbeddedAgentRun(sessionId)
-          : await commands!.stopRealtimeVoiceSessionRun({ sessionKey, sessionId })
+          : await commands!.stopRealtimeVoiceSessionRun({
+              sessionKey,
+              sessionId,
+              assertCurrent: () => {
+                params.assertCurrent?.();
+                toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
+              },
+            })
         : target !== null &&
           (params.cancelRun
             ? await params.cancelRun(target.runId)
@@ -335,9 +345,11 @@ export async function controlTalkAgentRun(
     if (overlay) {
       await params.prepareToolAuthorityOverlay?.(overlay);
     }
+    params.assertCurrent?.();
     options.toolAuthorityOverlay = overlay;
   };
   const canInject = () => {
+    params.assertCurrent?.();
     options.toolAuthorityOverlay?.operatorAuthority?.assertCurrent();
     return target
       ? !target.signal.aborted && target.isCurrent(sessionId)
@@ -351,6 +363,7 @@ export async function controlTalkAgentRun(
         }
       },
       compatAssertCurrent: () => {
+        params.assertCurrent?.();
         // An asynchronous reader cannot repeat its read here; check the overlay it
         // prepared for this admission while assertCurrent rechecks live operator authority.
         const overlay = params.getToolAuthorityOverlayAsync
