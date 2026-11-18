@@ -406,6 +406,16 @@ export async function applyLegacyCronStoreRepair(params: {
   }
 
   changes.push(...retirementChanges);
+  if (normalized.issues.backfilledHumanOwner) {
+    changes.push(
+      `Saved the recorded creator profile as the owner for ${pluralize(normalized.issues.backfilledHumanOwner, "automation")}; existing tool permissions were preserved.`,
+    );
+  }
+  for (const jobId of normalized.pausedUnprovenHumanOwnerJobs) {
+    warnings.push(
+      `Paused automation ${jobId}: the recorded creator profile has no ID. Ask an administrator to claim this automation by selecting its owner on the Automations page, then review and re-enable it.`,
+    );
+  }
   if (normalized.issues.reconciledOwnerAccount) {
     changes.push(
       `Reconciled ${pluralize(normalized.issues.reconciledOwnerAccount, "cron job owner account")} from persisted creator identity; existing tool permissions were preserved.`,

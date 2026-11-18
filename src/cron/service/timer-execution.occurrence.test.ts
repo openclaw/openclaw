@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
 import {
   unadmittedScheduledOccurrence,
@@ -110,6 +112,32 @@ const MATRIX = PAYLOAD_KINDS.flatMap((kind) =>
 );
 
 describe("scheduled occurrence admission", () => {
+  it("does not start the trigger or payload if the recorded human owner is gone", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const { state, seen } = harness();
+      const job: CronStoredJob = {
+        ...makeCronJob({ payload: payloadFor("command") }),
+        ownerProfileId: "deleted-profile",
+        trigger: { script: "return { fire: true }" },
+      };
+      await expect(executeJobCore(state, job)).resolves.toMatchObject({
+        status: "error",
+        error: expect.stringContaining("human owner no longer exists"),
+        executionStarted: false,
+      });
+      expect(seen).toEqual([]);
+
+      const owner = ensureProfileForEmail("owner@example.test");
+      await expect(
+        executeJobCore(state, { ...job, ownerProfileId: owner.id }),
+      ).resolves.toMatchObject({ status: "ok" });
+      expect(seen.map(({ executor }) => executor)).toEqual([
+        "evaluateCronTrigger",
+        "runCommandJob",
+      ]);
+    });
+  });
+
   it("classifies every executor that can start occurrence work", () => {
     expect(Object.values(executorsRequireOccurrence).every(Boolean)).toBe(true);
     expect(Object.keys(EXECUTOR_ADMISSION).toSorted()).toMatchInlineSnapshot(`

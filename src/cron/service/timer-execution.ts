@@ -1,5 +1,6 @@
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { readResidentUserProfileId } from "../../state/user-profile-list.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
@@ -250,6 +251,36 @@ export async function executeJobCore(
       ) {
         return { status: "skipped", error: "stream batch source no longer current" };
       }
+    }
+    // Admit the stored human owner before any trigger or payload runs. This
+    // check is not an effect guard; an admitted occurrence keeps its result.
+    if (job.ownerProfileId) {
+      let ownerId: string | undefined;
+      try {
+        ownerId = readResidentUserProfileId(job.ownerProfileId);
+      } catch {
+        return {
+          status: "error",
+          error:
+            "The automation's human owner could not be checked because the profile catalog is not ready. Retry when the Gateway is ready.",
+          executionStarted: false,
+        };
+      }
+      if (!ownerId) {
+        return {
+          status: "error",
+          error:
+            "The automation's human owner no longer exists. Ask an administrator to select a new owner on the Automations page before running it again.",
+          executionStarted: false,
+        };
+      }
+    } else if (job.createdActor?.type === "human" && job.createdActor.source === "profile") {
+      return {
+        status: "error",
+        error:
+          "The automation's human owner is not recorded. Run openclaw doctor --fix, or ask an administrator to select an owner on the Automations page.",
+        executionStarted: false,
+      };
     }
     // One admission per occurrence, shared by its trigger and payload executors.
     occurrence = await admitCronOccurrence(state, job, agentId);

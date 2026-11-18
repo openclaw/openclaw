@@ -13,6 +13,14 @@ Day-to-day operation of stored jobs: copy-ready CLI examples, the management com
 
 In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
 
+For an automation with a recorded human owner, the scheduler checks that the
+profile still exists before starting the trigger or payload. If the owner has
+been removed, ask an administrator to select a new owner on the **Automations**
+page and review the automation before resuming it. If an older automation has a
+recorded creator profile but no saved owner, run `openclaw doctor --fix`. Doctor
+backs up the cron store before saving that profile as the owner. It does not
+replace an explicitly assigned owner or change the automation's tool list.
+
 Deleting a conversation does not remove its linked automations. Command automations can continue running after their creating conversation is deleted. The conversation's deletion confirmation warns that automations may continue; disable or remove them separately to stop future runs.
 
 Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.

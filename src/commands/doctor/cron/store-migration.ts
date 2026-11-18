@@ -56,6 +56,8 @@ type CronStoreIssueKey =
   | "legacyDeliveryMode"
   | "migratedScheduledToolPolicy"
   | "reconciledOwnerAccount"
+  | "backfilledHumanOwner"
+  | "pausedUnprovenHumanOwner"
   | "invalidSchedule"
   | "invalidPayload";
 
@@ -104,6 +106,7 @@ type NormalizeCronStoreJobsResult = {
   unsupportedDeliveryModeJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
+  pausedUnprovenHumanOwnerJobs: string[];
   legacyGatewayExecJobs: string[];
   jobs: Array<Record<string, unknown>>;
   mutated: boolean;
@@ -171,6 +174,7 @@ export function normalizeStoredCronJobs(
   const legacyGatewayExecJobs: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
   const invalidScheduledToolPolicyJobs: string[] = [];
+  const pausedUnprovenHumanOwnerJobs: string[] = [];
   const unresolvedAgentTurnPromptJobsByKind = {
     commandPromptWithoutShellAccess: unresolvedAgentTurnCommandPromptJobs,
     shellToolPrompt: unresolvedAgentTurnShellToolPromptJobs,
@@ -529,6 +533,19 @@ export function normalizeStoredCronJobs(
       mutated = true;
       continue;
     }
+    // Only the prior reader's direct profile attribution proves ownership.
+    // Never replace a transferred owner or infer a person from a delivery route.
+    const actor = isRecord(raw.createdActor) ? raw.createdActor : undefined;
+    if (raw.ownerProfileId == null && actor?.type === "human" && actor.source === "profile") {
+      if (typeof actor.id === "string" && actor.id.trim()) {
+        raw.ownerProfileId = actor.id;
+        trackChange("backfilledHumanOwner");
+      } else if (raw.enabled !== false) {
+        raw.enabled = false;
+        pausedUnprovenHumanOwnerJobs.push(storedCronJobId(raw) ?? "<unnamed>");
+        trackChange("pausedUnprovenHumanOwner");
+      }
+    }
     keptJobs.push(raw);
   }
 
@@ -546,6 +563,7 @@ export function normalizeStoredCronJobs(
     unsupportedDeliveryModeJobs,
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,
+    pausedUnprovenHumanOwnerJobs,
     legacyGatewayExecJobs,
     jobs,
     mutated,
