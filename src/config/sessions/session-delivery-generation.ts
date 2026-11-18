@@ -159,6 +159,9 @@ async function prepareSessionGenerationLease(
     return entry;
   };
   const changed = (change: SessionRowChange) => {
+    if (!sessionChangeScopeAffectsStoredRows(change)) {
+      return;
+    }
     if ("all" in change) {
       if (isSessionStoreTopologyChange(change)) {
         // Registration changes do not retarget an in-flight delivery. Its selected
@@ -172,20 +175,11 @@ async function prepareSessionGenerationLease(
         if (change.scope.storePath && !paths.has(path.resolve(change.scope.storePath))) {
           return;
         }
-      } else if (
-        // Runtime and automation still invalidate this retained authority.
-        !sessionChangeScopeAffectsStoredRows(change) &&
-        change.scope !== "runtime" &&
-        change.scope !== "automation"
-      ) {
-        return;
       }
       invalidated = true;
       return;
     }
     if (
-      change.scope === "automation" ||
-      change.scope === "acp" ||
       change.sessionKey !== generation.sessionKey ||
       (change.agentId && change.agentId !== generation.agentId) ||
       !change.storePath ||

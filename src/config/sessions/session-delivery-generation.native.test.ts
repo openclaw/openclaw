@@ -33,14 +33,26 @@ async function fixture(initialSettings?: typeof settings) {
 const generationError = (code = "UNAVAILABLE") =>
   expect.objectContaining({ code: `SESSION_DELIVERY_GENERATION_${code}` });
 
-it.each(["runtime", "automation"])(
-  "retains generation facts across metadata but invalidates broad %s changes",
+it.each(["runtime", "automation"] as const)(
+  "retains generation facts across committed %s presentation changes",
   async (scope) => {
-    const { generation } = await fixture();
+    const { generation, database, scope: target } = await fixture();
     sessionChanges.emit({ all: true, scope: "profiles" });
     expect(generation.assertCurrent).not.toThrow();
-    sessionChanges.emit({ all: true, scope });
-    expect(generation.assertCurrent).toThrow(generationError());
+    runOpenClawAgentWriteTransaction(
+      () => {
+        sessionChanges.emit({ ...target, scope }, database.db);
+      },
+      { agentId: target.agentId, path: target.storePath },
+    );
+    expect(generation.assertCurrent).not.toThrow();
+    runOpenClawAgentWriteTransaction(
+      () => {
+        sessionChanges.emit({ all: true, scope }, database.db);
+      },
+      { agentId: target.agentId, path: target.storePath },
+    );
+    expect(generation.assertCurrent).not.toThrow();
   },
 );
 
