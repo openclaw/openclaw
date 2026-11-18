@@ -72,6 +72,7 @@ jobs:
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-event.mjs
             /scripts/lib/bounded-response.mjs
+            /scripts/lib/release-version.mjs
           sparse-checkout-cone-mode: false
 
       - name: Report checkout infrastructure retry
@@ -90,6 +91,7 @@ jobs:
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-event.mjs
             /scripts/lib/bounded-response.mjs
+            /scripts/lib/release-version.mjs
           sparse-checkout-cone-mode: false
 
       # A timed-out checkout can leave Git writers or locks behind. Keep its
@@ -160,6 +162,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
+            /scripts/github/dependency-manifests.mjs
             /scripts/github/guard-review.mjs
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-policy.mjs
@@ -167,6 +170,7 @@ jobs:
             /scripts/github/security-review.mjs
             /scripts/github/security-sensitive-guard.mjs
             /scripts/lib/bounded-response.mjs
+            /scripts/lib/release-version.mjs
             /.github/security-review-policy.yml
             /.github/actions/setup-security-review/action.yml
             /.github/actions/setup-security-review/package.json
@@ -187,6 +191,7 @@ jobs:
           persist-credentials: false
           sparse-checkout: |
             /scripts/github/dependency-guard.mjs
+            /scripts/github/dependency-manifests.mjs
             /scripts/github/guard-review.mjs
             /scripts/github/guard-shared.mjs
             /scripts/github/security-review-policy.mjs
@@ -194,6 +199,7 @@ jobs:
             /scripts/github/security-review.mjs
             /scripts/github/security-sensitive-guard.mjs
             /scripts/lib/bounded-response.mjs
+            /scripts/lib/release-version.mjs
             /.github/security-review-policy.yml
             /.github/actions/setup-security-review/action.yml
             /.github/actions/setup-security-review/package.json

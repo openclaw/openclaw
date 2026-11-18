@@ -136,6 +136,8 @@ function runGuard(options: Options = {}) {
     for (const source of [
       "scripts/github/security-sensitive-guard.mjs",
       "scripts/github/dependency-guard.mjs",
+      "scripts/github/dependency-manifests.mjs",
+      "scripts/lib/release-version.mjs",
       "scripts/github/security-review-policy.mjs",
       "scripts/github/security-review-rollout.mjs",
       "scripts/github/guard-review.mjs",
@@ -501,6 +503,7 @@ categories:
     review: Inspect this responsibility carefully.
     paths: ["custom/product.ts"]
 dependencies:
+  release-manifests: ["package.json"]
   manifests: ["**/package.json"]
   lockfiles: ["**/pnpm-lock.yaml"]
   other: ["custom/dependency-policy"]

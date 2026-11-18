@@ -125,6 +125,11 @@ categories:
 # autoscrubbed under the existing guard rules; other dependency files cannot.
 # These suffix globs preserve the dependency guard's existing classification.
 dependencies:
+  # Matches release-version.ts and sync-plugin-versions.ts, not arbitrary dependencies.
+  release-manifests:
+    - "package.json"
+    - "packages/{ai,gateway-client,gateway-protocol}/package.json"
+    - "extensions/*/package.json"
   manifests:
     - "**/*package.json"
   lockfiles:

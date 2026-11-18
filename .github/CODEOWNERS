@@ -16,6 +16,7 @@
 # Security-review classification, authorization, publication, and trusted API reads.
 /.github/workflows/security-review.yml @openclaw/openclaw-secops
 /scripts/github/dependency-guard.mjs @openclaw/openclaw-secops
+/scripts/github/dependency-manifests.mjs @openclaw/openclaw-secops
 /scripts/github/security-sensitive-guard.mjs @openclaw/openclaw-secops
 /scripts/github/security-review.mjs @openclaw/openclaw-secops
 /scripts/github/security-review-event.mjs @openclaw/openclaw-secops

@@ -291,6 +291,98 @@ describe("dependency guard script", () => {
     }
   });
 
+  it("exempts only maintainer-authored mechanical release alignment", () => {
+    const base = {
+      version: "2026.11.5",
+      peerDependencies: { openclaw: ">=2026.11.5", example: "1" },
+    };
+    const next = {
+      ...base,
+      version: "2026.11.6",
+      peerDependencies: { ...base.peerDependencies, openclaw: ">=2026.11.6" },
+    };
+    const cases = [
+      { path: "package.json", head: { ...base, version: next.version }, allowed: true },
+      ...[
+        "packages/ai/package.json",
+        "packages/gateway-client/package.json",
+        "packages/gateway-protocol/package.json",
+      ].map((filename) => ({
+        path: filename,
+        head: { ...base, version: next.version },
+        allowed: true,
+      })),
+      { path: "extensions/example/package.json", head: next, allowed: true },
+      {
+        path: "extensions/example/package.json",
+        head: { ...next, devDependencies: { openclaw: ">=2026.11.6" } },
+        allowed: false,
+      },
+      {
+        path: "extensions/example/package.json",
+        head: { ...next, peerDependencies: { ...next.peerDependencies, example: "2" } },
+        allowed: false,
+      },
+      {
+        path: "extensions/example/package.json",
+        head: {
+          ...next,
+          peerDependencies: { ...next.peerDependencies, openclaw: "npm:example@2" },
+        },
+        allowed: false,
+      },
+      { path: "packages/other/package.json", head: next, allowed: false },
+      { path: "extensions/nested/example/package.json", head: next, allowed: false },
+      {
+        path: "extensions/example/package.json",
+        head: { ...next, engines: { node: ">=30" } },
+        allowed: false,
+      },
+      {
+        path: "extensions/example/package.json",
+        head: next,
+        extra: "pnpm-lock.yaml",
+        allowed: false,
+      },
+      { path: "extensions/example/package.json", head: next, role: "write", allowed: false },
+      { path: "extensions/example/package.json", head: next, bot: true, allowed: false },
+      { path: "extensions/example/package.json", head: next, added: true, allowed: false },
+      { path: "extensions/example/package.json", head: next, renamed: true, allowed: false },
+    ];
+    for (const entry of cases) {
+      const files = [
+        {
+          filename: entry.path,
+          ...(entry.renamed ? { previous_filename: "extensions/old/package.json" } : {}),
+        },
+        ...(entry.extra ? [{ filename: entry.extra }] : []),
+      ];
+      const result = runDependencyGuard({
+        ["GET " + pullPath]: {
+          ...pullRequest,
+          changed_files: files.length,
+          ...(entry.bot ? { user: { ...pullRequest.user, type: "Bot" } } : {}),
+        },
+        ["GET " + pullPath + "/files"]: files,
+        ["GET " + contributorPermission]: { role_name: entry.role ?? "maintain" },
+        ["GET " + contentsPath + "/" + entry.path + "?ref=" + staleSha]: entry.added
+          ? { httpError: 404 }
+          : contentFile(JSON.stringify(base)),
+        ["GET " + contentsPath + "/" + entry.path + "?ref=" + headSha]: contentFile(
+          JSON.stringify(entry.head),
+        ),
+        ["GET " + contentsPath + "/extensions/old/package.json?ref=" + staleSha]: contentFile(
+          JSON.stringify(base),
+        ),
+        ["GET " + graphPath]: [],
+      });
+      expectGuard(result, ["pending", entry.allowed ? "success" : "pending"], 0, entry);
+      if (entry.allowed) {
+        expect(result.stdout).toContain("release version alignment");
+      }
+    }
+  });
+
   it("rechecks a command comment before publishing dependency success", () => {
     const result = runDependencyGuard({
       [`GET ${issuePath}/comments`]: afterTwoReads([approvalNotice, approval], [approvalNotice]),

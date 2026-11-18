@@ -807,6 +807,7 @@ describe("security review ownership", () => {
       "scripts/github/security-review.mjs",
       "scripts/github/security-review-rollout.mjs",
       "scripts/github/guard-review.mjs",
+      "scripts/github/dependency-manifests.mjs",
       "scripts/github/guard-shared.mjs",
       "scripts/lib/bounded-response.mjs",
     ].map((path) => ({ path, owners: ["@openclaw/openclaw-secops"] })),
