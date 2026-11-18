@@ -1,6 +1,5 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, Errored, For, Show, useContext } from "solid-js";
-import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
@@ -426,14 +425,6 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
         options().length > 0 &&
         options().every((option) => option.disabled && option.unavailableReason === "cooldown"),
     );
-    const auth = createMemo(() => {
-      const authProvider =
-        resolveModelRuntimeRoute(props.provider, providerRuntime(props.provider) ?? undefined) ===
-        "claudeCli"
-          ? "claude-cli"
-          : props.provider;
-      return providerAuth().get(authProvider);
-    });
     return (
       <section
         class="chat-controls__provider-model-group"
@@ -447,7 +438,8 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             favorites={props.provider === FAVORITES_GROUP}
             options={options()}
             cooldown={providerCooldown()}
-            auth={auth()}
+            providerAuth={providerAuth()}
+            runtime={providerRuntime(props.provider)}
             accounts={props.provider === state().activeProvider ? accounts() : undefined}
             onSettings={panel.params.onProviderSettings}
           />

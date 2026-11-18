@@ -1,4 +1,5 @@
 import { createMemo, Show } from "solid-js";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { IconButton } from "../../../components/solid/icon-button.tsx";
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import {
@@ -69,13 +70,21 @@ export function ChatModelProviderHeading(props: {
   favorites: boolean;
   options: ChatModelPickerOption[];
   cooldown: boolean;
-  auth: ModelProviderAuthLabel | undefined;
+  providerAuth: ReadonlyMap<string, ModelProviderAuthLabel>;
+  runtime: string | null;
   accounts: ReturnType<ChatModelAccountSection["viewProps"]> | undefined;
   onSettings: ChatModelPickerParams["onProviderSettings"];
 }) {
+  const auth = createMemo(() =>
+    props.providerAuth.get(
+      resolveModelRuntimeRoute(props.provider, props.runtime ?? undefined) === "claudeCli"
+        ? "claude-cli"
+        : props.provider,
+    ),
+  );
   const showAuth = createMemo(
     () =>
-      Boolean(props.auth) &&
+      Boolean(auth()) &&
       !props.options.some(
         (option) =>
           option.disabled &&
@@ -83,7 +92,7 @@ export function ChatModelProviderHeading(props: {
             option.unavailableReason === "auth-failed"),
       ),
   );
-  const authLabel = () => [props.auth?.label, props.auth?.detail].filter(Boolean).join(" · ");
+  const authLabel = () => [auth()?.label, auth()?.detail].filter(Boolean).join(" · ");
   const cooldownUntil = () => (props.cooldown ? modelCooldownDeadline(props.options) : undefined);
   return (
     <div class="chat-controls__provider-heading" data-chat-model-provider={props.provider}>
@@ -92,9 +101,9 @@ export function ChatModelProviderHeading(props: {
         {props.accounts ? (
           <ChatModelAccountSectionView {...props.accounts} />
         ) : showAuth() ? (
-          <span class="chat-controls__auth-meta" data-auth-kind={props.auth?.kind}>
+          <span class="chat-controls__auth-meta" data-auth-kind={auth()?.kind}>
             <span class="chat-controls__auth-meta-label">
-              {props.auth?.kind === "api" ? t("modelProviders.status.apiKey") : authLabel()}
+              {auth()?.kind === "api" ? t("modelProviders.status.apiKey") : authLabel()}
             </span>
           </span>
         ) : undefined}
