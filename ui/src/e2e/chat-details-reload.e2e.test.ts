@@ -130,17 +130,17 @@ suite.define(() => {
               if (!isRecord(history) || !Array.isArray(history.cases)) {
                 throw new Error(`Expected case-based ${method} fixture`);
               }
-              await gateway.setMethodResponse(method, {
-                ...history,
-                cases: history.cases.map((entry: unknown) =>
+              for (const entry of history.cases) {
+                if (
                   isRecord(entry) &&
                   isRecord(entry.response) &&
                   isRecord(entry.response.sessionInfo) &&
                   entry.response.sessionInfo.key === sessionKey
-                    ? { ...entry, response: { ...entry.response, sessionInfo: archivedSession } }
-                    : entry,
-                ),
-              });
+                ) {
+                  entry.response.sessionInfo = archivedSession;
+                }
+              }
+              await gateway.setMethodResponse(method, history);
             }
             await gateway.setSessionsListResponse(
               sessionsListResponse(
