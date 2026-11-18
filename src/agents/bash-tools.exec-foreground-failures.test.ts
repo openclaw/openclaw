@@ -269,4 +269,17 @@ describe("exec foreground failures", () => {
     expect(buildExecSpec).not.toHaveBeenCalled();
     expect(supervisorMock.spawn).not.toHaveBeenCalled();
   });
+
+  it("uses the mapped host cwd for existing relative backend-validated sandbox workdirs", async () => {
+    const workspaceDir = tempDirs.make("openclaw-sandbox-workdir-");
+    const srcDir = path.join(workspaceDir, "src");
+    fs.mkdirSync(srcDir);
+    const { execute, validateWorkdir } = createBackendSandboxTool({ workspaceDir });
+    mockSpawn();
+
+    const result = await execute("echo ok", "src");
+    expect(result.details).toMatchObject({ status: "completed", cwd: srcDir });
+    expect(validateWorkdir).toHaveBeenCalledWith("/remote/workspace/src");
+    expectSpawn({ cwd: srcDir });
+  });
 });
