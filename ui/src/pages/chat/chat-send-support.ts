@@ -28,7 +28,6 @@ import {
   updateQueuedMessage,
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
-import { foldPastedTextAttachments } from "./components/chat-pasted-text.ts";
 import type { ChatQueueAdmissionResult } from "./composer-queue-persistence.ts";
 import {
   admitChatSubmission,
@@ -343,26 +342,8 @@ export function surfaceChatDeliveryFailure(
   });
 }
 
-/**
- * Model-facing message: annotation context, then the draft with pasted-text cards appended.
- * Commands own their raw composer text, so they keep it and every attachment unchanged.
- */
-export function composeChatMessageBody(
-  userMessage: string,
-  attachments: readonly ChatAttachment[],
-  raw: boolean,
-) {
-  const body = raw
-    ? { text: userMessage, attachments: [...attachments] }
-    : foldPastedTextAttachments(userMessage, attachments);
-  const message = [...(raw ? [] : body.attachments.map(annotationMessageContext)), body.text]
-    .filter(Boolean)
-    .join("\n\n");
-  return { message, body: body.text, attachments: body.attachments };
-}
-
 /** Model-facing text an annotation contributes ahead of the user's own message. */
-function annotationMessageContext(attachment: ChatAttachment): string | undefined {
+export function annotationMessageContext(attachment: ChatAttachment): string | undefined {
   return attachment.selectionAnnotation
     ? formatChatSelectionQuote(attachment.selectionAnnotation)
     : attachment.browserAnnotation?.modelContext.trim();

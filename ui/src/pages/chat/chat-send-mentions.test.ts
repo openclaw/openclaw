@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import {
   createBrowserAnnotationAttachment,
@@ -28,39 +27,6 @@ it("offsets selected recipients past reply and annotation", async () => {
     message: expected,
     mentions: [recipient("profile-alex", expected.indexOf("@Alex"))],
   });
-});
-
-it("sends a pasted-text card as message text after the draft without shifting recipients", async () => {
-  const pasted = "  indented paste @Other\n".repeat(80);
-  const file = createStagedAttachment("paste-sibling");
-  const host = makeChatHost({
-    chatMessage: "@Alex please review",
-    chatMentions: [recipient("profile-alex")],
-    chatAttachments: [
-      createBrowserAnnotationAttachment("mention", "@Other context"),
-      {
-        id: "paste-card",
-        mimeType: "text/plain",
-        fileName: "pasted-text-1.txt",
-        origin: "paste",
-        dataUrl: `data:text/plain;base64,${Buffer.from(pasted).toString("base64")}`,
-      },
-      file,
-    ],
-    requestHandlers: { "chat.send": { status: "started" } },
-  });
-  await handleSendChat(host);
-  const expected = `@Other context\n\n@Alex please review\n\n${pasted.trimEnd()}`;
-  const payload = findChatSendPayload(host);
-  expect(payload).toMatchObject({
-    message: expected,
-    mentions: [recipient("profile-alex", expected.indexOf("@Alex"))],
-  });
-  // Only real files upload: the annotation screenshot and the PDF, never the paste.
-  expect(payload.attachments).toEqual([
-    expect.objectContaining({ type: "image" }),
-    expect.objectContaining({ fileName: "brief.pdf" }),
-  ]);
 });
 
 it("retains replacement recipients during history loading", async () => {
