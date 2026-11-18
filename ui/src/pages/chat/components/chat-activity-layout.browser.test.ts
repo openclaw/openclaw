@@ -13,6 +13,8 @@ let root: { unmount(): void } | undefined;
 beforeEach(() => {
   container = document.body.appendChild(document.createElement("div"));
   container.style.width = "760px";
+  container.style.maxHeight = "60vh";
+  container.style.overflowY = "auto";
 });
 afterEach(() => {
   root?.unmount();
@@ -128,7 +130,7 @@ function mountActivity(group: MessageGroup, inline = false, expandMessages = tru
 const bodyElement = () => container.querySelector<HTMLElement>(".chat-activity-group__body")!;
 
 describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () => {
-  it.each(["standalone", "inline"])("sizes and collapses %s", async (presentation) => {
+  it.each(["standalone", "inline"])("scrolls and collapses %s", async (presentation) => {
     await mountActivity(activityFixture(), presentation === "inline", false);
     const body = bodyElement();
     expect(body.getBoundingClientRect().height).toBe(0);
@@ -139,10 +141,15 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
     await settleToolBridges(container);
     expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(48);
     expect(body.clientHeight).toBeGreaterThan(0);
-    expect(body.clientHeight).toBeLessThan(window.innerHeight);
-    expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
-    body.scrollTop = body.scrollHeight;
-    expect(body.scrollTop).toBeGreaterThan(0);
+    const lastRow = body.querySelectorAll<HTMLElement>(".chat-tool-row")[47]!;
+    lastRow.scrollIntoView();
+    await settleToolBridges(container);
+    expect(body.scrollTop).toBe(0);
+    expect(container.scrollTop).toBeGreaterThan(0);
+    const bounds = lastRow.getBoundingClientRect();
+    const viewport = container.getBoundingClientRect();
+    expect(bounds.top).toBeGreaterThanOrEqual(viewport.top);
+    expect(bounds.bottom).toBeLessThanOrEqual(viewport.bottom);
 
     toggle();
     await settleToolBridges(container);
