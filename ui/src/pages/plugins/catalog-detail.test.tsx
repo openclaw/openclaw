@@ -125,8 +125,7 @@ function render(content: () => JSX.Element, container = document.createElement("
 const notice = {
   code: "deprecated-sdk-api" as const,
   severity: "info" as const,
-  message:
-    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update.",
+  message: "Uses older OpenClaw APIs. Migration date: Dec 31, 2026. Check for a plugin update.",
   removalDate: "2026-12-31",
   migrationGuideUrl: "https://docs.openclaw.ai/plugins/sdk-migration",
   apis: [],
@@ -141,7 +140,7 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   const translation = vi.spyOn(i18n, "t").mockImplementation((key, params) => {
     if (i18n.getLocale() === "de") {
       if (key === "pluginsPage.compatibilityDeprecatedDated") {
-        return `Verwendet OpenClaw-APIs bis ${params?.date}.`;
+        return `Verwendet ältere OpenClaw-APIs. Migrationsdatum: ${params?.date}.`;
       }
       if (key === "pluginsPage.compatibilityDetails") {
         return "Mehr erfahren";
@@ -153,11 +152,13 @@ it("localizes a mounted compatibility notice from its structured removal date", 
   await i18n.setLocale("en");
   const { container } = renderNotice({ message: "Server-only English fallback" });
   expect(container.textContent).toBe(
-    "Uses OpenClaw APIs that retire on Dec 31, 2026. It keeps working until then; check for a plugin update. Details",
+    "Uses older OpenClaw APIs. Migration date: Dec 31, 2026. Check for a plugin update. Details",
   );
   await i18n.setLocale("de");
   flush();
-  expect(container.textContent).toBe("Verwendet OpenClaw-APIs bis 31. Dez. 2026. Mehr erfahren");
+  expect(container.textContent).toBe(
+    "Verwendet ältere OpenClaw-APIs. Migrationsdatum: 31. Dez. 2026. Mehr erfahren",
+  );
 });
 
 it("uses catalog copy when a compatibility notice has no removal date", () => {

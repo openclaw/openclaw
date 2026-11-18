@@ -171,7 +171,7 @@ const enPluginManagement = {
       installContinue: "Install and continue",
     },
     compatibilityDeprecatedDated:
-      "Uses OpenClaw APIs that retire on {date}. It keeps working until then; check for a plugin update.",
+      "Uses older OpenClaw APIs. Migration date: {date}. Check for a plugin update.",
     compatibilityDeprecatedUndated:
       "Uses older OpenClaw APIs. It keeps working for now; check for a plugin update.",
     compatibilityDetails: "Details",
