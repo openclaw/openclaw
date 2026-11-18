@@ -323,12 +323,24 @@ async function main([artifacts, prefix, tarball, configPath, summary]) {
           owner.run_id,
         );
       });
-      // The local registry seam: loopback registry plus the matching package override.
+      // Point this service's registry reads at the fixture registry: the updater's loopback
+      // seam, and a harness preload for the Gateway's release discovery, which reads public npm.
+      const registryUrl = `http://127.0.0.1:${registryAddress}`;
+      const redirect = fileURLToPath(new URL("./plugin-registry-redirect.mjs", import.meta.url));
+      assert(unit.includes("\nEnvironment=NODE_OPTIONS=\n"), "the unit must pin NODE_OPTIONS");
       fs.writeFileSync(
         unitFile,
         unit.replace(
-          "[Service]\n",
-          `[Service]\nEnvironment=OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw\nEnvironment=NPM_CONFIG_REGISTRY=http://127.0.0.1:${registryAddress}\n`,
+          "\nEnvironment=NODE_OPTIONS=\n",
+          [
+            "",
+            `Environment=NODE_OPTIONS=--import=${redirect}`,
+            `Environment=OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY=${registryUrl}`,
+            "Environment=OPENCLAW_UPGRADE_SURVIVOR_NPM_REGISTRY_CORE=1",
+            "Environment=OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw",
+            `Environment=NPM_CONFIG_REGISTRY=${registryUrl}`,
+            "",
+          ].join("\n"),
         ),
       );
       systemctl("daemon-reload");
