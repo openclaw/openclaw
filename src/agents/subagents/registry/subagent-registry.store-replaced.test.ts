@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -13,9 +14,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../../state/openclaw-state-db.js";
-import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import {
   blockSubagentCompletionDelivery,
   mutateRequesterCompletionBatch,
@@ -26,12 +25,20 @@ import {
 } from "../completion/subagent-completion-admission.test-helpers.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { publishSubagentRunsAfterAtomicStore } from "./subagent-registry-state.js";
 import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
+import { resetSubagentRegistryForTests, testing } from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+function publishCommittedRecords(row: SubagentRunRecord): void {
+  seedSubagentCompletionDelivery({ subagent: row });
+  subagentRuns.set(row.runId, row);
+  publishSubagentRunsAfterAtomicStore(subagentRuns, [row.runId])();
+}
 
 it.each(["delivered", "failed", "error-failed"] as const)(
   "records an expired completion failure only after requester settlement (%s)",

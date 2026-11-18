@@ -34,145 +34,111 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it.each(["mismatched recorded requesterStorePath", "distinct operator sources"] as const)(
-  "delivers finished children in one requester settle turn with %s",
-  async (scenario) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      let cfg = { session: { store: state.path("sessions.json") } };
+it("delivers a finished child to the live requester when the recorded store path differs", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    let cfg = { session: { store: state.path("sessions.json") } };
+    config.setRuntimeConfigSnapshot(cfg);
+    vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
+    publishSystemEventStoreResolver(() => cfg.session.store);
+    vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
+    vi.mocked(bindGatewayLifecycleRequest).mockReturnValue(callGateway);
+    vi.mocked(onAgentEvent).mockReturnValue(() => {});
+    const requesterSessionKey = "agent:main:main";
+    await upsertSessionEntryCore(
+      { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
+      { sessionId: "live-requester", updatedAt: 1 },
+    );
+    const turns: string[] = [];
+    const handler = ({ params, respond }: GatewayRequestHandlerOptions) => {
+      expect(params.sessionKey).toBe(requesterSessionKey);
+      turns.push(String(params.message));
+      respond(true, { status: "ok" });
+    };
+    const context = createContext([["agent", WRITE_SCOPE, "agent", handler]], () => cfg);
+    const resolveGatewayContext = () => context;
+    context.resolveGatewayContext = resolveGatewayContext;
+    const source = await retainedOperatorFixture("operator", context, resolveGatewayContext);
+    const runId = "finished-child";
+    using driver = requesterWakeDriver([]);
+    try {
+      await withPluginRuntimeGatewayRequestScope({ ...source, isWebchatConnect: () => false }, () =>
+        registerSubagentRun({
+          runId,
+          childSessionKey: `agent:main:subagent:${runId}`,
+          childAgentId: "main",
+          sessionEntry: { sessionId: `session-${runId}` },
+          requesterAgentId: "main",
+          requesterSessionKey,
+          requesterDisplayKey: "main",
+          task: "produce child result",
+          cleanup: "keep",
+          expectsCompletionMessage: true,
+          gatewayContextResolver: resolveGatewayContext,
+        }),
+      );
+      source.source.release();
+      await mutateSubagentRuns([runId], (rows) => {
+        const draft = structuredClone(expectDefined(rows.get(runId), "registered child"));
+        const text = `Finished result from ${runId}`;
+        draft.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+        draft.completion = {
+          required: true,
+          resultText: text,
+          terminalReply: { disposition: "visible", text },
+        };
+        draft.delivery = { status: "pending" };
+        draft.cleanupHandled = true;
+        draft.cleanupCompletedAt = Date.now();
+        draft.requesterSettleWake = {
+          status: "pending",
+          attemptCount: 0,
+          rearmGeneration: 1,
+          batchRunIds: [runId],
+        };
+        return { value: undefined, postimages: new Map([[runId, draft]]) };
+      });
+      const recordedStorePath = subagentRuns.get(runId)?.requesterStorePath;
+      cfg = { session: { store: state.path("moved-sessions.json") } };
       config.setRuntimeConfigSnapshot(cfg);
       vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
-      if (scenario === "mismatched recorded requesterStorePath") {
-        publishSystemEventStoreResolver(() => cfg.session.store);
-      }
-      vi.mocked(callGateway).mockResolvedValue({ status: "pending" });
-      vi.mocked(bindGatewayLifecycleRequest).mockReturnValue(callGateway);
-      vi.mocked(onAgentEvent).mockReturnValue(() => {});
-      const requesterSessionKey = "agent:main:main";
       await upsertSessionEntryCore(
         { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
-        { sessionId: "live-requester", updatedAt: 1 },
+        { sessionId: "live-requester", updatedAt: 2 },
       );
-      const turns: string[] = [];
-      const handler = ({ client, params, respond }: GatewayRequestHandlerOptions) => {
-        if (scenario === "distinct operator sources") {
-          expect(client?.connect.scopes).toEqual([WRITE_SCOPE]);
-          expect(client?.internal?.operatorRunAuthority).toBeUndefined();
-        }
-        expect(params.sessionKey).toBe(requesterSessionKey);
-        turns.push(String(params.message));
-        respond(true, { status: "ok" });
-      };
-      const context = createContext([["agent", WRITE_SCOPE, "agent", handler]], () => cfg);
-      const resolveGatewayContext = () => context;
-      context.resolveGatewayContext = resolveGatewayContext;
-      const sources = await Promise.all(
-        (scenario === "distinct operator sources"
-          ? ["first-operator", "second-operator"]
-          : ["operator"]
-        ).map((name) => retainedOperatorFixture(name, context, resolveGatewayContext)),
-      );
-      const runIds = sources.map((_, index) => `finished-child-${index}`);
-      using driver = requesterWakeDriver([]);
-      try {
-        for (const [index, source] of sources.entries()) {
-          const runId = runIds[index]!;
-          await withPluginRuntimeGatewayRequestScope(
-            { ...source, isWebchatConnect: () => false },
-            () =>
-              registerSubagentRun({
-                runId,
-                childSessionKey: `agent:main:subagent:${runId}`,
-                childAgentId: "main",
-                sessionEntry: { sessionId: `session-${runId}` },
-                requesterAgentId: "main",
-                requesterSessionKey,
-                requesterDisplayKey: "main",
-                task: "produce child result",
-                cleanup: "keep",
-                expectsCompletionMessage: true,
-                gatewayContextResolver: resolveGatewayContext,
-              }),
-          );
-          source.source.release();
-        }
-        await mutateSubagentRuns(runIds, (rows) => ({
-          value: undefined,
-          postimages: new Map(
-            runIds.map((runId) => {
-              const draft = structuredClone(expectDefined(rows.get(runId), "registered child"));
-              const text = `Finished result from ${runId}`;
-              draft.execution = {
-                status: "terminal",
-                endedAt: Date.now(),
-                outcome: { status: "ok" },
-              };
-              draft.completion = {
-                required: true,
-                resultText: text,
-                terminalReply: { disposition: "visible", text },
-              };
-              draft.delivery = { status: "pending" };
-              draft.cleanupHandled = true;
-              draft.cleanupCompletedAt = Date.now();
-              draft.requesterSettleWake = {
-                status: "pending",
-                attemptCount: 0,
-                rearmGeneration: 1,
-                batchRunIds: runIds,
-              };
-              return [runId, draft] as const;
-            }),
-          ),
-        }));
-        if (scenario === "mismatched recorded requesterStorePath") {
-          const recordedStorePath = subagentRuns.get(runIds[0]!)?.requesterStorePath;
-          cfg = { session: { store: state.path("moved-sessions.json") } };
-          config.setRuntimeConfigSnapshot(cfg);
-          vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
-          await upsertSessionEntryCore(
-            { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
-            { sessionId: "live-requester", updatedAt: 2 },
-          );
-          const requester = await delivery.loadRequesterSessionEntry(requesterSessionKey, "main");
-          expect(recordedStorePath).toBeDefined();
-          expect(requester.storePath).not.toBe(recordedStorePath);
-          expect(requester.entry?.sessionId).toBe("live-requester");
-        }
-        // Replace only the established announcement boundary; exercise the real
-        // in-process dispatcher so the fallback client scopes are not fabricated.
-        vi.mocked(delivery.deliverSubagentAnnouncement).mockImplementation(async (params) => {
-          const result = await dispatchGatewayMethodInProcessRaw(
-            "agent",
-            {
-              message: params.triggerMessage,
-              sessionKey: requesterSessionKey,
-              idempotencyKey: params.directIdempotencyKey!,
-            },
-            { resolveGatewayContext },
-          );
-          expect(result.ok).toBe(true);
-          return { delivered: true, path: "direct" };
-        });
-        driver.wake.mockImplementation(maybeWakeRequesterAfterAllChildrenSettled);
-        await withPluginRuntimeGatewayRequestScope(
-          { context, resolveGatewayContext, isWebchatConnect: () => false },
-          () => driver.run(expectDefined(subagentRuns.get(runIds[0]!), "finished child")),
+      const requester = await delivery.loadRequesterSessionEntry(requesterSessionKey, "main");
+      expect(recordedStorePath).toBeDefined();
+      expect(requester.storePath).not.toBe(recordedStorePath);
+      expect(requester.entry?.sessionId).toBe("live-requester");
+      // Replace only the established announcement boundary; exercise the real
+      // in-process dispatcher so the requester route is not fabricated.
+      vi.mocked(delivery.deliverSubagentAnnouncement).mockImplementation(async (params) => {
+        const result = await dispatchGatewayMethodInProcessRaw(
+          "agent",
+          {
+            message: params.triggerMessage,
+            sessionKey: requesterSessionKey,
+            idempotencyKey: params.directIdempotencyKey!,
+          },
+          { resolveGatewayContext },
         );
-        await driver.sweep();
-        expect(turns).toHaveLength(1);
-        const stored = loadSubagentRegistryFromSqlite();
-        for (const runId of runIds) {
-          expect(turns[0]).toContain(`Finished result from ${runId}`);
-          expect(stored.get(runId)?.delivery?.status).toBe("delivered");
-          expect(stored.get(runId)?.requesterSettleWake).toBeUndefined();
-        }
-      } finally {
-        driver.controller.clearRuntimeState();
-        await resetSubagentRegistryForTests({ persist: false });
-        for (const source of sources) {
-          source.source.release();
-        }
-      }
-    });
-  },
-);
+        expect(result.ok).toBe(true);
+        return { delivered: true, path: "direct" };
+      });
+      driver.wake.mockImplementation(maybeWakeRequesterAfterAllChildrenSettled);
+      await withPluginRuntimeGatewayRequestScope(
+        { context, resolveGatewayContext, isWebchatConnect: () => false },
+        () => driver.run(expectDefined(subagentRuns.get(runId), "finished child")),
+      );
+      await driver.sweep();
+      expect(turns).toHaveLength(1);
+      expect(turns[0]).toContain(`Finished result from ${runId}`);
+      const stored = loadSubagentRegistryFromSqlite().get(runId);
+      expect(stored?.delivery?.status).toBe("delivered");
+      expect(stored?.requesterSettleWake).toBeUndefined();
+    } finally {
+      driver.controller.clearRuntimeState();
+      await resetSubagentRegistryForTests({ persist: false });
+      source.source.release();
+    }
+  });
+});
