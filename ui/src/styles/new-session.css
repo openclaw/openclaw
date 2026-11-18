@@ -1058,7 +1058,7 @@ span.new-session-page__select {
   /* No taller floor here: the surface rests at its own one-line minimum, where
      the touch row's clearance already reads as one empty line under the prompt. */
   .new-session-page__composer .new-session-page__message {
-    max-height: min(10lh, 34svh);
+    max-height: min(10lh, 34svh, var(--chat-composer-editor-height-limit, 100dvh));
   }
 
   .new-session-page__incognito-notice:not(.new-session-page__incognito-notice--visible) {
