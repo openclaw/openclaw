@@ -77,6 +77,7 @@ export async function executeSessionPatchMutations(params: {
   signal?: AbortSignal;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
@@ -214,6 +215,7 @@ export async function executeSessionPatchMutations(params: {
     placementChecks,
     outcomes,
     operatorAuthority: params.operatorAuthority,
+    followSharingRegistration: params.followSharingRegistration,
     personalModelSelection,
   });
   const {
@@ -608,13 +610,13 @@ export async function executeSessionPatchMutations(params: {
                   },
                   afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                   assertCommitAllowed,
-                  agentId: first.targetAgentId,
                   sessionKeys: selectedSessionKeys,
-                  storePath: first.storePath,
                   skipMaintenance: true,
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
+                  targets: group,
+                  followSharingRegistration: params.followSharingRegistration,
                   patch: first.fullPatch,
                   project: projectGroup,
                   timing: groupTiming,

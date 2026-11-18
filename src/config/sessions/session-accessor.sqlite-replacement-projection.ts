@@ -71,6 +71,7 @@ export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
 
 type ReplacementProjectionOptions = {
   retainedExecution?: OpenClawAgentDatabaseExecution;
+  followRegistration?: SessionEntryCreateWithTranscriptOptions["followRegistration"];
   assertCommitAllowed?: () => void;
   withCommit?: SessionEntryCreateWithTranscriptOptions["withCommit"];
   ownerAssignment?: SessionEntryReplacementCommit["ownerAssignment"];
@@ -367,6 +368,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
                       params.assertCommitAllowed?.();
                     },
                     params.retainedExecution,
+                    params.followRegistration,
                   );
                   result = await read();
                 }
