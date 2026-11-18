@@ -8,14 +8,18 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { OpenClawPluginToolContext } from "../plugins/types.js";
+import * as childAdapter from "../process/supervisor/adapters/child.js";
+import * as processSupervisor from "../process/supervisor/index.js";
+import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { readNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { SESSION_WATCHDOG_QUIET_TOOL_MS } from "../sessions/session-controller.watchdog-state.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import type { CodeModeExecutorId } from "./code-mode-executor-types.js";
 import { disposeAllCodeModeRuns, waitForPendingBridgeSettlement } from "./code-mode-state.js";
 import { createSubscribedCodeModeHarness as subscribeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
@@ -125,11 +129,57 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     clearRuntimeConfigSnapshot();
   });
 
-  it("preserves a silent host exec deadline without ambient caller context", async () => {
-    await import("./session-placement-admission.js");
+  it.each([
+    { name: "default timeout", args: {}, stopPhase: undefined },
+    {
+      name: "explicit timeout",
+      args: { timeoutSeconds: 1800 },
+      stopPhase: undefined,
+    },
+    {
+      name: "disabled timeout during preparation",
+      args: { timeoutSeconds: 0 },
+      stopPhase: "preparing",
+    },
+    {
+      name: "disabled timeout after spawn",
+      args: { timeoutSeconds: 0 },
+      stopPhase: "running",
+    },
+    {
+      name: "service preparation",
+      args: { background: true },
+      stopPhase: "preparing",
+    },
+  ] as const)("attributes sandbox exec liveness: $name", async ({ args, stopPhase }) => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-    vi.setSystemTime(0);
-    const harness = createHarness({ name: "exec-deadline", timeoutMs: 2_000 });
+    vi.setSystemTime(10);
+    const supervisor = createProcessSupervisor();
+    vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue(supervisor);
+    const completed = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+    const kill = vi.fn((signal?: NodeJS.Signals) => {
+      completed.resolve({ code: null, signal: signal ?? "SIGTERM" });
+    });
+    const adapter: Awaited<ReturnType<typeof childAdapter.createChildAdapter>>["adapter"] = {
+      supportsRawOutput: true,
+      onStdout: () => undefined,
+      onStderr: () => undefined,
+      onExit: () => undefined,
+      onError: () => undefined,
+      wait: () => completed.promise,
+      kill,
+      dispose: () => undefined,
+    };
+    const preparing = createDeferred();
+    const preparation = createDeferred();
+    const spawned = createDeferred();
+    let processStartedAt = 0;
+    vi.spyOn(childAdapter, "createChildAdapter").mockImplementation(async () => {
+      processStartedAt = Date.now();
+      spawned.resolve();
+      return { adapter, ready: Promise.resolve() };
+    });
+    const harness = createHarness({ name: "real-exec-deadline", timeoutMs: 2_000 });
     const operation = harness.replyOperation;
     operation.setPhase("running");
     const cancel = vi.fn(() => {
@@ -138,55 +188,98 @@ describe("Code Mode subscribed bridge lifecycle", () => {
     });
     operation.attachBackend({ kind: "embedded", runId: harness.runId, cancel });
     const watchdogAttempt = operation.watchdog.attachAttempt({ assertCurrent() {} });
-    // Process admission happens between the watchdog's one-second polls.
-    await vi.advanceTimersByTimeAsync(10);
-    const started = createDeferred();
-    const target = tool("shell_exec", "Run a silent command", async () => {
-      // Exec publishes the supervisor's enforced deadline after process startup.
-      recordDiagnosticToolExecutionDeadline(Date.now() + 1_800_000);
-      started.resolve();
-      await new Promise((_, reject) => {
-        setTimeout(() => reject(new Error("Command timed out after 1800 seconds")), 1_800_000);
-      });
-      return jsonResult({ unreachable: true });
+    const target = createExecTool({
+      host: "sandbox",
+      allowBackground: true,
+      notifyOnExit: false,
+      preparedStoreEnvironment: { env: {} },
+      preparedSubagentExecution: false,
+      sandbox: {
+        containerName: "synthetic-sandbox",
+        workspaceDir: process.cwd(),
+        containerWorkdir: "/workspace",
+        buildExecSpec: async () => {
+          preparing.resolve();
+          await preparation.promise;
+          return {
+            argv: ["synthetic-sandbox", "sleep", "3600"],
+            env: {},
+            cwd: process.cwd(),
+            stdinMode: "pipe-closed",
+            prepareCurrent: async () => {},
+          };
+        },
+      },
     });
-    // Tools can already have their hook layer before the run catalog is prepared.
-    const wrapped = wrapToolWithBeforeToolCallHook(target, { runId: harness.runId });
-    const caller = { agentId: "main", sessionKey: harness.sessionKey, watchdogAttempt };
     const surface = applyCodeModeCatalog({
       ...harness,
-      tools: [...harness.tools, wrapped],
-      toolHookContext: caller,
+      tools: [...harness.tools, wrapToolWithBeforeToolCallHook(target, { runId: harness.runId })],
+      toolHookContext: { runId: harness.runId, sessionKey: harness.sessionKey, watchdogAttempt },
     });
     const outer = expectDefined(
       surface.tools.find((entry) => entry.name === "exec"),
       "exec",
     );
-    const execution = outer.execute("deadline-cell", {
-      code: `try { await shell_exec({}); } catch (error) {
-              return { timeout: error.message, continued: true };
-            }`,
-      awaitResults: true,
-    });
-    await started.promise;
-    await vi.advanceTimersByTimeAsync(900_001);
-    await operation.watchdog.tick(Date.now());
-    await vi.waitFor(() =>
-      expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+    const execution = outer.execute(
+      "real-deadline-cell",
+      {
+        code: `return await exec(${JSON.stringify({ command: "sleep 3600", ...args })});`,
+        awaitResults: true,
+      },
+      harness.runAbortController.signal,
     );
-    expect(operation.abortSignal.reason).toBeUndefined();
-    expect(operation.watchdog.snapshot().tools).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ explicitDeadlineAtMs: expect.any(Number) }),
-      ]),
-    );
-    await vi.advanceTimersByTimeAsync(899_999);
-    const result = resultDetails(await execution);
-    expect(result).toMatchObject({
-      status: "completed",
-      value: { timeout: "Command timed out after 1800 seconds", continued: true },
-    });
-    expect(cancel).not.toHaveBeenCalled();
+    const settled = execution.catch((error: unknown) => error);
+    try {
+      await preparing.promise;
+      if (stopPhase !== "running") {
+        await vi.advanceTimersByTimeAsync(900_001);
+        await operation.watchdog.tick(Date.now());
+        // Stop recovery includes asynchronous persistence; keep the same outcome assertion
+        // without imposing the default one-second filesystem scheduling deadline.
+        await vi.waitFor(
+          () => expect(operation.watchdog.snapshot().recovery?.status).not.toBe("pending"),
+          { timeout: 5_000 },
+        );
+      }
+      if (stopPhase === "preparing") {
+        await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+      } else {
+        expect(operation.abortSignal.reason).toBeUndefined();
+        if (!stopPhase) {
+          await vi.advanceTimersByTimeAsync(99_999);
+        }
+        preparation.resolve();
+        await spawned.promise;
+        await vi.advanceTimersByTimeAsync(0);
+        if (stopPhase === "running") {
+          await vi.advanceTimersByTimeAsync(900_001);
+          await operation.watchdog.tick(Date.now());
+          await vi.waitFor(() => expect(operation.abortSignal.aborted).toBe(true));
+        } else {
+          // Cross the dispatch allowance too: spawn must publish its later enforced deadline.
+          await vi.advanceTimersByTimeAsync(processStartedAt + 1_800_000 - 1 - Date.now());
+          await operation.watchdog.tick(Date.now());
+          expect(operation.abortSignal.reason).toBeUndefined();
+          expect(kill).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(2);
+          const result = resultDetails(await execution);
+          expect(result, JSON.stringify(result)).toMatchObject({
+            status: "completed",
+            value: { status: "failed", failureKind: "overall-timeout" },
+          });
+          expect(kill).toHaveBeenCalledWith("SIGTERM");
+          expect(cancel).not.toHaveBeenCalled();
+        }
+      }
+    } finally {
+      harness.runAbortController.abort();
+      preparation.resolve();
+      completed.resolve({ code: null, signal: "SIGTERM" });
+      await settled;
+      await supervisor.shutdown();
+      resetProcessRegistryForTests();
+      vi.restoreAllMocks();
+    }
   });
 
   it.each(["finite", "unlimited"] as const)(
