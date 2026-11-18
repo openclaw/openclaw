@@ -159,6 +159,8 @@ describe("ClawRouter provider catalog", () => {
 
   it("retains known native image inputs without granting unknown OpenAI models", async () => {
     const upstreamIds = [
+      "gpt-6.2-sol",
+      "gpt-6.2-astra",
       "gpt-6.1-sol",
       "gpt-6-sol",
       "gpt-6-astra",
@@ -179,6 +181,8 @@ describe("ClawRouter provider catalog", () => {
     }));
     const provider = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
     expect(Object.fromEntries(provider.models.map((model) => [model.id, model.input]))).toEqual({
+      "openai/gpt-6.2-sol": ["text", "image"],
+      "openai/gpt-6.2-astra": ["text", "image"],
       "openai/gpt-6.1-sol": ["text", "image"],
       "openai/gpt-6-sol": ["text", "image"],
       "openai/gpt-6-astra": ["text", "image"],
