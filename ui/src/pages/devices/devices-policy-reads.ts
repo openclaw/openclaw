@@ -74,7 +74,7 @@ export function createDevicePolicyReads(options: {
     // Once a form is available the editor lock must follow the config owner,
     // not a previously displayed loading frame.
     if (options.hasConfig()) {
-      return;
+      return undefined;
     }
     const read = currentConfigRead(options.config());
     if (!read || read.client !== current.client || read.connectionEpoch !== current.configEpoch) {

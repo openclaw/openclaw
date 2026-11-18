@@ -1,17 +1,7 @@
 import type { SessionsStorageStatusResult } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import {
-  Errored,
-  For,
-  Loading,
-  Show,
-  action,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  onSettled,
-} from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
@@ -57,14 +47,6 @@ type SettingsProps = {
   buildEditor?: () => JSX.Element;
   advancedExpanded?: boolean;
 };
-function RunSubmissionResult(props: { completion: Promise<void> }) {
-  const submitted = createMemo(async () => {
-    await props.completion;
-    return undefined;
-  });
-  return <>{submitted()}</>;
-}
-
 export function SessionStorageSettings(props: SettingsProps) {
   const context = useApplication();
   const {
@@ -90,11 +72,9 @@ export function SessionStorageSettings(props: SettingsProps) {
     },
   });
   const [ageDraft, setAgeDraft] = createSignal<string | null>(null);
-  const [runSubmission, setRunSubmission] = createSignal<{ completion: Promise<void> } | null>(
-    null,
-  );
+  const [runError, setRunError] = createSignal<string | null>(null);
   const [runOutcome, setRunOutcome] = createSignal<string | null>(null);
-  const [submitting, setSubmitting] = createOptimistic(false);
+  const [submitting, setSubmitting] = createSignal(false);
   // Admission and retirement are synchronous; Solid owns the visible submission state.
   let runOperation: AbortController | null = null;
   let followingRun = false;
@@ -110,10 +90,11 @@ export function SessionStorageSettings(props: SettingsProps) {
     stopPolling();
     runOperation?.abort();
     runOperation = null;
+    setSubmitting(false);
     if (identityChanged) {
       followingRun = false;
       setAgeDraft(null);
-      setRunSubmission(null);
+      setRunError(null);
       setRunOutcome(null);
     }
   }
@@ -141,7 +122,7 @@ export function SessionStorageSettings(props: SettingsProps) {
               .filter(Boolean)
               .join(" "),
       );
-      setRunSubmission(null);
+      setRunError(null);
       followingRun = false;
     }
   }
@@ -207,25 +188,16 @@ export function SessionStorageSettings(props: SettingsProps) {
     }
     const operation = new AbortController();
     runOperation = operation;
-    const completion = currentClient.request<SessionsStorageStatusResult>(
-      "sessions.storage.run",
-      {},
-      { signal: operation.signal },
-    );
-    return presentRun(completion, operation, ownsConnection);
-  }
-  const presentRun = action(function* (
-    completion: Promise<SessionsStorageStatusResult>,
-    operation: AbortController,
-    ownsConnection: () => boolean,
-  ) {
     const isCurrent = () => runOperation === operation && ownsConnection();
+    setSubmitting(true);
+    setRunOutcome(null);
+    setRunError(null);
     try {
-      if (isCurrent()) {
-        setSubmitting(true);
-        setRunOutcome(null);
-      }
-      const response: SessionsStorageStatusResult = yield completion;
+      const response = await currentClient.request<SessionsStorageStatusResult>(
+        "sessions.storage.run",
+        {},
+        { signal: operation.signal },
+      );
       if (!isCurrent()) {
         return;
       }
@@ -237,14 +209,15 @@ export function SessionStorageSettings(props: SettingsProps) {
       refreshStatus();
     } catch (error) {
       if (isCurrent()) {
-        throw error;
+        setRunError(formatUiError(error));
       }
     } finally {
       if (isCurrent()) {
         runOperation = null;
+        setSubmitting(false);
       }
     }
-  });
+  }
   function setAge(event: Event) {
     // SAFETY: The native number input calls this synchronously from its own change binding.
     const input = event.currentTarget as HTMLInputElement;
@@ -471,11 +444,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                     class="btn"
                     disabled={!canRun()}
                     onClick={() => {
-                      const completion = runNow();
-                      // Show tracks the receipt, leaving promise reads inside the error boundary.
-                      setRunSubmission({ completion });
-                      // The same receipt reports submission failures through the inline boundary.
-                      void completion.catch(() => undefined);
+                      void runNow();
                     }}
                   >
                     {t(
@@ -486,27 +455,8 @@ export function SessionStorageSettings(props: SettingsProps) {
                   </button>
                 }
               />
-              <Show when={runSubmission()} keyed>
-                {(submission) => (
-                  <Errored
-                    fallback={(error) => (
-                      <Show
-                        when={
-                          !submissionPending() &&
-                          formatUiError(error()) !== status()?.maintenance.lastError
-                        }
-                      >
-                        <SettingsEmpty
-                          message={<span role="alert">{formatUiError(error())}</span>}
-                        />
-                      </Show>
-                    )}
-                  >
-                    <Loading fallback={undefined}>
-                      <RunSubmissionResult completion={submission.completion} />
-                    </Loading>
-                  </Errored>
-                )}
+              <Show when={runError() && runError() !== status()?.maintenance.lastError}>
+                <SettingsEmpty message={<span role="alert">{runError()}</span>} />
               </Show>
               {!submissionPending() && runOutcome() ? (
                 <SettingsEmpty message={<span role="status">{runOutcome()}</span>} />

@@ -285,7 +285,12 @@ export function MessageReactionPicker(props: {
                     <EmojiSearchPanel
                       inputRef={(input) => {
                         searchInput = input;
-                        onSettled(focusPicker);
+                        // Refs run outside Solid's owner; focus after the input is attached.
+                        queueMicrotask(() => {
+                          if (searchInput === input && input.isConnected) {
+                            focusPicker();
+                          }
+                        });
                       }}
                       query={query()}
                       onQueryChange={search}
