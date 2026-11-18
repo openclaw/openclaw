@@ -123,7 +123,7 @@ export function NewSessionIncognitoNotice(props: {
   );
 }
 
-/** The docked layout swaps the hint for this line in place, so turning Incognito on moves nothing. */
+/** Reuse the hint slot, or float status-only help so Incognito never moves the identity. */
 export function DraftWelcomeHint(props: {
   page: NewSessionPageOwner;
   open: boolean;
@@ -133,7 +133,12 @@ export function DraftWelcomeHint(props: {
   return (
     <Show when={!catalog.isTarget(props.page.data)} fallback={hint()}>
       <Show when={hint() || props.page.submission.visibility === "incognito"}>
-        <span class="new-session-page__welcome-hint">
+        <span
+          class={[
+            "new-session-page__welcome-hint",
+            { "new-session-page__welcome-hint--floating": !hint() },
+          ]}
+        >
           <Show when={hint()}>
             <span class="new-session-page__welcome-hint-text">{hint()}</span>
           </Show>
