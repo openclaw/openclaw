@@ -1,12 +1,19 @@
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { normalizeCommandBody } from "../../auto-reply/commands-registry-normalize.js";
 import { parseSlashCommandOrNull } from "../../auto-reply/reply/commands-slash-parse.js";
 import { parseConfigCommand } from "../../auto-reply/reply/config-commands.js";
 import { parseDebugCommand } from "../../auto-reply/reply/debug-commands.js";
 import { logVerbose } from "../../globals.js";
-import { resolveActiveSessionRunId } from "../../sessions/session-controller.queries.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  isSessionRunActiveForKey,
+  resolveActiveSessionRunId,
+} from "../../sessions/session-controller.queries.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { waitForSessionRunIdle } from "../../sessions/session-controller.wait.js";
 import { getConfigValueAtPath, parseConfigPath, setConfigValueAtPath } from "../config-paths.js";
 import { REDACTED_SENTINEL } from "../redact-sentinel.js";
+import { resolveSessionStorePathCore } from "./paths.js";
 import { appendAssistantMessageToSessionTranscript } from "./transcript.js";
 
 export function scopeCommandTranscriptId(
@@ -129,12 +136,28 @@ const MAX_DEFERRED_COMMAND_EXCHANGE_WAITS = 8;
  * cannot move the fence.
  */
 function shouldDeferUntilActiveTurnSettles(params: CommandExchangeParams): boolean {
-  return (
-    params.contextFreeCommand !== true &&
-    !params.expectedWriterRunId &&
-    resolveActiveSessionRunId(params.sessionKey, undefined, { executionStartedOnly: true }) !==
-      undefined
-  );
+  if (params.contextFreeCommand === true || params.expectedWriterRunId) {
+    return false;
+  }
+  const sessionKey = params.sessionKey.trim();
+  try {
+    // Same physical owner the recorder writes to; a logical key can span several stores.
+    const agentId =
+      params.agentId?.trim() ||
+      resolveAgentIdFromSessionKey(
+        sessionKey,
+        params.config ? resolveDefaultAgentId(params.config) : undefined,
+      );
+    const storeScope =
+      params.storePath ?? resolveSessionStorePathCore(params.config?.session?.store, { agentId });
+    const target = captureSessionTarget({ storeScope, sessionKey, agentId });
+    return (
+      resolveActiveSessionRunId(sessionKey, target, { executionStartedOnly: true }) !== undefined
+    );
+  } catch {
+    // Unresolvable ownership must not fail a delivered command; a busy key waits.
+    return isSessionRunActiveForKey(sessionKey);
+  }
 }
 
 async function recordDeliveredCommandExchangeNow(params: CommandExchangeParams) {

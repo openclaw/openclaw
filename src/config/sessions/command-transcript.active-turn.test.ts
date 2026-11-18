@@ -61,3 +61,48 @@ it("records a mid-turn exchange as context after the active turn settles", async
     expect(message).not.toHaveProperty("excludeFromContext");
   }
 });
+
+it("scopes the active-turn check to the store being written", async () => {
+  const state = await createOpenClawTestState({ label: "command-shared-key", applyEnv: false });
+  onTestFinished(() => state.cleanup());
+  const sessionKey = "agent:main:telegram:group:g2";
+  const [busyStore, idleStore] = [state.path("busy.json"), state.path("idle.json")];
+  await upsertSessionEntry({
+    agentId: "main",
+    storePath: idleStore,
+    sessionKey,
+    entry: { sessionId: "idle", updatedAt: 1 },
+  });
+  const [started, finish] = [createDeferred(), createDeferred()];
+  const turns = [busyStore, idleStore].map((storePath, index) =>
+    withSessionTurn(
+      { sessionKey, sessionId: `s${index}`, storePath, agentId: "main" },
+      async (operation) => {
+        if (index === 0) {
+          markReplyOperationExecutionStarted(operation!);
+          started.resolve();
+        }
+        await finish.promise;
+      },
+    ),
+  );
+  await started.promise;
+  onTestFinished(async () => {
+    finish.resolve();
+    await Promise.all(turns);
+  });
+
+  // The other store's turn is admitted but not executing, so this write goes through now.
+  await expect(
+    recordDeliveredCommandExchange({
+      agentId: "main",
+      storePath: idleStore,
+      sessionKey,
+      config: { session: { store: idleStore } },
+      commandText: "/think",
+      commandId: "telegram:default:g2:1",
+      replyId: "menu",
+      replyText: "Choose level for /think.",
+    }),
+  ).resolves.toMatchObject({ ok: true });
+});
