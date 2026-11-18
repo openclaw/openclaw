@@ -474,12 +474,12 @@ export function CloudWorkersPage() {
     const advertised = createMemo(() => {
       const snapshot = configProjection.read().state.configSnapshot;
       const configured = profiles().find((profile) => profile.id === view.draft.id);
-      // The loaded catalog belongs to the applied backend, binary and setup interpreter.
+      // Match resolved revisions; the raw-file hash is only the config write precondition.
       if (
         !editing() ||
         !configured ||
         !snapshot?.appliedConfigHash ||
-        snapshot.hash !== snapshot.appliedConfigHash ||
+        snapshot.configRevisionHash !== snapshot.appliedConfigHash ||
         catalog()?.appliedHash !== snapshot.appliedConfigHash ||
         (["backend", "binary", "setup"] as const).some(
           (key) => view.draft[key].trim() !== configured[key],

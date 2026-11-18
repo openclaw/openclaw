@@ -262,10 +262,11 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     ],
   };
   let hash = "initial";
+  let appliedHash = hash;
   let response = Promise.resolve<EnvironmentsListResult>(catalog);
   const request = createGatewayRequestMock(async (method, params) => {
     if (method === "config.get") {
-      return configSnapshot(config, hash);
+      return { ...configSnapshot(config, hash), appliedConfigHash: `resolved:${appliedHash}` };
     }
     if (method === "environments.list") {
       return isRecord(params) && params.projection === "profiles" ? response : { environments: [] };
@@ -295,7 +296,7 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     const refresh = async (nextHash: string) => {
       const pending = createDeferred<EnvironmentsListResult>();
       response = pending.promise;
-      hash = nextHash;
+      hash = appliedHash = nextHash;
       const before = catalogCalls();
       await runtimeConfig.refresh();
       await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
@@ -304,6 +305,12 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     await waitForSolid(() =>
       expect(page.querySelector("#cloud-worker-machine-class")).not.toBeNull(),
     );
+    const callsBeforeUnappliedSave = catalogCalls();
+    hash = "saved-but-not-applied";
+    await runtimeConfig.refresh();
+    await waitForSolid(() => expect(page.querySelector("#cloud-worker-machine-class")).toBeNull());
+    expect(catalogCalls()).toBe(callsBeforeUnappliedSave);
+
     const pending = await refresh("second");
     expect(page.querySelector("#cloud-worker-machine-class")).toBeNull();
     const machine = expectDefined(
