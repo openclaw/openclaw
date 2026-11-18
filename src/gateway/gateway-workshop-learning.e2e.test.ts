@@ -24,7 +24,6 @@ import { createTrackedProvider } from "./test-helpers.tracked-provider.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 type ProviderRequest = {
-  max_output_tokens?: number;
   tools?: Array<{ name?: string }>;
 };
 
@@ -89,8 +88,6 @@ describe("Gateway automatic Workshop learning", () => {
       });
       let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
       const requests: string[] = [];
-      const oldHistory = "OLD_HISTORY_NOT_NEEDED_FOR_REVIEW ".repeat(20_000);
-      const workspaceInstructions = "WORKSPACE_INSTRUCTIONS_NOT_NEEDED_FOR_REVIEW";
       const recentEvidence =
         "RECENT_VERIFIED_PROCEDURE: confirm the public generation matches the release.";
       const startup = createStartupGate();
@@ -101,7 +98,6 @@ describe("Gateway automatic Workshop learning", () => {
         await onPrepared?.();
       });
       try {
-        await fs.writeFile(path.join(state.workspaceDir, "AGENTS.md"), workspaceInstructions);
         await withResponsesProvider(
           (body, response) => {
             requests.push(body);
@@ -119,10 +115,7 @@ describe("Gateway automatic Workshop learning", () => {
           async (baseUrl, providerErrors) => {
             const candidate = await createExperienceReviewCandidate(
               "http-tpm-limit",
-              [
-                { role: "user", content: oldHistory, timestamp: 1 },
-                { role: "user", content: recentEvidence, timestamp: 2 },
-              ],
+              [{ role: "user", content: recentEvidence, timestamp: 1 }],
               {
                 workspaceDir: state.workspaceDir,
                 modelId: "gpt-workshop-rate-limit-test",
@@ -130,11 +123,9 @@ describe("Gateway automatic Workshop learning", () => {
                 apiKey: "synthetic-workshop-provider-key",
               },
             );
-            candidate.config.models!.providers!.openai!.models[0]!.maxTokens = 128_000;
             candidate.config.agents!.defaults!.models![
               "openai/gpt-workshop-rate-limit-test"
             ]!.params = {
-              maxTokens: 128_000,
               transport: "sse",
               openaiWsWarmup: false,
             };
@@ -160,17 +151,11 @@ describe("Gateway automatic Workshop learning", () => {
             await kernel.startupMethodsReady;
             await expect(runLoadedWorkshopReview(candidate)).rejects.toThrow(/rate limit/i);
 
+            // The review sends the conversation as the session's own request (#200545) and
+            // makes no retry after the provider's rate limit.
             expect(providerErrors).toEqual([]);
             expect(requests).toHaveLength(1);
-            const serialized = requests[0]!;
-            expect(Buffer.byteLength(serialized)).toBeLessThan(64 * 1024);
-            expect(serialized).toContain(recentEvidence);
-            for (const excluded of ["OLD_HISTORY_NOT_NEEDED_FOR_REVIEW", workspaceInstructions]) {
-              expect(serialized).not.toContain(excluded);
-            }
-            const payload = JSON.parse(serialized) as ProviderRequest;
-            expect(payload.max_output_tokens).toBe(2_048);
-            expect(payload.tools?.map((tool) => tool.name)).toEqual(["skill_workshop"]);
+            expect(requests[0]).toContain(recentEvidence);
           },
         );
       } finally {
@@ -303,9 +288,11 @@ Retain the distinct rollback procedure after verifying the previous public gener
             await fs.writeFile(skillFile, originalSkill);
             await fs.writeFile(supportFile, originalSupport);
             const reason = "require the public generation to match the release";
+            // The review sends the session's tool list, where skill_workshop sits behind the
+            // tool catalog.
             const workshopCall = (action: string, args: Record<string, unknown> = {}) => ({
-              name: "skill_workshop",
-              args: { action, name: "map-publication", ...args },
+              name: "dispatch_action",
+              args: { id: "skill_workshop", args: { action, name: "map-publication", ...args } },
             });
             const patch = { old_text: oldRule, new_text: newRule, reason };
             reviewActions = [
