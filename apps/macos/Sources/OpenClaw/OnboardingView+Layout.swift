@@ -9,7 +9,9 @@ extension OnboardingView {
                 GlowingOpenClawIcon(
                     size: 130,
                     mood: self.mascotMood,
-                    accessory: self.mascotAccessory)
+                    accessory: self.mascotAccessory,
+                    // Setup shows plain dark eyes; the teal highlights glare at this size.
+                    eyeGlow: false)
                     .offset(y: 10)
                     .frame(height: 145)
 
