@@ -142,6 +142,11 @@ the completed backup image while retaining filesystem inventory and source-chang
 checks. The candidate must contain these changes; backup publication, integrity
 checks, migrations, and rollback rules are unchanged.
 
+Original-state capture saves ordinary files from protected paths as file payloads
+and budgets SQLite inspection for database files. The installed updater must
+contain this change for its initial capture. Standalone Doctor uses the same
+capture behavior from the version that it runs.
+
 Lazy SQLite schema catalogs load through the retained updater's module loader.
 An updater that first needs a catalog after Git activation therefore reads its
 own generation, not the candidate's replacement JSON. This fix must be present

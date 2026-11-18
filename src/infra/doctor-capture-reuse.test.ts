@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -17,11 +19,13 @@ import { retireIdleOpenClawStateReadWorkers } from "../state/openclaw-state-read
 import * as retention from "./doctor-capture-retention.js";
 import { findReusableDoctorCapture } from "./doctor-capture-reuse.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
+import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import * as snapshots from "./sqlite-snapshot-source.js";
 import * as discoveryWorker from "./update-candidate-state.inspection.js";
 import { resolveUpdateCaptureRoot } from "./update-capture-paths.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "./update-managed-service-handoff-lease.js";
 import * as backupReader from "./update-recovery-backup-reader.js";
+import { captureUpdateRecoveryBaseline } from "./update-recovery-baseline-capture.js";
 import { captureRetainedNativeWorkerSource } from "./worker-native-lifecycle.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -156,6 +160,62 @@ it("reuses a sealed standalone baseline only while the complete source is unchan
   expect(await f.capture(true), "explicit full integrity verification does not reuse").toHaveLength(
     3,
   );
+});
+
+it("budgets original-state inspection for databases and retains protected payload bytes", async () => {
+  const f = await fixture();
+  const shared = path.join(f.stateDir, "state", "openclaw.sqlite");
+  const namedDatabase = path.join(f.plugin, "state.sqlite");
+  const headerOnlyDatabase = path.join(f.plugin, "store.bin");
+  await fs.mkdir(path.dirname(shared));
+  {
+    using db = new DatabaseSync(shared);
+    db.exec(
+      "PRAGMA user_version=17; CREATE TABLE sample (id INTEGER); INSERT INTO sample VALUES (42)",
+    );
+  }
+  await Promise.all([namedDatabase, headerOnlyDatabase].map((file) => fs.copyFile(shared, file)));
+  const payloads = new Map(
+    Array.from({ length: 24 }, (_, index) => [
+      path.join(f.plugin, `credential-${index}.json`),
+      JSON.stringify({ fixture: index }),
+    ]),
+  );
+  await Promise.all([...payloads].map(([file, bytes]) => fs.writeFile(file, bytes)));
+
+  const worker = vi.spyOn(discoveryWorker, "runUpdateStateInspectionWorker");
+  const { ref } = await captureUpdateRecoveryBaseline({
+    runId: "protected-payloads",
+    installRoot: f.root,
+    env: { ...process.env },
+    drivers: [],
+    assertCurrent() {},
+  });
+  const request = worker.mock.calls.find(([call]) => call.input.mode === "database-backup")?.[0];
+  assert(request);
+  expect(request.databases.map((file) => file.path).toSorted()).toEqual(
+    [shared, namedDatabase, headerOnlyDatabase].toSorted(),
+  );
+  expect(
+    resolveAggregateSqliteInspectionTimeoutMs("state schema inspection", request.databases),
+  ).toBe(903_000);
+
+  await backupReader.withVerifiedUpdateRecoveryBackup(ref, async (manifest) => {
+    const entries = new Map(manifest.entries.map((entry) => [entry.sourcePath, entry]));
+    const database = entries.get(headerOnlyDatabase);
+    assert(database?.kind === "file" && database.sqlite);
+    using snapshot = new DatabaseSync(path.join(ref.directory, database.archivePath), {
+      readOnly: true,
+    });
+    expect(snapshot.prepare("SELECT id FROM sample").all()).toEqual([{ id: 42 }]);
+    for (const [file, bytes] of payloads) {
+      expect(request.input.additionalFiles).not.toContain(file);
+      const entry = entries.get(file);
+      assert(entry?.kind === "file" && !entry.sqlite);
+      expect(await fs.readFile(path.join(ref.directory, entry.archivePath), "utf8")).toBe(bytes);
+      expect(entry.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    }
+  });
 });
 
 it("captures declared SQLite sidecar roots through their database image and reuses it", async () => {
