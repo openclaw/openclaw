@@ -12,7 +12,7 @@ const ONBOARDING_DEFAULT_TOOLS_PROFILE: ToolProfileId = "full";
 
 const TOOL_PROFILE_SUMMARIES: Record<ToolProfileId, string> = {
   minimal:
-    "This profile only lets the agent check its status: no files, commands, web or messages.",
+    "This profile allows status checks, session presence, and authorized Gateway maintenance.",
   coding:
     "This profile allows files, commands, the web, memory and sessions, but not channel messages.",
   messaging: "This profile allows chat, messages and sessions, but not files, commands or the web.",

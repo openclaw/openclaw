@@ -59,7 +59,7 @@ it.each([
   [
     "an agent profile outranks the full default",
     { agents: { entries: { main: { tools: { profile: "minimal" } } } } },
-    'Tool profile: minimal (agents.entries.main.tools.profile). This profile only lets the agent check its status: no files, commands, web or messages. To add one tool, list it in agents.entries.main.tools.alsoAllow, or set agents.entries.main.tools.profile to "full".',
+    'Tool profile: minimal (agents.entries.main.tools.profile). This profile allows status checks, session presence, and authorized Gateway maintenance. To add one tool, list it in agents.entries.main.tools.alsoAllow, or set agents.entries.main.tools.profile to "full".',
   ],
   [
     "kept allow, deny and provider policies change the full default",
