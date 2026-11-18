@@ -137,6 +137,7 @@ try {
         const coldAndWarmupMs = performance.now() - cold;
         await inspector.post("HeapProfiler.collectGarbage");
         const clone = globalThis.structuredClone;
+        // oxlint-disable-next-line typescript/unbound-method -- Forward the live receiver with apply and restore the exact method after measurement.
         const fork = ModelRegistry.prototype.fork;
         let ownerWallMs = 0,
           ownerCpuUs = 0;
@@ -161,17 +162,20 @@ try {
             if (Array.isArray(value) && value[0]?.provider === provider) {
               catalogClones++;
               copiedRows += value.length;
-              if (value.length > 1) fullCloneStacks.add(new Error("catalog clone").stack ?? "");
+              if (value.length > 1) {
+                fullCloneStacks.add(new Error("catalog clone").stack ?? "");
+              }
             }
             return clone(value, options);
           };
         }
-        if (values.allocation)
+        if (values.allocation) {
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 4096,
             includeObjectsCollectedByMajorGC: true,
             includeObjectsCollectedByMinorGC: true,
           });
+        }
         const cpu0 = process.cpuUsage(),
           start = performance.now(),
           hostLoad = loadavg();

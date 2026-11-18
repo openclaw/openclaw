@@ -91,8 +91,8 @@ export function capturePreparedModelRuntimeCatalog(
     },
     readPublishedModels: () => models,
     routeModelResolutionMemo: cached.memo,
-    createStores: (publishedModels = models, selectedModel) =>
-      snapshot.createStores(publishedModels, selectedModel),
+    createStores: (publishedModels, selectedModel) =>
+      snapshot.createStores(publishedModels ?? models, selectedModel),
   });
   copyPreparedModelRuntimeAuthBindings(snapshot, captured);
   return captured;

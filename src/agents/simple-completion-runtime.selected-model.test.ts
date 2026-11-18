@@ -62,8 +62,12 @@ it.each([
           };
           if (concurrent) {
             pendingReplies.push(reply);
-            if (pendingReplies.length === 2) pendingReplies.forEach((send) => send());
-          } else reply();
+            if (pendingReplies.length === 2) {
+              pendingReplies.forEach((send) => send());
+            }
+          } else {
+            reply();
+          }
         });
       });
       const { baseUrl } = server;
@@ -259,10 +263,9 @@ module.exports = {
           "materialized:plain",
           "materialized:plain",
         ]);
-        expect(credentials.slice(-2).toSorted()).toEqual([
-          "Bearer synthetic-first",
-          "Bearer synthetic-second",
-        ]);
+        expect(credentials.slice(-2)).toEqual(
+          expect.arrayContaining(["Bearer synthetic-first", "Bearer synthetic-second"]),
+        );
       }
     });
   },
