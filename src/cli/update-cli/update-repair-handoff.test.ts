@@ -3,6 +3,7 @@ import "./update-repair.test-support.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
@@ -34,6 +35,11 @@ import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { createInterruptedPackagePublication } from "./update-package-publication.test-support.js";
 
 const { createRepairState, mocks } = await import("./update-repair.test-support.js");
+
+// Keep native identity real except for the explicit uninspectable-owner case.
+vi.mock("@openclaw/proc-safe/identity", async (original) => ({
+  ...(await original<typeof import("@openclaw/proc-safe/identity")>()),
+}));
 
 vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
@@ -282,6 +288,15 @@ it.each(preservedOwnerCases)(
     }
     if (identity === "EPERM") {
       vi.mocked(pidAlive.isPidDefinitelyDead).mockRestore();
+      const readIdentity = processIdentity.readProcessIdentity;
+      // Windows also consults native identity after EPERM. The synthetic owner
+      // must be uninspectable there too, rather than authoritatively absent.
+      vi.spyOn(processIdentity, "readProcessIdentity").mockImplementation((pid) => {
+        if (pid === fixture.helper.pid) {
+          throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+        }
+        return readIdentity(pid);
+      });
       const kill = process.kill.bind(process);
       vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
         if (pid === fixture.helper.pid) {

@@ -1,0 +1,3 @@
+84
+# Release repair: live Doctor custody, atomic and two-move publication,
+# native identity refusal, and cache-path fixtures. Read-only CLI allocated separately.

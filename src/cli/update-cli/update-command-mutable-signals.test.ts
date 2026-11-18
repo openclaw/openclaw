@@ -378,7 +378,9 @@ it.skipIf(process.platform === "win32").for([
             );
             expect(ready, childDiagnostics()).toBe(false);
             if (mode === "publishing-compensation") {
-              expect(fs.existsSync(installRoot)).toBe(false);
+              expect(JSON.parse(read(installRoot, "package.json"))).toMatchObject({
+                version: "2.0.0",
+              });
             } else {
               expect(JSON.parse(read(installRoot, "package.json"))).toMatchObject({
                 version: "1.0.0",

@@ -239,6 +239,7 @@ export function mutableCompensationFixtureSource(): string {
           let stopped;
           const nativeFs=await import('node:fs/promises');
           const rename=nativeFs.default.rename;
+          const lstat=nativeFs.default.lstat;
           const holdRename=selected=>{
             nativeFs.default.rename=async(from,to)=>{
               await rename(from,to);
@@ -250,7 +251,20 @@ export function mutableCompensationFixtureSource(): string {
               }
             };
           };
-          if(!lateRollback)holdRename(installRoot);
+          if(!lateRollback) {
+            const candidate=await lstat(packageFixture.params.stage.packageRoot,{bigint:true});
+            // Observe the actual atomic publication, not the retired live-root rename.
+            nativeFs.default.lstat=async(...args)=>{
+              const observed=await lstat(...args);
+              if(String(args[0])===installRoot && BigInt(observed.dev)===candidate.dev && BigInt(observed.ino)===candidate.ino) {
+                nativeFs.default.lstat=lstat;
+                const interrupted=new Promise(resolve=>process.once('message',resolve));
+                ready();
+                await interrupted;
+              }
+              return observed;
+            };
+          }
           let swapped;
           try {
             swapped=await swapStagedPackageInstall({
@@ -264,7 +278,7 @@ export function mutableCompensationFixtureSource(): string {
               },
               onTransaction:retained=>{transaction=retained;},
             });
-          } finally {nativeFs.default.rename=rename;}
+          } finally {nativeFs.default.rename=rename;nativeFs.default.lstat=lstat;}
           assert.equal(swapped.status,'committed',JSON.stringify(swapped));
           assert.equal(stopped.stopped,true);
           const verificationFailure={name:'candidate verification',command:'openclaw update',cwd:installRoot,durationMs:0,exitCode:1,stderrTail:'Synthetic candidate verification failed.'};

@@ -9,6 +9,7 @@ import {
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { isChildProcessTreeAlive } from "../process/child-process-tree.js";
+import { settleCommandProcessGroups } from "../process/command-process-custody.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { tryRunDoctorResultBridge } from "./run-main-doctor-result.js";
 
@@ -83,8 +84,28 @@ it.skipIf(process.platform === "win32").each([
       }
       const writeResult = (result) => fs.writeFileSync(resultPath, JSON.stringify(result), {flag:'wx', mode:0o600});
       if (mode === 'unsettled') {
-        custody.reserve([process.execPath, '-e', 'process.stdin.resume()']);
-        writeResult({status:'ok'});
+        const {spawn}=await import('node:child_process');
+        const {once}=await import('node:events');
+        const {getProcessInstanceStartTime}=await import(${JSON.stringify(moduleUrl("shared/pid-alive.ts"))});
+        const argv=[process.execPath,'-e','setInterval(()=>{},1000)'];
+        const reservation=custody.reserve(argv);
+        const writer=spawn(argv[0],argv.slice(1),{detached:true,stdio:'ignore'});
+        const closed=once(writer,'close');
+        try {
+          await once(writer,'spawn');
+          assert.ok(writer.pid);
+          const startedAt=getProcessInstanceStartTime(writer.pid);
+          assert.notEqual(startedAt,null);
+          fs.writeFileSync(${JSON.stringify(identity)},JSON.stringify({pid:writer.pid,startedAt}));
+          // Native custody is bound, but the receipt cannot authorize signalling.
+          reservation.spawned({pid:writer.pid,startedAt:null});
+          writeResult({status:'ok'});
+          writer.unref();
+        } catch(error) {
+          writer.kill('SIGKILL');
+          await closed;
+          throw error;
+        }
       } else if (mode === 'interrupted') {
         await withCommandProcessScope(async () => {
           const writer = spawnCommand([process.execPath, '-e', 'process.stdin.resume()'], {stdio:['pipe','ignore','ignore']});
@@ -128,36 +149,44 @@ it.skipIf(process.platform === "win32").each([
     }
     vi.spyOn(process, "cwd").mockReturnValue(root);
     const argv = [process.execPath, fixture, "doctor", "--fix", "--non-interactive"];
-    await withCommandProcessScope(() => tryRunDoctorResultBridge(argv), controller.signal).catch(
-      (error: unknown) => {
-        if (mode === "unsettled") {
-          expect(error).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
-        } else if (mode !== "interrupted") {
-          throw error;
-        }
-      },
-    );
-    const { stdout: output, stderr } = captured;
-    const line = output.split("\n").findLast((item) => item.startsWith(`${resultEnv}=`));
-    expect(fs.readFileSync(stale, "utf8")).toBe(staleBytes);
-    expect(
-      fs.readdirSync(privateTmp).filter((name) => name.endsWith(".json.processes")),
-    ).toHaveLength(mode === "unsettled" ? 1 : 0);
-    if (exitCode !== undefined) {
-      expect(process.exitCode).toBe(exitCode);
-    }
-    if (!result) {
-      expect(line, output).toBeUndefined();
-      if (mode === "interrupted") {
-        expect(isChildProcessTreeAlive({ pid: Number(fs.readFileSync(identity, "utf8")) })).toBe(
-          false,
-        );
+    try {
+      await withCommandProcessScope(() => tryRunDoctorResultBridge(argv), controller.signal).catch(
+        (error: unknown) => {
+          if (mode === "unsettled") {
+            expect(error).toMatchObject({ code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN" });
+          } else if (mode !== "interrupted") {
+            throw error;
+          }
+        },
+      );
+      const { stdout: output, stderr } = captured;
+      const line = output.split("\n").findLast((item) => item.startsWith(`${resultEnv}=`));
+      expect(fs.readFileSync(stale, "utf8")).toBe(staleBytes);
+      expect(
+        fs.readdirSync(privateTmp).filter((name) => name.endsWith(".json.processes")),
+      ).toHaveLength(mode === "unsettled" ? 1 : 0);
+      if (exitCode !== undefined) {
+        expect(process.exitCode).toBe(exitCode);
       }
-      return;
-    }
-    expect(JSON.parse(line!.slice(resultEnv.length + 1)), stderr).toMatchObject(result);
-    if (mode === "normal") {
-      expect(output).toContain("fixture-legacy-refusal");
+      if (!result) {
+        expect(line, output).toBeUndefined();
+        if (mode === "interrupted") {
+          expect(isChildProcessTreeAlive({ pid: Number(fs.readFileSync(identity, "utf8")) })).toBe(
+            false,
+          );
+        }
+        return;
+      }
+      expect(JSON.parse(line!.slice(resultEnv.length + 1)), stderr).toMatchObject(result);
+      if (mode === "normal") {
+        expect(output).toContain("fixture-legacy-refusal");
+      }
+    } finally {
+      if (mode === "unsettled" && fs.existsSync(identity)) {
+        const ownedIdentity = JSON.parse(fs.readFileSync(identity, "utf8"));
+        const cleanup = await settleCommandProcessGroups([ownedIdentity]);
+        expect(cleanup.settled, cleanup.reason).toBe(true);
+      }
     }
   },
 );

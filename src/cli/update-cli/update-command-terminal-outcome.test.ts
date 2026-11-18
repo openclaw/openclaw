@@ -12,7 +12,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { finalizeRestartUpdateRun } from "../../gateway/server-restart-update-run.js";
 import { writePackageRoot } from "../../infra/package-update-steps.test-support.js";
-import { captureSwap } from "../../infra/package-update-swap.assertions.test-support.js";
+import {
+  captureSwap,
+  publishWithoutPathExchange,
+} from "../../infra/package-update-swap.assertions.test-support.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -153,6 +156,8 @@ async function scenario(
   let swap;
   let setupInjected = false;
   if (kind === "unverified-completion") {
+    // Exercise the supported two-move route whose backup rename is refused below.
+    publishWithoutPathExchange();
     const fixture = await createPackageSwapFixture(base);
     const rename = fs.rename.bind(fs);
     const effect = vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
