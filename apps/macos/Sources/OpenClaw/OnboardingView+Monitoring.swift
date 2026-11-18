@@ -47,7 +47,12 @@ extension OnboardingView {
         guard self.requiresLocalCLI else { return }
         // The AI page runs setup in the background; the CLI page only shows it after a failure.
         let onSetupPage = pageIndex == cliPageIndex || pageIndex == aiPageIndex
-        if onSetupPage, cliExecutableReady {
+        if Self.shouldActivateExistingCLI(
+            onCLIPage: pageIndex == cliPageIndex,
+            onAIPage: pageIndex == aiPageIndex,
+            executableReady: cliExecutableReady,
+            installed: cliInstalled)
+        {
             self.startExistingCLIActivationIfNeeded()
             return
         }
@@ -60,6 +65,16 @@ extension OnboardingView {
             installing: installingCLI)
         else { return }
         self.startCLIInstall()
+    }
+
+    static func shouldActivateExistingCLI(
+        onCLIPage: Bool,
+        onAIPage: Bool,
+        executableReady: Bool,
+        installed: Bool) -> Bool
+    {
+        // On the AI page, a ready Gateway stays ready: activating again would clear readiness and loop.
+        executableReady && (onCLIPage || (onAIPage && !installed))
     }
 
     static func shouldAutoInstallCLI(

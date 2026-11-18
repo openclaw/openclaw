@@ -391,6 +391,17 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
+    @Test func `AI page starts an existing CLI's Gateway once, not again after it is ready`() {
+        // Activation clears readiness and its success sets it again, which re-runs page monitoring.
+        #expect(OnboardingView.shouldActivateExistingCLI(
+            onCLIPage: false, onAIPage: true, executableReady: true, installed: false))
+        #expect(!OnboardingView.shouldActivateExistingCLI(
+            onCLIPage: false, onAIPage: true, executableReady: true, installed: true))
+        // The CLI page keeps main's behavior: it is shown only to retry setup.
+        #expect(OnboardingView.shouldActivateExistingCLI(
+            onCLIPage: true, onAIPage: false, executableReady: true, installed: true))
+    }
+
     @Test func `paused gateway keeps CLI setup and recovery visible after every install path`() {
         for afterFreshInstall in [false, true] {
             let outcome = OnboardingView.localGatewayActivationOutcome(
