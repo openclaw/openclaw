@@ -26,6 +26,7 @@ import type { SessionControllerEntry } from "../../../sessions/session-controlle
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "../../../state/agent-database-admission-error.js";
 import { buildCollectPrompt, previewQueueSummaryPrompt } from "../../../utils/queue-helpers.js";
+import { attachAmbientOverflowContext } from "./ambient-context.js";
 import {
   collectCurrentInboundContext,
   collectRuntimeMetadata,
@@ -185,6 +186,7 @@ async function executeClaim(
     }
   };
   for (const item of sources) {
+    attachAmbientOverflowContext(item);
     if (claim.summary) {
       queue.activeSummarySources.add(item);
     }
