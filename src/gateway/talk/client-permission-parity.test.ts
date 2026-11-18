@@ -36,8 +36,8 @@ import { prepareTalkSessionTarget } from "./session-target.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 const model = vi.hoisted(() => ({ run: vi.fn() }));
-// mock-isolation: replace inference while exercising real source guards and native effects.
-vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: model.run }));
+// mock-isolation: Replace candidate execution while exercising real source guards and native effects.
+vi.mock("./agent-consult-execution.js", () => ({ runTalkAgentTurn: model.run }));
 
 describe("authenticated Talk permission parity", () => {
   let state: OpenClawTestState;

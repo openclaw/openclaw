@@ -98,7 +98,8 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 
-vi.mock("../../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: mocks.runEmbeddedAgent }));
+// mock-isolation: Candidate execution is controlled; physical targets and source ownership stay real.
+vi.mock("../agent-consult-execution.js", () => ({ runTalkAgentTurn: mocks.runEmbeddedAgent }));
 vi.mock("../../../agents/bootstrap-files.js", () => ({
   resolveBootstrapFilesForRun: async () => [],
 }));

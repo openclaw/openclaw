@@ -83,8 +83,9 @@ vi.mock("../../../plugins/runtime/index.js", async () => {
   const { createRuntimeAgent } = await import("../../../plugins/runtime/runtime-agent.js");
   return { createPluginRuntime: () => ({ agent: createRuntimeAgent() }) };
 });
-vi.mock("../../../agents/embedded-agent.js", () => ({
-  runEmbeddedAgent: voiceMocks.runEmbeddedAgent,
+// mock-isolation: Gate candidate execution while keeping accepted Talk work and source custody real.
+vi.mock("../agent-consult-execution.js", () => ({
+  runTalkAgentTurn: voiceMocks.runEmbeddedAgent,
 }));
 vi.mock("../../../shared/lazy-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../shared/lazy-runtime.js")>();
@@ -98,8 +99,8 @@ vi.mock("../../../shared/lazy-runtime.js", async (importOriginal) => {
           if (
             runtime &&
             typeof runtime === "object" &&
-            "runEmbeddedAgent" in runtime &&
-            runtime.runEmbeddedAgent === voiceMocks.runEmbeddedAgent
+            "runAgentTurn" in runtime &&
+            runtime.runAgentTurn === voiceMocks.runEmbeddedAgent
           ) {
             await voiceMocks.executionReady();
           }

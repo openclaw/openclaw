@@ -357,7 +357,7 @@ export class OpenAIQuicksilverDelegationController {
       if (runner.steer) {
         this.schedulePendingSteering(this.consultController, runner.steer);
       } else {
-        // Generic runners retain replacement fallback; Gateway runners steer in place.
+        // The prior consult must settle before the pending replacement launches.
         this.revokeRequesterFinal();
         this.consultController.abort(new Error("Realtime delegation superseded"));
       }
@@ -420,6 +420,16 @@ export class OpenAIQuicksilverDelegationController {
           ) {
             return;
           }
+          if (
+            readErrorName(error) === "NotSupportedError" &&
+            this.consultController === controller
+          ) {
+            // Only the host's live cancellation-only backend requests replacement.
+            // Its finalizer joins the aborted consult before launching pending input.
+            this.pendingDelegation ??= delegation;
+            controller.abort(new Error("Realtime delegation superseded"));
+            return;
+          }
           const fatal = toErrorObject(error, "Realtime delegation steering failed");
           // The queued delegation belongs to this steering attempt. Do not let the
           // active-run finalizer relaunch it after its owner has failed.
@@ -446,7 +456,12 @@ export class OpenAIQuicksilverDelegationController {
       if (this.steeringPromise === completion) {
         this.steeringPromise = undefined;
       }
-      if (this.pendingDelegation && !this.stopped) {
+      if (
+        this.pendingDelegation &&
+        !this.stopped &&
+        !controller.signal.aborted &&
+        this.consultController === controller
+      ) {
         this.schedulePendingSteering(controller, steer);
       }
     });

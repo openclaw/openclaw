@@ -17,8 +17,8 @@ vi.mock("../../agents/admitted-run-context.js", () => ({
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
 // mock-isolation: The gated backend controls mailbox execution order without starting a real model run.
-vi.mock("../../agents/embedded-agent.js", () => ({
-  runEmbeddedAgent: mocks.runEmbeddedAgentCore,
+vi.mock("./agent-consult-execution.js", () => ({
+  runTalkAgentTurn: mocks.runEmbeddedAgentCore,
 }));
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),

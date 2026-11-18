@@ -375,12 +375,12 @@ describe("native Talk through the public OpenAI plugin registration", () => {
           { headers: { "content-type": "text/event-stream" } },
         );
       });
-      const actualRunner = await vi.importActual<
-        typeof import("../../../agents/embedded-agent.js")
-      >("../../../agents/embedded-agent.js");
+      const actualRunner = await vi.importActual<typeof import("../agent-consult-execution.js")>(
+        "../agent-consult-execution.js",
+      );
       upstream.runEmbeddedAgent.mockImplementation(async (params) => {
         try {
-          const result = await actualRunner.runEmbeddedAgent(params);
+          const result = await actualRunner.runTalkAgentTurn(params);
           runnerFinished.resolve({});
           return result;
         } catch (error) {
