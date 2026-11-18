@@ -49,21 +49,21 @@ their name on hover or keyboard focus and stays visible on touch screens. Use
 Pages always hides dashboards from
 archived sessions and has no archive toggle. To find archived sessions in the
 sidebar, use the **Sessions** filter instead. Hover or focus an icon for its name.
-The active agent's avatar sits at the top of the rail and opens the agent menu;
-in team mode it opens the workspace menu. The accented **+**, labeled **New session**,
-sits directly below the avatar, separated from navigation by a divider. It stays in
-the same place in Pages, Sessions, and Users, even when the list is collapsed.
-It opens New session for the selected agent; in team mode, choose an agent from
-its menu first. Command-palette search sits below the three view buttons.
+The active agent's avatar sits at the top of the rail and only opens the agent menu,
+from any page and with the list open or collapsed; in team mode it opens the workspace
+menu. **Sessions** sits directly below the avatar and opens the session list; its icon
+fills while that list is open. **New session** (**+**) sits in the Sessions list header,
+beside **Filter & sort**, and opens New session for the selected agent; in team mode,
+choose an agent from its menu first. Command-palette search sits below the three view buttons.
 Search failures show **Couldn’t search sessions. Try again.**, rather than an empty result.
 If message search is unavailable, the palette still shows matching session titles and details.
-Click the selected Pages or Sessions view again to collapse its list, or press ⌘B on
+Use the list's collapse button to hide it, or press ⌘B on
 Mac or Ctrl+B on Windows/Linux. Clicks use the normal sidebar animation; the
 keyboard shortcut opens or closes navigation immediately. Reduced-motion preferences
 also keep clicks immediate. While the list is hidden, none of the three view
 buttons is selected; click any view to open its list. Selecting a different view
-while the list is open switches directly to that view. Clicking Users again keeps
-its list open; use the collapse button or keyboard shortcut to hide it.
+while the list is open switches directly to that view. Clicking Sessions or Users again
+keeps its list open.
 Home, Inbox, and your account controls stay together at the bottom of the rail.
 When gateway switching is available, the account menu shows one current-gateway row.
 Open it to switch gateways or open **Gateway settings**; **Set as primary** appears
@@ -122,13 +122,12 @@ participation and mentions. External catalog entries appear in **Involving me**
 only when their adopted OpenClaw conversation is in the Gateway-filtered list.
 Shared or imported catalog access alone does not establish involvement; use
 **All owners** to browse those sources. The separate filter button controls the
-remaining session filters. New session stays in the rail rather than moving
-into this header. In mobile chat, open navigation to reach **New session**
-in the rail; the conversation header reserves its two right-hand controls for
-**Session actions** and **Panels**. Other mobile pages keep an equivalent **+** in
-the page topbar while the drawer is closed. Opening the drawer moves that action
-back to the rail, without a second header button. In team mode, creation opens the
-same agent picker as the rail. Native apps keep their native creation controls.
+remaining session filters. On mobile chat, open navigation and choose **Sessions**
+to reach **New session** in the list header. The conversation header keeps its
+two right-hand controls for **Session actions** and **Panels**. Other mobile pages
+also offer **New session** (**+**) in the page topbar while the drawer is closed.
+In team mode, **New session** first opens an agent picker. Native apps keep their
+native creation controls.
 
 The agent picker sets the sidebar's agent scope. **My sessions**, a named owner,
 **Involving me**, and **All owners** stay within the selected agent; changing the

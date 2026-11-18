@@ -240,7 +240,7 @@ suite.define(() => {
         .getByRole("button", { name: "Collapse sidebar", exact: true });
       const toggleSidebar = async () => {
         for (const pressed of ["false", "true"]) {
-          // Sessions reopens a collapsed panel; while open it would open the agent menu.
+          // Sessions reopens a collapsed panel; the panel header collapses it.
           await (pressed === "false" ? collapse : sessions).click();
           await expect.poll(() => sessions.getAttribute("aria-pressed")).toBe(pressed);
           await page.locator(".shell").evaluate(async (shell) => {
