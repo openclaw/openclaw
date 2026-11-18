@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { observeWorkerTimeout } from "../../../test/helpers/worker-timeout-qualification.mjs";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
@@ -17,10 +18,13 @@ afterEach(worker.cleanupWorkerTurnLauncherTest);
 it.for(["accepted", "conflict", "failure"] as const)(
   "delivers the durable reply before %s reconciliation",
   async (outcome, { signal }) => {
+    const phase = observeWorkerTimeout(signal, outcome);
+    onTestFinished(() => phase("cleanup-complete"));
     const { placements, SESSION_ID, sessionTarget } = worker;
     const conflictPath = "conflicted.txt";
     const transferFailure = new Error("synthetic workspace transfer failure");
     await worker.seedActivePlacement();
+    phase("seed-ready");
     const input = worker.turn("early-final");
     const followupInput = worker.turn("after-early-final");
     const reconcileEntered = createDeferred();
@@ -29,6 +33,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
     await writeFile(workspaceFile, "before reconciliation");
     let terminalId: string | undefined;
     const launchTurn = vi.fn<WorkerTurnTunnelHandle["launchTurn"]>(async (request) => {
+      phase("launch-enter");
       request.onDispatchReady?.();
       const launchCount = launchTurn.mock.calls.length;
       if (launchCount !== 1) {
@@ -38,6 +43,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
         launchCount === 1 ? "Worker reply" : "Follow-up reply",
         launchCount,
       );
+      phase("reply-appended");
       if (launchCount === 1) {
         terminalId = leafId;
       }
@@ -49,8 +55,10 @@ it.for(["accepted", "conflict", "failure"] as const)(
         if (launchTurn.mock.calls.length !== 1) {
           return worker.reconcileUnchangedLocalWorkspace(request);
         }
+        phase("reconcile-enter");
         reconcileEntered.resolve();
         await reconcileRelease.promise;
+        phase("reconcile-released");
         if (outcome === "failure") {
           throw transferFailure;
         }
@@ -88,6 +96,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
     const runLocal = vi.fn();
     const execute = (params: typeof input) =>
       provider.executeTurn({ ...sessionTarget, runId: params.runId }, params, runLocal);
+    phase("execute-first");
     const first = execute(input);
     void first.catch(() => {});
     let followup: ReturnType<typeof provider.executeTurn> | undefined;
@@ -96,6 +105,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
       expect(await withinTest(first, signal)).toMatchObject({
         payloads: [{ text: "Worker reply" }],
       });
+      phase("first-durable");
       const firstClaim = launchTurn.mock.calls[0]?.[0].turnClaim;
       assert(firstClaim);
       expect(placements.validateWorkspaceResultClaim(firstClaim)).toBe(true);
@@ -110,18 +120,23 @@ it.for(["accepted", "conflict", "failure"] as const)(
       });
       expect(before.getLeafId()).toBe(terminalId);
       if (outcome === "accepted") {
+        phase("execute-followup");
         followup = execute(followupInput);
         void followup.catch(() => {});
         expect(launchTurn).toHaveBeenCalledOnce();
         expect(await readFile(workspaceFile, "utf8")).toBe("before reconciliation");
       }
+      phase("reconcile-release");
       reconcileRelease.resolve();
       if (followup) {
         expect(await withinTest(followup, signal)).toMatchObject({
           payloads: [{ text: "Follow-up reply" }],
         });
+        phase("followup-durable");
       }
+      phase("wait-run-end");
       await withinTest(waitForSessionRunEnd(SESSION_ID, null), signal);
+      phase("run-ended");
       const pending = await placements.listPendingWorkspaceResultsAsync();
       if (outcome === "failure") {
         expect(reconcileActivePlacement).toHaveBeenCalledOnce();
@@ -162,6 +177,7 @@ it.for(["accepted", "conflict", "failure"] as const)(
       }
       expect(runLocal).not.toHaveBeenCalled();
     } finally {
+      phase("cleanup-enter");
       reconcileRelease.resolve();
       await Promise.allSettled([first, followup]);
       await waitForSessionRunEnd(SESSION_ID, null);

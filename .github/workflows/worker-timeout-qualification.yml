@@ -1,0 +1,79 @@
+name: Worker Timeout Qualification
+run-name: Worker timeout qualification ${{ github.sha }}
+on:
+  push:
+    branches: [diagnostic/frv7-worker-timeout]
+permissions:
+  contents: read
+concurrency:
+  group: worker-timeout-qualification-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  original-group-267351:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CI: "true"
+      NODE_OPTIONS: --max-old-space-size=8192
+      OPENCLAW_VITEST_MAX_WORKERS: "3"
+      OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: "1"
+      OPENCLAW_TEST_PROJECTS_PARALLEL: "1"
+      OPENCLAW_CI_TEST_RUNTIME: node
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: node
+      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000"
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]"
+      RUNNER_ENVIRONMENT: github-hosted
+      FROZEN_TARGET: "false"
+    steps:
+      - name: Validate pinned invocation
+        env:
+          TARGET_SHA: ${{ github.sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TARGET_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$TARGET_SHA" = "$WORKFLOW_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Setup original hosted Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: "24.22.1"
+          semantic-checks: "true"
+          install-bun: "false"
+          cache-mode: restore
+          dependency-cache: "false"
+          vitest-fs-cache: "true"
+          vitest-worker-cache: "true"
+          vitest-worker-preset: full
+          node-compile-cache: "true"
+      - name: Verify host and source, then run original complete group
+        env:
+          TARGET_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import os from 'node:os';
+          assert.equal(process.version, 'v24.22.1');
+          assert.equal(os.availableParallelism(), 4);
+          assert(os.totalmem() >= 15 * 2 ** 30 && os.totalmem() <= 17 * 2 ** 30);
+          console.log(JSON.stringify({ node: process.version, cpus: os.availableParallelism(),
+            memory: os.totalmem(), cpuModels: os.cpus().map(cpu => cpu.model) }));
+          JS
+          export OPENCLAW_QUALIFICATION_DIR="$RUNNER_TEMP/worker-timeout-qualification"
+          python3 scripts/qualification/worker-timeout-observer.py
+      - name: Upload payload-free qualification observations
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: worker-timeout-267351-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/worker-timeout-qualification/
+          if-no-files-found: warn
+          retention-days: 7

@@ -1,0 +1,32 @@
+[
+  {
+    "configs": [
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.gateway-database-workers.config.ts"
+    ],
+    "includePatterns": [
+      "src/gateway/server-startup-worker-recovery.test.ts",
+      "src/gateway/session-activity-summaries.retry.test.ts",
+      "src/gateway/session-history-cold.benchmark.test.ts",
+      "src/gateway/session-restart-resume-custody.test.ts",
+      "src/gateway/session-sharing-creation-receipts.test.ts",
+      "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
+      "src/gateway/talk/file-transcription.clawrouter.test.ts",
+      "src/gateway/tool-resolution.swarm-collector.test.ts",
+      "src/gateway/tool-resolution.test.ts",
+      "src/gateway/worker-environments/device-placement-demand.test.ts",
+      "src/gateway/worker-environments/placement-abandon-lifecycle.test.ts",
+      "src/gateway/worker-environments/placement-force-destroy.test.ts",
+      "src/gateway/worker-environments/placement-startup-concurrency.test.ts",
+      "src/gateway/worker-environments/prepared-pool-maintenance.test.ts",
+      "src/gateway/worker-environments/provider-node-teardown.test.ts",
+      "src/gateway/worker-environments/repository-workspace-snapshot.test.ts",
+      "src/gateway/worker-environments/store-revocation-notify.test.ts",
+      "src/gateway/worker-environments/worker-turn-early-final.test.ts",
+      "src/gateway/worker-environments/worker-turn-pg-boundary.test.ts",
+      "src/gateway/worker-environments/workspace-result-repository.test.ts"
+    ],
+    "shard_name": "agentic-gateway-server-isolated-hosted-2",
+    "timing_key": "agentic-gateway-server-isolated#selector-623-87738299627d#generation-039aeab5f7cb#part-2-of-20#include-20-d19fba618283"
+  }
+]
