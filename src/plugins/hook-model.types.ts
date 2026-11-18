@@ -21,7 +21,7 @@ import type { AsyncPluginHook } from "./hook-handler.types.js";
  */
 export type PluginHookModelRequestKind = "turn" | "compaction" | "side_question";
 
-export type PluginHookBeforeModelRequestEvent = {
+type PluginHookBeforeModelRequestEvent = {
   runtime: "embedded" | "cli";
   requestKind: PluginHookModelRequestKind;
   payload: unknown;
@@ -34,7 +34,7 @@ export type PluginHookBeforeModelRequestEvent = {
  * Replacement payload. Return nothing to send the current payload unchanged. A CLI
  * replacement must keep the `{ prompt, prependContext?, appendContext? }` string shape.
  */
-export type PluginHookBeforeModelRequestResult = { payload: unknown };
+type PluginHookBeforeModelRequestResult = { payload: unknown };
 
 // Leaf contract: hook-types.ts imports this file, so it must not import hook-types.ts.
 export type ModelRequestHooks = {
