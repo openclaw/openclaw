@@ -378,6 +378,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       // Relative labels tick only while this retained pane is presented.
       const [relativeTime, setRelativeTime] = createSignal(Date.now());
       const minutePoll = useVisiblePoll(60_000, () => setRelativeTime(Date.now()));
+      const catalogPoll = useVisiblePoll(5_000, () => void runtime.pollCatalogSession());
       const [providerReview, setProviderReview] = createSignal<ChatProviderReviewOwner>();
       const frame = createParkedProjection(
         () => {
@@ -445,8 +446,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
             }
             if (next.presented) {
               minutePoll.start();
+              catalogPoll.start();
             } else {
               minutePoll.stop();
+              catalogPoll.stop();
             }
           },
         );
