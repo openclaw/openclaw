@@ -2507,6 +2507,9 @@ async function main() {
         formatShippedBaselineExclusions(releaseNotesProvenance.shippedBaselines) ||
         "Shipped baseline exclusions: none"
       }`,
+      ...(releaseNotesProvenance.diagnostics ?? []).map(
+        (diagnostic) => "- Changelog warning: " + diagnostic,
+      ),
       `- local generated release checks: ${localGeneratedCheck.status}${
         localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
       }`,

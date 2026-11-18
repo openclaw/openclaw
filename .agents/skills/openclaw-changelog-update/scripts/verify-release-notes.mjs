@@ -20,22 +20,37 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  authorsMatch,
+  backportPullRequestOrigins,
+  canonicalMainCommitMatches,
+  cherryPickOrigins,
+  normalizedCommitSubject,
+  pathsOverlap,
+  loadChangelogShippedBaseline,
+} from "../../../../scripts/lib/release-changelog-baseline.mts";
+import {
   findReleaseChangelog,
   loadChangelogCollection,
   loadReleaseChangelog,
   writeReleaseChangelog,
 } from "../../../../scripts/lib/release-changelog.mjs";
-import { parseReleaseVersion } from "../../../../scripts/lib/release-version.mjs";
+import {
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "../../../../scripts/lib/release-version.mjs";
 import {
   extractChangelogReleaseSections,
   formatContributionRecordProvenance,
   formatShippedBaselineExclusions,
-  loadReleaseNotesForTag,
   parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
-  releaseNotesVersionForTag,
   verifyGithubReleaseNotes,
 } from "../../../../scripts/render-github-release-notes.mts";
+
+export {
+  canonicalMainCommitMatches,
+  cumulativeShippedPullRequests,
+} from "../../../../scripts/lib/release-changelog-baseline.mts";
 
 const repo = "openclaw/openclaw";
 const githubSnapshotSchemaVersion = 1;
@@ -96,10 +111,10 @@ function fail(message) {
 function printUsage() {
   console.log(`Usage:
   node --import tsx .agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs \\
-    [--base <tag-or-sha|npm-beta>] --target <tag-or-sha> --version <version> [options]
+    [--base <tag-or-sha|npm-beta|npm-stable>] --target <tag-or-sha> --version <version> [options]
 
 Required:
-  --base <ref>          Release range start; beta versions default to npm-beta.
+  --base <ref>          Previous release; defaults to npm-stable (npm-beta for beta).
                        Capture npm beta before publication; reuse the resolved tag on retries.
   --target <ref>        Release range end.
   --version <version>   Release changelog version heading to verify.
@@ -204,8 +219,13 @@ export function parseArgs(argv) {
   }
 
   if (!options.help) {
-    if (!options.base && parseReleaseVersion(options.version ?? "")?.channel === "beta") {
-      options.base = "npm-beta";
+    if (!options.base) {
+      const version = parseReleaseVersion(options.version ?? "");
+      if (version?.channel === "beta") {
+        options.base = "npm-beta";
+      } else if (version?.channel === "stable" && version.patch < 33) {
+        options.base = "npm-stable";
+      }
     }
     for (const name of ["base", "target", "version"]) {
       if (!options[name]) {
@@ -896,57 +916,6 @@ export function pullRequestTitleFromCommitSubject(subject, number) {
   return match?.groups?.number === String(number) ? match.groups.title : undefined;
 }
 
-function completeContributionRecord(section, label) {
-  const recordStart = section.source.search(/\n### Complete contribution record\r?$/m);
-  if (recordStart < 0) {
-    fail(`${label} is missing ### Complete contribution record`);
-  }
-  const recordSource = section.source.slice(recordStart);
-  const provenance = parseContributionRecordProvenance(recordSource);
-  if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
-    fail(`${label} is missing exact complete contribution record provenance`);
-  }
-  const record = contributionRecordFor(section);
-  const declaredCount = provenance.uniquePullRequests;
-  return { record, declaredCount };
-}
-
-export function cumulativeShippedPullRequests(changelog, label) {
-  const sections = extractChangelogReleaseSections(changelog).filter(
-    (section) =>
-      section.version !== "Unreleased" &&
-      section.source.includes("\n### Complete contribution record"),
-  );
-  if (sections.length === 0) {
-    fail(`${label} is missing ### Complete contribution record`);
-  }
-  const pullRequests = new Set();
-  for (const section of sections) {
-    const record = contributionRecordFor(section);
-    for (const number of record.pullRequests.keys()) {
-      pullRequests.add(number);
-    }
-  }
-  return pullRequests;
-}
-
-function shippedBaselineFor(ref) {
-  const version = releaseNotesVersionForTag(ref);
-  const tagRef = `refs/tags/${ref}`;
-  git(["rev-parse", `${tagRef}^{commit}`]);
-  const rootDir = process.cwd();
-  const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
-  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
-  completeContributionRecord(
-    sectionFor(source.record ?? source.section, source.version),
-    `shipped baseline ${ref}`,
-  );
-  return {
-    ref,
-    pullRequests: cumulativeShippedPullRequests(changelog, `shipped baseline ${ref}`),
-  };
-}
-
 export function subtractShippedPullRequests(source, baselines) {
   const excluded = new Set();
   const metadata = [];
@@ -1071,26 +1040,6 @@ function appendReferences(references, additions) {
   }
 }
 
-function normalizedCommitSubject(subject) {
-  return subject
-    .replace(/(?:\s+\(#\d+\))+\s*$/, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
-function cherryPickOrigins(message) {
-  return [...message.matchAll(/^\(cherry picked from commit ([0-9a-f]{40})\)$/gim)].map((match) =>
-    match[1].toLowerCase(),
-  );
-}
-
-function backportPullRequestOrigins(message) {
-  return [
-    ...message.matchAll(/^Backport of #(\d+) to release\/[A-Za-z0-9._/-]+(?:\.)?\s*$/gim),
-  ].map((match) => Number(match[1]));
-}
-
 function releaseProvenanceMarker(line) {
   const match = line.match(/^Release provenance: ([0-9a-f]{40}) -> (#\d+(?:,\s*#\d+)*)\.?\s*$/i);
   if (!match) {
@@ -1171,62 +1120,6 @@ function changedPathsForCommit(hash) {
   );
 }
 
-function authorsMatch(left, right) {
-  const leftEmail = left.authorEmail?.trim().toLowerCase();
-  const rightEmail = right.authorEmail?.trim().toLowerCase();
-  if (leftEmail && rightEmail && leftEmail === rightEmail) {
-    return true;
-  }
-  return (
-    left.authorName?.trim().toLowerCase() === right.authorName?.trim().toLowerCase() &&
-    Boolean(left.authorName?.trim())
-  );
-}
-
-function pathsOverlap(left, right) {
-  for (const filePath of left) {
-    if (right.has(filePath)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function canonicalMainCommitMatches(commit, candidates) {
-  const exact = candidates.find((candidate) => candidate.hash === commit.hash);
-  if (exact) {
-    return [exact.hash];
-  }
-
-  const origins = new Set(cherryPickOrigins(commit.body));
-  const explicit = candidates
-    .filter((candidate) => origins.has(candidate.hash))
-    .map((candidate) => candidate.hash);
-  if (explicit.length > 0) {
-    return [...new Set(explicit)];
-  }
-
-  const pullRequestOrigins = new Set(backportPullRequestOrigins(commit.body));
-  if (pullRequestOrigins.size > 0) {
-    const pullRequestMatches = candidates.filter(
-      (candidate) =>
-        (candidate.pullRequests ?? []).some((number) => pullRequestOrigins.has(number)) &&
-        authorsMatch(commit, candidate) &&
-        pathsOverlap(commit.changedPaths, candidate.changedPaths),
-    );
-    return pullRequestMatches.length === 1 ? [pullRequestMatches[0].hash] : [];
-  }
-
-  const subject = normalizedCommitSubject(commit.subject);
-  const matches = candidates.filter(
-    (candidate) =>
-      normalizedCommitSubject(candidate.subject) === subject &&
-      authorsMatch(commit, candidate) &&
-      pathsOverlap(commit.changedPaths, candidate.changedPaths),
-  );
-  return matches.length === 1 ? [matches[0].hash] : [];
-}
-
 export function canonicalPullRequests(
   currentPullRequests,
   mainPullRequests,
@@ -1271,10 +1164,10 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const targetHistory = new Set(git(["rev-list", targetCommit]).split("\n"));
   const mainCommit = mainRef ? gitCommit(mainRef, true) : undefined;
   const mainHistory = mainCommit ? new Set(git(["rev-list", mainCommit]).split("\n")) : new Set();
-  if (!gitIsAncestor(base, targetCommit)) {
+  if (!/^v[0-9]/u.test(base) && !gitIsAncestor(base, targetCommit)) {
     fail(`release range base ${base} must be an ancestor of target ${target}`);
   }
-  const mergeBase = git(["merge-base", base, targetCommit]);
+  const mergeBase = gitMergeBase(base, targetCommit);
   const targetTimestamp = Date.parse(git(["show", "-s", "--format=%cI", targetCommit]));
   if (!Number.isFinite(targetTimestamp)) {
     fail(`could not resolve timestamp for release target ${target}`);
@@ -1284,7 +1177,7 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
     "--topo-order",
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
-    `${mergeBase}..${targetCommit}`,
+    `${base}..${targetCommit}`,
   ]);
   const revertedTargetsByCommit = new Map();
   const revertedHashesFor = (hash, subject, body) => {
@@ -1439,7 +1332,13 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   const mainCommits = canonicalMainCommits(base, mainCommit);
   const mainCommitsByHash = new Map(mainCommits.map((commit) => [commit.hash, commit]));
   const mainCommitsBySubject = new Map();
+  const mainCommitsByOrigin = new Map();
   for (const commit of mainCommits) {
+    for (const origin of cherryPickOrigins(commit.body)) {
+      const carriers = mainCommitsByOrigin.get(origin) ?? [];
+      carriers.push(commit);
+      mainCommitsByOrigin.set(origin, carriers);
+    }
     const subject = normalizedCommitSubject(commit.subject);
     const matches = mainCommitsBySubject.get(subject) ?? [];
     matches.push(commit);
@@ -1463,9 +1362,12 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
       canonicalMainCommitsByReleaseCommit.set(commit.hash, []);
       continue;
     }
-    const explicit = cherryPickOrigins(commit.body)
-      .map((origin) => mainCommitsByHash.get(origin))
-      .filter(Boolean);
+    const explicit = [
+      ...cherryPickOrigins(commit.body)
+        .map((origin) => mainCommitsByHash.get(origin))
+        .filter(Boolean),
+      ...(mainCommitsByOrigin.get(commit.hash) ?? []),
+    ];
     if (explicit.length > 0) {
       const matches = [...new Set(explicit.map((candidate) => candidate.hash))];
       canonicalMainCommitsByReleaseCommit.set(commit.hash, matches);
@@ -2749,6 +2651,7 @@ export function ledgerFor(
   shippedBaselines,
   targetTimestamp,
   targetHistory,
+  canonicalMain,
 ) {
   const entries = references.map((number) => {
     const node = nodes.get(number);
@@ -2834,6 +2737,7 @@ export function ledgerFor(
     "",
     `${formatContributionRecordProvenance({ base, target, ...provenance })} The generation manifest also supplies direct commits as editorial input; the grouped notes above prioritize user impact.`,
     ...(shippedBaselineLine ? ["", shippedBaselineLine] : []),
+    ...(canonicalMain ? ["", "Canonical main history: " + canonicalMain + "."] : []),
     "",
     "#### Pull requests",
     "",
@@ -3080,6 +2984,8 @@ function manifestFor(options, source, ledger, directCommitRecords) {
   const unlinkedCommits = directCommits.filter((commit) => commit.references.length === 0);
   return {
     schemaVersion: 3,
+    diagnostics: source.diagnostics,
+    canonicalMain: source.mainCommit,
     changelogSource: options.changelogSource,
     base: options.base,
     target: options.target,
@@ -3201,53 +3107,55 @@ function main() {
     printUsage();
     return;
   }
-  if (options.base === "npm-beta") {
+  if (options.base === "npm-beta" || options.base === "npm-stable") {
     const candidate = parseReleaseVersion(options.version);
-    if (candidate?.channel !== "beta") {
-      fail("--base npm-beta requires an exact beta changelog version");
+    const channel = options.base === "npm-beta" ? "beta" : "latest";
+    if (
+      !candidate ||
+      (channel === "beta"
+        ? candidate.channel !== "beta"
+        : candidate.channel !== "stable" || candidate.patch >= 33)
+    ) {
+      fail(
+        "registry baseline requires a matching regular release channel; extended-stable requires its captured --base tag",
+      );
     }
     const previous = JSON.parse(
       run("npm", [
         "view",
-        "openclaw@beta",
+        "openclaw@" + channel,
         "version",
         "--json",
         "--registry=https://registry.npmjs.org",
       ]),
     );
     const baseline = typeof previous === "string" ? parseReleaseVersion(previous) : null;
-    if (!baseline || baseline.channel === "alpha" || baseline.patch >= 33) {
-      fail("npm beta did not resolve to a supported regular release version");
-    }
-    const compareBase =
-      candidate.year - baseline.year ||
-      candidate.month - baseline.month ||
-      candidate.patch - baseline.patch;
     if (
-      compareBase < 0 ||
-      (compareBase === 0 &&
-        (baseline.channel !== "beta" || baseline.betaNumber >= candidate.betaNumber))
+      !baseline ||
+      baseline.channel === "alpha" ||
+      baseline.patch >= 33 ||
+      (channel === "latest" && baseline.channel !== "stable")
     ) {
+      fail("npm " + channel + " did not resolve to a supported regular release version");
+    }
+    if ((compareReleaseVersions(baseline.version, candidate.version) ?? 0) >= 0) {
       fail(
-        "npm beta already points to this candidate or a newer version; reuse the previously captured --base tag for verification or recovery",
+        "npm " +
+          channel +
+          " already points to this candidate or a newer version; reuse the previously captured --base tag for verification or recovery",
       );
     }
     // Resolve once before discovery. The manifest and contribution provenance
     // retain this tag; publication/verification never consult a moving selector.
     options.base = `v${baseline.version}`;
   }
-  if (
-    parseReleaseVersion(options.version)?.channel === "beta" &&
-    /^v[0-9]/u.test(options.base) &&
-    !gitIsAncestor(options.base, options.target)
-  ) {
-    // Stable closeout may forward-port a release without retaining tag ancestry.
-    // Keep the reachable range strict and subtract the shipped record through
-    // its existing owner rather than documenting already-shipped PRs again.
-    if (!options.shippedRefs.includes(options.base)) {
-      options.shippedRefs.push(options.base);
-    }
-    options.base = gitMergeBase(options.base, options.target);
+  // Keep the shipped identity in provenance, including divergent release branches.
+  if (/^v[0-9]/u.test(options.base) && !options.shippedRefs.includes(options.base)) {
+    options.shippedRefs.push(options.base);
+  }
+  // Preserve early recovery guidance for divergent/shallow shipped tags.
+  if (/^v[0-9]/u.test(options.base)) {
+    gitMergeBase(options.base, options.target);
   }
   const rootDir = process.cwd();
   if (options.releaseBranch && !gitIsAncestor(options.target, options.releaseBranch)) {
@@ -3367,7 +3275,15 @@ function main() {
       historicalRecordBase = historicalEvidence.snapshot.base;
     }
   }
-  const shippedBaselineRecords = options.shippedRefs.map(shippedBaselineFor);
+  const shippedBaselineRecords = options.shippedRefs.map((ref) =>
+    loadChangelogShippedBaseline(ref, rootDir, source.mainCommit ?? source.target),
+  );
+  source.diagnostics = shippedBaselineRecords.flatMap((baseline) => baseline.diagnostics);
+  if (!/^v[0-9]/u.test(options.base)) {
+    source.diagnostics.push(
+      "Explicit non-release base retained for historical replay; use the previous shipped tag for new release notes, not a main closeout SHA.",
+    );
+  }
   const shippedExclusions = subtractShippedPullRequests(source, shippedBaselineRecords);
   source.shippedBaselines = shippedExclusions.baselines;
   const preexistingNotes = section.source.replace(
@@ -3577,6 +3493,7 @@ function main() {
     source.shippedBaselines,
     source.targetTimestamp,
     source.targetHistory,
+    source.mainCommit,
   );
   const contamination = contaminatingPullRequestReferences({
     noteReferences,
@@ -3650,6 +3567,8 @@ function main() {
   }
 
   const result = {
+    diagnostics: source.diagnostics,
+    canonicalMain: source.mainCommit,
     changelogSource: options.changelogSource,
     workflowRuns,
     recoveredIssues: source.recoveredIssues,
@@ -3679,6 +3598,9 @@ function main() {
   if (options.json) {
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   } else {
+    for (const diagnostic of source.diagnostics) {
+      console.error("Warning: " + diagnostic);
+    }
     const snapshotSummary = githubSnapshotState
       ? `, GitHub snapshot ${githubSnapshotState.hits} hits/${githubSnapshotState.misses} misses`
       : "";

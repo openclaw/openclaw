@@ -856,12 +856,15 @@ function validatePublishCandidateChangelog(
     resolveReleaseContextIdentity(targetContextRef, targetVersion)?.releaseTag ??
     `v${targetVersion}`;
   try {
-    validateCandidateChangelog({
+    const checked = validateCandidateChangelog({
       rootDir: process.cwd(),
       repository: REPOSITORY,
       tag: releaseTag,
       targetSha,
     });
+    for (const diagnostic of checked.releaseNotesProvenance.diagnostics ?? []) {
+      console.warn("Changelog warning: " + diagnostic);
+    }
   } catch (error) {
     throw new Error(
       `Candidate ${targetSha} would fail the pnpm release:candidate changelog gates for ${releaseTag}: ${error instanceof Error ? error.message : String(error)}. Fix the release notes or contribution record on the release branch (its recorded target must be reachable from the candidate), then validate the new candidate SHA.`,

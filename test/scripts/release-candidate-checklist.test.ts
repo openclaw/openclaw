@@ -24,11 +24,13 @@ import { normalizePublicationIntent } from "../../scripts/full-release-publicati
 import { stripLeadingPackageManagerSeparator } from "../../scripts/lib/arg-utils.mts";
 import { parsePluginReleaseSelection } from "../../scripts/lib/plugin-npm-release.ts";
 import {
-  candidateCumulativeShippedPullRequests,
-  loadCandidateShippedBaseline,
   validateCandidateChangelogProvenance,
   validateCandidateReleaseNotes,
 } from "../../scripts/lib/release-candidate-changelog.mts";
+import {
+  cumulativeShippedPullRequests,
+  loadChangelogShippedBaseline,
+} from "../../scripts/lib/release-changelog-baseline.mts";
 import { splitChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
 import { evaluateReleasePublishGates } from "../../scripts/lib/release-publish-gates.mts";
@@ -577,7 +579,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       "CHANGELOG.md": `${section("2026.7.1", 12)}\n${section("2026.6.1", 11)}`,
     });
     git("tag", "v2026.7.1-beta.1");
-    expect(loadCandidateShippedBaseline("v2026.7.1-beta.1", root).pullRequests).toEqual(
+    expect(loadChangelogShippedBaseline("v2026.7.1-beta.1", root).pullRequests).toEqual(
       new Set([12, 11]),
     );
     splitChangelog({ rootDir: root });
@@ -588,7 +590,7 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
     git("add", ".");
     git("commit", "-m", "docs: replace visible prose");
     git("tag", "v2026.7.1-beta.2");
-    expect(loadCandidateShippedBaseline("v2026.7.1-beta.2", root).pullRequests).toEqual(
+    expect(loadChangelogShippedBaseline("v2026.7.1-beta.2", root).pullRequests).toEqual(
       new Set([12, 11]),
     );
   });
@@ -1682,7 +1684,24 @@ return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/open
       ).replace("## 2026.7.1", `## ${version}`);
     const changelog = `${section("Unreleased", 99, "- **PR #1** fix: not shipped.")}\n\n${section("2026.6.11", 0, "- **PR #2** fix: shipped.")}`;
 
-    expect([...candidateCumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
+    const diagnostics: string[] = [];
+    expect([
+      ...cumulativeShippedPullRequests(changelog, "test baseline", undefined, diagnostics),
+    ]).toEqual([2]);
+    expect(diagnostics).toEqual([
+      "test baseline section 2026.6.11 has a stale legacy PR count; using explicit rows, not its declared total.",
+    ]);
+    expect(() =>
+      cumulativeShippedPullRequests(
+        changelog.replace(
+          "base..HEAD history: 0 merged PRs.",
+          "base.." +
+            "a".repeat(40) +
+            " history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.",
+        ),
+        "test baseline",
+      ),
+    ).toThrow("contribution record row count 1 != 0");
   });
 
   it("validates cumulative shipped baseline exclusion metadata", () => {

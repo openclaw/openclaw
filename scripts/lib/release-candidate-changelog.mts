@@ -2,14 +2,13 @@
 // before publication. pnpm release:candidate and the SHA-pinned Full Release
 // Validation dispatch helper both run them; the helper runs under native Node,
 // so this module must stay resolvable without workspace package aliases.
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import {
   CHANGELOG_ATTRIBUTION_NEXT_STEP,
   findChangelogAttributionViolations,
 } from "../check-changelog-attributions.mts";
 import {
   dedicatedSectionVersionForTag,
-  extractChangelogReleaseSections,
   extractChangelogSection,
   formatShippedBaselineExclusions,
   loadReleaseNotesForTag,
@@ -18,7 +17,10 @@ import {
   releaseNotesVersionForTag,
   renderGithubReleaseNotes,
 } from "../render-github-release-notes.mts";
-import { loadChangelogCollection } from "./release-changelog.mjs";
+import {
+  canonicalMainHistoryFor,
+  loadChangelogShippedBaseline,
+} from "./release-changelog-baseline.mts";
 
 type StringFields<K extends string> = Record<K, string>;
 
@@ -43,71 +45,6 @@ export function gitIsAncestor(ancestor: string, target: string, cwd = process.cw
       result.stderr?.trim() || result.signal || result.status
     }`,
   );
-}
-
-function candidateContributionRecordPullRequests(
-  section: string,
-  label: string,
-  { requireExactProvenance = true }: { requireExactProvenance?: boolean } = {},
-) {
-  const recordStart = section.search(/\n### Complete contribution record\r?$/m);
-  if (recordStart < 0) {
-    throw new Error(`${label} is missing ### Complete contribution record`);
-  }
-  const record = section.slice(recordStart);
-  const rowNumbers = [...record.matchAll(/^- \*\*PR #(?<number>[0-9]+)\*\*/gmu)].map((match) =>
-    Number(match.groups?.number),
-  );
-  const rows = new Set(rowNumbers);
-  if (rows.size !== rowNumbers.length) {
-    const duplicate = rowNumbers.find((number, index) => rowNumbers.indexOf(number) !== index);
-    throw new Error(`${label} contains duplicate contribution record PR #${duplicate}`);
-  }
-  if (!requireExactProvenance) {
-    return rows;
-  }
-  const provenance = parseContributionRecordProvenance(record);
-  if (!provenance || !/^[0-9a-f]{40}$/u.test(provenance.target)) {
-    throw new Error(`${label} is missing exact complete contribution record provenance`);
-  }
-  return rows;
-}
-
-export function candidateCumulativeShippedPullRequests(changelog: string, label: string) {
-  const pullRequests = new Set<number>();
-  for (const section of extractChangelogReleaseSections(changelog)) {
-    if (
-      section.version === "Unreleased" ||
-      !section.source.includes("\n### Complete contribution record")
-    ) {
-      continue;
-    }
-    for (const number of candidateContributionRecordPullRequests(
-      section.source,
-      `${label} section ${section.version}`,
-      { requireExactProvenance: false },
-    )) {
-      pullRequests.add(number);
-    }
-  }
-  return pullRequests;
-}
-
-export function loadCandidateShippedBaseline(ref: string, rootDir = process.cwd()) {
-  const tagRef = `refs/tags/${ref}`;
-  execFileSync("git", ["rev-parse", "--verify", `${tagRef}^{commit}`], {
-    cwd: rootDir,
-    stdio: ["ignore", "ignore", "pipe"],
-  });
-  const changelog = loadChangelogCollection({ rootDir, ref: tagRef, recordsOnly: true });
-  const version = releaseNotesVersionForTag(ref);
-  const source = loadReleaseNotesForTag({ rootDir, ref: tagRef, tag: ref, version });
-  candidateContributionRecordPullRequests(
-    source.record ?? source.section,
-    `shipped baseline ${ref}`,
-  );
-  const pullRequests = candidateCumulativeShippedPullRequests(changelog, `shipped baseline ${ref}`);
-  return { ref, pullRequests };
 }
 
 export function validateCandidateReleaseNotes({
@@ -140,15 +77,17 @@ export function validateCandidateChangelogProvenance({
   version,
   tag,
   targetSha,
-  isAncestor = gitIsAncestor,
-  loadShippedBaseline = loadCandidateShippedBaseline,
+  rootDir = process.cwd(),
+  isAncestor = (ancestor, target) => gitIsAncestor(ancestor, target, rootDir),
+  loadShippedBaseline,
 }: {
   changelog: string;
   version: string;
   tag: string;
   targetSha: string;
+  rootDir?: string;
   isAncestor?: (ancestor: string, target: string) => boolean;
-  loadShippedBaseline?: (ref: string) => { pullRequests: Set<number> };
+  loadShippedBaseline?: (ref: string) => { pullRequests: Set<number>; diagnostics?: string[] };
 }) {
   // Beta and correction tags may carry their own changelog heading.
   let section: string | undefined;
@@ -172,9 +111,8 @@ export function validateCandidateChangelogProvenance({
     );
   }
   const record = section.slice(recordStart);
-  const recordedPullRequests = candidateContributionRecordPullRequests(
-    section,
-    `CHANGELOG.md ## ${sectionVersion}`,
+  const recordedPullRequests = new Set(
+    [...record.matchAll(/^- \*\*PR #(\d+)\*\*/gmu)].map((match) => Number(match[1])),
   );
   const provenance = parseContributionRecordProvenance(record);
   const base = provenance?.base;
@@ -183,6 +121,10 @@ export function validateCandidateChangelogProvenance({
     throw new Error(
       `CHANGELOG.md ## ${sectionVersion} is missing exact complete contribution record provenance`,
     );
+  }
+  const canonicalMain = canonicalMainHistoryFor(record);
+  if (canonicalMainHistoryFor(section) !== canonicalMain) {
+    throw new Error("canonical main history must appear inside the complete contribution record");
   }
   const shippedBaselines = parseShippedBaselineExclusions(record);
   const sectionShippedBaselines = parseShippedBaselineExclusions(section);
@@ -194,7 +136,10 @@ export function validateCandidateChangelogProvenance({
       "shipped baseline exclusions must appear inside the complete contribution record",
     );
   }
-  if (!isAncestor(base, recordedTarget)) {
+  if (
+    !isAncestor(base, recordedTarget) &&
+    !shippedBaselines.some((baseline) => baseline.ref === base)
+  ) {
     throw new Error(
       `CHANGELOG.md contribution record base ${base} is not an ancestor of recorded target ${recordedTarget}`,
     );
@@ -208,9 +153,13 @@ export function validateCandidateChangelogProvenance({
   }
   // The verifier persists associated and text-linked PR exclusions together.
   // Revalidate that exact inventory here instead of rediscovering a narrower set from git text.
+  const diagnostics: string[] = [];
   const excludedPullRequests = new Set<number>();
   for (const baseline of shippedBaselines) {
-    const loaded = loadShippedBaseline(baseline.ref);
+    const loaded = loadShippedBaseline
+      ? loadShippedBaseline(baseline.ref)
+      : loadChangelogShippedBaseline(baseline.ref, rootDir, canonicalMain ?? recordedTarget);
+    diagnostics.push(...(loaded.diagnostics ?? []));
     if (!(loaded.pullRequests instanceof Set)) {
       throw new Error(`shipped baseline ${baseline.ref} did not provide a PR inventory`);
     }
@@ -243,6 +192,7 @@ export function validateCandidateChangelogProvenance({
     base,
     target: recordedTarget,
     shippedBaselines,
+    ...(diagnostics.length ? { diagnostics } : {}),
     reason: undefined,
   };
 }
@@ -288,6 +238,7 @@ export function validateCandidateChangelog({
       version,
       tag,
       targetSha,
+      rootDir,
     }),
   };
 }

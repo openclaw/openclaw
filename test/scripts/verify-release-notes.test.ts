@@ -45,6 +45,7 @@ import {
   validateReleaseProvenanceOverrides,
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
+import { validateCandidateChangelogProvenance } from "../../scripts/lib/release-candidate-changelog.mts";
 import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
 import { renderGithubReleaseNotes } from "../../scripts/render-github-release-notes.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -497,16 +498,18 @@ syncBuiltinESMExports();
     { previous: "2026.7.1-beta.2", divergent: false },
     { previous: "2026.6.11", divergent: true },
     { previous: "2026.7.1-beta.2", divergent: true },
+    { previous: "2026.6.11", divergent: false, candidateVersion: "2026.7.1" },
+    { previous: "2026.6.11", divergent: true, candidateVersion: "2026.7.1" },
   ])(
-    "freezes npm beta $previous (divergent=$divergent) and reuses it after publication",
-    ({ previous, divergent }) => {
+    "freezes published $previous (divergent=$divergent, candidate=$candidateVersion) and reuses it after publication",
+    ({ previous, divergent, candidateVersion }) => {
       const cwd = tempDirs.make("openclaw-npm-beta-notes-");
       git(cwd, ["init", "-q"]);
       git(cwd, ["config", "commit.gpgsign", "false"]);
-      const version = "2026.7.1-beta.3";
+      const version = candidateVersion ?? "2026.7.1-beta.3";
       writeFileSync(
         join(cwd, "CHANGELOG.md"),
-        `## ${version}\n\n### Highlights\n\n### Changes\n\n### Fixes\n`,
+        createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", version),
       );
       splitChangelog({ rootDir: cwd });
       git(cwd, ["add", "."]);
@@ -536,7 +539,7 @@ syncBuiltinESMExports();
       const env = { PATH: `${cwd}:${process.env.PATH}`, TEST_NPM_BETA: previous };
       const result = runVerifier(cwd, { base: null, version, target, manifest, env });
       expect(result.status, result.stderr || result.stdout).toBe(0);
-      const capturedBase = divergent ? target : `v${previous}`;
+      const capturedBase = `v${previous}`;
       expect(JSON.parse(readFileSync(manifest, "utf8"))).toMatchObject({
         base: capturedBase,
         target,
@@ -548,7 +551,12 @@ syncBuiltinESMExports();
         expect(record).toContain(`Shipped baseline exclusions: v${previous} (0 PRs).`);
       }
       const publishedEnv = { ...env, TEST_NPM_BETA: version };
-      const refused = runVerifier(cwd, { base: "npm-beta", version, target, env: publishedEnv });
+      const refused = runVerifier(cwd, {
+        base: candidateVersion ? "npm-stable" : "npm-beta",
+        version,
+        target,
+        env: publishedEnv,
+      });
       expect(refused.status).not.toBe(0);
       expect(refused.stderr).toContain("reuse the previously captured --base tag");
       const recovery = runVerifier(cwd, {
@@ -1486,6 +1494,15 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
       canonicalMainCommitMatches({ ...release, ...patch }, candidates);
     expect(matches()).toEqual([main.hash]);
     expect(
+      matches({ body: "" }, [
+        {
+          ...main,
+          subject: "forward port",
+          body: "(cherry picked from commit " + release.hash + ")",
+        },
+      ]),
+    ).toEqual([main.hash]);
+    expect(
       matches({
         body: `(cherry picked from commit ${main.hash})`,
         authorEmail: "other@example.com",
@@ -1661,7 +1678,7 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
 
   it("excludes Unreleased records from a cumulative shipped tag boundary", () => {
     const changelog = `## Unreleased\n\n${contributionRecord("base", "a".repeat(40), ["- **PR #1** fix: not shipped."])}
-## 2026.6.11\n\n${contributionRecord("base", "HEAD", ["- **PR #2** fix: shipped."])}`;
+## 2026.6.11\n\n${contributionRecord("base", "b".repeat(40), ["- **PR #2** fix: shipped."])}`;
 
     expect([...cumulativeShippedPullRequests(changelog, "test baseline")]).toEqual([2]);
   });
@@ -1819,37 +1836,61 @@ validate(new Map([[source, [9]]]), new Map([[9, node]]), main, undefined, () => 
     ).toEqual(expected);
   });
 
-  it("credits the original PR, not its backport, and rejects stale generated thanks", () => {
-    const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
-    const helpers = Array.from({ length: 21 }, (_, index) => ({
-      email: "helper" + (index + 1) + "@example.invalid",
-      login: index === 0 ? "original-helper" : "original-helper-" + (index + 1),
-    }));
-    const originalMessage = [
-      "fix: preserve playback errors (#21)\n\nFixes #20",
-      ...helpers.map(({ email }) => "Co-authored-by: Helper <" + email + ">"),
-      "Co-authored-by: Bot <bot@example.invalid>",
-      "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
-    ].join("\n");
-    writeFileSync(join(cwd, "playback.txt"), "fixed\n");
-    const original = commitAll(cwd, originalMessage);
-    git(cwd, ["checkout", "-qb", "release", base]);
-    commitAll(cwd, "chore: release preparation");
-    git(cwd, ["cherry-pick", "-x", original]);
-    git(cwd, [
-      "commit",
-      "--amend",
-      "-qm",
-      `${git(cwd, ["log", "-1", "--format=%B"])}\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>`,
-    ]);
-    const target = git(cwd, ["rev-parse", "HEAD"]);
-    const stale = `${changelog}- Preserve playback errors by @steipete and @original-helper. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
-    writeFileSync(join(cwd, "CHANGELOG.md"), stale);
-    const seed = commitAll(cwd, "docs: old credit");
-    const gh = join(cwd, "gh");
-    writeFileSync(
-      gh,
-      `#!${process.execPath}\n
+  it.each(["backport", "forward-port"])(
+    "credits canonical main through %s and rejects stale generated thanks",
+    (direction) => {
+      const { cwd, base, changelog } = seedRepository("openclaw-release-credit-", "main");
+      const helpers = Array.from({ length: 21 }, (_, index) => ({
+        email: "helper" + (index + 1) + "@example.invalid",
+        login: index === 0 ? "original-helper" : "original-helper-" + (index + 1),
+      }));
+      const originalMessage = [
+        "fix: preserve playback errors (#21)\n\nFixes #20",
+        ...helpers.map(({ email }) => "Co-authored-by: Helper <" + email + ">"),
+        "Co-authored-by: Bot <bot@example.invalid>",
+        "Co-authored-by: Copilot App <223556219+Copilot@users.noreply.github.com>",
+      ].join("\n");
+      let original: string;
+      let target: string;
+      if (direction === "forward-port") {
+        git(cwd, ["checkout", "-qb", "release", base]);
+        writeFileSync(join(cwd, "playback.txt"), "fixed\n");
+        target = commitAll(
+          cwd,
+          "fix: release-first playback (#22)\n\nFixes #20\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>",
+        );
+        git(cwd, ["checkout", "-q", "main"]);
+        git(cwd, ["cherry-pick", "-x", target]);
+        git(cwd, [
+          "commit",
+          "--amend",
+          "-qm",
+          originalMessage + "\n(cherry picked from commit " + target + ")",
+        ]);
+        original = git(cwd, ["rev-parse", "HEAD"]);
+        git(cwd, ["checkout", "-q", "release"]);
+      } else {
+        writeFileSync(join(cwd, "playback.txt"), "fixed\n");
+        original = commitAll(cwd, originalMessage);
+        git(cwd, ["checkout", "-qb", "release", base]);
+        commitAll(cwd, "chore: release preparation");
+        git(cwd, ["cherry-pick", "-x", original]);
+        git(cwd, [
+          "commit",
+          "--amend",
+          "-qm",
+          git(cwd, ["log", "-1", "--format=%B"]) +
+            "\nCo-authored-by: RomneyDa <6581799+RomneyDa@users.noreply.github.com>",
+        ]);
+        target = git(cwd, ["rev-parse", "HEAD"]);
+      }
+      const stale = `${changelog}- Preserve playback errors by @steipete and @original-helper. (#21) Thanks @RomneyDa.\n\n${contributionRecord(base, target, ["- **PR #21** Related #20. Thanks @RomneyDa."])}`;
+      writeFileSync(join(cwd, "CHANGELOG.md"), stale);
+      const seed = commitAll(cwd, "docs: old credit");
+      const gh = join(cwd, "gh");
+      writeFileSync(
+        gh,
+        `#!${process.execPath}\n
 const original = ${JSON.stringify(original)};
 const target = ${JSON.stringify(target)};
 const helpers = ${JSON.stringify(helpers)};
@@ -1886,76 +1927,84 @@ for (const [, alias, rawNumber] of query.matchAll(/(n\\d+): repository[\\s\\S]*?
 for (const [, alias, login] of query.matchAll(/(u\\d+): user\\(login: "([^"]+)"\\)/g)) data[alias] = { __typename: "User", login };
 console.log(JSON.stringify({ data }));
 `,
-    );
-    chmodSync(gh, 0o755);
-    splitChangelog({ rootDir: cwd });
-    const manifestPath = join(cwd, "manifest.json");
-    const run = (write: boolean, cursorMode = "complete") =>
-      runVerifier(cwd, {
-        base,
-        target,
-        mainRef: original,
-        write,
-        manifest: manifestPath,
-        extraArgs: ["--seed-ref", seed, "--no-github-snapshot"],
-        env: { PATH: `${cwd}:${process.env.PATH}`, COAUTHOR_CURSOR_MODE: cursorMode },
-      });
-    const generated = run(true);
-    expect(generated.stderr).toBe("");
-    expect(generated.status, generated.stdout).toBe(0);
-    const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
-    const section = readFileSync(entryPath, "utf8");
-    const expectedThanks = ["steipete", ...helpers.map(({ login }) => login), "reporter"];
-    expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
-      expectedThanks,
-    );
-    expect(section).toContain(
-      "- **PR #21** Related #20. Authored by @steipete. Thanks " +
-        helpers.map(({ login }) => "@" + login).join(", ") +
-        ", and @reporter.",
-    );
-    const editorial = section.split("\n").find((line) => line.startsWith("- Preserve playback"));
-    for (const login of expectedThanks) {
-      expect(editorial).toContain("@" + login);
-    }
-    expect(section).not.toContain("@clawsweeper");
-    expect(section).not.toContain("@Copilot");
-    expect(section).not.toContain("@RomneyDa");
-    expect(section).not.toContain("@release-operator");
-    const checked = run(false);
-    expect(checked.status, checked.stderr + checked.stdout).toBe(0);
-    expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
-      expectedThanks,
-    );
-    writeReleaseChangelog({
-      rootDir: cwd,
-      version: "2026.7.1",
-      section: section.replaceAll("Authored by @steipete", "Authored by @RomneyDa and @steipete"),
-    });
-    const rejected = run(false);
-    expect(rejected.status).toBe(1);
-    expect(JSON.parse(rejected.stdout).errors).toEqual(
-      expect.arrayContaining([
-        "unexpected Thanks @RomneyDa for #21",
-        "unexpected editorial Thanks @RomneyDa",
-      ]),
-    );
-    const repaired = run(true);
-    expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
-    expect(readFileSync(entryPath, "utf8")).toBe(section);
-    for (const cursorMode of ["missing", "repeated"]) {
-      const malformed = run(false, cursorMode);
-      expect(malformed.status).toBe(1);
-      expect(malformed.stderr).toContain(
-        "GitHub returned an invalid authors cursor for commit " + original,
       );
+      chmodSync(gh, 0o755);
+      splitChangelog({ rootDir: cwd });
+      const manifestPath = join(cwd, "manifest.json");
+      const run = (write: boolean, cursorMode = "complete") =>
+        runVerifier(cwd, {
+          base,
+          target,
+          mainRef: original,
+          write,
+          manifest: manifestPath,
+          extraArgs: ["--seed-ref", seed, "--no-github-snapshot"],
+          env: { PATH: `${cwd}:${process.env.PATH}`, COAUTHOR_CURSOR_MODE: cursorMode },
+        });
+      const generated = run(true);
+      expect(generated.stderr).toBe("");
+      expect(generated.status, generated.stdout).toBe(0);
+      const entryPath = join(cwd, "CHANGELOG/2026.7.1.md");
+      const section = readFileSync(entryPath, "utf8");
+      const expectedThanks = ["steipete", ...helpers.map(({ login }) => login), "reporter"];
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
+        expectedThanks,
+      );
+      expect(section).toContain(
+        "- **PR #21** Related #20. Authored by @steipete. Thanks " +
+          helpers.map(({ login }) => "@" + login).join(", ") +
+          ", and @reporter.",
+      );
+      const editorial = section.split("\n").find((line) => line.startsWith("- Preserve playback"));
+      for (const login of expectedThanks) {
+        expect(editorial).toContain("@" + login);
+      }
+      expect(section).not.toContain("@clawsweeper");
+      expect(section).not.toContain("@Copilot");
+      expect(section).not.toContain("@RomneyDa");
+      expect(section).not.toContain("@release-operator");
+      const checked = run(false);
+      expect(checked.status, checked.stderr + checked.stdout).toBe(0);
+      expect(JSON.parse(readFileSync(manifestPath, "utf8")).pullRequests[0].thanks).toEqual(
+        expectedThanks,
+      );
+      writeReleaseChangelog({
+        rootDir: cwd,
+        version: "2026.7.1",
+        section: section.replaceAll("Authored by @steipete", "Authored by @RomneyDa and @steipete"),
+      });
+      const rejected = run(false);
+      expect(rejected.status).toBe(1);
+      expect(JSON.parse(rejected.stdout).errors).toEqual(
+        expect.arrayContaining([
+          "unexpected Thanks @RomneyDa for #21",
+          "unexpected editorial Thanks @RomneyDa",
+        ]),
+      );
+      const repaired = run(true);
+      expect(repaired.status, repaired.stderr + repaired.stdout).toBe(0);
       expect(readFileSync(entryPath, "utf8")).toBe(section);
-    }
-  });
+      for (const cursorMode of ["missing", "repeated"]) {
+        const malformed = run(false, cursorMode);
+        expect(malformed.status).toBe(1);
+        expect(malformed.stderr).toContain(
+          "GitHub returned an invalid authors cursor for commit " + original,
+        );
+        expect(readFileSync(entryPath, "utf8")).toBe(section);
+      }
+    },
+  );
 
-  it.each([0, 1, 2])(
-    "accounts for merged side ancestry with %i reversals without duplicating shipped PRs",
-    (reversals) => {
+  it.each([
+    { reversals: 0, evidence: "cherry-pick" },
+    { reversals: 1, evidence: "cherry-pick" },
+    { reversals: 2, evidence: "cherry-pick" },
+    { reversals: 0, evidence: "subject-author-path" },
+    { reversals: 0, evidence: "merge-carrier" },
+    { reversals: 0, evidence: "missing-record" },
+  ])(
+    "compares divergent shipped stable history across closeout ($reversals reversals, $evidence)",
+    ({ reversals, evidence }) => {
       const cwd = tempDirs.make("openclaw-release-notes-ancestry-");
       git(cwd, ["init", "-q", "-b", "main"]);
       const changelog = createReleaseNotesFixtureLines().join("\n");
@@ -1976,25 +2025,51 @@ console.log(JSON.stringify({ data }));
       git(cwd, ["merge", "--no-ff", "-qm", "merge: nested side work", "nested-side"]);
       const nestedMerge = git(cwd, ["rev-parse", "HEAD"]);
       const withdrawn = commit("fix: withdrawable contribution", "withdrawn.txt");
-      const shipped = commit("fix: separately shipped contribution", "shipped.txt");
+      const shipped = commit("fix: separately shipped contribution (#12)", "shipped.txt");
       git(cwd, ["checkout", "-q", "main"]);
-      commit("chore: main work", "main.txt");
+      const preCloseout = commit("feat: unshipped beta feature", "main.txt");
       git(cwd, ["merge", "--no-ff", "-qm", "merge: side work", "side"]);
       let reversed = withdrawn;
       for (let index = 0; index < reversals; index += 1) {
         git(cwd, ["revert", "--no-edit", reversed]);
         reversed = git(cwd, ["rev-parse", "HEAD"]);
       }
+      commit("chore(release): main closeout", "closeout.txt");
       const target = git(cwd, ["rev-parse", "HEAD"]);
 
       // A divergent stable tag already contains PR #12; its side commit is in
       // this Git range, so subtraction must happen after complete discovery.
       git(cwd, ["checkout", "-qb", "shipped-release", base]);
+      git(cwd, ["cherry-pick", "-x", shipped]);
+      git(cwd, [
+        "commit",
+        "--amend",
+        "-qm",
+        (evidence === "merge-carrier"
+          ? "Merge pull request #112 from contributor/release-fix"
+          : "fix: separately shipped contribution (#112)") +
+          (evidence === "subject-author-path"
+            ? ""
+            : "\n\n(cherry picked from commit " + shipped + ")"),
+      ]);
       writeFileSync(
         join(cwd, "CHANGELOG.md"),
-        `## 2026.6.1\n\n${contributionRecord(base, base, ["- **PR #12** Thanks @contributor."], "1 in-range PR + 0 retained seed-only PRs = 1 unique PR.")}`,
+        `## 2026.6.1\n\n${contributionRecord(base, base, ["- **PR #112** Thanks @contributor."], "1 in-range PR + 0 retained seed-only PRs = 1 unique PR.")}`,
+      );
+      writeFileSync(
+        join(cwd, "CHANGELOG.md"),
+        readFileSync(join(cwd, "CHANGELOG.md"), "utf8") +
+          "\n## 2026.6.1-beta.1\n\n" +
+          contributionRecord(base, base, ["- **PR #14** feat: unshipped beta feature."]),
       );
       git(cwd, ["add", "CHANGELOG.md"]);
+      if (evidence === "missing-record") {
+        writeFileSync(
+          join(cwd, "CHANGELOG.md"),
+          "## 2026.6.1\n\nHistorical release without an audited record.\n",
+        );
+        git(cwd, ["add", "CHANGELOG.md"]);
+      }
       git(cwd, ["commit", "-qm", "docs: shipped record"]);
       git(cwd, ["tag", "v2026.6.1"]);
       git(cwd, ["checkout", "-q", "main"]);
@@ -2007,6 +2082,7 @@ console.log(JSON.stringify({ data }));
         [withdrawn]: 11,
         [shipped]: 12,
         [nestedMerge]: 13,
+        [preCloseout]: 14,
       };
       const gh = join(cwd, "gh");
       writeFileSync(
@@ -2032,10 +2108,9 @@ console.log(JSON.stringify({ data }));
       const manifestPath = join(cwd, "manifest.json");
       splitChangelog({ rootDir: cwd });
       const result = runVerifier(cwd, {
-        base,
+        base: "v2026.6.1",
         target,
         manifest: manifestPath,
-        extraArgs: ["--shipped-ref", "v2026.6.1"],
         env: { PATH: `${cwd}:${process.env.PATH}` },
       });
       expect(result.stderr).toBe("");
@@ -2043,11 +2118,50 @@ console.log(JSON.stringify({ data }));
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       expect(
         manifest.pullRequests.map((entry: { number: number }) => entry.number).toSorted(),
-      ).toEqual(reversals === 1 ? [10, 13] : [10, 11, 13]);
+      ).toEqual(
+        evidence === "missing-record"
+          ? [10, 11, 12, 13, 14]
+          : reversals === 1
+            ? [10, 13, 14]
+            : [10, 11, 13, 14],
+      );
+      if (evidence === "missing-record") {
+        expect(manifest.diagnostics[0]).toContain("uncertain work is retained");
+      }
       expect(manifest.pullRequests[0].thanks).toEqual(["contributor"]);
       expect(manifest.shippedBaselines).toEqual([
-        { ref: "v2026.6.1", count: 1, pullRequests: [12] },
+        {
+          ref: "v2026.6.1",
+          count: evidence === "missing-record" ? 0 : 1,
+          pullRequests: evidence === "missing-record" ? [] : [12],
+        },
       ]);
+      const record = readFileSync(join(cwd, "CHANGELOG/records/2026.7.1.md"), "utf8");
+      const validate = (candidateRecord: string) =>
+        validateCandidateChangelogProvenance({
+          changelog: candidateRecord,
+          version: "2026.7.1",
+          tag: "v2026.7.1",
+          targetSha: target,
+          rootDir: cwd,
+        });
+      expect(record).toContain("Canonical main history: " + manifest.canonicalMain + ".");
+      // Candidate replay uses the recorded immutable main head, not a fresh selector.
+      git(cwd, ["commit", "--allow-empty", "-qm", "chore: moving main"]);
+      expect(validate(record).status).toBe("passed");
+      expect(() =>
+        validate(record.replace(/Canonical main history: .*/u, "Canonical main history: broken.")),
+      ).toThrow("Malformed canonical main history");
+      expect(() => validate(record.replace(/^Shipped baseline exclusions:.*$/mu, ""))).toThrow(
+        "not an ancestor",
+      );
+      if (evidence !== "missing-record") {
+        expect(() => validate(record.replace("(1 PRs: #12)", "(1 PRs: #14)"))).toThrow(
+          "absent from shipped baseline",
+        );
+      }
+      expect(manifest.base).toBe("v2026.6.1");
+      expect(manifest.mergeBase).toBe(base);
       expect(
         readFileSync(join(cwd, "CHANGELOG/2026.7.1.md"), "utf8").match(/\*\*PR #10\*\*/g),
       ).toHaveLength(1);
@@ -2704,7 +2818,11 @@ Atomics.wait = function (...args) {
         );
         return;
       }
-      expect(result.stderr).toBe("");
+      if (mode === "release-only base") {
+        expect(result.stderr).toContain("Explicit non-release base");
+      } else {
+        expect(result.stderr).toBe("");
+      }
       expect(result.status).toBe(0);
       if (mode === "symbolic target") {
         expect(JSON.parse(result.stdout).target).toBe(root);

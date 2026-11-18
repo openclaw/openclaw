@@ -105,6 +105,12 @@ stable version when `beta` and `latest` coincide. Never choose the last GitHub
 prerelease. Preserve the resolved tag in the contribution manifest and reuse
 it for verification/recovery after the selector moves. Every beta gets freshly
 inventoried delta prose; a new candidate refuses cumulative-only notes.
+Stable notes compare with the previous published regular stable release, not a
+reachable main closeout or an older ancestor tag. Capture npm latest before
+publication (or provide the already captured tag for recovery); divergent tags
+retain their identity while the inventory removes proven shipped backports.
+Missing historical metadata is reported conservatively, never inferred from
+closeout ancestry. Extended-stable uses its own line's previous published tag.
 Stable notes remain cumulative in `CHANGELOG/YYYY.M.PATCH.md`, with their own
 record. `CHANGELOG.md` is the generated index.
 Use the shared resolver and writer documented in the changelog skill. Canonical PR
