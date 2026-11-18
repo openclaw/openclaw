@@ -426,9 +426,10 @@ is unchanged; Stop, cancellation, archive, and reset keep their normal meanings.
 ### Subagents
 
 Graceful shutdown marks the root requester of a running child, then cancels the
-child through the ordinary abort path. The child settles terminally without a
-shutdown completion announcement or a "subagent failed" notice to its parent.
-Children are not adopted or independently resumed at startup.
+child through the ordinary abort path. The child retains its terminal error for
+completion delivery after startup; shutdown is not intentional cancellation by
+the requester. No completion announcement starts during shutdown. Children are
+not adopted or independently resumed at startup.
 
 Collector children retain their captured results. If shutdown recorded a terminal
 child before its collector result finished publishing, startup completes that
@@ -436,8 +437,12 @@ record from the saved outcome. A resumed parent's `agents_wait` reads these
 recorded results, including stopped children, without waiting for a new execution
 or completion event. This does not restore the child's retired tool authority.
 
-The parent's single resume input covers reconciliation of its children. It can
-inspect their transcripts and results with the existing sub-agent tools, then
+A result already committed to the requester transcript is not submitted again.
+The Gateway resumes that interrupted turn using its normal restart input and the
+saved conversation. Unconsumed results remain with the completion registry, and
+deliberately yielded requesters remain parked for their children.
+
+The parent can inspect transcripts and results with the existing sub-agent tools, then
 send a new instruction or spawn replacements after checking what already happened.
 See [Sub-agent operations](/tools/subagents/operations).
 

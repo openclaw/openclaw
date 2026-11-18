@@ -15,6 +15,7 @@ import {
 } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import {
   isIncognitoSessionKey,
   normalizeAgentId,
@@ -316,4 +317,15 @@ export async function loadSessionEntryByKey(sessionKey: string, explicitAgentId?
         ? undefined
         : readSessionEntryReadOnlyInWorker({ storePath, sessionKey, agentId, projection: "list" }),
   );
+}
+
+export function isRequesterGatewayClosed(
+  resolveGatewayContext: GatewayContextResolver | undefined,
+  hadGatewayContext: boolean,
+): boolean {
+  try {
+    return hadGatewayContext && !resolveGatewayContext?.();
+  } catch {
+    return hadGatewayContext;
+  }
 }

@@ -51,6 +51,7 @@ import {
   withSubagentRequesterSource,
   captureRequesterSessionEntryCurrent,
   hasUsableSessionEntry,
+  isRequesterGatewayClosed,
 } from "./subagent-announce-delivery.runtime.js";
 import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 import {
@@ -66,6 +67,7 @@ import {
 import {
   readSharedBatchState,
   createRequesterSettleBatchCompletion,
+  captureRequesterWakeGeneration,
   hasExhaustedRequesterSettleAttempts,
   needsRequesterSettleFindings,
   isRequesterSettleMemberReady,
@@ -157,10 +159,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const frozenBatchRunIds = currentState.batchRunIds;
   const frozen = Boolean(frozenBatchRunIds?.length);
-  const currentRearmGeneration = currentState.rearmGeneration;
-  const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
-    Boolean(entry?.requesterSettleWake) &&
-    entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
+  const { generation, hasCurrentWake } = captureRequesterWakeGeneration(currentState);
   let settledBatch: SubagentRunRecord[];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
@@ -213,13 +212,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   if (resolveGatewayContext && !hadGatewayContext) {
     return false;
   }
-  const isGatewayClosed = () => {
-    try {
-      return hadGatewayContext && !resolveGatewayContext?.();
-    } catch {
-      return hadGatewayContext;
-    }
-  };
 
   const preparation = requesterAgentId
     ? resolveGatewayContext?.()?.agentDatabaseStartup?.waitForAgentPreparation(requesterAgentId, {
@@ -248,7 +240,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       // Exact cohort custody survives a member's result becoming obsolete.
       // Findings below still use the current-source filter independently.
       currentRuns: readRequesterRuns(),
-      rearmGeneration: currentRearmGeneration,
+      rearmGeneration: generation,
       pause,
       isClaimedByLiveRequesterTurn,
     });
@@ -321,6 +313,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     // Cancellation already owns the task result; only consume its obsolete wake.
     await completeBatch(settledBatch, selectedState);
     return false;
+  }
+  if (!pauseNotice && settledBatch.every(hasConsumedRequesterInput)) {
+    // The transcript owns the input; only the Gateway resumes its interrupted turn.
+    // An uncertain external send retains its own outcome after input consumption.
+    if (settledBatch.some((entry) => entry.delivery?.disposition === "ambiguous")) {
+      return false;
+    }
+    const outcome = resolveConsumedRequesterDeliveryOutcome(settledBatch);
+    await completeBatch(settledBatch, selectedState, outcome);
+    return outcome.delivered;
   }
   const requiredSettled = settledBatch.filter((entry) => entry.expectsCompletionMessage === true);
   // A yielded batch owns a rearm generation even when its child settles later.
@@ -480,7 +482,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       !params.signal?.aborted &&
       params.isSourceCurrent() &&
       preparedFindings.isCurrent() &&
-      !isGatewayClosed() &&
+      !isRequesterGatewayClosed(resolveGatewayContext, hadGatewayContext) &&
       areCompletionRowsCurrent() &&
       isRequesterCurrent() &&
       !isBatchDeliveryClosed();
@@ -559,13 +561,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         isBatchCurrent() &&
         !isBatchDeliveryClosed() &&
         isRequesterCurrent() &&
-        !isGatewayClosed()
+        !isRequesterGatewayClosed(resolveGatewayContext, hadGatewayContext)
       ) {
         // Cancellation refused before Gateway admission: keep the unspent durable obligation.
         await params.transitionBatch(settledBatch, state, refreshBatch);
         return true;
       }
-      if (params.signal?.aborted || isGatewayClosed() || !isBatchCurrent()) {
+      if (
+        params.signal?.aborted ||
+        isRequesterGatewayClosed(resolveGatewayContext, hadGatewayContext) ||
+        !isBatchCurrent()
+      ) {
         return true;
       }
       const deliveryClosed = isBatchDeliveryClosed();

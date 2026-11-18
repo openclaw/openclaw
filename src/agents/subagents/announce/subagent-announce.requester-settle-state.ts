@@ -15,6 +15,14 @@ export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "reti
 const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
 const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
 
+export function captureRequesterWakeGeneration(state: RequesterSettleWakeState) {
+  const generation = state.rearmGeneration;
+  const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
+    Boolean(entry?.requesterSettleWake) &&
+    entry?.requesterSettleWake?.rearmGeneration === generation;
+  return { generation, hasCurrentWake };
+}
+
 export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
   return (
     entry.execution.status !== "running" &&

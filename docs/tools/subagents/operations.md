@@ -104,8 +104,11 @@ If a requester wake is refused because the child's completion owner changed,
 that attempt yields to the current owner. The completion stays owed and the registry
 re-evaluates its retained wake. The same requester and wake generation can still
 record a result already delivered after child cleanup. The registry owns recovery
-of requester-settle continuations instead of starting a competing requester turn
-under the old run's operator authority.
+of unconsumed requester-settle results instead of starting a competing requester
+turn under the old run's operator authority. Once the result is committed to the
+requester transcript, the Gateway owns restarting that interrupted turn from its
+saved conversation; the registry does not submit the completion input again.
+A requester that deliberately yielded remains parked for its children.
 
 A crash or `SIGKILL` cannot write a shutdown marker. Children do not resume
 independently. A child that was still running in the previous Gateway is recorded
