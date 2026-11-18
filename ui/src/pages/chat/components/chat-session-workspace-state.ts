@@ -167,6 +167,7 @@ export function loadSessionWorkspaceArtifacts(
     try {
       const result = await client.request<{
         artifacts?: SessionWorkspaceListResult["artifacts"];
+        attachments?: SessionWorkspaceArtifacts["attachments"];
       } | null>("artifacts.list", {
         sessionKey: workspace.sessionKey,
         agentId: workspace.agentId,
@@ -177,6 +178,7 @@ export function loadSessionWorkspaceArtifacts(
         return;
       }
       artifacts.items = result?.artifacts ?? [];
+      artifacts.attachments = result?.attachments;
       artifacts.loaded = true;
       artifacts.resolved = true;
       if (!messageRole && workspace.list) {

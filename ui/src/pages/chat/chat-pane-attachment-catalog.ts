@@ -3,16 +3,37 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readChatTranscriptAttachmentSource } from "./chat-history-state.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import type { ChatProps } from "./chat-view.tsx";
 import { assistantMediaPolicyKey } from "./components/chat-message-media.ts";
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { projectTranscriptAttachments } from "./components/chat-transcript-attachments.ts";
+
+export function filesJump(
+  chat: ChatProps,
+  mobile: { close: () => void } | null | undefined,
+  visible: boolean,
+  open: (slot: "conversation") => void,
+) {
+  const access = chat.replyMessageAccess;
+  return access
+    ? (id: string) => {
+        if (mobile) {
+          mobile.close();
+        } else if (!visible) {
+          open("conversation");
+        }
+        access.open(id);
+      }
+    : undefined;
+}
 
 export class PaneAttachmentCatalog {
   private catalog?: {
     scope: readonly unknown[];
     inputs?: readonly unknown[];
     chat: ChatProps;
+    showMessage?: (id: string) => void;
     value?: ReturnType<typeof projectTranscriptAttachments>;
   };
 
@@ -29,6 +50,7 @@ export class PaneAttachmentCatalog {
     gateway: ApplicationContext["gateway"];
     presentation: "desktop" | "mobile" | undefined;
     workspacePresented: boolean;
+    showMessage?: (id: string) => void;
     sessionWorkspace: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
   }) {
     const {
@@ -64,6 +86,7 @@ export class PaneAttachmentCatalog {
       chatProps.onOpenSidebar,
       Boolean(chatProps.resolveArtifactDownload),
       Boolean(chatProps.onFindWorkspaceFile),
+      Boolean(input.showMessage),
     ];
     if (
       !this.catalog ||
@@ -75,6 +98,7 @@ export class PaneAttachmentCatalog {
     // Fresh render closures forward to the live pane within this exact media scope.
     // A retired scope retains its own callbacks, never those of the next session.
     attachmentCatalog.chat = paneChatProps;
+    attachmentCatalog.showMessage = input.showMessage;
     const workspaceState = state.sessionWorkspaceState;
     const activePreview = workspaceState?.previews.find(
       (entry) => entry.id === workspaceState.activePreviewId,
@@ -85,18 +109,52 @@ export class PaneAttachmentCatalog {
         activePreview?.catalogVisible === true ||
         (presentation === "desktop" && sessionWorkspace.navigation?.treeVisible));
     if (catalogPresented) {
-      const source = readChatTranscriptAttachmentSource(state);
+      const loaded = readChatTranscriptAttachmentSource(state);
+      const snapshot = workspaceState?.artifacts?.attachments;
+      const source =
+        snapshot && snapshot.sessionId === loaded.sessionId
+          ? {
+              ...loaded,
+              messages: snapshot.messages,
+              coverage: snapshot.truncated ? ("partial" as const) : ("complete" as const),
+              loading: false,
+              error: undefined,
+            }
+          : loaded;
       // publishChatSessionProjection preserves the array for run-only changes and
       // replaces it for adopted/streamed row changes. No message scan is needed here.
-      const inputs = [source.messages, source.coverage, source.loading, source.error];
+      const tail =
+        snapshot?.truncated && snapshot.sessionId === loaded.sessionId
+          ? loaded.messages
+          : undefined;
+      const inputs = [source.messages, source.coverage, source.loading, source.error, tail];
       if (
         !attachmentCatalog.inputs ||
         inputs.some((value, index) => value !== attachmentCatalog.inputs![index])
       ) {
+        // A bounded snapshot still augments the loaded window, never hides its recent files.
+        const covered = tail
+          ? new Set(source.messages.map(persistedMessageEntryId).filter(Boolean))
+          : undefined;
         attachmentCatalog.value = projectTranscriptAttachments(
-          source,
+          tail && covered
+            ? {
+                ...source,
+                messages: [
+                  ...source.messages,
+                  ...tail.filter((message) => !covered.has(persistedMessageEntryId(message))),
+                ],
+              }
+            : source,
           {
             sessionKey: chatProps.sessionKey,
+            showMessage: input.showMessage
+              ? (id) => {
+                  if (this.catalog === attachmentCatalog) {
+                    attachmentCatalog.showMessage?.(id);
+                  }
+                }
+              : undefined,
             agentId: currentAgentId,
             mediaPolicyKey,
             connectionEpoch: chatProps.connectionEpoch,

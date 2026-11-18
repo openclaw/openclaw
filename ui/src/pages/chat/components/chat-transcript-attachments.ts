@@ -15,10 +15,24 @@ import type {
   SidebarContent,
 } from "./chat-sidebar-content-types.ts";
 
-/** Projects only the adopted window, preserving message and media slot identities. */
+export function representedArtifactIds(entries: readonly TranscriptAttachmentEntry[]) {
+  return new Set(
+    entries.flatMap((entry) => {
+      const id =
+        entry.kind === "image"
+          ? entry.image.artifactId
+          : entry.item.type === "attachment"
+            ? entry.item.attachment.artifactId
+            : undefined;
+      return id ? [id] : [];
+    }),
+  );
+}
+
+/** The catalog and chat fallback share message and media slot identities. */
 export function projectTranscriptAttachments(
   source: ReturnType<typeof readChatTranscriptAttachmentSource>,
-  options: MessageMediaOptions,
+  options: MessageMediaOptions & { showMessage?: (id: string) => void },
   onOpenSidebar: (content: SidebarContent) => void,
 ): TranscriptAttachments {
   const entries: TranscriptAttachmentEntry[] = [];
@@ -54,9 +68,13 @@ export function projectTranscriptAttachments(
       },
       media,
     );
+    const id = nativeOptions.messageId;
+    const showMessage = options.showMessage;
+    const onShowMessage = id && showMessage ? () => showMessage(id) : undefined;
     for (const [index, image] of media.images.entries()) {
       entries.push({
         kind: "image",
+        onShowMessage,
         image,
         options: nativeOptions,
         onOpenSidebar,
@@ -76,6 +94,7 @@ export function projectTranscriptAttachments(
     for (const [index, item] of media.attachments.entries()) {
       entries.push({
         kind: "attachment",
+        onShowMessage,
         item,
         options: nativeOptions,
         onOpenSidebar,

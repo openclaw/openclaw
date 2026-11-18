@@ -15,6 +15,7 @@ import type {
 } from "./chat-sidebar-content-types.ts";
 
 export type SessionWorkspaceArtifacts = {
+  attachments?: import("../../../../../packages/gateway-protocol/src/schema/artifacts.js").ArtifactsListResult["attachments"];
   /** Completion of the owner's admitted read; presentation observes without issuing another RPC. */
   readResult?: Promise<void>;
   items: NonNullable<SessionWorkspaceListResult["artifacts"]>;
