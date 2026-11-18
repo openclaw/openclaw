@@ -89,7 +89,7 @@ export async function prepareCrabboxWorkerRuntime(params: {
           await runCrabboxCommand({
             ...params.context,
             action: "node runtime verification",
-            args: leaseRunArgs({ ...params.context, id: params.leaseId }),
+            args: [...leaseRunArgs({ ...params.context, id: params.leaseId }), "--no-hydrate"],
             input: verification.command,
             timeoutMs: remainingProvisionTimeout(params.context.deadline, CRABBOX_SETUP_TIMEOUT_MS),
             signal: AbortSignal.any([
@@ -222,7 +222,8 @@ export async function prepareCrabboxProjectFiles(params: {
             snapshotWorkerBundle: params.snapshot.workerBundle,
           }
         : {}),
-      runScript: (input, signal) => run(leaseRunArgs(params), signal, () => input),
+      runScript: (input, signal) =>
+        run([...leaseRunArgs(params), "--no-hydrate"], signal, () => input),
     });
     return undefined;
   }
