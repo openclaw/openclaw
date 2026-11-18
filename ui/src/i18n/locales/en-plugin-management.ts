@@ -85,7 +85,6 @@ const enPluginManagement = {
     requestFailed: "Couldn’t get a reply. Try again.",
     sessionRestarted:
       "{error} OpenClaw started a fresh session; earlier messages remain for context.",
-    unsupportedGateway: "This Gateway doesn’t support setup. Update it and reconnect to continue.",
     accessRequired:
       "This browser doesn’t have admin access. Reconnect with admin access to set up OpenClaw.",
     adminAccessRequired: "You need admin access to set up OpenClaw.",
@@ -111,14 +110,6 @@ const enPluginManagement = {
       failed: "Couldn’t finish AI setup. Try again.",
       safety:
         "OpenClaw can take actions using the permissions and services you enable. Review prompts and only connect tools you trust.",
-    },
-    panel: {
-      title: "OpenClaw",
-      toggle: "Toggle Ask OpenClaw",
-      close: "Close Ask OpenClaw",
-      resize: "Resize Ask OpenClaw",
-      dockBottom: "Dock Ask OpenClaw at bottom",
-      dockRight: "Dock Ask OpenClaw at right",
     },
     history: {
       button: "History",
