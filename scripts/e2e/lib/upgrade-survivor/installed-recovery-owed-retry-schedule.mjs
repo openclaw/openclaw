@@ -148,10 +148,14 @@ async function main([artifacts, prefix, tarball, summary]) {
     }
   };
   const waitFor = async (name, predicate, timeoutMs) => {
-    const deadline = Date.now() + timeoutMs;
+    const started = Date.now();
+    const deadline = started + timeoutMs;
     for (;;) {
       const value = await predicate();
       if (value) {
+        console.log(
+          `[owed-retry-schedule] ${name} after ${Math.round((Date.now() - started) / 1000)}s`,
+        );
         return value;
       }
       assert(Date.now() < deadline, `${name}: timed out`);
@@ -300,6 +304,7 @@ async function main([artifacts, prefix, tarball, summary]) {
       announcements: logLines(retryAnnounced).length,
     };
     write(summary, evidence);
+    console.log(`[owed-retry-schedule] early: ${JSON.stringify(evidence.early)}`);
     assert.deepEqual(
       evidence.early.newRuns,
       [],
@@ -358,8 +363,13 @@ async function main([artifacts, prefix, tarball, summary]) {
       lastCheckedAt: checkState().lastCheckedAt,
     };
     write(summary, evidence);
+    console.log(`[owed-retry-schedule] late: ${JSON.stringify(evidence.late)}`);
     assert.notEqual(retry.status, "failed", "the same-version update keeps its result");
-    assert.deepEqual([retry.before, retry.target], [owedVersion, owedVersion]);
+    assert.deepEqual(
+      [evidence.late.retry.before, evidence.late.retry.target],
+      [owedVersion, owedVersion],
+      "the retry targets the installed version",
+    );
     assert.equal(evidence.late.ownerOwedStep, "completed", "the retry settles the row");
     assert.equal(evidence.late.campaignRuns, 1, "exactly one retry");
     assert.equal(installedVersion(), owedVersion, "the core is unchanged");
@@ -368,6 +378,12 @@ async function main([artifacts, prefix, tarball, summary]) {
     delete evidence.current;
     write(summary, evidence);
   } finally {
+    // The Gateway's own update decisions, in the cell's public log.
+    for (const line of logLines(
+      /update campaign|retry owed plugin|update check failed|auto-update/u,
+    )) {
+      console.log(`[owed-retry-schedule] gateway: ${line.slice(0, 300)}`);
+    }
     fs.writeFileSync(unitFile, unit);
     spawnSync("systemctl", ["--user", "daemon-reload"], { env, stdio: "ignore" });
     if (registryEnded === undefined) {
@@ -393,6 +409,10 @@ try {
   console.log("[owed-retry-schedule] PASS: no retry within the hour; exactly one after it");
 } catch (error) {
   failed = true;
+  // Only this driver's own assertion messages are public; generated ones can carry values.
+  if (error instanceof assert.AssertionError && !error.generatedMessage) {
+    console.error(`[owed-retry-schedule] ${error.message.split("\n")[0].slice(0, 200)}`);
+  }
   if (driverError !== undefined) {
     fs.writeFileSync(driverError, `${inspect(error, { customInspect: false })}\n`);
   }
