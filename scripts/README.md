@@ -79,6 +79,10 @@ bundled `dist` layout without editing it. Append its file URL to the owned guest
 process's existing `NODE_OPTIONS`, set `OPENCLAW_PERF_CHAT_OWNER_ROOT` to that app,
 and set `OPENCLAW_PERF_CHAT_CAPTURE_DIR` to a guest-writable task directory.
 On Windows, use file URLs for Node `--import` arguments, not backslash specifiers.
+Readable and recognized identifier-minified owners are qualified separately;
+unsupported or ambiguous bindings fail closed. A checkout with `src` selects
+source-only qualification even after a build: qualify its emitted files through
+a dist-only staged app root, not that source-only result.
 
 Run the driver through the repository TypeScript loader with `--url <loopback-ws>
 --mock-url <loopback-http-v1> --samples 6 --output <new-file>`. An optional

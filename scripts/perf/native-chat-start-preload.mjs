@@ -30,6 +30,13 @@ const probes = [
       return ${key}.withOwner(params.purpose, () => __nativeChatOwnedCompletion(params));
     }
     async function __nativeChatOwnedCompletion(params) {`,
+    emitted: {
+      marker: /async function runIsolatedCompletion\(([A-Za-z_$][\w$]*)\)\{/gu,
+      code: ([, params]) => `async function runIsolatedCompletion(${params}) {
+        return ${key}.withOwner(${params}.purpose, () => __nativeChatOwnedCompletion(${params}));
+      }
+      async function __nativeChatOwnedCompletion(${params}) {`,
+    },
   },
   {
     name: "request-correlation",
@@ -42,11 +49,21 @@ const probes = [
     name: "acknowledged",
     marker: /diagnostics\.acknowledge\([^;\r\n]*\);/gu,
     code: `${key}("acknowledged", clientRunId);`,
+    emitted: {
+      marker:
+        /[A-Za-z_$][\w$]*\(true,[A-Za-z_$][\w$]*,void 0,\{runId:([A-Za-z_$][\w$]*)\}\);[A-Za-z_$][\w$]*\?\.finish\(\);[A-Za-z_$][\w$]*\.acknowledge\(\);/gu,
+      code: ([, clientRunId]) => `${key}("acknowledged", ${clientRunId});`,
+    },
   },
   {
     name: "run-start",
     marker: /queuedFollowup\.onRunStarted\(runId\);/gu,
     code: `${key}("run-start", clientRunId, runId);`,
+    emitted: {
+      marker:
+        /const onAgentRunStart=\(([A-Za-z_$][\w$]*),[A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\)=>\{[A-Za-z_$][\w$]*\.onRunStarted\(\1\);(?=[\s\S]{0,512}?\1!==([A-Za-z_$][\w$]*)\?\{agentRunId:\1\})/gu,
+      code: ([, runId, clientRunId]) => `${key}("run-start", ${clientRunId}, ${runId});`,
+    },
   },
   {
     name: "provider-start",
@@ -74,9 +91,95 @@ const probes = [
   },
 ];
 
+function emittedProviderProbes(source) {
+  const identifier = "[A-Za-z_$][\\w$]*";
+  const unique = (marker, name) => {
+    const matches = [...source.matchAll(marker)];
+    assert.equal(
+      matches.length,
+      1,
+      `Unsupported or ambiguous emitted native chat binding: ${name}`,
+    );
+    return matches[0];
+  };
+  const [, params, callId] = unique(
+    /function createModelLifecycle\(([A-Za-z_$][\w$]*)\)\{const ([A-Za-z_$][\w$]*)=\1\.ctx\.nextCallId\(\);/gu,
+    "model lifecycle",
+  );
+  const [, observer] = unique(
+    new RegExp(`const (${identifier})=${RegExp.escape(params)}\\.createObserver\\(`, "gu"),
+    "model observer",
+  );
+  const date = unique(
+    /const ([A-Za-z_$][\w$]*)=Date\.now\(\);(?=emitDiagnosticsTimelineEvent\(\{type:`mark`,name:`provider\.request\.started`)/gu,
+    "provider start",
+  );
+  const identity = "__nativeChatCaptureIdentity";
+  assert(!source.includes(identity), "Conflicting emitted native chat identity binding");
+  // Emitted callbacks can shadow the lifecycle's parameter and call-ID bindings.
+  return [
+    {
+      name: "request-correlation",
+      marker: new RegExp(`modelRequestBodyState\\((${identifier})\\)\\.onBytes=`, "gu"),
+      before: true,
+      code: ([, options]) => `${key}.headers(${options}, ${identity}.runId, ${identity}.callId);`,
+    },
+    {
+      name: "provider-start",
+      marker: new RegExp(RegExp.escape(date[0]), "gu"),
+      code: `const ${identity} = {runId: ${params}.ctx.runId, callId: ${callId}};
+        ${key}("provider-start", ${identity}.runId, ${identity}.callId);`,
+    },
+    {
+      name: "provider-serialized",
+      marker: new RegExp(
+        `${RegExp.escape(observer)}\\.state\\.requestPayloadBytes=${identifier};`,
+        "gu",
+      ),
+      code: `${key}("provider-serialized", ${identity}.runId, ${identity}.callId);`,
+    },
+    {
+      name: "provider-headers",
+      marker: new RegExp(
+        `${RegExp.escape(observer)}\\.state\\.responseStatus=(${identifier})\\.status;`,
+        "gu",
+      ),
+      code: ([, response]) =>
+        `${key}("provider-headers", ${identity}.runId, ${identity}.callId, ${response}.status);`,
+    },
+    {
+      name: "provider-output",
+      marker: new RegExp(
+        `${RegExp.escape(observer)}\\.observeResponseChunk\\(${RegExp.escape(date[1])},(${identifier})\\);`,
+        "gu",
+      ),
+      code: ([, chunk]) =>
+        `if (isModelOutputDelta(${chunk})) ${key}("provider-output", ${identity}.runId, ${identity}.callId);`,
+    },
+  ];
+}
+
 /** Qualify exact owner anchors before returning any instrumented code. */
 export function instrumentNativeChatStartModule(source) {
-  const selected = probes.filter(
+  let activeProbes = probes.map((probe) =>
+    probe.emitted &&
+    ![...source.matchAll(probe.marker)].length &&
+    [...source.matchAll(probe.emitted.marker)].length
+      ? Object.assign({}, probe, probe.emitted)
+      : probe,
+  );
+  if (
+    source.includes("function createModelLifecycle(") &&
+    ![...source.matchAll(probes.find((probe) => probe.name === "provider-start").marker)].length
+  ) {
+    activeProbes = [
+      ...activeProbes.filter((probe) => !probe.owner),
+      ...emittedProviderProbes(source).map((probe) =>
+        Object.assign(probe, { owner: "function createModelLifecycle(" }),
+      ),
+    ];
+  }
+  const selected = activeProbes.filter(
     (probe) =>
       (!probe.owner || source.includes(probe.owner)) &&
       [...source.matchAll(probe.marker)].length > 0,
@@ -85,7 +188,7 @@ export function instrumentNativeChatStartModule(source) {
     return undefined;
   }
   if (source.includes("function createModelLifecycle(")) {
-    for (const probe of probes.filter((entry) => entry.owner)) {
+    for (const probe of activeProbes.filter((entry) => entry.owner)) {
       assert(
         [...source.matchAll(probe.marker)].length > 0,
         `Missing native chat capture anchor: ${probe.name}`,
@@ -94,17 +197,11 @@ export function instrumentNativeChatStartModule(source) {
   }
   let transformed = source;
   for (const probe of selected) {
-    assert.equal(
-      [...source.matchAll(probe.marker)].length,
-      1,
-      `Ambiguous native chat capture anchor: ${probe.name}`,
-    );
+    const matches = [...source.matchAll(probe.marker)];
+    assert.equal(matches.length, 1, `Ambiguous native chat capture anchor: ${probe.name}`);
+    const code = typeof probe.code === "function" ? probe.code(matches[0]) : probe.code;
     transformed = transformed.replace(probe.marker, (matched) =>
-      probe.replace
-        ? probe.code
-        : probe.before
-          ? `${probe.code}\n${matched}`
-          : `${matched}\n${probe.code}`,
+      probe.replace ? code : probe.before ? `${code}\n${matched}` : `${matched}\n${code}`,
     );
   }
   return { source: transformed, anchors: selected.map((probe) => probe.name) };

@@ -97,6 +97,96 @@ it("retains producer ordinals without accepting arbitrary correlation header con
   });
 });
 
+it("derives emitted provider bindings without capturing shadowed callback parameters", () => {
+  const marks: unknown[] = [];
+  const headers: unknown[] = [];
+  const source = `
+    const observer = {
+      state: {},
+      observeResponseChunk(_startedAt, chunk) { this.last = chunk.delta; },
+    };
+    const modelRequestBodyState = (options) => options.bodyState ??= {};
+    const emitDiagnosticsTimelineEvent = () => {};
+    const isModelOutputDelta = (chunk) => chunk.type === "text_delta" && chunk.delta.length > 0;
+    function createModelLifecycle(e){const t=e.ctx.nextCallId();
+      const a=e.createObserver();
+      const l=Date.now();emitDiagnosticsTimelineEvent({type:\`mark\`,name:\`provider.request.started\`});
+      const onResponse=(e,t)=>{a.state.responseStatus=e.status;return t};
+      const g={};
+      modelRequestBodyState(g).onBytes=e=>{a.state.requestPayloadBytes=e;};
+      return {
+        serialized(bytes) { modelRequestBodyState(g).onBytes(bytes); },
+        headers: onResponse,
+        chunk(e) { a.observeResponseChunk(l,e); },
+      };
+    }
+    const lifecycle = createModelLifecycle({
+      ctx: {runId: "synthetic-run", nextCallId: () => "synthetic-call"},
+      createObserver: () => observer,
+    });
+    lifecycle.serialized(42);
+    lifecycle.headers({status: 200}, "shadowed-call");
+    lifecycle.chunk({type: "text_delta", delta: "private synthetic content"});
+    observer.state;
+  `;
+  const transformed = instrumentNativeChatStartModule(source);
+  const tracker = Object.assign((...args: unknown[]) => marks.push(args), {
+    headers: (_options: unknown, ...args: unknown[]) => headers.push(args),
+  });
+  expect(
+    runInNewContext(transformed!.source, {
+      [Symbol.for("openclaw.perf.native-chat-start")]: tracker,
+    }),
+  ).toEqual({ requestPayloadBytes: 42, responseStatus: 200 });
+  expect(headers).toEqual([["synthetic-run", "synthetic-call"]]);
+  expect(marks).toEqual([
+    ["provider-start", "synthetic-run", "synthetic-call"],
+    ["provider-serialized", "synthetic-run", "synthetic-call"],
+    ["provider-headers", "synthetic-run", "synthetic-call", 200],
+    ["provider-output", "synthetic-run", "synthetic-call"],
+  ]);
+  expect(() =>
+    instrumentNativeChatStartModule(source.replace("const t=e.ctx.nextCallId();", "let t=0;")),
+  ).toThrow("Unsupported or ambiguous emitted native chat binding");
+  expect(() =>
+    instrumentNativeChatStartModule(`${source}\na.state.responseStatus=e.status;`),
+  ).toThrow("Ambiguous native chat capture anchor");
+});
+
+it("derives emitted dispatch and completion identities and rejects duplicate owners", async () => {
+  const marks: unknown[] = [];
+  const source = `
+    const T="client", D=T, Ce={runId:T}, R={finish(){}}, _={acknowledge(){}};
+    const u=()=>{}, Z=()=>{}, q={onRunStarted(){}}, t={finish(){}};
+    u(true,Ce,void 0,{runId:T});R?.finish();_.acknowledge();
+    const onAgentRunStart=(e,n,i,s)=>{q.onRunStarted(e);t.finish();Z("agent-run-started",e!==D?{agentRunId:e}:void 0);return i};
+    async function runIsolatedCompletion(e){return e.value}
+    onAgentRunStart("agent", undefined, "unchanged-result");
+    runIsolatedCompletion({purpose:"session-activity-summary",value:42});
+  `;
+  const transformed = instrumentNativeChatStartModule(source);
+  expect(transformed?.anchors).toEqual(["completion-owner", "acknowledged", "run-start"]);
+  const tracker = Object.assign((...args: unknown[]) => marks.push(args), {
+    withOwner: (purpose: string, run: () => unknown) => {
+      marks.push(["owner", purpose]);
+      return run();
+    },
+  });
+  expect(
+    await runInNewContext(transformed!.source, {
+      [Symbol.for("openclaw.perf.native-chat-start")]: tracker,
+    }),
+  ).toBe(42);
+  expect(marks).toEqual([
+    ["acknowledged", "client"],
+    ["run-start", "client", "agent"],
+    ["owner", "session-activity-summary"],
+  ]);
+  expect(() =>
+    instrumentNativeChatStartModule(`${source}\nasync function runIsolatedCompletion(x){}`),
+  ).toThrow("Ambiguous native chat capture anchor");
+});
+
 it("serves content-free accounting from the actual opt-in mock producer", async () => {
   const child = spawn(
     resolveTestNodeExecPath(),
