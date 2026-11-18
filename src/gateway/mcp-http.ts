@@ -295,7 +295,7 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
           const createCallerIdentity = (
             agentId: string | undefined,
             phase: "construction" | "execution",
-            tools?: readonly McpLoopbackTool[],
+            tools?: McpLoopbackTool[],
           ) => {
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
