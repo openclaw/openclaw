@@ -126,6 +126,13 @@ describe("update run ledger", () => {
       host: "\0".repeat(255),
       pid: Number.MAX_SAFE_INTEGER - index,
       startIdentity: "9".repeat(128),
+      // The longest boot namespace the recorded shape admits.
+      namespace: JSON.stringify([
+        "freebsd",
+        "x".repeat(40),
+        `pid:[${"9".repeat(20)}]`,
+        "a".repeat(64),
+      ]),
     }));
     const run = createUpdateRun(
       {
@@ -143,8 +150,10 @@ describe("update run ledger", () => {
       options,
     );
     const retained = getUpdateRun(run.runId, options)!;
-    expect(retained.origin.driver).toEqual(drivers[0]);
-    expect(retained.origin.previousDrivers).toEqual(drivers.slice(1));
+    // Boot namespaces only skip a repair after a restart, so they yield before routing.
+    const identities = drivers.map(({ namespace: _namespace, ...identity }) => identity);
+    expect(retained.origin.driver).toStrictEqual(identities[0]);
+    expect(retained.origin.previousDrivers).toStrictEqual(identities.slice(1));
     expect(retained.origin).toMatchObject(admissionRouting);
     expect(retained.admission?.candidateVersion).toBe(candidateVersion);
     expect(retained.admission?.checks?.map((check) => check.name)).toEqual(

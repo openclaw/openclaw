@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import { isDeepStrictEqual } from "node:util";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
@@ -13,6 +14,10 @@ import {
 } from "../../infra/package-update-activation-journal.js";
 import { readReleasedPackageActivationReceipt } from "../../infra/package-update-activation-status.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import {
+  captureNamespacedStateLeaseProcessOwner,
+  ranInEarlierHostBoot,
+} from "../../infra/state-lease-process-owner.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
@@ -24,14 +29,17 @@ import {
 } from "../../infra/update-managed-service-handoff-lease.js";
 import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import {
+  hasUnrecordedUpdateRunDriver,
   inspectUpdateRunAbandonment,
   needsPostCoreRepair,
+  updateRunLastActivity,
 } from "../../infra/update-run-activity.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import { getUpdateRun, listUpdateRuns } from "../../infra/update-run-ledger.js";
 import {
   isAbandonedUpdateRun,
   isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
 } from "../../infra/update-run-record.js";
 import {
   assertUpdateRecoveryAdmission,
@@ -77,6 +85,28 @@ function hasPackageRecoveryAuthority(installKey: string): boolean {
   } catch {
     return true;
   }
+}
+
+/**
+ * Every process the run recorded as its driver ran on this host in an earlier boot,
+ * so none of them and none of their children survive. A run that lost a driver's
+ * identity, or that a managed helper adopted, keeps the lease store's proof. Its
+ * history must also have gone quiet before this boot began: a clone sharing the host
+ * name, machine identity and state directory boots on its own, and its live updater
+ * keeps writing.
+ */
+function ranBeforeRestart(run: UpdateRunRecord): boolean {
+  const drivers = [run.origin.driver, ...(run.origin.previousDrivers ?? [])];
+  if (
+    !drivers[0] ||
+    run.origin.managedHandoff ||
+    hasUnrecordedUpdateRunDriver(run) ||
+    updateRunLastActivity(run) >= Date.now() - os.uptime() * 1000
+  ) {
+    return false;
+  }
+  const current = captureNamespacedStateLeaseProcessOwner().namespace;
+  return drivers.every((driver) => driver !== undefined && ranInEarlierHostBoot(driver, current));
 }
 
 /**
@@ -205,7 +235,8 @@ export async function settleManagedHandoffPluginCohort(
  * with repair's settlement when no operator judgement is needed: update history
  * shows a command-line update whose driver exited, and the update lease store still
  * holds that driver's lease, so claiming the installation proves its processes and
- * their children gone. When that update had replaced the installed version without
+ * their children gone. When a restart emptied that store, a recorded earlier boot of
+ * this host proves the same. When that update had replaced the installed version without
  * confirming it, had begun rolling back on it, or left the Gateway stopped, this
  * update then finishes it as repair does before deciding anything about its own
  * core; a stopped Gateway only when this update would restart it anyway. Inspect
@@ -361,17 +392,22 @@ export async function inspectInterruptedUpdateRecovery(
       holder !== false &&
       holder.pid === driver.pid &&
       holder.startIdentity === driver.startIdentity;
+    // A restart empties the temporary lease store, but also ends every process of the boot.
+    const rebooted = !recorded && held.kind === "absent" && ranBeforeRestart(history);
     return {
       pair,
       refuse,
       inspectHistory,
       refuseOtherRecovery,
+      databasePath,
       store,
-      refused: recorded
-        ? undefined
-        : refuse(
-            "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",
-          ),
+      rebooted,
+      refused:
+        recorded || rebooted
+          ? undefined
+          : refuse(
+              "The update lease store no longer holds that update's lease, so this update cannot show that its processes are gone.",
+            ),
     };
   };
   // A failed inspection changes nothing: admission then reports what it finds itself.
@@ -379,7 +415,9 @@ export async function inspectInterruptedUpdateRecovery(
   if (!inspected) {
     return undefined;
   }
-  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, store } = inspected;
+  const { pair, refuse, inspectHistory, refuseOtherRecovery, refused, databasePath, store } =
+    inspected;
+  const rebooted = inspected.rebooted === true;
   return async (resolveAdmissionEnv) => {
     // Admission can follow a managed service to another state directory: not this recovery.
     const admitted = resolveOpenClawStateSqlitePath(await resolveAdmissionEnv(invocationCwd));
@@ -405,7 +443,13 @@ export async function inspectInterruptedUpdateRecovery(
           owner: _owner,
           ...claimedStore
         } = captureUpdateCommandExecutorAuthority(ownership);
-        if (claimed !== installKey || !isDeepStrictEqual(claimedStore, store)) {
+        // After a restart the claim's store is a new one at the same place; the earlier
+        // boot is the proof.
+        const sameStore = rebooted
+          ? databasePath !== undefined &&
+            claimedStore.databasePath === fs.realpathSync(databasePath)
+          : isDeepStrictEqual(claimedStore, store);
+        if (claimed !== installKey || !sameStore) {
           throw refuse("The update lease store changed while this update was starting.");
         }
         if (!(await pendingRecovery())) {
@@ -415,6 +459,9 @@ export async function inspectInterruptedUpdateRecovery(
         const history = inspectHistory();
         if (history instanceof Error) {
           throw history;
+        }
+        if (rebooted && !ranBeforeRestart(history)) {
+          throw refuse("The update's recorded processes changed while this update was starting.");
         }
         // What repair's finalization finishes and an already-current update would not.
         const gatewayStopped = findUpdateGatewayStop([history])?.started === false;
