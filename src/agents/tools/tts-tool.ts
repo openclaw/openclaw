@@ -1,7 +1,6 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { textToSpeech } from "../../tts/tts.js";
 import type { AnyAgentTool } from "./common.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
 import { markCoreTtsToolResult } from "./tts-tool-result-provenance.js";
@@ -50,6 +49,7 @@ export function createTtsTool(opts?: {
         message: "timeoutMs must be a positive integer in milliseconds.",
       });
       const cfg = opts?.config ?? getRuntimeConfig();
+      const { textToSpeech } = await import("../../tts/tts.js");
       const result = await textToSpeech({
         text,
         cfg,
