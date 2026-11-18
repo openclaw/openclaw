@@ -6,10 +6,10 @@ import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
 } from "../attachment-payload-store.ts";
+import { appendPastedTextToDraft, readPastedText } from "../pasted-text-card.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { currentAttachments, removeDraftAttachment } from "./chat-attachment-draft.ts";
 import { AttachmentRemove } from "./chat-attachment-file.tsx";
-import { appendPastedTextToDraft, readPastedText } from "./chat-pasted-text.ts";
 import { ChatPastedText } from "./chat-pasted-text.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);

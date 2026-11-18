@@ -22,9 +22,9 @@ import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { excludeComposerAttachments } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { isPastedTextAttachment } from "./components/chat-pasted-text.ts";
 import { chatAttachmentDraftSignature } from "./composer-draft.ts";
 import { resetChatInputHistoryNavigation } from "./input-history.ts";
+import { isPastedTextAttachment } from "./pasted-text-card.ts";
 
 export function chatSubmitKey(
   host: ChatHost,

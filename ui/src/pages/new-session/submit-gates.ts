@@ -10,7 +10,7 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
-import { isPastedTextAttachment } from "../chat/components/chat-pasted-text.ts";
+import { isPastedTextAttachment } from "../chat/pasted-text-card.ts";
 import * as catalog from "./catalog-target.ts";
 import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
 import type { DraftRepositoryState } from "./discovery.ts";

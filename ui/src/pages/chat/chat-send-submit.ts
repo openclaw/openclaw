@@ -68,7 +68,6 @@ import {
   type ChatSubmitGuard,
 } from "./chat-submit-guard.ts";
 import { attachmentBatchRejection } from "./components/chat-attachment-admission.ts";
-import { foldPastedTextAttachments } from "./components/chat-pasted-text.ts";
 import { recordNonTranscriptInputHistory } from "./input-history.ts";
 import {
   captureOutboxPayloadOwner,
@@ -76,6 +75,7 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
+import { foldPastedTextAttachments } from "./pasted-text-card.ts";
 import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,

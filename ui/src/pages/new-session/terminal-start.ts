@@ -10,7 +10,7 @@ import {
 import { startCatalogSessionInTerminal } from "../../lib/sessions/catalog-terminal.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
-import { foldPastedTextAttachments } from "../chat/components/chat-pasted-text.ts";
+import { foldPastedTextAttachments } from "../chat/pasted-text-card.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";

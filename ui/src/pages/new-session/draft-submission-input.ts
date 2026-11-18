@@ -7,7 +7,7 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
-import { foldPastedTextAttachments } from "../chat/components/chat-pasted-text.ts";
+import { foldPastedTextAttachments } from "../chat/pasted-text-card.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";

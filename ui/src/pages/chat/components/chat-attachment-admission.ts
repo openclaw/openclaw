@@ -9,8 +9,8 @@ import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-compo
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { getChatAttachmentDataUrl } from "../attachment-payload-store.ts";
+import { isPastedTextAttachment } from "../pasted-text-card.ts";
 import { canResizeChatAttachment } from "./chat-attachment-image.ts";
-import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 
 registerChatComposerEnglish();
 
