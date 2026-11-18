@@ -53,8 +53,32 @@ suite.define(() => {
         const row = (model: string) => list.locator('[data-chat-model-option="' + model + '"]');
         const handle = (model: string) => row(model).getByRole("button", { name: /^Reorder/ });
         await expect.poll(order).toEqual(initial);
-        expect(await handle(third!).count()).toBe(1);
-        await handle(third!).dragTo(row(first!));
+        expect(await handle(third!).count()).toBe(0);
+        const firstRow = row(first!);
+        const source = await row(third!).getByText("Example Flash", { exact: true }).boundingBox();
+        const target = await firstRow.boundingBox();
+        if (!source || !target) {
+          throw new Error("Favorite source or destination is not visible");
+        }
+        const x = target.x + target.width - 54;
+        const top = target.y + 5;
+        const bottom = target.y + target.height - 5;
+        await page.mouse.move(source.x + source.width / 2, source.y + source.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(x, bottom, { steps: 8 });
+        await page.mouse.move(x - 1, bottom);
+        const marker = () =>
+          firstRow.evaluate((element) => {
+            const style = getComputedStyle(element, "::before");
+            return { top: style.top, bottom: style.bottom, height: style.height };
+          });
+        await expect.poll(marker).toMatchObject({ bottom: "0px", height: "2px" });
+        await page.mouse.move(x, top, { steps: 3 });
+        await expect.poll(marker).toMatchObject({ top: "0px", height: "2px" });
+        await expect
+          .poll(() => row(third!).evaluate((element) => getComputedStyle(element).opacity))
+          .toBe("0.45");
+        await page.mouse.up();
         await expect.poll(order).toEqual([third, first, second]);
         expect(
           await gateway.getRequests("users.prefs.set", {
@@ -63,19 +87,23 @@ suite.define(() => {
           }),
         ).toHaveLength(1);
         await search.fill("example");
-        await expect.poll(() => picker.getByRole("button", { name: /^Reorder/ }).count()).toBe(0);
+        await expect
+          .poll(() => picker.locator('[data-chat-model-option][draggable="true"]:visible').count())
+          .toBe(0);
         await search.clear();
         await expect.poll(order).toEqual([third, first, second]);
         await page.reload();
         await trigger.click();
         await expect.poll(order).toEqual([third, first, second]);
-        await expect.poll(() => handle(first!).getAttribute("aria-disabled")).toBe("false");
-        await handle(first!).press("Alt+ArrowDown");
+        await expect.poll(() => row(first!).getAttribute("draggable")).toBe("true");
+        await row(first!).press("Alt+ArrowDown");
         await expect.poll(order).toEqual([third, second, first]);
         await expect
-          .poll(() => handle(first!).evaluate((button) => document.activeElement === button))
+          .poll(() => row(first!).evaluate((element) => document.activeElement === element))
           .toBe(true);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+        await row(second!).getByText("Example Sonnet", { exact: true }).click();
+        await expect.poll(async () => (await gateway.getRequests("sessions.patch")).length).toBe(1);
       },
     );
   });

@@ -115,12 +115,13 @@ export type ChatModelPickerOptionProps = {
   favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
   reorder?: {
     disabled: boolean;
+    dragging: boolean;
     indicator?: "before" | "after";
     onDragStart: (event: DragEvent) => void;
     onDragEnd: () => void;
-    onDragOver: (event: DragEvent) => void;
+    onDragOver: (event: DragEvent & { currentTarget: HTMLElement }) => void;
     onDragLeave: (event: DragEvent) => void;
-    onDrop: (event: DragEvent) => void;
+    onDrop: (event: DragEvent & { currentTarget: HTMLElement }) => void;
     onMove: (offset: number) => void;
   };
   contextWindow?: ChatContextWindowControlParams;

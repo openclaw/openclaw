@@ -189,7 +189,7 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
         keys.includes(key) ? keys.filter((entry) => entry !== key) : [...keys, key],
       );
     },
-    move(key: string, destination: string) {
+    move(key: string, destination: string, side: "before" | "after") {
       change((keys) => {
         const from = keys.indexOf(key);
         const to = keys.indexOf(destination);
@@ -197,9 +197,13 @@ export function createChatModelFavorites(owner: ReturnType<typeof createChatMode
           return keys;
         }
         // Move in the full preference so refs absent from the catalog are retained.
+        const index = to - Number(from < to) + Number(side === "after");
+        if (index === from) {
+          return keys;
+        }
         const next = [...keys];
         next.splice(from, 1);
-        next.splice(to, 0, key);
+        next.splice(index, 0, key);
         return next;
       });
     },

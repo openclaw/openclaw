@@ -216,6 +216,8 @@ function ModelOptionButton(
     props.disabled ||
     props.presentation.blocked ||
     Boolean(props.entry.disabled && !props.presentation.resetsPin);
+  const reorderingEnabled = () => props.reorder && !props.reorder.disabled;
+  let pressedButton = false;
   function FavoriteButton() {
     const [popped, setPopped] = createSignal(false);
     return (
@@ -259,12 +261,25 @@ function ModelOptionButton(
       id={search?.optionId(key())}
       class={[
         "chat-controls__inline-select-option chat-controls__model-option",
+        props.reorder?.indicator ? `reorder-drop-${props.reorder.indicator}` : undefined,
         {
+          "reorder-dragging": props.reorder?.dragging,
           "chat-controls__inline-select-option--selected":
             props.presentation.selected && !props.presentation.blocked,
         },
       ]}
-      data-favorite-drop={props.reorder?.indicator}
+      draggable={reorderingEnabled() ? "true" : undefined}
+      onPointerDown={(event) => {
+        pressedButton = event.target instanceof Element && Boolean(event.target.closest("button"));
+      }}
+      onDragStart={(event) => {
+        if (pressedButton) {
+          event.preventDefault();
+        } else {
+          props.reorder?.onDragStart(event);
+        }
+      }}
+      onDragEnd={() => props.reorder?.onDragEnd()}
       onDragOver={(event) => props.reorder?.onDragOver(event)}
       onDragLeave={(event) => props.reorder?.onDragLeave(event)}
       onDrop={(event) => props.reorder?.onDrop(event)}
@@ -289,7 +304,14 @@ function ModelOptionButton(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
-      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
+      aria-keyshortcuts={
+        [
+          search?.row(key())?.shortcut,
+          reorderingEnabled() ? "Alt+ArrowUp Alt+ArrowDown" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" ") || undefined
+      }
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
@@ -307,7 +329,18 @@ function ModelOptionButton(
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
       data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
       onKeyDown={(event) => {
-        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+        if (event.target !== event.currentTarget) {
+          return;
+        }
+        if (
+          reorderingEnabled() &&
+          event.altKey &&
+          (event.key === "ArrowUp" || event.key === "ArrowDown")
+        ) {
+          event.preventDefault();
+          event.stopPropagation();
+          props.reorder?.onMove(event.key === "ArrowUp" ? -1 : 1);
+        } else if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           if (!blocked()) {
             event.currentTarget.click();
@@ -320,28 +353,6 @@ function ModelOptionButton(
         }
       }}
     >
-      <Show when={props.reorder}>
-        <button
-          type="button"
-          class="chat-controls__model-reorder"
-          aria-disabled={props.reorder?.disabled ? "true" : "false"}
-          aria-label={t("chat.modelFavorites.reorder", { model: props.presentation.modelLabel })}
-          aria-keyshortcuts="Alt+ArrowUp Alt+ArrowDown"
-          draggable={props.reorder?.disabled ? "false" : "true"}
-          onDragStart={(event) => props.reorder?.onDragStart(event)}
-          onDragEnd={() => props.reorder?.onDragEnd()}
-          onClick={(event) => event.stopPropagation()}
-          onKeyDown={(event) => {
-            if (event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-              event.preventDefault();
-              event.stopPropagation();
-              props.reorder?.onMove(event.key === "ArrowUp" ? -1 : 1);
-            }
-          }}
-        >
-          <Icon name="gripVertical" />
-        </button>
-      </Show>
       <span class="chat-controls__model-option-provider">
         <ChatModelProviderIcon
           provider={props.entry.provider}
