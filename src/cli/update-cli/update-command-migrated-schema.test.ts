@@ -286,6 +286,29 @@ it.each([
   },
 );
 
+it("leaves a Git release's outdated state for the Gateway that boots from it", async () => {
+  const { stateDir, env, result } = await fixture("update-git-release-state-");
+  const agentPath = path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite");
+  runOpenClawAgentWriteTransaction(() => {}, { agentId: "main", env });
+  closeOpenClawAgentDatabasesForTest();
+  const schemaVersions = await readUpdateStateSchemaVersions({ stateDir, config: {}, env });
+  const before = await fs.readFile(agentPath);
+  await expect(
+    inspect({
+      result,
+      schemaVersions,
+      gitRelease: true,
+      candidateSchemaVersions: {
+        state: OPENCLAW_STATE_SCHEMA_VERSION + 1,
+        agent: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+      },
+      env,
+    }),
+  ).resolves.toBeUndefined();
+  expect(result).toMatchObject({ status: "ok", steps: [] });
+  expect(await fs.readFile(agentPath)).toEqual(before);
+});
+
 it("refuses state inspection when activation leaves no known runtime root", async () => {
   const result = updateResult({ status: "error", durationMs: 0 });
   await expect(

@@ -600,6 +600,7 @@ async function updateCommandInternal(
             inspectActivatedUpdateState({
               result,
               root,
+              gitRelease,
               packageUpdateNodeRunner,
               schemaVersions: execution.schemaVersions,
               candidateSchemaVersions: execution.candidateSchemaVersions,

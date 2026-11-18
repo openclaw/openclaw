@@ -59,7 +59,7 @@ import {
 export async function inspectActivatedUpdateState(
   params: Pick<
     FinishUpdateParams,
-    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner"
+    "result" | "root" | "schemaVersions" | "packageUpdateNodeRunner" | "gitRelease"
   > & {
     config: OpenClawConfig;
     env: NodeJS.ProcessEnv;
@@ -68,7 +68,10 @@ export async function inspectActivatedUpdateState(
   },
 ): Promise<FinishUpdateParams["rollbackBlockedReason"]> {
   const { result, root, schemaVersions, candidateSchemaVersions, env, config } = params;
-  if (!schemaVersions) {
+  // A Git release migrates nothing here: the Gateway that boots from it upgrades state
+  // (updateGitRelease). Demanding the candidate schema now fails every schema-changing
+  // update before the restart that would apply it.
+  if (!schemaVersions || params.gitRelease) {
     return undefined;
   }
   const agentPaths = new Set(
