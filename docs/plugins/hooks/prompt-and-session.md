@@ -378,6 +378,16 @@ augmentation.
   to review the finished turn in the background. It is absent when the runtime
   recorded no final entry, such as CLI backends or a turn superseded before it
   finished.
+- `ctx.turnTainted` reports turn provenance on `agent_end`, `before_agent_finalize`,
+  `before_prompt_build`, `llm_input`, `llm_output`, `before_compaction`, and `after_compaction`.
+  `true` means the runtime observed a network-marked tool result or inherited taint;
+  `false` means it tracked the turn and observed none so far. `"unknown"` means the
+  runtime cannot report a measurement, including when compaction has no turn tracker.
+  A missing field on an older host also means `"unknown"`.
+  Compare values explicitly (`ctx.turnTainted === true`); `"unknown"` is a truthy string.
+  None of the states means the content is safe. Unmarked tool results and the user's
+  message can still contain untrusted text. Memory-flush runs inherit taint when
+  the source turn was tainted or the sender wasn't the owner. See [memory provenance](/concepts/memory-provenance#freeform-edits-and-quarantine).
 
 `agent_end` is an observation hook. Channel-backed paths generally run
 it fire-and-forget after the turn, while local one-shot paths can wait
