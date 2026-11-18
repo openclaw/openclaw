@@ -1,10 +1,11 @@
+import {
+  registerProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { createSpeechDirectivePolicy } from "../test-support/speech-directive-policy.test-support.js";
 
-const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
-  inworldTTSMock: vi.fn(),
-  listInworldVoicesMock: vi.fn(),
-}));
+const [inworldTTSMock, listInworldVoicesMock] = vi.hoisted(() => [vi.fn(), vi.fn()] as const);
 
 vi.mock("./tts.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./tts.js")>()),
@@ -12,7 +13,7 @@ vi.mock("./tts.js", async (importOriginal) => ({
   listInworldVoices: listInworldVoicesMock,
 }));
 
-import { buildInworldSpeechProvider } from "./speech-provider.js";
+import plugin from "./index.js";
 
 const request = {
   text: "Hello",
@@ -28,7 +29,9 @@ afterAll(() => {
   vi.resetModules();
 });
 
-const provider = buildInworldSpeechProvider();
+const registration = { plugin, id: "inworld", name: "Inworld" };
+const { speechProviders } = await registerProviderPlugin(registration);
+const provider = requireRegisteredProvider(speechProviders, registration.id);
 const resolveConfig = (inworld: Record<string, unknown>) =>
   provider.resolveConfig?.({ ...request, rawConfig: { providers: { inworld } } });
 const resolveTalk = (base: Record<string, unknown>, values: Record<string, unknown>) =>
