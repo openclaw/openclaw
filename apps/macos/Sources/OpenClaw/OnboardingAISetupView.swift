@@ -353,9 +353,12 @@ struct OnboardingAISetupView: View {
                             .foregroundStyle(Color.green)
                     }
                 }
+                let signInFailed = open && self.model.authError != nil
                 Group {
                     if let failure {
                         Text(failure.summary)
+                    } else if signInFailed {
+                        Text("Not connected")
                     } else if open, self.isConnecting {
                         Text("Connecting…")
                     } else {
@@ -363,7 +366,7 @@ struct OnboardingAISetupView: View {
                     }
                 }
                 .font(.caption)
-                .foregroundStyle(failure == nil ? Color.secondary : Color.orange)
+                .foregroundStyle(failure == nil && !signInFailed ? Color.secondary : Color.orange)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)

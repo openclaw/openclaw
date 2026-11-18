@@ -2145,6 +2145,7 @@
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.3a7dc1ed8a86cb60","source":"Found, but not ready to use"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.7a1d3f7d5744b2a8","source":"Gemini"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.690683f854b0c8ce","source":"More providers"},
+    {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.84c56bb98785b36f","source":"Not connected"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.413b7b09c221d1eb","source":"Ollama or LM Studio"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.d78a0eb01a7c6ef2","source":"On this Mac"},
     {"path":"apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift","kind":"ui-call","surface":"apple","id":"native.apple.319b3b1f1ad14dd9","source":"Open help…"},
