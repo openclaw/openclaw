@@ -72,20 +72,28 @@ export function formatDataAtRiskResolved(params: {
   return `Update ${params.runId} recorded data at risk (${params.mark}); verification found the ${params.verification.detail}, so that mark is resolved.`;
 }
 
+/** Agent first, then the manual command, for a finding a person must act on. */
+export function formatDataAtRiskNextSteps(
+  verification: Exclude<UpdateStateVerification, { status: "consistent" }>,
+  env: NodeJS.ProcessEnv,
+): string {
+  return `Run \`${formatCliCommand("openclaw triage", env)}\` to have a coding agent inspect it with the facts recorded on this run. By hand: ${verification.nextAction}`;
+}
+
 export function formatDataAtRiskRefusal(params: {
   runId: string;
   mark: string;
   verification: Exclude<UpdateStateVerification, { status: "consistent" }>;
   gateway: ObservedGateway;
-  /** What this command left as it was. */
-  unchanged: string;
+  /** What this command left as it was, then what to do next. */
+  outcome: string;
 }): string {
   const { verification } = params;
   const finding =
     verification.status === "unverifiable"
       ? `Verification against installed OpenClaw ${VERSION} could not complete: ${verification.detail}.`
       : `Verification against installed OpenClaw ${VERSION} found that ${verification.detail}.`;
-  return `Update ${params.runId} recorded data at risk (${params.mark}). ${finding} ${describeGateway(params.gateway)} ${params.unchanged} ${verification.nextAction}`;
+  return `Update ${params.runId} recorded data at risk (${params.mark}). ${finding} ${describeGateway(params.gateway)} ${params.outcome}`;
 }
 
 /**
@@ -93,7 +101,7 @@ export function formatDataAtRiskRefusal(params: {
  * Consistent: report one line and return the recorder for the receipt on the new run.
  * Newer state or an unreadable database: warn and continue, since the update's own
  * schema checks still guard activation and updating is the named fix. Any other
- * finding refuses with nothing changed.
+ * finding refuses once its run exists, so the finding is recorded; nothing changes.
  */
 export async function verifyRecordedDataAtRiskBeforeUpdate(
   env: NodeJS.ProcessEnv,
@@ -133,13 +141,26 @@ export async function verifyRecordedDataAtRiskBeforeUpdate(
     mark: latest.mark,
     verification,
     gateway: await observeGatewayForGuidance({ service: resolveGatewayService(), env, timeoutMs }),
-    unchanged: continues
+    outcome: continues
       ? "The update continues; its own checks still guard activation."
-      : "The update changed nothing.",
+      : `The update changed nothing. ${formatDataAtRiskNextSteps(verification, env)}`,
   });
-  if (!continues) {
-    throw new Error(refusal);
+  if (continues) {
+    defaultRuntime.error(`Warning: ${refusal}`);
+    return undefined;
   }
-  defaultRuntime.error(`Warning: ${refusal}`);
-  return undefined;
+  // The refusal is recorded on the new run, so an agent reading it has the finding.
+  return (runId) => {
+    recordUpdateRunStep(
+      runId,
+      {
+        step: "data-at-risk verification",
+        status: "failed",
+        endedAtMs: Date.now(),
+        detail: refusal,
+      },
+      { env },
+    );
+    throw new Error(refusal);
+  };
 }

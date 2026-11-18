@@ -422,7 +422,7 @@ it.each([
             warnings: [
               expect.stringMatching(
                 new RegExp(
-                  `^${escapeRegExp(warning)}.* The Gateway is stopped\\. Repair left the Gateway and state as they were\\. ${escapeRegExp(verification.nextAction)}$`,
+                  `^${escapeRegExp(warning)}.* The Gateway is stopped\\. Repair left the Gateway and state as they were\\. ${escapeRegExp(`${triageLead}${verification.nextAction}`)}$`,
                 ),
               ),
             ],
@@ -461,13 +461,16 @@ it("reports a serving Gateway as running when a recorded mark is inconsistent", 
       postUpdate: expect.objectContaining({
         doctor: expect.objectContaining({
           warnings: [
-            `Update ${original} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw ${VERSION} found that the state database is at schema 99. The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway and state as they were. Run \`openclaw update\` to install a version that supports this state.`,
+            `Update ${original} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw ${VERSION} found that the state database is at schema 99. The Gateway is running and serving OpenClaw 1.0.0. Repair left the Gateway and state as they were. Run \`openclaw triage\` to have a coding agent inspect it with the facts recorded on this run. By hand: Run \`openclaw update\` to install a version that supports this state.`,
           ],
         }),
       }),
     }),
   );
 });
+
+const triageLead =
+  "Run `openclaw triage` to have a coding agent inspect it with the facts recorded on this run. By hand: ";
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

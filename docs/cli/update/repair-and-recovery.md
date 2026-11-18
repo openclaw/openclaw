@@ -509,11 +509,22 @@ already running. The original run keeps its recorded mark; the repair step is wh
 resolves it, and later repairs do not check it again. The managed update helper
 reads the same step before it restarts a Gateway after an interrupted update.
 
-If the state is inconsistent or cannot be read, repair leaves the Gateway and
-state as they were and reports the finding, the Gateway's current state, and one
-next step:
+The next plain `openclaw update`, including an automatic update and one that finds
+the installation already current, runs the same check before it creates its own run.
+Consistent state prints the same `... so that mark is resolved.` line, records the
+same step on the new run, and the update continues; you do not need to run repair
+first. A database newer than the installed version, or one that cannot be read, is
+reported as a warning and the update continues, because the update's own schema
+checks still guard activation and updating is the fix for newer state. Any other
+finding refuses the update before it changes anything and records the finding on the
+refused run.
 
-| Finding                                                 | Next step                                                                         |
+If the state is inconsistent or cannot be read, repair leaves the Gateway and
+state as they were and reports the finding and the Gateway's current state. Both
+repair and a refused update name `openclaw triage` first, which opens a coding agent
+with the facts recorded on the run, and then the manual next step:
+
+| Finding                                                 | Manual next step                                                                  |
 | ------------------------------------------------------- | --------------------------------------------------------------------------------- |
 | A database is newer than the installed version supports | `openclaw update` to a version that supports it, or restore the pre-update backup |
 | A database is behind the installed version              | `openclaw doctor --fix` to finish the migration                                   |

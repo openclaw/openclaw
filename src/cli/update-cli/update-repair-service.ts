@@ -34,6 +34,7 @@ import {
   resolveUpdatedGatewayRestartPort,
 } from "./update-command-service-plan.js";
 import {
+  formatDataAtRiskNextSteps,
   formatDataAtRiskRefusal,
   formatDataAtRiskResolved,
   observeGatewayForGuidance,
@@ -77,7 +78,7 @@ export async function verifyRecordedDataAtRisk(params: {
         config: params.config,
         timeoutMs: params.timeoutMs,
       }),
-      unchanged: "Repair left the Gateway and state as they were.",
+      outcome: `Repair left the Gateway and state as they were. ${formatDataAtRiskNextSteps(verification, env)}`,
     });
   }
   const resolved = formatDataAtRiskResolved({ runId: markedRunId, mark, verification });

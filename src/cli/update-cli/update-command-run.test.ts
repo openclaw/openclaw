@@ -232,8 +232,6 @@ it.each([
     nextAction: "Run `openclaw doctor --fix` to finish the migration.",
     ...(refuses ? {} : { newerState: true as const }),
   });
-  const runsBefore = updateRunLedger.listUpdateRuns({ limit: 100 }).length;
-
   const admission = admitUpdateCommandRun({ env: process.env, opts: {}, root });
 
   if (refuses) {
@@ -241,9 +239,18 @@ it.each([
       `Update ${marked.runId} recorded data at risk (rollback-state-unverified). Verification against installed OpenClaw`,
     );
     await expect(admission).rejects.toThrow(
-      "The update changed nothing. Run `openclaw doctor --fix` to finish the migration.",
+      "The update changed nothing. Run `openclaw triage` to have a coding agent inspect it with the facts recorded on this run. By hand: Run `openclaw doctor --fix` to finish the migration.",
     );
-    expect(updateRunLedger.listUpdateRuns({ limit: 100 })).toHaveLength(runsBefore);
+    // The refusing run keeps the finding for the agent that triage opens.
+    const [refusing] = updateRunLedger.listUpdateRuns({ limit: 1 });
+    expect(refusing?.runId).not.toBe(marked.runId);
+    expect(refusing?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "data-at-risk verification",
+        status: "failed",
+        detail: expect.stringContaining("the state database is at schema 7"),
+      }),
+    );
     return;
   }
   const next = await admission;

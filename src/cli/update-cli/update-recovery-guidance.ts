@@ -27,6 +27,7 @@ function describeUnverifiedDataAtRisk(params: {
   serviceRunning?: boolean;
   runningVersion: string;
   repair: string;
+  update: string;
 }): string {
   const { result } = params;
   const rolledBack =
@@ -45,7 +46,9 @@ function describeUnverifiedDataAtRisk(params: {
   const repair =
     params.dataAtRisk === "active-mutation"
       ? `Once the recorded processes have stopped, run \`${params.repair}\`.`
-      : `Run \`${params.repair}\`: it checks the state on disk against the installed version, then finishes maintenance and ${params.serviceRunning === true ? "keeps the Gateway serving" : "starts the Gateway"} if it is consistent, or names what is wrong and changes nothing.`;
+      : params.serviceRunning === true
+        ? `Nothing is needed now: the next \`${params.update}\`, including an automatic one, checks the state on disk against the installed version before it changes anything and resolves the mark if the state is consistent. To check now, run \`${params.repair}\`.`
+        : `Run \`${params.repair}\` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next \`${params.update}\` runs the same check.`;
   return `This update recorded possible data at risk (${params.dataAtRisk}); nothing has verified it yet. ${gateway} ${code} Keep the recovery snapshots. ${repair}`;
 }
 
@@ -146,6 +149,7 @@ export function resolveUpdateResultNextAction(params: {
             serviceRunning: params.serviceRunning,
             runningVersion,
             repair: formatCliCommand("openclaw update repair", env),
+            update: formatCliCommand("openclaw update", env),
           },
         )}`
       : servingVersion

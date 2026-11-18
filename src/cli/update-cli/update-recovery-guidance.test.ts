@@ -312,13 +312,13 @@ it.each([
     observed: "running candidate",
     result: { after: { version: "2026.11.6" } },
     options: { serviceRunning: true, runningVersion: "2026.11.6" },
-    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is running OpenClaw 2026.11.6. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and keeps the Gateway serving if it is consistent, or names what is wrong and changes nothing.",
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is running OpenClaw 2026.11.6. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Nothing is needed now: the next `openclaw update`, including an automatic one, checks the state on disk against the installed version before it changes anything and resolves the mark if the state is consistent. To check now, run `openclaw update repair`.",
   },
   {
     observed: "stopped candidate",
     result: { after: { version: "2026.11.6" } },
     options: { serviceRunning: false },
-    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if it is consistent, or names what is wrong and changes nothing.",
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
   },
   {
     observed: "rolled-back package",
@@ -328,7 +328,7 @@ it.each([
       rollbackOutcome: { status: "succeeded", reason: "package restored" },
     },
     options: { serviceRunning: false },
-    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. The update was rolled back; OpenClaw 2026.11.5 is installed. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if it is consistent, or names what is wrong and changes nothing.",
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. The update was rolled back; OpenClaw 2026.11.5 is installed. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
   },
   {
     observed: "failed rollback",
@@ -338,13 +338,13 @@ it.each([
       rollbackOutcome: { status: "failed", reason: "package restore failed" },
     },
     options: { serviceRunning: false },
-    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if it is consistent, or names what is wrong and changes nothing.",
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway is stopped. OpenClaw 2026.11.6 is installed; keep it and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
   },
   {
     observed: "unobserved Gateway",
     result: {},
     options: {},
-    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway was not observed after the failure. Keep the installed version and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair`: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if it is consistent, or names what is wrong and changes nothing.",
+    text: "This update recorded possible data at risk (rollback-state-unverified); nothing has verified it yet. The Gateway was not observed after the failure. Keep the installed version and do not roll back code by hand. Keep the recovery snapshots. Run `openclaw update repair` to bring it back: it checks the state on disk against the installed version, then finishes maintenance and starts the Gateway if the state is consistent, or names what is wrong and changes nothing. The next `openclaw update` runs the same check.",
   },
 ] as const)("renders data-at-risk guidance for a $observed", ({ result, options, text }) => {
   vi.mocked(isContainerEnvironment).mockReturnValue(false);

@@ -205,7 +205,7 @@ export async function admitUpdateCommandRun(params: {
     recoverOrphanedSidecars: false,
   });
   // A recorded data-at-risk mark is checked, never ignored, even when already current.
-  const recordMarkReceipt =
+  const settleMark =
     params.opts.dryRun === true || env[POST_CORE_UPDATE_ENV] === "1"
       ? undefined
       : await verifyRecordedDataAtRiskBeforeUpdate(env, parseUpdateTimeoutMs(params.opts.timeout));
@@ -254,7 +254,6 @@ export async function admitUpdateCommandRun(params: {
     ledgerOptions,
   );
   const record = adoptUpdateRun(created.runId, ledgerOptions);
-  recordMarkReceipt?.(record.runId);
   const run: NonNullable<UpdateCommandOptions["run"]> = {
     runId: record.runId,
     originalRecoveryCapture:
@@ -281,6 +280,7 @@ export async function admitUpdateCommandRun(params: {
   // Adoption grants this invocation the run; register its terminal owner before
   // any fallible enrichment can strand the committed row without a result.
   await params.onAdmitted?.(run);
+  settleMark?.(record.runId);
   params.assertCurrent?.();
   if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
     // Create the ledger before opening its reader; later update work may relocate it.
