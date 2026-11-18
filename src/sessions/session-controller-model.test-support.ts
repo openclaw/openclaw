@@ -1,5 +1,5 @@
-// Reference model, not a runtime controller: one ReplyOperation, V2 steering and
-// its finishing writer. Mailbox custody excludes durable replay and command stop.
+// Independent reference models for controller scheduling, steering, and durable
+// input custody. Runtime behavior is exercised by adapters in the test file.
 export type PilotInput = Readonly<{ id: string; authority: string }>;
 export type PilotCustody = "offered" | "accepted" | "indeterminate" | "rejected" | "failed";
 export type PilotEvent =
@@ -246,4 +246,85 @@ export function generatePilotSequence(seed: number, length = 48): PilotEvent[] {
     add({ type: "delivery-settled" });
   }
   return events;
+}
+
+export type DurablePilotInput = Readonly<{ id: string; recoverable: boolean }>;
+export type DurablePilotEvent =
+  | { type: "append"; input: DurablePilotInput }
+  | { type: "claim" | "adopt" | "resend"; id: string }
+  | { type: "crash" }
+  | { type: "replay"; dispatchAvailable: boolean };
+export type DurablePilotCustody = "queued" | "consumed" | "restart-unrecoverable";
+export type DurablePilotState = Readonly<
+  Record<string, { recoverable: boolean; custody: DurablePilotCustody }>
+>;
+
+export function stepDurablePilot(
+  state: DurablePilotState,
+  event: DurablePilotEvent,
+): DurablePilotState {
+  switch (event.type) {
+    case "append":
+      return {
+        ...state,
+        [event.input.id]: { recoverable: event.input.recoverable, custody: "queued" },
+      };
+    case "adopt":
+      return { ...state, [event.id]: { ...state[event.id]!, custody: "consumed" } };
+    case "replay": {
+      let blocked = false;
+      return Object.fromEntries(
+        Object.entries(state).map(([id, input]) => {
+          if (input.custody !== "queued" || blocked) {
+            return [id, input];
+          }
+          if (input.recoverable && !event.dispatchAvailable) {
+            // FIFO custody remains with this row and every later waiting input.
+            blocked = true;
+            return [id, input];
+          }
+          return [
+            id,
+            {
+              ...input,
+              custody: input.recoverable ? "consumed" : "restart-unrecoverable",
+            },
+          ];
+        }),
+      );
+    }
+    default:
+      return state;
+  }
+}
+
+/** Every seed includes a lost commit confirmation and a claimed-but-unadopted input. */
+export function generateDurablePilotSequence(seed: number): DurablePilotEvent[] {
+  const random = pilotRandom(seed);
+  const inputs = Array.from({ length: 4 }, (_, index) => ({
+    id: `durable-${seed}-${index}`,
+    recoverable: index !== 3,
+  }));
+  for (let index = inputs.length - 1; index > 0; index--) {
+    const other = random(index + 1);
+    [inputs[index], inputs[other]] = [inputs[other]!, inputs[index]!];
+  }
+  const committed = inputs.find((input) => input.recoverable)!;
+  const claimed = inputs.find((input) => input.recoverable && input !== committed)!;
+  const resends: DurablePilotEvent[] = inputs
+    .filter((input) => input.recoverable)
+    .map(({ id }) => ({ type: "resend", id }));
+  return [
+    ...inputs.map((input): DurablePilotEvent => ({ type: "append", input })),
+    { type: "claim", id: committed.id },
+    { type: "adopt", id: committed.id },
+    { type: "claim", id: claimed.id },
+    { type: "crash" },
+    { type: "replay", dispatchAvailable: false },
+    { type: "replay", dispatchAvailable: true },
+    ...resends,
+    { type: "crash" },
+    { type: "replay", dispatchAvailable: true },
+    ...resends,
+  ];
 }

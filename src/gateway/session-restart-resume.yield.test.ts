@@ -156,9 +156,7 @@ it.for([
     });
     try {
       await persistRunningSessionsForRestart({ cfg });
-      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
-        queuedInputIds: [],
-      });
+      expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
       for (let boot = 0; boot < 2; boot++) {
         const warn = vi.fn();
         await resumeMarkedSessions({

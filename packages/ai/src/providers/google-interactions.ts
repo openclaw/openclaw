@@ -16,6 +16,7 @@ import { resolveProviderContext, PROVIDER_MODEL_INPUT } from "../provider-types.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { buildGuardedModelFetch } from "../transports/host-policy.js";
 import { parseJsonPreservingUnsafeIntegers } from "../transports/json-unsafe-integers.js";
+import { prepareFinalModelRequestJson } from "../transports/model-request-body.js";
 import {
   awaitProviderLifecycleCallback,
   failTransportStream,
@@ -129,6 +130,7 @@ export const streamGoogleInteractions: StreamFunction<
         : context;
       const videoSlots: GoogleVideoSlots = new Map();
       let body = buildGoogleInteractionsParams(model, providerContext, options, videoSlots);
+      const finalJson = prepareFinalModelRequestJson(options);
       const nextBody = await awaitProviderLifecycleCallback(
         options?.onPayload ? () => options.onPayload?.(body, model) : undefined,
         options?.signal,
@@ -209,7 +211,7 @@ export const streamGoogleInteractions: StreamFunction<
       const response = await guardedFetch(url, {
         method: "POST",
         headers: omitNullRequestHeaders(headers),
-        body: JSON.stringify(body),
+        body: finalJson ? await finalJson(JSON.stringify(body)) : JSON.stringify(body),
         signal: options?.signal,
       });
       await notifyProviderHttpResponse({ options, response, model });

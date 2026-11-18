@@ -96,14 +96,11 @@ async function prepareRestartStore(
   }
   let orphaned: PreparedRestartStore["orphaned"] = [];
   try {
-    orphaned = await listOrphanedSessionPendingInputTargets(
-      target,
-      entries.flatMap(({ entry }) => entry.resumeAfterRestart?.queuedInputIds ?? []),
-    );
+    orphaned = await listOrphanedSessionPendingInputTargets(target);
     signal.throwIfAborted();
   } catch (error) {
     signal.throwIfAborted();
-    log.warn(`Skipped interrupted input settlement for agent ${target.agentId}: ${String(error)}`);
+    log.warn(`Skipped queued input recovery for agent ${target.agentId}: ${String(error)}`);
   }
   const windows = params.context.restartResumeWindows;
   return {

@@ -22,7 +22,7 @@ import { buildTestCtx, createRoutedTestCtx } from "./test-ctx.js";
 type Recorder = ReturnType<typeof createUserTurnTranscriptRecorder>;
 async function cancel(...recorders: (Recorder | undefined)[]) {
   for (const recorder of recorders) {
-    recorder?.finishPendingInput?.("cancelled");
+    recorder?.finishPendingInput?.("cancelled", "failed");
   }
   for (const recorder of recorders) {
     await recorder?.waitForPendingInputSettlement?.();

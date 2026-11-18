@@ -23,3 +23,8 @@ export function resolveConversationAccessAllowed(
   }
   return origin === "bundled" || accepted === true;
 }
+
+/** Final provider request rewriting is never implied, even for bundled plugins. */
+export function resolveModelRequestAllowed(policy?: PluginHookPolicy): boolean {
+  return policy?.allowModelRequest === true;
+}

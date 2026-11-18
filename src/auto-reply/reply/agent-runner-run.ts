@@ -545,6 +545,7 @@ export async function runReplyAgent(
     const { admitUserTurn, recordPendingDelivery } = createReplyInputAdmission({
       followupRun,
       replyOperation,
+      runId: turn.runId,
       sourceTurnId,
       sessionKey,
       storePath,
